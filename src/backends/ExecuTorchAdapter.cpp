@@ -29,9 +29,11 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "../capi/words.h"
@@ -124,20 +126,83 @@ std::string backends_list(const std::vector<std::string>& names) {
     return text.empty() ? "none" : text;
 }
 
-/// The engine object: the runtime's global initialisation (executorch::runtime::runtime_init,
-/// the platform abstraction layer; the kernels and the backends register at static
-/// initialisation), run once at the engine's init. Nothing else is per process: the delegate
-/// options are per method, the thread-pool guard per call. The core keeps one object per
-/// engine (Core::builtin_engine); every loaded model holds it.
-class ExecuTorchEngine final : public BuiltinEngine {
-public:
-    ExecuTorchEngine() : BuiltinEngine(ANIRA_ENGINE_EXECUTORCH) {}
-
-protected:
-    void do_init(const anira_init_info& /*info*/) override { executorch::runtime::runtime_init(); }
-
-    std::vector<ProviderInfo> runtime_providers() const override { return executorch_providers(); }
+/// The XNNPACK delegate's runtime options as its registered backend reports them.
+struct XnnpackOptions {
+    int m_workspace_sharing_mode = 0;
+    bool m_weight_cache_enabled = false;
 };
+
+// One option of the XNNPACK delegate as the runtime's record spells it: the key copied into
+// the record's array, the value in its variant.
+executorch::runtime::BackendOption xnnpack_option(const char* key,
+                                                  executorch::runtime::OptionValue value) {
+    executorch::runtime::BackendOption option{};
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay) the key is a C array
+    std::snprintf(option.key, sizeof(option.key), "%s", key);
+    option.value = std::move(value);
+    return option;
+}
+
+// The two options of this adapter as one record: a workspace per delegate instance, no
+// weight cache.
+std::array<executorch::runtime::BackendOption, 2> xnnpack_options_of_this_adapter() {
+    return {xnnpack_option("workspace_sharing_mode", int{k_xnnpack_workspace_per_instance}),
+            xnnpack_option("weight_cache_enabled", false)};
+}
+
+// The delegate's options in effect for the process, read back through the registered backend
+// (executorch::runtime::get_option): nothing when the backend is not registered here or does
+// not answer.
+std::optional<XnnpackOptions> xnnpack_options_in_effect() {
+    std::array<executorch::runtime::BackendOption, 2> options = xnnpack_options_of_this_adapter();
+    const executorch::runtime::Error error = executorch::runtime::get_option(
+        k_xnnpack_backend,
+        executorch::runtime::Span<executorch::runtime::BackendOption>(options.data(),
+                                                                      options.size()));
+    if (error != executorch::runtime::Error::Ok) { return std::nullopt; }
+    const int* mode = std::get_if<int>(&options[0].value);
+    const bool* cache = std::get_if<bool>(&options[1].value);
+    if (mode == nullptr || cache == nullptr) { return std::nullopt; }
+    return XnnpackOptions{.m_workspace_sharing_mode = *mode, .m_weight_cache_enabled = *cache};
+}
+
+// The delegate's options set for the process, at the engine's init: what every method of
+// every loaded model runs under here (the load names them per method too, in its map). Read
+// back afterwards, so that a release that spells the option keys otherwise says so at the
+// engine's init, as a warning naming the values, instead of leaving the shared workspace and
+// the weight cache on, and their mutexes with them, in silence. Nothing when the backend is
+// not registered in this runtime.
+void set_xnnpack_options_of_the_process() {
+    std::array<executorch::runtime::BackendOption, 2> options = xnnpack_options_of_this_adapter();
+    const executorch::runtime::Error error = executorch::runtime::set_option(
+        k_xnnpack_backend,
+        executorch::runtime::Span<executorch::runtime::BackendOption>(options.data(),
+                                                                      options.size()));
+    if (error == executorch::runtime::Error::NotFound) { return; }
+    if (error != executorch::runtime::Error::Ok) {
+        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+                          "executorch: the XNNPACK delegate refused its runtime options "
+                          "(workspace_sharing_mode %d, weight_cache_enabled 0): %s; this release "
+                          "spells the option keys otherwise, and executors may meet on the "
+                          "delegate's process-wide mutexes",
+                          k_xnnpack_workspace_per_instance,
+                          executorch::runtime::to_string(error));
+        return;
+    }
+    const std::optional<XnnpackOptions> in_effect = xnnpack_options_in_effect();
+    if (!in_effect.has_value() ||
+        in_effect->m_workspace_sharing_mode != k_xnnpack_workspace_per_instance ||
+        in_effect->m_weight_cache_enabled) {
+        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+                          "executorch: the XNNPACK delegate reports workspace_sharing_mode %d "
+                          "and weight_cache_enabled %d after its init set %d and 0: this "
+                          "release spells the option keys otherwise, and executors may meet on "
+                          "the delegate's process-wide mutexes",
+                          in_effect.has_value() ? in_effect->m_workspace_sharing_mode : -1,
+                          in_effect.has_value() && in_effect->m_weight_cache_enabled ? 1 : 0,
+                          k_xnnpack_workspace_per_instance);
+    }
+}
 
 // Every fallible ExecuTorch call returns a runtime::Error (or a Result carrying one). A failure
 // here means a setup or runtime problem, so it becomes a StatusError with the failing call and
@@ -458,19 +523,45 @@ void Instance::run(const anira_engine_ctx& ctx) {
 anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
+        m_failures.succeeded();
         return ANIRA_OK;
     } catch (const StatusError& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+        }
         return e.status();
     } catch (const std::exception& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch,
-                           "executorch threw a non-std exception out of execute");
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch,
+                               "executorch threw a non-std exception out of execute");
+        }
         return ANIRA_ERROR_ENGINE;
     }
 }
+
+/// The engine object: the runtime's global initialisation (executorch::runtime::runtime_init,
+/// the platform abstraction layer; the kernels and the backends register at static
+/// initialisation) and the XNNPACK delegate's options for the process (a workspace per delegate
+/// instance, no weight cache: set_xnnpack_options_of_the_process, read back), run once at the
+/// engine's init; the thread-pool guard is per call. The core keeps one object per engine
+/// (Core::builtin_engine); every loaded model holds it.
+class ExecuTorchEngine final : public BuiltinEngine {
+public:
+    ExecuTorchEngine() : BuiltinEngine(ANIRA_ENGINE_EXECUTORCH) {}
+
+protected:
+    void do_init(const anira_init_info& /*info*/) override {
+        executorch::runtime::runtime_init();
+        set_xnnpack_options_of_the_process();
+    }
+
+    std::vector<ProviderInfo> runtime_providers() const override { return executorch_providers(); }
+};
 
 /// The loaded model: the program every executor shares (SharedProgram, parsed once), positional
 /// on both sides (the meta carries no names), checked against a probe's metas: the planned
@@ -567,13 +658,21 @@ std::shared_ptr<BuiltinEngine> make_executorch_engine() {
     return std::make_shared<ExecuTorchEngine>();
 }
 
-std::shared_ptr<Loaded> make_executorch_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_executorch_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     std::shared_ptr<ExecuTorchEngine> own = std::dynamic_pointer_cast<ExecuTorchEngine>(engine);
     if (own == nullptr) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                           "executorch: the engine object is not this adapter's");
     }
     return std::make_shared<ExecuTorchLoaded>(std::move(own));
+}
+
+bool executorch_xnnpack_options(int& workspace_sharing_mode, bool& weight_cache_enabled) {
+    const std::optional<XnnpackOptions> in_effect = xnnpack_options_in_effect();
+    if (!in_effect.has_value()) { return false; }
+    workspace_sharing_mode = in_effect->m_workspace_sharing_mode;
+    weight_cache_enabled = in_effect->m_weight_cache_enabled;
+    return true;
 }
 
 std::vector<ProviderInfo> executorch_providers() {

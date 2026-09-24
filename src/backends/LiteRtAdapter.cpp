@@ -5,7 +5,7 @@
  * model per executor, run through the model's first signature (LiteRT synthesizes one for a
  * file without signatures, keyed by the tensor names), the slots bound to the signature's
  * inputs and outputs by name where the entry's tensors record or the canonical name matches a
- * key and by the signature's index order otherwise, checked against the signature tensors'
+ * key and by its key order (the names sorted) otherwise, checked against the signature tensors'
  * ranked types at load, and one managed host buffer per signature tensor in the signature's
  * index order (what LiteRtRunCompiledModel takes), filled from and read into the descriptors'
  * memory through a lock and a memcpy per call (the managed buffers need LiteRT's own
@@ -612,21 +612,51 @@ void Instance::run(const anira_engine_ctx& ctx) {
 anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
+        m_failures.succeeded();
         return ANIRA_OK;
     } catch (const StatusError& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        }
         return e.status();
     } catch (const std::exception& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_litert,
-                           "litert threw a non-std exception out of LiteRtRunCompiledModel");
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert,
+                               "litert threw a non-std exception out of LiteRtRunCompiledModel");
+        }
         return ANIRA_ERROR_ENGINE;
     }
 }
 
-/// The loaded model: the environment, the model and the options every executor shares
+/// The binding of one side over the probe's signature tensors, in the KEY order of the
+/// signature for the positional rule: a slot without a name match takes the tensor at its
+/// position among the names sorted, as TensorFlow Lite's signature runner lists them, so that
+/// one file binds the same on both engines; the indices come back in the signature's index
+/// order, what the buffers and LiteRtRunCompiledModel take.
+std::vector<SlotBinding> bind_side_in_key_order(const std::vector<TensorInfo>& slots,
+                                                const std::vector<EngineTensor>& tensors,
+                                                const char* side) {
+    std::vector<size_t> order(tensors.size());
+    for (size_t i = 0; i < order.size(); ++i) { order[i] = i; }
+    std::ranges::sort(order, [&tensors](size_t a, size_t b) {
+        return tensors[a].m_name < tensors[b].m_name;
+    });
+    std::vector<EngineTensor> keyed;
+    keyed.reserve(tensors.size());
+    for (const size_t index : order) { keyed.push_back(tensors[index]); }
+    std::vector<SlotBinding> bindings =
+        bind_side(slots, keyed, keyed.size(), ExtentRule::Exact, k_engine, side);
+    for (SlotBinding& binding : bindings) { binding.m_index = order[binding.m_index]; }
+    return bindings;
+}
+
+/// The loaded model: the engine object's environment, the model and the options every
+/// executor shares
 /// (SharedModel, loaded once), the binding rule over a probe's signature, checked against the
 /// signature tensors' ranked types (a dynamic extent of the file matches anything, a static
 /// one must be the record's); the probe is the executor of shared slot 0 or, for a record
@@ -667,14 +697,8 @@ protected:
         auto probe = std::make_unique<Instance>(m_shared);
         const std::vector<EngineTensor> inputs = probe->inputs();
         const std::vector<EngineTensor> outputs = probe->outputs();
-        m_input_bindings =
-            bind_side(model.m_inputs, inputs, inputs.size(), ExtentRule::Exact, k_engine, "input");
-        m_output_bindings = bind_side(model.m_outputs,
-                                      outputs,
-                                      outputs.size(),
-                                      ExtentRule::Exact,
-                                      k_engine,
-                                      "output");
+        m_input_bindings = bind_side_in_key_order(model.m_inputs, inputs, "input");
+        m_output_bindings = bind_side_in_key_order(model.m_outputs, outputs, "output");
         probe->bind(model, m_input_bindings, m_output_bindings);
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
@@ -699,7 +723,7 @@ std::shared_ptr<BuiltinEngine> make_litert_engine() {
     return std::make_shared<LiteRtEngine>();
 }
 
-std::shared_ptr<Loaded> make_litert_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_litert_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     std::shared_ptr<LiteRtEngine> own = std::dynamic_pointer_cast<LiteRtEngine>(engine);
     if (own == nullptr) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,

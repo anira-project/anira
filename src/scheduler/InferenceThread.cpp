@@ -15,6 +15,7 @@
 #include <exception>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../backends/Adapter.h"
@@ -249,39 +250,31 @@ bool InferenceThread::execute() {
 }
 
 void InferenceThread::process_dequeued_inference() {
-    auto& session = m_inference_data.m_session;
-    auto& thread_safe_struct = m_inference_data.m_thread_safe_struct;
-    // Register the job BEFORE checking m_initialized / m_generation, so a concurrent
-    // reset can never miss it: either this thread observes the reset and skips, or the
-    // reset observes the increment. Both sides do store-then-load on the shared
-    // variables (store-buffering pattern), so the paired accesses must be seq_cst —
-    // with release/acquire alone the store-load reordering lets both sides read stale
-    // values and a "ghost" inference could run concurrently with SessionElement::clear().
-    session->m_active_inferences.fetch_add(1, std::memory_order::seq_cst);
-    // Released on every exit path, a throw included: Core::drain_inference_queue() waits
-    // for the count to reach zero.
-    struct ActiveInferenceGuard {
-        explicit ActiveInferenceGuard(std::atomic<int>& counter) : m_counter(counter) {}
-        ~ActiveInferenceGuard() { m_counter.fetch_sub(1, std::memory_order::release); }
-        ActiveInferenceGuard(const ActiveInferenceGuard&) = delete;
-        ActiveInferenceGuard& operator=(const ActiveInferenceGuard&) = delete;
-        std::atomic<int>& m_counter;
-    } const active_guard(session->m_active_inferences);
-    // The job's data goes back to the queue's empty state before the count drops, on every
-    // exit path (declared after the guard above, so destroyed before it): a thread that kept
-    // the last job's session and struct in m_inference_data until its next dequeue held that
-    // session alive past Core::release_session, which waits on the count and then expects the
-    // manager's reference to be the last, so the session, its plan table and the prepared
-    // models in it (whose unprepare the engines are promised at the handler's re-prepare or
-    // destroy) lived on until this thread picked up another session's job. Never the last
-    // reference here: the drainer holds its own while the count is above zero.
-    struct ReleaseJobGuard {
-        explicit ReleaseJobGuard(InferenceData& data) : m_data(data) {}
-        ~ReleaseJobGuard() { m_data = InferenceData{}; }
-        ReleaseJobGuard(const ReleaseJobGuard&) = delete;
-        ReleaseJobGuard& operator=(const ReleaseJobGuard&) = delete;
+    // The job leaves the member and travels in this local: its references (the session, the
+    // struct) are dropped at every exit below, a throw included, BEFORE the session's
+    // in-flight count is decremented, on the counter this thread holds beside the session, so
+    // that the zero Core::drain_inference_queue waits for means no inference thread holds the
+    // session any more: the session dies on the control thread that released it, never here.
+    // The count was taken at the enqueue, so a laggard (a thread that dequeued the job before
+    // the drain looked and was preempted here) is waited for like any other worker; and the
+    // job's session and struct never linger in m_inference_data past the job.
+    InferenceData job = std::move(m_inference_data);
+    const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
+    struct JobGuard {
+        JobGuard(InferenceData& data, std::atomic<int>& counter) noexcept
+            : m_data(data), m_counter(counter) {}
+        ~JobGuard() {
+            m_data = InferenceData{};
+            m_counter.fetch_sub(1, std::memory_order::release);
+        }
+        JobGuard(const JobGuard&) = delete;
+        JobGuard& operator=(const JobGuard&) = delete;
         InferenceData& m_data;
-    } const release_guard(m_inference_data);
+        std::atomic<int>& m_counter;
+    } const guard(job, *active);
+    const std::shared_ptr<SessionElement>& session = job.m_session;
+    const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct =
+        job.m_thread_safe_struct;
 
     // Whether the struct's done signal was published: a struct is signalled exactly once,
     // whatever path it takes (a second signal would let a later try_acquire succeed for a
@@ -347,12 +340,15 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
     if (auto next = session->try_acquire_next_dispatch()) {
         // Safe to use the session's producer token here: the dispatch gate
         // guarantees only one thread at a time enqueues for this session,
-        // and its acquire/release ordering publishes the token's state.
+        // and its acquire/release ordering publishes the token's state. Counted
+        // before it is in the queue (the drain's rule); a drop gives the count back.
+        session->m_active_inferences->fetch_add(1, std::memory_order::seq_cst);
         if (!m_next_inference.try_enqueue(
                 session->m_producer_token,
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
             // The task completes as zeros at its stream position, keeping
             // the output time-aligned instead of stalling the session.
+            session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
                                     log_group::k_scheduler,
                                     "Could not enqueue next inference! "
@@ -455,7 +451,7 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // two reads ran two engines for one chunk, or none). A stamp is always in range; the check
     // keeps a defect from reading past the table.
     if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
-    const SessionElement::PlanSlot& slot = session->m_plans[plan];
+    SessionElement::PlanSlot& slot = session->m_plans[plan];
     if (slot.m_missing_model) {
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoModelForBackend,
                                 log_group::k_scheduler,
@@ -480,16 +476,18 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     ctx.inputs = chunk.m_input_tensors.data();
     ctx.outputs = chunk.m_output_tensors.data();
 
-    // The engine's reset boundary, for a session-exclusive session alone (its inferences run
+    // The plan's reset boundary, for a session-exclusive session alone (its inferences run
     // one at a time and in order, so the stamp is this thread's between the gate's acquire
-    // and release): the chunk's dispatch stamp against the one the engine last ran under; a
-    // difference is the first inference of a new stream, and the stamp is adopted. The
-    // chunk's stamp, never the session's atomic: a reset that lands between the stale check
-    // and this read belongs to the next chunk.
+    // and release): the chunk's dispatch stamp against the one this plan's engine last ran
+    // under; a difference is the plan's first inference of a new stream, and the stamp is
+    // adopted. Per plan: after a reset every plan is reset at its own first inference, so a
+    // plan switched to later starts its stream clean too. The chunk's stamp, never the
+    // session's atomic: a reset that lands between the stale check and this read belongs to
+    // the next chunk.
     bool reset_first = false;
     if (session->m_inference_config.m_session_exclusive_processor &&
-        chunk.m_dispatch_generation != session->m_engine_generation) {
-        session->m_engine_generation = chunk.m_dispatch_generation;
+        chunk.m_dispatch_generation != slot.m_engine_generation) {
+        slot.m_engine_generation = chunk.m_dispatch_generation;
         reset_first = true;
     }
 

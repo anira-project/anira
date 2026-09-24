@@ -74,16 +74,18 @@
  * pair alternate between two buffers; a later pre-release hands a caller's Buffer tensor over
  * in place). A status other than ANIRA_OK fails the chunk: it lands in anira_handler_rt_error
  * with one latched record, anira zeroes the outputs, the chunk delivers zeros at its stream
- * position, a State pair keeps its last good value. reset re-initialises the state an engine
- * keeps per handler: for an exclusive handler, at the first inference of a new stream (after
- * prepare, after anira_handler_reset), on that handler's prepared with that inference's
- * context, right before its process; a handler whose model is stateless is never reset. The
- * flags are the engine's promises, reported in anira_plan_info.engine_flags and consumed by
- * later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
- * ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit this header does not define is
- * ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create. The callback typedefs carry no
- * real-time attribute: whether process is real-time is the engine's own promise, the flag. The
- * C++ face is anira::Engine of anira/anira.hpp.
+ * position, a State pair keeps its last good value (an aliasing engine,
+ * ANIRA_ENGINE_FLAG_STATE_ALIAS, writes in place: what a failed call left in the buffer is its
+ * own). reset re-initialises the state an engine keeps per handler: for an exclusive handler,
+ * at the first inference of a new stream (after prepare, after anira_handler_reset), on that
+ * handler's prepared with that inference's context, right before its process; a handler whose
+ * model is stateless is never reset. The flags are the engine's promises, reported in
+ * anira_plan_info.engine_flags and consumed by later contract options
+ * (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+ * ANIRA_ENGINE_FLAG_DYNAMIC_TIME, ANIRA_ENGINE_FLAG_STATE_ALIAS of anira/abi/enums.h); a bit
+ * this header does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create.
+ * The callback typedefs carry no real-time attribute: whether process is real-time is the
+ * engine's own promise, the flag. The C++ face is anira::Engine of anira/anira.hpp.
  */
 
 #include <stddef.h>
@@ -368,9 +370,11 @@ typedef anira_status (ANIRA_CALL* anira_engine_process_fn)(const anira_engine_ct
  * @brief Re-initialises the state the engine keeps per handler: for an exclusive handler
  * (ANIRA_PREPARE_EXCLUSIVE at its prepare), at the first inference of a new stream
  * (after prepare, after anira_handler_reset), on the inference thread, with that
- * inference's context, right before its process; never for a handler whose model is
- * stateless, whose calls run on the shared slots and keep nothing between them. NULL:
- * nothing to reset.
+ * inference's context, right before its process. The boundary is the plan's: after
+ * prepare or a reset every plan of the handler is reset at its own first inference of
+ * the new stream, whichever plan ran first, and a plan switch alone is none. Never for a
+ * handler whose model is stateless, whose calls run on the shared slots and keep nothing
+ * between them. NULL: nothing to reset.
  * @param ctx The context of the first inference of the new stream, the one whose process
  *        follows; ANIRA_ENGINE_CALL_EXCLUSIVE is set.
  * @param prepared What this handler's prepare on this loaded model handed back.

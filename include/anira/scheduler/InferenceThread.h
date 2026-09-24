@@ -200,9 +200,10 @@ private:
      * handle on it: exactly one plan runs per call, the one of @p plan, the index the chunk
      * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
      * On a session-exclusive session the chunk's dispatch stamp is compared with the
-     * session's engine generation: a difference is the first inference of a new stream
+     * plan's engine generation: a difference is the plan's first inference of a new stream
      * (after prepare, after a reset), so the adapter resets its engine's own state right
-     * before this call's process and the stamp is adopted. A plan without a model (a 2.x
+     * before this call's process and the stamp is adopted (per plan: a plan switched to
+     * after a reset resets at its first inference too). A plan without a model (a 2.x
      * table's row for a backend of the build the configuration names no model for) runs the
      * roundtrip and logs RtSite::NoModelForBackend once per prepare.
      *

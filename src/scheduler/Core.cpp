@@ -317,6 +317,12 @@ size_t Core::get_thread_pool_size() {
     return state.m_thread_pool.size();
 }
 
+size_t Core::prospective_thread_pool_size(const anira_context_config& context_config) {
+    State& state = get_state();
+    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    return prospective_pool_size_locked(state, sanitize_config(context_config));
+}
+
 anira_context_config Core::sanitize_config(anira_context_config context_config) {
 #ifdef __EMSCRIPTEN__
     // Blocking waits are impossible on WebAssembly: inference loops are driven
@@ -649,11 +655,6 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             SessionElement::PlanSlot slot;
             slot.m_loaded = acquire_loaded_locked(state, request, inference_config, pool_size);
             slot.m_registered = request.m_source == backend::Source::Registered;
-            if (!slot.m_registered) {
-                slot.m_prepared = slot.m_loaded->prepare(backend::PrepareRequest{
-                    .m_exclusive = inference_config.m_session_exclusive_processor,
-                    .m_info = nullptr});
-            }
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
@@ -661,7 +662,16 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             slot.m_missing_model = request.m_missing_model;
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
+            // Into the table before the prepare: a prepare that throws (an exclusive session's
+            // own executor, its warm-up) leaves the slot where the rollback below finds its
+            // loaded model and lets the pool entry go.
             session->m_plans.push_back(std::move(slot));
+            SessionElement::PlanSlot& placed = session->m_plans.back();
+            if (!placed.m_registered) {
+                placed.m_prepared = placed.m_loaded->prepare(backend::PrepareRequest{
+                    .m_exclusive = inference_config.m_session_exclusive_processor,
+                    .m_info = nullptr});
+            }
             has_custom_backend = has_custom_backend || request.m_source == backend::Source::Legacy;
         }
 
@@ -1328,9 +1338,13 @@ bool Core::enqueue_inference_or_drop(
     // per-session enqueues are serialized (single driving thread, and the
     // stateful path additionally holds the dispatch gate). existing_state(): this is
     // a real-time path, reached only through a registered session.
+    // Counted before it is in the queue: the drain waits for every counted job, one a worker
+    // dequeued before the drain looked included; a drop gives the count back.
+    session->m_active_inferences->fetch_add(1, std::memory_order::seq_cst);
     bool const enqueued =
         existing_state().m_next_inference.try_enqueue(session->m_producer_token, inference_data);
     if (!enqueued) {
+        session->m_active_inferences->fetch_sub(1, std::memory_order::release);
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
         // was consumed and exactly one (silent) chunk will be produced.
@@ -1376,23 +1390,16 @@ void Core::start_thread_pool_locked(State& state) {
 
 void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session) {
     InferenceQueue& next_inference = get_state().m_next_inference;
-    // Fixpoint loop: one spin-then-single-pass is not enough — a worker that
-    // dequeued one of this session's tasks just before m_initialized went false
-    // can still run its session-exclusive continuation and enqueue a successor
-    // into this drain's window. Repeat until a full pass finds none of this
-    // session's entries AND no inference is registered afterwards. The chain
-    // cannot grow indefinitely: with the session uninitialized, the worker's
-    // skip path never dispatches a successor, so each pass strictly shrinks the
-    // outstanding work.
+    // Fixpoint loop: a pass over the global queue completes this session's queued jobs as
+    // silence (their count given back here) and requeues the other sessions'; then, with
+    // nothing of ours found and the in-flight count at zero, the session is quiescent. The
+    // count is taken before every enqueue and given back by the worker that finished the job
+    // or by this drain, so a job outside the free pool is never invisible: not one a worker
+    // dequeued before this pass and was preempted with (a laggard), not one a worker's
+    // exclusive continuation enqueued into this drain's window (the next pass takes it; with
+    // the session uninitialized the skip path dispatches no successor, so the chain shrinks).
+    // The wait never blocks on a queued job: a pass takes it, whether or not a worker runs.
     while (true) {
-        // seq_cst: pairs with the worker's register-before-check in
-        // InferenceThread::process_dequeued_inference() — either the worker sees
-        // m_initialized == false and skips, or this load sees its increment and
-        // waits.
-        while (session->m_active_inferences.load(std::memory_order::seq_cst) != 0) {
-            std::this_thread::sleep_for(std::chrono::microseconds(50));
-        }
-
         bool found_own = false;
         std::vector<InferenceData> inference_stack;
         InferenceData inference_data;
@@ -1408,6 +1415,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                     session->release_dispatch(
                         inference_data.m_thread_safe_struct->m_dispatch_epoch);
                 }
+                session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             } else {
                 inference_stack.emplace_back(inference_data);
             }
@@ -1417,7 +1425,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
             if (!next_inference.try_enqueue(other)) {
                 // Requeue failed: complete the other session's task as silence so
                 // its stream stays time-aligned (previously it was silently lost),
-                // and unwedge its dispatch chain.
+                // unwedge its dispatch chain and give its count back.
                 ANIRA_LOG_RT_ERROR_ONCE(RtSite::RequeueDropped,
                                         log_group::k_core,
                                         "Could not requeue inference data! Dropping the "
@@ -1426,12 +1434,17 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 if (other.m_session->m_inference_config.m_session_exclusive_processor) {
                     other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
                 }
+                other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             }
         }
 
-        if (!found_own && session->m_active_inferences.load(std::memory_order::seq_cst) == 0) {
+        // seq_cst: pairs with the worker's seq_cst read of m_initialized, which the caller
+        // stored false before this drain: a worker that read it true is counted until it
+        // finished.
+        if (!found_own && session->m_active_inferences->load(std::memory_order::seq_cst) == 0) {
             return;
         }
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
 }
 
@@ -1448,9 +1461,8 @@ void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
     // Wait-free for ALL session types — the public entry point
     // InferenceHandler::reset() is [[clang::nonblocking]].
     //
-    // seq_cst: pairs with the worker's register-before-read in
-    // InferenceThread::process_dequeued_inference() (m_active_inferences increment
-    // then generation load), the same store-buffering discipline as m_initialized.
+    // seq_cst: pairs with the worker's seq_cst generation load in
+    // InferenceThread::process_dequeued_inference(), the same discipline as m_initialized.
     // After this bump, every inference dispatched under the previous generation is
     // stale: new_data_request() ignores its result and reclaim_stale_structs() frees
     // its struct once the worker is done. We do NOT touch m_initialized — workers keep

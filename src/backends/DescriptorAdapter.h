@@ -72,8 +72,9 @@ public:
     /// The descriptor's flags: the engine's ANIRA_ENGINE_FLAG_* promises.
     uint32_t flags() const noexcept override;
 
-    /// Every provider: the handler checked the plan's against the descriptor's list at create,
-    /// and the engine's load decides at run time (the record names the provider).
+    /// Every provider: the handler checked the plan's against the engine's query at create and
+    /// at every prepare, and the engine's load decides at run time (the record names the
+    /// provider).
     bool serves(anira_provider /*provider*/,
                 std::string_view /*provider_id*/) const noexcept override {
         return true;

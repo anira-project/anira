@@ -86,7 +86,7 @@ ANIRA_API std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine
 /// object's engine, which holds the object for its life; NULL for a null object. Throws
 /// anira::StatusError(ANIRA_ERROR_INVALID_ARGUMENT) for an object that is not the adapter's
 /// own (make_builtin_engine's are).
-ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 
 /// What a fresh engine object of a built-in engine of this build answers for its providers
 /// (BuiltinEngine::providers: the default provider first, then what its runtime reports
@@ -100,7 +100,8 @@ ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine);
 /// ANIRA_ERROR_INVALID_ARGUMENT.
 #ifdef USE_ONNXRUNTIME
 ANIRA_API std::shared_ptr<BuiltinEngine> make_onnxruntime_engine();
-ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded(
+    const std::shared_ptr<BuiltinEngine>& engine);
 /// The execution providers the ONNX Runtime of this build reports available
 /// (Ort::GetAvailableProviders()), the CPU provider left out: the enum's value for CUDA,
 /// DirectML, CoreML, WebGPU and XNNPACK, the runtime's registered name in provider_id for
@@ -109,15 +110,16 @@ ANIRA_API std::vector<ProviderInfo> onnxruntime_providers();
 #endif
 #ifdef USE_LIBTORCH
 ANIRA_API std::shared_ptr<BuiltinEngine> make_libtorch_engine();
-ANIRA_API std::shared_ptr<Loaded> make_libtorch_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_libtorch_loaded(
+    const std::shared_ptr<BuiltinEngine>& engine);
 #endif
 #ifdef USE_TFLITE
 ANIRA_API std::shared_ptr<BuiltinEngine> make_tflite_engine();
-ANIRA_API std::shared_ptr<Loaded> make_tflite_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_tflite_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 #endif
 #ifdef USE_LITERT
 ANIRA_API std::shared_ptr<BuiltinEngine> make_litert_engine();
-ANIRA_API std::shared_ptr<Loaded> make_litert_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_litert_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 /// The accelerators a fresh LiteRT environment registers here (its automatic registration,
 /// which loads the accelerator libraries it finds), by the hardware they support: "gpu",
 /// "npu", "webnn" as custom providers beside ANIRA_PROVIDER_DEFAULT, the CPU accelerator left
@@ -129,11 +131,17 @@ ANIRA_API std::vector<ProviderInfo> litert_providers();
 #endif
 #ifdef USE_EXECUTORCH
 ANIRA_API std::shared_ptr<BuiltinEngine> make_executorch_engine();
-ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded(std::shared_ptr<BuiltinEngine> engine);
+ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded(
+    const std::shared_ptr<BuiltinEngine>& engine);
 /// The backends registered to the ExecuTorch runtime of this build and available, the
 /// delegates an export may be lowered to: the enum's value for XnnpackBackend, CoreMLBackend
 /// and VulkanBackend, the registered name in provider_id for every other.
 ANIRA_API std::vector<ProviderInfo> executorch_providers();
+/// The XNNPACK delegate's runtime options in effect for the process, as the registered
+/// backend reports them: the workspace sharing mode and whether the weight cache is on (what
+/// the engine object's init set: 0 and off). False when the backend is not registered here or
+/// does not answer.
+ANIRA_API bool executorch_xnnpack_options(int& workspace_sharing_mode, bool& weight_cache_enabled);
 #endif
 
 /// The plan table of a 2.x session: one request per configured model, in m_model_data order

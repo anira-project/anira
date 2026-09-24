@@ -72,6 +72,12 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              bool default_set) {
     Derived derived;
     validate(model, &contract, candidates, num_candidates, derived, stages, engines, default_set);
+    return make_inference_config(model, contract, derived);
+}
+
+anira::InferenceConfig make_inference_config(const anira_model_config& model,
+                                             const anira_contract& contract,
+                                             const Derived& derived) {
     const HardContract& hard = *contract.hard();
 
     std::vector<anira::ModelData> model_data;

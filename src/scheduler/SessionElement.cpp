@@ -467,9 +467,9 @@ void SessionElement::prepare(const HostConfig& host_config,
         m_inference_queue.back()->bind_tensors(input_shapes, output_shapes);
     }
 
-    // The first inference of the new session is the first of a new stream: the engine of a
-    // session-exclusive plan resets before it.
-    m_engine_generation = k_no_generation;
+    // The first inference of the new session is the first of a new stream: the engine of each
+    // session-exclusive plan resets before its own first one.
+    for (PlanSlot& plan : m_plans) { plan.m_engine_generation = k_no_generation; }
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);

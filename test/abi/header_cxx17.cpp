@@ -230,6 +230,7 @@ static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
 static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_create(nullptr, nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_destroy(nullptr)));
+static_assert(noexcept(anira_custom_engine_detach(nullptr)));
 static_assert(noexcept(anira_pipeline_add_engine(nullptr, nullptr, nullptr)));
 static_assert(
     noexcept(anira_pipeline_capabilities_backends(nullptr, nullptr, 0, nullptr, nullptr)));

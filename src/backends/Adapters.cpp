@@ -67,23 +67,23 @@ std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine) {
     }
 }
 
-std::shared_ptr<Loaded> make_builtin_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_builtin_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     if (engine == nullptr) { return nullptr; }
     switch (engine->engine()) {
 #ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded(std::move(engine));
+        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded(engine);
 #endif
 #ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_loaded(std::move(engine));
+        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_loaded(engine);
 #endif
 #ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return make_tflite_loaded(std::move(engine));
+        case ANIRA_ENGINE_TFLITE: return make_tflite_loaded(engine);
 #endif
 #ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return make_litert_loaded(std::move(engine));
+        case ANIRA_ENGINE_LITERT: return make_litert_loaded(engine);
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_loaded(std::move(engine));
+        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_loaded(engine);
 #endif
         default: return nullptr;  // an object of an engine this build does not carry
     }

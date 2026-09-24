@@ -42,6 +42,12 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        const EngineFacts* engines = nullptr,
                                                        bool default_set = false);
 
+/// The same over a model validated already: `derived` is what validate filled for it under
+/// `contract` (the C handler's prepare validates once and maps here).
+ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config& model,
+                                                       const anira_contract& contract,
+                                                       const Derived& derived);
+
 /// The 2.x HostConfig of a Hard contract's geometry and the model config's anchor.
 ANIRA_API anira::HostConfig make_host_config(const anira_contract& contract,
                                              const anira_model_config& model);

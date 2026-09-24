@@ -4,7 +4,6 @@
 // 2.x plan table as requests, and the copies the legacy adapter makes around a descriptor that
 // names other memory than the struct's buffer.
 
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
@@ -1662,20 +1661,20 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
 #ifdef USE_LITERT
 
 // LiteRT lists the gain export's signature outputs in the file's order, [output_1 (the peak),
-// output_0 (the stream)]: a positional binding of the declared order would put the stream on
-// the peak, which the shape check refuses at prepare with both shapes; the names of the file's
-// litert row bind the two outputs to their keys, and the gain runs at the export's rank 3.
-TEST(AdapterLiteRt, TheGainNeedsItsOutputsNamedAndRunsAtTheExportsRank) {
-    Model positional = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
-    const anira::StatusError error =
-        status_error_of([&positional] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(positional); });
-    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
-    const std::string message = error.what();
-    EXPECT_NE(message.find("litert: output tensor 'audio_out' bound to the model's 'output_1'"),
-              std::string::npos)
-        << message;
-    EXPECT_NE(message.find("[1]"), std::string::npos) << message;
-    EXPECT_NE(message.find("[1, 1, 512]"), std::string::npos) << message;
+// output_0 (the stream)], and the adapter binds a slot without a name by the KEY order of the
+// signature (the names sorted, as TensorFlow Lite's signature runner lists them), so the
+// declared order puts the stream on output_0 and the peak on output_1, as it does on TFLite,
+// and the gain runs at the export's rank 3; the names of the file's litert row bind the same.
+TEST(AdapterLiteRt, TheGainBindsByPositionInTheSignaturesKeyOrder) {
+    const std::shared_ptr<Rig> positional = builtin_rig(ANIRA_ENGINE_LITERT);
+    ASSERT_NE(positional, nullptr);
+    positional->prepare(tensorflow_gain_model(ANIRA_ENGINE_LITERT));
+    EXPECT_EQ(positional->bindings().m_inputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    EXPECT_EQ(positional->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    expect_gain_of_one_half(*positional);
+    expect_gain_of_one_half(*positional);
 
     Model named = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
     named.m_outputs[0].m_engine_name = "output_0";
@@ -1737,16 +1736,14 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     }
 }
 
-// The accumulator on LiteRT: the same reversal on the output side, refused by position and
-// bound by the keys of the file's litert row; the closed form holds.
-TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
-    Model positional = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
-    const anira::StatusError error =
-        status_error_of([&positional] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(positional); });
-    EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::string(error.what()).find("'processed_data' bound to the model's 'output_1'"),
-              std::string::npos)
-        << error.what();
+// The accumulator on LiteRT: the same file order on the output side, bound by position in the
+// key order (the closed form holds, as on TFLite) and by the keys of the file's litert row.
+TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
+    const std::shared_ptr<Rig> positional = builtin_rig(ANIRA_ENGINE_LITERT);
+    positional->prepare(tensorflow_accumulator_model(ANIRA_ENGINE_LITERT));
+    EXPECT_EQ(positional->bindings().m_outputs,
+              (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
+    expect_accumulator_closed_form(*positional);
 
     Model named = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
     named.m_outputs[0].m_engine_name = "output_0";
@@ -1759,12 +1756,12 @@ TEST(AdapterLiteRt, TheAccumulatorBindsItsOutputsByName) {
               (std::vector<anira_binding>{ANIRA_BINDING_NAME, ANIRA_BINDING_NAME}));
     expect_accumulator_closed_form(*adapter);
 
-    // A record naming a key the signature lacks: CONFIG listing the keys in LiteRT's order.
+    // A record naming a key the signature lacks: CONFIG listing the keys in the key order.
     named.m_outputs[1].m_engine_name = "ghost";
     const anira::StatusError missing =
         status_error_of([&named] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(named); });
     EXPECT_EQ(missing.status(), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::string(missing.what()).find("'output_1', 'output_0'"), std::string::npos)
+    EXPECT_NE(std::string(missing.what()).find("'output_0', 'output_1'"), std::string::npos)
         << missing.what();
 }
 

@@ -286,4 +286,24 @@ TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
     }
 }
 
+// The engine object's init sets the XNNPACK delegate's runtime options for the process (a
+// workspace per delegate instance, no weight cache) and reads them back through the
+// registered backend, so a release that spells the option keys otherwise is caught at init,
+// not by the mutexes.
+TEST(ExecuTorchProcessor, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
+    const std::shared_ptr<anira::backend::BuiltinEngine> engine =
+        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
+    ASSERT_NE(engine, nullptr);
+    anira_init_info info = ANIRA_INIT_INFO_INIT;
+    info.log_level = static_cast<uint32_t>(anira::get_log_level());
+    engine->ensure_init(info);
+    int workspace_sharing_mode = -1;
+    bool weight_cache_enabled = true;
+    ASSERT_TRUE(
+        anira::backend::executorch_xnnpack_options(workspace_sharing_mode, weight_cache_enabled))
+        << "the registered backend answers";
+    EXPECT_EQ(workspace_sharing_mode, 0) << "a workspace per delegate instance";
+    EXPECT_FALSE(weight_cache_enabled);
+}
+
 #endif  // USE_EXECUTORCH

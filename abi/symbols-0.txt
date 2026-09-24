@@ -49,6 +49,7 @@ anira_contract_set_ext_json
 anira_contract_set_host_domain
 anira_custom_engine_create
 anira_custom_engine_destroy
+anira_custom_engine_detach
 anira_drain_log
 anira_enabled_backends
 anira_handler_create

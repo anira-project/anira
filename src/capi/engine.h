@@ -93,9 +93,17 @@ ANIRA_API EngineFacts
 }  // namespace anira::capi
 
 /// The handle of anira_custom_engine_create: one reference to the carrier, dropped by
-/// anira_custom_engine_destroy.
+/// anira_custom_engine_destroy, or, once anira_custom_engine_detach moved it to m_detached, a
+/// name of the carrier that keeps it alive no longer.
 struct anira_custom_engine {
     std::shared_ptr<const anira::capi::EngineCarrier> m_carrier;
+    std::weak_ptr<const anira::capi::EngineCarrier> m_detached;
+
+    /// The carrier the handle names: the reference it holds, or the one the pipelines,
+    /// handlers and loaded models hold once detached; NULL when the engine was released.
+    std::shared_ptr<const anira::capi::EngineCarrier> carrier() const {
+        return m_carrier != nullptr ? m_carrier : m_detached.lock();
+    }
 };
 
 #endif  // ANIRA_CAPI_ENGINE_H

@@ -409,19 +409,28 @@ void Instance::warm_up(uint32_t iterations) {
 anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         deliver(execute(ctx), ctx);
+        m_failures.succeeded();
         return ANIRA_OK;
     } catch (const StatusError& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+        }
         return e.status();
     } catch (const c10::Error& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (const std::exception& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch,
-                           "libtorch threw a non-std exception out of the method");
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch,
+                               "libtorch threw a non-std exception out of the method");
+        }
         return ANIRA_ERROR_ENGINE;
     }
 }
@@ -504,6 +513,10 @@ protected:
                                        k_engine,
                                        "output");
         probe->bind(model, m_input_bindings, m_output_bindings);
+        // The schema carries no output shapes: the first run of the warm-up checks them
+        // against the record, and a record without a warm-up gets that one run here, on the
+        // probe, so a mismatch is refused at load, not at the first chunk.
+        if (model.m_warm_up == 0) { probe->warm_up(1); }
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
     }
@@ -525,7 +538,7 @@ std::shared_ptr<BuiltinEngine> make_libtorch_engine() {
     return std::make_shared<LibTorchEngine>();
 }
 
-std::shared_ptr<Loaded> make_libtorch_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_libtorch_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     std::shared_ptr<LibTorchEngine> own = std::dynamic_pointer_cast<LibTorchEngine>(engine);
     if (own == nullptr) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,

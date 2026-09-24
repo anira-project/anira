@@ -4,7 +4,7 @@
  * the model's first signature (TfLiteSignatureRunner) when the file has one and through the
  * interpreter itself otherwise, the slots bound to the signature's inputs and outputs by name
  * where the entry's tensors record or the canonical name matches a key (a tensor name for a
- * file without signatures) and by the signature's index order (the interpreter's order)
+ * file without signatures) and by the signature's key order (the runner's names, sorted)
  * otherwise, the inputs resized to the record's engine dims where the file's differ, every
  * tensor checked against its allocated dims at load, and every block copied from and into the
  * descriptors' memory with TfLiteTensorCopyFromBuffer / CopyToBuffer per call (the
@@ -439,16 +439,23 @@ void Instance::run(const anira_engine_ctx& ctx) {
 anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
+        m_failures.succeeded();
         return ANIRA_OK;
     } catch (const StatusError& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+        }
         return e.status();
     } catch (const std::exception& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
-                           "tflite threw a non-std exception out of the invoke");
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
+                               "tflite threw a non-std exception out of the invoke");
+        }
         return ANIRA_ERROR_ENGINE;
     }
 }
@@ -517,7 +524,7 @@ std::shared_ptr<BuiltinEngine> make_tflite_engine() {
     return std::make_shared<TFLiteEngine>();
 }
 
-std::shared_ptr<Loaded> make_tflite_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_tflite_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     std::shared_ptr<TFLiteEngine> own = std::dynamic_pointer_cast<TFLiteEngine>(engine);
     if (own == nullptr) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,

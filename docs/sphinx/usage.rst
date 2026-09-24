@@ -193,8 +193,9 @@ not here, so one config serves every build.
 
   Without a record, an entry binds the tensor by its **canonical name** where the engine's
   side has a tensor of that name, and **positionally** otherwise (the spec's input ``i`` to
-  the file's input ``i``: ONNX Runtime's graph order, the signature's index order on TFLite
-  and LiteRT, the method's argument order on LibTorch, the method's order on ExecuTorch), in
+  the file's input ``i``: ONNX Runtime's graph order, the signature's key order (its names
+  sorted) on TFLite and LiteRT, the method's argument order on LibTorch, the method's order on
+  ExecuTorch), in
   the spec's axis order. Either way the bound tensor's dtype and every static extent are
   checked against the spec's engine dims at prepare (a dynamic extent of the file matches
   anything), a mismatch is ``ANIRA_ERROR_CONFIG`` naming both, and every tensor of the file's
@@ -1106,7 +1107,9 @@ copies an ``anira_engine_desc`` of ``anira/abi/engine.h`` into a refcounted
 is anira's own), and ``anira_pipeline_add_engine(pipe, engine, &err)`` adds it to a pipeline.
 The object is the engine and the id its name in every pipeline it is added to: one engine may
 be added to several pipelines, the engines of one pipeline have distinct ids, and the handle, the pipelines, their handlers and the loaded models all hold a reference, so
-``anira_custom_engine_destroy`` may run right after the last addition. The lifecycle is the
+``anira_custom_engine_destroy`` may run right after the last addition, or the handle is
+detached (``anira_custom_engine_detach``) to add the engine to later pipelines for as long as
+something holds it. The lifecycle is the
 stage's with one level more, the model's, and the same words; the descriptor's slots, from
 the innermost level out: ``process``, the engine call, the one required slot, on an inference
 thread over an ``anira_engine_ctx`` (the shared slot of the loaded model the call runs on,
@@ -1739,7 +1742,9 @@ this inference wrote is what the next one reads. Both steps are field fills, wit
 allocation or a lock, and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. Under a plan
 whose engine keeps its own aliasing (``ANIRA_ENGINE_FLAG_STATE_ALIAS``, :doc:`custom_backends`)
 both halves are bound to one stable buffer and nothing flips: the engine updates the state in
-place, and every address stays put across calls. The pair is the model's: every plan of the
+place, and every address stays put across the calls of such plans (a chunk of a flipping plan
+in between moves the pair, so a captured graph is re-captured after a plan switch). The pair
+is the model's: every plan of the
 variant runs the same pair, in the engine domain of the plans that run it (host memory for
 every engine of this pre-release; ``host_domain`` on the State input overrides it), which the
 bound descriptors report, so a plan switch keeps the state whether the plans flip or alias.
@@ -1787,7 +1792,8 @@ The two buffers take the spec's dtype: a registered engine binds what its ``load
 (an ``int32`` pair runs), while every built-in adapter of this pre-release refuses a model
 with a tensor of another dtype than ``float32`` at prepare with ``ANIRA_ERROR_CONFIG`` naming
 the engine and the tensor. A failed inference (an engine failure, a hook that returns a
-failure) does not flip, so the read side keeps the last good state; a dropped chunk never runs
+failure) does not flip, so the read side keeps the last good state (under an aliasing engine,
+which writes in place, what the failed call left is the engine's); a dropped chunk never runs
 and does not advance it; a missed block does not affect it, since its inference still runs and
 only its delivery is late. The state is the handler's, not a session's or a processor's, so it
 survives ``anira_handler_set_plan`` between two engines. ``anira_handler_reset`` and

@@ -132,9 +132,10 @@ void rt_refuse(anira_handler& handler,
 }
 
 // The prepared check of every Hard entry, after the NULL-handler check and before the
-// arguments (the order the registry documents).
+// arguments (the order the registry documents): the session runs and every callback of the
+// prepare returned (m_runnable, not m_prepared, which the getters read inside the callbacks).
 bool is_prepared(anira_handler& handler, const char* entry) noexcept ANIRA_NONBLOCKING {
-    if (handler.m_prepared.load(std::memory_order_acquire)) { return true; }
+    if (handler.m_runnable.load(std::memory_order_acquire)) { return true; }
     rt_refuse(handler, ANIRA_ERROR_NOT_PREPARED, entry);
     return false;
 }
@@ -634,6 +635,7 @@ void clear_report(anira_plan_report& report) noexcept {
 // table; the InferenceConfig stays until the next prepare replaces it or destroy frees it. The
 // rings die with the session: no stream port names one while the handler is unprepared.
 void unprepare(anira_handler& handler) noexcept {
+    handler.m_runnable.store(false, std::memory_order_release);
     handler.m_prepared.store(false, std::memory_order_release);
     handler.m_manager.reset();
     handler.m_pp.reset();
@@ -1410,14 +1412,30 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     check_stage_flags(stage);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
-    anira::InferenceConfig config =
-        anira::capi::make_inference_config(model,
-                                           snapshot,
-                                           ids.data(),
-                                           num_ids,
-                                           &stages,
-                                           &engines,
-                                           handler.m_pipeline.m_default_set);
+    // The plans' providers against what their engines serve now (a built-in engine's runtime,
+    // a custom engine's query), as at create: a context probed again since is seen here.
+    check_providers(*handler.m_context, handler.m_pipeline, derived);
+    // The stage's init, once per registration, at the first prepare of a handler of the
+    // pipeline that survives validation, before any model loads (a refused init throws none of
+    // that work away and is tried again by the next prepare), with the facts of the core in
+    // effect: the level, the pool this session will run on, this handler's context.
+    if (stage != nullptr) {
+        anira_init_info init = ANIRA_INIT_INFO_INIT;
+        init.log_level = static_cast<uint32_t>(anira::get_log_level());
+        init.num_threads = static_cast<uint32_t>(
+            anira::Core::prospective_thread_pool_size(handler.m_context->m_config));
+        init.context = handler.m_context;
+        const anira_status init_status = stage->ensure_init(init);
+        if (init_status != ANIRA_OK) {
+            throw StatusError(init_status,
+                              std::string("the stage refused ") +
+                                  anira::capi::phase_word(ANIRA_PHASE_INIT) + ": it returned " +
+                                  std::to_string(static_cast<int>(init_status)) + " (" +
+                                  anira_status_string(init_status) + ")");
+        }
+    }
+    // The 2.x configuration of the validated variant (validated once, above).
+    anira::InferenceConfig config = anira::capi::make_inference_config(model, snapshot, derived);
     const anira::HostConfig host = anira::capi::make_host_config(snapshot, model);
 
     // Quiescence: the previous session is released before the new one is built.
@@ -1574,42 +1592,32 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                            .m_info = &info});
     }
 
-    // Last, the stage: its init once per registration, at the first prepare of a handler of
-    // the pipeline (with the facts of the core in effect: the level, the pool, this handler's
-    // context; a refused init fails this prepare and is tried again by the next one), then its
-    // prepare function, when it has one, with the record. A status other than ANIRA_OK fails
-    // this prepare with it, and the caller unprepares the handler; the stage's unprepare is
-    // not owed for a refused prepare.
-    if (stage == nullptr) { return; }
-    anira_init_info init = ANIRA_INIT_INFO_INIT;
-    init.log_level = static_cast<uint32_t>(anira::get_log_level());
-    init.num_threads = static_cast<uint32_t>(anira::Core::get_thread_pool_size());
-    init.context = handler.m_context;
-    const anira_status init_status = stage->ensure_init(init);
-    if (init_status != ANIRA_OK) {
-        throw StatusError(init_status,
-                          std::string("the stage refused ") +
-                              anira::capi::phase_word(ANIRA_PHASE_INIT) + ": it returned " +
-                              std::to_string(static_cast<int>(init_status)) + " (" +
-                              anira_status_string(init_status) + ")");
+    // Last, the stage's prepare function, when it has one, with the record (its init ran above,
+    // before the models loaded). A status other than ANIRA_OK fails this prepare with it, and
+    // the caller unprepares the handler; the stage's unprepare is not owed for a refused
+    // prepare.
+    if (stage != nullptr && stage->desc().prepare != nullptr) {
+        const anira_stage_desc& desc = stage->desc();
+        void* stage_prepared = nullptr;
+        const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
+        if (status != ANIRA_OK) {
+            throw StatusError(status,
+                              std::string("the stage refused ") +
+                                  anira::capi::phase_word(ANIRA_PHASE_PREPARE) + ": it returned " +
+                                  std::to_string(static_cast<int>(status)) + " (" +
+                                  anira_status_string(status) + ")");
+        }
+        // What the stage handed back for this handler: every phase call and the reset receive
+        // it beside user_data from here on, and the unprepare gets it back once, when the
+        // session is released.
+        handler.m_stage_prepared = stage_prepared;
+        handler.m_stage_unprepare_owed = true;
+        stage_processor->set_prepared(stage_prepared);
     }
-    const anira_stage_desc& desc = stage->desc();
-    if (desc.prepare == nullptr) { return; }
-    void* stage_prepared = nullptr;
-    const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
-    if (status != ANIRA_OK) {
-        throw StatusError(status,
-                          std::string("the stage refused ") +
-                              anira::capi::phase_word(ANIRA_PHASE_PREPARE) + ": it returned " +
-                              std::to_string(static_cast<int>(status)) + " (" +
-                              anira_status_string(status) + ")");
-    }
-    // What the stage handed back for this handler: every phase call and the reset receive it
-    // beside user_data from here on, and the unprepare gets it back once, when the session is
-    // released.
-    handler.m_stage_prepared = stage_prepared;
-    handler.m_stage_unprepare_owed = true;
-    stage_processor->set_prepared(stage_prepared);
+    // Every callback of this prepare returned and every plan has its prepared handle: the
+    // Hard entries and reset run from here on (the getters answered since m_prepared above,
+    // for the callbacks).
+    handler.m_runnable.store(true, std::memory_order_release);
 }
 
 // ==== the report enumerators ==================================================================
@@ -1983,12 +1991,19 @@ anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
     }
     // The carrier copies the id, the kinds and the providers.
     *out = new anira_custom_engine{
-        std::make_shared<anira::capi::EngineCarrier>(std::string(engine_id), value)};
+        .m_carrier = std::make_shared<anira::capi::EngineCarrier>(std::string(engine_id), value)};
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
 void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engine) ANIRA_NOEXCEPT try {
     delete engine;
+} catch (...) { anira::capi::report_void_failure(__func__); }
+
+void ANIRA_CALL anira_custom_engine_detach(anira_custom_engine* engine) ANIRA_NOEXCEPT try {
+    if (engine == nullptr || engine->m_carrier == nullptr) { return; }
+    engine->m_detached = engine->m_carrier;
+    // The last reference releases the engine here; the handle then names nothing.
+    engine->m_carrier.reset();
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
 anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
@@ -2002,11 +2017,18 @@ anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "pipeline: NULL engine");
+    // A detached handle names its engine while something holds it.
+    const std::shared_ptr<const anira::capi::EngineCarrier> carrier = engine->carrier();
+    ANIRA_CAPI_REQUIRE(carrier != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_STATE,
+                       "pipeline: the engine was released: the detached handle names an engine "
+                       "no pipeline, handler or loaded model holds any more");
     // One engine per id in a pipeline, since the id is how its model entries name the engine;
     // the engine itself may sit in several pipelines, under its one id.
-    const std::string& id = engine->m_carrier->id();
+    const std::string& id = carrier->id();
     for (const std::shared_ptr<const anira::capi::EngineCarrier>& added : pipeline->m_engines) {
-        ANIRA_CAPI_REQUIRE(added != engine->m_carrier,
+        ANIRA_CAPI_REQUIRE(added != carrier,
                            err,
                            ANIRA_ERROR_INVALID_STATE,
                            "pipeline: the engine '%s' is already added to this pipeline",
@@ -2018,7 +2040,7 @@ anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
                            "the engines of one pipeline need distinct ids",
                            id.c_str());
     }
-    pipeline->m_engines.push_back(engine->m_carrier);
+    pipeline->m_engines.push_back(carrier);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
@@ -2516,7 +2538,7 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
 
 void ANIRA_CALL anira_handler_reset(anira_handler* handler) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     if (handler == nullptr) { return; }
-    if (handler->m_prepared.load(std::memory_order_acquire)) { handler->m_manager->reset(); }
+    if (handler->m_runnable.load(std::memory_order_acquire)) { handler->m_manager->reset(); }
     const uint32_t suppressed = handler->m_rt.rearm();
     if (suppressed > 0) {
         ANIRA_LOG_RT_INFO(anira::log_group::k_capi,

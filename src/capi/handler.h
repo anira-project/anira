@@ -139,8 +139,13 @@ struct anira_handler {
     /// distinct.
     std::vector<anira::capi::Plan> m_plans;
     anira_plan_report m_report;
-    std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
-                                          ///< acquire in every nonblocking entry
+    std::atomic<bool> m_prepared{false};  ///< release before the engines' and the stage's
+                                          ///< prepares of a prepare, so the getters answer
+                                          ///< inside them; acquire in every getter
+    std::atomic<bool> m_runnable{false};  ///< release at the end of a successful prepare,
+                                          ///< after its last callback returned: the Hard
+                                          ///< entries and reset run; cleared first by
+                                          ///< unprepare; acquire in those entries
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
     // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
     // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype

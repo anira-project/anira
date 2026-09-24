@@ -770,9 +770,14 @@ typedef enum anira_phase {
  * Without the bit the two buffers alternate behind every successful inference
  * (anira/abi/handler.h). The pair is the model's, shared by every plan of the variant: a
  * plan switch between an aliasing engine and one without the bit keeps the state (the
- * one buffer an aliasing plan updates is the buffer a flipping plan reads next). The
- * generation rule is the same under both: the first inference of a new stream reads
- * zeros. Reported in anira_plan_info.engine_flags; no built-in engine sets it.
+ * one buffer an aliasing plan updates is the buffer a flipping plan reads next); the
+ * flipping plan's chunk moves the pair, so the addresses stay put only across the chunks
+ * of aliasing plans, and a captured graph is re-captured after such a switch. A failed
+ * call of an aliasing engine leaves the buffer as the engine left it, since it writes in
+ * place: the last-good rule of a flipping pair (a failed inference does not flip) is the
+ * engine's to keep there. The generation rule is the same under both: the first
+ * inference of a new stream reads zeros. Reported in anira_plan_info.engine_flags; no
+ * built-in engine sets it.
  */
 #define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
 

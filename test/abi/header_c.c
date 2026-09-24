@@ -498,6 +498,7 @@ int anira_header_c_probe(void) {
             checks += anira_pipeline_add_engine(NULL, custom, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
+            anira_custom_engine_detach(custom);
             anira_custom_engine_destroy(custom);
             /* The pipeline's capabilities: the context's rows and the custom engines'. */
             checks += anira_pipeline_capabilities_backends(NULL,

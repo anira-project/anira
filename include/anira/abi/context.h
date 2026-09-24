@@ -176,7 +176,9 @@ ANIRA_API const anira_capabilities* ANIRA_CALL anira_context_capabilities(const 
  * name); a custom engine's rows are its pipeline's
  * (anira_pipeline_capabilities_backends), since an engine belongs to a pipeline, not to
  * the context. Stride-explicit enumeration: min(element_size, the library's record size)
- * bytes are written per element.
+ * bytes are written per element. The strings the rows point to (provider_id) are the
+ * context's, valid until its next anira_context_probe replaces them or the context is
+ * destroyed: copy what must outlive a probe.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of backends.
@@ -225,9 +227,11 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
                                                                const char** out) ANIRA_NOEXCEPT;
 
 /**
- * @brief Every row of the edge registry, available or not; one zero-copy edge from
- * ANIRA_DOMAIN_HOST to each enabled backend in this pre-release. Stride-explicit
- * enumeration.
+ * @brief Every row of the edge registry, available or not; one host edge to each backend row of
+ * this pre-release (zero-copy to a CPU provider, a host copy to any other).
+ * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
+ * are the context's, valid until its next anira_context_probe replaces them or the
+ * context is destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.

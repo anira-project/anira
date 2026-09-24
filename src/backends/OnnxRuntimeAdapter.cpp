@@ -478,18 +478,23 @@ void Instance::warm_up(uint32_t iterations) {
 anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
     try {
         run(ctx);
+        m_failures.succeeded();
         return ANIRA_OK;
     } catch (const StatusError& e) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        }
         return e.status();
     } catch (const std::exception& e) {
-        // Ort::Exception among them: the engine's text is logged here, unlatched; the
-        // scheduler latches the status.
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+        }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx,
-                           "onnxruntime threw a non-std exception out of Session::Run");
+        if (m_failures.first_failure()) {
+            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx,
+                               "onnxruntime threw a non-std exception out of Session::Run");
+        }
         return ANIRA_ERROR_ENGINE;
     }
 }
@@ -579,7 +584,7 @@ std::shared_ptr<BuiltinEngine> make_onnxruntime_engine() {
     return std::make_shared<OnnxRuntimeEngine>();
 }
 
-std::shared_ptr<Loaded> make_onnxruntime_loaded(std::shared_ptr<BuiltinEngine> engine) {
+std::shared_ptr<Loaded> make_onnxruntime_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     std::shared_ptr<OnnxRuntimeEngine> own = std::dynamic_pointer_cast<OnnxRuntimeEngine>(engine);
     if (own == nullptr) {
         throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,

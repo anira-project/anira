@@ -2345,6 +2345,94 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
     }
 }
 
+// The reset boundary is the plan's: after anira_handler_reset every plan of an exclusive
+// handler is reset at its own first inference of the new stream, whichever plan ran first,
+// and a plan switch alone resets nothing.
+TEST(AbiEngine, EveryPlanIsResetAtItsOwnFirstInferenceOfANewStream) {
+    const Context context;
+    const anira::ContractHandle contract = explicit_contract();
+    GainEngine first;
+    GainEngine second;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(first)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine("org.example.second", gain_desc(second)), ANIRA_OK)
+        << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    model.add_model_path("org.example.second", k_never_opened);
+    model.state(ANIRA_MODEL_STATEFUL);
+    pipe.add_inference(model);
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(plan_rows(handler).size(), 2U);
+    ASSERT_EQ(anira_handler_get_plan(handler), 0U);
+    // One block per call, the ramp continued across the calls of a stream (both engines pass
+    // the block through, one block late).
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 1));
+    EXPECT_EQ(first.m_resets.load(), 1) << "the first plan's first inference after prepare";
+    EXPECT_EQ(second.m_resets.load(), 0);
+    ASSERT_EQ(anira_handler_set_plan(handler, 1), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 1, 1.0F, 2));
+    EXPECT_EQ(second.m_resets.load(), 1) << "the second plan's first inference of the stream";
+    ASSERT_EQ(anira_handler_set_plan(handler, 0), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 1, 1.0F, 3));
+    EXPECT_EQ(first.m_resets.load(), 1) << "a plan switch alone is no boundary";
+    anira_handler_reset(handler);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 1));
+    EXPECT_EQ(first.m_resets.load(), 2) << "the first plan, at its first inference after the reset";
+    EXPECT_EQ(second.m_resets.load(), 1);
+    ASSERT_EQ(anira_handler_set_plan(handler, 1), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 1, 1.0F, 2));
+    EXPECT_EQ(second.m_resets.load(), 2)
+        << "the second plan too, at its own first inference of the new stream";
+    EXPECT_EQ(first.m_processed.load() + second.m_processed.load(), 5);
+    anira_handler_destroy(handler);
+}
+
+// A detached handle names its engine for as long as a pipeline, a handler or a loaded model
+// holds it, and keeps it alive no longer: it adds the engine to a later pipeline while one
+// lives, the addition is INVALID_STATE once the engine was released, a handle nothing else
+// holds the engine through releases it at the detach, and a second detach is a no-op.
+TEST(AbiEngine, ADetachedHandleNamesTheEngineWhileSomethingHoldsIt) {
+    EngineLife life;
+    const anira_engine_desc desc = full_engine(life);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(k_gain_id, &desc, &engine, &err), ANIRA_OK) << err.message;
+    {
+        Pipe first;
+        ASSERT_EQ(first.add_engine(engine), ANIRA_OK) << first.m_err.message;
+        anira_custom_engine_detach(engine);
+        anira_custom_engine_detach(engine);
+        EXPECT_EQ(life.m_released, 0) << "the pipeline holds the engine";
+        Pipe second;
+        ASSERT_EQ(second.add_engine(engine), ANIRA_OK) << second.m_err.message;
+        EXPECT_EQ(first.m_pipeline->m_engines.at(0), second.m_pipeline->m_engines.at(0))
+            << "the same engine, through the detached handle";
+    }
+    EXPECT_EQ(life.m_released, 1) << "the last pipeline released it";
+    {
+        Pipe third;
+        EXPECT_EQ(third.add_engine(engine), ANIRA_ERROR_INVALID_STATE);
+        EXPECT_NE(std::strstr(third.m_err.message, "released"), nullptr) << third.m_err.message;
+    }
+    anira_custom_engine_destroy(engine);
+    EXPECT_EQ(life.m_released, 1);
+
+    // Nothing else holds it: the detach releases the engine.
+    EngineLife alone;
+    const anira_engine_desc alone_desc = full_engine(alone);
+    anira_custom_engine* unadded = nullptr;
+    ASSERT_EQ(anira_custom_engine_create(k_gain_id, &alone_desc, &unadded, &err), ANIRA_OK)
+        << err.message;
+    anira_custom_engine_detach(unadded);
+    EXPECT_EQ(alone.m_released, 1);
+    anira_custom_engine_destroy(unadded);
+    EXPECT_EQ(alone.m_released, 1);
+    anira_custom_engine_detach(nullptr);
+}
+
 // The engine's flags travel into anira_plan_info.engine_flags of every plan of the engine; a
 // plan that is no registered engine's reads 0, and ANIRA_PLAN_INFO_INIT's tail is 0.
 TEST(AbiEngine, FlagsRoundTripThroughThePlanReport) {

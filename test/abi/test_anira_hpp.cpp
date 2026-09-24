@@ -2280,31 +2280,34 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
         ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
         EXPECT_EQ(engine->m_inited + stage->m_inited, 0) << "init belongs to the first prepare";
 
-        // The engine's init comes first (the session's create loads its model), so the stage's
-        // is not reached while the engine refuses.
+        // The stage's init comes first, before any model loads (the outermost level in), so
+        // the engine's is not reached while the stage refuses, and nothing is loaded behind a
+        // refused init of either.
+        EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_NE(std::string_view(first.m_err.message).find("the stage refused init"),
+                  std::string_view::npos)
+            << first.m_err.message;
+        EXPECT_EQ(stage->m_inited, 1);
+        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare waits for its init";
+        EXPECT_EQ(engine->m_inited, 0) << "the prepare failed before the engine";
+        EXPECT_EQ(engine->m_loaded, 0) << "nothing loaded behind a refused init";
+        stage->m_init_throws = false;
         EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
         EXPECT_NE(
             std::string_view(first.m_err.message).find("the engine 'org.example.cxx' refused init"),
             std::string_view::npos)
             << first.m_err.message;
+        EXPECT_EQ(stage->m_inited, 2) << "tried again";
         EXPECT_EQ(engine->m_inited, 1);
         EXPECT_EQ(engine->m_loaded, 0) << "nothing loaded behind a refused init";
-        EXPECT_EQ(stage->m_inited, 0) << "the session failed before the stage";
+        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare follows the loads";
+        EXPECT_EQ(anira_handler_plan_report(first.m_handler), nullptr);
         engine->m_init_throws = false;
-        EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
-        EXPECT_NE(std::string_view(first.m_err.message).find("the stage refused init"),
-                  std::string_view::npos)
-            << first.m_err.message;
+        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        EXPECT_EQ(stage->m_inited, 2) << "initialised: not again";
         EXPECT_EQ(engine->m_inited, 2) << "tried again";
         EXPECT_EQ(engine->m_loaded, 1);
         EXPECT_EQ(engine->m_prepared, 1);
-        EXPECT_EQ(stage->m_inited, 1);
-        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare waits for its init";
-        EXPECT_EQ(anira_handler_plan_report(first.m_handler), nullptr);
-        stage->m_init_throws = false;
-        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
-        EXPECT_EQ(engine->m_inited, 2) << "initialised: not again";
-        EXPECT_EQ(stage->m_inited, 2) << "tried again";
         EXPECT_EQ(stage->m_prepared, 1);
         ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
@@ -2727,6 +2730,51 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
         EXPECT_EQ(engine.use_count(), 2) << "a fresh C engine";
     }
     EXPECT_EQ(engine->m_released.load(), 2);
+    EXPECT_EQ(engine.use_count(), 1);
+}
+
+// A handler that outlives the Pipeline it was created from keeps the object's C engine, and a
+// later registration of the object, on a new Pipeline, adds that same C engine (the object's
+// detached handle names it while the handler holds it): one init, one loaded model shared
+// across the two handlers, one release after the last of them.
+TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
+    const anira_test::Context context;
+    const anira::ContractHandle contract = anira_test::explicit_contract();
+    const ModelConfig model = engine_stream_model();
+    auto engine = std::make_shared<CountingEngine>();
+    {
+        std::optional<anira::Pipeline> first_pipe;
+        first_pipe.emplace();
+        first_pipe->register_engine(engine).inference(model);
+        CHandler first(context, *first_pipe);
+        ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+        first_pipe.reset();  // the handler carries the C engine alone now
+        EXPECT_EQ(engine.use_count(), 2) << "the C engine's copy";
+        EXPECT_EQ(engine->m_released.load(), 0);
+
+        anira::Pipeline second_pipe;
+        second_pipe.register_engine(engine).inference(model);
+        EXPECT_EQ(engine.use_count(), 2) << "the same C engine: no second copy";
+        CHandler second(context, second_pipe);
+        ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+        ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
+        ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
+        EXPECT_EQ(engine->m_inited, 1) << "one C engine: one init";
+        EXPECT_EQ(engine->m_loaded, 1) << "one loaded model across the two handlers";
+        EXPECT_EQ(engine->m_prepared, 2);
+        std::vector<float> in;
+        std::vector<float> out;
+        drive(first.m_handler, 2, in, out);
+        drive(second.m_handler, 2, in, out);
+        ASSERT_FALSE(HasFatalFailure());
+        first.destroy();
+        EXPECT_FALSE(engine->last_load()->m_unloaded.load());
+        EXPECT_EQ(engine->m_released.load(), 0);
+        second.destroy();
+        EXPECT_TRUE(engine->last_load()->m_unloaded.load());
+        EXPECT_EQ(engine->m_released.load(), 0) << "the second pipeline still carries it";
+    }
+    EXPECT_EQ(engine->m_released.load(), 1);
     EXPECT_EQ(engine.use_count(), 1);
 }
 

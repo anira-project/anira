@@ -151,6 +151,21 @@ struct PrepareRequest {
 /// TFLite's model, a compiled model over LiteRT's, a Module over ExecuTorch's program, a
 /// TorchScript module). Made on the control thread (ExecutorLoaded::make_executor), where it
 /// may load, allocate and throw; process and reset run on an inference thread.
+/// Whether a failing chunk's text is logged: the first failure since the last success is
+/// (first_failure), the rest are not until a chunk succeeds (succeeded); the scheduler latches
+/// the status itself and counts the rest. One per executor, on the inference thread, without
+/// a lock.
+class FailureLatch {
+public:
+    /// True for the first failure since the last success: the caller logs.
+    bool first_failure() noexcept { return !m_failed.exchange(true, std::memory_order_relaxed); }
+    /// A success: the next failure is logged again.
+    void succeeded() noexcept { m_failed.store(false, std::memory_order_relaxed); }
+
+private:
+    std::atomic<bool> m_failed{false};
+};
+
 class ANIRA_API Executor {
 public:
     Executor() = default;
@@ -171,6 +186,11 @@ public:
     /// right after it was made; throws anira::StatusError(ANIRA_ERROR_ENGINE) with the
     /// engine's text for an inference that fails. Nothing by default.
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
+
+protected:
+    /// The latch of this executor's process: the engine's text goes to the log for the first
+    /// failing chunk since the last success, the scheduler's latch counts the rest.
+    FailureLatch m_failures;
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
@@ -475,7 +495,7 @@ struct SlotBinding {
 
 /// The binding rule of every built-in engine, one side at a time. `engine_names` are the
 /// engine's tensors of the side in the engine's order (the graph order of ONNX Runtime, the
-/// signature's index order of LiteRT and TFLite, the method's argument order of LibTorch; all
+/// key order of the signature on LiteRT and TFLite, the method's argument order of LibTorch; all
 /// empty strings for a side without names). A slot the entry's tensors record names
 /// (TensorInfo::m_engine_name) binds to the engine tensor of that name, which must exist; a
 /// slot without a record binds to the engine tensor of its canonical name where the side has

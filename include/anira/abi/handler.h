@@ -376,15 +376,31 @@ ANIRA_API anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_
                                                              anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Drops the handle's reference. The pipelines the engine was added to and the handlers
- * created from them keep theirs; release fires here when no one holds the engine any
- * more.
+ * @brief Drops the handle's reference (or frees a detached handle). The pipelines the engine
+ * was added to and the handlers created from them keep theirs; release fires here when
+ * no one holds the engine any more.
  * @param engine The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
 ANIRA_API void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engine) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Detaches the handle from the engine's lifetime: from now on the handle keeps the
+ * engine alive no longer and names it for anira_pipeline_add_engine only while a
+ * pipeline, a handler created from one or a loaded model holds it; once they are gone
+ * the engine is released and the addition is ANIRA_ERROR_INVALID_STATE.
+ * anira_custom_engine_destroy still frees the handle. For a caller that keeps a handle
+ * to add the engine to pipelines yet to come without keeping it alive itself
+ * (anira.hpp's Engine object does, so that one object has one C engine for as long as
+ * anything holds it). A handle nothing else holds the engine through is released here.
+ * @param engine The handle; NULL, or a handle detached already, is a no-op.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API void ANIRA_CALL anira_custom_engine_detach(anira_custom_engine* engine) ANIRA_NOEXCEPT;
 
 /**
  * @brief Adds a custom engine to the pipeline, under the id it was created with
@@ -400,7 +416,8 @@ ANIRA_API void ANIRA_CALL anira_custom_engine_destroy(anira_custom_engine* engin
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or engine;
  *         ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine with the engine's
- *         id, this engine or another. A refused call takes no reference.
+ *         id, this engine or another, or when a detached handle's engine was released
+ *         (anira_custom_engine_detach). A refused call takes no reference.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -543,31 +560,34 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * @brief The blocking quiescence point, and the one call no other handler entry may overlap:
  * validates the variant against the contract (geometry, the explicit budget, the warm-up
  * mode, the miss policy against the anchor, the ring dtypes by canonical name, the
- * contract's extensions), loads the model of every candidate with an entry, warms up as
- * the contract says, sizes the rings for the contract's block range and the latency,
- * builds the plan report, selects the plan of the variant's default engine when that
- * engine has a plan (else plan 0), logs the report (Info records of the group
- * anira.capi: the counts and the selected plan, then one record per plan, per slot and
- * per consumed extension) re-arms the real-time latches, logging the count of failures
- * suppressed since the last prepare or reset, and last calls the stage's prepare
- * function, when the pipeline has a stage with one, with an anira_prepare_info (the
- * handler, the report, the entry count, a template of the model end of every slot and
- * the canonical names) and keeps the prepared pointer it hands back for this handler (a
- * status other than ANIRA_OK fails this call with it, and unprepare is not called for a
- * refused prepare). A second prepare replaces the previous session whole: the stage's
- * unprepare of the previous prepare runs once the old session is released, before the
- * new prepare. A failed prepare leaves the handler unprepared, the previous prepare's
- * unprepare called all the same. Refused in this pre-release: an Async contract,
- * ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an
- * explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an
- * output or when a streamed output's channel count or ring dtype differs from the
- * anchored input's, ANIRA_MISS_CALLBACK without a function
- * (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one
- * that differs from its spec's dtype while the stage does not fill the phase that moves
- * that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process
- * or post_process carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since
- * under a Hard contract those two phases run on the driving thread (ANIRA_ERROR_CONFIG
- * naming the flag).
+ * contract's extensions), checks every plan's provider against what its engine serves
+ * now (a built-in engine's runtime, a custom engine's query; ANIRA_ERROR_NOT_SUPPORTED
+ * as at anira_handler_create, so a context probed again since the create is seen), runs
+ * the stage's init when it has not run yet (once per registration, before any model
+ * loads), loads the model of every candidate with an entry, warms up as the contract
+ * says, sizes the rings for the contract's block range and the latency, builds the plan
+ * report, selects the plan of the variant's default engine when that engine has a plan
+ * (else plan 0), logs the report (Info records of the group anira.capi: the counts and
+ * the selected plan, then one record per plan, per slot and per consumed extension)
+ * re-arms the real-time latches, logging the count of failures suppressed since the last
+ * prepare or reset, and last calls the stage's prepare function, when the pipeline has a
+ * stage with one, with an anira_prepare_info (the handler, the report, the entry count,
+ * a template of the model end of every slot and the canonical names) and keeps the
+ * prepared pointer it hands back for this handler (a status other than ANIRA_OK fails
+ * this call with it, and unprepare is not called for a refused prepare). A second
+ * prepare replaces the previous session whole: the stage's unprepare of the previous
+ * prepare runs once the old session is released, before the new prepare. A failed
+ * prepare leaves the handler unprepared, the previous prepare's unprepare called all the
+ * same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+ * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
+ * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
+ * output's channel count or ring dtype differs from the anchored input's,
+ * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
+ * that names no Streamed tensor, or one that differs from its spec's dtype while the
+ * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
+ * field), and a stage whose filled pre_process or post_process carries no
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those two
+ * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.

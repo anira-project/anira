@@ -240,6 +240,9 @@ public:
         return m_order;
     }
 
+    /// How many calls are inside process() right now: a held inference is one.
+    int inside() const noexcept { return m_inside.load(); }
+
     std::atomic<bool> m_open{true};
     std::atomic<bool> m_throw{false};  ///< fails the next inference, once
     std::atomic<int> m_calls{0};
@@ -1078,7 +1081,7 @@ TEST(AbiState, AResetAcrossAnInferenceInFlightNeverSeedsTheNewStream) {
     const anira_tensor held_tensor = whole_f32(held.data(), {k_channels, k_hop});
     ASSERT_EQ(anira_handler_push_data(h, &held_tensor, rig.data_slot()), ANIRA_OK);
     const auto start = std::chrono::steady_clock::now();
-    while (rig.session().m_active_inferences.load() == 0) {
+    while (rig.backend().inside() == 0) {
         ASSERT_LT(std::chrono::steady_clock::now(), start + std::chrono::seconds(10));
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }

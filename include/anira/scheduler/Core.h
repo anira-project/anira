@@ -331,6 +331,20 @@ public:
     static size_t get_thread_pool_size();
 
     /**
+     * @brief The size the inference thread pool will have once a session under this
+     * context configuration is registered
+     *
+     * What the init record of a registration names for a session that does not exist yet
+     * (the stage's init runs before the session's models load): the pool in effect, clamped
+     * by the configuration's thread count, or the configuration's count when no user has a
+     * pool yet; 0 for a configuration that brings its own threads. Takes the lifecycle lock.
+     *
+     * @param context_config The context's configuration, the C struct itself
+     * @return The pool's prospective size
+     */
+    static size_t prospective_thread_pool_size(const anira_context_config& context_config);
+
+    /**
      * @brief Prepares a session for processing with new audio configuration
      *
      * Configures the specified session with new audio host settings and optional

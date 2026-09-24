@@ -294,6 +294,10 @@ public:
                                                                        ///< structures for
                                                                        ///< concurrent processing
 
+    /// No chunk carries this dispatch stamp: what a plan's m_engine_generation holds after
+    /// prepare, so that the plan's first inference of the session is its first of a new stream.
+    static constexpr uint64_t k_no_generation = UINT64_MAX;
+
     /**
      * @brief One plan of the table: the adapter the plan runs on and what a chunk stamped
      * with the plan reports.
@@ -337,6 +341,21 @@ public:
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the stage processor binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
         bool m_state_alias = false;
+        /**
+         * @brief The dispatch stamp this plan's engine last ran under: the plan's reset boundary
+         *
+         * A session-exclusive session only, whose inferences run one at a time and in order
+         * (the dispatch gate): InferenceThread::inference compares the chunk's dispatch stamp
+         * with it, and a difference is this plan's first inference of a new stream (after
+         * prepare, after a reset), so the plan's adapter resets its engine's own state right
+         * before that inference's process and the stamp is adopted. Per plan, since every plan
+         * runs its own executor: after a reset each plan is reset at its own first inference
+         * of the new stream, whichever plan ran first, and a plan switch alone is no boundary.
+         * Read and written on the inference thread alone, between the gate's acquire and
+         * release; set to k_no_generation by prepare, at quiescence. A shared (pooled) adapter
+         * is never reset: only an exclusive session gets here.
+         */
+        uint64_t m_engine_generation = k_no_generation;
     };
 
     /**
@@ -371,24 +390,6 @@ public:
     /// The first plan that runs on a 2.x backend (the 2.x selection by backend), if any does.
     std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
 
-    /// No chunk carries this dispatch stamp: what m_engine_generation holds after prepare, so
-    /// that the first inference of the session is the first of a new stream.
-    static constexpr uint64_t k_no_generation = UINT64_MAX;
-
-    /**
-     * @brief The dispatch stamp the engine last ran under: the engine's reset boundary.
-     *
-     * A session-exclusive session only, whose inferences run one at a time and in order
-     * (the dispatch gate): InferenceThread::inference compares the chunk's dispatch stamp
-     * with it, and a difference is the first inference of a new stream (after prepare, after
-     * a reset), so the plan's adapter resets its engine's own state right before that
-     * inference's process and the stamp is adopted. Read and written on the inference thread
-     * alone, between the gate's acquire and release; set to k_no_generation by prepare, at
-     * quiescence. A shared (pooled) adapter is never reset: only an exclusive session gets
-     * here.
-     */
-    uint64_t m_engine_generation = k_no_generation;
-
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
     size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of
@@ -399,20 +400,26 @@ public:
 
     const int m_session_id;  ///< Unique identifier for this session (immutable)
 
-    std::atomic<bool> m_initialized{false};   ///< Atomic flag indicating if the session is fully
-                                              ///< initialized
-    std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
-                                              ///< operations
+    std::atomic<bool> m_initialized{false};  ///< Atomic flag indicating if the session is fully
+                                             ///< initialized
+    /// The session's jobs outside the free pool, counted from before their enqueue into the
+    /// global queue (the audio thread's dispatch, an exclusive chain's continuation) until the
+    /// worker finished the job or a drain completed it as zeros: what
+    /// Core::drain_inference_queue waits down to zero, so that no job is invisible to it,
+    /// however late its worker is. On a heap object of its own, which a worker holds beside the
+    /// session: its decrement is the last thing the worker does for the job, after it dropped
+    /// its reference to the session, so a session dies on the control thread that released it,
+    /// never on an inference thread.
+    const std::shared_ptr<std::atomic<int>> m_active_inferences =
+        std::make_shared<std::atomic<int>>(0);
 
     // Monotonic generation counter, bumped by Core::reset_session() (audio
     // thread) and Core::prepare_session() (control thread, quiescent). Every
     // inference dispatched under an earlier generation is "stale": its output is
     // discarded and its struct reclaimed, without the caller ever waiting for the
     // worker. Workers read it to decide whether to skip a stale dispatch. seq_cst
-    // on the write pairs with the worker's register-before-read of
-    // m_active_inferences (store-buffering), matching the existing m_initialized
-    // handshake. 64-bit: wrap-around (ABA) is unreachable even at per-block reset
-    // rates.
+    // on the write pairs with the worker's seq_cst read of it, as m_initialized's
+    // does. 64-bit: wrap-around (ABA) is unreachable even at per-block reset rates.
     std::atomic<uint64_t> m_generation{0};
 
     // This session's explicit producer token for the global inference queue.

@@ -60,7 +60,11 @@ Two calls, two jobs:
 The handle, every pipeline the engine was added to, every handler created from those pipelines
 and every loaded model of the engine hold a reference. ``anira_custom_engine_destroy`` drops
 the handle's, so it may run right after the last ``anira_pipeline_add_engine``; ``release``
-fires exactly once, when the last reference is gone. The id is a reverse-URI name: it must
+fires exactly once, when the last reference is gone. A handle that should add the engine to
+pipelines yet to come without keeping it alive is **detached** (``anira_custom_engine_detach``):
+from then on it names the engine while a pipeline, a handler or a loaded model holds it, the
+addition is ``ANIRA_ERROR_INVALID_STATE`` once the engine was released, and
+``anira_custom_engine_destroy`` still frees it. The id is a reverse-URI name: it must
 contain a ``.``, and the prefix ``anira.`` is anira's own (``anira.v2.custom`` names the 2.x
 ``CUSTOM`` backend of :doc:`migration`). Adding is legal before or after
 ``anira_pipeline_add_inference``; a handler copies the pipeline at ``anira_handler_create``, so
@@ -272,7 +276,8 @@ draw the line so (``src/backends/``, internal):
   method is loaded with the XNNPACK delegate's runtime options set to a workspace per delegate
   instance and no process-wide weight cache, so two executors never meet on the process-wide
   mutexes the prebuilt runtime otherwise takes around every call, at the price of a workspace
-  and an unpacked copy of the weights per executor; and it is loaded and run under a
+  and an unpacked copy of the weights per executor (memory grows with the model per executor,
+  an exclusive handler's own included); and it is loaded and run under a
   no-thread-pool guard, so the delegate captures no thread pool and every call runs inline on
   the inference thread that made it.
 
@@ -362,14 +367,18 @@ A ``process`` that returns any status but ``ANIRA_OK`` fails the chunk, as a bui
 failure does: ``anira_handler_rt_error`` reads ``ANIRA_ERROR_ENGINE`` with one latched record
 naming the status, anira zeroes the outputs, the chunk delivers zeros at its stream position,
 the stage's ``after_inference`` does not run for it, and a State pair keeps its last good
-value. A throw across this boundary is undefined.
+value (an aliasing engine writes in place: what a failed call left in the buffer is its own).
+A throw across this boundary is undefined.
 
 **reset(ctx, prepared, user_data)** re-initialises the state an engine keeps per handler (a
 recurrent hidden state the model does not declare, a variable tensor, a filter's history): for
 an **exclusive** handler, at the first inference of a new stream (after ``prepare``, after
 ``anira_handler_reset``), on the inference thread, with that inference's context
 (``ANIRA_ENGINE_CALL_EXCLUSIVE`` set) and the handler's ``prepared``, right before its
-``process``; never for a handler whose model is stateless, whose calls run on the shared slots
+``process``. The boundary is the plan's: after ``prepare`` or a reset every plan of the
+handler is reset at its own first inference of the new stream, whichever plan ran first, and a
+plan switch alone is none. Never for a handler whose model is stateless, whose calls run on the
+shared slots
 and keep nothing between them. ``NULL`` for an engine without such state. (Of the built-in
 engines only TensorFlow Lite has a body, ``TfLiteInterpreterResetVariableTensors`` on the
 handler's own interpreter.)
@@ -411,8 +420,10 @@ The flags are the engine's promises, declared once and reported in
 - ``ANIRA_ENGINE_FLAG_STATE_ALIAS``: the engine keeps its own aliasing of a declared State
   pair. anira binds one stable buffer per pair as both the State input and the State output of
   every call of a plan of this engine and never flips it: the engine reads the state before it
-  writes it, in place, and every address stays put across calls, which a captured graph (CUDA
-  graphs, WebGPU replay) needs. Honoured per plan (below); no built-in engine sets it.
+  writes it, in place, and every address stays put across the calls of aliasing plans, which
+  a captured graph (CUDA graphs, WebGPU replay) needs (a chunk of a flipping plan in between
+  moves the pair: re-capture after such a switch). Honoured per plan (below); no built-in
+  engine sets it.
 
 A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
 ``anira_custom_engine_create``. The flags of the two records are anira's, not the
@@ -443,6 +454,10 @@ An engine whose runtime wants the addresses to stay put, a captured graph above 
 ``ANIRA_ENGINE_FLAG_STATE_ALIAS``: for every call of a plan of that engine anira binds **one**
 buffer as both halves of the pair and never flips, so the State input's memory is the State
 output's, and the engine reads the state before it writes it (in place) or copies for itself.
+A failed call leaves the buffer as the engine left it (the last-good rule of a flipping pair,
+which a failed inference does not flip, is the engine's to keep here), and a chunk of a plan
+without the bit in between flips the pair, so the addresses stay put across the chunks of
+aliasing plans alone.
 The pair is the model's, not a plan's: every plan of the variant runs the same pair, in the
 engine domain of the plans that run it (host memory for every engine of this pre-release; the
 slot's declared host domain overrides it, :doc:`usage` section 1.3), so a plan switch keeps
@@ -744,10 +759,12 @@ along by the inference stage, ``stage::Inference(cfg).engine(impl)``, which
 The ``anira::Engine`` object is the engine's identity, as ``anira_custom_engine`` is in C. The
 first registration of an object creates its C engine under the object's id; every later
 registration of **the same object**, on another ``Pipeline``, reuses that C engine for as long
-as a ``Pipeline`` holding it lives, so handlers of all of them share loaded models. The C engine
-holds a copy of the ``shared_ptr``; ``release()`` runs once per C engine, when the last
-pipeline and handler carrying it are gone, and a registration after that creates a fresh C
-engine with a ``release()`` of its own. An id the C engine's create refuses creates nothing. A
+as anything holds it (a ``Pipeline``, a handler created from one, a loaded model in the pool:
+the object keeps a detached handle of it), so handlers of all of them share loaded models. The
+C engine holds a copy of the ``shared_ptr``; ``release()`` runs once per C engine, when the
+last pipeline, handler and loaded model carrying it are gone, and a registration after that
+creates a fresh C engine with a ``release()`` of its own. An id the C engine's create refuses
+creates nothing. A
 registration refused because the pipeline already has an engine with the object's id takes no
 reference; when that call created the object's C engine, the C engine is dropped again and
 ``release()`` answers it. The gain engine, its ``process`` the passthrough of the first slot

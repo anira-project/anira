@@ -2497,7 +2497,7 @@ public:
     /// the Engine::Loaded the call runs on, which its Prepared holds already.
     void* loaded() const noexcept { return m_ctx->loaded; }
     /// The model's input list, State tensors included: the descriptors over the memory the
-    /// engine reads, the spec's dtype and the engine-side extents of the prepare record's
+    /// engine reads, the spec's dtype and the engine-side extents of the load record's
     /// templates, with the data.
     std::span<const Tensor> inputs() const noexcept {
         // NOLINTNEXTLINE(cppcoreguidelines-pro-type-static-cast-downcast) a Tensor is the record
@@ -2533,8 +2533,9 @@ struct EngineTrampolines;
  * identity and its id the engine's name, as an anira_custom_engine and its id are in C: the
  * first Pipeline::register_engine of an object creates its C engine under the id (flags(),
  * consumed_kinds() and providers() are read then, once), and every later registration of the
- * same object, on another Pipeline, adds that same C engine for as long as a Pipeline holding
- * it lives. The levels, from
+ * same object, on another Pipeline, adds that same C engine for as long as anything holds it
+ * (a Pipeline, a handler created from one, a loaded model in the pool: the object keeps a
+ * detached handle of it, anira_custom_engine_detach). The levels, from
  * the outermost in: init() is called once per C engine, by the first anira_handler_prepare
  * that reaches it, with the facts of the core in effect (InitInfo); load() is called once per
  * loaded model anira pools and returns that model's Engine::Loaded, the C lifecycle's loaded
@@ -2567,11 +2568,13 @@ struct EngineTrampolines;
  * right before its process; a handler whose model is stateless is never reset. A status other
  * than ANIRA_OK from process fails the chunk: it lands in anira_handler_rt_error with one
  * latched record, anira zeroes the outputs, the chunk delivers zeros at its stream position, a
- * State pair keeps its last good value.
+ * State pair keeps its last good value (an aliasing engine writes in place: what a failed call
+ * left in the buffer is its own).
  *
  * flags() is the engine's promise (anira_engine_desc::flags): an OR of
- * ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE and
- * ANIRA_ENGINE_FLAG_DYNAMIC_TIME, declared and reported in anira_plan_info::engine_flags in this
+ * ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+ * ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, declared and reported in
+ * anira_plan_info::engine_flags in this
  * pre-release; the default promises nothing. process and reset are noexcept (an override that
  * throws does not compile without it, and terminates with it) and carry no real-time attribute
  * of their own, like the C typedefs: whether process is real-time is the flag, and everything
@@ -2611,10 +2614,11 @@ public:
         /// ANIRA_OK fails the chunk (zeros at its stream position, the status latched in
         /// anira_handler_rt_error).
         virtual anira_status process(EngineContext& ctx) noexcept = 0;
-        /// The first inference of a new stream of an exclusive handler (after prepare, after
-        /// anira_handler_reset), with that inference's context, right before its process; never
-        /// for a handler whose model is stateless: the state this object keeps per stream starts
-        /// over. The base class does nothing.
+        /// This plan's first inference of a new stream of an exclusive handler (after prepare,
+        /// after anira_handler_reset; every plan is reset at its own first inference, a plan
+        /// switch alone is no boundary), with that inference's context, right before its
+        /// process; never for a handler whose model is stateless: the state this object keeps
+        /// per stream starts over. The base class does nothing.
         virtual void reset(EngineContext& /*ctx*/) noexcept {}
     };
 
@@ -2734,20 +2738,25 @@ public:
 private:
     friend struct detail::EngineTrampolines;
     std::string m_id;
-    /// The C engine of this object while a Pipeline holding it lives: weak, since the C engine
-    /// owns a shared_ptr to this object (its user_data), and a strong reference back would
-    /// keep both alive forever. Guarded by m_handle_mutex: two plugin instances may register
-    /// one object from two threads.
+    /// The handle of this object's C engine, detached (anira_custom_engine_detach) once the
+    /// C engine was added to its first Pipeline: it names the C engine for every later
+    /// registration for as long as anything holds it (a Pipeline, a handler created from one,
+    /// a loaded model in the pool) and keeps it alive no longer, since the C engine owns a
+    /// shared_ptr to this object (its user_data) and a strong reference back would keep both
+    /// alive forever. Reset by the C engine's release, so a registration after that creates a
+    /// new C engine. Guarded by m_handle_mutex: two plugin instances may register one object
+    /// from two threads, and the release runs on the thread of the last destroy.
     std::mutex m_handle_mutex;
-    std::weak_ptr<detail::EngineHandle> m_handle;
+    std::shared_ptr<detail::EngineHandle> m_handle;
 };
 
 namespace detail {
 
 /**
- * @brief One reference to the C engine of an Engine object (anira_custom_engine), dropped at
- * destruction. Held by every Pipeline that registered the object; the object itself holds it
- * weakly (Engine::m_handle), which is how a later registration finds it again.
+ * @brief The handle of the C engine of an Engine object (anira_custom_engine): a reference
+ * until Pipeline::register_engine detached it, a name afterwards; freed at destruction. Held
+ * by the object (Engine::m_handle) until the C engine's release, and by a registration for
+ * the duration of its addition.
  */
 struct EngineHandle {
     EngineHandle() = default;
@@ -2770,15 +2779,17 @@ struct EngineHandle {
  * out_prepared and deleted at unprepare, exactly once per successful call each.
  */
 struct EngineTrampolines {
-    /// The C engine of `engine`: the one a living Pipeline already holds, else a new one
-    /// (anira_custom_engine_create) under the object's id, whose descriptor is read from the
-    /// object now: flags(), consumed_kinds(), providers(), the eight slots. @throws Error when
-    /// the C entry refuses the id (no reverse-URI name, or anira's own) or the descriptor (a
-    /// flags() bit anira/abi/enums.h does not define); a refused create keeps no copy of the
-    /// object and never calls its release.
+    /// The C engine of `engine`: the one its handle names while anything holds it, else a new
+    /// one (anira_custom_engine_create) under the object's id, whose descriptor is read from the
+    /// object now: flags(), consumed_kinds(), providers(), the nine slots. A new C engine's
+    /// handle keeps it alive until Pipeline::register_engine added it and detached the handle
+    /// (a refused addition detaches too, so the C engine goes again and release answers it).
+    /// @throws Error when the C entry refuses the id (no reverse-URI name, or anira's own) or
+    /// the descriptor (a flags() bit anira/abi/enums.h does not define); a refused create keeps
+    /// no copy of the object and never calls its release.
     static std::shared_ptr<EngineHandle> handle_of(const std::shared_ptr<Engine>& engine) {
         const std::scoped_lock<std::mutex> lock(engine->m_handle_mutex);
-        if (std::shared_ptr<EngineHandle> handle = engine->m_handle.lock()) { return handle; }
+        if (engine->m_handle != nullptr) { return engine->m_handle; }
         const std::span<const char* const> kinds = engine->consumed_kinds();
         const std::span<const char* const> providers = engine->providers();
         anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
@@ -2811,6 +2822,14 @@ struct EngineTrampolines {
         [[maybe_unused]] const std::shared_ptr<Engine>* const carried = holder.release();
         engine->m_handle = handle;
         return handle;
+    }
+
+    /// Whether `handle` still names `engine`'s C engine: false once that C engine was released
+    /// (its last holder gone on another thread between a registration's lookup and its
+    /// addition), which the registration answers with a fresh C engine.
+    static bool still_named(Engine& engine, const std::shared_ptr<EngineHandle>& handle) {
+        const std::scoped_lock<std::mutex> lock(engine.m_handle_mutex);
+        return engine.m_handle == handle;
     }
 
     static Engine& engine_of(void* user_data) noexcept {
@@ -2919,7 +2938,13 @@ struct EngineTrampolines {
     static void ANIRA_CALL release(void* user_data) noexcept {
         const std::unique_ptr<std::shared_ptr<Engine>> holder(
             static_cast<std::shared_ptr<Engine>*>(user_data));
-        (*holder)->release();
+        Engine& engine = **holder;
+        {
+            // The handle names this C engine no more: a later registration creates a new one.
+            const std::scoped_lock<std::mutex> lock(engine.m_handle_mutex);
+            engine.m_handle.reset();
+        }
+        engine.release();
     }
 
 private:
@@ -3099,14 +3124,11 @@ public:
     ~Pipeline() { anira_pipeline_destroy(m_pipeline); }
     Pipeline(const Pipeline&) = delete;
     Pipeline& operator=(const Pipeline&) = delete;
-    Pipeline(Pipeline&& other) noexcept
-        : m_pipeline(std::exchange(other.m_pipeline, nullptr))
-        , m_engines(std::move(other.m_engines)) {}
+    Pipeline(Pipeline&& other) noexcept : m_pipeline(std::exchange(other.m_pipeline, nullptr)) {}
     Pipeline& operator=(Pipeline&& other) noexcept {
         if (this != &other) {
             anira_pipeline_destroy(m_pipeline);
             m_pipeline = std::exchange(other.m_pipeline, nullptr);
-            m_engines = std::move(other.m_engines);
         }
         return *this;
     }
@@ -3158,8 +3180,18 @@ public:
         std::shared_ptr<detail::EngineHandle> handle =
             detail::EngineTrampolines::handle_of(implementation);
         anira_error err{};
-        detail::check(anira_pipeline_add_engine(m_pipeline, handle->m_engine, &err), err);
-        m_engines.push_back(std::move(handle));
+        anira_status status = anira_pipeline_add_engine(m_pipeline, handle->m_engine, &err);
+        if (status == ANIRA_ERROR_INVALID_STATE &&
+            !detail::EngineTrampolines::still_named(*implementation, handle)) {
+            // The C engine the handle named was released between the lookup and the addition
+            // (its last holder gone on another thread): a fresh one.
+            handle = detail::EngineTrampolines::handle_of(implementation);
+            status = anira_pipeline_add_engine(m_pipeline, handle->m_engine, &err);
+        }
+        // Added or refused, the handle keeps the C engine alive no longer: the pipeline holds
+        // it now, or nothing does and Engine::release answers.
+        anira_custom_engine_detach(handle->m_engine);
+        detail::check(status, err);
         return *this;
     }
 
@@ -3240,9 +3272,6 @@ private:
     }
 
     anira_pipeline* m_pipeline = nullptr;
-    /// The C engines of the Engine objects registered here, one entry per registration: what
-    /// lets another Pipeline registering the same object find the same C engine.
-    std::vector<std::shared_ptr<detail::EngineHandle>> m_engines;
 };
 
 // ---- job options (section 6) ---------------------------------------------------------------
