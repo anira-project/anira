@@ -2,7 +2,7 @@
 # validate-options.cmake — cross-option validation guards, in one place.
 #
 # Included after project() AND after cmake/tanh/platform.cmake (so TANH_BINARY_FORMAT is
-# resolved) but BEFORE the backends are set up / the library target is created,
+# resolved) but BEFORE the engines are set up / the library target is created,
 # so the auto-disable below takes effect. include() runs in the caller's scope,
 # so plain set() here updates the options the rest of the build sees.
 # ==============================================================================
@@ -14,13 +14,13 @@ if(ANIRA_WITH_TFLITE AND ANIRA_WITH_LITERT)
     message(FATAL_ERROR
         "ANIRA_WITH_TFLITE and ANIRA_WITH_LITERT are the same TensorFlow Lite runtime exposed "
         "through two C APIs and cannot be enabled together (their static libraries export the "
-        "same TfLite* symbols). To use the legacy TFLite backend, set "
+        "same TfLite* symbols). To use the legacy TFLite engine, set "
         "-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON.")
 endif()
 
 # ------------------------------------------------------------------------------
-# Backend linkage follows the library type, with no per-engine override: a shared
-# anira links shared backends, a static anira links static backends
+# Engine linkage follows the library type, with no per-engine override: a shared
+# anira links shared engines, a static anira links static engines
 # (ANIRA_BACKEND_LINKAGE). These are the only two shapes anira supports, because they
 # are the only ones in which every engine exists exactly once per process and a
 # consumer can still reach it: a shared anira that absorbed a static engine could
@@ -30,7 +30,7 @@ endif()
 #   * LibTorch ships shared-only (and its bundled XNNPACK collides with static LiteRT).
 #   * ExecuTorch ships static-only (a force-loaded runtime that aborts when its
 #     kernels register twice in one process).
-# The rule is checked once more at compile time by the BackendLinkage test.
+# The rule is checked once more at compile time by the EngineLinkage test.
 # ------------------------------------------------------------------------------
 if(BUILD_SHARED_LIBS)
     set(ANIRA_BACKEND_LINKAGE "shared")
@@ -42,7 +42,7 @@ endif()
 # into one wasm module: neither has a shared shape, so demand the static one
 # explicitly instead of silently building something else than what was asked for.
 if(BUILD_SHARED_LIBS AND (TANH_OPERATING_SYSTEM STREQUAL "iOS" OR TANH_BINARY_FORMAT STREQUAL "Wasm"))
-    message(FATAL_ERROR "anira is static-only on iOS and Emscripten (the backends ship static "
+    message(FATAL_ERROR "anira is static-only on iOS and Emscripten (the engines ship static "
                         "archives only there): configure with -DBUILD_SHARED_LIBS=OFF.")
 endif()
 
@@ -56,28 +56,28 @@ endif()
 
 if(ANIRA_WITH_EXECUTORCH AND NOT ANIRA_BACKEND_LINKAGE STREQUAL "static")
     message(WARNING "disabling ANIRA_WITH_EXECUTORCH: ExecuTorch is static-only and cannot be linked "
-                    "into a shared anira build (BUILD_SHARED_LIBS=ON) — anira links its backends in "
+                    "into a shared anira build (BUILD_SHARED_LIBS=ON) — anira links its engines in "
                     "the linkage of the library itself, so that every engine exists exactly once per "
                     "process. Build static (-DBUILD_SHARED_LIBS=OFF) to use ExecuTorch.")
     set(ANIRA_WITH_EXECUTORCH OFF)
 endif()
 
 # Android / iOS: the anira backends release ships no LibTorch mobile build (LibTorch
-# is desktop-only upstream; the PyTorch mobile path is the ExecuTorch backend).
+# is desktop-only upstream; the PyTorch mobile path is the ExecuTorch engine).
 # LibTorch defaults ON, so a mobile build must opt out of it explicitly.
 if((TANH_OPERATING_SYSTEM STREQUAL "Android" OR TANH_OPERATING_SYSTEM STREQUAL "iOS") AND ANIRA_WITH_LIBTORCH)
     message(FATAL_ERROR "LibTorch has no Android/iOS build in the anira backends release. Disable it "
-                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime, LiteRT or ExecuTorch backend on mobile.")
+                        "(-DANIRA_WITH_LIBTORCH=OFF) and use the ONNX Runtime, LiteRT or ExecuTorch engine on mobile.")
 endif()
 
 # ExecuTorch, LiteRT and TFLite all bundle their own (different) copy of XNNPACK.
-# In a fully static anira every backend's archives are linked into one image, where
+# In a fully static anira every engine's archives are linked into one image, where
 # the duplicate xnn_* symbols hard-collide at link time (and would cross-bind the
 # delegates if they didn't). Shared builds are unaffected: LiteRT/TFLite are then
 # self-contained shared libraries.
 #
 # ExecuTorch, LiteRT and TFLite all bundle their own (different) copy of XNNPACK
-# (plus cpuinfo/pthreadpool). In a fully static anira every backend's archives are
+# (plus cpuinfo/pthreadpool). In a fully static anira every engine's archives are
 # linked into one image, where duplicate xnn_* symbols hard-collide at link time
 # (and would cross-bind the delegates if they didn't). Shared builds are unaffected.
 #

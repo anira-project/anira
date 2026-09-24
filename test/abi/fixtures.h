@@ -54,7 +54,8 @@ inline constexpr const char* k_contract_async_v3 = R"({ "async": {
     "lanes": 0, "max_in_flight": 0, "delivery": "polled"
 }, "edge_cost": "strict" })";
 
-// The SimpleGain config as the tree generates it (two inputs, the second static).
+// The SimpleGain config as the tree generates it (two inputs, the second static); the TFLite
+// export holds the static gain at rank 3 ([1, 1, 1]), which the two TensorFlow rows say.
 inline constexpr const char* k_simple_gain_v2 = R"({
   "context_config": { "num_threads": 1 },
   "inference_config": {
@@ -65,7 +66,9 @@ inline constexpr const char* k_simple_gain_v2 = R"({
       { "model_path": "models/simple_gain_network_mono.tflite", "inference_backend": "LITERT" },
       { "model_path": "models/simple_gain_network_mono.pte",    "inference_backend": "EXECUTORCH" }
     ],
-    "tensor_shape": [ { "input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512], [1]] } ],
+    "tensor_shape": [ { "input_shape": [[1, 1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512], [1]], "inference_backend": "TFLITE" },
+                      { "input_shape": [[1, 1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512], [1]], "inference_backend": "LITERT" },
+                      { "input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512], [1]] } ],
     "processing_spec": {
       "preprocess_input_channels": [1, 1], "postprocess_output_channels": [1, 1],
       "preprocess_input_size": [512, 0], "postprocess_output_size": [512, 0]

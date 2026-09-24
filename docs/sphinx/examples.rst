@@ -143,14 +143,14 @@ Comprehensive benchmarking suite featuring:
 - Multiple configuration testing
 - Parameterized benchmarks
 - Statistical analysis
-- Performance comparison across backends
+- Performance comparison across engines
 
 Minimal Inference Examples
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 **Location**: ``examples/minimal-inference/``
 
-These examples show the minimal code required to perform inference with each backend supported by anira. They read the model path and the tensor shapes from anira's model files (through the bridge to the 2.x :cpp:struct:`anira::InferenceConfig`) and then drive the engine's own API directly, without the anira runtime. The ExecuTorch example is the exception: it does not link anira (anira embeds its own copy of the ExecuTorch runtime, which a second copy must stay isolated from), so it spells the path and the shapes out.
+These examples show the minimal code required to perform inference with each engine supported by anira. They read the model path and the tensor shapes from anira's model files (through the bridge to the 2.x :cpp:struct:`anira::InferenceConfig`) and then drive the engine's own API directly, without the anira runtime. The ExecuTorch example is the exception: it does not link anira (anira embeds its own copy of the ExecuTorch runtime, which a second copy must stay isolated from), so it spells the path and the shapes out.
 
 External Examples
 -----------------

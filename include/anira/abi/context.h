@@ -18,9 +18,12 @@
  * shutdown family of the core are abi/core.h. Two contexts in one copy are two views of one
  * core with two log sinks. Thread pool and inference queue are core-owned and exist exactly
  * while any handler in this copy exists; anira_shutdown is refused while a context or a handler
- * lives. In this pre-release every context is Host-only: the probe reports the compiled-in
- * engines on ANIRA_PROVIDER_DEFAULT, the host domain and one zero-copy edge per engine; a
- * device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
+ * lives. In this pre-release every context is Host-only (the host domain alone): the probe
+ * reports the compiled-in engines on the providers their runtimes report usable here (every
+ * engine on ANIRA_PROVIDER_DEFAULT; ONNX Runtime's available execution providers, the enum's
+ * value where one fits and the runtime's own name in provider_id else; LiteRT's registered
+ * accelerators by hardware, "gpu", "npu", "webnn"), and one host edge per backend row; a device
+ * block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
  */
 
 #include <stddef.h>
@@ -36,9 +39,11 @@ extern "C" {
 // NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
- * @brief A backend, where the pair must travel as one item: an engine on a provider. Tier 2,
- * struct_size first; enumerated at the caller's stride. engine_id is NULL for a built-in
- * engine and the registered name for a custom one (a later pre-release).
+ * @brief A backend, where the pair must travel as one item: an engine on a provider (provider,
+ * or provider_id for one the enum does not name). Tier 2, struct_size first; enumerated
+ * at the caller's stride. engine_id is NULL for a built-in engine and a custom engine's
+ * own id (anira_custom_engine_create), whose engine is then ANIRA_ENGINE_NONE: a custom
+ * engine has no value of anira_engine of its own.
  */
 typedef struct anira_backend_id {
     uint32_t struct_size;  /**< sizeof(anira_backend_id) of the caller's header. */
@@ -49,22 +54,34 @@ typedef struct anira_backend_id {
      * storage of the library when anira wrote it.
      */
     const char* engine_id;
+    /**
+     * NULL for a provider the enum names (provider says which); the name of a custom provider
+     * in the engine's vocabulary (anira_provider), with provider ANIRA_PROVIDER_DEFAULT beside
+     * it. A tail field: a caller whose header ends before it names the enum's providers alone.
+     * Static storage of the library when anira wrote it; the caller's, valid for the call, when
+     * the caller did.
+     */
+    const char* provider_id;
 } anira_backend_id;
 /**
  * @brief No engine on the default provider.
  */
-#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL)
+#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, NULL)
 
 /**
  * @brief One row of the edge registry: whether a tensor in domain from_domain can reach the
- * backend (to_engine, to_provider), how (edge_class), how sure the probe is (rung), and
- * why not (reason). Valid for the duration of the enumerating call.
+ * backend (to_engine, to_provider, or to_provider_id for a provider the enum does not
+ * name), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for
+ * the duration of the enumerating call.
  */
 typedef struct anira_edge_info {
     uint32_t struct_size;  /**< sizeof(anira_edge_info) of the caller's header. */
     uint32_t from_domain;  /**< anira_domain of the tensor. */
     uint32_t to_engine;  /**< anira_engine of the backend. */
-    uint32_t to_provider;  /**< anira_provider of the backend. */
+    /**
+     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a to_provider_id.
+     */
+    uint32_t to_provider;
     /**
      * anira_edge_class: the cost class of the edge, ANIRA_EDGE_UNAVAILABLE when there is none.
      */
@@ -76,11 +93,17 @@ typedef struct anira_edge_info {
      * NULL when there is nothing to say.
      */
     const char* reason;
+    /**
+     * NULL for a provider the enum names; the name of a custom provider of the backend, in the
+     * engine's own vocabulary (anira_provider), valid while the capabilities are. A tail field:
+     * a caller whose header ends before it reads the rows without it.
+     */
+    const char* to_provider_id;
 } anira_edge_info;
 /**
  * @brief No edge.
  */
-#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL)
+#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL)
 
 /**
  * @brief Creates a context over this copy's core: reconciles the config into the core (see the
@@ -118,9 +141,10 @@ ANIRA_API anira_status ANIRA_CALL anira_context_create(const anira_context_confi
 ANIRA_API void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NOEXCEPT;
 
 /**
- * @brief Re-runs the probe and refreshes the capabilities the handle reports. Host-only in this
- * pre-release: the answer is the compiled-in engines and one zero-copy host edge per
- * engine, and force changes nothing.
+ * @brief Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
+ * engines on the providers their runtimes report usable now
+ * (anira_capabilities_backends), one host edge per backend row, the host domain. Nothing
+ * is cached in this pre-release, so force changes nothing.
  * @param context The handle.
  * @param force Nonzero re-runs every rung even where a cached answer exists.
  * @param err Nullable.
@@ -146,9 +170,15 @@ ANIRA_API const anira_capabilities* ANIRA_CALL anira_context_capabilities(const 
                                                                           ANIRA_NOEXCEPT;
 
 /**
- * @brief The backends that are compiled in and usable here, one record per (engine, provider).
- * Stride-explicit enumeration: min(element_size, the library's record size) bytes are
- * written per element.
+ * @brief The backends that are compiled in and usable here, one record per (engine, provider)
+ * the build and its runtimes report: the enum's providers by provider, any other by
+ * provider_id in the runtime's own words (an ONNX Runtime execution provider by its
+ * name); a custom engine's rows are its pipeline's
+ * (anira_pipeline_capabilities_backends), since an engine belongs to a pipeline, not to
+ * the context. Stride-explicit enumeration: min(element_size, the library's record size)
+ * bytes are written per element. The strings the rows point to (provider_id) are the
+ * context's, valid until its next anira_context_probe replaces them or the context is
+ * destroyed: copy what must outlive a probe.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of backends.
@@ -197,9 +227,11 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
                                                                const char** out) ANIRA_NOEXCEPT;
 
 /**
- * @brief Every row of the edge registry, available or not; one zero-copy edge from
- * ANIRA_DOMAIN_HOST to each enabled backend in this pre-release. Stride-explicit
- * enumeration.
+ * @brief Every row of the edge registry, available or not; one host edge to each backend row of
+ * this pre-release (zero-copy to a CPU provider, a host copy to any other).
+ * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
+ * are the context's, valid until its next anira_context_probe replaces them or the
+ * context is destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.
@@ -216,7 +248,10 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilit
                                                            anira_edge_info* out) ANIRA_NOEXCEPT;
 
 /**
- * @brief One row of the edge registry, by domain and backend.
+ * @brief One row of the edge registry, by domain and backend: the engine on the provider, a
+ * custom provider by its provider_id (read when the caller's record has the slot). A
+ * custom engine (engine_id set) has no row here: its rows are its pipeline's
+ * (anira_pipeline_capabilities_edge).
  * @param capabilities The capabilities.
  * @param from The tensor's domain.
  * @param to The backend; read within its struct_size.

@@ -17,26 +17,21 @@
 #include "InferenceThread.h"
 #include "SessionElement.h"
 
-#ifdef USE_LIBTORCH
-#include "../backends/LibTorchProcessor.h"
-#endif
-#ifdef USE_ONNXRUNTIME
-#include "../backends/OnnxRuntimeProcessor.h"
-#endif
-#ifdef USE_TFLITE
-#include "../backends/TFLiteProcessor.h"
-#endif
-#ifdef USE_LITERT
-#include "../backends/LiteRtProcessor.h"
-#endif
-#ifdef USE_EXECUTORCH
-#include "../backends/ExecuTorchProcessor.h"
-#endif
-
 /// The context config the core reads (anira_context_config_* of anira/abi/config.h); its body
 /// lives in src/capi/handles.h. Declarations that take it by const& or return it by value are
 /// legal on the incomplete type; only Core.cpp needs the body.
 struct anira_context_config;
+
+namespace anira::backend {
+/// One plan a session asks for (src/backends/Adapters.h): where its loaded model comes from
+/// and the record of it. A parameter type here, complete in Core.cpp and at every caller.
+struct PlanRequest;
+/// The loaded model of a plan (src/backends/Adapter.h); a return type here, complete in Core.cpp.
+class Loaded;
+/// The engine object of a built-in engine (src/backends/Adapter.h); a return type here,
+/// complete in Core.cpp and at every caller.
+class BuiltinEngine;
+}  // namespace anira::backend
 
 namespace anira {
 
@@ -48,13 +43,13 @@ class LogDrainLoop;
 struct RtLatch;
 
 /**
- * @brief Process-wide inference core: session registry, inference thread pool, backend
- * processor pools and the global inference queue
+ * @brief Process-wide inference core: session registry, inference thread pool, the pool of
+ * loaded models and the global inference queue
  *
  * The core coordinates every inference session in a process (or, for a plugin, in the
- * binary that embeds anira): it owns the shared inference thread pool, pools backend
- * processors between sessions with equal configurations, and hands out the global
- * inference queue that the inference threads consume from.
+ * binary that embeds anira): it owns the shared inference thread pool, pools the prepared
+ * models (the adapters of src/backends) between sessions whose plans describe the same
+ * model, and hands out the global inference queue that the inference threads consume from.
  *
  * @par Lifetime
  * The core is immortal: its state lives in one heap-allocated State that is created on
@@ -115,19 +110,25 @@ public:
      * @brief Creates and registers a new inference session
      *
      * Applies or reconciles the given context config (see the class description), builds
-     * the session with its preprocessing/postprocessing pipeline, inference configuration
-     * and optional custom backend, and registers it. When this is the first session, the
-     * inference thread pool is built from the configuration in effect (its threads are
-     * started by prepare_session()).
+     * the session with its preprocessing/postprocessing pipeline and inference
+     * configuration, builds its plan table from the requests (one plan per request, in
+     * order: a built-in or a registered engine's loaded model is taken from the pool when
+     * an equal one exists there and loaded once else, whether the session is exclusive or
+     * not, with this session's prepared handle over it; a 2.x backend and the roundtrip get
+     * a legacy loaded model of their own), and registers it. When this is the first
+     * session, the inference thread pool is built from
+     * the configuration in effect (its threads are started by prepare_session()).
      *
-     * Registration is the last step: if anything before it throws (typically a backend
-     * that cannot load the model), the registry, the thread pool and the configuration are
-     * left exactly as they were and any backend processor created for the failed session is
-     * released again. Nothing leaks.
+     * Registration is the last step: if anything before it throws (typically an engine
+     * that cannot load its model), the registry, the thread pool and the configuration are
+     * left exactly as they were and every loaded model this session acquired is released
+     * again. Nothing leaks.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration
-     * @param custom_processor Pointer to a custom backend processor (nullptr for default backends)
+     * @param requests One plan per entry, in dense-index order: what the session's plan
+     * table holds (the 2.x constructors ask for backend::legacy_plan_requests, a 3.x
+     * handler for exactly its plans); never empty
      * @param context_config Configuration of the core as requested by this session: a 3.x
      * handler passes its context's config through unchanged, the 2.x InferenceManager maps
      * its CoreConfig onto one
@@ -136,6 +137,7 @@ public:
      * its own. Reaches the SessionElement constructor and is published by the same
      * lifecycle lock that registers the session
      * @return Shared pointer to the newly created session
+     * @throws std::invalid_argument for an empty request list
      *
      * @note Thread-safe: may be called from any non-realtime thread, including
      *       concurrently with other sessions' lifecycle calls.
@@ -143,15 +145,15 @@ public:
     static std::shared_ptr<SessionElement> create_session(
         PrePostProcessor& pp_processor,
         InferenceConfig& inference_config,
-        BackendBase* custom_processor,
+        std::vector<backend::PlanRequest> requests,
         const anira_context_config& context_config,
         RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Releases an inference session and its resources
      *
-     * Drains the session's in-flight inferences, unregisters it and releases its backend
-     * processors. When this was the last session, the inference thread pool is stopped and
+     * Drains the session's in-flight inferences, unregisters it and releases its prepared
+     * models. When this was the last session, the inference thread pool is stopped and
      * joined before this function returns, in the same critical section as the
      * unregistration — after the last InferenceHandler is destroyed no anira thread exists.
      *
@@ -243,6 +245,29 @@ public:
     static bool has_core();
 
     /**
+     * @brief The core's engine object of a built-in engine of this build, one per engine
+     * while anything holds it
+     *
+     * Made at the first call (backend::make_builtin_engine) and remembered weakly: every
+     * loaded model of the engine holds the one object (make_builtin_loaded), the context's
+     * probe holds it while it asks, and the last holder frees it on its own thread. So what
+     * the engine builds at its init (an ONNX Runtime or a LiteRT environment with the level
+     * in effect on its logger, ExecuTorch's runtime initialisation, LibTorch's thread count)
+     * is shared by every loaded model of the engine and dies with the last of them: a failed
+     * load leaves nothing behind, and no runtime environment is torn down at process exit by
+     * the unload hook, after the runtime's own statics (where macOS aborted). The next call
+     * makes a new object whose init runs again. The first session that loads a model of the
+     * engine initialises it (acquire_loaded_locked, under the lifecycle lock); the context's
+     * probe asks the object for its providers before or after that. Takes the engine mutex
+     * alone, never the lifecycle lock, so a callback that runs under that lock may probe a
+     * context.
+     *
+     * @param engine A built-in engine
+     * @return The object, or NULL for an engine this build does not carry
+     */
+    static std::shared_ptr<backend::BuiltinEngine> builtin_engine(anira_engine engine);
+
+    /**
      * @brief Registers a 3.x context as a user of the core
      *
      * A live context counts like a session for the configuration in effect and for the
@@ -309,6 +334,20 @@ public:
      * what anira_num_inference_threads reports.
      */
     static size_t get_thread_pool_size();
+
+    /**
+     * @brief The size the inference thread pool will have once a session under this
+     * context configuration is registered
+     *
+     * What the init record of a registration names for a session that does not exist yet
+     * (the stage's init runs before the session's models load): the pool in effect, clamped
+     * by the configuration's thread count, or the configuration's count when no user has a
+     * pool yet; 0 for a configuration that brings its own threads. Takes the lifecycle lock.
+     *
+     * @param context_config The context's configuration, the C struct itself
+     * @return The pool's prospective size
+     */
+    static size_t prospective_thread_pool_size(const anira_context_config& context_config);
 
     /**
      * @brief Prepares a session for processing with new audio configuration
@@ -848,42 +887,61 @@ private:
         ANIRA_BLOCKING;
 
     /**
-     * @brief Template method for setting backend processors
+     * @brief The loaded model of one plan request, acquired for a session
      *
-     * Generic template method for assigning backend processors to sessions.
-     * This method handles processor allocation and session configuration for
-     * any supported backend type.
+     * Called with the lifecycle lock held, from create_session(). A built-in or registered
+     * engine's model is shared: the pool entry whose record equals the request's and whose
+     * carrier is the request's is returned, else a new loaded model is made, its engine
+     * initialised (a registered engine's init slot, once per engine object, with the facts
+     * of the core in effect and the request's context), loaded once and entered into the
+     * pool. Exclusivity is no part of the key: a stateful model is loaded once for every
+     * session that runs it, with no shared slot (the record says so). A 2.x backend and the
+     * roundtrip get a fresh legacy loaded model per session, never pooled.
      *
-     * @tparam T Backend processor type (LibtorchProcessor, OnnxRuntimeProcessor, etc.)
-     * @param session Session to configure
-     * @param inference_config Inference configuration
-     * @param processors Vector of available processors of type T
-     * @param backend Backend type identifier
+     * @param state The core's state
+     * @param request The plan's request (its model's log level is the one in effect)
+     * @param inference_config The session's configuration: what the roundtrip and the 2.x
+     * processors of this line are built from
+     * @param pool_size The size the inference-thread pool will have once this session's
+     * configuration is applied (0: the caller brings its own threads), what the init record
+     * of a registered engine names
+     * @return The plan's loaded model
+     * @throws anira::StatusError what the engine's init and load throw (MODEL_LOAD,
+     * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
+     * for
      */
-    template <typename T>
-    static void set_processor(const std::shared_ptr<SessionElement>& session,
-                              InferenceConfig& inference_config,
-                              std::vector<std::shared_ptr<T>>& processors,
-                              InferenceBackend backend);
+    static std::shared_ptr<backend::Loaded> acquire_loaded_locked(
+        State& state,
+        const backend::PlanRequest& request,
+        InferenceConfig& inference_config,
+        size_t pool_size);
 
     /**
-     * @brief Template method for releasing backend processors
+     * @brief Releases the loaded models of a session's plan table
      *
-     * Generic template method for properly releasing backend processors and
-     * returning them to the available processor pool. A processor stays pooled while
-     * another registered session with an equal configuration shares it.
+     * Called with the lifecycle lock held, after the session left the registry (or never
+     * entered it: the rollback of create_session()) and after the session's prepared handles
+     * were given back. A pool entry stays while the plan table of any registered session
+     * holds its loaded model (pointer identity, no record comparison), else it is erased; the
+     * loaded model itself dies with its last holder, which frees what its load loaded.
      *
-     * @tparam T Backend processor type (LibtorchProcessor, OnnxRuntimeProcessor, etc.)
      * @param state The core's state
-     * @param inference_config Inference configuration
-     * @param processors Vector of available processors of type T
-     * @param processor Processor to release
+     * @param session The session whose plans are released
      */
-    template <typename T>
-    static void release_processor(State& state,
-                                  InferenceConfig& inference_config,
-                                  std::vector<std::shared_ptr<T>>& processors,
-                                  std::shared_ptr<T>& processor);
+    static void release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief The core's engine object of a built-in engine, made at the first call
+     *
+     * Under the state's engine mutex alone, never the lifecycle lock, which the caller may
+     * hold (the pool's acquisition does, the context's probe does not).
+     *
+     * @param state The core's state
+     * @param engine A built-in engine
+     * @return The object, or NULL for an engine this build does not carry
+     */
+    static std::shared_ptr<backend::BuiltinEngine> find_or_make_builtin_engine(State& state,
+                                                                               anira_engine engine);
 
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference
@@ -904,13 +962,7 @@ private:
                                          ///< documentation
     InferenceThread* __doxygen_force_1;  ///< Placeholder for Doxygen to find InferenceThread class
                                          ///< documentation
-    LibtorchProcessor* __doxygen_force_2;     ///< Placeholder for Doxygen to find LibtorchProcessor
-                                              ///< class documentation
-    OnnxRuntimeProcessor* __doxygen_force_3;  ///< Placeholder for Doxygen to find
-                                              ///< OnnxRuntimeProcessor class documentation
-    TFLiteProcessor* __doxygen_force_4;  ///< Placeholder for Doxygen to find TFLiteProcessor class
-                                         ///< documentation
-    InferenceData* __doxygen_force_5;  ///< Placeholder for Doxygen to find InferenceData structure
+    InferenceData* __doxygen_force_2;  ///< Placeholder for Doxygen to find InferenceData structure
                                        ///< documentation
 #endif
 };

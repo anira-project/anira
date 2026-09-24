@@ -11,6 +11,7 @@
 #include "../CoreConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
+#include "../backends/BackendBase.h"
 #include "../utils/HostConfig.h"
 #include "../utils/InferenceBackend.h"
 #include "Core.h"
@@ -87,11 +88,12 @@ public:
                      const CoreConfig& core_config);
 
     /**
-     * @brief The 3.x constructor: the context's config passed through unchanged
+     * @brief The 2.x constructor over a context config: the 2.x plan table, the context's
+     * config passed through unchanged
      *
-     * Creates the session through Core::create_session() with the context config as the
-     * handler's context holds it (the core reads its six scalars and reconciles them
-     * against the configuration in effect) and the handler's real-time latch.
+     * Asks the core for the 2.x plan table (backend::legacy_plan_requests: one plan per
+     * configured model, then every other backend of the build, CUSTOM last, on
+     * `custom_processor` when one is given) and delegates to the constructor over requests.
      *
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration containing model settings
@@ -104,6 +106,29 @@ public:
     InferenceManager(PrePostProcessor& pp_processor,
                      InferenceConfig& inference_config,
                      BackendBase* custom_processor,
+                     const anira_context_config& context_config,
+                     anira::RtLatch* rt_latch = nullptr);
+
+    /**
+     * @brief The 3.x constructor: the session over exactly the plans asked for
+     *
+     * Creates the session through Core::create_session() with the plan requests (one plan
+     * per entry, in dense-index order: a C-created handler's plans), the context config as
+     * the handler's context holds it (the core reads its six scalars and reconciles them
+     * against the configuration in effect) and the handler's real-time latch. The table is
+     * the session's for its life: nothing replaces it.
+     *
+     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param inference_config Reference to the inference configuration containing model settings
+     * @param requests The plans, in dense-index order; never empty
+     * @param context_config The context's configuration (anira_context_config_*)
+     * @param rt_latch The handler's latch the session records its failures into; nullptr
+     * gives the session its own
+     * @throws std::invalid_argument for an empty request list
+     */
+    InferenceManager(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     std::vector<backend::PlanRequest> requests,
                      const anira_context_config& context_config,
                      anira::RtLatch* rt_latch = nullptr);
 
@@ -354,20 +379,6 @@ public:
         const anira_tensor* outputs) const noexcept;
 
     ///@}
-
-    /**
-     * @brief Replaces the session's plan table (SessionElement::m_plan_backends) and selects
-     * plan 0: one backend per plan, in dense-index order.
-     *
-     * What a 3.x handler calls with exactly its plans, after construction and before
-     * prepare(): only while no chunk of the session exists. A 2.x session keeps the table
-     * Core::create_session built.
-     *
-     * @throws std::invalid_argument for an empty table
-     * @throws std::logic_error after prepare(): the table is read without synchronization
-     * and is replaced before prepare only; a refused call changes nothing
-     */
-    void set_plan_backends(std::vector<InferenceBackend> backends);
 
     /**
      * @brief Selects the plan the next submitted chunk runs on

@@ -1,5 +1,6 @@
-// The translator behind anira/compat/v3_to_v2.h, exercised through its status-returning
-// face: every section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
+// The bridge behind anira/compat/v3_to_v2.h (the validator of src/capi/validate.h and the 2.x
+// translators of src/capi/v3_to_v2.h), exercised through its status-returning face: every
+// section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
 // message naming the tensor or the entry, everything the 2.x runtime cannot do returns
 // ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x InferenceConfig,
 // CoreConfig and HostConfig the same way the 2.x constructors would build them.
@@ -28,7 +29,8 @@
 
 #include "../support/inference_config_eq.h"
 #include "../support/v2_documents.h"
-#include "capi/translate.h"
+#include "capi/v3_to_v2.h"
+#include "capi/validate.h"
 #include "fixtures.h"
 
 namespace {
@@ -511,7 +513,17 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
         {dir + std::string("/simple_gain_network_mono.pte"), anira::InferenceBackend::EXECUTORCH},
 #endif
     };
+    // The TensorFlow export holds the static gain at rank 3: the two TensorFlow rows of the
+    // document say so, and the upgrade carries them as a layout the bridge turns back into a
+    // backend-qualified shape, listed before the universal one (the 2.x fixture header had [1]
+    // there, which the adapters' shape check refuses since anira 3).
     const std::vector<anira::TensorShape> tensor_shape = {
+#ifdef USE_TFLITE
+        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::TFLITE},
+#endif
+#ifdef USE_LITERT
+        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::LITERT},
+#endif
         {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}},
     };
     const anira::ProcessingSpec processing_spec = {{1, 1}, {1, 1}, {512, 0}, {512, 0}};
@@ -768,7 +780,7 @@ TEST(AbiTranslate, ANonFloat32DtypeIsNotSupported) {
     const Outcome outcome = bridge(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "tensor 'out': dtype");
-    expect_contains(outcome.m_message, "float32 only");
+    expect_contains(outcome.m_message, "the queue stores float32");
 }
 
 TEST(AbiTranslate, NoStreamedTensorIsConfig) {
@@ -823,7 +835,8 @@ TEST(AbiTranslate, RowRules) {
     outcome = bridge(foreign);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message,
-                    "models[0]: custom engine 'de.tu-berlin.coreml' has no 2.x adapter");
+                    "models[0]: custom engine 'de.tu-berlin.coreml' is not added to this "
+                    "pipeline");
 
     ModelConfig twice;
     twice.add_model_path(k_custom, "a.custom");
@@ -847,7 +860,7 @@ TEST(AbiTranslate, RowRules) {
     const ModelConfig custom_only = minimal();
     outcome = bridge(custom_only, contract, &only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+    expect_contains(outcome.m_message, "none of the 1 model entries runs on a candidate backend");
 }
 
 TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
@@ -900,6 +913,57 @@ TEST(AbiTranslate, LayoutRules) {
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "models[0]: tensor 'in': layout");
 }
+
+// A name in a tensors record on a side its engine binds by position would bind nothing: it is
+// refused at create rather than ignored. LibTorch binds its outputs by position (a method
+// returns unnamed tensors) and its inputs by the method's argument names; ExecuTorch binds
+// both sides by position. A layout on such a side stays legal.
+#ifdef USE_LIBTORCH
+TEST(AbiTranslate, ANameOnALibTorchOutputIsNotSupportedOnAnInputItBinds) {
+    ModelConfig output_named;
+    const uint32_t row = output_named.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
+    output_named.tensor_name(row, "out", "y");
+    output_named.input(streamed("in"));
+    output_named.output(streamed("out"));
+    Outcome outcome = bridge(output_named);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    expect_contains(outcome.m_message,
+                    "models[0]: tensor 'out': libtorch binds its outputs by position; drop the "
+                    "name, keep the layout");
+
+    ModelConfig input_named;
+    const uint32_t row2 = input_named.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
+    input_named.tensor_name(row2, "in", "x");
+    input_named.tensor_layout(row2, "out", std::array{0U, 1U, 2U});
+    input_named.input(streamed("in"));
+    input_named.output(streamed("out"));
+    outcome = bridge(input_named);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+}
+#endif
+
+#ifdef USE_EXECUTORCH
+TEST(AbiTranslate, ANameOnAnExecuTorchRowIsNotSupported) {
+    ModelConfig named;
+    const uint32_t row = named.add_model_path(ANIRA_ENGINE_EXECUTORCH, "model.pte");
+    named.tensor_name(row, "in", "x");
+    named.input(streamed("in"));
+    named.output(streamed("out"));
+    Outcome outcome = bridge(named);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+    expect_contains(outcome.m_message,
+                    "models[0]: tensor 'in': executorch binds its inputs by position; drop the "
+                    "name, keep the layout");
+
+    ModelConfig laid_out;
+    const uint32_t row2 = laid_out.add_model_path(ANIRA_ENGINE_EXECUTORCH, "model.pte");
+    laid_out.tensor_layout(row2, "in", std::array{0U, 1U, 2U});
+    laid_out.input(streamed("in"));
+    laid_out.output(streamed("out"));
+    outcome = bridge(laid_out);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+}
+#endif
 
 TEST(AbiTranslate, AnUnknownExtensionFailsByName) {
     ModelConfig model = minimal();

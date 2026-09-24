@@ -211,10 +211,10 @@ typedef enum anira_tensor_flags {
 } anira_tensor_flags;
 
 /**
- * @brief Identifies a record for anira_sizeof (M2): the six Tier-1 PODs and the enumerated
+ * @brief Identifies a record for anira_sizeof (M2): the seven Tier-1 PODs and the enumerated
  * Tier-2 records. Ids 0x0001xxxx are reserved for extension payloads, 0x0004xxxx for
  * Emscripten-only structs. The document pins 1..3 and 7..11; 4..6 follow its Tier-1
- * table order.
+ * table order, and 12 is the engine context that arrived with anira/abi/engine.h.
  */
 typedef enum anira_struct_id {
     ANIRA_STRUCT_TENSOR = 1,  /**< anira_tensor (216 bytes). */
@@ -228,6 +228,7 @@ typedef enum anira_struct_id {
     ANIRA_STRUCT_PLAN_EXT = 9,  /**< anira_plan_ext (Tier 2). */
     ANIRA_STRUCT_PLAN_INFO = 10,  /**< anira_plan_info (Tier 2). */
     ANIRA_STRUCT_BACKEND_ID = 11,  /**< anira_backend_id (Tier 2). */
+    ANIRA_STRUCT_ENGINE_CTX = 12,  /**< anira_engine_ctx (64 bytes). */
     ANIRA_STRUCT_ID_FORCE32 = 0x7fffffff
 } anira_struct_id;
 
@@ -544,8 +545,8 @@ typedef enum anira_probe_rung {
  * is the anira_error message prefixed by the entry and the status (the boundary trace,
  * for an application that swallowed the status and a developer who only has the device
  * log). Off by default on every platform. Held while a context that set it lives,
- * counted across contexts.x runtime applies it, in this pre-release the process-wide
- * switch is anira::capi::set_trace_failures.
+ * counted across contexts; in this pre-release the process-wide switch is
+ * anira::capi::set_trace_failures.
  */
 #define ANIRA_LOG_FLAG_TRACE_FAILURES 2u
 
@@ -609,12 +610,18 @@ typedef enum anira_pad_policy {
 #define ANIRA_TICKET_INVALID 0u
 
 /**
- * @brief Inference engine, one of the two independent backend axes. Values 6..0x0fff are
- * reserved for later anira engines; a registered custom engine is assigned a value from
- * 0x1000 up at prepare, scoped to its pipeline.
+ * @brief Inference engine, one of the two independent backend axes. Values 6 and up are
+ * reserved for later anira engines. A custom engine (anira_custom_engine_create, added
+ * to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the
+ * pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id,
+ * anira_plan_info; a stage reads the id off the plan report, since anira_stage_ctx
+ * carries the pair's values alone).
  */
 typedef enum anira_engine {
-    ANIRA_ENGINE_NONE = 0,  /**< No engine; as a default engine it means models[0]. */
+    /**
+     * No engine; as a default engine it means plan 0 (the first plan of the table).
+     */
+    ANIRA_ENGINE_NONE = 0,
     ANIRA_ENGINE_ONNXRUNTIME = 1,  /**< ONNX Runtime (v2 ONNX, JSON "onnxruntime"). */
     ANIRA_ENGINE_LIBTORCH = 2,  /**< LibTorch (JSON "libtorch"). */
     ANIRA_ENGINE_TFLITE = 3,  /**< TensorFlow Lite, legacy C API (JSON "tflite"). */
@@ -625,56 +632,200 @@ typedef enum anira_engine {
 
 /**
  * @brief Execution provider, the other backend axis; a provider name means the same thing
- * across engines.
+ * across engines. A provider the enum does not name travels as a string beside it,
+ * provider_id (anira_backend_id, anira_plan_info, anira_engine_load_info, the pin of a
+ * model entry), in the engine's own vocabulary: the runtime's name for a built-in engine
+ * (what the context's capabilities report), an entry of the descriptor's providers list
+ * for a custom engine; provider is ANIRA_PROVIDER_DEFAULT beside a provider_id. A
+ * provider is part of the loaded model: two providers of one model load twice
+ * (anira/abi/engine.h).
  */
 typedef enum anira_provider {
-    ANIRA_PROVIDER_DEFAULT = 0,  /**< The engine's own CPU path (JSON: no suffix). */
-    ANIRA_PROVIDER_CUDA = 1,  /**< CUDA (JSON ":cuda"). */
-    ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON ":webgpu"). */
-    ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON ":directml"). */
-    ANIRA_PROVIDER_COREML = 4,  /**< Core ML (JSON ":coreml"). */
-    ANIRA_PROVIDER_XNNPACK = 5,  /**< XNNPACK (JSON ":xnnpack"). */
-    ANIRA_PROVIDER_VULKAN = 6,  /**< Vulkan (JSON ":vulkan"). */
+    /**
+     * The engine's own CPU path (JSON: a model entry without a "provider" key).
+     */
+    ANIRA_PROVIDER_DEFAULT = 0,
+    /**
+     * CUDA (JSON "cuda", the value of a model entry's "provider" key).
+     */
+    ANIRA_PROVIDER_CUDA = 1,
+    ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON "webgpu"). */
+    ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON "directml"). */
+    ANIRA_PROVIDER_COREML = 4,  /**< Core ML (JSON "coreml"). */
+    ANIRA_PROVIDER_XNNPACK = 5,  /**< XNNPACK (JSON "xnnpack"). */
+    ANIRA_PROVIDER_VULKAN = 6,  /**< Vulkan (JSON "vulkan"). */
     ANIRA_PROVIDER_FORCE32 = 0x7fffffff
 } anira_provider;
 
 /**
- * @brief The phase a stage callback runs in, and the engine call between two of them
- * (abi/stage.h, M2); pinned now. The three inference-thread phases are numbered in the
- * order they run.
+ * @brief The phase a callback of either descriptor runs in: the phases and slots of a stage,
+ * the engine call between two of them and the slots of an engine (abi/stage.h,
+ * abi/engine.h). The two lifecycles share it, so like their shared records
+ * (anira/abi/lifecycle.h) it names no side. The value travels in one field,
+ * anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives
+ * none, each of its slots being a callback of its own. Every message anira writes about
+ * a slot names the phase by the lower-case name of its value (pre_process, post_process,
+ * before_inference, inference, after_inference, prepare, release, reset, unprepare,
+ * init, load, unload, query): a stage phase that fails or that an accessor refuses, a
+ * refused init, load or prepare of a stage or an engine ("the engine 'x' refused load:
+ * it returned N"), a failed engine call. Pinned now. The three inference-thread phases
+ * are numbered in the order they run; the phases of the shared lifecycle
+ * (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare,
+ * then init, then the engine's two model-level phases, load and unload, then the
+ * engine's query.
  */
-typedef enum anira_stage_phase {
+typedef enum anira_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
     ANIRA_PHASE_POST_PROCESS = 1,  /**< After the model outputs arrive. */
     ANIRA_PHASE_BEFORE_INFERENCE = 2,  /**< On the inference thread, before the engine call. */
     /**
      * On the inference thread, the engine call itself: the built-in engine of the running plan,
-     * or a registered custom engine's process. No stage callback runs in this phase; it is the
-     * word a failure, a log record or a report row uses for the engine call.
+     * or a registered custom engine's process. No stage callback runs in this phase; a failed
+     * engine call is logged under its word ("inference failed in session N: the engine of plan
+     * P returned S").
      */
     ANIRA_PHASE_INFERENCE = 3,
     ANIRA_PHASE_AFTER_INFERENCE = 4,  /**< On the inference thread, after the engine call. */
     ANIRA_PHASE_PREPARE = 5,  /**< At anira_handler_prepare. */
     ANIRA_PHASE_RELEASE = 6,  /**< When the last carrier dies. */
-    ANIRA_STAGE_PHASE_FORCE32 = 0x7fffffff
-} anira_stage_phase;
+    /**
+     * The first chunk of a new stream (after prepare, after anira_handler_reset), before its
+     * pre_process, on the thread that runs pre_process: the stage's reset slot
+     * (anira_stage_reset_fn), with that chunk's context, where the accessors answer the role
+     * only.
+     */
+    ANIRA_PHASE_RESET = 7,
+    /**
+     * At the next anira_handler_prepare and at anira_handler_destroy, after the last phase call
+     * of the handler: the stage's unprepare slot (anira_stage_unprepare_fn), and the engine's
+     * (anira_engine_unprepare_fn) for that handler.
+     */
+    ANIRA_PHASE_UNPREPARE = 8,
+    /**
+     * At the first anira_handler_prepare that reaches a stage's or an engine's carrier, once
+     * per carrier: the init slot (anira_stage_init_fn, anira_engine_init_fn) with an
+     * anira_init_info.
+     */
+    ANIRA_PHASE_INIT = 9,
+    /**
+     * At anira_handler_prepare, under the core's lifecycle lock, once per loaded model anira
+     * pools: an engine's load slot (anira_engine_load_fn) with an anira_engine_load_info.
+     */
+    ANIRA_PHASE_LOAD = 10,
+    /**
+     * When the last handler holding a loaded model is re-prepared or destroyed, after every
+     * unprepare of it: an engine's unload slot (anira_engine_unload_fn).
+     */
+    ANIRA_PHASE_UNLOAD = 11,
+    /**
+     * An engine's query slot (anira_engine_query_fn): which of its declared providers are
+     * usable here, now; at anira_handler_create and at anira_pipeline_capabilities_backends /
+     * _edge, before the engine's init and any number of times.
+     */
+    ANIRA_PHASE_QUERY = 12,
+    ANIRA_PHASE_FORCE32 = 0x7fffffff
+} anira_phase;
 
 /**
  * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
- * allocate nothing, lock nothing and block on nothing. Required by anira_handler_prepare
- * for a filled pre_process or post_process under a Hard contract, where the two phases
- * run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
- * required under an Async contract.
+ * allocate nothing, lock nothing and block on nothing (its reset runs on the same thread
+ * and is covered by the same promise). Required by anira_handler_prepare for a filled
+ * pre_process or post_process under a Hard contract, where the two phases run on the
+ * driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not required under an
+ * Async contract.
  */
-#define ANIRA_STAGE_REALTIME_PRE_POST 1u
+#define ANIRA_STAGE_FLAG_REALTIME_PRE_POST 1u
 
 /**
  * @brief anira_stage_desc.flags bit: the stage promises the same of its before_inference and
  * after_inference. Not required by any contract of this pre-release (the hooks run on an
  * inference thread); a later contract option that runs them on the driving thread will
- * require it together with ANIRA_STAGE_REALTIME_PRE_POST.
+ * require it together with ANIRA_STAGE_FLAG_REALTIME_PRE_POST.
  */
-#define ANIRA_STAGE_REALTIME_HOOKS 2u
+#define ANIRA_STAGE_FLAG_REALTIME_HOOKS 2u
+
+/**
+ * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither
+ * a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this
+ * pre-release; consumed when a source-less entry can be built, in a later one.
+ */
+#define ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL 1u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine promises that its process allocates nothing,
+ * takes no lock and makes no system call after prepare. Reported in
+ * anira_plan_info.engine_flags and consumed by a later contract option; no built-in
+ * engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_REALTIME_SAFE 2u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine's process accepts a Time extent that varies
+ * per call, at or below the template's of its load record; a Time extent below the
+ * template is legal only under this bit. Reported in anira_plan_info.engine_flags; no
+ * built-in engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_DYNAMIC_TIME 4u
+
+/**
+ * @brief anira_engine_desc.flags bit: the engine keeps its own aliasing of a declared State
+ * pair. anira then binds one stable buffer per pair as both the State input and the
+ * State output of every call of a plan of the engine and never flips the two: the engine
+ * reads the state before it writes it (in place) or copies for itself, and every address
+ * stays put across calls, which a captured graph (CUDA graphs, WebGPU replay) needs.
+ * Without the bit the two buffers alternate behind every successful inference
+ * (anira/abi/handler.h). The pair is the model's, shared by every plan of the variant: a
+ * plan switch between an aliasing engine and one without the bit keeps the state (the
+ * one buffer an aliasing plan updates is the buffer a flipping plan reads next); the
+ * flipping plan's chunk moves the pair, so the addresses stay put only across the chunks
+ * of aliasing plans, and a captured graph is re-captured after such a switch. A failed
+ * call of an aliasing engine leaves the buffer as the engine left it, since it writes in
+ * place: the last-good rule of a flipping pair (a failed inference does not flip) is the
+ * engine's to keep there. The generation rule is the same under both: the first
+ * inference of a new stream reads zeros. Reported in anira_plan_info.engine_flags; no
+ * built-in engine sets it.
+ */
+#define ANIRA_ENGINE_FLAG_STATE_ALIAS 8u
+
+/**
+ * @brief anira_prepare_info.flags bit (anira/abi/lifecycle.h): the handler's inferences run one
+ * at a time and in order, under the dispatch gate of a model declared
+ * ANIRA_MODEL_STATEFUL or with a declared State pair, with a reset at every stream
+ * start. An engine builds what it keeps per stream at this prepare, its own executor
+ * included: its process calls for this handler carry ANIRA_ENGINE_CALL_EXCLUSIVE and
+ * claim no shared slot of the loaded model. For a stage the bit is informational.
+ */
+#define ANIRA_PREPARE_EXCLUSIVE 1u
+
+/**
+ * @brief anira_engine_ctx.flags bit: the call is an exclusive handler's
+ * (ANIRA_PREPARE_EXCLUSIVE at its prepare): it runs on what that handler's prepare
+ * built, no shared slot of the loaded model was claimed, and instance is 0.
+ */
+#define ANIRA_ENGINE_CALL_EXCLUSIVE 1u
+
+/**
+ * @brief How a plan bound a slot to the engine's tensor (anira_plan_slot.binding): by name
+ * where the engine's side has names, by position otherwise, checked against the spec's
+ * shape and dtype at prepare either way; a custom engine received the names in its load
+ * record and bound itself.
+ */
+typedef enum anira_binding {
+    /**
+     * The slot's position: in the signature's order where the engine runs one, in the graph or
+     * method order elsewhere.
+     */
+    ANIRA_BINDING_POSITION = 0,
+    /**
+     * The engine tensor of that name: the entry's tensors record, else the canonical name.
+     */
+    ANIRA_BINDING_NAME = 1,
+    /**
+     * A custom engine: it received the names in its anira_engine_load_info and bound itself.
+     */
+    ANIRA_BINDING_ENGINE = 2,
+    ANIRA_BINDING_FORCE32 = 0x7fffffff
+} anira_binding;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

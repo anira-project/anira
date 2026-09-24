@@ -2,7 +2,7 @@
 # backends.cmake — data-driven download + setup of pre-built inference engines
 # ==============================================================================
 #
-# Single entry point for fetching the pre-built backend binaries anira links
+# Single entry point for fetching the pre-built engine binaries anira links
 # against. Replaces the per-engine SetupOnnxRuntime / SetupLibTorch /
 # SetupTensorflowLite scripts.
 #
@@ -12,12 +12,12 @@
 # and unpacks to a uniform tree (include/ + lib/, plus share/ + bin/ for libtorch).
 #
 # Integrity is checked live: at configure time anira asks the GitHub release for
-# each asset's published sha256 (when reachable) and re-downloads any backend whose
+# each asset's published sha256 (when reachable) and re-downloads any engine whose
 # archive changed upstream or downloaded incompletely. Nothing is pinned in-repo —
 # no lockfile, no hashes to maintain. The download itself is verified with that
 # sha256 so a partial/corrupt fetch can never be mistaken for a good one. When the
-# release metadata is unreachable (offline, rate-limited, CMake < 3.19), a backend
-# already present on disk is reused; only a missing backend then needs the network.
+# release metadata is unreachable (offline, rate-limited, CMake < 3.19), an engine
+# already present on disk is reused; only a missing engine then needs the network.
 #
 # Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert|executorch
 #
@@ -75,7 +75,7 @@ function(_anira_backend_libname id out)
     elseif(id STREQUAL "executorch")
         set(${out} "executorch" PARENT_SCOPE)
     else()
-        message(FATAL_ERROR "Unknown backend id '${id}' (expected libtorch|onnxruntime|tflite|litert|executorch)")
+        message(FATAL_ERROR "Unknown engine id '${id}' (expected libtorch|onnxruntime|tflite|litert|executorch)")
     endif()
 endfunction()
 
@@ -150,7 +150,7 @@ function(_anira_release_json out)
     list(GET _st 0 _code)
     if(NOT _code EQUAL 0)
         list(GET _st 1 _m)
-        message(STATUS "anira: backend integrity check skipped (release metadata unreachable: ${_m})")
+        message(STATUS "anira: engine integrity check skipped (release metadata unreachable: ${_m})")
         file(REMOVE "${_json}")
         return()
     endif()
@@ -211,7 +211,7 @@ function(_anira_target_tokens out_os out_arch)
     endif()
 
     if(TANH_OPERATING_SYSTEM STREQUAL "iOS")
-        # The backends ship a single iOS xcframework (device + simulator slices); the
+        # The engines ship a single iOS xcframework (device + simulator slices); the
         # slice is selected at wiring time, so there is no arch token here either.
         set(${out_os} "iOS" PARENT_SCOPE)
         set(${out_arch} "" PARENT_SCOPE)
@@ -258,12 +258,12 @@ function(_anira_target_tokens out_os out_arch)
         return()
     endif()
 
-    message(FATAL_ERROR "anira backends: unsupported platform")
+    message(FATAL_ERROR "anira engines: unsupported platform")
 endfunction()
 
 # ------------------------------------------------------------------------------
 # _anira_resolve_linkage(<id> <supported> <out>) — the linkage of an engine is the
-# linkage of anira itself (shared anira -> shared backends, static -> static), with
+# linkage of anira itself (shared anira -> shared engines, static -> static), with
 # no per-engine override. cmake/validate-options.cmake has already disabled every
 # engine that does not ship the required linkage (LibTorch in static builds,
 # ExecuTorch in shared ones) and refused a shared build on the static-only platforms
@@ -291,7 +291,7 @@ endfunction()
 # ------------------------------------------------------------------------------
 function(_anira_download_extract url sha256 dest archive flatten)
     if(EXISTS "${dest}/")
-        message(STATUS "anira: backend found at ${dest}")
+        message(STATUS "anira: engine found at ${dest}")
         return()
     endif()
 
@@ -316,7 +316,7 @@ function(_anira_download_extract url sha256 dest archive flatten)
     if(NOT _code EQUAL 0 OR _size LESS 1024)
         file(REMOVE_RECURSE "${dest}")
         file(REMOVE "${_zip}")
-        message(FATAL_ERROR "anira: failed to download backend archive.\n  URL: ${url}\n  Reason: ${_msg}")
+        message(FATAL_ERROR "anira: failed to download engine archive.\n  URL: ${url}\n  Reason: ${_msg}")
     endif()
 
     file(ARCHIVE_EXTRACT INPUT "${_zip}" DESTINATION "${dest}")
@@ -362,7 +362,7 @@ function(_anira_acquire_backend url asset dest)
         endif()
     endif()
     if(_reuse)
-        message(STATUS "anira: backend ready at ${dest}")
+        message(STATUS "anira: engine ready at ${dest}")
         return()
     endif()
 
@@ -457,7 +457,7 @@ endmacro()
 # _anira_locate_shared_lib(<libdir> <rootdir> <libname> <out-location> <out-implib>)
 # — the file(s) a shared engine is linked through: lib<name>.so / .dylib in <libdir>
 # on Unix; on Windows the import library <name>.lib in <libdir> and the DLL, which
-# is looked up anywhere below <rootdir> (the backends archives are not uniform about
+# is looked up anywhere below <rootdir> (the engine archives are not uniform about
 # its directory). A missing DLL is not fatal: linking needs the import library only.
 # ------------------------------------------------------------------------------
 function(_anira_locate_shared_lib libdir rootdir libname out_location out_implib)
@@ -502,7 +502,7 @@ endfunction()
 
 # ==============================================================================
 # anira_setup_backend(<id>) — main entry point. A macro so find_package(Torch),
-# CMAKE_CXX_FLAGS, and the BACKEND_BUILD_*_DIRS accumulators all act on the
+# CMAKE_CXX_FLAGS, and the BACKEND_SOURCES list all act on the
 # including (directory) scope.
 # ==============================================================================
 macro(anira_setup_backend id)

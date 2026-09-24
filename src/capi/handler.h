@@ -24,18 +24,20 @@
 #include <string>
 #include <vector>
 
+#include "engine.h"
 #include "handles.h"
 #include "port.h"
 #include "stage.h"
 
 namespace anira::capi {
 
-/// A candidate backend with its engine_id string owned (anira_backend_id::engine_id is a
-/// pointer). The pointer inside m_id is not trusted after a copy: anira_pipeline::candidate_ids
-/// re-points it at m_engine_id.
+/// A candidate backend with its engine_id and provider_id strings owned (the two pointers of
+/// anira_backend_id). The pointers inside m_id are not trusted after a copy:
+/// anira_pipeline::candidate_ids re-points them at the strings.
 struct Candidate {
     anira_backend_id m_id = ANIRA_BACKEND_ID_INIT;
-    std::string m_engine_id;  ///< m_id.engine_id points here when set
+    std::string m_engine_id;    ///< m_id.engine_id points here when set
+    std::string m_provider_id;  ///< m_id.provider_id points here when set
 };
 
 /// A field-wise copy of a model config (the handle is move-only: its legacy contract is a
@@ -46,8 +48,8 @@ anira_model_config clone_model_config(const anira_model_config& model);
 struct Plan {
     size_t m_row = 0;                                                     ///< the models[] index
     anira::InferenceBackend m_backend = anira::InferenceBackend::CUSTOM;  ///< set_backend's arg
-    anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id points into the report's
-                                                    ///< string store
+    anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
+                                                    ///< the report's string store
 };
 
 }  // namespace anira::capi
@@ -60,13 +62,23 @@ struct anira_pipeline {
                                                        ///< this pre-release
     std::vector<anira::capi::Candidate> m_candidates;  ///< never empty after add_inference: the
                                                        ///< caller's list, or the default set
+    /// Whether m_candidates is the default set (a NULL list at add_inference: every engine of
+    /// the build on the default provider, the custom entries, every pin): under it an entry is
+    /// one plan, on its pin or on the default provider (validate.h matching_plans).
+    bool m_default_set = false;
     bool m_has_inference = false;
     /// The one stage of the pipeline (anira_pipeline_add_stage; a second call is refused), or
     /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
     /// the stage's release fires once, when the last of them dies.
     std::shared_ptr<anira::capi::StageCarrier> m_stage;
+    /// The custom engines added to the pipeline (anira_pipeline_add_engine), in the order they
+    /// were added, their ids distinct (an engine whose id the pipeline has is refused). The
+    /// carriers are shared with the engine's handle, with every other pipeline the engine was
+    /// added to and with every copy of the pipeline, so an engine's release fires once, when
+    /// the last of them dies.
+    std::vector<std::shared_ptr<const anira::capi::EngineCarrier>> m_engines;
 
-    /// The candidate view a translate/ext call takes (pointers into the strings); control
+    /// The candidate view a validate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
     std::vector<anira_backend_id> candidate_ids() const;
 
@@ -99,14 +111,15 @@ struct anira_handler {
     /// like everything else of the handler and the stage processor, and a variant of what the
     /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
     /// ring), a static port (the stored whole-tensor value, in the spec's shape and dtype), a
-    /// state port (the input half: the state's value in the spec's shape and dtype and the
-    /// generation it was last fed under; the output half: the input slot it feeds), a buffer
-    /// port (nothing: refused under a Hard contract). Built by anira_handler_create from the
-    /// pipeline copy, the Static and State values zeroed, and never resized; an arm never
-    /// changes. prepare fills the stream ports' fields, zeroes the State values (a new session
-    /// starts on a fresh state) and leaves the Static values alone, and so does reset (m_pp and
-    /// m_manager are rebuilt by every prepare, the Static values set before one survive it).
-    /// Declared before m_pp, which reads and writes them: destroyed after.
+    /// state port (the input half: the state's two buffers in the spec's shape and dtype, one
+    /// read and one written per inference, and the generation they were last bound under; the
+    /// output half: the input slot it feeds), a buffer port (nothing: refused under a Hard
+    /// contract). Built by anira_handler_create from the pipeline copy, the Static and State
+    /// values zeroed, and never resized; an arm never changes. prepare fills the stream ports'
+    /// fields, zeroes the State buffers (a new session starts on a fresh state) and leaves the
+    /// Static values alone, and so does reset (m_pp and m_manager are rebuilt by every prepare,
+    /// the Static values set before one survive it). Declared before m_pp, which reads and
+    /// writes them: destroyed after.
     std::vector<anira::capi::Port> m_input_ports;
     std::vector<anira::capi::Port> m_output_ports;
     std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageProcessor over
@@ -120,14 +133,19 @@ struct anira_handler {
                                                              ///< twins: wait_ratio x block_max
                                                              ///< / rate
     /// dense index -> row/backend; rebuilt at prepare only, and handed to the session as its
-    /// plan table (InferenceManager::set_plan_backends). The selected plan has no storage
+    /// plan table (the InferenceManager's constructor). The selected plan has no storage
     /// here: it is the session's one atomic, the dense index itself (SessionElement::
     /// m_current_plan), so set_plan has no pair to tear and two plans on one backend stay
     /// distinct.
     std::vector<anira::capi::Plan> m_plans;
     anira_plan_report m_report;
-    std::atomic<bool> m_prepared{false};  ///< release at the end of a successful prepare;
-                                          ///< acquire in every nonblocking entry
+    std::atomic<bool> m_prepared{false};  ///< release before the engines' and the stage's
+                                          ///< prepares of a prepare, so the getters answer
+                                          ///< inside them; acquire in every getter
+    std::atomic<bool> m_runnable{false};  ///< release at the end of a successful prepare,
+                                          ///< after its last callback returned: the Hard
+                                          ///< entries and reset run; cleared first by
+                                          ///< unprepare; acquire in those entries
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
     // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
     // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype
@@ -147,6 +165,14 @@ struct anira_handler {
     /// reports as the chunk's entry): set by prepare from the processor's table, 0 while
     /// unprepared. anira_handler_num_entries reads it.
     uint32_t m_num_entries = 0;
+    /// What the stage's prepare handed back for this handler (the out_prepared of
+    /// anira_stage_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
+    /// the reset and the unprepare of this handler receive beside the registration's user_data.
+    /// Held here for the unprepare and on the stage processor, which passes it per call.
+    void* m_stage_prepared = nullptr;
+    /// A successful stage prepare is outstanding: its unprepare is owed, once, when the session
+    /// is released (the next prepare, a failed prepare, destroy). A refused prepare never sets it.
+    bool m_stage_unprepare_owed = false;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;

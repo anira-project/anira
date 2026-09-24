@@ -110,7 +110,7 @@ interface TensorMeta {
 /**
  * ONNX Runtime Web backend implementation.
  * Loads the ORT WASM module directly for synchronous inference in the
- * process() callback, mirroring the native OnnxRuntimeProcessor.
+ * process() callback, mirroring the native ONNX Runtime adapter (src/backends/OnnxRuntimeAdapter.cpp).
  */
 export class ONNXRuntimeWebBackend extends JSBackendBase {
   private ort: OrtWasmModule | null = null

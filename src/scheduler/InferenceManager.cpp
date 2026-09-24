@@ -24,7 +24,8 @@
 #include <utility>
 #include <vector>
 
-#include "../capi/translate.h"
+#include "../backends/Adapters.h"
+#include "../capi/v3_to_v2.h"
 #include "TensorRun.h"
 
 namespace anira {
@@ -46,19 +47,28 @@ InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    BackendBase* custom_processor,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
+    // The 2.x plan table: one plan per configured model, then every other backend of the
+    // build, CUSTOM last, on the custom backend when one is given.
+    : InferenceManager(pp_processor,
+                       inference_config,
+                       backend::legacy_plan_requests(inference_config, custom_processor),
+                       context_config,
+                       rt_latch) {}
+
+InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
+                                   InferenceConfig& inference_config,
+                                   std::vector<backend::PlanRequest> requests,
+                                   const anira_context_config& context_config,
+                                   anira::RtLatch* rt_latch)
     : m_inference_config(inference_config)
     , m_session(Core::create_session(pp_processor,
                                      inference_config,
-                                     custom_processor,
+                                     std::move(requests),
                                      context_config,
                                      rt_latch)) {}
 
 InferenceManager::~InferenceManager() {
     Core::release_session(m_session);
-}
-
-void InferenceManager::set_plan_backends(std::vector<InferenceBackend> backends) {
-    m_session->set_plan_backends(std::move(backends));
 }
 
 bool InferenceManager::set_plan(uint32_t plan) noexcept {

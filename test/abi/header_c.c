@@ -8,6 +8,7 @@
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/draft/tensor_platform.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -27,11 +28,14 @@ static void on_record(const anira_log_record* record, void* user_data) {
 
 /* anira/abi/stage.h from C11: a phase callback as a C host writes one (it asks the context
    what the first input is, pops its ring into its model end through the accessors and falls
-   back on the default body), a prepare and a release function. The three are assigned to the
-   descriptor's slots below, so their types are the typedefs' to the letter. */
+   back on the default body), a reset, a prepare, an unprepare, an init and a release
+   function. The six are assigned to the descriptor's slots below, so their types are the
+   typedefs' to the letter; every parameter a body does not read is voided (MSVC /W4 /WX). */
 static anira_status ANIRA_CALL on_pre_process(const anira_stage_ctx* ctx,
+                                              void* prepared,
                                               void* user_data) ANIRA_NONBLOCKING {
     anira_role role = ANIRA_ROLE_FORCE32;
+    (void)prepared;
     (void)user_data;
     if (ctx->num_inputs > 0u && anira_stage_input_role(ctx, 0u, &role) == ANIRA_OK &&
         role == ANIRA_ROLE_STREAMED) {
@@ -50,15 +54,119 @@ static anira_status ANIRA_CALL on_pre_process(const anira_stage_ctx* ctx,
     return anira_stage_default_pre_process(ctx);
 }
 
-static anira_status ANIRA_CALL on_stage_prepare(anira_handler* handler,
-                                                const anira_plan_report* report,
-                                                void* user_data) {
-    (void)handler;
+/* The reset slot: the first chunk of a new stream, on the thread of pre_process, where the
+   role is the one answer the context gives. */
+static void ANIRA_CALL on_stage_reset(const anira_stage_ctx* ctx,
+                                      void* prepared,
+                                      void* user_data) ANIRA_NONBLOCKING {
+    anira_role role = ANIRA_ROLE_FORCE32;
+    (void)prepared;
     (void)user_data;
-    return anira_plan_report_num_plans(report) > 0u ? ANIRA_OK : ANIRA_ERROR_INVALID_STATE;
+    (void)anira_stage_input_role(ctx, 0u, &role);
+}
+
+static anira_status ANIRA_CALL on_stage_prepare(const anira_prepare_info* info,
+                                                void* user_data,
+                                                void** out_prepared) {
+    (void)user_data;
+    *out_prepared = NULL; /* nothing per handler: the phases receive NULL */
+    return info->num_entries > 0u && anira_plan_report_num_plans(info->report) > 0u &&
+                   (info->flags & ANIRA_PREPARE_EXCLUSIVE) == 0u
+               ? ANIRA_OK
+               : ANIRA_ERROR_INVALID_STATE;
+}
+
+/* The init slot: once per registration, with the shared init record of lifecycle.h. */
+static anira_status ANIRA_CALL on_stage_init(const anira_init_info* info, void* user_data) {
+    (void)user_data;
+    return info->struct_size == sizeof(anira_init_info) && info->context == NULL
+               ? ANIRA_OK
+               : ANIRA_ERROR_INVALID_STATE;
+}
+
+static void ANIRA_CALL on_stage_unprepare(void* prepared, void* user_data) {
+    (void)prepared;
+    (void)user_data;
 }
 
 static void ANIRA_CALL on_stage_release(void* user_data) {
+    (void)user_data;
+}
+
+/* anira/abi/engine.h from C11: the eight functions of an engine descriptor, assigned to
+   its slots below. process copies the first input into the first output, reading every
+   extent and every pointer from the tensors of the call (the adapter rule). */
+static anira_status ANIRA_CALL on_engine_process(const anira_engine_ctx* ctx,
+                                                 void* prepared,
+                                                 void* user_data) {
+    (void)prepared;
+    (void)user_data;
+    if (ctx->num_inputs > 0u && ctx->num_outputs > 0u) {
+        const float* in = anira_tensor_data_f32(&ctx->inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx->outputs[0]);
+        const size_t count = anira_tensor_num_elements(&ctx->outputs[0]);
+        size_t i;
+        if (in == NULL || out == NULL || anira_tensor_num_elements(&ctx->inputs[0]) < count) {
+            return ANIRA_ERROR_ENGINE;
+        }
+        for (i = 0; i < count; ++i) { out[i] = in[i]; }
+    }
+    return ANIRA_OK;
+}
+
+static void ANIRA_CALL on_engine_reset(const anira_engine_ctx* ctx,
+                                       void* prepared,
+                                       void* user_data) {
+    (void)ctx;
+    (void)prepared;
+    (void)user_data;
+}
+
+static anira_status ANIRA_CALL on_engine_init(const anira_init_info* info, void* user_data) {
+    (void)user_data;
+    return info->struct_size == sizeof(anira_init_info) ? ANIRA_OK : ANIRA_ERROR_INVALID_STATE;
+}
+
+static anira_status ANIRA_CALL on_engine_load(const anira_engine_load_info* info,
+                                              void* user_data,
+                                              void** out_loaded) {
+    (void)user_data;
+    *out_loaded = NULL;
+    return info->num_inputs > 0u ? ANIRA_OK : ANIRA_ERROR_CONFIG;
+}
+
+static void ANIRA_CALL on_engine_unload(void* loaded, void* user_data) {
+    (void)loaded;
+    (void)user_data;
+}
+
+static anira_status ANIRA_CALL on_engine_prepare(const anira_prepare_info* info,
+                                                 void* loaded,
+                                                 void* user_data,
+                                                 void** out_prepared) {
+    (void)loaded;
+    (void)user_data;
+    *out_prepared = NULL; /* a stateless handler keeps nothing per handler */
+    return info->num_entries > 0u || (info->flags & ANIRA_PREPARE_EXCLUSIVE) == 0u
+               ? ANIRA_OK
+               : ANIRA_ERROR_INVALID_STATE;
+}
+
+static void ANIRA_CALL on_engine_unprepare(void* prepared, void* user_data) {
+    (void)prepared;
+    (void)user_data;
+}
+
+static anira_status ANIRA_CALL on_engine_query(const anira_init_info* info,
+                                               void* user_data,
+                                               uint64_t* out_available) {
+    (void)info;
+    (void)user_data;
+    *out_available = 0u;
+    return ANIRA_OK;
+}
+
+static void ANIRA_CALL on_engine_release(void* user_data) {
     (void)user_data;
 }
 
@@ -100,9 +208,19 @@ int anira_header_c_probe(void) {
         anira_metal_desc metal = ANIRA_METAL_DESC_INIT;
         anira_d3d12_desc d3d12 = ANIRA_D3D12_DESC_INIT;
         anira_webgpu_desc webgpu = ANIRA_WEBGPU_DESC_INIT;
+        anira_provider_option_set option_set = ANIRA_PROVIDER_OPTION_SET_INIT;
+        anira_ext_provider_options provider_options = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
         entry.name = "forward";
         checks += entry.header.struct_size == sizeof(anira_ext_entry) ? 1 : 0;
         checks += entry.header.version == 1u ? 1 : 0;
+        checks += option_set.struct_size == sizeof(anira_provider_option_set) &&
+                          option_set.num_options == 0u && option_set.keys == NULL
+                      ? 1
+                      : 0;
+        checks += provider_options.header.struct_size == sizeof(anira_ext_provider_options) &&
+                          provider_options.sets == NULL && provider_options.num_sets == 0u
+                      ? 1
+                      : 0;
         checks +=
             cuda.struct_size == sizeof(anira_cuda_desc) && cuda.ownership == ANIRA_OWNERSHIP_OWNED
                 ? 1
@@ -128,10 +246,13 @@ int anira_header_c_probe(void) {
         uint32_t count = 0;
         checks +=
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
+        checks += backend.provider == ANIRA_PROVIDER_DEFAULT && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
+        checks += edge.reason == NULL && edge.to_provider_id == NULL ? 1 : 0;
         checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
+        checks += info.provider_id == NULL && info.engine_flags == 0u ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =
@@ -209,16 +330,21 @@ int anira_header_c_probe(void) {
         }
     }
     {
-        /* anira/abi/stage.h from C11: the descriptor's initializer with the three callback
-           typedefs in its slots, the frozen size of the stage context, a context zeroed and
-           filled by hand (both names of an ANIRA_PTR slot, the frame's pointee const), and
-           behind the never-true branch the entries a C host calls. */
+        /* anira/abi/stage.h from C11: the descriptor's initializer with the six callback
+           typedefs in its slots, the initializers of the two shared records of lifecycle.h,
+           the frozen size of the stage context, a context zeroed and filled by hand (both
+           names of an ANIRA_PTR slot, the frame's pointee const), the phases of the shared
+           lifecycle, and behind the never-true branch the entries a C host calls and the
+           slots as anira calls them. */
         static const char* const kinds[1] = {"model:entry"};
         anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+        anira_prepare_info prepare_info = ANIRA_PREPARE_INFO_INIT;
+        anira_init_info init_info = ANIRA_INIT_INFO_INIT;
         anira_stage_ctx ctx;
         anira_tensor model_end;
         anira_role role = ANIRA_ROLE_FORCE32;
         anira_ring* ring = NULL;
+        void* prepared = NULL;
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
         ctx.ticket = ANIRA_TICKET_INVALID;
@@ -226,13 +352,31 @@ int anira_header_c_probe(void) {
         ctx.frame = kinds; /* any address: the frame is anira's, this one is never read */
         checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == NULL ? 1 : 0;
         checks += stage.flags == 0u && stage.pre_process == NULL ? 1 : 0;
+        checks += stage.reset == NULL && stage.unprepare == NULL && stage.init == NULL ? 1 : 0;
+        checks += prepare_info.struct_size == sizeof(anira_prepare_info) &&
+                          prepare_info.handler == NULL && prepare_info.num_entries == 0u &&
+                          prepare_info.flags == 0u
+                      ? 1
+                      : 0;
+        checks += init_info.struct_size == sizeof(anira_init_info) && init_info.context == NULL &&
+                          init_info.num_threads == 0u
+                      ? 1
+                      : 0;
+        checks += ANIRA_PHASE_RESET == 7 && ANIRA_PHASE_UNPREPARE == 8 ? 1 : 0;
+        checks +=
+            ANIRA_PHASE_INIT == 9 && ANIRA_PHASE_LOAD == 10 && ANIRA_PHASE_UNLOAD == 11 ? 1 : 0;
         stage.consumed_kinds = kinds;
         stage.num_consumed_kinds = 1u;
-        /* The real-time promise of the two host-end phases, as a Hard contract requires it. */
-        stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
+        /* The real-time promise of the two host-end phases (the reset runs on their thread), as
+           a Hard contract requires it, and the hooks' promise beside it. */
+        stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
         stage.pre_process = on_pre_process;
+        stage.reset = on_stage_reset;
         stage.prepare = on_stage_prepare;
+        stage.unprepare = on_stage_unprepare;
+        stage.init = on_stage_init;
         stage.release = on_stage_release;
+        checks += stage.flags == 3u ? 1 : 0;
         checks += sizeof(anira_stage_ctx) == 64u && offsetof(anira_stage_ctx, frame) == 32u ? 1 : 0;
         checks += ctx.frame_bits != 0u && ctx.reserved_ptr0 == NULL ? 1 : 0;
         if (checks < 0) { /* never true: the object is never linked */
@@ -245,7 +389,16 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += stage.pre_process(&ctx, NULL) == ANIRA_OK ? 1 : 0;
+            /* The slots, called as anira calls them: (init_info, user_data) once per
+               registration, (ctx, prepared, user_data) per chunk, (info, user_data, &prepared)
+               at prepare, (prepared, user_data) at unprepare. */
+            checks += stage.init(&init_info, NULL) == ANIRA_OK ? 1 : 0;
+            checks += stage.pre_process(&ctx, prepared, NULL) == ANIRA_OK ? 1 : 0;
+            stage.reset(&ctx, prepared, NULL);
+            checks +=
+                stage.prepare(&prepare_info, NULL, &prepared) == ANIRA_ERROR_INVALID_STATE ? 1 : 0;
+            stage.unprepare(prepared, NULL);
+            stage.release(NULL);
             checks +=
                 anira_stage_default_post_process(&ctx) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
             checks += anira_ring_num_channels(NULL) == 0u ? 1 : 0;
@@ -266,6 +419,114 @@ int anira_header_c_probe(void) {
             checks +=
                 anira_stage_output_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
                                                                                                 : 0;
+        }
+    }
+    {
+        /* anira/abi/engine.h from C11: the descriptor's initializer with the eight callback
+           typedefs in its slots, the load record's initializer and the two shared records',
+           the frozen size of the engine context, a context zeroed and filled by hand (both
+           names of an ANIRA_PTR slot, the loaded pointer among them), the three promises
+           OR-ed, the binding enum and the two tail fields of the plan records, and behind the
+           never-true branch the engine entries and the slots as anira calls them, from the
+           outermost level in. */
+        anira_engine_desc engine = ANIRA_ENGINE_DESC_INIT;
+        anira_engine_load_info load_info = ANIRA_ENGINE_LOAD_INFO_INIT;
+        anira_prepare_info prepare_info = ANIRA_PREPARE_INFO_INIT;
+        anira_init_info init_info = ANIRA_INIT_INFO_INIT;
+        anira_engine_ctx engine_ctx;
+        anira_tensor model_end;
+        anira_plan_slot slot = ANIRA_PLAN_SLOT_INIT;
+        anira_plan_info plan = ANIRA_PLAN_INFO_INIT;
+        void* loaded = NULL;
+        void* prepared = NULL;
+        memset(&engine_ctx, 0, sizeof(engine_ctx));
+        memset(&model_end, 0, sizeof(model_end));
+        engine_ctx.ticket = ANIRA_TICKET_INVALID;
+        engine_ctx.num_inputs = 1u;
+        engine_ctx.inputs = &model_end; /* the pointer name of the ANIRA_PTR slot */
+        checks +=
+            engine.struct_size == sizeof(anira_engine_desc) && engine.user_data == NULL ? 1 : 0;
+        checks += engine.flags == 0u && engine.process == NULL && engine.release == NULL ? 1 : 0;
+        checks += engine.load == NULL && engine.unload == NULL && engine.init == NULL ? 1 : 0;
+        checks +=
+            engine.providers == NULL && engine.num_providers == 0u && engine.query == NULL ? 1 : 0;
+        checks += load_info.struct_size == sizeof(anira_engine_load_info) &&
+                          load_info.model == NULL && load_info.instances == 0u
+                      ? 1
+                      : 0;
+        checks +=
+            load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == NULL ? 1 : 0;
+        checks += load_info.option_keys == NULL && load_info.option_values == NULL &&
+                          load_info.num_options == 0u
+                      ? 1
+                      : 0;
+        checks += sizeof(anira_engine_ctx) == 64u && offsetof(anira_engine_ctx, inputs) == 32u &&
+                          offsetof(anira_engine_ctx, loaded) == 48u &&
+                          offsetof(anira_engine_ctx, reserved_ptr1) == 56u
+                      ? 1
+                      : 0;
+        checks += engine_ctx.inputs_bits != 0u && engine_ctx.outputs == NULL &&
+                          engine_ctx.loaded_bits == 0u && engine_ctx.loaded == NULL &&
+                          (engine_ctx.flags & ANIRA_ENGINE_CALL_EXCLUSIVE) == 0u
+                      ? 1
+                      : 0;
+        /* The two tail fields of the plan records and the binding enum. */
+        checks += slot.binding == (uint32_t)ANIRA_BINDING_POSITION && plan.engine_flags == 0u &&
+                          plan.reserved == 0u
+                      ? 1
+                      : 0;
+        checks += ANIRA_BINDING_NAME == 1 && ANIRA_BINDING_ENGINE == 2 ? 1 : 0;
+        /* The three promises OR-ed, and every slot filled with a C function of its typedef. */
+        engine.flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE |
+                       ANIRA_ENGINE_FLAG_DYNAMIC_TIME;
+        engine.process = on_engine_process;
+        engine.reset = on_engine_reset;
+        engine.prepare = on_engine_prepare;
+        engine.unprepare = on_engine_unprepare;
+        engine.load = on_engine_load;
+        engine.unload = on_engine_unload;
+        engine.init = on_engine_init;
+        engine.release = on_engine_release;
+        engine.query = on_engine_query;
+        checks += engine.flags == 7u ? 1 : 0;
+        if (checks < 0) { /* never true: the object is never linked */
+            checks += anira_sizeof(ANIRA_STRUCT_ENGINE_CTX) == 64u ? 1 : 0;
+            anira_custom_engine* custom = NULL;
+            checks +=
+                anira_custom_engine_create("org.example.c", &engine, &custom, NULL) == ANIRA_OK ? 1
+                                                                                                : 0;
+            checks += anira_pipeline_add_engine(NULL, custom, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            anira_custom_engine_detach(custom);
+            anira_custom_engine_destroy(custom);
+            /* The pipeline's capabilities: the context's rows and the custom engines'. */
+            checks += anira_pipeline_capabilities_backends(NULL,
+                                                           NULL,
+                                                           sizeof(anira_backend_id),
+                                                           NULL,
+                                                           NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_pipeline_capabilities_edge(NULL, NULL, ANIRA_DOMAIN_HOST, NULL, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            {
+                uint64_t available = 0u;
+                checks += engine.query(&init_info, NULL, &available) == ANIRA_OK ? 1 : 0;
+            }
+            /* The slots, from the outermost level in: init once per object, load once per
+               loaded model, prepare once per handler on it, process and reset per call,
+               then the way back out. */
+            checks += engine.init(&init_info, NULL) == ANIRA_OK ? 1 : 0;
+            checks += engine.load(&load_info, NULL, &loaded) == ANIRA_ERROR_CONFIG ? 1 : 0;
+            checks += engine.prepare(&prepare_info, loaded, NULL, &prepared) == ANIRA_OK ? 1 : 0;
+            checks += engine.process(&engine_ctx, prepared, NULL) == ANIRA_OK ? 1 : 0;
+            engine.reset(&engine_ctx, prepared, NULL);
+            engine.unprepare(prepared, NULL);
+            engine.unload(loaded, NULL);
+            engine.release(NULL);
         }
     }
     return checks;

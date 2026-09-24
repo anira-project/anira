@@ -168,7 +168,7 @@ public:
         m_backend = std::make_unique<Backend>(get()->m_inference_config);
         m_session = anira_test::session_of(get());
         ASSERT_NE(m_session, nullptr);
-        m_session->m_custom_processor = m_backend.get();
+        anira_test::attach_processor(get(), *m_backend);
         hold(*m_backend);
     }
 

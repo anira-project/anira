@@ -20,6 +20,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "words.h"
 
 using anira::capi::report_void_failure;
 using anira::capi::translate_exception;
@@ -830,6 +831,56 @@ const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_model_conf
     return entry.is_custom() ? entry.m_engine_id.c_str() : nullptr;
 }
 
+anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config* config,
+                                                              uint32_t model_index,
+                                                              anira_provider provider,
+                                                              const char* provider_id,
+                                                              anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(config != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model config: NULL handle");
+    ANIRA_CAPI_REQUIRE(model_index < config->m_models.size(),
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model entry: index %u is out of range (%zu entries)",
+                       model_index,
+                       config->m_models.size());
+    ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model entry: provider %d is not a provider this header names",
+                       static_cast<int>(provider));
+    ANIRA_CAPI_REQUIRE(provider_id == nullptr || provider == ANIRA_PROVIDER_DEFAULT,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model entry: a provider of the enum and a provider_id at once; a custom "
+                       "provider travels as provider_id beside ANIRA_PROVIDER_DEFAULT");
+    ANIRA_CAPI_REQUIRE(provider_id == nullptr || non_empty(provider_id),
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model entry: an empty provider_id");
+    anira::capi::ModelEntry& entry = config->m_models[model_index];
+    entry.m_provider = provider;
+    entry.m_provider_id = provider_id != nullptr ? provider_id : "";
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
+anira_provider ANIRA_CALL anira_model_config_model_provider(const anira_model_config* config,
+                                                            uint32_t model_index) ANIRA_NOEXCEPT {
+    if (config == nullptr || model_index >= config->m_models.size()) {
+        return ANIRA_PROVIDER_DEFAULT;
+    }
+    return config->m_models[model_index].m_provider;
+}
+
+const char* ANIRA_CALL anira_model_config_model_provider_id(const anira_model_config* config,
+                                                            uint32_t model_index) ANIRA_NOEXCEPT {
+    if (config == nullptr || model_index >= config->m_models.size()) { return nullptr; }
+    const anira::capi::ModelEntry& entry = config->m_models[model_index];
+    return entry.m_provider_id.empty() ? nullptr : entry.m_provider_id.c_str();
+}
+
 const char* ANIRA_CALL anira_model_config_model_path(const anira_model_config* config,
                                                      uint32_t model_index) ANIRA_NOEXCEPT {
     if (config == nullptr || model_index >= config->m_models.size()) { return nullptr; }
@@ -855,13 +906,13 @@ anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_model_config*
 anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model_config* config,
                                                            uint32_t model_index,
                                                            const char* canonical,
-                                                           const char* engine_name) ANIRA_NOEXCEPT
+                                                           const char* export_name) ANIRA_NOEXCEPT
     try {
     if (config == nullptr || model_index >= config->m_models.size()) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    if (!non_empty(canonical) || !non_empty(engine_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_models[model_index].m_tensors[canonical].m_name = engine_name;
+    if (!non_empty(canonical) || !non_empty(export_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    config->m_models[model_index].m_tensors[canonical].m_name = export_name;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

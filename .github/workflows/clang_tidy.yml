@@ -94,7 +94,7 @@ jobs:
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
-          SOURCES: "src/backends/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp test/contracts/test_BackendLinkage.cpp test/*.cpp"
+          SOURCES: "src/backends/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp src/InferenceHandler.cpp src/PrePostProcessor.cpp test/backends/ test/scheduler/ test/utils/ test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp test/contracts/test_EngineLinkage.cpp test/*.cpp"
           # Pull requests check the .cpp files they change; the queue and a
           # dispatch sweep SOURCES. A header or build change does not widen the
           # set: what it breaks in an untouched file fails in the queue.

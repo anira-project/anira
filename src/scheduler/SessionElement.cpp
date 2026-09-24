@@ -1,29 +1,15 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
+#include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
-
-#ifdef USE_LIBTORCH
-#include <anira/backends/LibTorchProcessor.h>
-#endif
-#ifdef USE_ONNXRUNTIME
-#include <anira/backends/OnnxRuntimeProcessor.h>
-#endif
-#ifdef USE_TFLITE
-#include <anira/backends/TFLiteProcessor.h>
-#endif
-#ifdef USE_LITERT
-#include <anira/backends/LiteRtProcessor.h>
-#endif
-#ifdef USE_EXECUTORCH
-#include <anira/backends/ExecuTorchProcessor.h>
-#endif
 
 #include <algorithm>
 #include <array>
@@ -40,7 +26,16 @@
 #include <utility>
 #include <vector>
 
+#include "../backends/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
+
 namespace anira {
+
+// The plan slot's special members live here, where backend::Loaded and backend::Prepared are
+// complete (the public header forward-declares them).
+SessionElement::PlanSlot::PlanSlot() = default;
+SessionElement::PlanSlot::~PlanSlot() = default;
+SessionElement::PlanSlot::PlanSlot(PlanSlot&&) noexcept = default;
+SessionElement::PlanSlot& SessionElement::PlanSlot::operator=(PlanSlot&&) noexcept = default;
 
 SessionElement::SessionElement(int new_session_id,
                                PrePostProcessor& pp_processor,
@@ -57,40 +52,23 @@ SessionElement::SessionElement(int new_session_id,
     , m_dispatch_producer_token(m_dispatch_pending)
     , m_pp_processor(pp_processor)
     , m_inference_config(inference_config)
-    , m_default_processor(m_inference_config)
-    , m_custom_processor(&m_default_processor)
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
     , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
 
-void SessionElement::set_plan_backends(std::vector<InferenceBackend> backends) {
-    if (backends.empty()) {
-        throw std::invalid_argument("SessionElement::set_plan_backends: an empty plan table");
-    }
-    // The table is read without synchronization by the driving thread and the inference
-    // threads, so it may only be replaced while no chunk of the session can exist.
-    if (m_initialized.load(std::memory_order::seq_cst)) {
-        throw std::logic_error(
-            "SessionElement::set_plan_backends: the session is prepared; the plan table is "
-            "replaced before prepare only");
-    }
-    m_plan_backends = std::move(backends);
-    m_current_plan.store(0, std::memory_order_relaxed);
-}
-
 bool SessionElement::select_plan(uint32_t plan) noexcept {
-    if (plan >= m_plan_backends.size()) { return false; }
+    if (plan >= m_plans.size()) { return false; }
     m_current_plan.store(plan, std::memory_order_relaxed);
     return true;
 }
 
 InferenceBackend SessionElement::plan_backend(uint32_t plan) const noexcept {
-    return plan < m_plan_backends.size() ? m_plan_backends[plan] : InferenceBackend::CUSTOM;
+    return plan < m_plans.size() ? m_plans[plan].m_legacy_backend : InferenceBackend::CUSTOM;
 }
 
 std::optional<uint32_t> SessionElement::plan_of_backend(InferenceBackend backend) const noexcept {
-    for (uint32_t i = 0; i < m_plan_backends.size(); ++i) {
-        if (m_plan_backends[i] == backend) { return i; }
+    for (uint32_t i = 0; i < m_plans.size(); ++i) {
+        if (m_plans[i].m_legacy_backend == backend) { return i; }
     }
     return std::nullopt;
 }
@@ -101,6 +79,38 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& te
     m_tensor_output_data.clear();
     for (unsigned long const& i : tensor_input_size) { m_tensor_input_data.emplace_back(1, i); }
     for (unsigned long const& i : tensor_output_size) { m_tensor_output_data.emplace_back(1, i); }
+}
+
+void SessionElement::ThreadSafeStruct::bind_tensors(const TensorShapeList& input_shapes,
+                                                    const TensorShapeList& output_shapes) {
+    // The spec's rank and extents over the buffer's packed block; the storage's dtype (the
+    // queue stores float32 in this pre-release); a slot without a shape row gets rank 0.
+    const auto bind = [](std::vector<anira_tensor>& tensors,
+                         std::vector<BufferF>& buffers,
+                         const TensorShapeList& shapes) {
+        tensors.assign(buffers.size(), anira_tensor{});
+        for (size_t slot = 0; slot < buffers.size(); ++slot) {
+            const bool has_shape = slot < shapes.size();
+            anira_tensor_init_host(&tensors[slot],
+                                   buffers[slot].data(),
+                                   ANIRA_DTYPE_F32,
+                                   has_shape ? static_cast<uint32_t>(shapes[slot].size()) : 0U,
+                                   has_shape ? shapes[slot].data() : nullptr);
+        }
+    };
+    bind(m_input_tensors, m_tensor_input_data, input_shapes);
+    bind(m_output_tensors, m_tensor_output_data, output_shapes);
+}
+
+void SessionElement::ThreadSafeStruct::rebind_tensors() noexcept {
+    for (size_t slot = 0; slot < m_input_tensors.size() && slot < m_tensor_input_data.size();
+         ++slot) {
+        m_input_tensors[slot].handle.host.ptr = m_tensor_input_data[slot].data();
+    }
+    for (size_t slot = 0; slot < m_output_tensors.size() && slot < m_tensor_output_data.size();
+         ++slot) {
+        m_output_tensors[slot].handle.host.ptr = m_tensor_output_data[slot].data();
+    }
 }
 
 void SessionElement::clear() {
@@ -441,49 +451,29 @@ void SessionElement::prepare(const HostConfig& host_config,
     // any gate token a laggard worker may still hold from before the drain.
     force_reset_dispatch_chain();
 
-    // Create the thread-safe structs for the inference queue
+    // Create the thread-safe structs for the inference queue, each with the descriptors of
+    // its tensors over its buffers and its position in the pool, the chunk's entry.
     m_inference_queue.clear();
 
     std::vector<size_t> const tensor_input_size = m_inference_config.get_tensor_input_size();
     std::vector<size_t> const tensor_output_size = m_inference_config.get_tensor_output_size();
+    const TensorShapeList& input_shapes = m_inference_config.get_tensor_input_shape();
+    const TensorShapeList& output_shapes = m_inference_config.get_tensor_output_shape();
 
     for (size_t i = 0; i < m_num_structs; ++i) {
         m_inference_queue.emplace_back(
             std::make_unique<ThreadSafeStruct>(tensor_input_size, tensor_output_size));
+        m_inference_queue.back()->m_entry = static_cast<uint32_t>(i);
+        m_inference_queue.back()->bind_tensors(input_shapes, output_shapes);
     }
+
+    // The first inference of the new session is the first of a new stream: the engine of each
+    // session-exclusive plan resets before its own first one.
+    for (PlanSlot& plan : m_plans) { plan.m_engine_generation = k_no_generation; }
 
     m_time_stamps.clear();
     m_time_stamps.reserve(m_num_structs);
     m_pending_pull_samples = 0;
-}
-
-template <typename T>
-void SessionElement::set_processor(std::shared_ptr<T>& processor) {
-#ifdef USE_LIBTORCH
-    if (std::is_same_v<T, LibtorchProcessor>) {
-        m_libtorch_processor = std::dynamic_pointer_cast<LibtorchProcessor>(processor);
-    }
-#endif
-#ifdef USE_ONNXRUNTIME
-    if (std::is_same_v<T, OnnxRuntimeProcessor>) {
-        m_onnx_processor = std::dynamic_pointer_cast<OnnxRuntimeProcessor>(processor);
-    }
-#endif
-#ifdef USE_TFLITE
-    if (std::is_same_v<T, TFLiteProcessor>) {
-        m_tflite_processor = std::dynamic_pointer_cast<TFLiteProcessor>(processor);
-    }
-#endif
-#ifdef USE_LITERT
-    if (std::is_same_v<T, LiteRtProcessor>) {
-        m_litert_processor = std::dynamic_pointer_cast<LiteRtProcessor>(processor);
-    }
-#endif
-#ifdef USE_EXECUTORCH
-    if (std::is_same_v<T, ExecuTorchProcessor>) {
-        m_executorch_processor = std::dynamic_pointer_cast<ExecuTorchProcessor>(processor);
-    }
-#endif
 }
 
 bool SessionElement::has_streamable_input() const {
@@ -502,26 +492,5 @@ bool SessionElement::receive_rings_have_room() {
     }
     return true;
 }
-
-#ifdef USE_LIBTORCH
-template void SessionElement::set_processor<LibtorchProcessor>(
-    std::shared_ptr<LibtorchProcessor>& processor);
-#endif
-#ifdef USE_ONNXRUNTIME
-template void SessionElement::set_processor<OnnxRuntimeProcessor>(
-    std::shared_ptr<OnnxRuntimeProcessor>& processor);
-#endif
-#ifdef USE_TFLITE
-template void SessionElement::set_processor<TFLiteProcessor>(
-    std::shared_ptr<TFLiteProcessor>& processor);
-#endif
-#ifdef USE_LITERT
-template void SessionElement::set_processor<LiteRtProcessor>(
-    std::shared_ptr<LiteRtProcessor>& processor);
-#endif
-#ifdef USE_EXECUTORCH
-template void SessionElement::set_processor<ExecuTorchProcessor>(
-    std::shared_ptr<ExecuTorchProcessor>& processor);
-#endif
 
 }  // namespace anira

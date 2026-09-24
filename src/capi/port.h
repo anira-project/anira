@@ -8,11 +8,13 @@
  *   Streamed -> StreamPort: the session's ring, and what a host block of the slot must carry.
  *   Static   -> StaticPort: the stored whole-tensor value (StaticSlot), in the spec's shape and
  *               dtype.
- *   State    -> StatePort: the input half holds the state, a StaticSlot in the spec's shape
- *               and dtype, and the generation it was last fed under; the output half names
- *               the input slot it feeds (m_partner). The stage processor feeds the value into
- *               the model input ahead of before_inference and captures the model output into
- *               it behind after_inference, on the inference thread; no Hard entry carries it.
+ *   State    -> StatePort: the input half holds the state, a StateSlot (two buffers in the
+ *               spec's shape and dtype, one read and one written per inference, swapped by a
+ *               flip) and the generation it was last bound under; the output half names the
+ *               input slot it feeds (m_partner). The stage processor binds the model's State
+ *               input to the read buffer and the model's State output to the write buffer
+ *               ahead of before_inference and flips them behind after_inference, on the
+ *               inference thread; no Hard entry carries it.
  *   Buffer   -> BufferPort: nothing. A Buffer tensor is a per-job payload of the Async
  *               contract and is refused under a Hard one at prepare.
  *
@@ -26,19 +28,26 @@
  * The Static value: sized and zeroed once, at anira_handler_create, untouched by prepare and by
  * reset: what anira_handler_set_static_input stores and the stage processor materialises into the
  * model's input tensors, and what the chain captures from the model's output tensors and
- * anira_handler_get_static_output returns. The State value is the same slot with another life:
- * zeroed at create and at every prepare, re-initialised at the first inference of a new
- * generation (a reset), written by the capture of every successful inference.
+ * anira_handler_get_static_output returns.
  *
- * The latch is a sequence counter per slot with one writer: the counter is odd while a write
- * runs, a reader copies and takes the copy only when the counter was even and is unchanged
- * afterwards, so a reader never sees a torn tensor. The values sit in atomic 64-bit words, so
- * a read that overlaps a write is a read of atomics (no data race) whose result is dropped.
- * Under the [driver-thread] tag and a Hard contract the writer and the reader of a slot are
- * the same thread (the entries and the chain's pre_process / post_process all run on the
- * driving thread), so the counter never moves under a reader and nothing retries. A host that
- * writes from another thread breaks the tag: the tensor still never tears, but a writer
- * preempted inside a write makes the reader spin until it finishes.
+ * The latch of the Static value is a sequence counter per slot with one writer: the counter
+ * is odd while a write runs, a reader copies and takes the copy only when the counter was even
+ * and is unchanged afterwards, so a reader never sees a torn tensor. The values sit in atomic
+ * 64-bit words, so a read that overlaps a write is a read of atomics (no data race) whose
+ * result is dropped. Under the [driver-thread] tag and a Hard contract the writer and the
+ * reader of a slot are the same thread (the entries and the chain's pre_process / post_process
+ * all run on the driving thread), so the counter never moves under a reader and nothing
+ * retries. A host that writes from another thread breaks the tag: the tensor still never
+ * tears, but a writer preempted inside a write makes the reader spin until it finishes.
+ *
+ * The State value has no latch: only the inference thread touches its two buffers, under the
+ * session's dispatch gate (a pair makes the session exclusive), except at prepare, which zeroes
+ * them while no chunk exists, and a white-box reader at quiescence. An engine binds them as
+ * plain memory: the read buffer is the model's State input of an inference and the write
+ * buffer its State output, and a successful inference flips the two, so the state moves by
+ * pointer and never by a copy of anira's (an engine that copies its tensors copies, as for
+ * every other slot). Zeroed at create and at every prepare; the read buffer is re-zeroed at
+ * the first inference of a new generation (a reset).
  *
  * Nothing here allocates, locks or calls the system after construction, so every member but
  * the constructors is legal on the driving thread. Nothing converts: a tensor's dtype is the
@@ -316,30 +325,124 @@ struct StaticPort {
     StaticSlot m_value;
 };
 
-/// One half of a declared state pair. The INPUT half holds the state: its value in the spec's
-/// shape and dtype, what the stage processor feeds into the model input ahead of
-/// before_inference and what its capture behind after_inference writes, and the generation the
-/// value was last fed under (a chunk stamped with another one is the first of a new stream: the
-/// value starts over at zeros). The OUTPUT half holds no value: its `m_partner` names the input
-/// slot the capture writes into. On both halves `m_partner` is the slot of the other half, on
-/// the other side. Constructed in place (an atomic does not move). The value and the generation
-/// are the inference thread's, under the session's dispatch gate (a pair makes the session
-/// exclusive), except at prepare, which zeroes them while no chunk exists; a reader of the
-/// value on another thread takes it under the slot's latch, never torn.
+/// The value of one declared state pair: two buffers in the spec's shape and dtype, each
+/// starting on a 64-byte boundary (explicit over-allocation of one block), one read and one
+/// written per inference. The stage processor binds the model's State input to read() and the
+/// model's State output of the pair to write() ahead of the inference and flips the two behind
+/// a successful one, so the produced state is the next inference's input without a copy of
+/// anira's; a failed inference leaves the read buffer the last good state. Under a plan whose
+/// engine keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS) both halves are bound to
+/// read() and nothing flips: the engine updates the state in place, every address stays put
+/// across calls (what a captured graph needs), and the one buffer is the state a plan without
+/// the flag reads next (a plan switch keeps the state either way). The pair is the model's:
+/// every plan of the one variant runs the same pair, in the pair's domain (domain()). Nothing
+/// here allocates after construction. Non-copyable and non-movable: the ports name its memory.
+class StateSlot {
+public:
+    /// `shape` is the spec's (every extent above 0, at most ANIRA_MAX_RANK of them), `dtype`
+    /// the spec's. Allocates; both buffers are all-zero bits, the zero of every dtype.
+    StateSlot(std::vector<int64_t> shape, anira_dtype dtype)
+        : m_shape(std::move(shape)), m_dtype(dtype), m_element_size(tensor_run::dtype_size(dtype)) {
+        if (m_shape.size() > ANIRA_MAX_RANK) { m_shape.resize(ANIRA_MAX_RANK); }
+        m_num_elements = 1;
+        for (const int64_t extent : m_shape) {
+            m_num_elements *= extent > 0 ? static_cast<size_t>(extent) : 0;
+        }
+        m_num_bytes = m_num_elements * m_element_size;
+        // Each buffer takes whole blocks of k_alignment bytes, so that the second one starts
+        // on a boundary too; one block more lets the first one start on a boundary whatever
+        // the allocator handed out. Value-initialised: zeros.
+        const size_t block = std::max<size_t>(m_num_bytes, 1);
+        m_stride = ((block + k_alignment - 1) / k_alignment) * k_alignment;
+        m_storage = std::vector<unsigned char>((2 * m_stride) + k_alignment);
+        const auto base = reinterpret_cast<uintptr_t>(m_storage.data());
+        const uintptr_t aligned =
+            (base + k_alignment - 1) & ~static_cast<uintptr_t>(k_alignment - 1);
+        m_buffers[0] = m_storage.data() + (aligned - base);
+        m_buffers[1] = m_buffers[0] + m_stride;
+    }
+    ~StateSlot() = default;
+    StateSlot(const StateSlot&) = delete;
+    StateSlot& operator=(const StateSlot&) = delete;
+    StateSlot(StateSlot&&) = delete;
+    StateSlot& operator=(StateSlot&&) = delete;
+
+    /// Every buffer starts on a multiple of this many bytes (what the engines that bind caller
+    /// memory ask for at most).
+    static constexpr size_t k_alignment = 64;
+
+    const std::vector<int64_t>& shape() const noexcept { return m_shape; }
+    anira_dtype dtype() const noexcept { return m_dtype; }
+    size_t num_elements() const noexcept { return m_num_elements; }
+    size_t num_bytes() const noexcept { return m_num_bytes; }
+
+    /// The domain the two buffers live in, which the bound descriptors report: the engine
+    /// domain of the plans that run the pair, the declared host-end domain of the slot
+    /// (anira_contract_set_host_domain) overriding it; host memory for every engine of this
+    /// pre-release, so the buffers above are the pair wherever it runs. Set at prepare, while
+    /// no chunk exists; read on the inference thread.
+    anira_domain domain() const noexcept { return m_domain; }
+    void set_domain(anira_domain domain) noexcept { m_domain = domain; }
+
+    /// The buffer the next inference reads its State input from: the last promoted state.
+    void* read() noexcept { return m_buffers[m_read]; }
+    /// The same for a reader at quiescence (a white-box check; no latch guards it).
+    const void* read() const noexcept { return m_buffers[m_read]; }
+    /// The buffer the next inference writes its State output into.
+    void* write() noexcept { return m_buffers[1 - m_read]; }
+
+    /// The promotion: what was written is what the next inference reads, and the buffer it
+    /// read becomes the one it writes. A pointer swap.
+    void flip() noexcept { m_read = 1 - m_read; }
+
+    /// The re-initialisation of the state at the first inference of a new generation: the read
+    /// buffer to all-zero bits; the write buffer is about to be overwritten anyway.
+    void zero_read() noexcept { std::memset(read(), 0, m_num_bytes); }
+
+    /// Both buffers to all-zero bits: create and prepare, while no chunk exists.
+    void zero_both() noexcept {
+        std::memset(m_buffers[0], 0, m_num_bytes);
+        std::memset(m_buffers[1], 0, m_num_bytes);
+    }
+
+private:
+    std::vector<int64_t> m_shape;
+    anira_dtype m_dtype;
+    size_t m_element_size;
+    size_t m_num_elements = 0;
+    size_t m_num_bytes = 0;
+    size_t m_stride = 0;                   ///< the bytes from one buffer's start to the other's
+    std::vector<unsigned char> m_storage;  ///< both buffers plus one alignment block
+    std::array<unsigned char*, 2> m_buffers{};
+    size_t m_read = 0;  ///< which of the two is read; the other is written
+    anira_domain m_domain = ANIRA_DOMAIN_HOST;
+};
+
+/// One half of a declared state pair. The INPUT half holds the state: a StateSlot in the
+/// spec's shape and dtype, whose read buffer the stage processor binds to the model's State
+/// input ahead of before_inference and whose write buffer it binds to the model's State output
+/// of the pair, flipping the two behind a successful after_inference, and the generation the
+/// value was last bound under (a chunk stamped with another one is the first of a new stream:
+/// the read buffer starts over at zeros). The OUTPUT half holds no value: its `m_partner`
+/// names the input slot whose write buffer it is bound to. On both halves `m_partner` is the
+/// slot of the other half, on the other side. Constructed in place (the ports name the
+/// buffers). The value and the generation are the inference thread's, under the session's
+/// dispatch gate (a pair makes the session exclusive), except at prepare, which zeroes them
+/// while no chunk exists, and a white-box reader at quiescence.
 struct StatePort {
-    /// The input half: the value, all-zero bits, in `shape` and `dtype` (the spec's).
+    /// The input half: the two buffers, all-zero bits, in `shape` and `dtype` (the spec's).
     StatePort(std::vector<int64_t> shape, anira_dtype dtype)
         : m_value(std::in_place, std::move(shape), dtype) {}
     /// The output half: no value.
     StatePort() = default;
 
-    /// No chunk carries this stamp: the first feed after a prepare re-initialises.
+    /// No chunk carries this stamp: the first bind after a prepare re-initialises.
     static constexpr uint64_t k_no_generation = UINT64_MAX;
 
-    std::optional<StaticSlot> m_value;  ///< engaged on the input half only
-    uint32_t m_partner = 0;             ///< the slot of the other half, on the other side
-    /// The generation the value was last fed under; k_no_generation after prepare. Plain field:
-    /// the inference thread's, under the dispatch gate, like the value.
+    std::optional<StateSlot> m_value;  ///< engaged on the input half only
+    uint32_t m_partner = 0;            ///< the slot of the other half, on the other side
+    /// The generation the value was last bound under; k_no_generation after prepare. Plain
+    /// field: the inference thread's, under the dispatch gate, like the value.
     uint64_t m_generation = k_no_generation;
 };
 

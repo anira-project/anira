@@ -98,7 +98,7 @@ path of a JSON document.
   ``ANIRA_ERROR_NOT_SUPPORTED``.
 - A model file that does not resolve to a readable file: ``ANIRA_ERROR_NO_SUCH_FILE`` with the
   resolved absolute path and the engine name; anira checks this itself before any engine sees
-  the path, so the message is the same on every backend.
+  the path, so the message is the same on every engine.
 - A JSON document: ``ANIRA_ERROR_JSON`` with the key path and the offending value
   (``models[0].engine: "foo" is not one of ...``).
 - Prepare-time legality: ``ANIRA_ERROR_CONFIG`` with the tensor's canonical name and what

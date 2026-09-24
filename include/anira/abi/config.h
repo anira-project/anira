@@ -59,6 +59,87 @@ typedef struct anira_ext_entry {
 #define ANIRA_EXT_ENTRY_INIT ANIRA_INIT(anira_ext_entry, {sizeof(anira_ext_entry), 1, "entry"}, NULL)
 
 /**
+ * @brief One set of anira_ext_provider_options: a backend (an engine on a provider, the
+ * two-axis id as anira_backend_id spells it) and the options its runtime takes for the
+ * provider, as string pairs in the runtime's own vocabulary (ONNX Runtime's execution
+ * provider option keys: device_id for CUDA, backend_path for QNN, ...), kept in key
+ * order (two sets with the same pairs are one set, whatever their order). Tier 2,
+ * struct_size first, read within it; copied by the set call, which refuses a malformed
+ * set with ANIRA_ERROR_INVALID_ARGUMENT naming it: a struct_size below the fixed head or
+ * unlike the first record's (an array has one stride), an engine or a provider value
+ * this header does not name, no provider (the default provider takes no options), a
+ * provider of the enum beside a provider_id, an empty provider_id, or a count of options
+ * without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet.
+ */
+typedef struct anira_provider_option_set {
+    uint32_t struct_size;  /**< sizeof(anira_provider_option_set) of the caller's header. */
+    /**
+     * anira_engine of the backend; ANIRA_ENGINE_NONE with an engine_id for a custom engine,
+     * which receives the set in its load record (anira_engine_load_info.option_keys) when its
+     * descriptor lists "context:provider_options".
+     */
+    uint32_t engine;
+    /**
+     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a provider_id, never alone:
+     * the default provider takes no options, and a set for it is refused.
+     */
+    uint32_t provider;
+    uint32_t num_options;  /**< The number of key/value pairs. */
+    const char* engine_id;  /**< NULL for a built-in engine; the id of a custom engine, copied. */
+    /**
+     * NULL for a provider the enum names; a custom provider's name in the engine's vocabulary,
+     * copied.
+     */
+    const char* provider_id;
+    const char* const* keys;  /**< num_options option names, NUL-terminated, copied. */
+    const char* const* values;  /**< num_options option values, NUL-terminated, copied. */
+} anira_provider_option_set;
+/**
+ * @brief No backend and no options.
+ */
+#define ANIRA_PROVIDER_OPTION_SET_INIT ANIRA_INIT(anira_provider_option_set, sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, 0u, NULL, NULL, NULL, NULL)
+
+/**
+ * @brief Extension "provider_options", version 1, on the context config: the options an
+ * engine's runtime takes for a provider, one set per backend
+ * (anira_provider_option_set). Each set is checked against the backend it names. Its
+ * engine must consume the kind: the ONNX Runtime adapter, which reads the set of the
+ * plan's backend at load into the execution provider's options (CUDA's own entry and the
+ * generic one alike), or a custom engine whose descriptor lists
+ * "context:provider_options", which receives the set in its load record; a set for
+ * another engine is ANIRA_ERROR_EXTENSION_UNCONSUMED naming the backend, at
+ * anira_context_create for a built-in engine (no adapter of the build reads the kind for
+ * it) and at anira_handler_create for a custom engine of the pipeline. Its provider must
+ * be one the engine serves here, the context's capabilities for a built-in engine and
+ * the descriptor's list for a custom one, else ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create, so a misspelled provider word is refused and never silently
+ * ignored. A set for a custom engine no pipeline of the handler adds, or for a backend
+ * no plan runs on, is not an error. The options are part of the loaded model where its
+ * engine reads them: two contexts with different options for one backend load twice. A
+ * device block of the context (anira_cuda_desc.device and its siblings) and a provider
+ * option that selects a device ("device_id" for CUDA) name the same device: anira does
+ * not reconcile the two in this pre-release. JSON: {"version": 1, "sets": [{"engine":
+ * "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}: the pair as its
+ * two keys, as a model entry spells them (a built-in engine's word or a custom engine's
+ * id; the enum's spelling or a custom provider's name, never the default provider, which
+ * takes no options), every option value a string.
+ */
+typedef struct anira_ext_provider_options {
+    anira_ext_header header;  /**< {sizeof(anira_ext_provider_options), 1, "provider_options"}. */
+    /**
+     * num_sets records at the stride of the first record's struct_size (an array has one), each
+     * read within it; copied. NULL with a count of 0 for none.
+     */
+    const anira_provider_option_set* sets;
+    uint32_t num_sets;  /**< The number of sets. */
+    uint32_t reserved;  /**< 0. */
+} anira_ext_provider_options;
+/**
+ * @brief An anira_ext_provider_options with its header filled and no set yet.
+ */
+#define ANIRA_EXT_PROVIDER_OPTIONS_INIT ANIRA_INIT(anira_ext_provider_options, {sizeof(anira_ext_provider_options), 1, "provider_options"}, NULL, 0u, 0u)
+
+/**
  * @brief Scalar enumeration of the extension kinds this build understands, without a context:
  * NULL out returns the count, a short buffer is filled as far as it goes and returns
  * ANIRA_INCOMPLETE.
@@ -602,20 +683,22 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
 
 /**
  * @brief The host-end domain of one tensor, common to both contract kinds like
- * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor,
- * the Static store and the state buffers of the slot in, and the domain all four phases
- * of a stage, the feed and the capture work in; the planner joins it to the engine's
- * domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in /
- * domain_out / edge_class / recipe). A tensor declared in the engine's own domain has no
- * edge to cross. The ring, the model tensor and the tensors the context accessors fill
- * share the declared domain, readable from the domain field of any tensor an accessor
- * fills or from the plan row. Set per tensor by canonical name, resolved at
- * anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and
- * in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED
- * there, naming the tensor (the declaration is data; the runtime allocates in host
- * memory only). In a contract file the key is a top-level "host_domains": {"<name>":
- * "<domain word>"}, the words the lower-case suffixes of anira_domain ("host",
- * "host_pinned", "cuda", ...).
+ * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor
+ * and the Static store of the slot in, and the domain all four phases of a stage, the
+ * feed and the capture work in; for a State input it overrides the domain of the pair's
+ * two buffers, which is the backend's domain of the plans that run the pair otherwise
+ * (host memory for every backend of this pre-release), the domain the bound State
+ * descriptors report; the planner joins it to the backend's domain per slot with the
+ * edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
+ * recipe). A tensor declared in the backend's own domain has no edge to cross. The ring,
+ * the model tensor and the tensors the context accessors fill share the declared domain,
+ * readable from the domain field of any tensor an accessor fills or from the plan row.
+ * Set per tensor by canonical name, resolved at anira_handler_prepare: a name that
+ * matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but
+ * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
+ * declaration is data; anira's runtime allocates in host memory only). In a contract
+ * file the key is a top-level "host_domains": {"<name>": "<domain word>"}, the words the
+ * lower-case suffixes of anira_domain ("host", "host_pinned", "cuda", ...).
  * @param contract Either contract kind.
  * @param canonical The tensor's canonical name (the one its spec was created with): any tensor
  *        of either side, Streamed, Buffer, Static and State alike.
@@ -917,8 +1000,9 @@ ANIRA_API void ANIRA_CALL anira_context_config_destroy(anira_context_config* con
 typedef void (ANIRA_CALL* anira_bytes_release_fn)(const void* bytes, void* ctx);
 
 /**
- * @brief Creates an empty model config: no models, no tensors, default engine NONE (=
- * models[0]), STATELESS, max_instances 1, anchor = the first Streamed input.
+ * @brief Creates an empty model config: no models, no tensors, default engine NONE (= plan 0,
+ * the first plan of the table), STATELESS, max_instances 1, anchor = the first Streamed
+ * input.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -931,7 +1015,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_create(anira_model_config**
 
 /**
  * @brief Appends a model entry that loads from a file. Whether the engine is in this build is
- * decided at prepare, so a config can name every engine a deployment might have.
+ * decided at anira_handler_create (an entry of an engine the build lacks is skipped when
+ * the candidates leave it out, refused when they name it), so a config can name every
+ * engine a deployment might have.
  * @param config The config.
  * @param engine A built-in engine (not NONE).
  * @param utf8_path Model file path, UTF-8, copied.
@@ -977,8 +1063,10 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model
                                                                      anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Appends a model entry for a custom engine registered by name
- * (anira_pipeline_register_engine, M2).
+ * @brief Appends a model entry for a custom engine, named by its reverse-URI id (the one
+ * anira_custom_engine_create gave it; the entry and the engine's addition to the
+ * pipeline, anira_pipeline_add_engine, may come in either order). An id no engine of the
+ * pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
  * @param config The config.
  * @param engine_id A registered custom engine's name, reverse-URI (must contain a '.').
  * @param utf8_path Model file path, UTF-8, copied.
@@ -1086,6 +1174,63 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_
                                                                     uint32_t model_index) ANIRA_NOEXCEPT;
 
 /**
+ * @brief Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered
+ * for a provider (an ExecuTorch delegate), an ONNX Runtime .ort compiled for an
+ * execution provider), so only a candidate naming that provider runs it, and a candidate
+ * naming it picks this entry. An entry without a pin is neutral: it runs on any provider
+ * of its engine, the candidate deciding. Two entries of one engine may coexist when
+ * their pins differ. JSON: the entry's "provider" key beside its "engine", "coreml" (the
+ * enum's spellings) or "com.example.npu" (a custom name); "default" or no key is a
+ * neutral entry.
+ * @param config The config.
+ * @param model_index An entry.
+ * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT with a provider_id for a
+ *        custom one; DEFAULT with a NULL provider_id unpins the entry.
+ * @param provider_id A custom provider's name in the engine's vocabulary (the runtime's own
+ *        name for a built-in engine, an entry of a custom engine's providers list),
+ *        copied; NULL for a provider of the enum.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an index out of range,
+ *         an unknown provider value, both a provider of the enum and a provider_id, or an empty
+ *         provider_id.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config* config,
+                                                                        uint32_t model_index,
+                                                                        anira_provider provider,
+                                                                        const char* provider_id,
+                                                                        anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The provider the entry is pinned to.
+ * @param config The config.
+ * @param model_index An entry.
+ * @return The provider; ANIRA_PROVIDER_DEFAULT for a neutral entry, for an entry pinned to a
+ *         custom provider (anira_model_config_model_provider_id names it) and for an index out
+ *         of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_provider ANIRA_CALL anira_model_config_model_provider(const anira_model_config* config,
+                                                                      uint32_t model_index) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The custom provider the entry is pinned to.
+ * @param config The config.
+ * @param model_index An entry.
+ * @return Object-owned; NULL for a neutral entry, for an entry pinned to a provider of the enum
+ *         and for an index out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_model_config_model_provider_id(const anira_model_config* config,
+                                                                      uint32_t model_index) ANIRA_NOEXCEPT;
+
+/**
  * @brief The entry's model path.
  * @param config The config.
  * @param model_index An entry.
@@ -1128,7 +1273,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
  * @param model_index An entry.
  * @param canonical Your canonical name of the tensor (the spec's name); the spec may be added
  *        later, the name is resolved at prepare.
- * @param engine_name The export's name for that tensor, copied: ONNX Runtime the graph's input
+ * @param export_name The export's name for that tensor, copied: ONNX Runtime the graph's input
  *        or output name; TFLite and LiteRT the signature key ("args_0",
  *        "output_0"), or the tensor name for a file without signatures; LibTorch
  *        the method's argument name (inputs only); ExecuTorch the tensor name when
@@ -1142,7 +1287,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model_config* config,
                                                                      uint32_t model_index,
                                                                      const char* canonical,
-                                                                     const char* engine_name) ANIRA_NOEXCEPT;
+                                                                     const char* export_name) ANIRA_NOEXCEPT;
 
 /**
  * @brief The axis order in which this entry's file holds the tensor you named canonical, when
@@ -1242,9 +1387,12 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_output(anira_model_conf
                                                                 const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
- * @brief The engine the handler starts on; whether it names an entry is checked at prepare.
+ * @brief The engine the handler starts on; whether it names an entry is checked at prepare. An
+ * engine with several plans (one entry under several providers, or several entries)
+ * starts on the first of its plans in plan-table order.
  * @param config The config.
- * @param engine A built-in engine, or ANIRA_ENGINE_NONE = models[0] (default).
+ * @param engine A built-in engine, or ANIRA_ENGINE_NONE = plan 0, the first plan of the table
+ *        (default).
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown engine.
  * @par Thread contract
  * [main-thread]
@@ -1254,7 +1402,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_mo
                                                                         anira_engine engine) ANIRA_NOEXCEPT;
 
 /**
- * @brief The custom twin of anira_model_config_set_default_engine.
+ * @brief The custom twin of anira_model_config_set_default_engine. An engine with several plans
+ * (one entry under several providers, or several entries) starts on the first of its
+ * plans in plan-table order.
  * @param config The config.
  * @param engine_id A registered custom engine's name, reverse-URI.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.'.

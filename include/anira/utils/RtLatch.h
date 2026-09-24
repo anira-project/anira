@@ -150,13 +150,11 @@ enum class RtSite : uint8_t {
     MissingSamples,            // S7  InferenceManager: a block missed
     PendingDispatchDropped,    // S8  SessionElement: the pending stateful dispatch queue is full
     NextDispatchDropped,       // S9  InferenceThread: the next dispatch could not be enqueued
-    NoLibTorchModel,           // S10 InferenceThread: no LibTorch model, default processor
-    NoOnnxRuntimeModel,        // S11 InferenceThread: no ONNX Runtime model
-    NoTFLiteModel,             // S12 InferenceThread: no TFLite model
-    NoLiteRtModel,             // S13 InferenceThread: no LiteRT model
-    NoExecuTorchModel,         // S14 InferenceThread: no ExecuTorch model
-    BackendWithoutPlan,        // S15 InferenceManager: set_backend named a backend no plan runs
-    TensorDtypeMismatch,       // S16 InferenceManager: a host tensor's dtype is not its slot's
+    NoModelForBackend,         // S10 InferenceThread: the selected plan's backend has no model
+                               //     (a 2.x table names every backend of the build), the
+                               //     default processor runs
+    BackendWithoutPlan,        // S11 InferenceManager: set_backend named a backend no plan runs
+    TensorDtypeMismatch,       // S12 InferenceManager: a host tensor's dtype is not its slot's
     InferenceThreadBodyThrew,  // the catch-all of the inference thread's loop body
     Count
 };
@@ -172,11 +170,7 @@ inline constexpr std::array<const char*, static_cast<size_t>(RtSite::Count)> k_r
     "missing samples",
     "stateful dispatch dropped (pending queue full)",
     "next dispatch dropped (core queue full)",
-    "libtorch model not provided",
-    "onnxruntime model not provided",
-    "tflite model not provided",
-    "litert model not provided",
-    "executorch model not provided",
+    "no model for the selected backend",
     "backend without a plan",
     "host tensor dtype mismatch",
     "inference thread body threw",

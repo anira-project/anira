@@ -213,7 +213,7 @@ public:
         }
         m_session = anira_test::session_of(handler);
         if (m_session == nullptr) { return; }
-        m_session->m_custom_processor = m_gate.get();  // attach_processor, the gate closed
+        anira_test::attach_processor(handler, *m_gate);  // the gate closed
         m_gate->m_open.store(false);
         m_positions.assign(handler->m_num_inputs, 0);
 

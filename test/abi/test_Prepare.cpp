@@ -1,5 +1,5 @@
-// anira/abi/handler.h: anira_handler_create and anira_handler_prepare. Every ex-translator
-// contract rule through prepare's anira_error, the three miss policies on a starved block, the
+// anira/abi/handler.h: anira_handler_create and anira_handler_prepare. Every contract rule of
+// the validator through prepare's anira_error, the three miss policies on a starved block, the
 // legacy contract's ZEROS, the structural rules at create, a model that does not load, the
 // second prepare, the failed prepare, and the context that outlives its destroy while a
 // handler lives.
@@ -771,7 +771,7 @@ TEST(AbiPrepare, ZeroPlansIsConfigAtCreate) {
                                                    .engine_id = nullptr}};
     const CreateOutcome outcome = try_create(context, model, only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+    expect_contains(outcome.m_message, "none of the 1 model entries runs on a candidate backend");
 }
 
 TEST(AbiPrepare, StructuralRulesAtCreate) {
@@ -791,7 +791,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         other.output(streamed("out"));
         const CreateOutcome outcome = try_create(context, other, {});
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-        expect_contains(outcome.m_message, "has no 2.x adapter");
+        expect_contains(outcome.m_message, "is not added to this pipeline");
     }
     const std::optional<anira_engine> missing = missing_engine();
     if (missing.has_value()) {
@@ -822,7 +822,8 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         missing_alone.output(streamed("out"));
         outcome = try_create(context, missing_alone, {});
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-        expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+        expect_contains(outcome.m_message,
+                        "none of the 1 model entries runs on a candidate backend");
     }
 
     // anira_pipeline_add_inference's own refusals.
@@ -842,13 +843,47 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, two.data(), 2, nullptr, 0, &err),
               ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "one variant per inference stage");
-    const anira_backend_id cuda{.struct_size = sizeof(anira_backend_id),
+    // A candidate's provider: its syntax here (a value of the enum, never both a provider of
+    // the enum and a provider_id, never an empty provider_id), whether the engine serves it at
+    // anira_handler_create, against the context's capabilities.
+    const anira_backend_id bad_value{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = 0x1000U,
+                                     .engine_id = nullptr,
+                                     .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &bad_value, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "candidates[0].provider");
+    const anira_backend_id both{.struct_size = sizeof(anira_backend_id),
                                 .engine = ANIRA_ENGINE_ONNXRUNTIME,
                                 .provider = ANIRA_PROVIDER_CUDA,
-                                .engine_id = nullptr};
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &cuda, 1, &err),
-              ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(err.message, "Host-only");
+                                .engine_id = nullptr,
+                                .provider_id = "com.example.npu"};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &both, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "at once");
+    const anira_backend_id empty_id{.struct_size = sizeof(anira_backend_id),
+                                    .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                    .engine_id = nullptr,
+                                    .provider_id = ""};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &empty_id, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "provider_id is empty");
+    if (const std::vector<anira_engine> engines = anira_test::oracle_engines(); !engines.empty()) {
+        // Well formed, and a provider this context's capabilities do not list for the engine
+        // (no CUDA on the CI legs): refused at create, naming the entry, the engine and the
+        // provider.
+        const anira_backend_id cuda{.struct_size = sizeof(anira_backend_id),
+                                    .engine = static_cast<uint32_t>(engines[0]),
+                                    .provider = ANIRA_PROVIDER_CUDA,
+                                    .engine_id = nullptr,
+                                    .provider_id = nullptr};
+        const CreateOutcome outcome = try_create(context, model, {cuda});
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message, "does not serve provider 'cuda'");
+        expect_contains(outcome.m_message, "capabilities list");
+    }
     const anira_backend_id short_row{.struct_size = 4,
                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
                                      .provider = ANIRA_PROVIDER_DEFAULT,

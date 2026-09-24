@@ -55,7 +55,11 @@ typedef enum anira_status {
     ANIRA_ERROR_INVALID_ARGUMENT = -2,
     ANIRA_ERROR_INVALID_STATE = -3,  /**< The object is not in a state that allows the call. */
     ANIRA_ERROR_OUT_OF_MEMORY = -4,  /**< An allocation failed. */
-    ANIRA_ERROR_NOT_SUPPORTED = -5,  /**< Backend, domain or extension kind not in this build. */
+    /**
+     * Engine, provider, domain or extension kind not available here (not in this build, or not
+     * served by the engine on this machine).
+     */
+    ANIRA_ERROR_NOT_SUPPORTED = -5,
     ANIRA_ERROR_NO_SUCH_FILE = -6,  /**< A path does not resolve to a readable file. */
     ANIRA_ERROR_MODEL_LOAD = -7,  /**< The engine refused the model. */
     ANIRA_ERROR_ENGINE = -8,  /**< The engine failed at run time. */
@@ -131,6 +135,7 @@ typedef struct anira_context_config anira_context_config;
 typedef struct anira_contract anira_contract;
 typedef struct anira_job_options anira_job_options;
 typedef struct anira_pipeline anira_pipeline;
+typedef struct anira_custom_engine anira_custom_engine;
 typedef struct anira_context anira_context;
 typedef struct anira_capabilities anira_capabilities;
 typedef struct anira_inference_thread anira_inference_thread;

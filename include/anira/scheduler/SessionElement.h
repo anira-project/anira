@@ -8,12 +8,16 @@
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <optional>
+#include <string>
+#include <vector>
 
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
+#include "../abi/enums.h"
 #include "../abi/status.h"
-#include "../backends/BackendBase.h"
+#include "../abi/tensor.h"
 #include "../utils/Buffer.h"
 #include "../utils/HostConfig.h"
 #include "../utils/InferenceBackend.h"
@@ -24,29 +28,14 @@
 
 namespace anira {
 
-/**
- * @brief Forward declarations to resolve circular dependencies
- *
- * The backend processor classes include SessionElement.h, so SessionElement only
- * forward-declares them here and holds them via std::shared_ptr (which does not
- * require a complete type). This breaks the otherwise circular include dependency.
- */
-class BackendBase;
-#ifdef USE_LIBTORCH
-class LibtorchProcessor;
-#endif
-#ifdef USE_ONNXRUNTIME
-class OnnxRuntimeProcessor;
-#endif
-#ifdef USE_TFLITE
-class TFLiteProcessor;
-#endif
-#ifdef USE_LITERT
-class LiteRtProcessor;
-#endif
-#ifdef USE_EXECUTORCH
-class ExecuTorchProcessor;
-#endif
+namespace backend {
+/// The engine room's interface (src/backends/Adapter.h): the loaded model a plan of the session
+/// runs on and the session's prepared handle over it. Held through smart pointers, which need
+/// no complete type here (the destructor of the session is defined where the types are
+/// complete); no engine header is included by any public header.
+class Loaded;
+class Prepared;
+}  // namespace backend
 
 /**
  * @brief Session management class for individual inference instances
@@ -170,18 +159,6 @@ public:
                  const RingDtypes& ring_dtypes = {});
 
     /**
-     * @brief Template method for setting backend processors
-     *
-     * Assigns a specific backend processor to this session. This template method
-     * works with any supported backend type (LibTorch, ONNX, TensorFlow Lite).
-     *
-     * @tparam T Backend processor type
-     * @param processor Shared pointer to the backend processor to assign
-     */
-    template <typename T>
-    void set_processor(std::shared_ptr<T>& processor);
-
-    /**
      * @brief Whether every streamable receive ring can take one more inference result
      *
      * True if each streamable output's ring buffer has at least postprocess_output_size
@@ -223,6 +200,31 @@ public:
         ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
                          const std::vector<size_t>& tensor_output_size);
 
+        /**
+         * @brief Builds the descriptor of every tensor of the chunk over its buffer
+         *
+         * Control thread, once per prepare, after the buffers exist: one anira_tensor per
+         * slot of either side, over the buffer's memory, with the spec's rank and extents
+         * (the universal TensorShape rows) and the storage's dtype, float32, all-zero
+         * strides. What the engine call hands its adapter (anira_engine_ctx::inputs /
+         * outputs) and what a stage context copies for a slot.
+         *
+         * @param input_shapes The spec's extents per input tensor
+         * @param output_shapes The spec's extents per output tensor
+         */
+        void bind_tensors(const TensorShapeList& input_shapes,
+                          const TensorShapeList& output_shapes);
+
+        /**
+         * @brief Re-points every descriptor at its buffer's memory of the moment
+         *
+         * A field fill on the driving thread at every claim of the struct
+         * (Core::pre_process). No adapter swaps a buffer's memory any more, so the fill
+         * re-points every descriptor at the memory it already names; it stays until the
+         * queue's storage is anira's own and described once (PR 10).
+         */
+        void rebind_tensors() noexcept;
+
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
         anira::Semaphore m_done_semaphore{0};    ///< Semaphore for blocking wait on inference
@@ -249,7 +251,7 @@ public:
         // stomping a newer era's in-flight dispatch. Plain field: stable for the
         // dispatch's lifetime, synced by the gate/queue handoffs.
         uint64_t m_dispatch_epoch{0};
-        // The plan this chunk runs on: the dense index into SessionElement::m_plan_backends,
+        // The plan this chunk runs on: the dense index into SessionElement::m_plans,
         // stamped in Core::pre_process from SessionElement::m_current_plan with one load.
         // The hooks, the engine call and post_process all resolve this stamp and never read
         // the session's atomic again, so a plan switch that lands while the chunk is queued
@@ -275,54 +277,119 @@ public:
         // Plain field, synced by the queue handoffs like the stamps above (written before the
         // done signal, read after it).
         bool m_completed_as_zeros{false};
+        // The struct's position in SessionElement::m_inference_queue: the chunk's entry
+        // (anira_engine_ctx::entry, anira_stage_ctx::entry), set by prepare with the pool.
+        uint32_t m_entry{0};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
+        // One descriptor per slot of either side over the buffers above (bind_tensors,
+        // rebind_tensors): the engine call's anira_engine_ctx names these arrays, a stage
+        // context copies one for a slot. Written on the driving thread at the claim, read on
+        // the inference thread; synced by the queue handoffs like the fields above.
+        std::vector<anira_tensor> m_input_tensors;
+        std::vector<anira_tensor> m_output_tensors;
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
                                                                        ///< structures for
                                                                        ///< concurrent processing
 
+    /// No chunk carries this dispatch stamp: what a plan's m_engine_generation holds after
+    /// prepare, so that the plan's first inference of the session is its first of a new stream.
+    static constexpr uint64_t k_no_generation = UINT64_MAX;
+
     /**
-     * @brief The plan table: dense plan index -> the backend that plan runs on.
-     *
-     * Core::create_session builds the 2.x table (one row per configured model, in
-     * m_model_data order, then every other backend of this build, so that every backend a
-     * 2.x caller can name has a row); a 3.x handler replaces it with exactly its plans before
-     * it prepares the session (set_plan_backends). Several rows may name one backend. Never
-     * empty. Replaced only while no chunk of the session exists (before prepare), so the
-     * driving thread and the inference threads read it without synchronization.
+     * @brief One plan of the table: the adapter the plan runs on and what a chunk stamped
+     * with the plan reports.
      */
-    std::vector<InferenceBackend> m_plan_backends{CUSTOM};
+    struct PlanSlot {
+        /// The loaded model the plan runs on (never null in a registered session): shared with
+        /// the core's pool and with every other session on the same model, exclusive sessions
+        /// included, or this session's own (a 2.x custom backend, the roundtrip).
+        std::shared_ptr<backend::Loaded> m_loaded;
+        /// This session's handle over the loaded model, what the inference thread runs: made
+        /// by Core::create_session for a built-in engine's and a 2.x plan, by the C handler's
+        /// prepare (with the shared prepare record) for a registered engine's plan, and given
+        /// back by Core::release_session after the session's in-flight inferences drained,
+        /// before the loaded model is released. Declared after m_loaded, so it dies first.
+        std::unique_ptr<backend::Prepared> m_prepared;
+        /// A registered engine's plan: its Prepared is the C handler's to make, with the
+        /// record of its prepare; null until then.
+        bool m_registered = false;
+
+        // Defined in SessionElement.cpp, where the two engine-room types are complete: a
+        // unique_ptr over a forward-declared type needs its deleter there, not here.
+        PlanSlot();
+        ~PlanSlot();
+        PlanSlot(PlanSlot&&) noexcept;
+        PlanSlot& operator=(PlanSlot&&) noexcept;
+        PlanSlot(const PlanSlot&) = delete;
+        PlanSlot& operator=(const PlanSlot&) = delete;
+        /// The backend a stage context reports for the chunk: a built-in engine, or
+        /// ANIRA_ENGINE_NONE with m_engine_id for a custom one, on a provider of the enum, or
+        /// ANIRA_PROVIDER_DEFAULT with m_provider_id for a custom one.
+        anira_engine m_engine = ANIRA_ENGINE_NONE;
+        anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+        std::string m_engine_id;
+        std::string m_provider_id;
+        /// The 2.x backend the plan runs on: what set_backend selects by and get_backend
+        /// answers (InferenceManager); the value the 2.x pre- and post-processing virtuals
+        /// receive for the chunk.
+        InferenceBackend m_legacy_backend = InferenceBackend::CUSTOM;
+        /// A 2.x row for a backend of the build without a model: the roundtrip runs for the
+        /// plan, and the inference thread logs RtSite::NoModelForBackend once per prepare.
+        bool m_missing_model = false;
+        /// The plan's engine keeps its own aliasing of a declared State pair
+        /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the stage processor binds one stable
+        /// buffer as both halves of every pair for a chunk of this plan and never flips it.
+        bool m_state_alias = false;
+        /**
+         * @brief The dispatch stamp this plan's engine last ran under: the plan's reset boundary
+         *
+         * A session-exclusive session only, whose inferences run one at a time and in order
+         * (the dispatch gate): InferenceThread::inference compares the chunk's dispatch stamp
+         * with it, and a difference is this plan's first inference of a new stream (after
+         * prepare, after a reset), so the plan's adapter resets its engine's own state right
+         * before that inference's process and the stamp is adopted. Per plan, since every plan
+         * runs its own executor: after a reset each plan is reset at its own first inference
+         * of the new stream, whichever plan ran first, and a plan switch alone is no boundary.
+         * Read and written on the inference thread alone, between the gate's acquire and
+         * release; set to k_no_generation by prepare, at quiescence. A shared (pooled) adapter
+         * is never reset: only an exclusive session gets here.
+         */
+        uint64_t m_engine_generation = k_no_generation;
+    };
+
+    /**
+     * @brief The plan table: dense plan index -> the plan.
+     *
+     * Built by Core::create_session from the requests it is given (backend::PlanRequest): the
+     * 2.x constructors ask for one row per configured model, in m_model_data order, then every
+     * other backend of this build, so that every backend a 2.x caller can name has a row; a
+     * 3.x handler asks for exactly its plans. Several rows may name one backend. Never empty
+     * in a registered session, and never changed afterwards, so the driving thread and the
+     * inference threads read it without synchronization.
+     */
+    std::vector<PlanSlot> m_plans;
 
     /**
      * @brief The selected plan: the one the next submitted chunk is stamped with.
      *
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
-     * Always below m_plan_backends.size(). Initialized by Core::create_session to the first
-     * configured model whose processor is available (the CUSTOM row when a custom processor
+     * Always below m_plans.size(). Initialized by Core::create_session to the first
+     * configured model whose engine has an adapter (the CUSTOM row when a custom backend
      * was provided or nothing matches).
      */
     std::atomic<uint32_t> m_current_plan{0};
 
-    /**
-     * @brief Replaces the plan table and selects plan 0.
-     * @param backends One backend per plan, in dense-index order.
-     * @throws std::invalid_argument for an empty table.
-     * @throws std::logic_error on a prepared session: the table is read without
-     * synchronization, so it is replaced only while no chunk of the session exists, before
-     * the session is prepared. Nothing is changed by a refused call.
-     */
-    void set_plan_backends(std::vector<InferenceBackend> backends);
-
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
 
-    /// The backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
+    /// The 2.x backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
     InferenceBackend plan_backend(uint32_t plan) const noexcept;
 
-    /// The first plan that runs on a backend (the 2.x selection by backend), if any does.
+    /// The first plan that runs on a 2.x backend (the 2.x selection by backend), if any does.
     std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
 
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
@@ -335,20 +402,26 @@ public:
 
     const int m_session_id;  ///< Unique identifier for this session (immutable)
 
-    std::atomic<bool> m_initialized{false};   ///< Atomic flag indicating if the session is fully
-                                              ///< initialized
-    std::atomic<int> m_active_inferences{0};  ///< Atomic counter of currently active inference
-                                              ///< operations
+    std::atomic<bool> m_initialized{false};  ///< Atomic flag indicating if the session is fully
+                                             ///< initialized
+    /// The session's jobs outside the free pool, counted from before their enqueue into the
+    /// global queue (the audio thread's dispatch, an exclusive chain's continuation) until the
+    /// worker finished the job or a drain completed it as zeros: what
+    /// Core::drain_inference_queue waits down to zero, so that no job is invisible to it,
+    /// however late its worker is. On a heap object of its own, which a worker holds beside the
+    /// session: its decrement is the last thing the worker does for the job, after it dropped
+    /// its reference to the session, so a session dies on the control thread that released it,
+    /// never on an inference thread.
+    const std::shared_ptr<std::atomic<int>> m_active_inferences =
+        std::make_shared<std::atomic<int>>(0);
 
     // Monotonic generation counter, bumped by Core::reset_session() (audio
     // thread) and Core::prepare_session() (control thread, quiescent). Every
     // inference dispatched under an earlier generation is "stale": its output is
     // discarded and its struct reclaimed, without the caller ever waiting for the
     // worker. Workers read it to decide whether to skip a stale dispatch. seq_cst
-    // on the write pairs with the worker's register-before-read of
-    // m_active_inferences (store-buffering), matching the existing m_initialized
-    // handshake. 64-bit: wrap-around (ABA) is unreachable even at per-block reset
-    // rates.
+    // on the write pairs with the worker's seq_cst read of it, as m_initialized's
+    // does. 64-bit: wrap-around (ABA) is unreachable even at per-block reset rates.
     std::atomic<uint64_t> m_generation{0};
 
     // This session's explicit producer token for the global inference queue.
@@ -438,8 +511,6 @@ public:
     PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration
 
-    BackendBase m_default_processor;  ///< Default backend processor instance
-    BackendBase* m_custom_processor;  ///< Pointer to custom backend processor (if provided)
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
                        ///< constructor received no latch (a 2.x session); nothing reads its
                        ///< word, but a failed inference records ENGINE into it all the same
@@ -481,34 +552,6 @@ public:
     std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive buffer sizes (for testing
                                                 ///< access)
 
-#ifdef USE_LIBTORCH
-    std::shared_ptr<LibtorchProcessor> m_libtorch_processor = nullptr;  ///< Shared pointer to
-                                                                        ///< LibTorch backend
-                                                                        ///< processor (if
-                                                                        ///< available)
-#endif
-#ifdef USE_ONNXRUNTIME
-    std::shared_ptr<OnnxRuntimeProcessor> m_onnx_processor = nullptr;  ///< Shared pointer to ONNX
-                                                                       ///< Runtime backend
-                                                                       ///< processor (if available)
-#endif
-#ifdef USE_TFLITE
-    std::shared_ptr<TFLiteProcessor> m_tflite_processor = nullptr;  ///< Shared pointer to
-                                                                    ///< TensorFlow Lite backend
-                                                                    ///< processor (if available)
-#endif
-#ifdef USE_LITERT
-    std::shared_ptr<LiteRtProcessor> m_litert_processor = nullptr;  ///< Shared pointer to LiteRT
-                                                                    ///< backend processor
-                                                                    ///< (if available)
-#endif
-#ifdef USE_EXECUTORCH
-    std::shared_ptr<ExecuTorchProcessor> m_executorch_processor = nullptr;  ///< Shared pointer to
-                                                                            ///< ExecuTorch backend
-                                                                            ///< processor
-                                                                            ///< (if available)
-#endif
-
 private:
     /**
      * @brief Whether any input tensor is streamable
@@ -521,11 +564,8 @@ private:
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
-    ThreadSafeStruct* __doxygen_force_0;      ///< Placeholder for Doxygen documentation
-    RingBuffer* __doxygen_force_1;            ///< Placeholder for Doxygen documentation
-    LibtorchProcessor* __doxygen_force_2;     ///< Placeholder for Doxygen documentation
-    OnnxRuntimeProcessor* __doxygen_force_3;  ///< Placeholder for Doxygen documentation
-    TFLiteProcessor* __doxygen_force_4;       ///< Placeholder for Doxygen documentation
+    ThreadSafeStruct* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
+    RingBuffer* __doxygen_force_1;        ///< Placeholder for Doxygen documentation
 #endif
 };
 

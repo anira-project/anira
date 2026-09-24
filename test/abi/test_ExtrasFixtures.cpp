@@ -148,9 +148,13 @@ Oracle cnn_oracle(int64_t window, unsigned warm_up) {
         .m_engines = k_every_engine};
 }
 
+// The TensorFlow export holds the static gain at rank 3 ([1, 1, 1]): the tflite and litert
+// rows carry a layout for it, which the bridge turns into the backend-qualified shape.
 Oracle gain_oracle(int64_t channels) {
     return Oracle{.m_in = {{1, channels, 512}, {1}},
                   .m_out = {{1, channels, 512}, {1}},
+                  .m_tensorflow = std::pair{TensorShapeList{{1, channels, 512}, {1, 1, 1}},
+                                            TensorShapeList{{1, channels, 512}, {1}}},
                   .m_in_channels = {static_cast<size_t>(channels), 1},
                   .m_out_channels = {static_cast<size_t>(channels), 1},
                   .m_in_size = {512, 0},
@@ -216,20 +220,27 @@ TEST(ExtrasFixtures, StereoGain) {
 }
 
 // The bundled StatefulAccumulatorNetwork is a 3.x-only file: the 2.x bridge refuses a State
-// spec, so there is no 2.x oracle, and the file is checked field by field. Rows for the three
-// engines that keep the export's tensor order and none for tflite or litert (the TFLite export
-// orders its outputs [state_out, processed_data], and the engines bind by position until they
-// bind by name), every row's file in the fetched tree, the State pair around the stereo
-// stream, and the contract file's budget and warm-up.
+// spec, so there is no 2.x oracle, and the file is checked field by field. A row for every
+// engine: the TFLite export orders its outputs [state_out, processed_data] in the file while
+// its signature keeps the declared mapping under the keys output_0 / output_1, so the tflite
+// row binds by position through the signature runner's key order and the litert row names the
+// two outputs (LiteRT lists them in the file's order); every row's file in the fetched tree,
+// the State pair around the stereo stream, and the contract file's budget and warm-up.
 TEST(ExtrasFixtures, StatefulAccumulator) {
     const anira::ModelConfig loaded =
         anira::ModelConfig::from_file(k_stateful_accumulator_model_json);
     EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
     const anira_model_config& cfg = *loaded.native();
-    ASSERT_EQ(cfg.m_models.size(), 3U);
+    ASSERT_EQ(cfg.m_models.size(), 5U);
     EXPECT_EQ(cfg.m_models[0].m_engine, ANIRA_ENGINE_LIBTORCH);
     EXPECT_EQ(cfg.m_models[1].m_engine, ANIRA_ENGINE_ONNXRUNTIME);
     EXPECT_EQ(cfg.m_models[2].m_engine, ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_EQ(cfg.m_models[3].m_engine, ANIRA_ENGINE_TFLITE);
+    EXPECT_EQ(cfg.m_models[4].m_engine, ANIRA_ENGINE_LITERT);
+    EXPECT_TRUE(cfg.m_models[3].m_tensors.empty()) << "the runner's key order is the declared one";
+    ASSERT_EQ(cfg.m_models[4].m_tensors.size(), 2U);
+    EXPECT_EQ(cfg.m_models[4].m_tensors.at("processed_data").m_name, "output_0");
+    EXPECT_EQ(cfg.m_models[4].m_tensors.at("state_out").m_name, "output_1");
     for (const anira::capi::ModelEntry& row : cfg.m_models) {
         EXPECT_NE(row.m_path.find("StatefulAccumulatorNetwork/models/"
                                   "stateful_accumulator_network_stereo."),

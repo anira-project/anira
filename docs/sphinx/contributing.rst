@@ -87,9 +87,9 @@ Install tree
     cmake -S test/contracts/install -B build-consumer -DCMAKE_PREFIX_PATH=$PWD/prefix
     cmake --build build-consumer && ./build-consumer/consumer
 
-Anything a consumer needs — public headers, the exported target, tanh-lib's core component, backend runtimes — must be part of that tree.
+Anything a consumer needs — public headers, the exported target, tanh-lib's core component, engine runtimes — must be part of that tree.
 
-The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default backend set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
+The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default engine set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
 
 Code Style
 ~~~~~~~~~~
@@ -126,12 +126,14 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 ``test/CMakeLists.txt``).
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``backends/``, ``system/`` and ``utils/`` each map one to one.
+  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/backends/`` mostly
+  covers ``src/backends/`` (the engine adapters), since ``include/anira/backends/`` holds
+  only ``BackendBase.h``.
 - Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
   ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
   cross-unit integration suites (``test_OneSidedStreaming``).
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: header isolation, backend linkage, the library-unload harness,
+  than of any one unit: header isolation, engine linkage, the library-unload harness,
   the installed-package consumer.
 - ``test/support/`` is shared test infrastructure, not tests.
 
@@ -241,7 +243,37 @@ accessors and the two default bodies it may call). For an entry under it the gen
 requires ``nonblocking: true`` exactly as it does for ``driver-thread``, since anira's side is
 real-time on both threads; for a callback typedef under it (``anira_stage_fn``) it requires
 no attribute, since whether a stage body is real-time is the stage's own promise
-(``anira_stage_desc.flags``), stated per stage and checked at prepare. The 64-bit rule has a closed allowlist
+(``anira_stage_desc.flags``), stated per stage and checked at prepare. An
+``inference-thread`` callback typedef (``anira_engine_process_fn``) carries no
+``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
+promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
+follow one naming scheme and one shape, which every later descriptor keeps: ``stage`` /
+``engine`` on every level that belongs to one side (``anira_stage_desc`` /
+``anira_engine_desc``, ``anira_stage_ctx`` / ``anira_engine_ctx``, the ``anira_stage_*_fn`` /
+``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine`` with ``StageContext`` /
+``EngineContext``), no side on what the two lifecycles share (the records ``anira_init_info``
+and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
+slot of either descriptor receive, ``anira::InitInfo`` / ``anira::PrepareInfo``, and the enum
+``anira_phase``, which names the phases of both), the verb on
+the record of a level one side alone has (``anira_engine_load_info``,
+``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``,
+``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what
+``prepare`` hands back and ``Loaded`` for what ``load`` hands back (the C ``prepared`` and
+``loaded`` pointers; the nested classes ``Stage::Prepared``, ``Engine::Loaded`` and
+``Engine::Prepared``), and one callback shape, from the outermost level in:
+``init(info, user_data)`` and ``release(user_data)`` once per carrier;
+``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)`` once per loaded model,
+the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
+``prepare(info, loaded, user_data, &prepared)`` for the engine and
+``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
+``(ctx, prepared, user_data)``, the four phases and ``reset`` of the stage, ``process`` and
+``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
+travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
+(``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
+``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` on ``anira_edge_info``), a
+value of the enum or ``ANIRA_PROVIDER_DEFAULT`` beside a name in the engine's own vocabulary,
+and the JSON spellings of both enums live in one place, ``src/capi/words.h``, which the JSON
+reader and writer, the messages, the carriers and the adapters share. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,
 ``anira_tensor_init_opaque_fd``, ``anira_tensor_init_wgpu_buffer``,
 ``anira_tensor_init_dmabuf`` and ``anira_tensor_init_iosurface``, whose parameters are vendor
@@ -287,7 +319,7 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
 ``cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>``:
 
 ``desktop-tests-rtsan``
-   RealtimeSanitizer over the full backend set. Gates the ``ANIRA_NONBLOCKING``
+   RealtimeSanitizer over the full engine set. Gates the ``ANIRA_NONBLOCKING``
    (clang's ``nonblocking`` attribute) hot path — the C entries of
    ``anira/abi/handler.h`` and the 2.x ``process``/``push_data``/``pop_data``/
    ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
@@ -306,7 +338,7 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
 ``desktop-tests-tsan``
    ThreadSanitizer.
 
-The ASan and TSan presets build no engines: the prebuilt backend runtimes are
+The ASan and TSan presets build no engines: the prebuilt engine runtimes are
 uninstrumented, so a sanitized build linking them would report on frames it cannot
 see into. They are ``RelWithDebInfo`` with ``-DNDEBUG`` dropped from the build-type
 flags — ``-O0`` costs roughly 2.4× the test time for no extra signal, and

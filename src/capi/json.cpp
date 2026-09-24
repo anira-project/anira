@@ -34,6 +34,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "words.h"
 
 using anira::capi::StatusError;
 using anira::capi::translate_exception;
@@ -133,13 +134,6 @@ const char* word_of(Enum value, const std::array<std::pair<const char*, Enum>, N
 
 // ---- vocabularies ------------------------------------------------------------------------
 
-const std::array<std::pair<const char*, anira_engine>, 5> k_engines{{
-    {"onnxruntime", ANIRA_ENGINE_ONNXRUNTIME},
-    {"libtorch", ANIRA_ENGINE_LIBTORCH},
-    {"tflite", ANIRA_ENGINE_TFLITE},
-    {"litert", ANIRA_ENGINE_LITERT},
-    {"executorch", ANIRA_ENGINE_EXECUTORCH},
-}};
 const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"ONNX", ANIRA_ENGINE_ONNXRUNTIME},
     {"LIBTORCH", ANIRA_ENGINE_LIBTORCH},
@@ -217,23 +211,6 @@ const std::array<std::pair<const char*, anira_delivery>, 2> k_deliveries{{
 const std::array<std::pair<const char*, anira_edge_cost>, 2> k_edge_costs{{
     {"permissive", ANIRA_EDGE_COST_PERMISSIVE},
     {"strict", ANIRA_EDGE_COST_STRICT},
-}};
-// The host-end domain of a tensor ("host_domains", anira_contract_set_host_domain): every arm
-// of anira_domain by its lower-case suffix.
-const std::array<std::pair<const char*, anira_domain>, 13> k_domains{{
-    {"host", ANIRA_DOMAIN_HOST},
-    {"host_pinned", ANIRA_DOMAIN_HOST_PINNED},
-    {"cuda", ANIRA_DOMAIN_CUDA},
-    {"gl_buffer", ANIRA_DOMAIN_GL_BUFFER},
-    {"vulkan_buffer", ANIRA_DOMAIN_VULKAN_BUFFER},
-    {"opaque_fd", ANIRA_DOMAIN_OPAQUE_FD},
-    {"metal_buffer", ANIRA_DOMAIN_METAL_BUFFER},
-    {"wgpu_buffer", ANIRA_DOMAIN_WGPU_BUFFER},
-    {"dmabuf", ANIRA_DOMAIN_DMABUF},
-    {"iosurface", ANIRA_DOMAIN_IOSURFACE},
-    {"ahardwarebuffer", ANIRA_DOMAIN_AHARDWAREBUFFER},
-    {"d3d12", ANIRA_DOMAIN_D3D12},
-    {"frame", ANIRA_DOMAIN_FRAME},
 }};
 const std::array<std::pair<const char*, anira_gl_threads>, 2> k_gl_threads{{
     {"caller_thread", ANIRA_GL_CALLER_THREAD},
@@ -402,7 +379,7 @@ void set_engine_from_json(const Json& node,
                           anira_engine& engine,
                           std::string& engine_id) {
     const std::string word = require_string(node, path);
-    for (const auto& [name, value] : k_engines) {
+    for (const auto& [name, value] : anira::capi::k_engine_words) {
         if (word == name) {
             engine = value;
             engine_id.clear();
@@ -413,10 +390,43 @@ void set_engine_from_json(const Json& node,
         fail_json(path,
                   R"(")" + word +
                       R"(" is neither a built-in engine (onnxruntime, libtorch, tflite, litert, )"
-                      "executorch) nor a reverse-URI custom engine name");
+                      "executorch) nor a reverse-URI custom engine id");
     }
     engine = ANIRA_ENGINE_NONE;
     engine_id = word;
+}
+
+// models[].engine: the engine word alone, a built-in engine's spelling or a custom engine's
+// reverse-URI id. The pair is two keys: the provider an entry is pinned to has its own.
+void set_entry_engine_from_json(const Json& node,
+                                const std::string& path,
+                                anira::capi::ModelEntry& entry) {
+    const std::string word = require_string(node, path);
+    if (word.find(':') != std::string::npos) {
+        fail_json(path,
+                  R"(")" + word +
+                      R"(" carries a ':'; the provider an entry is pinned to is spelled under )"
+                      R"("provider", beside "engine")");
+    }
+    set_engine_from_json(node, path, entry.m_engine, entry.m_engine_id);
+}
+
+// models[].provider: the provider the entry is pinned to
+// (anira_model_config_set_model_provider): the enum's spelling ("coreml"; "default" spells a
+// neutral entry, as no key does) or a custom provider's name in the engine's vocabulary
+// ("com.example.npu").
+void set_entry_provider_from_json(const Json& node,
+                                  const std::string& path,
+                                  anira::capi::ModelEntry& entry) {
+    const std::string word = require_string(node, path);
+    if (word.empty()) { fail_json(path, "must not be empty"); }
+    entry.m_provider = ANIRA_PROVIDER_DEFAULT;
+    entry.m_provider_id.clear();
+    if (const std::optional<anira_provider> known = anira::capi::provider_of_word(word)) {
+        entry.m_provider = *known;
+        return;
+    }
+    entry.m_provider_id = word;
 }
 
 // models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
@@ -534,8 +544,10 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                 for (const auto& [ekey, evalue] : value[i].items()) {
                     const std::string ekey_path = child(entry_path, ekey.c_str());
                     if (ekey == "engine") {
-                        set_engine_from_json(evalue, ekey_path, entry.m_engine, entry.m_engine_id);
+                        set_entry_engine_from_json(evalue, ekey_path, entry);
                         has_engine = true;
+                    } else if (ekey == "provider") {
+                        set_entry_provider_from_json(evalue, ekey_path, entry);
                     } else if (ekey == "path") {
                         entry.m_path = resolve_path(require_string(evalue, ekey_path), base_dir);
                         if (entry.m_path.empty()) { fail_json(ekey_path, "must not be empty"); }
@@ -847,7 +859,7 @@ void load_contract_v3(const Json& root, anira_contract& contract) {
             for (const auto& [tensor, word] : value.items()) {
                 if (tensor.empty()) { fail_json(key, "a tensor name must not be empty"); }
                 contract.m_host_domains[tensor] =
-                    vocabulary(word, child(key, tensor.c_str()), k_domains);
+                    vocabulary(word, child(key, tensor.c_str()), anira::capi::k_domain_words);
             }
         } else {
             set_ext_from_json(contract.m_ext, key, value, "");
@@ -1340,8 +1352,14 @@ Json model_to_json(const anira_model_config& cfg) {
     Json models = Json::array();
     for (const anira::capi::ModelEntry& entry : cfg.m_models) {
         Json object = Json::object();
-        object["engine"] =
-            entry.is_custom() ? entry.m_engine_id.c_str() : word_of(entry.m_engine, k_engines);
+        object["engine"] = entry.is_custom() ? entry.m_engine_id
+                                             : word_of(entry.m_engine, anira::capi::k_engine_words);
+        // The pin under its own key; a neutral entry has none.
+        if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
+            object["provider"] = anira::capi::provider_word(entry.m_provider);
+        } else if (!entry.m_provider_id.empty()) {
+            object["provider"] = entry.m_provider_id;
+        }
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
         write_tensor_records(object, entry);
         write_exts(object, entry.m_ext);
@@ -1351,7 +1369,7 @@ Json model_to_json(const anira_model_config& cfg) {
     if (!cfg.m_default_engine_id.empty()) {
         root["default_engine"] = cfg.m_default_engine_id;
     } else if (cfg.m_default_engine != ANIRA_ENGINE_NONE) {
-        root["default_engine"] = word_of(cfg.m_default_engine, k_engines);
+        root["default_engine"] = word_of(cfg.m_default_engine, anira::capi::k_engine_words);
     }
     root["state"] = word_of(cfg.m_state, k_states);
     root["max_instances"] = cfg.m_max_instances;
@@ -1423,6 +1441,14 @@ anira_status write_text(const std::string& text, char* buf, size_t cap, size_t* 
 }
 
 }  // namespace
+
+namespace anira::capi {
+
+std::string model_config_json(const anira_model_config& model) {
+    return model_to_json(model).dump();
+}
+
+}  // namespace anira::capi
 
 // ==== entry points ==============================================================================
 

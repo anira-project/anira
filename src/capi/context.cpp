@@ -15,14 +15,20 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <memory>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
+#include "../backends/Adapter.h"
 #include "capi_internal.h"
+#include "enumerate.h"
 #include "ext_registry.h"
-#include "translate.h"
+#include "providers.h"
+#include "validate.h"
 
 using anira::capi::translate_exception;
 
@@ -63,76 +69,66 @@ bool has_device_block(const anira_context_config& config) {
            config.m_metal.has_value() || config.m_d3d12.has_value() || config.m_webgpu.has_value();
 }
 
+// The CPU rule of the edge registry (providers.h cpu_provider), on a probed provider.
+bool cpu_provider(const anira::backend::ProviderInfo& provider) noexcept {
+    return anira::capi::cpu_provider(provider.m_provider, provider.m_provider_id);
+}
+
 // The Host-only capability report of this pre-release: every compiled-in engine on the
-// default provider, the host domain, the registered extension kinds, and one zero-copy
-// edge from host memory to each engine. Nothing is probed at run time yet.
-void probe_host_only(anira_capabilities& capabilities) {
+// providers its runtime reports usable here (the default provider first; ONNX Runtime's
+// available execution providers, LiteRT's registered accelerators; the other engines the
+// default provider alone), the host domain, the registered extension kinds, and one edge from
+// host memory to each backend row: zero-copy to a CPU provider, a copy the engine makes for
+// itself to a device one. The runtimes are asked at every probe; nothing is cached.
+void probe(anira_capabilities& capabilities) {
     std::vector<anira_backend_id> backends;
     std::vector<anira_edge_info> edges;
+    std::deque<std::string> strings;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
-        anira_backend_id id = ANIRA_BACKEND_ID_INIT;
-        id.engine = static_cast<uint32_t>(engine);
-        id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
-        backends.push_back(id);
-        anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
-        edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
-        edge.to_engine = static_cast<uint32_t>(engine);
-        edge.to_provider = static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
-        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
-        edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
-        edge.available = 1;
-        edge.reason = "host memory reaches every built-in engine without a copy";
-        edges.push_back(edge);
+        // The core's engine object of the engine: the one its loaded models hold, or one made
+        // for this query alone and freed with it.
+        const std::shared_ptr<anira::backend::BuiltinEngine> object =
+            anira::Core::builtin_engine(engine);
+        if (object == nullptr) { continue; }
+        for (const anira::backend::ProviderInfo& provider : object->providers()) {
+            const char* provider_id = nullptr;
+            if (!provider.m_provider_id.empty()) {
+                strings.push_back(provider.m_provider_id);
+                provider_id = strings.back().c_str();
+            }
+            anira_backend_id id = ANIRA_BACKEND_ID_INIT;
+            id.engine = static_cast<uint32_t>(engine);
+            id.provider = static_cast<uint32_t>(provider.m_provider);
+            id.provider_id = provider_id;
+            backends.push_back(id);
+            anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
+            edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+            edge.to_engine = static_cast<uint32_t>(engine);
+            edge.to_provider = static_cast<uint32_t>(provider.m_provider);
+            edge.to_provider_id = provider_id;
+            edge.available = 1;
+            if (cpu_provider(provider)) {
+                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
+                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
+                edge.reason = "host memory reaches a CPU provider without a copy";
+            } else {
+                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY);
+                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
+                edge.reason =
+                    "the engine's runtime reports the provider; the engine moves "
+                    "host memory to it itself, per call";
+            }
+            edges.push_back(edge);
+        }
     }
     std::vector<anira_domain> domains{ANIRA_DOMAIN_HOST};
     std::vector<const char*> ext_kinds = anira::capi::ext_kinds();
     const std::scoped_lock<std::mutex> lock(capabilities.m_mutex);
+    capabilities.m_strings = std::move(strings);  // before the rows that point into it
     capabilities.m_backends = std::move(backends);
     capabilities.m_domains = std::move(domains);
     capabilities.m_ext_kinds = std::move(ext_kinds);
     capabilities.m_edges = std::move(edges);
-}
-
-// The enumeration convention of section 6a: out == NULL asks for the count, a short buffer
-// is filled as far as it goes and returns ANIRA_INCOMPLETE. Records are written at the
-// caller's stride, min(element_size, the library's record size) bytes each, so the row's
-// struct_size tells a newer caller how much of its record the library filled.
-template <class T>
-anira_status enumerate_records(const std::vector<T>& rows,
-                               uint32_t element_size,
-                               uint32_t* count,
-                               void* out) {
-    if (count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const auto total = static_cast<uint32_t>(rows.size());
-    if (out == nullptr) {
-        *count = total;
-        return ANIRA_OK;
-    }
-    if (element_size < sizeof(uint32_t)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const uint32_t capacity = *count;
-    const uint32_t written = std::min(capacity, total);
-    const size_t bytes = std::min<size_t>(element_size, sizeof(T));
-    auto* destination = static_cast<unsigned char*>(out);
-    for (uint32_t i = 0; i < written; ++i) {
-        std::memcpy(destination + static_cast<size_t>(i) * element_size, &rows[i], bytes);
-    }
-    *count = total;
-    return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
-}
-
-template <class T>
-anira_status enumerate_scalars(const std::vector<T>& rows, uint32_t* count, T* out) {
-    if (count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const auto total = static_cast<uint32_t>(rows.size());
-    if (out == nullptr) {
-        *count = total;
-        return ANIRA_OK;
-    }
-    const uint32_t capacity = *count;
-    const uint32_t written = std::min(capacity, total);
-    for (uint32_t i = 0; i < written; ++i) { out[i] = rows[i]; }
-    *count = total;
-    return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
 }
 
 // The fixed head of anira_backend_id: struct_size, engine, provider.
@@ -184,7 +180,7 @@ anira_status ANIRA_CALL anira_context_create(const anira_context_config* config,
         anira::Core::register_context(*config);
         context->m_registered = true;
         apply_log_flags(*context, true);
-        probe_host_only(context->m_capabilities);
+        probe(context->m_capabilities);
     } catch (...) {
         apply_log_flags(*context, false);
         if (context->m_registered) { anira::Core::unregister_context(); }
@@ -221,8 +217,8 @@ anira_status ANIRA_CALL anira_context_probe(anira_context* context,
                                             anira_bool force,
                                             anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(context != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "context: NULL");
-    static_cast<void>(force);  // nothing is cached in the Host-only report
-    probe_host_only(context->m_capabilities);
+    static_cast<void>(force);  // nothing is cached: every probe asks the runtimes
+    probe(context->m_capabilities);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
@@ -237,7 +233,7 @@ anira_status ANIRA_CALL anira_capabilities_backends(const anira_capabilities* ca
                                                     anira_backend_id* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_records(capabilities->m_backends, element_size, count, out);
+    return anira::capi::enumerate_records(capabilities->m_backends, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_domains(const anira_capabilities* capabilities,
@@ -245,7 +241,7 @@ anira_status ANIRA_CALL anira_capabilities_domains(const anira_capabilities* cap
                                                    anira_domain* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_scalars(capabilities->m_domains, count, out);
+    return anira::capi::enumerate_scalars(capabilities->m_domains, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capabilities* capabilities,
@@ -253,7 +249,7 @@ anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capabilities* c
                                                      const char** out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_scalars(capabilities->m_ext_kinds, count, out);
+    return anira::capi::enumerate_scalars(capabilities->m_ext_kinds, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilities* capabilities,
@@ -262,7 +258,7 @@ anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilities* capab
                                                  anira_edge_info* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_records(capabilities->m_edges, element_size, count, out);
+    return anira::capi::enumerate_records(capabilities->m_edges, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabilities,
@@ -276,12 +272,23 @@ anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabi
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     // A custom engine (engine_id set, readable only when the caller's record has the slot)
-    // has no row in this pre-release.
-    const bool custom = to->struct_size >= sizeof(anira_backend_id) && to->engine_id != nullptr;
+    // has no row in this pre-release; a custom provider is matched by its name, read when the
+    // caller's record has the slot (a shorter record names the enum's providers alone).
+    const bool has_engine_id =
+        to->struct_size >= offsetof(anira_backend_id, engine_id) + sizeof(const char*);
+    const bool custom = has_engine_id && to->engine_id != nullptr;
+    const std::string_view provider_id =
+        to->struct_size >= sizeof(anira_backend_id) && to->provider_id != nullptr
+            ? std::string_view(to->provider_id)
+            : std::string_view();
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
     for (const anira_edge_info& edge : capabilities->m_edges) {
+        const std::string_view listed = edge.to_provider_id != nullptr
+                                            ? std::string_view(edge.to_provider_id)
+                                            : std::string_view();
         if (!custom && edge.from_domain == static_cast<uint32_t>(from) &&
-            edge.to_engine == to->engine && edge.to_provider == to->provider) {
+            edge.to_engine == to->engine && edge.to_provider == to->provider &&
+            listed == provider_id) {
             std::memcpy(out, &edge, std::min<size_t>(out->struct_size, sizeof(anira_edge_info)));
             return ANIRA_OK;
         }
@@ -298,7 +305,7 @@ anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
         id.engine = static_cast<uint32_t>(engine);
         backends.push_back(id);
     }
-    return enumerate_records(backends, element_size, count, out);
+    return anira::capi::enumerate_records(backends, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 uint64_t ANIRA_CALL anira_context_byte_image_bytes(const anira_context* context,

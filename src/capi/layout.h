@@ -1,7 +1,7 @@
 /*
  * The per-entry axis layout of section 5: how one engine's file holds a tensor's axes when
  * that order differs from the spec's. Shared by the C entry (validation at set time), the JSON
- * loader and the version 2 upgrade (stable fill), and the translator (classification).
+ * loader and the version 2 upgrade (stable fill), and the validator (classification).
  */
 #ifndef ANIRA_CAPI_LAYOUT_H
 #define ANIRA_CAPI_LAYOUT_H

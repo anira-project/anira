@@ -935,6 +935,70 @@ TEST(AbiHandler, PlanReportRows) {
     }
 }
 
+// Every slot row tells how its plan bound the slot: the custom plan's 2.x backend binds by
+// position; the ONNX Runtime plan of the gain model binds audio_in and both outputs by position
+// (the graph names them data, processed_data and peak) and the gain input by its canonical
+// name, which the graph has.
+TEST(AbiHandler, ASlotReportsHowItsPlanBoundIt) {
+    const Context context;
+    const anira::ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    ASSERT_NE(report, nullptr);
+    const uint32_t num_plans = anira_plan_report_num_plans(report);
+    std::vector<anira_plan_info> plans(num_plans);
+    uint32_t count = num_plans;
+    ASSERT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, plans.data()),
+              ANIRA_OK);
+    const auto slots_of = [report](uint32_t plan, bool inputs) {
+        std::array<anira_plan_slot, 2> rows{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
+        uint32_t n = 2;
+        EXPECT_EQ(anira_plan_report_slots(report,
+                                          plan,
+                                          inputs ? 1U : 0U,
+                                          sizeof(anira_plan_slot),
+                                          &n,
+                                          rows.data()),
+                  ANIRA_OK);
+        EXPECT_EQ(n, 2U);
+        return rows;
+    };
+    bool custom_seen = false;
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        SCOPED_TRACE("plan " + std::to_string(plan));
+        const std::array<anira_plan_slot, 2> inputs = slots_of(plan, true);
+        const std::array<anira_plan_slot, 2> outputs = slots_of(plan, false);
+        if (plans[plan].engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE)) {
+            custom_seen = true;
+            for (const anira_plan_slot& row : inputs) {
+                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+            }
+            for (const anira_plan_slot& row : outputs) {
+                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+            }
+        }
+#ifdef USE_ONNXRUNTIME
+        if (plans[plan].engine == static_cast<uint32_t>(ANIRA_ENGINE_ONNXRUNTIME)) {
+            EXPECT_EQ(inputs[0].binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+            EXPECT_EQ(inputs[1].binding, static_cast<uint32_t>(ANIRA_BINDING_NAME));
+            EXPECT_EQ(outputs[0].binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+            EXPECT_EQ(outputs[1].binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+        }
+#endif
+    }
+    EXPECT_TRUE(custom_seen);
+    // A caller whose header ends before the tail field gets its rows without it.
+    anira_plan_slot head = ANIRA_PLAN_SLOT_INIT;
+    head.binding = 77;
+    count = 1;
+    EXPECT_EQ(
+        anira_plan_report_slots(report, 0, 1, offsetof(anira_plan_slot, binding), &count, &head),
+        ANIRA_INCOMPLETE);
+    EXPECT_EQ(head.binding, 77U) << "the tail field stays the caller's";
+}
+
 // ============================================================================================
 // Lifetimes
 // ============================================================================================

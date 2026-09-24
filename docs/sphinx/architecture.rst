@@ -35,7 +35,7 @@ anira is designed with real-time audio applications in mind, focusing on determi
                       |
                       v
      +----------------+------------------+       +----------------------+
-     |         Backend Processors        | <---> |   Inference Engines  |
+     |          Engine Adapters          | <---> |   Inference Engines  |
      | (LibTorch, ONNX, TensorFlow Lite) |       | (External libraries) |
      +-----------------------------------+       +----------------------+
 
@@ -51,7 +51,7 @@ Key Design Principles
 
 2. **Flexibility**
     
-    * Support for multiple inference backends
+    * Support for multiple inference engines and providers
     * Configurable thread management
     * Customizable pre/post-processing
     * Support for both stateful and stateless models
@@ -104,15 +104,16 @@ Coordinates the thread pool and inference scheduling.
 * Schedules inference tasks
 * Handles synchronization between audio and inference threads
 
-Backend Processors
-~~~~~~~~~~~~~~~~~~
+Engine Adapters
+~~~~~~~~~~~~~~~
 
-Backend-specific implementations for different inference engines.
+Engine-specific adapters.
 
-* :cpp:class:`anira::LibtorchProcessor` - PyTorch C++ API integration
-* :cpp:class:`anira::OnnxRuntimeProcessor` - ONNX Runtime integration
-* :cpp:class:`anira::TFLiteProcessor` - TensorFlow Lite integration
-* :cpp:class:`anira::BackendBase` - For inheritance for custom inference engines
+* The LibTorch adapter (``src/backends/LibTorchAdapter.cpp``, internal) - PyTorch C++ API integration
+* The ONNX Runtime adapter (``src/backends/OnnxRuntimeAdapter.cpp``, internal) - ONNX Runtime integration
+* The TensorFlow Lite and LiteRT adapters (``src/backends/TFLiteAdapter.cpp``, ``LiteRtAdapter.cpp``, internal) - TensorFlow Lite and LiteRT integration
+* The ExecuTorch adapter (``src/backends/ExecuTorchAdapter.cpp``, internal) - ExecuTorch integration
+* :cpp:class:`anira::Engine` (``anira_engine_desc`` of ``anira/abi/engine.h`` in C) - a custom engine registered on the pipeline under its id, run through the same adapter interface as the five above (:doc:`custom_backends`); :cpp:class:`anira::BackendBase` is the 2.x handler's custom backend until the cut-over
 
 Data Flow
 ---------
@@ -120,7 +121,7 @@ Data Flow
 1. **Audio Input:** The host application provides audio data to the InferenceHandler
 2. **Pre-processing:** The PrePostProcessor converts audio data to tensors
 3. **Scheduling:** The InferenceManager schedules the inference task
-4. **Inference:** A backend processor executes the neural network model
+4. **Inference:** The engine's adapter runs the model
 5. **Post-processing:** The PrePostProcessor converts results back to audio
 6. **Audio Output:** The processed audio is returned to the host application
 

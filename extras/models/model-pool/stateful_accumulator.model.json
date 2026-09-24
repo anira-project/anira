@@ -11,6 +11,18 @@
     {
       "engine": "executorch",
       "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.pte"
+    },
+    {
+      "engine": "tflite",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.tflite"
+    },
+    {
+      "engine": "litert",
+      "path": "example-models/StatefulAccumulatorNetwork/models/stateful_accumulator_network_stereo.tflite",
+      "tensors": {
+        "processed_data": { "name": "output_0" },
+        "state_out": { "name": "output_1" }
+      }
     }
   ],
   "inputs": [

@@ -23,23 +23,28 @@
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -53,6 +58,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "capi/handles.h"
 #include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -95,9 +101,12 @@ TensorSpec streamed(std::string_view name) {
 }
 
 /// One half of the pair: [1, channels, 2], the Channel tag on a State spec. `source` names the
-/// output half and is set on the input half only.
-TensorSpec state(std::string_view name, const char* source = nullptr) {
-    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+/// output half and is set on the input half only; `dtype` is the pair's (float32, or int32 on
+/// the registered engine).
+TensorSpec state(std::string_view name,
+                 const char* source = nullptr,
+                 anira_dtype dtype = ANIRA_DTYPE_F32) {
+    TensorSpec spec(name, dtype, ANIRA_ROLE_STATE);
     spec.axis(0, ANIRA_AXIS_BATCH, 1)
         .axis(1, ANIRA_AXIS_CHANNEL, k_channels)
         .axis(2, ANIRA_AXIS_ANY, static_cast<int64_t>(k_state_width));
@@ -115,14 +124,17 @@ TensorSpec static_values(std::string_view name) {
 
 /// The example model's order: the state FIRST on the input side and LAST on the output side.
 /// `data` is input slot 1 and `processed_data` is output slot 0: the stream does not stand at
-/// the same position on both sides, which is what the two-slot process form is for.
-ModelConfig accumulator_model() {
+/// the same position on both sides, which is what the two-slot process form is for. One row on
+/// `engine_id` (the engine-free custom row by default; a registered engine's id otherwise,
+/// whose path anira never opens), the pair in `state_dtype`.
+ModelConfig accumulator_model(const char* engine_id = anira_test::k_custom,
+                              anira_dtype state_dtype = ANIRA_DTYPE_F32) {
     ModelConfig model;
-    model.add_model_path(anira_test::k_custom, "custom-processor");
-    model.input(state("state_in", "state_out"));
+    model.add_model_path(engine_id, "custom-processor");
+    model.input(state("state_in", "state_out", state_dtype));
     model.input(streamed("data"));
     model.output(streamed("processed_data"));
-    model.output(state("state_out"));
+    model.output(state("state_out", nullptr, state_dtype));
     return model;
 }
 constexpr Positions k_accumulator{};
@@ -149,16 +161,21 @@ constexpr Positions k_wide{.m_state_in = 1,
                            .m_values_in = 0,
                            .m_values_out = 2};
 
-/// The value of the State input at `slot`, read off the handler's port (the input half of a
-/// pair holds it; the session has no buffer of its own): what the last capture left, zeros after
-/// a prepare or at a new generation. Empty for a slot that is no State input.
-std::vector<float> state_values(const anira_handler* handler, size_t slot) {
+/// The value of the State input at `slot`, read off the handler's port at quiescence (the
+/// input half of a pair holds it; the session has no buffer of its own): the read buffer, what
+/// the last promotion left, zeros after a prepare or at a new generation. Empty for a slot that
+/// is no State input. TSan is the check that no inference touches the buffer meanwhile.
+template <typename Element = float>
+std::vector<Element> state_values(const anira_handler* handler, size_t slot) {
     const auto* port = slot < handler->m_input_ports.size()
                            ? std::get_if<anira::capi::StatePort>(&handler->m_input_ports[slot])
                            : nullptr;
     if (port == nullptr || !port->m_value.has_value()) { return {}; }
-    std::vector<float> values(port->m_value->num_elements());
-    port->m_value->read_packed(values.data(), values.size() * sizeof(float));
+    const anira::capi::StateSlot& value = *port->m_value;
+    std::vector<Element> values(value.num_elements());
+    std::memcpy(values.data(),
+                value.read(),
+                std::min(value.num_bytes(), values.size() * sizeof(Element)));
     return values;
 }
 
@@ -222,6 +239,9 @@ public:
         const std::scoped_lock<std::mutex> lock(m_mutex);
         return m_order;
     }
+
+    /// How many calls are inside process() right now: a held inference is one.
+    int inside() const noexcept { return m_inside.load(); }
 
     std::atomic<bool> m_open{true};
     std::atomic<bool> m_throw{false};  ///< fails the next inference, once
@@ -316,7 +336,7 @@ public:
             std::make_unique<AccumulatorBackend>(m_handler->m_inference_config, m_positions);
         m_session = anira_test::session_of(m_handler);
         ASSERT_NE(m_session, nullptr);
-        m_session->m_custom_processor = m_backend.get();
+        anira_test::attach_processor(m_handler, *m_backend);
     }
 
     bool ready() const { return m_session != nullptr && m_backend != nullptr; }
@@ -461,11 +481,12 @@ struct SlotProbe {
 };
 
 // A stage asks what each tensor is before it runs: the role of every slot, from the report its
-// prepare receives.
-anira_status ANIRA_CALL probe_roles(anira_handler* /*handler*/,
-                                    const anira_plan_report* report,
-                                    void* user_data) {
+// prepare record carries.
+anira_status ANIRA_CALL probe_roles(const anira_prepare_info* info,
+                                    void* user_data,
+                                    void** /*out_prepared*/) {
     auto* probe = static_cast<SlotProbe*>(user_data);
+    const anira_plan_report* const report = info->report;
     for (const anira_bool inputs : {anira_bool{1}, anira_bool{0}}) {
         std::array<anira_plan_slot, 3> slots{ANIRA_PLAN_SLOT_INIT,
                                              ANIRA_PLAN_SLOT_INIT,
@@ -503,7 +524,9 @@ struct PlanSlotWithoutRole {
 // NOLINTEND(readability-identifier-naming)
 static_assert(sizeof(PlanSlotWithoutRole) == offsetof(anira_plan_slot, role));
 
-anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+anira_status ANIRA_CALL probe_slots(const anira_stage_ctx* ctx,
+                                    void* /*prepared*/,
+                                    void* user_data) ANIRA_NONBLOCKING {
     auto* probe = static_cast<SlotProbe*>(user_data);
     const size_t index = probe->m_calls.fetch_add(1);
     if (ctx->num_inputs != 3 || ctx->num_outputs != 3) {
@@ -583,14 +606,15 @@ TEST(AbiState, OneSlotSpacePerSide) {
     ASSERT_NE(state_out, nullptr);
     EXPECT_EQ(state_in->m_partner, 0U);
     EXPECT_EQ(state_out->m_partner, 1U);
-    const anira::capi::StaticSlot* value =
+    const anira::capi::StateSlot* value =
         state_in->m_value.has_value() ? &*state_in->m_value : nullptr;
     ASSERT_NE(value, nullptr);
     EXPECT_FALSE(state_out->m_value.has_value());
     EXPECT_EQ(value->dtype(), static_cast<anira_dtype>(ANIRA_DTYPE_F32));
     EXPECT_EQ(value->shape(),
               (std::vector<int64_t>{1, k_channels, static_cast<int64_t>(k_state_width)}));
-    EXPECT_EQ(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "not fed yet";
+    EXPECT_EQ(value->num_bytes(), static_cast<size_t>(k_channels) * k_state_width * sizeof(float));
+    EXPECT_EQ(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "not bound yet";
     EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 1), nullptr);
     EXPECT_EQ(anira::capi::static_slot(h->m_output_ports, 0), nullptr);
     EXPECT_NE(anira::capi::static_slot(h->m_input_ports, 0), nullptr);
@@ -723,7 +747,7 @@ TEST(AbiState, OneSlotSpacePerSide) {
             EXPECT_EQ(state[channel * k_state_width], sum) << "channel " << channel;
             EXPECT_EQ(state[(channel * k_state_width) + 1], 4.0F) << "channel " << channel;
         }
-        EXPECT_NE(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "fed";
+        EXPECT_NE(state_in->m_generation, anira::capi::StatePort::k_no_generation) << "bound";
     }
     for (size_t hop = 0; hop < 4; ++hop) {
         EXPECT_EQ(probe.m_static_first.at(hop).load(), 9.0F) << "hop " << hop;
@@ -1057,7 +1081,7 @@ TEST(AbiState, AResetAcrossAnInferenceInFlightNeverSeedsTheNewStream) {
     const anira_tensor held_tensor = whole_f32(held.data(), {k_channels, k_hop});
     ASSERT_EQ(anira_handler_push_data(h, &held_tensor, rig.data_slot()), ANIRA_OK);
     const auto start = std::chrono::steady_clock::now();
-    while (rig.session().m_active_inferences.load() == 0) {
+    while (rig.backend().inside() == 0) {
         ASSERT_LT(std::chrono::steady_clock::now(), start + std::chrono::seconds(10));
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
@@ -1090,7 +1114,7 @@ TEST(AbiState, PrepareReinitialisesState) {
         std::get_if<anira::capi::StatePort>(&rig.get()->m_input_ports[k_accumulator.m_state_in]);
     ASSERT_NE(port, nullptr);
     ASSERT_TRUE(port->m_value.has_value());
-    EXPECT_NE(port->m_generation, anira::capi::StatePort::k_no_generation) << "fed";
+    EXPECT_NE(port->m_generation, anira::capi::StatePort::k_no_generation) << "bound";
     EXPECT_NE(state_values(rig.get(), k_accumulator.m_state_in).at(0), 0.0F);
     ASSERT_NO_FATAL_FAILURE(rig.prepare());
     ASSERT_TRUE(rig.ready());
@@ -1192,6 +1216,7 @@ struct StageLog {
 constexpr float k_offset = 1000.0F;
 
 anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
+                                     void* /*prepared*/,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Input slot 0 is the State tensor, for the stage as for the host (whose `data` is slot 1).
@@ -1205,7 +1230,9 @@ anira_status ANIRA_CALL alter_before(const anira_stage_ctx* ctx,
     return ANIRA_OK;
 }
 
-anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx, void* user_data) ANIRA_NONBLOCKING {
+anira_status ANIRA_CALL alter_after(const anira_stage_ctx* ctx,
+                                    void* /*prepared*/,
+                                    void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<StageLog*>(user_data);
     // Output slot 1 is the State tensor, not yet captured.
     anira_tensor tensor;
@@ -1281,6 +1308,7 @@ struct HostEndLog {
 /// Asks every slot in the two host-end phases as the log says, then runs the default body of
 /// the phase.
 anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
+                                     void* /*prepared*/,
                                      void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<HostEndLog*>(user_data);
     if (ctx->num_inputs != 2 || ctx->num_outputs != 2) { return ANIRA_ERROR_INTERNAL; }
@@ -1314,7 +1342,7 @@ anira_status ANIRA_CALL ask_host_end(const anira_stage_ctx* ctx,
 void run_host_end_probe(HostEndLog& log) {
     anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
     stage.user_data = &log;
-    stage.flags = ANIRA_STAGE_REALTIME_PRE_POST;
+    stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
     stage.pre_process = &ask_host_end;
     stage.post_process = &ask_host_end;
     Rig rig(accumulator_model(), k_accumulator, {stage});
@@ -1670,7 +1698,9 @@ TEST(AbiState, ThePairingIsValidatedAtCreate) {
         expect_refused(model, ANIRA_ERROR_CONFIG, "state_in", "the anchor is a Streamed tensor");
     }
     {
-        // Both halves of another dtype: equal, and not supported before PR 7.
+        // Both halves of another dtype, equal: legal, since a pair lives in the handler's own
+        // buffers in the spec's dtype and never in the queue (AnInt32StatePair runs one); the
+        // float32 rule of the queue stands on the Streamed tensor beside it.
         Parts parts;
         for (TensorSpec* half : {&parts.m_state_in, &parts.m_state_out}) {
             const bool input = half == &parts.m_state_in;
@@ -1681,7 +1711,15 @@ TEST(AbiState, ThePairingIsValidatedAtCreate) {
         }
         ASSERT_EQ(anira_tensor_spec_set_state_source(parts.m_state_in.native(), "state_out"),
                   ANIRA_OK);
-        expect_refused(parts.model(), ANIRA_ERROR_NOT_SUPPORTED, "state_in", "float32");
+        std::string message;
+        EXPECT_EQ(create_status(parts.model(), message), ANIRA_OK) << message;
+        Parts stream;
+        stream.m_data = TensorSpec("data", ANIRA_DTYPE_I32, ANIRA_ROLE_STREAMED);
+        stream.m_data.axis(0, ANIRA_AXIS_BATCH, 1)
+            .axis(1, ANIRA_AXIS_CHANNEL, k_channels)
+            .axis(2, ANIRA_AXIS_TIME, k_hop);
+        stream.m_data.window(k_hop, k_hop, 0);
+        expect_refused(stream.model(), ANIRA_ERROR_NOT_SUPPORTED, "data", "float32");
     }
     {
         // A transposed layout on a state tensor, like on every tensor today; a view prepares.
@@ -1759,18 +1797,684 @@ TEST(AbiState, TheSetterRefusals) {
     EXPECT_EQ(create_status(parts.model(), message), ANIRA_OK) << message;
 }
 
+// ---- the registered engine
+// ------------------------------------------------------------------------
+
+/// The accumulator as a registered C engine over the descriptors (anira/abi/engine.h): the
+/// function of AccumulatorBackend, its slots found by the canonical names of its load record
+/// (so the specs may stand in any order) and read back through ctx->loaded, the state in the
+/// spec's dtype (float32, or int32), the stream float32. Its prepare hands back nothing (a
+/// NULL prepared is legal: the engine keeps nothing per handler), and it keeps nothing between
+/// two calls, so whatever carries over travelled through the pair's two buffers. process runs
+/// on the inference thread: atomics and the tensors alone.
+struct AccumulatorEngine {
+    struct Loaded {
+        uint32_t m_state_in = 0;
+        uint32_t m_data = 0;
+        uint32_t m_processed = 0;
+        uint32_t m_state_out = 0;
+    };
+    static constexpr size_t k_capacity = 64;
+    std::atomic<int> m_calls{0};
+    std::atomic<anira_status> m_fail_next{ANIRA_OK};  ///< what the next process returns, once
+    std::atomic<int> m_bad_prepared{0};               ///< a process with a prepared pointer
+    int m_loaded = 0;
+    int m_unloaded = 0;
+    int m_prepared = 0;
+    int m_unprepared = 0;
+    int m_released = 0;
+    /// Per call, before the engine writes: element 0 of the State input and of the State output
+    /// as found in their buffers (the read side and the write side of the pair).
+    std::array<std::atomic<float>, k_capacity> m_read_first{};
+    std::array<std::atomic<float>, k_capacity> m_write_first{};
+};
+
+anira_status ANIRA_CALL accumulator_load(const anira_engine_load_info* info,
+                                         void* user_data,
+                                         void** out_loaded) {
+    auto* engine = static_cast<AccumulatorEngine*>(user_data);
+    ++engine->m_loaded;
+    const auto find =
+        [](const char* const* names, uint32_t count, std::string_view wanted, uint32_t& slot) {
+            for (uint32_t i = 0; i < count; ++i) {
+                if (std::string_view(names[i]) == wanted) {
+                    slot = i;
+                    return true;
+                }
+            }
+            return false;
+        };
+    auto loaded = std::make_unique<AccumulatorEngine::Loaded>();
+    if (!find(info->input_names, info->num_inputs, "state_in", loaded->m_state_in) ||
+        !find(info->input_names, info->num_inputs, "data", loaded->m_data) ||
+        !find(info->output_names, info->num_outputs, "processed_data", loaded->m_processed) ||
+        !find(info->output_names, info->num_outputs, "state_out", loaded->m_state_out)) {
+        return ANIRA_ERROR_CONFIG;
+    }
+    *out_loaded = loaded.release();
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL accumulator_unload(void* loaded, void* user_data) {
+    ++static_cast<AccumulatorEngine*>(user_data)->m_unloaded;
+    delete static_cast<AccumulatorEngine::Loaded*>(loaded);
+}
+
+anira_status ANIRA_CALL accumulator_prepare(const anira_prepare_info* info,
+                                            void* loaded,
+                                            void* user_data,
+                                            void** out_prepared) {
+    auto* engine = static_cast<AccumulatorEngine*>(user_data);
+    ++engine->m_prepared;
+    if (info == nullptr || loaded == nullptr || out_prepared == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *out_prepared = nullptr;  // nothing per handler: process finds its slots in ctx->loaded
+    return ANIRA_OK;
+}
+
+/// The accumulator over one call's memory, the state in `State`.
+template <typename State>
+void accumulate(const State* state_in,
+                const float* data,
+                float* processed,
+                State* state_out,
+                size_t hop) {
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        const State carry = state_in[channel * k_state_width];
+        State sum = 0;
+        for (size_t i = 0; i < hop; ++i) {
+            const float sample = data[(channel * hop) + i];
+            processed[(channel * hop) + i] = sample + static_cast<float>(carry);
+            sum += static_cast<State>(sample);
+        }
+        state_out[channel * k_state_width] = carry + sum;
+        state_out[(channel * k_state_width) + 1] = state_in[(channel * k_state_width) + 1] + 1;
+    }
+}
+
+anira_status ANIRA_CALL accumulator_process(const anira_engine_ctx* ctx,
+                                            void* prepared,
+                                            void* user_data) {
+    auto* engine = static_cast<AccumulatorEngine*>(user_data);
+    if (prepared != nullptr) { engine->m_bad_prepared.fetch_add(1); }
+    const auto* slots = static_cast<const AccumulatorEngine::Loaded*>(ctx->loaded);
+    if (slots == nullptr) { return ANIRA_ERROR_INTERNAL; }
+    const auto call = static_cast<size_t>(engine->m_calls.fetch_add(1));
+    const anira_tensor& state_in = ctx->inputs[slots->m_state_in];
+    const anira_tensor& data = ctx->inputs[slots->m_data];
+    const anira_tensor& processed = ctx->outputs[slots->m_processed];
+    const anira_tensor& state_out = ctx->outputs[slots->m_state_out];
+    const size_t hop = data.ndim == 3 ? static_cast<size_t>(data.shape[2]) : 0;
+    const float* samples = anira_tensor_data_f32(&data);
+    float* out = anira_tensor_data_f32(&processed);
+    if (samples == nullptr || out == nullptr || hop == 0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (state_in.dtype == ANIRA_DTYPE_F32) {
+        const float* in = anira_tensor_data_f32(&state_in);
+        float* next = anira_tensor_data_f32(&state_out);
+        if (in == nullptr || next == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        if (call < AccumulatorEngine::k_capacity) {
+            engine->m_read_first.at(call).store(in[0]);
+            engine->m_write_first.at(call).store(next[0]);
+        }
+        accumulate(in, samples, out, next, hop);
+    } else if (state_in.dtype == ANIRA_DTYPE_I32) {
+        const auto* in = static_cast<const int32_t*>(anira_tensor_data(&state_in, ANIRA_DTYPE_I32));
+        auto* next = static_cast<int32_t*>(anira_tensor_data(&state_out, ANIRA_DTYPE_I32));
+        if (in == nullptr || next == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        if (call < AccumulatorEngine::k_capacity) {
+            engine->m_read_first.at(call).store(static_cast<float>(in[0]));
+            engine->m_write_first.at(call).store(static_cast<float>(next[0]));
+        }
+        accumulate(in, samples, out, next, hop);
+    } else {
+        return ANIRA_ERROR_CONFIG;
+    }
+    return engine->m_fail_next.exchange(ANIRA_OK);
+}
+
+void ANIRA_CALL accumulator_unprepare(void* /*prepared*/, void* user_data) {
+    ++static_cast<AccumulatorEngine*>(user_data)->m_unprepared;
+}
+
+void ANIRA_CALL accumulator_release(void* user_data) {
+    ++static_cast<AccumulatorEngine*>(user_data)->m_released;
+}
+
+anira_engine_desc accumulator_desc(AccumulatorEngine& engine, uint32_t flags = 0) {
+    anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+    desc.user_data = &engine;
+    desc.flags = flags;
+    desc.process = accumulator_process;
+    desc.prepare = accumulator_prepare;
+    desc.unprepare = accumulator_unprepare;
+    desc.load = accumulator_load;
+    desc.unload = accumulator_unload;
+    desc.release = accumulator_release;
+    return desc;
+}
+
+/// The id the registered accumulator runs under, and a second one for the plan switch.
+constexpr const char* k_accumulator_id = "org.example.accumulator";
+constexpr const char* k_other_accumulator_id = "org.example.accumulator.other";
+
+/// One registration for the rig: the id, the engine behind it and the flags its descriptor
+/// carries (ANIRA_ENGINE_FLAG_STATE_ALIAS for an engine that aliases the pair).
+struct Registration {
+    const char* m_id;
+    AccumulatorEngine* m_engine;
+    uint32_t m_flags = 0;
+};
+
+/// A handler over a model whose rows name registered accumulator engines (registered on the
+/// pipeline before the inference stage, the engines outliving the rig), with an optional stage,
+/// prepared with the accumulator's contract. The streams stand at the accumulator's positions.
+class RegisteredRig {
+public:
+    explicit RegisteredRig(const ModelConfig& model,
+                           std::span<const Registration> registrations,
+                           const std::vector<anira_stage_desc>& stages = {},
+                           uint32_t block_max = k_hop)
+        : m_context(4), m_block_max(block_max) {
+        EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
+        for (const Registration& registration : registrations) {
+            const anira_engine_desc desc =
+                accumulator_desc(*registration.m_engine, registration.m_flags);
+            anira_custom_engine* engine = nullptr;
+            EXPECT_EQ(anira_custom_engine_create(registration.m_id, &desc, &engine, &m_err),
+                      ANIRA_OK)
+                << m_err.message;
+            EXPECT_EQ(anira_pipeline_add_engine(m_pipeline, engine, &m_err), ANIRA_OK)
+                << m_err.message;
+            anira_custom_engine_destroy(engine);
+        }
+        const std::array<const anira_model_config*, 1> variants{model.native()};
+        const std::vector<anira_backend_id> candidates = custom_candidates();
+        EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
+                                               variants.data(),
+                                               1,
+                                               candidates.data(),
+                                               static_cast<uint32_t>(candidates.size()),
+                                               &m_err),
+                  ANIRA_OK)
+            << m_err.message;
+        for (const anira_stage_desc& stage : stages) {
+            EXPECT_EQ(anira_pipeline_add_stage(m_pipeline, &stage, &m_err), ANIRA_OK)
+                << m_err.message;
+        }
+        EXPECT_EQ(anira_handler_create(m_context.m_context, m_pipeline, &m_handler, &m_err),
+                  ANIRA_OK)
+            << m_err.message;
+        if (m_handler != nullptr) { prepare(); }
+    }
+    ~RegisteredRig() {
+        anira_handler_destroy(m_handler);
+        anira_pipeline_destroy(m_pipeline);
+    }
+    RegisteredRig(const RegisteredRig&) = delete;
+    RegisteredRig& operator=(const RegisteredRig&) = delete;
+    RegisteredRig(RegisteredRig&&) = delete;
+    RegisteredRig& operator=(RegisteredRig&&) = delete;
+
+    void prepare() {
+        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_block_max);
+        m_err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
+            << m_err.message;
+        m_prepared = true;
+    }
+
+    bool ready() const { return m_handler != nullptr && m_prepared; }
+    anira_handler* get() const { return m_handler; }
+    static constexpr uint32_t data_slot() { return static_cast<uint32_t>(k_accumulator.m_data); }
+    static constexpr uint32_t processed_slot() {
+        return static_cast<uint32_t>(k_accumulator.m_processed);
+    }
+
+    /// One host block through the waiting two-slot single form (Rig::block).
+    anira_status block(std::span<const float> in, std::span<float> out, size_t samples) {
+        const anira_tensor in_tensor =
+            whole_f32(in.data(), {k_channels, static_cast<int64_t>(samples)});
+        const anira_tensor out_tensor =
+            whole_f32(out.data(), {k_channels, static_cast<int64_t>(samples)});
+        return anira_handler_process_wait(m_handler,
+                                          &in_tensor,
+                                          data_slot(),
+                                          &out_tensor,
+                                          processed_slot(),
+                                          nullptr,
+                                          ANIRA_WAIT_FOREVER);
+    }
+
+private:
+    Context m_context;
+    uint32_t m_block_max;
+    anira_pipeline* m_pipeline = nullptr;
+    anira_handler* m_handler = nullptr;
+    anira_error m_err = ANIRA_ERROR_INIT;
+    bool m_prepared = false;
+};
+
+/// What a stage's two hooks saw of the State pair, per inference: the memory the State input
+/// (slot 0) named in before_inference and the memory the State output (slot 1) named in
+/// after_inference. Real-time code (the inference thread): fixed arrays of atomics.
+struct PointerLog {
+    static constexpr size_t k_capacity = 64;
+    std::array<std::atomic<const void*>, k_capacity> m_in{};
+    std::array<std::atomic<const void*>, k_capacity> m_out{};
+    std::array<std::atomic<uint32_t>, k_capacity> m_domain_in{};   ///< the descriptor's domain
+    std::array<std::atomic<uint32_t>, k_capacity> m_domain_out{};  ///< the descriptor's domain
+    std::atomic<size_t> m_num_in{0};
+    std::atomic<size_t> m_num_out{0};
+    std::atomic<uint32_t> m_refused{0};  ///< accessor calls that did not answer ANIRA_OK
+};
+
+/// The memory a descriptor names.
+const void* memory_of(const anira_tensor& tensor) {
+    return static_cast<const unsigned char*>(tensor.handle.host.ptr) +
+           static_cast<size_t>(tensor.byte_offset);
+}
+
+anira_status ANIRA_CALL log_state_in(const anira_stage_ctx* ctx,
+                                     void* /*prepared*/,
+                                     void* user_data) ANIRA_NONBLOCKING {
+    auto* log = static_cast<PointerLog*>(user_data);
+    anira_tensor tensor;
+    if (anira_stage_input_tensor(ctx, 0, &tensor) != ANIRA_OK) {
+        log->m_refused.fetch_add(1);
+        return ANIRA_OK;
+    }
+    const size_t index = log->m_num_in.fetch_add(1);
+    if (index < PointerLog::k_capacity) {
+        log->m_in.at(index).store(memory_of(tensor));
+        log->m_domain_in.at(index).store(tensor.domain);
+    }
+    return ANIRA_OK;
+}
+
+anira_status ANIRA_CALL log_state_out(const anira_stage_ctx* ctx,
+                                      void* /*prepared*/,
+                                      void* user_data) ANIRA_NONBLOCKING {
+    auto* log = static_cast<PointerLog*>(user_data);
+    anira_tensor tensor;
+    if (anira_stage_output_tensor(ctx, 1, &tensor) != ANIRA_OK) {
+        log->m_refused.fetch_add(1);
+        return ANIRA_OK;
+    }
+    const size_t index = log->m_num_out.fetch_add(1);
+    if (index < PointerLog::k_capacity) {
+        log->m_out.at(index).store(memory_of(tensor));
+        log->m_domain_out.at(index).store(tensor.domain);
+    }
+    return ANIRA_OK;
+}
+
+anira_stage_desc logging_stage(PointerLog& log) {
+    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
+    stage.user_data = &log;
+    stage.before_inference = &log_state_in;
+    stage.after_inference = &log_state_out;
+    return stage;
+}
+
+/// The pointer identity of the ping-pong over `inferences` successful inferences, all logged:
+/// what inference k produced is what inference k + 1 reads (in[k + 1] == out[k]), no
+/// inference reads what it writes, and exactly two addresses alternate, each on a 64-byte
+/// boundary.
+void expect_two_alternating_buffers(const PointerLog& log, size_t inferences) {
+    ASSERT_LE(inferences, PointerLog::k_capacity);
+    ASSERT_EQ(log.m_num_in.load(), inferences);
+    ASSERT_EQ(log.m_num_out.load(), inferences);
+    EXPECT_EQ(log.m_refused.load(), 0U);
+    std::vector<const void*> addresses;
+    for (size_t k = 0; k < inferences; ++k) {
+        const void* in = log.m_in.at(k).load();
+        const void* out = log.m_out.at(k).load();
+        ASSERT_NE(in, nullptr) << "inference " << k;
+        ASSERT_NE(out, nullptr) << "inference " << k;
+        EXPECT_NE(in, out) << "inference " << k << " reads what it writes";
+        if (k + 1 < inferences) {
+            EXPECT_EQ(log.m_in.at(k + 1).load(), out)
+                << "inference " << k + 1 << " does not read what inference " << k << " wrote";
+        }
+        for (const void* address : {in, out}) {
+            if (std::ranges::find(addresses, address) == addresses.end()) {
+                addresses.push_back(address);
+            }
+            EXPECT_EQ(reinterpret_cast<uintptr_t>(address) % 64, 0U) << "unaligned";
+        }
+    }
+    EXPECT_EQ(addresses.size(), 2U) << "the pair alternates between exactly two buffers";
+}
+
+// The state travels by pointer: through a stage's hooks, the State input of inference k + 1
+// names the memory the State output of inference k named, no inference reads what it writes,
+// and exactly two buffers alternate, on the registered C accumulator (which binds the
+// descriptors as they are). The closed form holds meanwhile.
+TEST(AbiState, TheStateAlternatesBetweenTwoBuffers) {
+    AccumulatorEngine engine;
+    PointerLog log;
+    const std::array<Registration, 1> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &engine}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    const size_t latency = anira_handler_get_latency(rig.get(), RegisteredRig::processed_slot());
+    const std::vector<size_t> sizes = hops(8);
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(engine.m_calls.load(), 8);
+    ASSERT_NO_FATAL_FAILURE(expect_two_alternating_buffers(log, 8));
+    // The port's read buffer is the last promoted state: the memory the last inference wrote.
+    const auto* port = std::get_if<anira::capi::StatePort>(&rig.get()->m_input_ports[0]);
+    ASSERT_NE(port, nullptr);
+    const anira::capi::StateSlot* value = port->m_value.has_value() ? &*port->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->read(), log.m_out.at(7).load());
+    EXPECT_EQ(state_values(rig.get(), 0).at(1), 8.0F);
+}
+
+/// The pointer identity under ANIRA_ENGINE_FLAG_STATE_ALIAS over `inferences` logged
+/// inferences: both halves name one address, the same one every time, on a 64-byte boundary.
+void expect_one_stable_buffer(const PointerLog& log, size_t inferences) {
+    ASSERT_LE(inferences, PointerLog::k_capacity);
+    ASSERT_EQ(log.m_num_in.load(), inferences);
+    ASSERT_EQ(log.m_num_out.load(), inferences);
+    EXPECT_EQ(log.m_refused.load(), 0U);
+    const void* first = log.m_in.at(0).load();
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(reinterpret_cast<uintptr_t>(first) % 64, 0U) << "unaligned";
+    for (size_t k = 0; k < inferences; ++k) {
+        EXPECT_EQ(log.m_in.at(k).load(), first) << "inference " << k << " reads another buffer";
+        EXPECT_EQ(log.m_out.at(k).load(), first) << "inference " << k << " writes another buffer";
+    }
+}
+
+// An engine that keeps its own aliasing (ANIRA_ENGINE_FLAG_STATE_ALIAS) sees one stable buffer
+// as both halves of the pair on every call, the same address across the stream, and nothing
+// flips: the accumulator reads its carry before it writes, so the closed form holds in place;
+// the read buffer of the port is that one buffer; the bound descriptors carry the pair's domain
+// (host memory); a reset zeroes it, so the stream starts over as it does without the flag.
+TEST(AbiState, AnAliasingEngineSeesOneStableBufferAsBothHalves) {
+    AccumulatorEngine engine;
+    PointerLog log;
+    const std::array<Registration, 1> registrations{{{.m_id = k_accumulator_id,
+                                                      .m_engine = &engine,
+                                                      .m_flags = ANIRA_ENGINE_FLAG_STATE_ALIAS}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    const std::vector<anira_plan_info> plans = [h] {
+        const anira_plan_report* report = anira_handler_plan_report(h);
+        uint32_t count = 0;
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, nullptr),
+                  ANIRA_OK);
+        std::vector<anira_plan_info> rows(count, ANIRA_PLAN_INFO_INIT);
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows.data()),
+                  ANIRA_OK);
+        return rows;
+    }();
+    ASSERT_EQ(plans.size(), 1U);
+    EXPECT_EQ(plans[0].engine_flags, static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS));
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(8), position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(engine.m_calls.load(), 8);
+    ASSERT_NO_FATAL_FAILURE(expect_one_stable_buffer(log, 8));
+    for (size_t k = 0; k < 8; ++k) {
+        EXPECT_EQ(log.m_domain_in.at(k).load(), static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(log.m_domain_out.at(k).load(), static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        // Before the engine writes, both halves hold the same memory: the carried state.
+        EXPECT_EQ(engine.m_read_first.at(k).load(), engine.m_write_first.at(k).load())
+            << "inference " << k;
+    }
+    const auto* port = std::get_if<anira::capi::StatePort>(&h->m_input_ports[0]);
+    ASSERT_NE(port, nullptr);
+    const anira::capi::StateSlot* value = port->m_value.has_value() ? &*port->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->read(), log.m_in.at(0).load()) << "the one buffer is the state";
+    EXPECT_EQ(value->domain(), ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(state_values(h, 0).at(1), 8.0F) << "the counter counts every inference";
+
+    anira_handler_reset(h);
+    position = 0;
+    Streams again;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(8), position, again));
+    EXPECT_EQ(again.m_out, streams.m_out) << "the reset started the state over at zeros";
+    EXPECT_EQ(state_values(h, 0).at(1), 8.0F);
+}
+
+// The pair is the model's: a plan switch between an aliasing engine and a flipping one keeps
+// the state, since the one buffer the aliasing plan updates in place is the read buffer the
+// flipping plan reads next, and the flipping plan's promotion leaves its produced state where
+// the aliasing plan reads it; the closed form holds across the three legs, and the counter
+// counts every inference of both engines.
+TEST(AbiState, APlanSwitchBetweenAnAliasingAndAFlippingEngineKeepsTheState) {
+    AccumulatorEngine flipping;
+    AccumulatorEngine aliasing;
+    const std::array<Registration, 2> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &flipping, .m_flags = 0},
+         {.m_id = k_other_accumulator_id,
+          .m_engine = &aliasing,
+          .m_flags = ANIRA_ENGINE_FLAG_STATE_ALIAS}}};
+    ModelConfig model = accumulator_model(k_accumulator_id);
+    model.add_model_path(k_other_accumulator_id, "custom-processor");
+    PointerLog log;
+    RegisteredRig rig(model, registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(h)), 2U);
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 1), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(flipping.m_calls.load(), 8);
+    EXPECT_EQ(aliasing.m_calls.load(), 4);
+    EXPECT_EQ(state_values(h, 0).at(1), 12.0F) << "the counter counts both engines' inferences";
+    // The aliasing leg (inferences 4..7) names one address for both halves, the address the
+    // flipping leg before it produced (its last write) and the flipping leg after it reads.
+    ASSERT_EQ(log.m_num_in.load(), 12U);
+    ASSERT_EQ(log.m_num_out.load(), 12U);
+    const void* stable = log.m_in.at(4).load();
+    EXPECT_EQ(stable, log.m_out.at(3).load()) << "the aliasing plan reads what the flip produced";
+    for (size_t k = 4; k < 8; ++k) {
+        EXPECT_EQ(log.m_in.at(k).load(), stable) << "inference " << k;
+        EXPECT_EQ(log.m_out.at(k).load(), stable) << "inference " << k;
+    }
+    EXPECT_EQ(log.m_in.at(8).load(), stable) << "the flipping plan reads the aliased buffer next";
+    EXPECT_NE(log.m_out.at(8).load(), stable) << "and writes the other one again";
+}
+
+// A failed inference does not promote: the pair keeps its read buffer, so the next inference
+// reads the same memory the failed one read, and the closed form continues as if the failed
+// block's input had never been summed (the failed block itself delivers zeros).
+TEST(AbiState, AFailingInferenceDoesNotPromote) {
+    AccumulatorEngine engine;
+    PointerLog log;
+    const std::array<Registration, 1> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &engine}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations, {logging_stage(log)});
+    ASSERT_TRUE(rig.ready());
+    const size_t latency = anira_handler_get_latency(rig.get(), RegisteredRig::processed_slot());
+    constexpr size_t k_failed = 3;  // the inference of hop 3 fails
+    Streams streams;
+    size_t position = 0;
+    for (size_t k = 0; k < 7; ++k) {
+        if (k == k_failed) { engine.m_fail_next.store(ANIRA_ERROR_ENGINE); }
+        const std::vector<size_t> one = hops(1);
+        ASSERT_NO_FATAL_FAILURE(drive(rig, one, position, streams));
+    }
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_ERROR_ENGINE);
+    EXPECT_EQ(engine.m_calls.load(), 7);
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        float carry = 0.0F;
+        for (size_t hop = 0; hop < 7; ++hop) {
+            float sum = 0.0F;
+            for (size_t i = 0; i < k_hop; ++i) {
+                const size_t n = (hop * k_hop) + i;
+                const float sample = input_sample(channel, n);
+                sum += sample;
+                if (n + latency >= streams.m_out.at(channel).size()) { continue; }
+                const float expected = hop == k_failed ? 0.0F : sample + carry;
+                ASSERT_EQ(streams.m_out.at(channel)[n + latency], expected)
+                    << "channel " << channel << ", hop " << hop << ", sample " << i;
+            }
+            if (hop != k_failed) { carry += sum; }
+        }
+    }
+    EXPECT_EQ(state_values(rig.get(), 0).at(1), 6.0F) << "the counter skipped the failed one";
+    // The pointers: before_inference ran for every inference, after_inference for the six
+    // that succeeded (a failed engine skips it). The failed one read the buffer its
+    // predecessor wrote, and its successor read that same buffer again: no flip.
+    ASSERT_EQ(log.m_num_in.load(), 7U);
+    ASSERT_EQ(log.m_num_out.load(), 6U);
+    EXPECT_EQ(log.m_in.at(k_failed).load(), log.m_out.at(k_failed - 1).load());
+    EXPECT_EQ(log.m_in.at(k_failed + 1).load(), log.m_in.at(k_failed).load())
+        << "the failed inference promoted its state";
+    // The successes around it alternate as always: out[j] names the successful inference j's
+    // write buffer, which the next inference reads.
+    const std::array<size_t, 6> successes{0, 1, 2, 4, 5, 6};
+    for (size_t j = 0; j < successes.size(); ++j) {
+        const size_t k = successes.at(j);
+        EXPECT_NE(log.m_in.at(k).load(), log.m_out.at(j).load()) << "inference " << k;
+        if (k + 1 < 7) {
+            EXPECT_EQ(log.m_in.at(k + 1).load(), log.m_out.at(j).load()) << "inference " << k;
+        }
+    }
+}
+
+// A reset re-initialises the read side alone, at the first inference of the new stream: the
+// State input of that inference is zeros, while the write side still holds what it held (a
+// canary written into it at quiescence), since the engine overwrites it anyway.
+TEST(AbiState, AResetZeroesTheReadSideOnly) {
+    AccumulatorEngine engine;
+    const std::array<Registration, 1> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &engine}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id), registrations);
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    const std::vector<size_t> sizes = hops(4);
+    size_t position = 0;
+    Streams first;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
+    ASSERT_EQ(engine.m_calls.load(), 4);
+    EXPECT_NE(engine.m_read_first.at(3).load(), 0.0F) << "the fourth inference read a carry";
+    // Quiescence (every process_wait returned with its inferences collected): the canary into
+    // the write side, white-box.
+    auto* port = std::get_if<anira::capi::StatePort>(&h->m_input_ports[0]);
+    ASSERT_NE(port, nullptr);
+    anira::capi::StateSlot* value = port->m_value.has_value() ? &*port->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    constexpr float k_canary = 12345.0F;
+    static_cast<float*>(value->write())[0] = k_canary;
+    EXPECT_NE(static_cast<const float*>(value->read())[0], 0.0F);
+
+    anira_handler_reset(h);
+    position = 0;
+    Streams second;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, second));
+    ASSERT_EQ(engine.m_calls.load(), 8);
+    EXPECT_EQ(engine.m_read_first.at(4).load(), 0.0F) << "the read side was zeroed";
+    EXPECT_EQ(engine.m_write_first.at(4).load(), k_canary) << "the write side was not";
+    EXPECT_EQ(second.m_out, first.m_out);
+    expect_closed_form(second, latency);
+}
+
+// The state is the handler's, not a plan's: two registered accumulator engines on two rows,
+// anira_handler_set_plan mid-stream, and the closed form continues across the switch, both
+// engines having run their share.
+TEST(AbiState, StateSurvivesPlanSwitch) {
+    AccumulatorEngine first;
+    AccumulatorEngine second;
+    const std::array<Registration, 2> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &first},
+         {.m_id = k_other_accumulator_id, .m_engine = &second}}};
+    ModelConfig model = accumulator_model(k_accumulator_id);
+    model.add_model_path(k_other_accumulator_id, "custom-processor");
+    RegisteredRig rig(model, registrations);
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(h)), 2U);
+    EXPECT_EQ(anira_handler_get_plan(h), 0U);
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 1), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    ASSERT_EQ(anira_handler_set_plan(h, 0), ANIRA_OK);
+    ASSERT_NO_FATAL_FAILURE(drive(rig, hops(4), position, streams));
+    expect_closed_form(streams, latency);
+    EXPECT_EQ(first.m_calls.load(), 8);
+    EXPECT_EQ(second.m_calls.load(), 4);
+    EXPECT_EQ(state_values(h, 0).at(1), 12.0F) << "the counter counts both engines' inferences";
+}
+
+// A pair of another dtype than float32 (int32 here) on the registered engine: the two buffers
+// take the spec's dtype, the engine reads and writes int32 through the descriptors, and the
+// closed form holds on the float32 stream around it.
+TEST(AbiState, AnInt32StatePair) {
+    AccumulatorEngine engine;
+    const std::array<Registration, 1> registrations{
+        {{.m_id = k_accumulator_id, .m_engine = &engine}}};
+    RegisteredRig rig(accumulator_model(k_accumulator_id, ANIRA_DTYPE_I32),
+                      registrations,
+                      {},
+                      2 * k_hop);
+    ASSERT_TRUE(rig.ready());
+    anira_handler* h = rig.get();
+    const auto* port = std::get_if<anira::capi::StatePort>(&h->m_input_ports[0]);
+    ASSERT_NE(port, nullptr);
+    const anira::capi::StateSlot* value = port->m_value.has_value() ? &*port->m_value : nullptr;
+    ASSERT_NE(value, nullptr);
+    EXPECT_EQ(value->dtype(), static_cast<anira_dtype>(ANIRA_DTYPE_I32));
+    EXPECT_EQ(value->num_bytes(),
+              static_cast<size_t>(k_channels) * k_state_width * sizeof(int32_t));
+    const size_t latency = anira_handler_get_latency(h, RegisteredRig::processed_slot());
+    const std::vector<size_t> sizes{8, 3, 13, 16, 1, 7, 8, 16, 5, 11, 8, 8, 16, 2, 6};
+    size_t position = 0;
+    Streams streams;
+    ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+    expect_closed_form(streams, latency);
+    const int calls = engine.m_calls.load();
+    ASSERT_GT(calls, 10);
+    const std::vector<int32_t> state = state_values<int32_t>(h, 0);
+    ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        EXPECT_EQ(state[(channel * k_state_width) + 1], calls) << "channel " << channel;
+        int32_t sum = 0;
+        for (size_t n = 0; n < static_cast<size_t>(calls) * k_hop; ++n) {
+            sum += static_cast<int32_t>(input_sample(channel, n));
+        }
+        EXPECT_EQ(state[channel * k_state_width], sum) << "channel " << channel;
+    }
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+}
+
 // ---- the bundled model on the engines
 // -------------------------------------------------------------
 
-#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH)
+#if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH) || \
+    defined(USE_TFLITE) || defined(USE_LITERT)
 
 // stateful_accumulator.model.json: the stereo export of example-models' StatefulAccumulatorNetwork
 // (the model of the twin above, a [1, 2, 2] state around a [1, 2, 64] stream, the state first
-// in the inputs and last in the outputs) with rows for LibTorch, ONNX Runtime and ExecuTorch.
-// TFLite and LiteRT are left out on purpose: the TFLite export orders its outputs [state_out,
-// processed_data] (the README of example-models; the input side keeps the declared order), and
-// the engines bind tensors by position until they bind by name, so on those two the stream
-// would be captured as the state. The three engines here keep the export's order.
+// in the inputs and last in the outputs) with a row for every engine. The TFLite export orders
+// its outputs [state_out, processed_data] in the file (the README of example-models); its
+// signature keeps the declared mapping under the keys output_0 / output_1, which the tflite row
+// reaches by position (the signature runner lists them in key order) and the litert row by
+// name (LiteRT lists them in the file's order, so the row carries a tensors record). The
+// closed form below holds on every engine because the binding is checked against the shapes
+// at prepare: a swapped pair would be refused, not captured as the state.
 
 constexpr uint32_t k_file_hop = 64;      // the file's window (min = max = 64, no overlap)
 constexpr double k_file_rate = 48000.0;  // the host's rate; a contract file carries none
@@ -1781,7 +2485,8 @@ std::vector<anira_engine> file_engines() {
     for (const anira::BackendId& id : anira::enabled_backends()) {
         const auto engine = static_cast<anira_engine>(id.engine);
         if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
-            engine == ANIRA_ENGINE_EXECUTORCH) {
+            engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||
+            engine == ANIRA_ENGINE_LITERT) {
             out.push_back(engine);
         }
     }
@@ -1793,6 +2498,8 @@ const char* engine_word(anira_engine engine) {
         case ANIRA_ENGINE_LIBTORCH: return "libtorch";
         case ANIRA_ENGINE_ONNXRUNTIME: return "onnxruntime";
         case ANIRA_ENGINE_EXECUTORCH: return "executorch";
+        case ANIRA_ENGINE_TFLITE: return "tflite";
+        case ANIRA_ENGINE_LITERT: return "litert";
         default: return "another engine";
     }
 }
@@ -1808,13 +2515,16 @@ uint32_t plan_engine(const anira_handler* handler) {
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
 public:
-    explicit EngineRig(anira_engine engine, uint32_t block_max = k_file_hop)
+    explicit EngineRig(anira_engine engine,
+                       uint32_t block_max = k_file_hop,
+                       std::vector<anira_stage_desc> stages = {})
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
                                         .engine = static_cast<uint32_t>(engine),
                                         .provider = ANIRA_PROVIDER_DEFAULT,
                                         .engine_id = nullptr}}
-        , m_handler(m_context, m_model, m_candidates)
+        , m_stages(std::move(stages))
+        , m_handler(m_context, m_model, m_candidates, m_stages)
         , m_block_max(block_max) {
         prepare();
     }
@@ -1868,6 +2578,7 @@ private:
     Context m_context{4};
     ModelConfig m_model;
     std::array<anira_backend_id, 1> m_candidates;
+    std::vector<anira_stage_desc> m_stages;
     anira_test::Handler m_handler;
     uint32_t m_block_max;
     std::shared_ptr<anira::SessionElement> m_session;
@@ -1978,6 +2689,161 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         }
     }
 }
+
+// The ping-pong on every engine of this build the file names: through a stage's hooks the
+// descriptors a built-in adapter is handed alternate between the pair's two buffers exactly as
+// on the registered engine, whether the adapter binds them in place (ONNX Runtime both ways,
+// LibTorch's input) or copies them (LibTorch's output, ExecuTorch, TFLite, LiteRT); the closed
+// form holds.
+TEST(AbiState, TheStateAlternatesBetweenTwoBuffersOnEveryEngine) {
+    for (const anira_engine engine : file_engines()) {
+        SCOPED_TRACE(engine_word(engine));
+        PointerLog log;
+        EngineRig rig(engine, k_file_hop, {logging_stage(log)});
+        ASSERT_TRUE(rig.ready());
+        const anira_handler* h = rig.get();
+        ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(engine));
+        const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
+        // Enough hops to see six of them behind the latency's zeros.
+        const std::vector<size_t> sizes((latency / k_file_hop) + 6, k_file_hop);
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        expect_closed_form(streams, latency, 0, k_file_hop);
+        ASSERT_NO_FATAL_FAILURE(rig.settle());
+        ASSERT_NO_FATAL_FAILURE(expect_two_alternating_buffers(log, sizes.size()));
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
+}
+
+#ifdef USE_ONNXRUNTIME
+
+/// The bundled accumulator's ONNX export.
+std::string accumulator_onnx_path() {
+    const ModelConfig file = ModelConfig::from_file(k_stateful_accumulator_model_json);
+    for (const anira::capi::ModelEntry& row : file.native()->m_models) {
+        if (row.m_engine == ANIRA_ENGINE_ONNXRUNTIME) { return row.m_path; }
+    }
+    return {};
+}
+
+/// The bundled accumulator declared under other canonical names and in another order than
+/// the export's (the stream first on both sides), with or without the tensors record that
+/// names the export's tensors.
+ModelConfig renamed_accumulator(bool with_names) {
+    ModelConfig model;
+    const uint32_t row = model.add_model_path(ANIRA_ENGINE_ONNXRUNTIME, accumulator_onnx_path());
+    TensorSpec audio("audio", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    audio.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, k_channels)
+        .axis(2, ANIRA_AXIS_TIME, static_cast<int64_t>(k_file_hop));
+    audio.window(k_file_hop, k_file_hop, 0);
+    TensorSpec audio_out("audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    audio_out.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, k_channels)
+        .axis(2, ANIRA_AXIS_TIME, static_cast<int64_t>(k_file_hop));
+    audio_out.window(k_file_hop, k_file_hop, 0);
+    model.input(audio);
+    model.input(state("carry", "carry_out"));
+    model.output(audio_out);
+    model.output(state("carry_out"));
+    if (with_names) {
+        model.tensor_name(row, "audio", "data");
+        model.tensor_name(row, "carry", "state_in");
+        model.tensor_name(row, "audio_out", "processed_data");
+        model.tensor_name(row, "carry_out", "state_out");
+    }
+    return model;
+}
+
+/// The renamed accumulator on ONNX Runtime: the streams at slot 0 on both sides.
+class RenamedRig {
+public:
+    explicit RenamedRig(bool with_names)
+        : m_model(renamed_accumulator(with_names)), m_handler(m_context, m_model, m_candidates) {}
+
+    anira_status prepare() {
+        anira::ContractHandle contract =
+            anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
+        contract.hard_geometry(1, k_file_hop, k_file_rate);
+        return m_handler.prepare(contract);
+    }
+    anira_handler* get() const { return m_handler.m_handler; }
+    const char* message() const { return m_handler.m_err.message; }
+
+    anira_status block(std::span<const float> in, std::span<float> out, size_t samples) {
+        const anira_tensor in_tensor =
+            whole_f32(in.data(), {k_channels, static_cast<int64_t>(samples)});
+        const anira_tensor out_tensor =
+            whole_f32(out.data(), {k_channels, static_cast<int64_t>(samples)});
+        return anira_handler_process_wait(get(),
+                                          &in_tensor,
+                                          0,
+                                          &out_tensor,
+                                          0,
+                                          nullptr,
+                                          ANIRA_WAIT_FOREVER);
+    }
+
+private:
+    Context m_context{4};
+    ModelConfig m_model;
+    std::array<anira_backend_id, 1> m_candidates{
+        anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                         .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                         .provider = ANIRA_PROVIDER_DEFAULT,
+                         .engine_id = nullptr}};
+    anira_test::Handler m_handler;
+};
+
+// A State model bound by name: the bundled accumulator declared in another order and under
+// other canonical names, its tensors record naming the export's tensors, runs the closed form
+// on ONNX Runtime (the state pair bound to the graph's state_in and state_out by name); the
+// same declaration without the record binds by position, which the shape check refuses at
+// prepare naming the slot, in place of running the stream into the state.
+TEST(AbiState, AStateModelBoundByNameOnOnnxRuntime) {
+    {
+        RenamedRig rig(true);
+        ASSERT_EQ(rig.prepare(), ANIRA_OK) << rig.message();
+        const anira_handler* h = rig.get();
+        ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(ANIRA_ENGINE_ONNXRUNTIME));
+        const size_t latency = anira_handler_get_latency(h, 0);
+        const std::vector<size_t> sizes((latency / k_file_hop) + 6, k_file_hop);
+        size_t position = 0;
+        Streams streams;
+        ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
+        expect_closed_form(streams, latency, 0, k_file_hop);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        const std::vector<anira_plan_slot> rows = [h] {
+            uint32_t count = 0;
+            const anira_plan_report* report = anira_handler_plan_report(h);
+            EXPECT_EQ(
+                anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, nullptr),
+                ANIRA_OK);
+            std::vector<anira_plan_slot> slots(count, ANIRA_PLAN_SLOT_INIT);
+            EXPECT_EQ(anira_plan_report_slots(report,
+                                              0,
+                                              1,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              slots.data()),
+                      ANIRA_OK);
+            return slots;
+        }();
+        ASSERT_EQ(rows.size(), 2U);
+        EXPECT_EQ(rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_NAME));
+        EXPECT_EQ(rows[1].binding, static_cast<uint32_t>(ANIRA_BINDING_NAME));
+    }
+    {
+        RenamedRig rig(false);
+        EXPECT_EQ(rig.prepare(), ANIRA_ERROR_CONFIG) << rig.message();
+        const std::string message = rig.message();
+        EXPECT_NE(message.find("'audio'"), std::string::npos) << message;
+        EXPECT_NE(message.find("state_in"), std::string::npos) << message;
+    }
+}
+
+#endif  // USE_ONNXRUNTIME
 
 #endif  // an engine the file names
 

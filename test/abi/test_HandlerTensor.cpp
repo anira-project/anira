@@ -224,7 +224,7 @@ public:
         m_gate = std::make_unique<anira_test::GateBackend>(get()->m_inference_config);
         m_session = anira_test::session_of(get());
         if (m_session == nullptr) { return; }
-        m_session->m_custom_processor = m_gate.get();  // attach_processor, the gate closed
+        anira_test::attach_processor(get(), *m_gate);  // the gate closed
         m_gate->m_open.store(false);
     }
     /// The gate opens and the handler is destroyed (which drains the in-flight work) before

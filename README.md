@@ -10,7 +10,7 @@
 
 ---
 
-**Anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference backends, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
+**Anira** is a high-performance library designed to enable easy real-time safe integration of neural network inference within audio applications. Compatible with multiple inference engines, [LibTorch](https://github.com/pytorch/pytorch/), [ONNXRuntime](https://github.com/microsoft/onnxruntime/), and [Tensorflow Lite](https://github.com/tensorflow/tensorflow/), anira bridges the gap between advanced neural network architectures and real-time audio processing. In the [paper](https://doi.org/10.1109/IS262782.2024.10704099) you can find more information about the architecture and the design decisions of **anira**, as well as extensive performance evaluations with the built-in benchmarking capabilities.
 
 ## Documentation
 
@@ -169,19 +169,19 @@ The install tree also carries the Apache-2.0 core component of [tanh-lib](https:
 
 ### C++ Build Options
 
-By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can disable specific backends as needed:
+By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can disable specific engines as needed:
 
 - LibTorch: ``-DANIRA_WITH_LIBTORCH=OFF``
 - OnnxRuntime: ``-DANIRA_WITH_ONNXRUNTIME=OFF``
-- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family backend.
+- LiteRT (`LiteRt*` C API): ``-DANIRA_WITH_LITERT=OFF`` — runs `.tflite` models through LiteRT's native CompiledModel runtime. Enabled by default; it is the modern TensorFlow-Lite-family engine.
 - TensorFlow Lite (legacy `TfLite*` C API): ``-DANIRA_WITH_TFLITE=ON`` — the **same runtime** as LiteRT exposed through the older C API, so the two are **mutually exclusive**. To use it, disable LiteRT: ``-DANIRA_WITH_LITERT=OFF -DANIRA_WITH_TFLITE=ON``.
 - ExecuTorch: ``-DANIRA_WITH_EXECUTORCH=OFF`` — runs `.pte` programs exported ahead-of-time with `torch.export`; PyTorch's edge/mobile inference stack (CPU execution via XNNPACK). Enabled by default; static-only.
 
-#### Platform / backend support
+#### Platform / engine support
 
-anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
-and/or `static`. Backend linkage follows `BUILD_SHARED_LIBS`: a shared anira links shared backends,
-a static anira links static backends, and an engine that does not ship the required linkage is
+anira builds on the targets below; the pre-built engines it downloads ship per target as `shared`
+and/or `static`. Engine linkage follows `BUILD_SHARED_LIBS`: a shared anira links shared engines,
+a static anira links static engines, and an engine that does not ship the required linkage is
 disabled with a warning:
 
 | Target                  | LibTorch | ONNXRuntime     | LiteRT          | TFLite (legacy) | ExecuTorch |
@@ -205,16 +205,16 @@ WebAssembly only ONNX Runtime is supported. Backends for Android and iOS are als
 published in the [anira-project/backends](https://github.com/anira-project/backends) release for
 cross-builds. `—` = not provided.
 
-Pre-built backend binaries are downloaded at configure time from the
+Pre-built engine binaries are downloaded at configure time from the
 [anira-project/backends](https://github.com/anira-project/backends) release pinned by
 `ANIRA_BACKENDS_VERSION`. Integrity is checked live: when GitHub is reachable, anira fetches each
-asset's published SHA256 and re-downloads any backend whose archive changed upstream or downloaded
+asset's published SHA256 and re-downloads any engine whose archive changed upstream or downloaded
 incompletely (the download is verified against that hash). Nothing is pinned in-repo. The source is
 configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 
 - Backends release tag: ``-DANIRA_BACKENDS_VERSION=v2.1.1``.
 - Offline / reproducible builds: ``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` skips the GitHub query and reuses whatever is already in `modules/`.
-- Bring your own backend (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
+- Bring your own engine (no fork): ``-DANIRA_<ENGINE>_ROOTDIR=/path/to/prebuilt`` (a tree with `include/` + `lib/`), or a custom source via ``-DANIRA_<ENGINE>_URL=... -DANIRA_<ENGINE>_SHA256=...``.
 
 Moreover, the following options are available:
 
@@ -280,7 +280,7 @@ A debug preset is also available via `cmake --preset web` / `cmake --build --pre
 - [Simple JUCE Audio Plugin](https://github.com/anira-project/anira/tree/main/examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
 - [CLAP Plugin Example](https://github.com/anira-project/anira/tree/main/examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
 - [Benchmark](https://github.com/anira-project/anira/tree/main/examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
-- [Minimal Inference](https://github.com/anira-project/anira/tree/main/examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in all three backends.
+- [Minimal Inference](https://github.com/anira-project/anira/tree/main/examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in every engine.
 
 ### Other examples
 

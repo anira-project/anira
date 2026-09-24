@@ -55,7 +55,8 @@ Anira supports multiple backends that can be selected at runtime. Use the :cpp:f
     // Set the inference backend to ExecuTorch (.pte programs exported with torch.export)
     inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
 
-    // You can also provide and select a custom backend if needed
+    // A custom engine is registered on the pipeline under its id (see "Custom Engines"); the
+    // 2.x handler of this pre-release selects the BackendBase it was constructed with as CUSTOM
     inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
 
 Multi Tensor Processing Example
@@ -125,7 +126,7 @@ handler of ``anira/abi/handler.h``, the 3.x runtime of this pre-release:
         .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}};
     anira::ContextConfig context_config;
     anira::Context context(context_config);
-    anira::Pipeline pipeline{anira::stage::Inference(model_config)};   // every engine of the build
+    anira::Pipeline pipeline{anira::stage::Inference(model_config)};   // the default candidate set
 
     // The handler, prepared with the host geometry: block size and sample rate complete the contract
     anira_handler* handler = nullptr;

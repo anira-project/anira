@@ -2,18 +2,18 @@
 #define ANIRA_BACKENDS_PROCESSINGGUARD_H
 
 /*
- * The busy-flag guard of the backend processors. Private to src/backends: every engine
- * processor claims one of its instances with m_processing.exchange(true) and runs the
- * instance's process() under this guard, so the flag is released on every exit path — a
- * throw of a type the instance's own catch does not name included. Without it a failing
- * inference could leave the instance busy forever and starve the session.
+ * The busy-flag guard of the engine room's claim loop (Loaded::claim_and_run, Adapter.h).
+ * Private to src/backends: the loop marks a shared slot busy with exchange(true) and runs the
+ * session's process on it under this guard, so the flag is released on every exit path, a
+ * throw of a type the engine's own catch does not name included. Without it a failing
+ * inference could leave the slot busy forever and starve every session on the model.
  */
 
 #include <atomic>
 
 namespace anira::detail {
 
-/// Clears an instance's busy flag on every exit path of process().
+/// Clears a slot's busy flag on every exit path of the call it guards.
 class ProcessingGuard {
 public:
     explicit ProcessingGuard(std::atomic<bool>& flag) noexcept : m_flag(flag) {}

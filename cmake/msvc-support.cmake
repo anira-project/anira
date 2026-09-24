@@ -24,8 +24,8 @@ if(BUILD_SHARED_LIBS)
     list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:tanh::Core>")
 endif()
 
-# Add all necessary DLLs to a list for later copying. Only shared backends ship a
-# runtime DLL; statically-linked backends are baked into anira.dll, so skip them.
+# Add all necessary DLLs to a list for later copying. Only shared engines ship a
+# runtime DLL; statically-linked engines are baked into anira.dll, so skip them.
 if(ANIRA_WITH_ONNXRUNTIME AND NOT ANIRA_ONNXRUNTIME_IS_STATIC)
     file(GLOB_RECURSE INFERENCE_ENGINE_DLLS_ONNX "${ANIRA_ONNXRUNTIME_SHARED_LIB_PATH}/*.dll")
     list(APPEND ANIRA_SHARED_LIBS_WIN ${INFERENCE_ENGINE_DLLS_ONNX})

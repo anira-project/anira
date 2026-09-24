@@ -5,7 +5,7 @@
  * The bodies of the opaque configuration handles of anira/abi/config.h. Private to
  * src/capi (and the tests through the src/ include directory): the layouts never enter
  * the ABI, which is what lets them change in any release. Every C setter is a thin,
- * firewalled wrapper over a member here, so the JSON loaders and the translator share the
+ * firewalled wrapper over a member here, so the JSON loaders and the validator share the
  * same code paths.
  */
 
@@ -26,6 +26,12 @@
 #include "ext_registry.h"
 
 namespace anira::capi {
+
+/// The model config as the compact JSON text anira_model_config_to_json writes (json.cpp): the
+/// whole variant, every entry, spec and extension, in a canonical order. What a custom engine's
+/// loaded model is pooled by beside its record (backend::Model::m_variant), since its load may
+/// read any of it.
+std::string model_config_json(const anira_model_config& model);
 
 /// One axis of a tensor spec; written says whether set_axis touched the slot.
 struct Axis {
@@ -61,8 +67,6 @@ private:
     void* m_ctx = nullptr;
 };
 
-/// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
-/// canonical -> engine tensor names, and its extensions (host "model").
 /// What one entry's file calls a tensor and how it holds its axes (section 5): the
 /// JSON file's models[].tensors record, keyed by the spec's canonical name.
 struct TensorBinding {
@@ -70,16 +74,26 @@ struct TensorBinding {
     std::vector<uint32_t> m_layout;  ///< engine axis k = spec axis m_layout[k]; empty = identity
 };
 
+/// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
+/// canonical -> export tensor names, and its extensions (host "model").
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;  ///< non-empty for a custom engine
-    std::string m_path;       ///< kept for to_json even after set_model_bytes
+    /// The provider the entry is pinned to (anira_model_config_set_model_provider): the enum's,
+    /// or DEFAULT with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
+    /// which runs on any provider of its engine.
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
+    std::string m_path;  ///< kept for to_json even after set_model_bytes
     std::shared_ptr<BytesCarrier> m_bytes;
     std::map<std::string, TensorBinding> m_tensors;
     ExtBag m_ext;
 
     bool is_custom() const noexcept { return !m_engine_id.empty(); }
     bool has_bytes() const noexcept { return m_bytes != nullptr; }
+    bool is_pinned() const noexcept {
+        return m_provider != ANIRA_PROVIDER_DEFAULT || !m_provider_id.empty();
+    }
 };
 
 /// The Hard (real-time) half of a contract: v2's HostConfig geometry, budget and warmup.

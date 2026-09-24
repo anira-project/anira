@@ -24,7 +24,7 @@
  * entry accepts a planar tensor only where its own documentation says so, which is where it
  * copies a host block; every other consumer refuses the flag with ANIRA_ERROR_NOT_SUPPORTED, as
  * does every domain but the two host domains, and anira never hands a planar tensor to a stage,
- * a backend or JavaScript. The factories of the unmeasured platform arms live in
+ * an engine or JavaScript. The factories of the unmeasured platform arms live in
  * anira/abi/draft/tensor_platform.h.
  */
 

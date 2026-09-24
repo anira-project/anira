@@ -57,10 +57,11 @@ inline constexpr const char* k_stereo_gain_contract_json =
 
 // StatefulAccumulatorNetwork, stereo: a 64-sample stream with a declared State pair around it
 // ([1, 2, 2]: the running sum and a block counter per channel; the state stands first in the
-// inputs and last in the outputs, and anira feeds it back). LibTorch, ONNX Runtime and
-// ExecuTorch only: the TFLite export orders its outputs [state_out, processed_data], and the
-// engines bind tensors by position until they bind by name, so the file names no tflite or
-// litert row.
+// inputs and last in the outputs, and anira feeds it back). Rows for every engine: the TFLite
+// export's signature keeps the declared mapping under the keys args_0 / args_0_1 / output_0 /
+// output_1, which the tflite row reaches by position (the signature runner lists them in key
+// order) and the litert row by name (LiteRT lists the outputs in the file's order, [state_out,
+// processed_data], so a tensors record names them).
 inline constexpr const char* k_stateful_accumulator_model_json =
     ANIRA_EXTRAS_MODEL_FILE("model-pool/stateful_accumulator.model.json");
 inline constexpr const char* k_stateful_accumulator_contract_json =

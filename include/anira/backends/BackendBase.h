@@ -19,18 +19,14 @@ class SessionElement;  // Forward declaration as we have a circular dependency
  * backend implementations such as LibTorch, ONNX Runtime, and TensorFlow Lite processors.
  *
  * @par No engine in the public headers
- * A backend's engine state lives in a named pimpl, `struct Instance`, that the
- * processor's header only declares and its .cpp defines; the header must not include
- * an engine header. The processor holds its instances as
- * `std::vector<std::shared_ptr<Instance>>` (a shared_ptr works with an incomplete
- * type — no custom deleter needed) and declares its destructor in the header but
- * defines it out of line, where Instance is complete. This keeps every engine out of
- * anira's public include surface: a consumer that links `anira::anira` sees no engine
- * header, and a consumer that uses an engine itself links the matching
- * `anira::<engine>` target explicitly. The `anira_header_isolation` CTest enforces it.
+ * The built-in engines are internal adapters (`src/backends/<Engine>Adapter.cpp`, one
+ * translation unit per engine, nothing of them in a public header): a consumer that
+ * links `anira::anira` sees no engine header, and a consumer that uses an engine itself
+ * links the matching `anira::<engine>` target explicitly. The `anira_header_isolation`
+ * CTest enforces it. A custom backend derived from this class keeps its own engine state
+ * in its .cpp the same way.
  *
- * @see LibtorchProcessor, OnnxRuntimeProcessor, TFLiteProcessor, LiteRtProcessor,
- *      ExecuTorchProcessor, InferenceConfig
+ * @see InferenceConfig
  */
 class ANIRA_API BackendBase {
 public:

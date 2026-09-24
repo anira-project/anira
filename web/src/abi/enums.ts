@@ -95,6 +95,7 @@ export const anira_struct_id = {
   ANIRA_STRUCT_PLAN_EXT: 9,
   ANIRA_STRUCT_PLAN_INFO: 10,
   ANIRA_STRUCT_BACKEND_ID: 11,
+  ANIRA_STRUCT_ENGINE_CTX: 12,
 } as const
 export type anira_struct_id = (typeof anira_struct_id)[keyof typeof anira_struct_id]
 
@@ -307,7 +308,7 @@ export const anira_provider = {
 } as const
 export type anira_provider = (typeof anira_provider)[keyof typeof anira_provider]
 
-export const anira_stage_phase = {
+export const anira_phase = {
   ANIRA_PHASE_PRE_PROCESS: 0,
   ANIRA_PHASE_POST_PROCESS: 1,
   ANIRA_PHASE_BEFORE_INFERENCE: 2,
@@ -315,8 +316,21 @@ export const anira_stage_phase = {
   ANIRA_PHASE_AFTER_INFERENCE: 4,
   ANIRA_PHASE_PREPARE: 5,
   ANIRA_PHASE_RELEASE: 6,
+  ANIRA_PHASE_RESET: 7,
+  ANIRA_PHASE_UNPREPARE: 8,
+  ANIRA_PHASE_INIT: 9,
+  ANIRA_PHASE_LOAD: 10,
+  ANIRA_PHASE_UNLOAD: 11,
+  ANIRA_PHASE_QUERY: 12,
 } as const
-export type anira_stage_phase = (typeof anira_stage_phase)[keyof typeof anira_stage_phase]
+export type anira_phase = (typeof anira_phase)[keyof typeof anira_phase]
+
+export const anira_binding = {
+  ANIRA_BINDING_POSITION: 0,
+  ANIRA_BINDING_NAME: 1,
+  ANIRA_BINDING_ENGINE: 2,
+} as const
+export type anira_binding = (typeof anira_binding)[keyof typeof anira_binding]
 
 export const ANIRA_FAILED = (s: number): boolean => (s | 0) < 0
 export const ANIRA_SUCCEEDED = (s: number): boolean => (s | 0) >= 0
@@ -347,7 +361,13 @@ export const ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK = 1
 export const ANIRA_LOG_FLAG_TRACE_FAILURES = 2
 export const ANIRA_AXIS_INSERT = 4294967295
 export const ANIRA_TICKET_INVALID = 0
-export const ANIRA_STAGE_REALTIME_PRE_POST = 1
-export const ANIRA_STAGE_REALTIME_HOOKS = 2
+export const ANIRA_STAGE_FLAG_REALTIME_PRE_POST = 1
+export const ANIRA_STAGE_FLAG_REALTIME_HOOKS = 2
+export const ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL = 1
+export const ANIRA_ENGINE_FLAG_REALTIME_SAFE = 2
+export const ANIRA_ENGINE_FLAG_DYNAMIC_TIME = 4
+export const ANIRA_ENGINE_FLAG_STATE_ALIAS = 8
+export const ANIRA_PREPARE_EXCLUSIVE = 1
+export const ANIRA_ENGINE_CALL_EXCLUSIVE = 1
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2

@@ -374,24 +374,16 @@ This configuration measures the overhead of anira's processing pipeline without 
 Benchmarking Custom Inference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-For custom inference backend implementations:
+A custom engine is benchmarked like a built-in one: it is created under its id and added to the pipeline (``anira_custom_engine_create`` and ``anira_pipeline_add_engine``, or an :cpp:class:`anira::Engine` through ``Pipeline::register_engine``; :doc:`custom_backends`), named by a model entry, and its plan is selected; the 2.x fixture of this pre-release, whose handler takes a :cpp:class:`anira::BackendBase`, selects that backend instead:
 
 .. code-block:: cpp
     :caption: benchmark.cpp
 
-    // Define your custom processor class first
-    class MyCustomProcessor : public anira::BackendBase {
-        // ... implement your custom inference logic ...
-    };
-
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CUSTOM_INFERENCE)(::benchmark::State& state) {
-        // ... setup code ...
-        
-        // Register your custom processor
-        // (implementation depends on your custom backend design)
-        
+        // ... setup code: the 2.x handler was constructed over your BackendBase ...
+
         m_inference_handler->set_inference_backend(anira::InferenceBackend::CUSTOM);
-        
+
         // ... measurement loop ...
     }
 

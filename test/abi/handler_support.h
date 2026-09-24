@@ -14,6 +14,7 @@
 #include <anira/abi/core.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
+#include <anira/abi/stage.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/Core.h>
@@ -39,6 +40,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "backends/LegacyAdapter.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -97,10 +99,11 @@ inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
     return model;
 }
 
-/// The engines of this build the bundled gain and CNN files run on. LiteRT is left out: its
-/// runtime refuses simple_gain_network_mono.tflite at the warm-up inference ("Cannot
-/// auto-resize tensor args_0_1: no dims_signature exists" -- the static gain scalar), a pair
-/// no other test loads; the oracle compares the plans that load on both sides.
+/// The engines of this build the bundled gain and CNN files run on, on both sides of the
+/// oracle. LiteRT is left out: its signature lists the gain export's outputs as [peak,
+/// processed], so the file's litert row names them (a tensors record), and the 2.x side of the
+/// oracle, whose InferenceConfig has no tensor names, binds them by position and fails the
+/// shape check at prepare; the oracle compares the plans that load on both sides.
 inline std::vector<anira_engine> oracle_engines() {
     std::vector<anira_engine> out;
     for (const anira::BackendId& id : anira::enabled_backends()) {
@@ -223,12 +226,14 @@ inline anira::ContractHandle file_contract(const char* contract_json,
     return contract;
 }
 
-/// A pipeline with one inference stage and the handler over it. An empty span means NULL
-/// candidates: the default set (every engine of this build plus the custom entries).
+/// A pipeline with one inference stage, the stages of `stages` (at most one in this
+/// pre-release) and the handler over it. An empty span means NULL candidates: the default set
+/// (every engine of this build plus the custom entries).
 struct Handler {
     Handler(const Context& context,
             const anira::ModelConfig& model,
-            std::span<const anira_backend_id> candidates = {}) {
+            std::span<const anira_backend_id> candidates = {},
+            std::span<const anira_stage_desc> stages = {}) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         const anira_model_config* variants[] = {model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
@@ -239,6 +244,10 @@ struct Handler {
                                                &m_err),
                   ANIRA_OK)
             << m_err.message;
+        for (const anira_stage_desc& stage : stages) {
+            EXPECT_EQ(anira_pipeline_add_stage(m_pipeline, &stage, &m_err), ANIRA_OK)
+                << m_err.message;
+        }
         EXPECT_EQ(anira_handler_create(context.m_context, m_pipeline, &m_handler, &m_err), ANIRA_OK)
             << m_err.message;
     }
@@ -356,15 +365,31 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
     return found;
 }
 
-/// Control thread, after prepare and before the first block, while the selected plan is the
-/// custom row: the inference thread reads the pointer per inference. The backend must outlive
-/// the handler (an inference thread may be inside its process() until the handler's destroy
-/// has drained the in-flight work), and a stack backend built from h->m_inference_config is
-/// declared after the handler: declare a DestroyFirst right after the attach.
+/// Control thread, after prepare and before the first block: the loaded model of the custom
+/// row's plan (the roundtrip the C path asked the core for) and the session's handle over it
+/// are replaced by a legacy loaded model over `backend`, loaded with the record of the plan it
+/// replaces, and a handle of the session's exclusivity. The inference thread reads the plan
+/// table per inference, so the replacement lands while no chunk exists, the discipline of the
+/// raw pointer write it succeeds. The backend must outlive the handler (an inference thread
+/// may be inside its process() until the handler's destroy has drained the in-flight work),
+/// and a stack backend built from h->m_inference_config is declared after the handler: declare
+/// a DestroyFirst right after the attach.
 inline void attach_processor(const anira_handler* handler, anira::BackendBase& backend) {
     const std::shared_ptr<anira::SessionElement> session = session_of(handler);
     ASSERT_NE(session, nullptr);
-    session->m_custom_processor = &backend;
+    for (anira::SessionElement::PlanSlot& slot : session->m_plans) {
+        if (slot.m_engine_id != k_custom) { continue; }
+        ASSERT_NE(slot.m_loaded, nullptr);
+        auto loaded = std::make_shared<anira::backend::LegacyLoaded>(backend);
+        loaded->load(slot.m_loaded->model());
+        slot.m_prepared.reset();
+        slot.m_loaded = loaded;
+        slot.m_prepared = loaded->prepare(anira::backend::PrepareRequest{
+            .m_exclusive = handler->m_inference_config.m_session_exclusive_processor,
+            .m_info = nullptr});
+        return;
+    }
+    FAIL() << "the handler has no plan on the custom row";
 }
 
 /// Lowers the drain summary's interval for the test's lifetime.

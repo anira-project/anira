@@ -2,7 +2,7 @@
 # libexecutorch.a per platform (anira-project/backends >= v2.4.0): runtime +
 # extensions + optimized/quantized CPU kernels + XNNPACK delegate, with the
 # kernel/backend registrations pre-linked into one archive member, so it links
-# on demand like the other static backends — no find_package, no force-load,
+# on demand like the other static engines — no find_package, no force-load,
 # no whole-archive microkernels. Windows has no partial link: the registration
 # set ships separately as executorch_registrations.lib and is whole-archived.
 #
