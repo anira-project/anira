@@ -30,7 +30,7 @@ endif()
 #   * LibTorch ships shared-only (and its bundled XNNPACK collides with static LiteRT).
 #   * ExecuTorch ships static-only (a force-loaded runtime that aborts when its
 #     kernels register twice in one process).
-# The rule is checked once more at compile time by the BackendLinkage test.
+# The rule is checked once more at compile time by the EngineLinkage test.
 # ------------------------------------------------------------------------------
 if(BUILD_SHARED_LIBS)
     set(ANIRA_BACKEND_LINKAGE "shared")
