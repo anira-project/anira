@@ -179,7 +179,7 @@ By default, LibTorch, ONNXRuntime, LiteRT and ExecuTorch are enabled. You can di
 
 #### Platform / engine support
 
-anira builds on the targets below; the pre-built backends it downloads ship per target as `shared`
+anira builds on the targets below; the pre-built engines it downloads ship per target as `shared`
 and/or `static`. Engine linkage follows `BUILD_SHARED_LIBS`: a shared anira links shared engines,
 a static anira links static engines, and an engine that does not ship the required linkage is
 disabled with a warning:

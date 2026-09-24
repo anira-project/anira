@@ -3199,7 +3199,7 @@ public:
     }
 
     /// The backends and edges a handler of this pipeline sees on a context: the context's
-    /// rows and the registered engines' (their Engine::available runs on every call).
+    /// rows and the custom engines' (their Engine::available runs on every call).
     PipelineCapabilities capabilities(const Context& context) const noexcept {
         return {m_pipeline, context.native()};
     }
