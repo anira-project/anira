@@ -87,9 +87,9 @@ Install tree
     cmake -S test/contracts/install -B build-consumer -DCMAKE_PREFIX_PATH=$PWD/prefix
     cmake --build build-consumer && ./build-consumer/consumer
 
-Anything a consumer needs — public headers, the exported target, tanh-lib's core component, backend runtimes — must be part of that tree.
+Anything a consumer needs — public headers, the exported target, tanh-lib's core component, engine runtimes — must be part of that tree.
 
-The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default backend set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
+The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with the default engine set, use the developer presets ``desktop-install-release`` / ``desktop-install-debug`` (``build/desktop/Install/<Config>``); without ``--prefix``, ``cmake --install`` places the tree in ``<build dir>/anira-<version>``.
 
 Code Style
 ~~~~~~~~~~
@@ -126,12 +126,14 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 ``test/CMakeLists.txt``).
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``backends/``, ``system/`` and ``utils/`` each map one to one.
+  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/backends/`` mostly
+  covers ``src/backends/`` (the engine adapters), since ``include/anira/backends/`` holds
+  only ``BackendBase.h``.
 - Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
   ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
   cross-unit integration suites (``test_OneSidedStreaming``).
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: header isolation, backend linkage, the library-unload harness,
+  than of any one unit: header isolation, engine linkage, the library-unload harness,
   the installed-package consumer.
 - ``test/support/`` is shared test infrastructure, not tests.
 
@@ -317,7 +319,7 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
 ``cmake --preset <name> && cmake --build --preset <name> && ctest --preset <name>``:
 
 ``desktop-tests-rtsan``
-   RealtimeSanitizer over the full backend set. Gates the ``ANIRA_NONBLOCKING``
+   RealtimeSanitizer over the full engine set. Gates the ``ANIRA_NONBLOCKING``
    (clang's ``nonblocking`` attribute) hot path — the C entries of
    ``anira/abi/handler.h`` and the 2.x ``process``/``push_data``/``pop_data``/
    ``reset`` — with no suppressions, so any allocation, lock, sleep, semaphore or
@@ -336,7 +338,7 @@ Three sanitizer presets gate the merge queue, and each reproduces locally with
 ``desktop-tests-tsan``
    ThreadSanitizer.
 
-The ASan and TSan presets build no engines: the prebuilt backend runtimes are
+The ASan and TSan presets build no engines: the prebuilt engine runtimes are
 uninstrumented, so a sanitized build linking them would report on frames it cannot
 see into. They are ``RelWithDebInfo`` with ``-DNDEBUG`` dropped from the build-type
 flags — ``-O0`` costs roughly 2.4× the test time for no extra signal, and

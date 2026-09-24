@@ -134,13 +134,6 @@ const char* word_of(Enum value, const std::array<std::pair<const char*, Enum>, N
 
 // ---- vocabularies ------------------------------------------------------------------------
 
-const std::array<std::pair<const char*, anira_engine>, 5> k_engines{{
-    {"onnxruntime", ANIRA_ENGINE_ONNXRUNTIME},
-    {"libtorch", ANIRA_ENGINE_LIBTORCH},
-    {"tflite", ANIRA_ENGINE_TFLITE},
-    {"litert", ANIRA_ENGINE_LITERT},
-    {"executorch", ANIRA_ENGINE_EXECUTORCH},
-}};
 const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"ONNX", ANIRA_ENGINE_ONNXRUNTIME},
     {"LIBTORCH", ANIRA_ENGINE_LIBTORCH},
@@ -218,23 +211,6 @@ const std::array<std::pair<const char*, anira_delivery>, 2> k_deliveries{{
 const std::array<std::pair<const char*, anira_edge_cost>, 2> k_edge_costs{{
     {"permissive", ANIRA_EDGE_COST_PERMISSIVE},
     {"strict", ANIRA_EDGE_COST_STRICT},
-}};
-// The host-end domain of a tensor ("host_domains", anira_contract_set_host_domain): every arm
-// of anira_domain by its lower-case suffix.
-const std::array<std::pair<const char*, anira_domain>, 13> k_domains{{
-    {"host", ANIRA_DOMAIN_HOST},
-    {"host_pinned", ANIRA_DOMAIN_HOST_PINNED},
-    {"cuda", ANIRA_DOMAIN_CUDA},
-    {"gl_buffer", ANIRA_DOMAIN_GL_BUFFER},
-    {"vulkan_buffer", ANIRA_DOMAIN_VULKAN_BUFFER},
-    {"opaque_fd", ANIRA_DOMAIN_OPAQUE_FD},
-    {"metal_buffer", ANIRA_DOMAIN_METAL_BUFFER},
-    {"wgpu_buffer", ANIRA_DOMAIN_WGPU_BUFFER},
-    {"dmabuf", ANIRA_DOMAIN_DMABUF},
-    {"iosurface", ANIRA_DOMAIN_IOSURFACE},
-    {"ahardwarebuffer", ANIRA_DOMAIN_AHARDWAREBUFFER},
-    {"d3d12", ANIRA_DOMAIN_D3D12},
-    {"frame", ANIRA_DOMAIN_FRAME},
 }};
 const std::array<std::pair<const char*, anira_gl_threads>, 2> k_gl_threads{{
     {"caller_thread", ANIRA_GL_CALLER_THREAD},
@@ -403,7 +379,7 @@ void set_engine_from_json(const Json& node,
                           anira_engine& engine,
                           std::string& engine_id) {
     const std::string word = require_string(node, path);
-    for (const auto& [name, value] : k_engines) {
+    for (const auto& [name, value] : anira::capi::k_engine_words) {
         if (word == name) {
             engine = value;
             engine_id.clear();
@@ -414,7 +390,7 @@ void set_engine_from_json(const Json& node,
         fail_json(path,
                   R"(")" + word +
                       R"(" is neither a built-in engine (onnxruntime, libtorch, tflite, litert, )"
-                      "executorch) nor a reverse-URI custom engine name");
+                      "executorch) nor a reverse-URI custom engine id");
     }
     engine = ANIRA_ENGINE_NONE;
     engine_id = word;
@@ -883,7 +859,7 @@ void load_contract_v3(const Json& root, anira_contract& contract) {
             for (const auto& [tensor, word] : value.items()) {
                 if (tensor.empty()) { fail_json(key, "a tensor name must not be empty"); }
                 contract.m_host_domains[tensor] =
-                    vocabulary(word, child(key, tensor.c_str()), k_domains);
+                    vocabulary(word, child(key, tensor.c_str()), anira::capi::k_domain_words);
             }
         } else {
             set_ext_from_json(contract.m_ext, key, value, "");
@@ -1376,8 +1352,8 @@ Json model_to_json(const anira_model_config& cfg) {
     Json models = Json::array();
     for (const anira::capi::ModelEntry& entry : cfg.m_models) {
         Json object = Json::object();
-        object["engine"] =
-            entry.is_custom() ? entry.m_engine_id : word_of(entry.m_engine, k_engines);
+        object["engine"] = entry.is_custom() ? entry.m_engine_id
+                                             : word_of(entry.m_engine, anira::capi::k_engine_words);
         // The pin under its own key; a neutral entry has none.
         if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
             object["provider"] = anira::capi::provider_word(entry.m_provider);
@@ -1393,7 +1369,7 @@ Json model_to_json(const anira_model_config& cfg) {
     if (!cfg.m_default_engine_id.empty()) {
         root["default_engine"] = cfg.m_default_engine_id;
     } else if (cfg.m_default_engine != ANIRA_ENGINE_NONE) {
-        root["default_engine"] = word_of(cfg.m_default_engine, k_engines);
+        root["default_engine"] = word_of(cfg.m_default_engine, anira::capi::k_engine_words);
     }
     root["state"] = word_of(cfg.m_state, k_states);
     root["max_instances"] = cfg.m_max_instances;

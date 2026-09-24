@@ -9,7 +9,7 @@
 // InferenceThread::inference() loaded it once per engine block: a switch landing between
 // two loads ran two engines for one chunk, or none, and told the hooks one backend while
 // another ran. The stamp is the index and not the backend, because two plans may run on one
-// backend (two variants of a model, two providers of an engine).
+// engine (two variants of a model, two providers of an engine).
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
@@ -198,7 +198,7 @@ std::vector<backend::PlanRequest> two_plans_on(InferenceConfig& config,
 
 }  // namespace
 
-TEST(BackendSwitch, AChunkInFlightFinishesOnTheBackendItWasSubmittedUnder) {
+TEST(PlanSwitch, AChunkInFlightFinishesOnTheBackendItWasSubmittedUnder) {
     const std::optional<InferenceBackend> engine = first_engine_backend();
     if (!engine.has_value()) { GTEST_SKIP() << "no engine backend in this build to switch from"; }
 
@@ -251,7 +251,7 @@ TEST(BackendSwitch, AChunkInFlightFinishesOnTheBackendItWasSubmittedUnder) {
 
 // The reverse direction, which needs no engine: a chunk submitted under CUSTOM is stamped
 // CUSTOM, whatever the build carries.
-TEST(BackendSwitch, EveryStepOfAChunkIsToldTheStampedBackend) {
+TEST(PlanSwitch, EveryStepOfAChunkIsToldTheStampedBackend) {
     InferenceConfig config = make_config();
     RecordingProcessor pp(config);
     CountingBackend custom(config);
@@ -277,7 +277,7 @@ TEST(BackendSwitch, EveryStepOfAChunkIsToldTheStampedBackend) {
 
 // What the index buys: two plans on one backend are two selections. A selection stored as a
 // backend could not tell them apart (it would read back as the first).
-TEST(BackendSwitch, TwoPlansOnOneBackendStayDistinct) {
+TEST(PlanSwitch, TwoPlansOnOneEngineStayDistinct) {
     InferenceConfig config = make_config();
     RecordingProcessor pp(config);
     CountingBackend custom(config);
@@ -329,7 +329,7 @@ TEST(BackendSwitch, TwoPlansOnOneBackendStayDistinct) {
     }
 }
 
-TEST(BackendSwitch, AnIndexOutOfRangeLeavesTheSelection) {
+TEST(PlanSwitch, AnIndexOutOfRangeLeavesTheSelection) {
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
     InferenceManager manager(pp,
@@ -346,7 +346,7 @@ TEST(BackendSwitch, AnIndexOutOfRangeLeavesTheSelection) {
 
 // The table is read without synchronization once chunks exist, so it is the session's from
 // create and never replaced: the plans asked for are the plans the prepared session holds.
-TEST(BackendSwitch, ThePlanTableIsTheSessionsFromCreate) {
+TEST(PlanSwitch, ThePlanTableIsTheSessionsFromCreate) {
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
     CountingBackend custom(config);
@@ -369,7 +369,7 @@ TEST(BackendSwitch, ThePlanTableIsTheSessionsFromCreate) {
 
 // The 2.x selection by backend on a table that names no plan for it (a 3.x handler's table
 // holds exactly its plans): the selection stays, nothing else happens.
-TEST(BackendSwitch, ABackendWithoutAPlanLeavesTheSelection) {
+TEST(PlanSwitch, ABackendWithoutAPlanLeavesTheSelection) {
     const std::optional<InferenceBackend> engine = first_engine_backend();
     if (!engine.has_value()) {
         GTEST_SKIP() << "needs an engine in the build: CUSTOM is the only backend here";
@@ -388,7 +388,7 @@ TEST(BackendSwitch, ABackendWithoutAPlanLeavesTheSelection) {
 
 // A 2.x session: one row per configured model, in order, then every other backend of the
 // build, so set_backend() finds a row for whatever a 2.x caller names.
-TEST(BackendSwitch, TheDefaultTableNamesEveryBackendOfTheBuild) {
+TEST(PlanSwitch, TheDefaultTableNamesEveryBackendOfTheBuild) {
     InferenceConfig config = make_config();
     PrePostProcessor pp(config);
     InferenceManager manager(pp, config, nullptr, CoreConfig(2));

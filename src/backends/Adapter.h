@@ -58,7 +58,7 @@ namespace anira::backend {
 /// the pinned window, the spec's dtype and the element count.
 struct TensorInfo {
     std::string m_name;
-    std::string m_engine_name;
+    std::string m_export_name;
     std::vector<int64_t> m_dims;
     anira_dtype m_dtype = ANIRA_DTYPE_F32;
     size_t m_num_elements = 0;
@@ -493,11 +493,11 @@ struct SlotBinding {
     anira_binding m_binding = ANIRA_BINDING_POSITION;
 };
 
-/// The binding rule of every built-in engine, one side at a time. `engine_names` are the
+/// The binding rule of every built-in engine, one side at a time. `export_names` are the
 /// engine's tensors of the side in the engine's order (the graph order of ONNX Runtime, the
 /// key order of the signature on LiteRT and TFLite, the method's argument order of LibTorch; all
 /// empty strings for a side without names). A slot the entry's tensors record names
-/// (TensorInfo::m_engine_name) binds to the engine tensor of that name, which must exist; a
+/// (TensorInfo::m_export_name) binds to the engine tensor of that name, which must exist; a
 /// slot without a record binds to the engine tensor of its canonical name where the side has
 /// one, else to the engine tensor at the slot's own position. Afterwards every engine tensor
 /// below `required` is bound exactly once and none at or above it twice (`required` is the
@@ -506,7 +506,7 @@ struct SlotBinding {
 /// side, the slot and the engine's names for a record name the engine lacks, a slot whose
 /// position the engine has no tensor at, a duplicate or an unbound engine tensor. Logs nothing.
 ANIRA_API std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
-                                              const std::vector<std::string>& engine_names,
+                                              const std::vector<std::string>& export_names,
                                               size_t required,
                                               const char* engine,
                                               const char* side);

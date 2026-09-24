@@ -940,7 +940,7 @@ anira::backend::Model model_of_row(const anira_model_config& model,
             info.m_name = specs[i].m_name;
             const auto binding = row.m_tensors.find(specs[i].m_name);
             const bool bound = binding != row.m_tensors.end();
-            if (bound) { info.m_engine_name = binding->second.m_name; }
+            if (bound) { info.m_export_name = binding->second.m_name; }
             info.m_dims = anira::capi::engine_dims_of(
                 specs[i],
                 rows[i],
@@ -1203,32 +1203,8 @@ void build_report(anira_handler& handler,
 
 #ifdef ENABLE_LOGGING
 // The words of the plan report's log lines: the JSON vocabulary where one exists (the
-// provider words of words.h, a custom provider's own name, json.cpp's k_waits), the
+// engine, provider and domain words of words.h, a custom engine's or provider's own name), the
 // enumerator's own word else.
-std::string provider_text(const anira_plan_info& info) {
-    return anira::capi::provider_label(static_cast<anira_provider>(info.provider),
-                                       info.provider_id != nullptr ? info.provider_id : "");
-}
-
-const char* domain_word(uint32_t domain) {
-    switch (domain) {
-        case ANIRA_DOMAIN_HOST: return "host";
-        case ANIRA_DOMAIN_HOST_PINNED: return "host_pinned";
-        case ANIRA_DOMAIN_CUDA: return "cuda";
-        case ANIRA_DOMAIN_GL_BUFFER: return "gl_buffer";
-        case ANIRA_DOMAIN_VULKAN_BUFFER: return "vulkan_buffer";
-        case ANIRA_DOMAIN_OPAQUE_FD: return "opaque_fd";
-        case ANIRA_DOMAIN_METAL_BUFFER: return "metal_buffer";
-        case ANIRA_DOMAIN_WGPU_BUFFER: return "wgpu_buffer";
-        case ANIRA_DOMAIN_DMABUF: return "dmabuf";
-        case ANIRA_DOMAIN_IOSURFACE: return "iosurface";
-        case ANIRA_DOMAIN_AHARDWAREBUFFER: return "ahardwarebuffer";
-        case ANIRA_DOMAIN_D3D12: return "d3d12";
-        case ANIRA_DOMAIN_FRAME: return "frame";
-        default: return "unknown";
-    }
-}
-
 const char* edge_class_word(uint32_t edge_class) {
     switch (edge_class) {
         case ANIRA_EDGE_ZERO_COPY: return "zero_copy";
@@ -1268,8 +1244,8 @@ void log_slots(uint32_t plan,
                        side,
                        slot.slot,
                        name,
-                       domain_word(slot.domain_in),
-                       domain_word(slot.domain_out),
+                       anira::capi::domain_word(static_cast<anira_domain>(slot.domain_in)),
+                       anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
                        edge_class_word(slot.edge_class),
                        edge_class_word(slot.allocate_class),
                        wait_strategy_word(slot.wait_strategy),
@@ -1301,14 +1277,18 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
     for (uint32_t i = 0; i < num_plans; ++i) {
         const anira_plan_info& info = report.m_plans[i];
         const std::string engine =
-            anira::capi::engine_label(model.m_models[handler.m_plans[i].m_row]);
+            anira::capi::engine_label(static_cast<anira_engine>(info.engine),
+                                      info.engine_id != nullptr ? info.engine_id : "");
+        const std::string provider =
+            anira::capi::provider_label(static_cast<anira_provider>(info.provider),
+                                        info.provider_id != nullptr ? info.provider_id : "");
         ANIRA_LOG_INFO(anira::log_group::k_capi,
                        "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
                        "budget %.3f ms",
                        i,
                        info.variant,
                        engine.c_str(),
-                       provider_text(info).c_str(),
+                       provider.c_str(),
                        info.budget_ms);
         log_slots(i, report.m_inputs[i], model.m_inputs, "input");
         log_slots(i, report.m_outputs[i], model.m_outputs, "output");

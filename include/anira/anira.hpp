@@ -48,7 +48,7 @@
  * entry() for the chunk's entry; the RingView calls take a std::span; stage::Custom takes no
  * domains and has no single-callable form (a stage works at the host end of every slot and never
  * crosses a domain), and a Pipeline holds at most one of them; the variant of Pipeline is named
- * Pipeline::AnyStage; a custom engine is anira::Engine (the document's BackendImpl), registered
+ * Pipeline::AnyStage; a custom engine is anira::Engine, registered
  * under its id and shaped like Stage with one level more, with Engine::Loaded what its load
  * returns per loaded model (EngineLoadInfo the record), Engine::Prepared what the Loaded's
  * prepare returns per handler (PrepareInfo the record, the stage's) and EngineContext the
@@ -1057,9 +1057,9 @@ private:
 // ---- model config (section 5) --------------------------------------------------------------
 
 /**
- * @brief The model: one entry per engine (a file or bytes) with what that export calls each
- * tensor and how it lays out its axes, the input and output specs, the default engine, the
- * state, the instance ceiling and the anchor. Move-only.
+ * @brief The model: one entry per export (an engine, and a provider when pinned; a file or
+ * bytes) with what that export calls each tensor and how it lays out its axes, the input and
+ * output specs, the default engine, the state, the instance ceiling and the anchor. Move-only.
  */
 class ModelConfig {
 public:
@@ -1225,12 +1225,13 @@ public:
                       "anira_model_config_model_bytes");
         return {static_cast<const std::byte*>(bytes), size};
     }
-    /// Pins the entry to the provider its file is built for (an ExecuTorch export lowered to
-    /// a backend, an ONNX Runtime .ort compiled for an execution provider): a provider of the
-    /// enum, or a custom name in the engine's own vocabulary with ANIRA_PROVIDER_DEFAULT beside
-    /// it. Only a candidate naming that provider runs a pinned entry; an entry without a pin
-    /// runs on any provider of its engine, the candidate deciding. Two entries of one engine
-    /// may coexist when their pins differ. DEFAULT with an empty name unpins.
+    /// Pins the entry to the provider its file is built for (an ExecuTorch export lowered for
+    /// a provider (an ExecuTorch delegate), an ONNX Runtime .ort compiled for an execution
+    /// provider): a provider of the enum, or a custom name in the engine's own vocabulary with
+    /// ANIRA_PROVIDER_DEFAULT beside it. Only a candidate naming that provider runs a pinned
+    /// entry; an entry without a pin runs on any provider of its engine, the candidate
+    /// deciding. Two entries of one engine may coexist when their pins differ. DEFAULT with an
+    /// empty name unpins.
     ModelConfig& model_provider(uint32_t index,
                                 anira_provider provider,
                                 std::string_view provider_id = {}) {
@@ -1247,11 +1248,11 @@ public:
     /// What this entry's export calls the tensor you named canonical (binds it by name).
     ModelConfig& tensor_name(uint32_t index,
                              std::string_view canonical,
-                             std::string_view engine_name) {
+                             std::string_view export_name) {
         detail::check(anira_model_config_set_tensor_name(m_config,
                                                          index,
                                                          std::string(canonical).c_str(),
-                                                         std::string(engine_name).c_str()),
+                                                         std::string(export_name).c_str()),
                       "anira_model_config_set_tensor_name");
         return *this;
     }
@@ -2070,7 +2071,7 @@ private:
  * Streamed tensor) to the model tensor, the chunking and every conversion, on the thread where
  * the host end is produced (the thread that drives the Hard entries); then, on an inference
  * thread, anira feeds the State inputs, before_inference runs, anira crosses the edge into the
- * engine's domain, the engine runs, anira crosses back, after_inference runs, anira captures
+ * backend's domain, the engine runs, anira crosses back, after_inference runs, anira captures
  * the State outputs; then post_process takes the model tensors back to the host end. A stage
  * never crosses a domain: every phase works in the host domain of the slot. reset runs for the
  * first chunk of a new stream (after prepare, after anira_handler_reset), before that chunk's
@@ -2154,10 +2155,10 @@ public:
             return anira_stage_default_post_process(ctx.native());
         }
         /// ANIRA_PHASE_BEFORE_INFERENCE, on an inference thread behind the State feed and ahead
-        /// of the edge into the engine's domain. The base class does nothing.
+        /// of the edge into the backend's domain. The base class does nothing.
         virtual anira_status before_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
         /// ANIRA_PHASE_AFTER_INFERENCE, on an inference thread behind the edge out of the
-        /// engine's domain and ahead of the State capture. The base class does nothing.
+        /// backend's domain and ahead of the State capture. The base class does nothing.
         virtual anira_status after_inference(StageContext& /*ctx*/) noexcept { return ANIRA_OK; }
         /// ANIRA_PHASE_RESET: the first chunk of a new stream (after prepare, after
         /// anira_handler_reset), before that chunk's pre_process, on its thread, never
@@ -2463,7 +2464,7 @@ private:
  * StageContext. The tensors are in the record, one descriptor per slot of either side in slot
  * order (the tensor's position in the model configuration's input or output list, State
  * tensors included), over the memory the engine reads and writes. Valid until the callback
- * returns, and never kept beyond it. The adapter rule of anira/abi/engine.h binds here: read
+ * returns, and never kept beyond it. The engine rule of anira/abi/engine.h binds here: read
  * every extent and every memory handle from the tensors of THIS call, never from a value kept
  * at prepare, and never assume a tensor is anira's own buffer (the halves of a declared State
  * pair alternate between two buffers, unless the engine's flags() carry
@@ -2985,8 +2986,10 @@ namespace stage {
 
 /**
  * @brief The inference stage of a Pipeline: the model configuration(s) it may run, the
- * candidate backends (empty = the default set: every engine this build carries, on
- * ANIRA_PROVIDER_DEFAULT, plus the custom entries) and the custom engines it brings along
+ * candidate backends (empty = the default set: every engine this build carries on
+ * ANIRA_PROVIDER_DEFAULT, every custom entry (ANIRA_ENGINE_NONE), and every provider a model
+ * entry of the variant is pinned to, on that entry's engine, so that a pinned entry runs on its
+ * pin and a neutral one on the default provider) and the custom engines it brings along
  * (engine(impl): Pipeline::add registers each one on the pipeline through
  * Pipeline::register_engine before it adds the stage). Holds pointers into the ModelConfigs, which
  * must outlive the Pipeline's construction; the pipeline copies them

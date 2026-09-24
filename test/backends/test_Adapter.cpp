@@ -71,7 +71,7 @@ TensorInfo named_tensor(const std::string& name,
                         const std::string& engine_name,
                         std::vector<int64_t> dims) {
     TensorInfo tensor = f32_tensor(name, std::move(dims));
-    tensor.m_engine_name = engine_name;
+    tensor.m_export_name = engine_name;
     return tensor;
 }
 
@@ -610,7 +610,7 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         ASSERT_EQ(without[i].m_model.m_inputs.size(), 1U);
         EXPECT_EQ(without[i].m_model.m_inputs.at(0).m_dims, (std::vector<int64_t>{1, 1, k_block}));
         EXPECT_EQ(without[i].m_model.m_inputs.at(0).m_num_elements, k_block);
-        EXPECT_TRUE(without[i].m_model.m_inputs.at(0).m_engine_name.empty());
+        EXPECT_TRUE(without[i].m_model.m_inputs.at(0).m_export_name.empty());
     }
     EXPECT_EQ(without[0].m_model.m_path, "placeholder");
     EXPECT_EQ(without[0].m_model.m_engine, ANIRA_ENGINE_NONE);
@@ -1361,7 +1361,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
     // A record naming a tensor the graph lacks: CONFIG listing the graph's names.
     {
         Model model = onnx_gain_model();
-        model.m_inputs[0].m_engine_name = "ghost";
+        model.m_inputs[0].m_export_name = "ghost";
         const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
@@ -1608,8 +1608,8 @@ TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
 
     // A record naming the keys binds the same slots by name.
     Model named = tensorflow_accumulator_model(ANIRA_ENGINE_TFLITE);
-    named.m_outputs[0].m_engine_name = "output_0";
-    named.m_outputs[1].m_engine_name = "output_1";
+    named.m_outputs[0].m_export_name = "output_0";
+    named.m_outputs[1].m_export_name = "output_1";
     const std::shared_ptr<Rig> by_name = builtin_rig(ANIRA_ENGINE_TFLITE);
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_outputs,
@@ -1617,7 +1617,7 @@ TEST(AdapterTFLite, TheAccumulatorBindsByPositionThroughTheSignatureRunner) {
     expect_accumulator_closed_form(*by_name);
 
     // A record naming a key the signature lacks: CONFIG listing the keys.
-    named.m_outputs[0].m_engine_name = "ghost";
+    named.m_outputs[0].m_export_name = "ghost";
     const anira::StatusError error =
         status_error_of([&named] { builtin_rig(ANIRA_ENGINE_TFLITE)->prepare(named); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
@@ -1648,8 +1648,8 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     EXPECT_TRUE(written);
 
     Model named = model;
-    named.m_inputs[0].m_engine_name = "args_0";
-    named.m_outputs[0].m_engine_name = "Identity";
+    named.m_inputs[0].m_export_name = "args_0";
+    named.m_outputs[0].m_export_name = "Identity";
     const std::shared_ptr<Rig> by_name = builtin_rig(ANIRA_ENGINE_TFLITE);
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
@@ -1677,8 +1677,8 @@ TEST(AdapterLiteRt, TheGainBindsByPositionInTheSignaturesKeyOrder) {
     expect_gain_of_one_half(*positional);
 
     Model named = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
-    named.m_outputs[0].m_engine_name = "output_0";
-    named.m_outputs[1].m_engine_name = "output_1";
+    named.m_outputs[0].m_export_name = "output_0";
+    named.m_outputs[1].m_export_name = "output_1";
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(named);
@@ -1723,8 +1723,8 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     });
     if (!has_gpu) {
         Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
-        gpu.m_outputs[0].m_engine_name = "output_0";
-        gpu.m_outputs[1].m_engine_name = "output_1";
+        gpu.m_outputs[0].m_export_name = "output_0";
+        gpu.m_outputs[1].m_export_name = "output_1";
         gpu.m_provider_id = "gpu";
         const anira::StatusError no_gpu =
             status_error_of([&gpu] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(gpu); });
@@ -1746,8 +1746,8 @@ TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
     expect_accumulator_closed_form(*positional);
 
     Model named = tensorflow_accumulator_model(ANIRA_ENGINE_LITERT);
-    named.m_outputs[0].m_engine_name = "output_0";
-    named.m_outputs[1].m_engine_name = "output_1";
+    named.m_outputs[0].m_export_name = "output_0";
+    named.m_outputs[1].m_export_name = "output_1";
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     adapter->prepare(named);
     EXPECT_EQ(adapter->bindings().m_inputs,
@@ -1757,7 +1757,7 @@ TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
     expect_accumulator_closed_form(*adapter);
 
     // A record naming a key the signature lacks: CONFIG listing the keys in the key order.
-    named.m_outputs[1].m_engine_name = "ghost";
+    named.m_outputs[1].m_export_name = "ghost";
     const anira::StatusError missing =
         status_error_of([&named] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(named); });
     EXPECT_EQ(missing.status(), ANIRA_ERROR_CONFIG);

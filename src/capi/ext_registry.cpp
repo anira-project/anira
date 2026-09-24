@@ -444,17 +444,15 @@ const std::vector<ExtRow>& ext_rows() {
 const std::vector<ExtConsumer>& ext_consumers() {
     static const std::vector<ExtConsumer> k_consumers = {
 #ifdef USE_ONNXRUNTIME
-        {.m_name = "OnnxRuntimeAdapter",
+        {.m_name = "onnxruntime",
          .m_engine = ANIRA_ENGINE_ONNXRUNTIME,
          .m_consumed = {"context:provider_options"}},
 #endif
 #ifdef USE_LIBTORCH
-        {.m_name = "LibTorchAdapter",
-         .m_engine = ANIRA_ENGINE_LIBTORCH,
-         .m_consumed = {"model:entry"}},
+        {.m_name = "libtorch", .m_engine = ANIRA_ENGINE_LIBTORCH, .m_consumed = {"model:entry"}},
 #endif
 #ifdef USE_EXECUTORCH
-        {.m_name = "ExecuTorchAdapter",
+        {.m_name = "executorch",
          .m_engine = ANIRA_ENGINE_EXECUTORCH,
          .m_consumed = {"model:entry"}},
 #endif
@@ -832,17 +830,17 @@ anira_status check_bag(const ExtBag& bag,
         }
         const char* consumer =
             consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates);
-        const std::vector<const char*> stage_consumers = pipeline_consumers_of(host,
-                                                                               slot.kind(),
-                                                                               entry_engine_id,
-                                                                               candidates,
-                                                                               num_candidates,
-                                                                               pipeline);
-        if (consumer == nullptr && stage_consumers.empty()) {
+        const std::vector<const char*> pipeline_consumers = pipeline_consumers_of(host,
+                                                                                  slot.kind(),
+                                                                                  entry_engine_id,
+                                                                                  candidates,
+                                                                                  num_candidates,
+                                                                                  pipeline);
+        if (consumer == nullptr && pipeline_consumers.empty()) {
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
                  nullptr,
-                 "extension '%s' on %s %s is not consumed by any stage in this build",
+                 "extension '%s' on %s %s is consumed by no engine or stage of this pipeline",
                  slot.kind().c_str(),
                  host_name(host),
                  where.c_str());
@@ -855,9 +853,9 @@ anira_status check_bag(const ExtBag& bag,
                 rows->push_back(
                     ExtPlanRow{.m_host = at, .m_kind = slot.kind(), .m_consumer = consumer});
             }
-            for (const char* stage : stage_consumers) {
+            for (const char* name : pipeline_consumers) {
                 rows->push_back(
-                    ExtPlanRow{.m_host = at, .m_kind = slot.kind(), .m_consumer = stage});
+                    ExtPlanRow{.m_host = at, .m_kind = slot.kind(), .m_consumer = name});
             }
         }
     }

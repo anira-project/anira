@@ -48,8 +48,8 @@ anira_model_config clone_model_config(const anira_model_config& model);
 struct Plan {
     size_t m_row = 0;                                                     ///< the models[] index
     anira::InferenceBackend m_backend = anira::InferenceBackend::CUSTOM;  ///< set_backend's arg
-    anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id points into the report's
-                                                    ///< string store
+    anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
+                                                    ///< the report's string store
 };
 
 }  // namespace anira::capi
@@ -78,7 +78,7 @@ struct anira_pipeline {
     /// the last of them dies.
     std::vector<std::shared_ptr<const anira::capi::EngineCarrier>> m_engines;
 
-    /// The candidate view a translate/ext call takes (pointers into the strings); control
+    /// The candidate view a validate/ext call takes (pointers into the strings); control
     /// thread only. Never empty after add_inference.
     std::vector<anira_backend_id> candidate_ids() const;
 
@@ -133,7 +133,7 @@ struct anira_handler {
                                                              ///< twins: wait_ratio x block_max
                                                              ///< / rate
     /// dense index -> row/backend; rebuilt at prepare only, and handed to the session as its
-    /// plan table (InferenceManager::set_plan_backends). The selected plan has no storage
+    /// plan table (the InferenceManager's constructor). The selected plan has no storage
     /// here: it is the session's one atomic, the dense index itself (SessionElement::
     /// m_current_plan), so set_plan has no pair to tear and two plans on one backend stay
     /// distinct.

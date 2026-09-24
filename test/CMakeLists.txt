@@ -72,7 +72,7 @@ anira_add_test_binary(test_utils
 )
 
 anira_add_test_binary(test_scheduler
-	scheduler/test_BackendSwitch.cpp
+	scheduler/test_PlanSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_CoreConfigMismatch.cpp
 	scheduler/test_CopyPathOracle.cpp
@@ -94,14 +94,14 @@ anira_add_test_binary(test_backends
 	backends/test_Adapter.cpp
 	backends/test_BackendBase.cpp
 	backends/test_ExecuTorchModelFunction.cpp
-	backends/test_ExecuTorchProcessor.cpp
-	backends/test_LibTorchProcessor.cpp
+	backends/test_AdapterExecuTorch.cpp
+	backends/test_AdapterLibTorch.cpp
 )
 # The engine room (src/backends/Adapter.h and the adapters) for test_Adapter.
 target_include_directories(test_backends PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_handler
-	contracts/test_BackendLinkage.cpp
+	contracts/test_EngineLinkage.cpp
 	test_CoreConfig.cpp
 	test_InferenceConfig.cpp
 	test_InferenceHandler.cpp

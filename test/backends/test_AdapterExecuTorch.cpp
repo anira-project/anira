@@ -96,7 +96,7 @@ std::shared_ptr<Rig> executorch_adapter() {
 // A .pte supplied as bytes loads through the BufferDataLoader branch and runs the same named
 // method as the same program supplied as a path. "gain2" multiplies by two, so the output
 // identifies which program ran.
-TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
+TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
     const std::vector<char> bytes = read_model_file(multifunction_model_path());
     ASSERT_FALSE(bytes.empty()) << "fixture missing: " << multifunction_model_path();
 
@@ -131,12 +131,13 @@ TEST(ExecuTorchProcessor, BinaryModelDataLoadsFromMemory) {
     }
 }
 
-// The provider of the record on ExecuTorch is the backend an export was lowered to: the
-// adapter serves the default provider and every backend registered to the runtime and
-// available (this package registers XNNPACK), the capabilities' query lists the same, and a
-// pinned entry whose method does not use the pinned backend (the bundled gain is a portable
-// export) is a mislabeled export, refused at load naming the pin, the backend and the method.
-TEST(ExecuTorchProcessor, TheProviderIsTheExportsBackend) {
+// The provider of the record on ExecuTorch is the delegate (ExecuTorch's backend) an export
+// was lowered for: the adapter serves the default provider and every delegate registered to
+// the runtime and available (this package registers XNNPACK), the capabilities' query lists
+// the same, and a pinned entry whose method does not use the pinned delegate (the bundled gain
+// is a portable export) is a mislabeled export, refused at load naming the pin, the delegate
+// and the method.
+TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
     // The package registers the XNNPACK backend (the adapter loads every method with its
     // options): the query lists it as the enum's provider, and the adapter serves every
     // provider the query lists.
@@ -187,16 +188,17 @@ TEST(ExecuTorchProcessor, TheProviderIsTheExportsBackend) {
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
-        EXPECT_NE(message.find("pinned to provider 'xnnpack' (backend 'XnnpackBackend')"),
-                  std::string::npos)
+        EXPECT_NE(
+            message.find("pinned to provider 'xnnpack' (ExecuTorch backend 'XnnpackBackend')"),
+            std::string::npos)
             << message;
-        EXPECT_NE(message.find("method 'gain2' uses no backend"), std::string::npos) << message;
+        EXPECT_NE(message.find("method 'gain2' uses no delegate"), std::string::npos) << message;
     }
     Model cuda = neutral;
     cuda.m_provider = ANIRA_PROVIDER_CUDA;
     try {
         executorch_adapter()->prepare(cuda);
-        FAIL() << "a provider no backend spells loaded";
+        FAIL() << "a provider no delegate spells loaded";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_NOT_SUPPORTED);
         EXPECT_NE(std::string(error.what()).find("does not serve provider 'cuda'"),
@@ -206,7 +208,7 @@ TEST(ExecuTorchProcessor, TheProviderIsTheExportsBackend) {
 }
 
 // The contract create_session() rolls back on: a StatusError, which is a std::runtime_error.
-TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
+TEST(AdapterExecuTorch, UnloadableModelThrowsRuntimeError) {
     const anira::InferenceConfig config(
         {anira::ModelData("this/model/does/not/exist.pte", anira::InferenceBackend::EXECUTORCH)},
         {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
@@ -223,7 +225,7 @@ TEST(ExecuTorchProcessor, UnloadableModelThrowsRuntimeError) {
 
 // A method name the program does not carry must fail the same way rather than silently
 // falling back to forward().
-TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
+TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
     const anira::InferenceConfig config(
         {anira::ModelData(multifunction_model_path(),
                           anira::InferenceBackend::EXECUTORCH,
@@ -247,7 +249,7 @@ TEST(ExecuTorchProcessor, UnknownModelFunctionThrowsRuntimeError) {
 // The method meta reports the planned upper bound of every axis and marks no axis dynamic:
 // the bundled gain program plans [1, 1, 65536] for its block, so a record of 512 binds and one
 // above the bound, or of another rank, is CONFIG at prepare naming both shapes.
-TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
+TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
     const auto config_of = [](const std::vector<int64_t>& block) {
         return anira::InferenceConfig(
             {anira::ModelData(gain_model_path(), anira::InferenceBackend::EXECUTORCH)},
@@ -290,7 +292,7 @@ TEST(ExecuTorchProcessor, TheMethodMetasPlannedBoundsAreTheCheck) {
 // workspace per delegate instance, no weight cache) and reads them back through the
 // registered backend, so a release that spells the option keys otherwise is caught at init,
 // not by the mutexes.
-TEST(ExecuTorchProcessor, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
+TEST(AdapterExecuTorch, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
     const std::shared_ptr<anira::backend::BuiltinEngine> engine =
         anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
     ASSERT_NE(engine, nullptr);

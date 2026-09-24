@@ -386,9 +386,9 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     model.m_inputs.push_back(spec);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(
-        err.message,
-        "extension 'entry' on tensor 'audio_in' is not consumed by any stage in this build");
+    EXPECT_STREQ(err.message,
+                 "extension 'entry' on tensor 'audio_in' is consumed by no engine or stage of this "
+                 "pipeline");
     model.m_inputs.clear();
 
     anira::capi::ModelEntry libtorch;
@@ -417,7 +417,7 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_libtorch, 1, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
     EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 0 is not consumed by any stage in this build");
+                 "extension 'entry' on model 0 is consumed by no engine or stage of this pipeline");
 #endif
 
     // The same kind on an engine that has no adapter reading it fails by name.
@@ -429,7 +429,7 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
     EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 1 is not consumed by any stage in this build");
+                 "extension 'entry' on model 1 is consumed by no engine or stage of this pipeline");
 
     // Context and contract hosts are walked when given.
     model.m_models.clear();
@@ -477,7 +477,7 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
     EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 1 is not consumed by any stage in this build");
+                 "extension 'entry' on model 1 is consumed by no engine or stage of this pipeline");
     // Both engines: every entry has its consumer.
     pipeline.push_back(second_engine);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
@@ -511,9 +511,9 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     model.m_inputs.push_back(spec);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(
-        err.message,
-        "extension 'entry' on tensor 'audio_in' is not consumed by any stage in this build");
+    EXPECT_STREQ(err.message,
+                 "extension 'entry' on tensor 'audio_in' is consumed by no engine or stage of this "
+                 "pipeline");
     const anira::capi::ExtConsumer spec_reader{.m_name = "org.example.second",
                                                .m_engine = ANIRA_ENGINE_NONE,
                                                .m_engine_id = "org.example.second",

@@ -28,18 +28,18 @@ option(ANIRA_WITH_LSAN      "Enable LeakSanitizer (standalone)" OFF)
 option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
 
 # ==============================================================================
-# Inference backends — wiring per engine in cmake/backends/<engine>.cmake,
+# Inference engines — wiring per engine in cmake/backends/<engine>.cmake,
 # prebuilts from anira-project/backends (cmake/backends.cmake). LiteRT and
 # TFLite are the same runtime through different C APIs — mutually exclusive.
 # ==============================================================================
-option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch backend" ON)
-option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime backend" ON)
-option(ANIRA_WITH_LITERT      "Build with the LiteRT backend (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
-option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite backend (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
-option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch backend (runs .pte models; static-only)" ON)
+option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch engine" ON)
+option(ANIRA_WITH_ONNXRUNTIME "Build with the ONNX Runtime engine" ON)
+option(ANIRA_WITH_LITERT      "Build with the LiteRT engine (LiteRt* C API; runs .tflite via the CompiledModel runtime)" ON)
+option(ANIRA_WITH_TFLITE      "Build with the legacy TensorFlow Lite engine (TfLite* C API); mutually exclusive with ANIRA_WITH_LITERT" OFF)
+option(ANIRA_WITH_EXECUTORCH  "Build with the ExecuTorch engine (runs .pte models; static-only)" ON)
 
 set(ANIRA_BACKENDS_VERSION "" CACHE STRING "anira-project/backends release tag to download (default: built-in)")
-option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for backend integrity at configure" OFF)
+option(ANIRA_BACKENDS_SKIP_REMOTE_CHECK "Don't query GitHub for engine archive integrity at configure" OFF)
 # Linkage follows BUILD_SHARED_LIBS (cmake/validate-options.cmake). Bring your own
 # engine via -DANIRA_<ENGINE>_ROOTDIR / _URL [+ _SHA256].
 
@@ -86,9 +86,9 @@ message(STATUS "Project version: ${PROJECT_VERSION_SHORT} (${PROJECT_VERSION_FUL
 # 11.0 (e.g. -DCMAKE_OSX_DEPLOYMENT_TARGET=10.13). Never FORCE'd (cmake/tanh/apple.cmake).
 include(cmake/tanh/apple.cmake)
 tanh_apple_deployment_target(MACOS 11.0)
-# Arch defaults + CMAKE_SYSTEM_PROCESSOR mirror for the backend asset picker. The
+# Arch defaults + CMAKE_SYSTEM_PROCESSOR mirror for the engine asset picker. The
 # prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator slice; an
-# Intel simulator build needs no backend (or TFLite's fat framework).
+# Intel simulator build needs no engine (or TFLite's fat framework).
 tanh_apple_default_architectures()
 
 set(CMAKE_CXX_STANDARD 20)
@@ -104,7 +104,7 @@ if(ANIRA_BUILD_WASM)
 endif()
 
 # Validate the option combination (mutual exclusivity, libtorch auto-disable, WASM
-# guards). After Emscripten detection so EMSDK_VERSION is known; before the backends
+# guards). After Emscripten detection so EMSDK_VERSION is known; before the engines
 # are set up so the libtorch auto-disable takes effect.
 include(cmake/validate-options.cmake)
 
@@ -231,12 +231,12 @@ FetchContent_MakeAvailable(nlohmann_json)
 
 # ------------------------------------------------------------------------------
 # Symbol policy (cmake/tanh/symbol-policy.cmake; the rules are written up in
-# docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
+# docs/sphinx/troubleshooting.rst, "Host application ships its own engine runtime"):
 #
 #  * Hidden symbol visibility on every platform; the public API is re-exported through
 #    ANIRA_API (include/anira/system/Exports.h) — the same allowlist model Windows
-#    enforces via dllexport. This keeps the backend runtimes private: without it, weak
-#    C++ symbols from the backend headers (e.g. ONNX Runtime's Ort::Global<void>::api_)
+#    enforces via dllexport. This keeps the engine runtimes private: without it, weak
+#    C++ symbols from the engine headers (e.g. ONNX Runtime's Ort::Global<void>::api_)
 #    are exported from any plugin that embeds anira and get weak-coalesced by the
 #    dynamic linker against a host that ships its own copy of the runtime (Ableton
 #    Live 12 bundles an ONNX Runtime dylib), making Ort::GetApi() resolve against a

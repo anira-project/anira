@@ -10,10 +10,10 @@
  * @brief The core of this copy of anira: its steady clock and the shutdown family.
  *
  * One core per copy of anira (a shared library has one, every static embedding its own) holds
- * what every context and handler shares: the inference thread pool and queue, the backend
- * processor pools, the real-time log queue and its drain. It is created by the first call that
- * needs it and lives until the copy is unloaded; a host never creates or destroys it, it only
- * asks it to shut its threads down (anira_shutdown) or to free itself once nothing uses it
+ * what every context and handler shares: the inference thread pool and queue, the loaded-model
+ * pools, the real-time log queue and its drain. It is created by the first call that needs it
+ * and lives until the copy is unloaded; a host never creates or destroys it, it only asks it to
+ * shut its threads down (anira_shutdown) or to free itself once nothing uses it
  * (anira_release_core_if_idle), both for a static embedding about to be unloaded. anira_now_ms
  * / anira_now_ns are the steady clock deadlines are spelled in.
  */

@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -52,7 +53,7 @@ namespace anira::backend {
 
 namespace {
 
-constexpr const char* k_engine = "tflite";
+constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_TFLITE);
 
 // The TensorFlow Lite C API reports failure as a TfLiteStatus; on the control path it becomes
 // a StatusError with the failing call named (ANIRA_ERROR_ENGINE unless the caller passes

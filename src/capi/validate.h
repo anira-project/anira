@@ -156,6 +156,7 @@ ANIRA_API std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
                                               const std::vector<uint32_t>& layout);
 
 /// The lower-case engine name of the JSON vocabulary, or the custom id.
+/// The row's engine in a message (words.h engine_label over its two fields).
 ANIRA_API std::string engine_label(const ModelEntry& row);
 
 /// The engines this build carries an adapter for, in anira_engine order.

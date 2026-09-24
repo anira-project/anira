@@ -29,6 +29,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -80,7 +81,7 @@ namespace anira::backend {
 
 namespace {
 
-constexpr const char* k_engine = "libtorch";
+constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_LIBTORCH);
 
 // The anira dtype of a torch scalar type; 0 for one anira has no code for.
 anira_dtype dtype_of(c10::ScalarType type) {

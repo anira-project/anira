@@ -43,8 +43,8 @@ std::vector<const char*> names_of(const std::vector<TensorInfo>& slots) {
     std::vector<const char*> names;
     names.reserve(slots.size());
     for (const TensorInfo& slot : slots) {
-        names.push_back(slot.m_engine_name.empty() ? slot.m_name.c_str()
-                                                   : slot.m_engine_name.c_str());
+        names.push_back(slot.m_export_name.empty() ? slot.m_name.c_str()
+                                                   : slot.m_export_name.c_str());
     }
     return names;
 }

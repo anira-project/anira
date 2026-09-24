@@ -67,8 +67,6 @@ private:
     void* m_ctx = nullptr;
 };
 
-/// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
-/// canonical -> engine tensor names, and its extensions (host "model").
 /// What one entry's file calls a tensor and how it holds its axes (section 5): the
 /// JSON file's models[].tensors record, keyed by the spec's canonical name.
 struct TensorBinding {
@@ -76,6 +74,8 @@ struct TensorBinding {
     std::vector<uint32_t> m_layout;  ///< engine axis k = spec axis m_layout[k]; empty = identity
 };
 
+/// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
+/// canonical -> export tensor names, and its extensions (host "model").
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;  ///< non-empty for a custom engine

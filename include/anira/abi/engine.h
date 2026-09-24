@@ -21,8 +21,8 @@
  * two pipelines (two instances of a plugin, each with its own engine). A model entry names the
  * engine by its id (anira_model_config_add_model_path_custom,
  * anira_model_config_add_model_bytes_custom) and a candidate of anira_pipeline_add_inference
- * with engine_id set selects it; wherever the engine-provider pair travels a registered engine
- * is ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info; a stage reads the id off
+ * with engine_id set selects it; wherever the engine-provider pair travels a custom engine is
+ * ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info; a stage reads the id off
  * the plan report, since anira_stage_ctx carries the pair's values alone). An added engine no
  * entry names is not a plan and not an error; an entry whose id no engine of the pipeline
  * serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. Which of an engine's declared
@@ -68,7 +68,7 @@
  * context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the
  * call): the instance of the loaded model the call runs on, the chunk's entry, the two tensor
  * arrays in slot order, State tensors included, the ticket, the per-call flags and the loaded
- * pointer. The adapter rule: read every extent and every memory handle (data pointer,
+ * pointer. The engine rule: read every extent and every memory handle (data pointer,
  * byte_offset, strides, domain) from the tensors of THIS call, never from a value kept at load
  * or prepare, and never assume a tensor is anira's own buffer (the halves of a declared State
  * pair alternate between two buffers; a later pre-release hands a caller's Buffer tensor over
@@ -186,8 +186,8 @@ typedef struct anira_engine_load_info {
  * returns. The tensors are in the record, one descriptor per slot of either side in slot
  * order (the tensor's position in the model config's list of its side, State tensors
  * included): the engine reads every extent and every memory handle from them on every
- * call, the adapter rule of the file comment. The loaded model the call runs on is in
- * the record too (loaded, what load handed back); the handler's prepared pointer travels
+ * call, the engine rule of the file comment. The loaded model the call runs on is in the
+ * record too (loaded, what load handed back); the handler's prepared pointer travels
  * beside the record, as the stage's does. The per-call facts grow through the reserved
  * slots, never through a second typedef.
  */
@@ -345,7 +345,7 @@ typedef void (ANIRA_CALL* anira_engine_unprepare_fn)(void* prepared, void* user_
  * @brief The engine call, ANIRA_PHASE_INFERENCE, on an inference thread: one inference over the
  * context's tensors, on the shared slot the context names (ctx->instance) or, under
  * ANIRA_ENGINE_CALL_EXCLUSIVE, on what the handler's prepare built. It may block; it
- * must not allocate per call. The adapter rule of the file comment: every extent and
+ * must not allocate per call. The engine rule of the file comment: every extent and
  * every memory handle comes from the tensors of THIS call, never from a value kept at
  * load, and no tensor is assumed to be anira's own buffer. A Time extent below the
  * template is legal only under ANIRA_ENGINE_FLAG_DYNAMIC_TIME. Return ANIRA_OK, or any

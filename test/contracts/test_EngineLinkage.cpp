@@ -31,14 +31,14 @@ constexpr bool k_with_executorch =
 
 }  // namespace
 
-TEST(BackendLinkage, LibTorchOnlyInSharedBuilds) {
+TEST(EngineLinkage, LibTorchOnlyInSharedBuilds) {
     if (k_with_libtorch) {
         EXPECT_FALSE(k_static_anira)
             << "LibTorch is shared-only and must not be compiled into a static anira";
     }
 }
 
-TEST(BackendLinkage, ExecuTorchOnlyInStaticBuilds) {
+TEST(EngineLinkage, ExecuTorchOnlyInStaticBuilds) {
     if (k_with_executorch) {
         EXPECT_TRUE(k_static_anira)
             << "ExecuTorch is static-only and must not be compiled into a shared anira";

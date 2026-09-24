@@ -57,7 +57,7 @@
  * Real-time refusals carry no anira_error: the entry returns the failure status, records it in
  * anira_handler_rt_error and logs once through the real-time queue. A handler counts as a user
  * of the core: anira_shutdown is refused while one lives. In this pre-release every handler is
- * Host-only (every engine domain is the host's), its plans are one per model entry of one
+ * Host-only (every backend's domain is the host's), its plans are one per model entry of one
  * variant and candidate naming that entry's engine and a provider it accepts
  * (anira_pipeline_add_inference), an Async contract is refused at prepare, and every model
  * tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's dtype is refused at
@@ -65,10 +65,10 @@
  * input, post_process for an output), since nothing in anira converts. Every tensor of either
  * side has one declared host-end domain (anira_contract_set_host_domain, default
  * ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static store
- * and, overriding the engine domain of the plans that run the pair (host memory for every
- * engine of this pre-release), the state buffers of the slot in, and the domain all four stage
+ * and, overriding the backend's domain of the plans that run the pair (host memory for every
+ * backend of this pre-release), the state buffers of the slot in, and the domain all four stage
  * phases work in; the plan report's slot rows carry it as domain_in of an input and domain_out
- * of an output, against the engine's domain on the other side. Anything but ANIRA_DOMAIN_HOST
+ * of an output, against the backend's domain on the other side. Anything but ANIRA_DOMAIN_HOST
  * is ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
  */
 
@@ -149,9 +149,9 @@ typedef struct anira_plan_slot {
      * anira_binding: how this plan bound the slot to the engine's tensor, by name where the
      * engine's side has names (the entry's tensors record, else the canonical name) and by
      * position otherwise, checked against the spec's shape and dtype at prepare either way;
-     * ANIRA_BINDING_ENGINE for a registered engine, which received the names in its load record
-     * and bound itself. A tail field: a caller whose header ends before it gets its rows
-     * without it.
+     * ANIRA_BINDING_ENGINE for a custom engine, which received the names in its load record and
+     * bound itself. A tail field: a caller whose header ends before it gets its rows without
+     * it.
      */
     uint32_t binding;
 } anira_plan_slot;
@@ -162,9 +162,9 @@ typedef struct anira_plan_slot {
 
 /**
  * @brief One extension a plan consumes: where it sits (the host and the tensor or entry it is
- * attached to), its kind and the stage or adapter that takes it ("entry ->
- * LibTorchAdapter"). Tier 2, struct_size first; enumerated by anira_plan_report_exts at
- * the caller's stride. The strings are valid while the report is.
+ * attached to), its kind and the stage or adapter that takes it ("entry -> libtorch").
+ * Tier 2, struct_size first; enumerated by anira_plan_report_exts at the caller's
+ * stride. The strings are valid while the report is.
  */
 typedef struct anira_plan_ext {
     uint32_t struct_size;  /**< sizeof(anira_plan_ext) of the caller's header. */
@@ -175,7 +175,8 @@ typedef struct anira_plan_ext {
     const char* host;
     const char* kind;  /**< The extension kind (its registered reverse-URI name). */
     /**
-     * Who consumes it: "stage" for the pipeline's stage, else the adapter's name.
+     * Who consumes it: "stage" for the pipeline's stage, else the engine's word for a built-in
+     * engine's adapter ("onnxruntime", "libtorch", "executorch") or the id of a custom engine.
      */
     const char* consumer;
 } anira_plan_ext;
@@ -212,7 +213,7 @@ typedef struct anira_plan_info {
     const char* engine_id;
     double budget_ms;  /**< The per-inference budget of this plan in milliseconds. */
     /**
-     * The flags of a registered engine's descriptor (anira_engine_desc.flags: the
+     * The flags of a custom engine's descriptor (anira_engine_desc.flags: the
      * ANIRA_ENGINE_FLAG_* promises); 0 for a built-in engine. A tail field: a caller whose
      * header ends before it gets its rows without it.
      */
@@ -527,7 +528,7 @@ ANIRA_API void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL context, pipeline or out;
  *         ANIRA_ERROR_CONFIG for a pipeline without an inference stage, a variant that breaks a
  *         structural rule or one no candidate matches (the message names the tensor or entry);
- *         ANIRA_ERROR_NOT_SUPPORTED for what the runtime of this pre-release cannot do, a
+ *         ANIRA_ERROR_NOT_SUPPORTED for what anira's runtime cannot do in this pre-release, a
  *         candidate's engine this build lacks or a plan's provider its engine does not serve
  *         among it; ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an
  *         extension on the model or a spec that this build does not know or nothing consumes.

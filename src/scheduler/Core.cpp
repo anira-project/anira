@@ -115,7 +115,8 @@ struct Core::State {
      * registered engine (NULL for a built-in one) and the loaded model itself
      *
      * The key is the record and the carrier: two sessions whose plans describe the same
-     * model for the same engine with the same tensors, shared slots, warm-up and entry share
+     * model for the same backend (engine and provider, and the provider options the engine
+     * reads) with the same tensors, shared slots, warm-up and entry share
      * the entry's loaded model (per-slot dims, dtype, the path or the bytes' identity are in
      * the record, so two handlers with different resolved windows never share), exclusive
      * sessions included (their record says no shared slot, and each keeps an executor of
@@ -370,8 +371,8 @@ anira_context_config Core::sanitize_config(anira_context_config context_config) 
 void Core::apply_log_level_locked(State& state, const anira_context_config& context_config) {
     // The level is process-global, like the thread pool; while users exist, the
     // lowest (most verbose) of the level in effect and the requested one wins, so no
-    // user can silence the diagnostics another one asked for. Backend
-    // processors pick the level up when their instances are created.
+    // user can silence the diagnostics another one asked for. The engines' objects take
+    // the level at their init, once per process (backend::BuiltinEngine).
     const anira_log_level level =
         has_users_locked(state)
             ? std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level)
@@ -468,10 +469,10 @@ void Core::apply_or_compare_config_locked(State& state,
                               "log level mismatch: the core is at log level '%s' but a new "
                               "context or session requested '%s'. The log level is "
                               "process-global and the lowest (most verbose) requested level "
-                              "wins, so '%s' is now in effect. Note that the inference backends "
-                              "were already initialized with the first user's log level and "
-                              "keep it. Align the log level of every context and session to "
-                              "silence this warning.",
+                              "wins, so '%s' is now in effect. Note that the engines' objects "
+                              "were initialised with the first user's log level and keep it. "
+                              "Align the log level of every context and session to silence "
+                              "this warning.",
                               level_word(state.m_core_config.m_log_level),
                               level_word(context_config.m_log_level),
                               level_word(log_level));
@@ -658,6 +659,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
+            slot.m_provider_id = request.m_model.m_provider_id;
             slot.m_legacy_backend = request.m_legacy_backend;
             slot.m_missing_model = request.m_missing_model;
             slot.m_state_alias = (slot.m_loaded->flags() &

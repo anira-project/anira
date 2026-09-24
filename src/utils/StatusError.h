@@ -2,7 +2,7 @@
  * The one exception anira's own code throws on a control path: a status and a message. The
  * C firewall (src/capi/error.cpp) maps it onto the caller's anira_error and returns the
  * status; anira.hpp rethrows that as anira::Error. It derives from std::runtime_error so
- * that 2.x callers who catch std::runtime_error keep working while the backends throw it
+ * that 2.x callers who catch std::runtime_error keep working while the engine adapters throw it
  * with the right status (MODEL_LOAD, ENGINE, NOT_SUPPORTED, NO_SUCH_FILE, CONFIG) instead of
  * a bare runtime_error the firewall can only classify as ANIRA_ERROR_INTERNAL.
  *

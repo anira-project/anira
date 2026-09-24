@@ -43,7 +43,7 @@
  * slot, the ring of a Streamed tensor, to the MODEL tensor of that slot: the chunking and every
  * conversion, a spectrogram model's FFT included, live here, in the domain of the host end.
  * Then, on an inference thread: anira feeds the State inputs, before_inference runs, anira
- * crosses the edge into the engine's domain, the engine runs, anira crosses the edge back,
+ * crosses the edge into the backend's domain, the engine runs, anira crosses the edge back,
  * after_inference runs, anira captures the State outputs. Then post_process takes the model
  * tensor of every output slot back to the host end, on the thread where the host end is
  * consumed. The edge sits directly before and after the engine and is anira's: a stage never
@@ -705,11 +705,11 @@ typedef struct anira_stage_desc {
     anira_stage_fn post_process;
     /**
      * ANIRA_PHASE_BEFORE_INFERENCE, on the inference thread behind the State feed and ahead of
-     * the edge into the engine's domain. NULL: not taking part.
+     * the edge into the backend's domain. NULL: not taking part.
      */
     anira_stage_fn before_inference;
     /**
-     * ANIRA_PHASE_AFTER_INFERENCE, on the inference thread behind the edge out of the engine's
+     * ANIRA_PHASE_AFTER_INFERENCE, on the inference thread behind the edge out of the backend's
      * domain and ahead of the State capture. NULL: not taking part.
      */
     anira_stage_fn after_inference;

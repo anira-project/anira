@@ -906,13 +906,13 @@ anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_model_config*
 anira_status ANIRA_CALL anira_model_config_set_tensor_name(anira_model_config* config,
                                                            uint32_t model_index,
                                                            const char* canonical,
-                                                           const char* engine_name) ANIRA_NOEXCEPT
+                                                           const char* export_name) ANIRA_NOEXCEPT
     try {
     if (config == nullptr || model_index >= config->m_models.size()) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    if (!non_empty(canonical) || !non_empty(engine_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_models[model_index].m_tensors[canonical].m_name = engine_name;
+    if (!non_empty(canonical) || !non_empty(export_name)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    config->m_models[model_index].m_tensors[canonical].m_name = export_name;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

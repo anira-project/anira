@@ -42,8 +42,8 @@ extern "C" {
  * @brief A backend, where the pair must travel as one item: an engine on a provider (provider,
  * or provider_id for one the enum does not name). Tier 2, struct_size first; enumerated
  * at the caller's stride. engine_id is NULL for a built-in engine and a custom engine's
- * own id (anira_custom_engine_create), whose engine is then ANIRA_ENGINE_NONE: a
- * registered engine has no value of anira_engine of its own.
+ * own id (anira_custom_engine_create), whose engine is then ANIRA_ENGINE_NONE: a custom
+ * engine has no value of anira_engine of its own.
  */
 typedef struct anira_backend_id {
     uint32_t struct_size;  /**< sizeof(anira_backend_id) of the caller's header. */

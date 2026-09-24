@@ -1,10 +1,13 @@
 /*
  * The words anira spells its enums with, one table each, for every place the word appears.
- * The providers: the suffix of a model entry's "engine" word in JSON, the strings of an engine
+ * The providers: the "provider" key of a model entry in JSON, the strings of an engine
  * descriptor's providers list, the words of the plan report's log lines; any other word is a
  * custom provider's name in the engine's own vocabulary. The built-in engines: the "engine"
- * word of a model entry and of every message that names one. The phases: how every message
- * about a slot names its phase.
+ * word of a model entry, the adapters' message prefix and every message that names one. The
+ * domains: the "host_domains" words of a contract file and the plan report's log lines. The
+ * phases: how every message about a slot names its phase. The labels (engine_label,
+ * provider_label, backend_label) are the one spelling of a value or a custom name in a
+ * message.
  */
 #pragma once
 
@@ -38,7 +41,7 @@ inline std::optional<anira_provider> provider_of_word(std::string_view word) noe
 }
 
 /// The word of a provider of the enum; "unknown" for a value the enum does not name.
-inline const char* provider_word(anira_provider provider) noexcept {
+inline constexpr const char* provider_word(anira_provider provider) noexcept {
     for (const auto& [name, value] : k_provider_words) {
         if (value == provider) { return name; }
     }
@@ -79,7 +82,7 @@ inline std::optional<anira_engine> engine_of_word(std::string_view word) noexcep
 }
 
 /// The word of a built-in engine; "none" for ANIRA_ENGINE_NONE and any other value.
-inline const char* engine_word(anira_engine engine) noexcept {
+inline constexpr const char* engine_word(anira_engine engine) noexcept {
     for (const auto& [name, value] : k_engine_words) {
         if (value == engine) { return name; }
     }
@@ -92,6 +95,38 @@ inline bool known_engine(anira_engine engine) noexcept {
         if (value == engine) { return true; }
     }
     return false;
+}
+
+/// The name of an engine in a message: a custom engine's id where there is one, the enum's
+/// word else. The engine half of backend_label, provider_label's twin.
+inline std::string engine_label(anira_engine engine, std::string_view engine_id) {
+    return engine_id.empty() ? std::string(engine_word(engine)) : std::string(engine_id);
+}
+
+/// The spellings of the domains: the "host_domains" words of a contract file and the words
+/// of the plan report's log lines, every arm of anira_domain by its lower-case suffix.
+inline constexpr std::array<std::pair<const char*, anira_domain>, 13> k_domain_words{{
+    {"host", ANIRA_DOMAIN_HOST},
+    {"host_pinned", ANIRA_DOMAIN_HOST_PINNED},
+    {"cuda", ANIRA_DOMAIN_CUDA},
+    {"gl_buffer", ANIRA_DOMAIN_GL_BUFFER},
+    {"vulkan_buffer", ANIRA_DOMAIN_VULKAN_BUFFER},
+    {"opaque_fd", ANIRA_DOMAIN_OPAQUE_FD},
+    {"metal_buffer", ANIRA_DOMAIN_METAL_BUFFER},
+    {"wgpu_buffer", ANIRA_DOMAIN_WGPU_BUFFER},
+    {"dmabuf", ANIRA_DOMAIN_DMABUF},
+    {"iosurface", ANIRA_DOMAIN_IOSURFACE},
+    {"ahardwarebuffer", ANIRA_DOMAIN_AHARDWAREBUFFER},
+    {"d3d12", ANIRA_DOMAIN_D3D12},
+    {"frame", ANIRA_DOMAIN_FRAME},
+}};
+
+/// The word of a domain; "unknown" for a value the enum does not name.
+inline constexpr const char* domain_word(anira_domain domain) noexcept {
+    for (const auto& [name, value] : k_domain_words) {
+        if (value == domain) { return name; }
+    }
+    return "unknown";
 }
 
 /// The label of a backend in a message or a log line: the engine's word (a custom engine's

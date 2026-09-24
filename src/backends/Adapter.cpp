@@ -65,8 +65,7 @@ void Loaded::load(const Model& model) {
     // serve it never sees the record.
     if (!serves(model.m_provider, model.m_provider_id)) {
         std::string message = "engine '";
-        message += model.m_engine_id.empty() ? anira::capi::engine_word(model.m_engine)
-                                             : model.m_engine_id.c_str();
+        message += anira::capi::engine_label(model.m_engine, model.m_engine_id);
         message += "' does not serve provider '";
         message += anira::capi::provider_label(model.m_provider, model.m_provider_id);
         message += "': ";
@@ -279,20 +278,20 @@ std::string at_slot(const char* engine, const char* side, size_t slot, const Ten
 }  // namespace
 
 std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
-                                    const std::vector<std::string>& engine_names,
+                                    const std::vector<std::string>& export_names,
                                     size_t required,
                                     const char* engine,
                                     const char* side) {
     std::vector<SlotBinding> bindings(slots.size());
     for (size_t i = 0; i < slots.size(); ++i) {
         const TensorInfo& slot = slots[i];
-        const bool named = !slot.m_engine_name.empty();
-        const std::string& wanted = named ? slot.m_engine_name : slot.m_name;
+        const bool named = !slot.m_export_name.empty();
+        const std::string& wanted = named ? slot.m_export_name : slot.m_name;
         // A name binds where the side has it: the record's, else the canonical one.
         const auto found =
-            wanted.empty() ? engine_names.end() : std::ranges::find(engine_names, wanted);
-        if (found != engine_names.end()) {
-            bindings[i] = SlotBinding{.m_index = static_cast<size_t>(found - engine_names.begin()),
+            wanted.empty() ? export_names.end() : std::ranges::find(export_names, wanted);
+        if (found != export_names.end()) {
+            bindings[i] = SlotBinding{.m_index = static_cast<size_t>(found - export_names.begin()),
                                       .m_binding = ANIRA_BINDING_NAME};
             continue;
         }
@@ -300,19 +299,19 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
             throw StatusError(ANIRA_ERROR_CONFIG,
                               at_slot(engine, side, i, slot) + "the tensors record names '" +
                                   wanted + "', which the " + engine + " model's " + side +
-                                  "s do not have (they are " + list_names(engine_names) + ")");
+                                  "s do not have (they are " + list_names(export_names) + ")");
         }
-        if (i >= engine_names.size()) {
+        if (i >= export_names.size()) {
             throw StatusError(ANIRA_ERROR_CONFIG,
                               at_slot(engine, side, i, slot) + "binds by position, and the " +
-                                  engine + " model has " + std::to_string(engine_names.size()) +
+                                  engine + " model has " + std::to_string(export_names.size()) +
                                   " " + side + "(s); the model config declares " +
                                   std::to_string(slots.size()));
         }
         bindings[i] = SlotBinding{.m_index = i, .m_binding = ANIRA_BINDING_POSITION};
     }
     // Exactly once: no engine tensor bound by two slots, and none below `required` unbound.
-    std::vector<size_t> bound_by(engine_names.size(), SIZE_MAX);
+    std::vector<size_t> bound_by(export_names.size(), SIZE_MAX);
     for (size_t i = 0; i < bindings.size(); ++i) {
         const size_t index = bindings[i].m_index;
         if (bound_by[index] != SIZE_MAX) {
@@ -325,7 +324,7 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
                 std::string(engine) + ": " + side + " slots " + std::to_string(first) + " '" +
                     slots[first].m_name + "' (" + how(first) + ") and " + std::to_string(i) + " '" +
                     slots[i].m_name + "' (" + how(i) + ") both bind the " + engine + " model's " +
-                    side + " '" + engine_names[index] + "' (index " + std::to_string(index) +
+                    side + " '" + export_names[index] + "' (index " + std::to_string(index) +
                     "); name the slots in the entry's tensors record");
         }
         bound_by[index] = i;
@@ -334,7 +333,7 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
         if (bound_by[index] != SIZE_MAX) { continue; }
         throw StatusError(ANIRA_ERROR_CONFIG,
                           std::string(engine) + ": the " + engine + " model's " + side + " '" +
-                              engine_names[index] + "' (index " + std::to_string(index) +
+                              export_names[index] + "' (index " + std::to_string(index) +
                               ") is bound by no slot; the model config declares " +
                               std::to_string(slots.size()) + " " + side + "(s) for " +
                               std::to_string(required) + " of the model's");

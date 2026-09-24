@@ -68,7 +68,7 @@ namespace anira::backend {
 
 namespace {
 
-constexpr const char* k_engine = "executorch";
+constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_EXECUTORCH);
 
 // The XNNPACK delegate's backend id and its workspace sharing mode "disabled", as
 // backends/xnnpack/runtime/XNNPACKBackend.h of the pinned release spells them (the prebuilt
@@ -82,10 +82,11 @@ constexpr const char* k_engine = "executorch";
 constexpr const char* k_xnnpack_backend = "XnnpackBackend";
 constexpr int k_xnnpack_workspace_per_instance = 0;
 
-// The names ExecuTorch's backends register under that spell a provider of anira's enum (the
-// delegate an export is lowered to, as the .pte names it); every other registered backend
-// travels as it is, the runtime's own word, in provider_id.
-constexpr std::array<std::pair<const char*, anira_provider>, 3> k_backend_names{{
+// The names ExecuTorch's delegates register under (its "backends", the word quoted as the
+// runtime's own below) that spell a provider of anira's enum: the delegate an export is
+// lowered for, as the .pte names it; every other registered name travels as it is, the
+// runtime's own word, in provider_id.
+constexpr std::array<std::pair<const char*, anira_provider>, 3> k_provider_names{{
     {k_xnnpack_backend, ANIRA_PROVIDER_XNNPACK},
     {"CoreMLBackend", ANIRA_PROVIDER_COREML},
     {"VulkanBackend", ANIRA_PROVIDER_VULKAN},
@@ -93,16 +94,17 @@ constexpr std::array<std::pair<const char*, anira_provider>, 3> k_backend_names{
 
 // The registered name of a provider: the table's for one of the enum, the provider_id itself
 // (a registered name the capabilities listed) for a custom one; empty for the default provider
-// and for a provider of the enum no backend spells.
-std::string backend_name_of(anira_provider provider, std::string_view provider_id) {
+// and for a provider of the enum no delegate spells.
+std::string registered_name(anira_provider provider, std::string_view provider_id) {
     if (!provider_id.empty()) { return std::string(provider_id); }
-    for (const auto& [name, value] : k_backend_names) {
+    for (const auto& [name, value] : k_provider_names) {
         if (value == provider) { return name; }
     }
     return "";
 }
 
-// The backends registered to this runtime and available, by their registered names.
+// The delegates registered to this runtime and available (ExecuTorch's backends), by their
+// registered names.
 std::vector<std::string> registered_backends() {
     std::vector<std::string> names;
     const size_t count = executorch::runtime::get_num_registered_backends();
@@ -579,7 +581,7 @@ public:
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
         if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
         try {
-            const std::string wanted = backend_name_of(provider, provider_id);
+            const std::string wanted = registered_name(provider, provider_id);
             if (wanted.empty()) { return false; }
             const std::vector<std::string> registered = registered_backends();
             return std::ranges::find(registered, wanted) != registered.end();
@@ -590,13 +592,13 @@ public:
 
     std::string provider_reason() const override {
         std::string reason =
-            "ExecuTorch runs the backends compiled into its runtime (registered "
+            "ExecuTorch runs the delegates compiled into its runtime, its backends (registered "
             "and available here: ";
         try {
             reason += backends_list(registered_backends());
         } catch (...) {  // NOLINT(bugprone-empty-catch) the list stays as far as it got
         }
-        reason += "); an entry pinned to a provider names the backend its export was lowered to";
+        reason += "); an entry pinned to a provider names the delegate its export was lowered for";
         return reason;
     }
 
@@ -605,20 +607,21 @@ protected:
         require_f32(model, k_engine);
         m_shared = std::make_shared<const SharedProgram>(model);
         auto probe = std::make_unique<Instance>(m_shared, model);
-        // A pinned entry names the backend its export was lowered to: the method must use it,
-        // or the export is mislabeled and refused here rather than at its first call.
+        // A pinned entry names the delegate (ExecuTorch's backend) its export was lowered for:
+        // the method must use it, or the export is mislabeled and refused here rather than at
+        // its first call.
         if (model.m_provider != ANIRA_PROVIDER_DEFAULT || !model.m_provider_id.empty()) {
-            const std::string wanted = backend_name_of(model.m_provider, model.m_provider_id);
+            const std::string wanted = registered_name(model.m_provider, model.m_provider_id);
             const std::vector<std::string> used = probe->backends();
             if (std::ranges::find(used, wanted) == used.end()) {
                 throw StatusError(
                     ANIRA_ERROR_CONFIG,
                     "executorch: " + m_shared->m_where + ": the entry is pinned to provider '" +
                         anira::capi::provider_label(model.m_provider, model.m_provider_id) +
-                        "' (backend '" + wanted + "'), but its method '" + probe->method() +
-                        "' uses " +
-                        (used.empty() ? "no backend" : "the backends " + backends_list(used)) +
-                        "; a pin names the backend the export was lowered to");
+                        "' (ExecuTorch backend '" + wanted + "'), but its method '" +
+                        probe->method() + "' uses " +
+                        (used.empty() ? "no delegate" : "the delegates " + backends_list(used)) +
+                        "; a pin names the delegate the export was lowered for");
             }
         }
         const std::vector<EngineTensor> inputs = probe->inputs();
@@ -680,7 +683,7 @@ std::vector<ProviderInfo> executorch_providers() {
     for (const std::string& name : registered_backends()) {
         ProviderInfo info;
         info.m_provider_id = name;
-        for (const auto& [registered, value] : k_backend_names) {
+        for (const auto& [registered, value] : k_provider_names) {
             if (name == registered) {
                 info.m_provider = value;
                 info.m_provider_id.clear();

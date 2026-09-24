@@ -35,6 +35,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -62,7 +63,7 @@ namespace anira::backend {
 
 namespace {
 
-constexpr const char* k_engine = "litert";
+constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_LITERT);
 
 // The accelerators LiteRT can take beyond the CPU, by the hardware they support, as the
 // provider names anira gives them (custom providers beside ANIRA_PROVIDER_DEFAULT): "gpu",

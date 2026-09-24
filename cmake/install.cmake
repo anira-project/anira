@@ -66,7 +66,7 @@ install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
 )
 
 # ==============================================================================
-# The backends. Libraries go into the install libdir as they are (libanira's
+# The engines. Libraries go into the install libdir as they are (libanira's
 # INSTALL_RPATH $ORIGIN and the consumers' runtime search depend on that layout);
 # headers go per engine into <includedir>/anira-backends/<engine>/; and the
 # anira::<engine> targets are defined again from the install prefix by

@@ -771,7 +771,7 @@ TEST(AbiPrepare, ZeroPlansIsConfigAtCreate) {
                                                    .engine_id = nullptr}};
     const CreateOutcome outcome = try_create(context, model, only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+    expect_contains(outcome.m_message, "none of the 1 model entries runs on a candidate backend");
 }
 
 TEST(AbiPrepare, StructuralRulesAtCreate) {
@@ -822,7 +822,8 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         missing_alone.output(streamed("out"));
         outcome = try_create(context, missing_alone, {});
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-        expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+        expect_contains(outcome.m_message,
+                        "none of the 1 model entries runs on a candidate backend");
     }
 
     // anira_pipeline_add_inference's own refusals.

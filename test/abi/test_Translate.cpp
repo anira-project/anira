@@ -860,7 +860,7 @@ TEST(AbiTranslate, RowRules) {
     const ModelConfig custom_only = minimal();
     outcome = bridge(custom_only, contract, &only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "none of the 1 model entries names a candidate engine");
+    expect_contains(outcome.m_message, "none of the 1 model entries runs on a candidate backend");
 }
 
 TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {

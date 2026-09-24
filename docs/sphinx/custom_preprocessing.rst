@@ -453,7 +453,7 @@ and the handler is created from the pipeline as in section 3.2 of the :doc:`usag
 
     anira_pipeline* pipe = NULL;
     anira_pipeline_create(&pipe, &err);
-    anira_pipeline_add_inference(pipe, variants, 1, NULL, 0, &err);   /* NULL: every engine of the build */
+    anira_pipeline_add_inference(pipe, variants, 1, NULL, 0, &err);   /* NULL: the default candidate set */
     anira_pipeline_add_stage(pipe, &desc, &err);                       /* at most one */
     anira_handler* h = NULL;
     anira_handler_create(context, pipe, &h, &err);                     /* copies the pipeline */
@@ -471,7 +471,7 @@ dies, whether init ever ran or not:
 
 .. code-block:: cpp
 
-    anira::Pipeline pipe{anira::stage::Inference(cfg),   // every engine of the build
+    anira::Pipeline pipe{anira::stage::Inference(cfg),   // the default candidate set
                          anira::stage::Custom(std::make_shared<Spectral>())};
     anira_handler* h = nullptr;
     anira_error err = ANIRA_ERROR_INIT;

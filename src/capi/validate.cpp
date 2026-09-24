@@ -86,8 +86,8 @@ std::string candidates_list(const anira_backend_id* candidates, uint32_t num_can
     for (uint32_t i = 0; i < num_candidates; ++i) {
         if (!text.empty()) { text += ", "; }
         const anira_backend_id& id = candidates[i];
-        text += id.engine_id != nullptr ? id.engine_id
-                                        : engine_word(static_cast<anira_engine>(id.engine));
+        text += engine_label(static_cast<anira_engine>(id.engine),
+                             id.engine_id != nullptr ? id.engine_id : "");
         if (id.provider != ANIRA_PROVIDER_DEFAULT || !candidate_provider_id(id).empty()) {
             text += ":" + provider_label(static_cast<anira_provider>(id.provider),
                                          candidate_provider_id(id));
@@ -560,7 +560,7 @@ void check_rows(const anira_model_config& model,
     if (out.m_rows.empty()) {
         // Zero plans is a configuration the caller can fix, not a limit of this build.
         config_error("none of the " + std::to_string(model.m_models.size()) +
-                     " model entries names a candidate engine (candidates: " +
+                     " model entries runs on a candidate backend (candidates: " +
                      candidates_list(candidates, num_candidates) + ")");
     }
     if (model.m_default_engine != ANIRA_ENGINE_NONE || !model.m_default_engine_id.empty()) {
@@ -572,8 +572,7 @@ void check_rows(const anira_model_config& model,
         }
         if (!found) {
             config_error("default_engine '" +
-                         (model.m_default_engine_id.empty() ? engine_word(model.m_default_engine)
-                                                            : model.m_default_engine_id) +
+                         engine_label(model.m_default_engine, model.m_default_engine_id) +
                          "' names no model entry");
         }
     }
@@ -753,7 +752,7 @@ std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
 }
 
 std::string engine_label(const ModelEntry& row) {
-    return row.is_custom() ? row.m_engine_id : engine_word(row.m_engine);
+    return engine_label(row.m_engine, row.m_engine_id);
 }
 
 std::vector<anira_engine> enabled_engines() {

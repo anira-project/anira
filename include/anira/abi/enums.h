@@ -545,8 +545,8 @@ typedef enum anira_probe_rung {
  * is the anira_error message prefixed by the entry and the status (the boundary trace,
  * for an application that swallowed the status and a developer who only has the device
  * log). Off by default on every platform. Held while a context that set it lives,
- * counted across contexts.x runtime applies it, in this pre-release the process-wide
- * switch is anira::capi::set_trace_failures.
+ * counted across contexts; in this pre-release the process-wide switch is
+ * anira::capi::set_trace_failures.
  */
 #define ANIRA_LOG_FLAG_TRACE_FAILURES 2u
 
@@ -618,7 +618,10 @@ typedef enum anira_pad_policy {
  * carries the pair's values alone).
  */
 typedef enum anira_engine {
-    ANIRA_ENGINE_NONE = 0,  /**< No engine; as a default engine it means models[0]. */
+    /**
+     * No engine; as a default engine it means plan 0 (the first plan of the table).
+     */
+    ANIRA_ENGINE_NONE = 0,
     ANIRA_ENGINE_ONNXRUNTIME = 1,  /**< ONNX Runtime (v2 ONNX, JSON "onnxruntime"). */
     ANIRA_ENGINE_LIBTORCH = 2,  /**< LibTorch (JSON "libtorch"). */
     ANIRA_ENGINE_TFLITE = 3,  /**< TensorFlow Lite, legacy C API (JSON "tflite"). */
@@ -642,12 +645,15 @@ typedef enum anira_provider {
      * The engine's own CPU path (JSON: a model entry without a "provider" key).
      */
     ANIRA_PROVIDER_DEFAULT = 0,
-    ANIRA_PROVIDER_CUDA = 1,  /**< CUDA (JSON ":cuda"). */
-    ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON ":webgpu"). */
-    ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON ":directml"). */
-    ANIRA_PROVIDER_COREML = 4,  /**< Core ML (JSON ":coreml"). */
-    ANIRA_PROVIDER_XNNPACK = 5,  /**< XNNPACK (JSON ":xnnpack"). */
-    ANIRA_PROVIDER_VULKAN = 6,  /**< Vulkan (JSON ":vulkan"). */
+    /**
+     * CUDA (JSON "cuda", the value of a model entry's "provider" key).
+     */
+    ANIRA_PROVIDER_CUDA = 1,
+    ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON "webgpu"). */
+    ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON "directml"). */
+    ANIRA_PROVIDER_COREML = 4,  /**< Core ML (JSON "coreml"). */
+    ANIRA_PROVIDER_XNNPACK = 5,  /**< XNNPACK (JSON "xnnpack"). */
+    ANIRA_PROVIDER_VULKAN = 6,  /**< Vulkan (JSON "vulkan"). */
     ANIRA_PROVIDER_FORCE32 = 0x7fffffff
 } anira_provider;
 
@@ -801,8 +807,8 @@ typedef enum anira_phase {
 /**
  * @brief How a plan bound a slot to the engine's tensor (anira_plan_slot.binding): by name
  * where the engine's side has names, by position otherwise, checked against the spec's
- * shape and dtype at prepare either way; a registered engine received the names in its
- * load record and bound itself.
+ * shape and dtype at prepare either way; a custom engine received the names in its load
+ * record and bound itself.
  */
 typedef enum anira_binding {
     /**
@@ -815,8 +821,7 @@ typedef enum anira_binding {
      */
     ANIRA_BINDING_NAME = 1,
     /**
-     * A registered engine: it received the names in its anira_engine_load_info and bound
-     * itself.
+     * A custom engine: it received the names in its anira_engine_load_info and bound itself.
      */
     ANIRA_BINDING_ENGINE = 2,
     ANIRA_BINDING_FORCE32 = 0x7fffffff

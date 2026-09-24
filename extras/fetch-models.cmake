@@ -87,7 +87,7 @@ foreach(_repo IN LISTS _anira_model_repos)
 endforeach()
 
 # RAVE TorchScript model — a LibTorch-only fixture, so extras/CMakeLists.txt
-# requests it only when that backend is enabled. The standalone (cmake -P)
+# requests it only when that engine is enabled. The standalone (cmake -P)
 # invocation defaults to ON so a seeded CI cache covers the LibTorch legs too.
 if(NOT DEFINED ANIRA_MODELS_FETCH_RAVE)
     set(ANIRA_MODELS_FETCH_RAVE ON)

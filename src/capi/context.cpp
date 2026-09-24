@@ -3,7 +3,6 @@
 // sits behind the exception firewall of capi_internal.h.
 #include "context.h"
 
-#include <anira/CoreConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -25,7 +24,6 @@
 #include <vector>
 
 #include "../backends/Adapter.h"
-#include "../backends/Adapters.h"
 #include "capi_internal.h"
 #include "enumerate.h"
 #include "ext_registry.h"
@@ -111,7 +109,7 @@ void probe(anira_capabilities& capabilities) {
             if (cpu_provider(provider)) {
                 edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
                 edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
-                edge.reason = "host memory reaches every built-in engine without a copy";
+                edge.reason = "host memory reaches a CPU provider without a copy";
             } else {
                 edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY);
                 edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);

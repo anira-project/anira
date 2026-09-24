@@ -16,9 +16,10 @@ of section 1.5 are their file form.
    * - Object
      - Description
    * - ``anira::ModelConfig``
-     - The model: one entry per engine (a file or bytes), its input and output tensors, its
-       state, the instance ceiling and the anchor tensor the host geometry refers to. Travels
-       with the model; its file form is the model file.
+     - The model: one entry per export (an engine, and a provider when pinned; a file or
+       bytes), its input and output tensors, its state, the instance ceiling and the anchor
+       tensor the host geometry refers to. Travels with the model; its file form is the model
+       file.
    * - ``anira::TensorSpec``
      - One tensor of the model: data type, role, tagged axes, the window and overlap a
        streamed tensor is consumed with, the output latency.
@@ -147,9 +148,9 @@ anchor's (``(0, 0)``, the default, derives it).
 1.2. Model configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The model config lists the model's files, one entry per engine, and its tensors. Add an entry
-only for the engines you ship; whether an engine is part of the build is decided at prepare,
-not here, so one config serves every build.
+The model config lists the model's files, one entry per export (an engine, and a provider
+when pinned), and its tensors. Add an entry only for the engines you ship; whether an engine
+is part of the build is decided at prepare, not here, so one config serves every build.
 
 .. code-block:: cpp
 
@@ -238,15 +239,15 @@ not here, so one config serves every build.
   engine serves here is the context's to say (``anira_capabilities_backends``, section 3.1);
   which one a plan runs on is the candidate's (section 3.2). An entry is **neutral** by
   default and runs on any provider of its engine, the candidate deciding; an entry whose file
-  is built for one (an ExecuTorch export lowered to a backend, an ONNX Runtime ``.ort``
-  compiled for an execution provider) is **pinned** to it: ``model_provider(i,
-  ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, ANIRA_PROVIDER_DEFAULT, "com.example.npu")``
-  (``anira_model_config_set_model_provider``, the getters ``anira_model_config_model_provider``
-  and ``anira_model_config_model_provider_id``), in a model file the entry's ``"provider"``
-  key beside its ``"engine"``, ``"xnnpack"`` or ``"com.example.npu"``. A pinned entry runs on
-  its pin alone, and two entries of one engine are legal when their pins differ (an export per
-  backend); an ExecuTorch entry pinned to a backend its method does not use is a mislabeled
-  export, refused at prepare.
+  is built for one (an ExecuTorch export lowered for a provider (an ExecuTorch delegate), an
+  ONNX Runtime ``.ort`` compiled for an execution provider) is **pinned** to it:
+  ``model_provider(i, ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, ANIRA_PROVIDER_DEFAULT,
+  "com.example.npu")`` (``anira_model_config_set_model_provider``, the getters
+  ``anira_model_config_model_provider`` and ``anira_model_config_model_provider_id``), in a
+  model file the entry's ``"provider"`` key beside its ``"engine"``, ``"xnnpack"`` or
+  ``"com.example.npu"``. A pinned entry runs on its pin alone, and two entries of one engine
+  are legal when their pins differ (an export per provider); an ExecuTorch entry pinned to a
+  provider its method does not use is a mislabeled export, refused at prepare.
 - **State.** ``state(ANIRA_MODEL_STATEFUL)`` declares a model that carries state across
   inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in submission order and
   never concurrently. A model with a declared State pair (section 1.1) runs this way whatever
@@ -427,7 +428,7 @@ contexts are reconciled against it).
 - **WebAssembly.** The core cannot run threads on the web: use ``threads(0)`` (the workers
   are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the log
   manually; ``webgpu`` throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a
-  JavaScript backend.
+  JavaScript API.
 
 1.5. JSON files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -468,15 +469,15 @@ document), so a typo never turns into a default.
       ]
     }
 
-- ``models[]``: one entry per engine, tagged by ``engine`` alone (``onnxruntime``,
-  ``libtorch``, ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom
-  engine); relative ``path`` values resolve against the file's directory (``from_file``) or
-  the ``base_dir`` argument (``from_json``); ``tensors`` holds the per-tensor records of
-  section 1.2, keyed by *your* canonical name: a string is the export's name for the tensor,
-  an object has ``name`` and ``layout`` (spec axis indices, ``"insert"`` for a unit axis the
-  spec lacks: ``{ "audio_in": { "name": "args_0", "layout": [0, 2, 1] } }`` for a
-  channels-last TensorFlow export of a mono model); ``entry`` is the extension that names the
-  entry point (section 1.2).
+- ``models[]``: one entry per export, tagged by ``engine`` (``onnxruntime``, ``libtorch``,
+  ``tflite``, ``litert``, ``executorch``, or the reverse-URI name of a custom engine) and,
+  when pinned, ``provider``; relative ``path`` values resolve against the file's directory
+  (``from_file``) or the ``base_dir`` argument (``from_json``); ``tensors`` holds the
+  per-tensor records of section 1.2, keyed by *your* canonical name: a string is the export's
+  name for the tensor, an object has ``name`` and ``layout`` (spec axis indices, ``"insert"``
+  for a unit axis the spec lacks: ``{ "audio_in": { "name": "args_0", "layout": [0, 2, 1] } }``
+  for a channels-last TensorFlow export of a mono model); ``entry`` is the extension that
+  names the entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``, ``state``), tagged ``axes`` (an extent or
   ``"dynamic"``), ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency``
@@ -972,7 +973,7 @@ section 3.2:
 
 .. code-block:: cpp
 
-    anira::Pipeline pipe{anira::stage::Inference(cfg),   // every engine of the build
+    anira::Pipeline pipe{anira::stage::Inference(cfg),   // the default candidate set
                          anira::stage::Custom(std::make_shared<Int16ToFloat>())};
     anira_handler* h = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
@@ -1061,10 +1062,10 @@ Messages from the audio thread and the inference threads are real-time safe: the
     what anira promises about exceptions is the subject of :doc:`logging`. The paragraphs
     below describe the 2.x runtime's log configuration, which this pre-release still uses.
 
-The log level (``context.log_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled backends — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level, at each engine's init, once per process, when the first model of the engine loads, with the level in effect then (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the backends' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
+The log level (``context.log_level``) is one setting for the whole inference stack: it is applied as the runtime level of ``thl::Logger`` and is forwarded to the logging facilities of the enabled engines — the ONNX Runtime environment severity, the LiteRT environment min-logger severity and the LibTorch/c10 log level, at each engine's init, once per process, when the first model of the engine loads, with the level in effect then (TFLite and ExecuTorch excepted — their prebuilt runtimes offer no runtime logging control). A message is emitted when its severity is at or above the configured level; the available levels are ``Debug``, ``Info``, ``Warning`` and ``Error``, where ``Debug`` additionally enables the engines' verbose output. The default is ``LogLevel::Info`` in debug builds and ``LogLevel::Error`` in release builds. Every level is compiled in on every build type (anira pins tanh-lib's compile-time ceiling, ``THL_LOG_COMPILED_MAX_LEVEL``, to its maximum), so the runtime level is the only filter.
 
 .. note::
-    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the context configurations in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite backend is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
+    Like the thread pool, the logging configuration is process-global — and the level also is ``thl::Logger``'s: a host that also uses tanh-lib shares one level with anira. If the context configurations in a process disagree, the lowest (most verbose) requested level wins — no session can silence the diagnostics another session asked for — while drain mode, capacity and interval stay those of the first session; every mismatch is reported with a warning. The TFLite engine is exempt from the log level — the prebuilt TFLite C library does not export any runtime logging control, so its (rare) log lines are unaffected.
 
 You can also opt out of the auto-managed thread pool entirely and supply your own threads. Ask for ``0`` threads (``context.threads(0)``, or ``"num_threads": 0`` in the context file) so the auto-pool stays empty, then create as many threads as you want: in C, ``anira_inference_thread_create(context, &thread, &err)`` of ``anira/abi/thread.h``, then ``anira_inference_thread_start`` (an OS thread anira spawns; it returns a status, ``ANIRA_ERROR_INVALID_STATE`` for a thread already running and ``ANIRA_ERROR_OUT_OF_MEMORY`` when the operating system refused the thread) or ``anira_inference_thread_run_loop`` on a thread of your own, ``anira_inference_thread_stop`` (native: joins), ``anira_inference_thread_has_exited`` (true once the loop returned; what a WebAssembly Worker's owner polls) and ``anira_inference_thread_destroy``; in the 2.x C++ API, :cpp:func:`anira::Core::make_inference_thread`, ``start()`` on each, and either ``stop()`` or simply destroy the returned ``unique_ptr`` to tear them down. ``anira_num_inference_threads`` reports the pool's size and is 0 then.
 
@@ -1148,12 +1149,13 @@ slots bound by the engine itself (``ANIRA_BINDING_ENGINE``); an engine no entry 
 a plan and not an error; an entry whose id no engine of the pipeline serves is
 ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the id (``anira.v2.custom``,
 the 2.x ``CUSTOM`` backend, needs no engine). The create refuses with
-``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` descriptor or ``out``, a ``struct_size`` below the
-three leading slots, a flags bit the header does not define, a ``NULL`` ``process`` or a
-``NULL`` ``consumed_kinds`` or ``providers`` with a count, and with ``ANIRA_ERROR_ABI_VERSION`` what
-``anira_check_abi`` refuses; the addition refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a
-``NULL`` pipeline, id or engine and a malformed id, and with ``ANIRA_ERROR_INVALID_STATE`` an id
-the pipeline already has; neither refusal leaves a reference behind. The pool rule: two
+``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` ``engine_id``, descriptor or ``out``, an id without
+a ``'.'`` or with the prefix ``anira.``, a ``struct_size`` below the three leading slots, a
+flags bit the header does not define, a ``NULL`` ``process`` or a ``NULL`` ``consumed_kinds``
+or ``providers`` with a count, and with ``ANIRA_ERROR_ABI_VERSION`` what ``anira_check_abi``
+refuses; the addition refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline or
+engine, and with ``ANIRA_ERROR_INVALID_STATE`` an id the pipeline already has; neither
+refusal leaves a reference behind. The pool rule: two
 handlers that run the same engine object on an equal model configuration resolved to equal
 tensors, on the same provider with the same provider options, share one loaded model (one ``load``, one ``unload``), whichever pipelines they come
 from, and each is prepared on it (one ``prepare``, one ``unprepare`` per handler); two engine
@@ -1604,7 +1606,7 @@ dtype; ``anira_tensor_data`` and ``anira_tensor_data_f32`` return ``NULL`` for a
 Planar is a boundary representation of the two host domains: an entry accepts a planar tensor
 only where its own documentation says so, which is where it copies a host block; every other
 consumer, and every other domain, refuses the flag with ``ANIRA_ERROR_NOT_SUPPORTED``, and
-anira never hands a planar tensor to a stage, a backend or JavaScript. One block with strides
+anira never hands a planar tensor to a stage, an engine or JavaScript. One block with strides
 covers the other two host layouts: contiguous is all-zero strides (or ``{N, 1}``), interleaved
 is strides ``{1, C}`` assigned on the record after ``anira_tensor_init_host``.
 

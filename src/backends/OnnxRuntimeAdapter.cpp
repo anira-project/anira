@@ -44,7 +44,7 @@ namespace anira::backend {
 
 namespace {
 
-constexpr const char* k_engine = "onnxruntime";
+constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_ONNXRUNTIME);
 
 // Maps anira's log level to the severity of the ONNX Runtime environment.
 // Debug maps to VERBOSE, ONNX Runtime's most detailed severity.
@@ -58,7 +58,7 @@ OrtLoggingLevel to_ort_logging_level(anira::LogLevel log_level) {
     return ORT_LOGGING_LEVEL_WARNING;
 }
 
-// If backend symbols leak out of the module embedding anira (misconfigured
+// If ONNX Runtime's symbols leak out of the module embedding anira (misconfigured
 // visibility) and the host process has loaded a different ONNX Runtime, the
 // dynamic linker can bind OrtGetApiBase to the host's runtime. GetApi() with
 // our (newer) ORT_API_VERSION then returns null and the first Ort:: call
@@ -71,7 +71,7 @@ void throw_if_foreign_onnxruntime() {
             "anira: OrtGetApiBase resolved to an ONNX Runtime that does not "
             "support the API version anira was built against. A different "
             "ONNX Runtime is already loaded in this process (e.g. shipped by "
-            "the host application) and backend symbols were not kept private "
+            "the host application) and ONNX Runtime's symbols were not kept private "
             "to the module embedding anira. Link ONNX Runtime only through "
             "anira::onnxruntime and compile the translation units that include "
             "its headers with hidden visibility (see the troubleshooting guide).");
@@ -140,10 +140,10 @@ constexpr std::array<std::pair<const char*, anira_provider>, 6> k_provider_names
 // The registered name of the record's provider: the table's for a provider of the enum, the
 // provider_id itself (a registered name the capabilities listed) for a custom one; empty for
 // the default provider and for Vulkan.
-std::string registered_name(const Model& model) {
-    if (!model.m_provider_id.empty()) { return model.m_provider_id; }
+std::string registered_name(anira_provider provider, std::string_view provider_id) {
+    if (!provider_id.empty()) { return std::string(provider_id); }
     for (const auto& [name, value] : k_provider_names) {
-        if (value == model.m_provider && value != ANIRA_PROVIDER_DEFAULT) { return name; }
+        if (value == provider && value != ANIRA_PROVIDER_DEFAULT) { return name; }
     }
     return "";
 }
@@ -156,7 +156,7 @@ std::string registered_name(const Model& model) {
 void append_provider(Ort::SessionOptions& options, const Model& model) {
     if (model.m_provider == ANIRA_PROVIDER_DEFAULT && model.m_provider_id.empty()) { return; }
     const std::string label = anira::capi::provider_label(model.m_provider, model.m_provider_id);
-    const std::string name = registered_name(model);
+    const std::string name = registered_name(model.m_provider, model.m_provider_id);
     if (name.empty()) {
         throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                           "onnxruntime: no execution provider serves '" + label + "'");

@@ -76,7 +76,7 @@ engine's entry; several such entries on one model configuration are several plan
 map to. A candidate of ``anira_pipeline_add_inference`` names the engine on a **provider**
 (``anira_backend_id``: ``engine_id`` with ``provider``, or ``provider_id`` for a provider the
 enum does not name), and a plan is one entry on one provider: an entry without a pin is a
-plan per candidate of its engine, an entry pinned to a provider (:doc:`usage` section 1.1) a
+plan per candidate of its engine, an entry pinned to a provider (:doc:`usage` section 1.2) a
 plan on that candidate alone. An added engine no entry names is not a plan and not an error; an entry whose id no
 engine of the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``,
 naming the id. anira never opens a custom entry's path or reads its bytes: the engine's
@@ -905,6 +905,7 @@ type, exactly like anira's adapters, which are file-local classes over the engin
 
     class MyOnnxEngine final : public anira::Engine {
     public:
+        MyOnnxEngine() : anira::Engine("com.example.myonnx") {}
         std::unique_ptr<Loaded> load(const anira::EngineLoadInfo& info) override;   // in the .cpp
     };
 
@@ -962,7 +963,7 @@ type, exactly like anira's adapters, which are file-local classes over the engin
 Whatever includes your header then compiles with anira's include directories alone, and only
 your ``.cpp`` needs the engine target's, which is what lets a plugin keep every engine symbol
 private: compile that ``.cpp`` with hidden visibility (see :doc:`troubleshooting`, "Host
-application ships its own backend runtime").
+application ships its own engine runtime").
 
 .. note::
     Subclassing :cpp:class:`anira::BackendBase` is the 2.x runtime's way of adding an engine,

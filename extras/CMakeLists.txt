@@ -1,7 +1,7 @@
 # The model fixtures come from pinned commits of the example-model repositories,
 # fetched by fetch-models.cmake (shared with the CI cache-seed job — see the pins
 # and the refetch/override story there). RAVE is a LibTorch-only fixture, so its
-# (large) download is requested only when that backend is enabled; the
+# (large) download is requested only when that engine is enabled; the
 # RAVE-specific tests are #ifdef USE_LIBTORCH-gated too.
 set(ANIRA_MODELS_FETCH_RAVE ${ANIRA_WITH_LIBTORCH})
 include("${CMAKE_CURRENT_SOURCE_DIR}/fetch-models.cmake")

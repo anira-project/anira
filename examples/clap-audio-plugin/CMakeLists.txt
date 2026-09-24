@@ -36,9 +36,9 @@ add_library(${PROJECT_NAME} MODULE
 )
 target_link_libraries(${PROJECT_NAME} clap-core clap-helpers anira)
 
-# What a plugin embedding anira should do (docs/sphinx/troubleshooting.rst, "Host application ships its own backend runtime"):
+# What a plugin embedding anira should do (docs/sphinx/troubleshooting.rst, "Host application ships its own engine runtime"):
 # export nothing but its entry point — CLAP_EXPORT marks clap_entry
-# default-visibility/dllexport — so that the embedded anira and its backend runtimes
+# default-visibility/dllexport — so that the embedded anira and its engine runtimes
 # stay private and cannot be interposed by a host that ships its own copy; under GCC
 # bind no STB_GNU_UNIQUE symbol, so that the host can actually unload the plugin; and
 # let the linker drop what the plugin never references (anira's objects are compiled
