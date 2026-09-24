@@ -1648,7 +1648,7 @@
           "kind": "enum",
           "name": "anira_engine",
           "terminator": "ANIRA_ENGINE_FORCE32",
-          "doc": "Inference engine, one of the two independent backend axes. Values 6 and up are reserved for later anira engines. A custom engine (anira_custom_engine_create, added to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id, anira_plan_info, anira_stage_ctx).",
+          "doc": "Inference engine, one of the two independent backend axes. Values 6 and up are reserved for later anira engines. A custom engine (anira_custom_engine_create, added to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id, anira_plan_info; a stage reads the id off the plan report, since anira_stage_ctx carries the pair's values alone).",
           "values": [
             {
               "name": "ANIRA_ENGINE_NONE",
@@ -1737,7 +1737,7 @@
           "kind": "enum",
           "name": "anira_phase",
           "terminator": "ANIRA_PHASE_FORCE32",
-          "doc": "The phase a callback of either descriptor runs in: the phases and slots of a stage, the engine call between two of them and the slots of an engine (abi/stage.h, abi/engine.h). The two lifecycles share it, so like their shared records (anira/abi/lifecycle.h) it names no side. The value travels in one field, anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives none, each of its slots being a callback of its own. Every message anira writes about a slot names the phase by the lower-case name of its value (pre_process, post_process, before_inference, inference, after_inference, prepare, release, reset, unprepare, init, load, unload): a stage phase that fails or that an accessor refuses, a refused init, load or prepare of a stage or an engine (\"the engine 'x' refused load: it returned N\"), a failed engine call. Pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload.",
+          "doc": "The phase a callback of either descriptor runs in: the phases and slots of a stage, the engine call between two of them and the slots of an engine (abi/stage.h, abi/engine.h). The two lifecycles share it, so like their shared records (anira/abi/lifecycle.h) it names no side. The value travels in one field, anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives none, each of its slots being a callback of its own. Every message anira writes about a slot names the phase by the lower-case name of its value (pre_process, post_process, before_inference, inference, after_inference, prepare, release, reset, unprepare, init, load, unload, query): a stage phase that fails or that an accessor refuses, a refused init, load or prepare of a stage or an engine (\"the engine 'x' refused load: it returned N\"), a failed engine call. Pinned now. The three inference-thread phases are numbered in the order they run; the phases of the shared lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare, then init, then the engine's two model-level phases, load and unload, then the engine's query.",
           "values": [
             {
               "name": "ANIRA_PHASE_PRE_PROCESS",
@@ -1798,6 +1798,11 @@
               "name": "ANIRA_PHASE_UNLOAD",
               "value": 11,
               "doc": "When the last handler holding a loaded model is re-prepared or destroyed, after every unprepare of it: an engine's unload slot (anira_engine_unload_fn)."
+            },
+            {
+              "name": "ANIRA_PHASE_QUERY",
+              "value": 12,
+              "doc": "An engine's query slot (anira_engine_query_fn): which of its declared providers are usable here, now; at anira_handler_create and at anira_pipeline_capabilities_backends / _edge, before the engine's init and any number of times."
             },
             {
               "name": "ANIRA_PHASE_FORCE32",
@@ -6169,7 +6174,7 @@
           "thread": "thread-safe",
           "status": "promised",
           "since": "0.2",
-          "doc": "The backends that are compiled in and usable here, one record per (engine, provider) the build and its runtimes report: the enum's providers by provider, any other by provider_id in the runtime's own words (an ONNX Runtime execution provider by its name); a custom engine's providers are its descriptor's and are not listed here. Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element.",
+          "doc": "The backends that are compiled in and usable here, one record per (engine, provider) the build and its runtimes report: the enum's providers by provider, any other by provider_id in the runtime's own words (an ONNX Runtime execution provider by its name); a custom engine's rows are its pipeline's (anira_pipeline_capabilities_backends), since an engine belongs to a pipeline, not to the context. Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element.",
           "return_doc": "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count or an element_size below the struct_size slot."
         },
         {
@@ -6287,7 +6292,7 @@
           "thread": "thread-safe",
           "status": "promised",
           "since": "0.2",
-          "doc": "One row of the edge registry, by domain and backend: the engine on the provider, a custom provider by its provider_id (read when the caller's record has the slot).",
+          "doc": "One row of the edge registry, by domain and backend: the engine on the provider, a custom provider by its provider_id (read when the caller's record has the slot). A custom engine (engine_id set) has no row here: its rows are its pipeline's (anira_pipeline_capabilities_edge).",
           "return_doc": "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no row for the pair (out untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields."
         },
         {
@@ -7584,7 +7589,7 @@
       "file": "engine.h",
       "guard": "ANIRA_ABI_ENGINE_H",
       "brief": "The engine descriptor, its load record and the engine context: a custom engine as an object, added to pipelines.",
-      "doc": "An engine is a descriptor, not a class: anira_engine_desc names a process function, a reset, a prepare, an unprepare, a load, an unload, an init and a release function, one user_data slot, the extension kinds it consumes and its flags. anira_custom_engine_create copies it, under a reverse-URI id, into a refcounted anira_custom_engine, which anira_pipeline_add_engine adds to pipelines: the object is what the engine is, the id is how model entries name it, and both are fixed at create, so an engine has one id in every pipeline it is added to. One engine may be added to any number of pipelines; the pipelines and every handler created from them share it, and the engines of one pipeline have distinct ids. The id is unique per pipeline, not per process: two engine objects may carry one id in two pipelines (two instances of a plugin, each with its own engine). A model entry names the engine by its id (anira_model_config_add_model_path_custom, anira_model_config_add_model_bytes_custom) and a candidate of anira_pipeline_add_inference with engine_id set selects it; wherever the engine-provider pair travels a registered engine is ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info, anira_stage_ctx). An added engine no entry names is not a plan and not an error; an entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create.\nThe lifecycle is the stage's (anira/abi/stage.h) with one level more, the same words on both sides, from the outermost level in. init runs once per engine object, at the first anira_handler_prepare that reaches it (a row of the engine survives validation), with an anira_init_info (anira/abi/lifecycle.h: the log level and the thread count in effect, the handler's context), before the engine's first load; a refused init fails that prepare and the next one calls init again. load runs once per loaded model anira pools, with an anira_engine_load_info (the variant, the entry's row, a template of every tensor on the engine's side, the name each slot binds to, the shared call slots) and hands back a loaded pointer: this is where the weights are loaded; unload frees them, when the last handler holding the loaded model is re-prepared or destroyed. prepare runs once per handler and loaded model the handler runs on, at anira_handler_prepare, with the anira_prepare_info the stage's prepare receives (the handler, its plan report, its entry count, the model-end templates, the canonical names and the flags of the prepare) and the loaded pointer, and hands back a prepared pointer: what the engine keeps per handler, its own executor included when the prepare carries ANIRA_PREPARE_EXCLUSIVE; unprepare gives it back, once per successful prepare, at the handler's next prepare or its destroy, before the loaded model is released. Every process and reset call receives the handler's prepared pointer beside the engine's user_data, as (ctx, prepared, user_data), and the loaded pointer in the context (anira_engine_ctx.loaded). release fires once, when the last reference to the engine dies (its handle, the pipelines it was added to, their handlers, the loaded models), after every unload, whether or not init ever ran.\nTwo handlers share one loaded model when they run the same engine object on an equal model configuration (the whole variant: every entry, spec and extension the engine may read through load's record) resolved to equal tensors, on the same provider, whichever pipelines they were created from; two engine objects never share, even under one id with the same callbacks. The shared call slots of a loaded model are its instances (anira_engine_load_info.instances, the model's max_instances): a process call of a handler whose model is stateless claims one of them, and no two calls run at once on one instance. A model declared ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0 shared slots: its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their prepare; their inferences run one at a time and in order, under the dispatch gate), their calls carry ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claim no shared slot and run on what their prepare built. The engine binds by name where its side has names: the load record carries the name each slot binds to (the entry's tensors record, else the canonical name), and an engine that cannot bind a slot refuses load.\nprocess runs on an inference thread, in ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call): the instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays in slot order, State tensors included, the ticket, the per-call flags and the loaded pointer. The adapter rule: read every extent and every memory handle (data pointer, byte_offset, strides, domain) from the tensors of THIS call, never from a value kept at load or prepare, and never assume a tensor is anira's own buffer (the halves of a declared State pair alternate between two buffers; a later pre-release hands a caller's Buffer tensor over in place). A status other than ANIRA_OK fails the chunk: it lands in anira_handler_rt_error with one latched record, anira zeroes the outputs, the chunk delivers zeros at its stream position, a State pair keeps its last good value. reset re-initialises the state an engine keeps per handler: for an exclusive handler, at the first inference of a new stream (after prepare, after anira_handler_reset), on that handler's prepared with that inference's context, right before its process; a handler whose model is stateless is never reset. The flags are the engine's promises, reported in anira_plan_info.engine_flags and consumed by later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit this header does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create. The callback typedefs carry no real-time attribute: whether process is real-time is the engine's own promise, the flag. The C++ face is anira::Engine of anira/anira.hpp.",
+      "doc": "An engine is a descriptor, not a class: anira_engine_desc names a process function, a reset, a prepare, an unprepare, a load, an unload, an init and a release function, one user_data slot, the extension kinds it consumes and its flags. anira_custom_engine_create copies it, under a reverse-URI id, into a refcounted anira_custom_engine, which anira_pipeline_add_engine adds to pipelines: the object is what the engine is, the id is how model entries name it, and both are fixed at create, so an engine has one id in every pipeline it is added to. One engine may be added to any number of pipelines; the pipelines and every handler created from them share it, and the engines of one pipeline have distinct ids. The id is unique per pipeline, not per process: two engine objects may carry one id in two pipelines (two instances of a plugin, each with its own engine). A model entry names the engine by its id (anira_model_config_add_model_path_custom, anira_model_config_add_model_bytes_custom) and a candidate of anira_pipeline_add_inference with engine_id set selects it; wherever the engine-provider pair travels a registered engine is ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info; a stage reads the id off the plan report, since anira_stage_ctx carries the pair's values alone). An added engine no entry names is not a plan and not an error; an entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. Which of an engine's declared providers are usable here is its query's answer (anira_engine_query_fn, a tail slot of the descriptor, the engine's own GetAvailableProviders): anira_handler_create checks every candidate's provider of the engine against it, and anira_pipeline_capabilities_backends / _edge report the engine's rows beside the context's, so a custom engine's capabilities are declared, measured and visible as a built-in engine's are.\nThe lifecycle is the stage's (anira/abi/stage.h) with one level more, the same words on both sides, from the outermost level in. init runs once per engine object, at the first anira_handler_prepare that reaches it (a row of the engine survives validation), with an anira_init_info (anira/abi/lifecycle.h: the log level and the thread count in effect, the handler's context), before the engine's first load; a refused init fails that prepare and the next one calls init again. load runs once per loaded model anira pools, with an anira_engine_load_info (the variant, the entry's row, a template of every tensor on the engine's side, the name each slot binds to, the shared call slots) and hands back a loaded pointer: this is where the weights are loaded; unload frees them, when the last handler holding the loaded model is re-prepared or destroyed. prepare runs once per handler and loaded model the handler runs on, at anira_handler_prepare, with the anira_prepare_info the stage's prepare receives (the handler, its plan report, its entry count, the model-end templates, the canonical names and the flags of the prepare) and the loaded pointer, and hands back a prepared pointer: what the engine keeps per handler, its own executor included when the prepare carries ANIRA_PREPARE_EXCLUSIVE; unprepare gives it back, once per successful prepare, at the handler's next prepare or its destroy, before the loaded model is released. Every process and reset call receives the handler's prepared pointer beside the engine's user_data, as (ctx, prepared, user_data), and the loaded pointer in the context (anira_engine_ctx.loaded). release fires once, when the last reference to the engine dies (its handle, the pipelines it was added to, their handlers, the loaded models), after every unload, whether or not init ever ran.\nTwo handlers share one loaded model when they run the same engine object on an equal model configuration (the whole variant: every entry, spec and extension the engine may read through load's record) resolved to equal tensors, on the same provider, whichever pipelines they were created from; two engine objects never share, even under one id with the same callbacks. The shared call slots of a loaded model are its instances (anira_engine_load_info.instances, the model's max_instances): a process call of a handler whose model is stateless claims one of them, and no two calls run at once on one instance. A model declared ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0 shared slots: its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their prepare; their inferences run one at a time and in order, under the dispatch gate), their calls carry ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claim no shared slot and run on what their prepare built. The engine binds by name where its side has names: the load record carries the name each slot binds to (the entry's tensors record, else the canonical name), and an engine that cannot bind a slot refuses load.\nprocess runs on an inference thread, in ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage context (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call): the instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays in slot order, State tensors included, the ticket, the per-call flags and the loaded pointer. The adapter rule: read every extent and every memory handle (data pointer, byte_offset, strides, domain) from the tensors of THIS call, never from a value kept at load or prepare, and never assume a tensor is anira's own buffer (the halves of a declared State pair alternate between two buffers; a later pre-release hands a caller's Buffer tensor over in place). A status other than ANIRA_OK fails the chunk: it lands in anira_handler_rt_error with one latched record, anira zeroes the outputs, the chunk delivers zeros at its stream position, a State pair keeps its last good value. reset re-initialises the state an engine keeps per handler: for an exclusive handler, at the first inference of a new stream (after prepare, after anira_handler_reset), on that handler's prepared with that inference's context, right before its process; a handler whose model is stateless is never reset. The flags are the engine's promises, reported in anira_plan_info.engine_flags and consumed by later contract options (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME of anira/abi/enums.h); a bit this header does not define is ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create. The callback typedefs carry no real-time attribute: whether process is real-time is the engine's own promise, the flag. The C++ face is anira::Engine of anira/anira.hpp.",
       "includes": [
         "<stddef.h>",
         "<stdint.h>",
@@ -7934,12 +7939,36 @@
           "doc": "The release function of an engine: called exactly once, when the last reference to the anira_custom_engine dies (anira_custom_engine_destroy, anira_pipeline_destroy or anira_handler_destroy, whichever comes last), after every unload, whether or not init ever ran. No callback of the engine runs afterwards. NULL: none."
         },
         {
+          "kind": "callback",
+          "name": "anira_engine_query_fn",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_init_info*",
+              "name": "info",
+              "doc": "The facts of the core in effect at the call (the log level, the thread count the context asks for, the context asking); valid until the callback returns."
+            },
+            {
+              "type": "void*",
+              "name": "user_data",
+              "doc": "The descriptor's user_data."
+            },
+            {
+              "type": "uint64_t*",
+              "name": "out_available",
+              "doc": "Receives a bitmask over the descriptor's providers list: bit i set means providers[i] is usable here, now. The default provider is always served and has no bit; a bit beyond num_providers is ignored."
+            }
+          ],
+          "thread": "main-thread",
+          "doc": "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
+        },
+        {
           "kind": "struct",
           "name": "anira_engine_desc",
           "tier": 2,
           "callback_descriptor": true,
           "padding_free": true,
-          "doc": "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 112 bytes, ILP32 68), growth at the tail. The slots are listed as the stage's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves. process is required; every other slot may be NULL.",
+          "doc": "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 120 bytes, ILP32 72), growth at the tail. The slots are listed as the stage's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves and the query that says which of them are usable here. process is required; every other slot may be NULL.",
           "fields": [
             {
               "name": "struct_size",
@@ -8025,11 +8054,16 @@
               "name": "reserved",
               "type": "uint32_t",
               "doc": "0."
+            },
+            {
+              "name": "query",
+              "type": "anira_engine_query_fn",
+              "doc": "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; at anira_handler_create and at anira_pipeline_capabilities_backends / _edge, before init and any number of times. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."
             }
           ],
           "init": {
             "name": "ANIRA_ENGINE_DESC_INIT",
-            "value": "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0",
+            "value": "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL",
             "doc": "An engine without a callback and without a promise (flags 0): process must be filled before anira_custom_engine_create."
           }
         }
@@ -8389,6 +8423,80 @@
           "since": "0.2",
           "doc": "Adds a custom engine to the pipeline, under the id it was created with (anira_custom_engine_create): the pipeline's model entries name it so. The engines of one pipeline have distinct ids. Legal before or after anira_pipeline_add_inference; a handler copies the pipeline at anira_handler_create, so a later addition does not reach that handler. An added engine no entry names is not a plan and not an error; an entry whose id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or engine; ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine with the engine's id, this engine or another. A refused call takes no reference."
+        },
+        {
+          "kind": "function",
+          "name": "anira_pipeline_capabilities_backends",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_pipeline*",
+              "name": "pipeline",
+              "doc": "The pipeline whose custom engines are asked."
+            },
+            {
+              "type": "const anira_context*",
+              "name": "context",
+              "doc": "The context whose probed rows lead the list."
+            },
+            {
+              "type": "uint32_t",
+              "name": "element_size",
+              "doc": "sizeof(anira_backend_id) of the caller's header, the stride of out."
+            },
+            {
+              "type": "uint32_t*",
+              "name": "count",
+              "doc": "In: the capacity of out in elements; out: the number of backends."
+            },
+            {
+              "type": "anira_backend_id*",
+              "name": "out",
+              "doc": "Receives the rows at the caller's stride, or NULL to ask for the count only."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The backends usable here for a handler of this pipeline on this context: the context's rows first (anira_capabilities_backends: the built-in engines on the providers their runtimes report, as the last anira_context_probe left them), then, for every custom engine added to the pipeline, in the order they were added, one row per provider usable here: the default provider first, then each provider of the descriptor's list whose query bit is set (anira_engine_query_fn; every listed provider for an engine without a query), engine ANIRA_ENGINE_NONE with the engine's id in engine_id. Every call runs the custom engines' queries; the built-in rows are refreshed by anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a custom provider's provider_id) and into the context's store (a built-in engine's provider_id): valid until the pipeline is destroyed and until the context's next probe. Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element.",
+          "return_doc": "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, context or count or an element_size below the struct_size slot, or the status a custom engine's query returned when it failed."
+        },
+        {
+          "kind": "function",
+          "name": "anira_pipeline_capabilities_edge",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "const anira_pipeline*",
+              "name": "pipeline",
+              "doc": "The pipeline whose custom engines are asked."
+            },
+            {
+              "type": "const anira_context*",
+              "name": "context",
+              "doc": "The context whose edge registry answers for a built-in engine."
+            },
+            {
+              "type": "anira_domain",
+              "name": "from",
+              "doc": "The tensor's domain."
+            },
+            {
+              "type": "const anira_backend_id*",
+              "name": "to",
+              "doc": "The backend; read within its struct_size. A custom engine by its engine_id (engine ANIRA_ENGINE_NONE), a custom provider by its provider_id."
+            },
+            {
+              "type": "anira_edge_info*",
+              "name": "out",
+              "doc": "Receives the row, read and written within its struct_size (set it before the call)."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.2",
+          "doc": "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to the default provider and to XNNPACK, the CPU providers host memory reaches without a copy, a host copy the engine makes for itself to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's.",
+          "return_doc": "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row for the pair (out untouched: a custom engine the pipeline does not add, a provider it does not declare or its query cleared, a domain other than the host's); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields; or the status a custom engine's query returned when it failed."
         },
         {
           "kind": "function",

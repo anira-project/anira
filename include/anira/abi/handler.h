@@ -410,6 +410,69 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipe
                                                             anira_error* err) ANIRA_NOEXCEPT;
 
 /**
+ * @brief The backends usable here for a handler of this pipeline on this context: the context's
+ * rows first (anira_capabilities_backends: the built-in engines on the providers their
+ * runtimes report, as the last anira_context_probe left them), then, for every custom
+ * engine added to the pipeline, in the order they were added, one row per provider
+ * usable here: the default provider first, then each provider of the descriptor's list
+ * whose query bit is set (anira_engine_query_fn; every listed provider for an engine
+ * without a query), engine ANIRA_ENGINE_NONE with the engine's id in engine_id. Every
+ * call runs the custom engines' queries; the built-in rows are refreshed by
+ * anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a
+ * custom provider's provider_id) and into the context's store (a built-in engine's
+ * provider_id): valid until the pipeline is destroyed and until the context's next
+ * probe. Stride-explicit enumeration: min(element_size, the library's record size) bytes
+ * are written per element.
+ * @param pipeline The pipeline whose custom engines are asked.
+ * @param context The context whose probed rows lead the list.
+ * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
+ * @param count In: the capacity of out in elements; out: the number of backends.
+ * @param out Receives the rows at the caller's stride, or NULL to ask for the count only.
+ * @return ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, ANIRA_ERROR_INVALID_ARGUMENT for a
+ *         NULL pipeline, context or count or an element_size below the struct_size slot, or the
+ *         status a custom engine's query returned when it failed.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const anira_pipeline* pipeline,
+                                                                       const anira_context* context,
+                                                                       uint32_t element_size,
+                                                                       uint32_t* count,
+                                                                       anira_backend_id* out) ANIRA_NOEXCEPT;
+
+/**
+ * @brief One row of the edge registry a handler of this pipeline sees on this context: for a
+ * built-in engine the context's row (anira_capabilities_edge); for a custom engine added
+ * to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable
+ * here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to
+ * the default provider and to XNNPACK, the CPU providers host memory reaches without a
+ * copy, a host copy the engine makes for itself to every other provider, the reason
+ * saying the engine declared the provider and its query reported it usable. The strings'
+ * lifetime is anira_pipeline_capabilities_backends's.
+ * @param pipeline The pipeline whose custom engines are asked.
+ * @param context The context whose edge registry answers for a built-in engine.
+ * @param from The tensor's domain.
+ * @param to The backend; read within its struct_size. A custom engine by its engine_id (engine
+ *        ANIRA_ENGINE_NONE), a custom provider by its provider_id.
+ * @param out Receives the row, read and written within its struct_size (set it before the
+ *        call).
+ * @return ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row
+ *         for the pair (out untouched: a custom engine the pipeline does not add, a provider it
+ *         does not declare or its query cleared, a domain other than the host's);
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed
+ *         fields; or the status a custom engine's query returned when it failed.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_edge(const anira_pipeline* pipeline,
+                                                                   const anira_context* context,
+                                                                   anira_domain from,
+                                                                   const anira_backend_id* to,
+                                                                   anira_edge_info* out) ANIRA_NOEXCEPT;
+
+/**
  * @brief Destroys a pipeline; handlers created from it keep their copy. The release function of
  * a stage fires here when no handler shares its carrier any more, and a custom engine's
  * when neither its handle, another pipeline, a handler nor a loaded model holds it any

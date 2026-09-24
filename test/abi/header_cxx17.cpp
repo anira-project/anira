@@ -171,7 +171,8 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
                   ? 1
                   : 0;
     checks += load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == nullptr &&
-                      engine.providers == nullptr && engine.num_providers == 0U
+                      engine.providers == nullptr && engine.num_providers == 0U &&
+                      engine.query == nullptr
                   ? 1
                   : 0;
     checks += load_info.option_keys == nullptr && load_info.num_options == 0U ? 1 : 0;
@@ -230,6 +231,10 @@ static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_create(nullptr, nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_destroy(nullptr)));
 static_assert(noexcept(anira_pipeline_add_engine(nullptr, nullptr, nullptr)));
+static_assert(
+    noexcept(anira_pipeline_capabilities_backends(nullptr, nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(
+    anira_pipeline_capabilities_edge(nullptr, nullptr, ANIRA_DOMAIN_HOST, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
 // The callback typedef carries no real-time attribute: a plain function converts to it.

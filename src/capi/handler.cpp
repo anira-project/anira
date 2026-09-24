@@ -77,9 +77,11 @@
 #include "capi_internal.h"
 #include "context.h"
 #include "engine.h"
+#include "enumerate.h"
 #include "ext_registry.h"
 #include "handles.h"
 #include "port.h"
+#include "providers.h"
 #include "stage.h"
 #include "v3_to_v2.h"
 #include "validate.h"
@@ -835,66 +837,26 @@ bool consumes_provider_options(const anira_pipeline& pipeline, const anira::capi
     return false;
 }
 
-// Whether the context's capabilities list a backend: the engine on the provider (a custom
-// provider by its name).
-bool context_serves(const anira_context& context,
-                    anira_engine engine,
-                    anira_provider provider,
-                    const std::string& provider_id) {
-    const std::scoped_lock<std::mutex> lock(context.m_capabilities.m_mutex);
-    for (const anira_backend_id& row : context.m_capabilities.m_backends) {
-        if (row.engine != static_cast<uint32_t>(engine) ||
-            row.provider != static_cast<uint32_t>(provider)) {
-            continue;
-        }
-        const std::string_view listed = row.provider_id != nullptr ? row.provider_id : "";
-        if (listed == provider_id) { return true; }
-    }
-    return false;
-}
-
-// The providers the context's capabilities list for an engine, as a message names them.
-std::string context_providers(const anira_context& context, anira_engine engine) {
-    std::string text;
-    const std::scoped_lock<std::mutex> lock(context.m_capabilities.m_mutex);
-    for (const anira_backend_id& row : context.m_capabilities.m_backends) {
-        if (row.engine != static_cast<uint32_t>(engine)) { continue; }
-        if (!text.empty()) { text += ", "; }
-        text += anira::capi::provider_label(static_cast<anira_provider>(row.provider),
-                                            row.provider_id != nullptr ? row.provider_id : "");
-    }
-    return text.empty() ? "none" : text;
-}
-
-// The providers a custom engine's descriptor lists, as a message names them.
-std::string listed_providers(const anira::capi::EngineCarrier& carrier) {
-    std::string text;
-    for (const std::string& provider : carrier.providers()) {
-        if (!text.empty()) { text += ", "; }
-        text += provider;
-    }
-    return text.empty() ? "none" : text;
-}
-
 // Every set of the context's "provider_options" extension against the backend it names, at
-// create, as the plans' providers are checked below: a built-in engine must serve the set's
-// provider on this context (that an adapter reads the kind for it was the context's create's
-// question), a custom engine of the pipeline must list the kind and serve the provider; a set
-// for a custom engine this pipeline does not add is another pipeline's and passes. So a
-// misspelled provider word, which reads as a custom provider's name, is refused here and
-// never silently ignored, and a set no plan of the handler runs on is still no error.
+// create, as the plans' providers are checked below, through the one path of providers.h: a
+// built-in engine must serve the set's provider on this context (that an adapter reads the
+// kind for it was the context's create's question), a custom engine of the pipeline must list
+// the kind and serve the provider by its declared list and its query; a set for a custom
+// engine this pipeline does not add is another pipeline's and passes. So a misspelled provider
+// word, which reads as a custom provider's name, is refused here and never silently ignored,
+// and a set no plan of the handler runs on is still no error.
 void check_option_sets(const anira_context& context, const anira_pipeline& pipeline) {
     const auto* options =
         context.m_config.m_ext.payload<anira::capi::ProviderOptionsPayload>("provider_options");
     if (options == nullptr) { return; }
     for (const anira::capi::ProviderOptionSet& set : options->m_sets) {
-        const std::string provider = anira::capi::provider_label(set.m_provider, set.m_provider_id);
         std::string message = "handler: provider_options: the set for backend '";
         message += anira::capi::backend_label(set.m_engine,
                                               set.m_engine_id,
                                               set.m_provider,
                                               set.m_provider_id);
         message += "': ";
+        anira::capi::ServedProviders served;
         if (!set.m_engine_id.empty()) {
             const std::shared_ptr<const anira::capi::EngineCarrier> engine =
                 engine_by_id(pipeline, set.m_engine_id);
@@ -907,33 +869,24 @@ void check_option_sets(const anira_context& context, const anira_pipeline& pipel
                     "consumed_kinds lacks \"context:provider_options\")";
                 throw StatusError(ANIRA_ERROR_EXTENSION_UNCONSUMED, message);
             }
-            if (engine->serves(set.m_provider, set.m_provider_id)) { continue; }
-            message += "custom engine '";
-            message += engine->id();
-            message += "' does not serve provider '";
-            message += provider;
-            message += "' (its descriptor lists: ";
-            message += listed_providers(*engine);
-            message += ")";
-            throw StatusError(ANIRA_ERROR_NOT_SUPPORTED, message);
+            served = anira::capi::served_by_custom(context, *engine);
+        } else {
+            served = anira::capi::served_by_builtin(context, set.m_engine);
         }
-        if (context_serves(context, set.m_engine, set.m_provider, set.m_provider_id)) { continue; }
-        message += "engine '";
-        message += anira::capi::engine_word(set.m_engine);
-        message += "' does not serve provider '";
-        message += provider;
-        message += "' on this context (its capabilities list: ";
-        message += context_providers(context, set.m_engine);
-        message += ")";
+        if (served.serves(set.m_provider, set.m_provider_id)) { continue; }
+        message += anira::capi::unserved_message(served, set.m_provider, set.m_provider_id);
         throw StatusError(ANIRA_ERROR_NOT_SUPPORTED, message);
     }
 }
 
-// Whether every plan of the table runs on a provider its engine serves: a built-in engine's
-// provider must be in the context's capabilities (what its runtime reports), a registered
-// engine's in its descriptor's list, and the 2.x pass-through serves the default provider
-// alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and what is
-// served; the engine's load may still refuse a provider at run time (a device missing).
+// Whether every plan of the table runs on a provider its engine serves here, through the one
+// path of providers.h: a built-in engine's provider must be in the context's capabilities
+// (what its runtime reported at the last probe), a registered engine's in its descriptor's
+// list and reported usable by its query (run now, before its init), and the 2.x pass-through
+// serves the default provider alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
+// the provider and what is served (a declared provider the query cleared says so); a query
+// that fails fails the create with its status; the engine's load may still refuse a provider
+// at run time (a device lost between create and prepare).
 void check_providers(const anira_context& context,
                      const anira_pipeline& pipeline,
                      const anira::capi::Derived& derived) {
@@ -941,36 +894,13 @@ void check_providers(const anira_context& context,
     for (const anira::capi::PlanKey& key : derived.m_plans) {
         if (key.m_provider == ANIRA_PROVIDER_DEFAULT && key.m_provider_id.empty()) { continue; }
         const anira::capi::ModelEntry& row = model.m_models[key.m_row];
-        const std::string provider = anira::capi::provider_label(key.m_provider, key.m_provider_id);
-        std::string message = "handler: models[" + std::to_string(key.m_row) + "]: ";
-        if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
-                registered_engine(pipeline, row)) {
-            if (engine->serves(key.m_provider, key.m_provider_id)) { continue; }
-            message += "custom engine '";
-            message += engine->id();
-            message += "' does not serve provider '";
-            message += provider;
-            message += "' (its descriptor lists: ";
-            message += listed_providers(*engine);
-            message += ")";
-        } else if (row.is_custom()) {
-            message += "engine '";
-            message += row.m_engine_id;
-            message += "' serves the default provider alone; asked for '";
-            message += provider;
-            message += "'";
-        } else if (!context_serves(context, row.m_engine, key.m_provider, key.m_provider_id)) {
-            message += "engine '";
-            message += anira::capi::engine_word(row.m_engine);
-            message += "' does not serve provider '";
-            message += provider;
-            message += "' on this context (its capabilities list: ";
-            message += context_providers(context, row.m_engine);
-            message += ")";
-        } else {
-            continue;
-        }
-        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED, message);
+        const anira::capi::ServedProviders served =
+            anira::capi::served_providers(context, pipeline, row);
+        if (served.serves(key.m_provider, key.m_provider_id)) { continue; }
+        throw StatusError(
+            ANIRA_ERROR_NOT_SUPPORTED,
+            "handler: models[" + std::to_string(key.m_row) +
+                "]: " + anira::capi::unserved_message(served, key.m_provider, key.m_provider_id));
     }
 }
 
@@ -2092,6 +2022,67 @@ anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipeline,
     pipeline->m_engines.push_back(engine->m_carrier);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
+
+anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const anira_pipeline* pipeline,
+                                                             const anira_context* context,
+                                                             uint32_t element_size,
+                                                             uint32_t* count,
+                                                             anira_backend_id* out) ANIRA_NOEXCEPT
+    try {
+    if (pipeline == nullptr || context == nullptr || count == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    // The context's rows first, then the custom engines' (their queries run here); a failed
+    // query is a StatusError the firewall returns as its status.
+    const anira::capi::CustomRows custom = anira::capi::custom_rows(*context, *pipeline);
+    std::vector<anira_backend_id> rows;
+    {
+        const std::scoped_lock<std::mutex> lock(context->m_capabilities.m_mutex);
+        rows = context->m_capabilities.m_backends;
+    }
+    rows.insert(rows.end(), custom.m_backends.begin(), custom.m_backends.end());
+    return anira::capi::enumerate_records(rows, element_size, count, out);
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_pipeline_capabilities_edge(const anira_pipeline* pipeline,
+                                                         const anira_context* context,
+                                                         anira_domain from,
+                                                         const anira_backend_id* to,
+                                                         anira_edge_info* out) ANIRA_NOEXCEPT try {
+    if (pipeline == nullptr || context == nullptr || to == nullptr || out == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (to->struct_size < k_backend_id_head || out->struct_size < 7 * sizeof(uint32_t)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const bool has_engine_id =
+        to->struct_size >= offsetof(anira_backend_id, engine_id) + sizeof(const char*);
+    if (!has_engine_id || to->engine_id == nullptr) {
+        // A built-in engine: the context's registry answers.
+        return anira_capabilities_edge(anira_context_capabilities(context), from, to, out);
+    }
+    const std::string_view provider_id =
+        to->struct_size >= sizeof(anira_backend_id) && to->provider_id != nullptr
+            ? std::string_view(to->provider_id)
+            : std::string_view();
+    // A custom engine of the pipeline on a provider usable here, from host memory: the edge
+    // custom_rows builds (the engines' queries run here); anything else has no row.
+    if (from != ANIRA_DOMAIN_HOST) { return ANIRA_ERROR_EDGE_UNREACHABLE; }
+    const std::string_view wanted_engine(to->engine_id);
+    const anira::capi::CustomRows rows = anira::capi::custom_rows(*context, *pipeline);
+    for (size_t i = 0; i < rows.m_backends.size(); ++i) {
+        const anira_backend_id& row = rows.m_backends[i];
+        const std::string_view listed = row.provider_id != nullptr ? row.provider_id : "";
+        if (std::string_view(row.engine_id) == wanted_engine && row.provider == to->provider &&
+            listed == provider_id) {
+            std::memcpy(out,
+                        &rows.m_edges[i],
+                        std::min<size_t>(out->struct_size, sizeof(anira_edge_info)));
+            return ANIRA_OK;
+        }
+    }
+    return ANIRA_ERROR_EDGE_UNREACHABLE;
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA_NOEXCEPT try {
     delete pipeline;

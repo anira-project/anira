@@ -321,6 +321,7 @@ export const anira_phase = {
   ANIRA_PHASE_INIT: 9,
   ANIRA_PHASE_LOAD: 10,
   ANIRA_PHASE_UNLOAD: 11,
+  ANIRA_PHASE_QUERY: 12,
 } as const
 export type anira_phase = (typeof anira_phase)[keyof typeof anira_phase]
 

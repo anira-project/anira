@@ -173,9 +173,10 @@ ANIRA_API const anira_capabilities* ANIRA_CALL anira_context_capabilities(const 
  * @brief The backends that are compiled in and usable here, one record per (engine, provider)
  * the build and its runtimes report: the enum's providers by provider, any other by
  * provider_id in the runtime's own words (an ONNX Runtime execution provider by its
- * name); a custom engine's providers are its descriptor's and are not listed here.
- * Stride-explicit enumeration: min(element_size, the library's record size) bytes are
- * written per element.
+ * name); a custom engine's rows are its pipeline's
+ * (anira_pipeline_capabilities_backends), since an engine belongs to a pipeline, not to
+ * the context. Stride-explicit enumeration: min(element_size, the library's record size)
+ * bytes are written per element.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of backends.
@@ -244,7 +245,9 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilit
 
 /**
  * @brief One row of the edge registry, by domain and backend: the engine on the provider, a
- * custom provider by its provider_id (read when the caller's record has the slot).
+ * custom provider by its provider_id (read when the caller's record has the slot). A
+ * custom engine (engine_id set) has no row here: its rows are its pipeline's
+ * (anira_pipeline_capabilities_edge).
  * @param capabilities The capabilities.
  * @param from The tensor's domain.
  * @param to The backend; read within its struct_size.

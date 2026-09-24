@@ -26,7 +26,9 @@
 
 #include "../backends/Adapters.h"
 #include "capi_internal.h"
+#include "enumerate.h"
 #include "ext_registry.h"
+#include "providers.h"
 #include "validate.h"
 
 using anira::capi::translate_exception;
@@ -68,12 +70,9 @@ bool has_device_block(const anira_context_config& config) {
            config.m_metal.has_value() || config.m_d3d12.has_value() || config.m_webgpu.has_value();
 }
 
-// Whether a provider of the enum runs on the CPU, where host memory reaches it without a
-// copy: the default provider and XNNPACK; every other provider of the enum, and every custom
-// one, is a device or an accelerator the engine moves host memory to itself.
+// The CPU rule of the edge registry (providers.h cpu_provider), on a probed provider.
 bool cpu_provider(const anira::backend::ProviderInfo& provider) noexcept {
-    return provider.m_provider_id.empty() && (provider.m_provider == ANIRA_PROVIDER_DEFAULT ||
-                                              provider.m_provider == ANIRA_PROVIDER_XNNPACK);
+    return anira::capi::cpu_provider(provider.m_provider, provider.m_provider_id);
 }
 
 // The Host-only capability report of this pre-release: every compiled-in engine on the
@@ -128,48 +127,6 @@ void probe(anira_capabilities& capabilities) {
     capabilities.m_domains = std::move(domains);
     capabilities.m_ext_kinds = std::move(ext_kinds);
     capabilities.m_edges = std::move(edges);
-}
-
-// The enumeration convention of section 6a: out == NULL asks for the count, a short buffer
-// is filled as far as it goes and returns ANIRA_INCOMPLETE. Records are written at the
-// caller's stride, min(element_size, the library's record size) bytes each, so the row's
-// struct_size tells a newer caller how much of its record the library filled.
-template <class T>
-anira_status enumerate_records(const std::vector<T>& rows,
-                               uint32_t element_size,
-                               uint32_t* count,
-                               void* out) {
-    if (count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const auto total = static_cast<uint32_t>(rows.size());
-    if (out == nullptr) {
-        *count = total;
-        return ANIRA_OK;
-    }
-    if (element_size < sizeof(uint32_t)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const uint32_t capacity = *count;
-    const uint32_t written = std::min(capacity, total);
-    const size_t bytes = std::min<size_t>(element_size, sizeof(T));
-    auto* destination = static_cast<unsigned char*>(out);
-    for (uint32_t i = 0; i < written; ++i) {
-        std::memcpy(destination + static_cast<size_t>(i) * element_size, &rows[i], bytes);
-    }
-    *count = total;
-    return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
-}
-
-template <class T>
-anira_status enumerate_scalars(const std::vector<T>& rows, uint32_t* count, T* out) {
-    if (count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    const auto total = static_cast<uint32_t>(rows.size());
-    if (out == nullptr) {
-        *count = total;
-        return ANIRA_OK;
-    }
-    const uint32_t capacity = *count;
-    const uint32_t written = std::min(capacity, total);
-    for (uint32_t i = 0; i < written; ++i) { out[i] = rows[i]; }
-    *count = total;
-    return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
 }
 
 // The fixed head of anira_backend_id: struct_size, engine, provider.
@@ -274,7 +231,7 @@ anira_status ANIRA_CALL anira_capabilities_backends(const anira_capabilities* ca
                                                     anira_backend_id* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_records(capabilities->m_backends, element_size, count, out);
+    return anira::capi::enumerate_records(capabilities->m_backends, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_domains(const anira_capabilities* capabilities,
@@ -282,7 +239,7 @@ anira_status ANIRA_CALL anira_capabilities_domains(const anira_capabilities* cap
                                                    anira_domain* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_scalars(capabilities->m_domains, count, out);
+    return anira::capi::enumerate_scalars(capabilities->m_domains, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capabilities* capabilities,
@@ -290,7 +247,7 @@ anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capabilities* c
                                                      const char** out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_scalars(capabilities->m_ext_kinds, count, out);
+    return anira::capi::enumerate_scalars(capabilities->m_ext_kinds, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilities* capabilities,
@@ -299,7 +256,7 @@ anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilities* capab
                                                  anira_edge_info* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    return enumerate_records(capabilities->m_edges, element_size, count, out);
+    return anira::capi::enumerate_records(capabilities->m_edges, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabilities,
@@ -346,7 +303,7 @@ anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
         id.engine = static_cast<uint32_t>(engine);
         backends.push_back(id);
     }
-    return enumerate_records(backends, element_size, count, out);
+    return anira::capi::enumerate_records(backends, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 uint64_t ANIRA_CALL anira_context_byte_image_bytes(const anira_context* context,

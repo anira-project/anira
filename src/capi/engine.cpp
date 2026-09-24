@@ -73,6 +73,21 @@ anira_status EngineCarrier::ensure_init(const anira_init_info& info) const {
     return ANIRA_OK;
 }
 
+anira_status EngineCarrier::query(const anira_init_info& info, uint64_t& available) const {
+    const uint64_t all =
+        m_providers.size() >= 64 ? ~uint64_t{0} : (uint64_t{1} << m_providers.size()) - 1;
+    available = all;
+    if (m_desc.query == nullptr) { return ANIRA_OK; }
+    uint64_t answer = 0;
+    const anira_status status = m_desc.query(&info, m_desc.user_data, &answer);
+    if (status != ANIRA_OK) {
+        available = 0;
+        return status;
+    }
+    available = answer & all;
+    return ANIRA_OK;
+}
+
 EngineFacts engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines) {
     EngineFacts facts;
     for (const std::shared_ptr<const EngineCarrier>& engine : engines) {

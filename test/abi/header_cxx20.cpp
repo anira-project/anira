@@ -444,6 +444,10 @@ class ProbeEngine final : public anira::Engine {
 public:
     ProbeEngine() : anira::Engine("org.example.probe") {}
     uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
+    // The query: every declared provider but the first is usable here.
+    std::uint64_t available(const anira::InitInfo& info) const override {
+        return info.num_threads() > 0 ? ~std::uint64_t{1} : 0;
+    }
 
     void init(const anira::InitInfo& info) override {
         if (info.context() == nullptr) {
@@ -567,6 +571,11 @@ int anira_header_cxx20_probe() {
         // stage in an initializer list; the enum alias where the model config takes one.
         const std::shared_ptr<anira::Engine> probe_engine = std::make_shared<ProbeEngine>();
         other.register_engine(probe_engine);
+        // The pipeline's capabilities on a context: the rows, an edge.
+        const anira::PipelineCapabilities caps =
+            other.capabilities(static_cast<const anira_context*>(nullptr));
+        checks += caps.backends().empty() ? 0 : 1;
+        checks += caps.edge(ANIRA_DOMAIN_HOST, caps.backends().front()).available == 1U ? 1 : 0;
         const anira::Pipeline with_engine{anira::stage::Inference(model).engine(probe_engine)};
         const anira::stage::Inference brings(model);
         checks += brings.engines().empty() ? 1 : 0;

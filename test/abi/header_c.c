@@ -157,6 +157,15 @@ static void ANIRA_CALL on_engine_unprepare(void* prepared, void* user_data) {
     (void)user_data;
 }
 
+static anira_status ANIRA_CALL on_engine_query(const anira_init_info* info,
+                                               void* user_data,
+                                               uint64_t* out_available) {
+    (void)info;
+    (void)user_data;
+    *out_available = 0u;
+    return ANIRA_OK;
+}
+
 static void ANIRA_CALL on_engine_release(void* user_data) {
     (void)user_data;
 }
@@ -439,7 +448,8 @@ int anira_header_c_probe(void) {
             engine.struct_size == sizeof(anira_engine_desc) && engine.user_data == NULL ? 1 : 0;
         checks += engine.flags == 0u && engine.process == NULL && engine.release == NULL ? 1 : 0;
         checks += engine.load == NULL && engine.unload == NULL && engine.init == NULL ? 1 : 0;
-        checks += engine.providers == NULL && engine.num_providers == 0u ? 1 : 0;
+        checks +=
+            engine.providers == NULL && engine.num_providers == 0u && engine.query == NULL ? 1 : 0;
         checks += load_info.struct_size == sizeof(anira_engine_load_info) &&
                           load_info.model == NULL && load_info.instances == 0u
                       ? 1
@@ -477,6 +487,7 @@ int anira_header_c_probe(void) {
         engine.unload = on_engine_unload;
         engine.init = on_engine_init;
         engine.release = on_engine_release;
+        engine.query = on_engine_query;
         checks += engine.flags == 7u ? 1 : 0;
         if (checks < 0) { /* never true: the object is never linked */
             checks += anira_sizeof(ANIRA_STRUCT_ENGINE_CTX) == 64u ? 1 : 0;
@@ -488,6 +499,22 @@ int anira_header_c_probe(void) {
                           ? 1
                           : 0;
             anira_custom_engine_destroy(custom);
+            /* The pipeline's capabilities: the context's rows and the custom engines'. */
+            checks += anira_pipeline_capabilities_backends(NULL,
+                                                           NULL,
+                                                           sizeof(anira_backend_id),
+                                                           NULL,
+                                                           NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_pipeline_capabilities_edge(NULL, NULL, ANIRA_DOMAIN_HOST, NULL, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            {
+                uint64_t available = 0u;
+                checks += engine.query(&init_info, NULL, &available) == ANIRA_OK ? 1 : 0;
+            }
             /* The slots, from the outermost level in: init once per object, load once per
                loaded model, prepare once per handler on it, process and reset per call,
                then the way back out. */

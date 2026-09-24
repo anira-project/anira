@@ -134,6 +134,8 @@ _anira_num_inference_threads
 _anira_pipeline_add_engine
 _anira_pipeline_add_inference
 _anira_pipeline_add_stage
+_anira_pipeline_capabilities_backends
+_anira_pipeline_capabilities_edge
 _anira_pipeline_create
 _anira_pipeline_destroy
 _anira_plan_report_exts

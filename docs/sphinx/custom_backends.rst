@@ -117,11 +117,14 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   (``"cuda"``, ``"webgpu"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``, ``"vulkan"``) name a
   provider of the enum; any other string is a custom provider in the engine's own vocabulary
   (a reverse-URI name is the convention, not a rule), which a candidate names in
-  ``provider_id`` beside ``ANIRA_PROVIDER_DEFAULT`` and a model entry's pin spells as the
-  ``"engine"`` word's suffix. ``NULL`` with a count of 0 serves the default provider alone. A
-  candidate naming a provider the list lacks is ``ANIRA_ERROR_NOT_SUPPORTED`` at
-  ``anira_handler_create``, naming the engine, the provider and the list; ``load`` may still
-  refuse one it cannot serve at run time (a device missing).
+  ``provider_id`` beside ``ANIRA_PROVIDER_DEFAULT`` and a model entry's pin spells under its
+  ``"provider"`` key. ``NULL`` with a count of 0 serves the default provider alone. The list is
+  what the engine can ever serve; which of it is usable here, now, is the ``query`` slot's
+  answer (below). A candidate naming a provider the list lacks, or one the query reports
+  unavailable, is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the
+  engine, the provider and what is served (a declared provider the query cleared: "declares
+  provider 'x' but its query reports it unavailable here"); ``load`` may still refuse one it
+  cannot serve at run time (a device lost since).
 - ``process``: the engine call, ``anira_engine_process_fn``. Required.
 - ``reset``: ``anira_engine_reset_fn``. ``NULL``: nothing to reset.
 - ``prepare``: ``anira_engine_prepare_fn``. ``NULL``: nothing to prepare, and ``prepared`` is
@@ -132,6 +135,14 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
 - ``unload``: ``anira_engine_unload_fn``. ``NULL``: none.
 - ``init``: ``anira_engine_init_fn``. ``NULL``: nothing to initialise.
 - ``release``: ``anira_engine_release_fn``. ``NULL``: none.
+- ``query``: ``anira_engine_query_fn``, a tail field beyond the providers list, the engine's
+  own ``GetAvailableProviders``: which of ``providers`` are usable here, now, as a bitmask over
+  the list (bit *i* set: ``providers[i]``; the default provider is always served and has no
+  bit). It runs before ``init`` and any number of times, on the main thread, at
+  ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
+  ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
+  lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
+  ``NULL``: every listed provider is usable.
 
 Three levels, three pointers, three lifetimes: ``user_data`` lives with the engine object,
 ``loaded`` with one loaded model of it, ``prepared`` with one handler on that loaded model.
@@ -473,6 +484,42 @@ when the handler was its last holder. Whatever an earlier plan of the same prepa
 prepared goes back on the way out, through its ``unprepare`` and ``unload``, and the handler
 is left unprepared; a refused ``anira_custom_engine_create`` owes no ``release``.
 
+What a custom engine can serve here
+-----------------------------------
+
+A built-in engine's capabilities are the context's: its runtime is asked at
+``anira_context_create`` and ``anira_context_probe``, and ``anira_capabilities_backends``
+lists one row per provider it reports usable (:doc:`usage` section 3.1). A custom engine has
+the same three parts, on the pipeline it belongs to: its **declared** vocabulary
+(``providers``), a **measurement** (the ``query`` slot, run before ``init`` and any number of
+times) and a **visible report**, the pipeline's capabilities:
+
+.. code-block:: c
+
+    /* The rows a handler of this pipeline sees on this context: the context's, then one per
+       added engine and provider usable here (engine ANIRA_ENGINE_NONE, engine_id the
+       engine's id), the default provider first. Every call runs the engines' queries. */
+    uint32_t count = 0;
+    anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, NULL);
+    anira_backend_id* rows = malloc(count * sizeof *rows);
+    anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
+
+    /* One edge: host memory to the engine on a provider (zero-copy to the default provider and
+       XNNPACK, a host copy the engine makes itself to every other). */
+    anira_backend_id to = ANIRA_BACKEND_ID_INIT;
+    to.engine = ANIRA_ENGINE_NONE;
+    to.engine_id = "com.example.myengine";
+    to.provider = ANIRA_PROVIDER_COREML;
+    anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
+    anira_pipeline_capabilities_edge(pipe, context, ANIRA_DOMAIN_HOST, &to, &edge);
+
+The rows' strings point into the pipeline's engines and the context's store: valid until the
+pipeline is destroyed and until the context's next probe. ``anira_handler_create`` asks the
+same question for every candidate's provider of the engine, so what the report lists is what a
+handler runs on. In C++ the query is ``Engine::available(const InitInfo&)`` (the base answers
+every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
+(:cpp:class:`anira::PipelineCapabilities`).
+
 Sharing an engine across plugin instances
 -----------------------------------------
 
@@ -650,7 +697,8 @@ place of the function pointers, split as the C lifecycle is, exactly like
 (``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
 ``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
 default one in ``providers()`` (all read once, when its C engine is
-created at its first registration), may override ``init(const InitInfo&)`` (the base does
+created at its first registration), may override ``available(const InitInfo&)`` (the query,
+the base answers every bit) and ``init(const InitInfo&)`` (the base does
 nothing), and its ``load(const EngineLoadInfo&)`` returns a
 ``std::unique_ptr<Engine::Loaded>``, the loaded model, whose ``prepare(const PrepareInfo&)``
 returns a ``std::unique_ptr<Engine::Prepared>``, the handler's handle, on which

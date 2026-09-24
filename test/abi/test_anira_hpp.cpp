@@ -5,6 +5,7 @@
 // src/capi/handles.h, as test_Handles does.
 
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -1974,6 +1975,12 @@ public:
                                 : std::span<const char* const>{};
     }
     std::span<const char* const> providers() const noexcept override { return m_providers; }
+    std::uint64_t available(const anira::InitInfo& info) const override {
+        ++m_queried;
+        m_query_context = info.context();
+        if (m_query_throws) { throw anira::Error(ANIRA_ERROR_DEVICE, "no device here"); }
+        return m_available;
+    }
 
     void init(const anira::InitInfo& info) override {
         ++m_inited;
@@ -2031,7 +2038,11 @@ public:
     uint32_t m_flags = 0;
     float m_gain = 1.0F;
     bool m_consumes_entry = false;
-    std::vector<const char*> m_providers;  ///< what providers() answers
+    std::vector<const char*> m_providers;           ///< what providers() answers
+    std::uint64_t m_available = ~std::uint64_t{0};  ///< what available() answers
+    bool m_query_throws = false;
+    mutable int m_queried = 0;
+    mutable const anira_context* m_query_context = nullptr;
     bool m_init_throws = false;
     PrepareMode m_mode = PrepareMode::Ok;
     ThrowAt m_throw_at = ThrowAt::Prepare;
@@ -2421,6 +2432,66 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(twin.use_count(), 1);
     EXPECT_EQ(twin->m_released.load(), 1) << "the C engine the refused call created";
     EXPECT_EQ(engine->m_released.load(), 0);
+}
+
+// available() is the engine's query: the bitmask over providers() that says which are usable
+// here. A Pipeline's capabilities on a context list the context's rows and then the engine's
+// rows for the providers the mask keeps, the default provider first; an edge to a custom
+// provider is a host copy, to the default provider zero-copy; a candidate on a declared
+// provider the mask clears is refused at create, the message saying so; a throwing
+// available() fails the entry with its status.
+TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
+    const anira_test::Context context;
+    auto engine = std::make_shared<CountingEngine>();
+    engine->m_providers = {"coreml", "com.example.npu"};
+    engine->m_available = 0b01;
+    anira::Pipeline pipe;
+    pipe.register_engine(engine).inference(engine_stream_model());
+    const anira::PipelineCapabilities caps = pipe.capabilities(context.m_context);
+    const std::vector<anira::BackendId> rows = caps.backends();
+    EXPECT_EQ(engine->m_queried, 2) << "the count call and the fill call each run the query";
+    EXPECT_EQ(engine->m_query_context, context.m_context);
+    const std::vector<anira::BackendId> context_rows =
+        anira::Capabilities(anira_context_capabilities(context.m_context)).backends();
+    ASSERT_EQ(rows.size(), context_rows.size() + 2U);
+    const anira::BackendId& on_default = rows[context_rows.size()];
+    const anira::BackendId& on_coreml = rows[context_rows.size() + 1];
+    EXPECT_EQ(on_default.engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_STREQ(on_default.engine_id, k_cxx_engine_id);
+    EXPECT_EQ(on_default.provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+    EXPECT_EQ(on_coreml.provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
+    EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_default).edge_class,
+              static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+    EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).edge_class,
+              static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+    const Thrown unreachable = thrown_by([&] {
+        const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
+                                      .engine = ANIRA_ENGINE_NONE,
+                                      .provider = ANIRA_PROVIDER_DEFAULT,
+                                      .engine_id = k_cxx_engine_id,
+                                      .provider_id = "com.example.npu"};
+        static_cast<void>(caps.edge(ANIRA_DOMAIN_HOST, on_npu));
+    });
+    EXPECT_TRUE(unreachable.m_thrown);
+    EXPECT_EQ(unreachable.m_status, ANIRA_ERROR_EDGE_UNREACHABLE);
+
+    const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
+                                  .engine = ANIRA_ENGINE_NONE,
+                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                  .engine_id = k_cxx_engine_id,
+                                  .provider_id = "com.example.npu"};
+    anira::Pipeline other;
+    other.register_engine(engine).inference(engine_stream_model(), {on_npu});
+    const CHandler refused(context, other);
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_NOT_SUPPORTED) << refused.m_err.message;
+    EXPECT_NE(std::string(refused.m_err.message).find("unavailable here"), std::string::npos)
+        << refused.m_err.message;
+    EXPECT_EQ(engine->m_inited, 0) << "the query runs before init";
+
+    engine->m_query_throws = true;
+    const Thrown failed = thrown_by([&] { static_cast<void>(caps.backends()); });
+    EXPECT_TRUE(failed.m_thrown);
+    EXPECT_EQ(failed.m_status, ANIRA_ERROR_DEVICE);
 }
 
 // providers() fills the descriptor's list: a candidate per listed provider is a plan per

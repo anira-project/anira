@@ -2687,6 +2687,17 @@ public:
     /// registered; the strings are copied. A provider is part of the loaded model: two
     /// providers of one model are two loads (EngineLoadInfo::provider, provider_id).
     virtual std::span<const char* const> providers() const noexcept { return {}; }
+    /// Which of providers() are usable here, now, as a bitmask over the list (bit i set:
+    /// providers()[i]; the default provider is always served and has no bit): the engine's
+    /// own GetAvailableProviders, a device present, a library loaded. Called before init and
+    /// any number of times, on the main thread ([main-thread]; it may log, must not call an
+    /// entry that takes the core's lifecycle lock): at anira_handler_create, where every
+    /// candidate's provider of the engine is checked against the answer (a declared provider
+    /// the answer clears is ANIRA_ERROR_NOT_SUPPORTED, "declares provider 'x' but its query
+    /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
+    /// engine's rows beside the context's. The base answers every bit: every declared
+    /// provider is usable. It may throw, as init may: the status fails the calling entry.
+    virtual std::uint64_t available(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches
     /// it (a row of the engine survives validation), under the core's lifecycle lock
@@ -2787,6 +2798,7 @@ struct EngineTrampolines {
         desc.unload = &unload;
         desc.init = &init;
         desc.release = &release;
+        desc.query = &query;
         // The C engine owns the copy from a successful create on and deletes it in release; a
         // refused create never calls release, so the copy dies here with the throw. The handle
         // exists first, so that nothing between the create and its owner can leak the engine.
@@ -2832,6 +2844,15 @@ struct EngineTrampolines {
     static anira_status ANIRA_CALL init(const anira_init_info* info, void* user_data) noexcept {
         return guarded("init", [&] {
             engine_of(user_data).init(InitInfo(info));
+            return ANIRA_OK;
+        });
+    }
+    /// The query: the object's available() as the bitmask, a throw the status.
+    static anira_status ANIRA_CALL query(const anira_init_info* info,
+                                         void* user_data,
+                                         std::uint64_t* out_available) noexcept {
+        return guarded("query", [&] {
+            *out_available = engine_of(user_data).available(InitInfo(info));
             return ANIRA_OK;
         });
     }
@@ -3006,6 +3027,48 @@ private:
 }  // namespace stage
 
 /**
+ * @brief The backends and edges a handler of one Pipeline sees on one Context: the context's
+ * probed rows (Capabilities) and then one row per custom engine registered on the pipeline
+ * and provider it serves here, the default provider first, then every declared provider its
+ * Engine::available reports usable (anira_pipeline_capabilities_backends /
+ * anira_pipeline_capabilities_edge). Every call runs the engines' queries; the built-in rows
+ * are the context's last probe's. The strings of the rows point into the pipeline's engines
+ * and the context's store: valid while the Pipeline lives and until the context's next probe.
+ */
+class PipelineCapabilities {
+public:
+    PipelineCapabilities(const anira_pipeline* pipeline, const anira_context* context) noexcept
+        : m_pipeline(pipeline), m_context(context) {}
+
+    /// The context's backends, then the custom engines' rows (ANIRA_ENGINE_NONE with the
+    /// engine's id). @throws Error with a query's status when an engine's available() throws.
+    std::vector<BackendId> backends() const {
+        return detail::enumerate<BackendId>(
+            [this](uint32_t* count, BackendId* out) {
+                return anira_pipeline_capabilities_backends(m_pipeline,
+                                                            m_context,
+                                                            sizeof(BackendId),
+                                                            count,
+                                                            out);
+            },
+            "anira_pipeline_capabilities_backends");
+    }
+    /// One row, by domain and backend: the context's registry for a built-in engine, the
+    /// pipeline's for a custom one (engine_id set).
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
+    anira_edge_info edge(Domain from, const BackendId& to) const {
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, from, &to, &row),
+                      "anira_pipeline_capabilities_edge");
+        return row;
+    }
+
+private:
+    const anira_pipeline* m_pipeline;
+    const anira_context* m_context;
+};
+
+/**
  * @brief An anira_pipeline with its lifetime: the stages a handler runs, exactly one
  * stage::Inference and at most one stage::Custom around it, and the custom engines registered
  * on it. A custom engine is no stage: it is part of the inference stage, one more
@@ -3098,6 +3161,16 @@ public:
         detail::check(anira_pipeline_add_engine(m_pipeline, handle->m_engine, &err), err);
         m_engines.push_back(std::move(handle));
         return *this;
+    }
+
+    /// The backends and edges a handler of this pipeline sees on a context: the context's
+    /// rows and the registered engines' (their Engine::available runs on every call).
+    PipelineCapabilities capabilities(const Context& context) const noexcept {
+        return {m_pipeline, context.native()};
+    }
+    /// The same over a C context handle.
+    PipelineCapabilities capabilities(const anira_context* context) const noexcept {
+        return {m_pipeline, context};
     }
 
     const anira_pipeline* native() const noexcept { return m_pipeline; }

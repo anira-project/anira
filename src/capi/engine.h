@@ -16,6 +16,7 @@
 #include <anira/abi/status.h>
 #include <anira/system/Exports.h>
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -60,6 +61,13 @@ public:
     /// an init slot. Serialised by a mutex of the carrier: two handlers of two pipelines may
     /// reach one engine object from two threads.
     anira_status ensure_init(const anira_init_info& info) const;
+
+    /// The engine's query slot: which of the descriptor's providers are usable here, now, as
+    /// a bitmask over the list (bit i: providers()[i]); every listed provider for a descriptor
+    /// without a query. Runs before init and any number of times, never under the lifecycle
+    /// lock. The status the query returned (ANIRA_OK for none); bits beyond the list are
+    /// cleared.
+    anira_status query(const anira_init_info& info, uint64_t& available) const;
 
 private:
     std::string m_id;

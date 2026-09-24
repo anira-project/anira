@@ -614,7 +614,8 @@ typedef enum anira_pad_policy {
  * reserved for later anira engines. A custom engine (anira_custom_engine_create, added
  * to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the
  * pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id,
- * anira_plan_info, anira_stage_ctx).
+ * anira_plan_info; a stage reads the id off the plan report, since anira_stage_ctx
+ * carries the pair's values alone).
  */
 typedef enum anira_engine {
     ANIRA_ENGINE_NONE = 0,  /**< No engine; as a default engine it means models[0]. */
@@ -659,12 +660,13 @@ typedef enum anira_provider {
  * none, each of its slots being a callback of its own. Every message anira writes about
  * a slot names the phase by the lower-case name of its value (pre_process, post_process,
  * before_inference, inference, after_inference, prepare, release, reset, unprepare,
- * init, load, unload): a stage phase that fails or that an accessor refuses, a refused
- * init, load or prepare of a stage or an engine ("the engine 'x' refused load: it
- * returned N"), a failed engine call. Pinned now. The three inference-thread phases are
- * numbered in the order they run; the phases of the shared lifecycle
+ * init, load, unload, query): a stage phase that fails or that an accessor refuses, a
+ * refused init, load or prepare of a stage or an engine ("the engine 'x' refused load:
+ * it returned N"), a failed engine call. Pinned now. The three inference-thread phases
+ * are numbered in the order they run; the phases of the shared lifecycle
  * (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare,
- * then init, then the engine's two model-level phases, load and unload.
+ * then init, then the engine's two model-level phases, load and unload, then the
+ * engine's query.
  */
 typedef enum anira_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
@@ -709,6 +711,12 @@ typedef enum anira_phase {
      * unprepare of it: an engine's unload slot (anira_engine_unload_fn).
      */
     ANIRA_PHASE_UNLOAD = 11,
+    /**
+     * An engine's query slot (anira_engine_query_fn): which of its declared providers are
+     * usable here, now; at anira_handler_create and at anira_pipeline_capabilities_backends /
+     * _edge, before the engine's init and any number of times.
+     */
+    ANIRA_PHASE_QUERY = 12,
     ANIRA_PHASE_FORCE32 = 0x7fffffff
 } anira_phase;
 

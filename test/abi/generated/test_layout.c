@@ -455,7 +455,8 @@ _Static_assert(sizeof(anira_engine_desc) ==
                    sizeof(((const anira_engine_desc*)0)->release) +
                    sizeof(((const anira_engine_desc*)0)->providers) +
                    sizeof(((const anira_engine_desc*)0)->num_providers) +
-                   sizeof(((const anira_engine_desc*)0)->reserved),
+                   sizeof(((const anira_engine_desc*)0)->reserved) +
+                   sizeof(((const anira_engine_desc*)0)->query),
                "anira_engine_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_plan_slot, struct_size) == 0, "anira_plan_slot.struct_size first");
