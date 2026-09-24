@@ -75,22 +75,22 @@ jobs:
       - name: build device library (onnx-litert)
         run: |
           cmake -B build-ios-device ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphoneos ${ONNX_LITERT}
-          cmake --build build-ios-device --parallel 4
+          cmake --build build-ios-device --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
       - name: build simulator tests (onnx-litert)
         run: |
           cmake -B build-ios-sim ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${ONNX_LITERT} -DANIRA_WITH_TESTS=ON
-          cmake --build build-ios-sim --parallel 4
+          cmake --build build-ios-sim --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
       - name: build simulator tests (tflite)
         run: |
           cmake -B build-ios-sim-tflite ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${TFLITE} -DANIRA_WITH_TESTS=ON
-          cmake --build build-ios-sim-tflite --parallel 4
+          cmake --build build-ios-sim-tflite --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
       - name: build simulator library (no-backend)
         run: |
           cmake -B build-ios-sim-nobackend ${IOS_FLAGS} -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_ARCHITECTURES=arm64 ${NO_BACKEND}
-          cmake --build build-ios-sim-nobackend --parallel 4
+          cmake --build build-ios-sim-nobackend --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
       - name: run tests on the simulator
         run: |

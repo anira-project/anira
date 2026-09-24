@@ -20,6 +20,9 @@ fi
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 WORK="$(mktemp -d)"
+# Build parallelism follows the machine; a fixed number caps a big one and
+# oversubscribes a small one.
+JOBS="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 trap 'rm -rf "$WORK"' EXIT
 
 build_slice() {  # <name> <sysroot> <archs>
@@ -27,7 +30,7 @@ build_slice() {  # <name> <sysroot> <archs>
         -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_SYSROOT="$2" -DCMAKE_OSX_ARCHITECTURES="$3" \
         -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF -DANIRA_WITH_LIBTORCH=OFF "${BACKENDS[@]}" >/dev/null
-    cmake --build "$WORK/$1" --parallel 4 >/dev/null
+    cmake --build "$WORK/$1" --parallel "$JOBS" >/dev/null
 }
 
 echo "Building device + simulator slices…"

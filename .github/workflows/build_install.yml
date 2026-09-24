@@ -129,7 +129,7 @@ jobs:
             if [ "$cfg" = "shared" ]; then SHARED=ON; else SHARED=OFF; fi
             cmake --preset "ci-install-$cfg" \
               -DCMAKE_C_COMPILER_LAUNCHER=sccache -DCMAKE_CXX_COMPILER_LAUNCHER=sccache
-            cmake --build "build/ci/install-$cfg" --target anira --parallel 4
+            cmake --build "build/ci/install-$cfg" --target anira --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
             PREFIX="$PWD/prefix-$cfg"
             cmake --install "build/ci/install-$cfg" --prefix "$PREFIX"
             cmake -S test/contracts/install -B "build-consumer-$cfg" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"

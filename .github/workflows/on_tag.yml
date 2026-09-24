@@ -173,7 +173,7 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
               -DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_TFLITE=OFF -DANIRA_WITH_EXECUTORCH=OFF \
               -DANIRA_WITH_INSTALL=ON -DCMAKE_INSTALL_PREFIX="artefacts/${PRODUCT}/${ABI}"
-            cmake --build "build-${ABI}" --target install --parallel 4
+            cmake --build "build-${ABI}" --target install --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
             # The backend archives ship every ABI; drop the sibling ABIs from this
             # tree's lib/ (by exact ABI name, so lib/cmake and libanira.a are untouched).
             for OTHER in arm64-v8a armeabi-v7a x86 x86_64; do
