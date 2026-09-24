@@ -179,14 +179,18 @@ stage's ``init`` receives the same record):
   returns, never kept.
 
 A built-in engine has the same level. The core keeps one engine object per compiled-in engine
-for its own life and runs the engine's init once, with the same record, right before its
-first ``load``: ONNX Runtime creates its environment there, with the level in effect as its
+while a loaded model of the engine holds it (every loaded model holds the one object; the last
+to let go frees it, so a failed load or the last unload frees what init built right there,
+never at process exit, and the next load makes a new object) and runs the engine's init once
+per object, with the same record, right before its first ``load``: ONNX Runtime creates its
+environment there, with the level in effect as its
 logger's severity, and every session of every loaded model is created over it; LiteRT its
 environment likewise, with the accelerators its registration finds, which a load's record is
 checked against; ExecuTorch initialises its runtime; LibTorch sets its intra-op thread count
 to one and c10's log level; TensorFlow Lite has nothing per process. What an engine builds at
-init outlives every loaded model of the engine on both sides, and a load before the init is
-``ANIRA_ERROR_INVALID_STATE`` on both.
+init outlives every loaded model of the engine that holds the object (a custom engine's for as
+long as its handle, its pipelines or a loaded model holds it; a built-in engine's for as long
+as a loaded model does), and a load before the init is ``ANIRA_ERROR_INVALID_STATE`` on both.
 
 A status other than ``ANIRA_OK`` fails that ``anira_handler_prepare`` with it, the message
 naming the engine (``the engine 'com.example.myengine' refused init: it returned N``), and
@@ -290,7 +294,10 @@ them where it is made.
 ``anira_handler_prepare``, once per handler and loaded model the handler runs on, after the
 plan report is built and while the handler already counts as prepared (its getters answer),
 with the loaded pointer and the record the stage's ``prepare`` receives. It may allocate: this
-is where an engine builds what it keeps per handler. Of anira it may call the
+is where an engine builds what it keeps per handler. The prepares and unprepares of one loaded
+model never overlap: anira serialises them per loaded model, so two handlers prepared on two
+threads reach the same ``loaded`` pointer one after the other (those of different loaded
+models may run at once, each on its handler's thread). Of anira it may call the
 ``[callback-safe]`` entries, the handler's getters and the two Static entries, never
 ``anira_handler_prepare``, ``anira_handler_destroy`` or a Hard entry. Its record,
 ``anira_prepare_info`` (Tier 2, valid for the duration of the call; the handler pointer and
@@ -388,7 +395,8 @@ prepare, on the thread of the ``anira_handler_prepare`` or ``anira_handler_destr
 handler (at the next prepare once the previous session is released, before the new prepare;
 a later prepare that fails earlier unprepares the previous one all the same), after the
 handler's in-flight inferences have drained and before the loaded model it ran on is
-released, so no ``process`` or ``reset`` with this prepared pointer runs afterwards.
+released, so no ``process`` or ``reset`` with this prepared pointer runs afterwards; it never
+overlaps a ``prepare`` or another ``unprepare`` of the same loaded model.
 
 **unload(loaded, user_data)** frees what one load loaded: once per successful load, on the
 thread of the ``anira_handler_prepare`` or ``anira_handler_destroy`` that drops the last

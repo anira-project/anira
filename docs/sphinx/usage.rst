@@ -747,11 +747,11 @@ may read or alter either.
 
 **The real-time promise.** Whether a stage body is real-time is the stage's own promise,
 ``anira_stage_desc.flags``, not a property of the callback type: ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``
-says ``pre_process`` and ``post_process`` allocate nothing, lock nothing and block on nothing;
+says ``pre_process``, ``post_process`` and ``reset`` allocate nothing, lock nothing and block on nothing;
 ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
 ``0``, the value of ``ANIRA_STAGE_DESC_INIT``, promises nothing. ``anira_handler_prepare``
-checks the promise against the placement: under a Hard contract a filled ``pre_process`` or
-``post_process`` runs on the driving thread and requires ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``,
+checks the promise against the placement: under a Hard contract a filled ``pre_process``,
+``post_process`` or ``reset`` runs on the driving thread and requires ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``,
 else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the flag; under an Async
 contract everything runs on an inference thread and no bit is required; a bit the header does
 not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_stage``. anira's own

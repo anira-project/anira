@@ -6,9 +6,11 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -167,6 +169,15 @@ std::unique_ptr<Prepared> DescriptorLoaded::do_prepare(const PrepareRequest& req
 
 DescriptorPrepared::DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRequest& request)
     : Prepared(loaded, request.m_exclusive), m_carrier(&loaded.carrier()) {
+    // The engine's view of every call: one copy of the descriptors per shared slot of the
+    // loaded model (a shared handle's calls run on distinct slots at once), one for an
+    // exclusive handle, sized here so that a call allocates nothing.
+    const Model& model = loaded.model();
+    m_views.resize(request.m_exclusive ? 1U : std::max<uint32_t>(model.m_instances, 1U));
+    for (View& view : m_views) {
+        view.m_inputs.resize(model.m_inputs.size());
+        view.m_outputs.resize(model.m_outputs.size());
+    }
     const anira_engine_desc& desc = m_carrier->desc();
     if (desc.prepare == nullptr) { return; }  // nothing to prepare: prepared stays NULL
     if (request.m_info == nullptr) {
@@ -191,19 +202,64 @@ DescriptorPrepared::~DescriptorPrepared() {
     if (!m_unprepare_owed) { return; }
     m_unprepare_owed = false;
     const anira_engine_desc& desc = m_carrier->desc();
+    // Serialised with the prepares and unprepares of the same loaded model, which outlives
+    // this handle (the plan slot holds the two in that order).
+    const std::scoped_lock<std::mutex> lock(loaded().prepare_mutex());
     if (desc.unprepare != nullptr) { desc.unprepare(m_prepared, desc.user_data); }
     m_prepared = nullptr;
+}
+
+namespace {
+
+// `dst` as the `count` descriptors at `src`, each with the extents of its slot of the record
+// where the element counts agree (a layout permutes the spec's axes and inserts unit axes, so
+// they always do; a slot the record does not know keeps the caller's shape). The strides stay
+// as the chunk's, all zero: packed, which a reshape of a packed block leaves packed.
+void copy_with_engine_extents(std::vector<anira_tensor>& dst,
+                              const anira_tensor* src,
+                              uint32_t count,
+                              const std::vector<TensorInfo>& slots) noexcept {
+    for (size_t slot = 0; slot < dst.size() && slot < count; ++slot) {
+        dst[slot] = src[slot];
+        if (slot >= slots.size() || slots[slot].m_dims.size() > ANIRA_MAX_RANK ||
+            anira_tensor_num_elements(&dst[slot]) != slots[slot].m_num_elements) {
+            continue;
+        }
+        const std::vector<int64_t>& dims = slots[slot].m_dims;
+        dst[slot].ndim = static_cast<uint32_t>(dims.size());
+        for (size_t axis = 0; axis < ANIRA_MAX_RANK; ++axis) {
+            dst[slot].shape[axis] = axis < dims.size() ? dims[axis] : 0;
+        }
+    }
+}
+
+}  // namespace
+
+const anira_engine_ctx& DescriptorPrepared::engine_view(const anira_engine_ctx& call) noexcept {
+    // The slot's view: the claimed shared slot's, or index 0 for an exclusive call.
+    View& view = m_views[std::min<size_t>(call.instance, m_views.size() - 1)];
+    view.m_ctx = call;
+    const Model& model = loaded().model();
+    if (call.inputs != nullptr && call.num_inputs == view.m_inputs.size()) {
+        copy_with_engine_extents(view.m_inputs, call.inputs, call.num_inputs, model.m_inputs);
+        view.m_ctx.inputs = view.m_inputs.data();
+    }
+    if (call.outputs != nullptr && call.num_outputs == view.m_outputs.size()) {
+        copy_with_engine_extents(view.m_outputs, call.outputs, call.num_outputs, model.m_outputs);
+        view.m_ctx.outputs = view.m_outputs.data();
+    }
+    return view.m_ctx;
 }
 
 anira_status DescriptorPrepared::process(const anira_engine_ctx& call,
                                          ChunkBuffers* /*chunk*/) noexcept {
     const anira_engine_desc& desc = m_carrier->desc();
-    return desc.process(&call, m_prepared, desc.user_data);
+    return desc.process(&engine_view(call), m_prepared, desc.user_data);
 }
 
 void DescriptorPrepared::reset(const anira_engine_ctx& call) noexcept {
     const anira_engine_desc& desc = m_carrier->desc();
-    if (desc.reset != nullptr) { desc.reset(&call, m_prepared, desc.user_data); }
+    if (desc.reset != nullptr) { desc.reset(&engine_view(call), m_prepared, desc.user_data); }
 }
 
 }  // namespace anira::backend

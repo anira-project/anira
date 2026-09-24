@@ -92,11 +92,11 @@
  * failed before_inference or after_inference skips the rest and zeroes the model outputs; after
  * a failed post_process anira tops every Streamed output ring up to the chunk's hop with zeros,
  * because a ring cannot take a push back). The real-time promise is the descriptor's flags, not
- * an attribute of the callback type: ANIRA_STAGE_FLAG_REALTIME_PRE_POST says pre_process and
- * post_process allocate nothing, lock nothing and block on nothing,
+ * an attribute of the callback type: ANIRA_STAGE_FLAG_REALTIME_PRE_POST says pre_process,
+ * post_process and reset allocate nothing, lock nothing and block on nothing,
  * ANIRA_STAGE_FLAG_REALTIME_HOOKS says the same of before_inference and after_inference.
  * anira_handler_prepare checks the promise against the placement: under a Hard contract a
- * filled pre_process or post_process runs on the driving thread and requires
+ * filled pre_process, post_process or reset runs on the driving thread and requires
  * ANIRA_STAGE_FLAG_REALTIME_PRE_POST (else ANIRA_ERROR_CONFIG naming the flag); under an Async
  * contract no bit is required. anira's own side is real-time whatever the flags say: the ring
  * accessors, the six context accessors and the two default bodies are ANIRA_NONBLOCKING, so a
@@ -681,7 +681,7 @@ typedef struct anira_stage_desc {
      * post_process and reset allocate nothing, lock nothing and block on nothing) and
      * ANIRA_STAGE_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise); 0
      * promises nothing. anira_handler_prepare checks the promise against the placement: under a
-     * Hard contract a filled pre_process or post_process runs on the driving thread and
+     * Hard contract a filled pre_process, post_process or reset runs on the driving thread and
      * requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare fails with ANIRA_ERROR_CONFIG
      * naming the flag; under an Async contract nothing is required; a later contract option
      * that runs the hooks on the driving thread will require both bits. The default bodies are

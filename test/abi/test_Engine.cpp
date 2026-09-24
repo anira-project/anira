@@ -26,6 +26,7 @@
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -35,6 +36,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -259,6 +261,11 @@ struct GainEngine {
     int m_prepared = 0;
     int m_unprepared = 0;
     int m_released = 0;
+    // The overlap watch of prepare: how many are inside at once, the peak, and how long each
+    // holds its exit (so that a prepare on another thread has the time to arrive).
+    std::atomic<int> m_inside_prepare{0};
+    std::atomic<int> m_max_inside_prepare{0};
+    int m_prepare_delay_ms = 0;
     std::vector<void*> m_loaded_out;         ///< every loaded pointer load handed back
     std::vector<void*> m_loaded_back;        ///< every loaded pointer unload received
     std::vector<void*> m_handed_out;         ///< every prepared pointer prepare handed back
@@ -310,6 +317,32 @@ bool loaded_is_live(const GainEngine& engine, void* loaded) {
     return std::ranges::count(engine.m_loaded_out, loaded) >
            std::ranges::count(engine.m_loaded_back, loaded);
 }
+
+/// Counts the gain engine's prepares that are inside at once over its scope and keeps the
+/// peak; the exit waits m_prepare_delay_ms first, so a prepare on another thread has the time
+/// to arrive while this one is inside (the overlap anira's rule forbids).
+class PrepareWatch {
+public:
+    explicit PrepareWatch(GainEngine& engine) : m_engine(engine) {
+        const int inside = m_engine.m_inside_prepare.fetch_add(1) + 1;
+        int seen = m_engine.m_max_inside_prepare.load();
+        while (inside > seen &&
+               !m_engine.m_max_inside_prepare.compare_exchange_weak(seen, inside)) {}
+    }
+    ~PrepareWatch() {
+        if (m_engine.m_prepare_delay_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(m_engine.m_prepare_delay_ms));
+        }
+        m_engine.m_inside_prepare.fetch_sub(1);
+    }
+    PrepareWatch(const PrepareWatch&) = delete;
+    PrepareWatch& operator=(const PrepareWatch&) = delete;
+    PrepareWatch(PrepareWatch&&) = delete;
+    PrepareWatch& operator=(PrepareWatch&&) = delete;
+
+private:
+    GainEngine& m_engine;
+};
 
 /// Whether `tensor` is `expected` in dtype, rank and extents.
 bool same_shape(const anira_tensor& tensor, const anira_tensor& expected) {
@@ -399,6 +432,7 @@ anira_status ANIRA_CALL gain_prepare(const anira_prepare_info* info,
                                      void* user_data,
                                      void** out_prepared) {
     auto* engine = static_cast<GainEngine*>(user_data);
+    const PrepareWatch watch(*engine);
     ++engine->m_prepared;
     if (engine->m_refuse_prepare != ANIRA_OK) { return engine->m_refuse_prepare; }
     // The record is the stage's (the handler, its report), the loaded pointer one load handed
@@ -2054,6 +2088,52 @@ TEST(AbiEngine, EqualConfigsShareOneLoadedModelStatefulOrNot) {
     }
 }
 
+// A pooled loaded model is every equal handler's, and a handler's prepare runs the engine's
+// prepare on its caller's thread, outside the core's lifecycle lock: anira serialises the
+// prepares (and unprepares) of one loaded model, so handlers prepared at once on several threads
+// reach the engine's prepare one after the other, never inside each other. Each prepare holds
+// its exit for a while, so the others have the time to arrive while it is inside.
+TEST(AbiEngine, PreparesOfOneLoadedModelNeverOverlap) {
+    constexpr int k_handlers = 4;
+    const Context context(2);
+    const anira::ContractHandle contract = explicit_contract();
+    GainEngine gain;
+    gain.m_prepare_delay_ms = 20;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    model.max_instances(k_handlers);
+    pipe.add_inference(model);
+    std::array<anira_handler*, k_handlers> handlers{};
+    for (anira_handler*& handler : handlers) {
+        ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    }
+    std::array<anira_status, k_handlers> statuses{};
+    std::array<anira_error, k_handlers> errs{};
+    std::vector<std::thread> threads;
+    threads.reserve(k_handlers);
+    for (int i = 0; i < k_handlers; ++i) {
+        errs.at(i) = ANIRA_ERROR_INIT;
+        threads.emplace_back([&, i] {
+            statuses.at(i) = anira_handler_prepare(handlers.at(i), contract.native(), &errs.at(i));
+        });
+    }
+    for (std::thread& thread : threads) { thread.join(); }
+    for (int i = 0; i < k_handlers; ++i) {
+        EXPECT_EQ(statuses.at(i), ANIRA_OK) << errs.at(i).message;
+    }
+    EXPECT_EQ(gain.m_loaded, 1) << "one loaded model for the equal handlers";
+    EXPECT_EQ(gain.m_prepared, k_handlers);
+    EXPECT_EQ(gain.m_max_inside_prepare.load(), 1)
+        << "the prepares of one loaded model never overlap";
+    EXPECT_EQ(gain.m_bad_prepare_record, 0);
+    for (anira_handler* handler : handlers) { ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2)); }
+    for (anira_handler* handler : handlers) { anira_handler_destroy(handler); }
+    EXPECT_EQ(gain.m_unprepared, k_handlers);
+    EXPECT_EQ(gain.m_unloaded, 1);
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0);
+}
+
 // A session-exclusive handler's loaded model has no shared call slot whatever the model's
 // max_instances, on the registered engine's row and on the row of every built-in engine of the
 // build alike (the built-in engines size their shared executors from the record, the
@@ -2564,6 +2644,49 @@ TEST(AbiEngine, ProcessSeesTheSpecsDtypeAndShapeEveryCall) {
     EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
     EXPECT_LT(gain.m_max_instance.load(), kept_of(gain).m_instances);
     EXPECT_LT(gain.m_max_entry.load(), anira_handler_num_entries(handler));
+    EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
+    anira_handler_destroy(handler);
+}
+
+// A row with a layout record: the engine's side of a slot is the spec's extents in the export's
+// order, a unit axis inserted where the export has one the spec lacks, and what the load
+// record's templates say is what every process call sees, over the chunk's memory as it is (a
+// layout moves no data: the spec's [1, 1, hop] and the export's [1, hop, 1] are one packed
+// block, so the ramp comes back as it went in).
+TEST(AbiEngine, ProcessSeesTheEngineSideExtentsOfALayoutRow) {
+    const Context context;
+    GainEngine gain;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    const std::array<uint32_t, 3> time_before_channel{0, 2, 1};
+    const std::array<uint32_t, 4> with_a_unit_axis{0, ANIRA_AXIS_INSERT, 1, 2};
+    model.tensor_layout(0, "in", time_before_channel);
+    model.tensor_layout(0, "out", with_a_unit_axis);
+    pipe.add_inference(model);
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(gain.m_loaded_out.size(), 1U);
+    const GainLoaded& kept = kept_of(gain);
+    ASSERT_EQ(kept.m_inputs.size(), 1U);
+    ASSERT_EQ(kept.m_outputs.size(), 1U);
+    EXPECT_EQ(kept.m_inputs[0].ndim, 3U);
+    EXPECT_EQ(kept.m_inputs[0].shape[0], 1);
+    EXPECT_EQ(kept.m_inputs[0].shape[1], static_cast<int64_t>(k_hop));
+    EXPECT_EQ(kept.m_inputs[0].shape[2], 1);
+    EXPECT_EQ(kept.m_outputs[0].ndim, 4U);
+    EXPECT_EQ(kept.m_outputs[0].shape[0], 1);
+    EXPECT_EQ(kept.m_outputs[0].shape[1], 1);
+    EXPECT_EQ(kept.m_outputs[0].shape[2], 1);
+    EXPECT_EQ(kept.m_outputs[0].shape[3], static_cast<int64_t>(k_hop));
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 4));
+    EXPECT_EQ(gain.m_processed.load(), 4);
+    EXPECT_EQ(gain.m_bad_counts.load(), 0U);
+    EXPECT_EQ(gain.m_bad_tensors.load(), 0U) << "every call carries the templates' extents";
+    EXPECT_EQ(gain.m_bad_scalars.load(), 0U);
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
     anira_handler_destroy(handler);
 }

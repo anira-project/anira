@@ -746,27 +746,29 @@ void check_buffer_specs(const anira_model_config& model) {
 
 // The real-time rule of prepare: the stage's flags are its promise, checked against where its
 // phases run. Under a Hard contract (the only contract of this pre-release) a filled
-// pre_process or post_process runs on the driving thread, so the stage must promise
-// ANIRA_STAGE_FLAG_REALTIME_PRE_POST for them (the reset runs on that thread too, under the
-// same promise); the two hooks run on an inference thread and need no promise here (a later
-// contract option that puts them on the driving thread requires ANIRA_STAGE_FLAG_REALTIME_HOOKS
-// too). The default bodies are real-time by construction, so a NULL slot needs nothing. anira's
-// own side stays real-time whatever the flags say.
+// pre_process, post_process or reset runs on the driving thread (the reset right before the
+// first pre_process of a new stream), so the stage must promise
+// ANIRA_STAGE_FLAG_REALTIME_PRE_POST for any of the three; the two hooks run on an inference
+// thread and need no promise here (a later contract option that puts them on the driving
+// thread requires ANIRA_STAGE_FLAG_REALTIME_HOOKS too). The default bodies are real-time by
+// construction, so a NULL slot needs nothing. anira's own side stays real-time whatever the
+// flags say.
 void check_stage_flags(const anira::capi::StageCarrier* stage) {
     if (stage == nullptr) { return; }
     const anira_stage_desc& desc = stage->desc();
-    const bool fills_pre_or_post = desc.pre_process != nullptr || desc.post_process != nullptr;
-    if (!fills_pre_or_post || (desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0) { return; }
-    throw StatusError(
-        ANIRA_ERROR_CONFIG,
-        std::string("the stage: ") +
-            anira::capi::phase_word(desc.pre_process != nullptr ? ANIRA_PHASE_PRE_PROCESS
-                                                                : ANIRA_PHASE_POST_PROCESS) +
-            " is filled and runs on the driving thread under a Hard contract, "
-            "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
-            "anira_stage_desc.flags (the stage's promise that pre_process, "
-            "post_process and reset allocate nothing, lock nothing and block on "
-            "nothing)");
+    const bool on_driving_thread =
+        desc.pre_process != nullptr || desc.post_process != nullptr || desc.reset != nullptr;
+    if (!on_driving_thread || (desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0) { return; }
+    const anira_phase filled = desc.pre_process != nullptr    ? ANIRA_PHASE_PRE_PROCESS
+                               : desc.post_process != nullptr ? ANIRA_PHASE_POST_PROCESS
+                                                              : ANIRA_PHASE_RESET;
+    throw StatusError(ANIRA_ERROR_CONFIG,
+                      std::string("the stage: ") + anira::capi::phase_word(filled) +
+                          " is filled and runs on the driving thread under a Hard contract, "
+                          "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
+                          "anira_stage_desc.flags (the stage's promise that pre_process, "
+                          "post_process and reset allocate nothing, lock nothing and block on "
+                          "nothing)");
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by

@@ -2649,7 +2649,10 @@ public:
         /// they run on (and what it keeps per stream); a stateless handler's Prepared routes
         /// its calls to the shared instances. Of anira it may call the [callback-safe] entries,
         /// the handler's getters and the two Static entries, never prepare, destroy or a Hard
-        /// entry. It may throw, as Engine::load may; a null return is ANIRA_ERROR_INTERNAL.
+        /// entry. The prepares of one Loaded never overlap, nor a prepare and the destruction
+        /// of a Prepared of it (anira serialises them per loaded model; those of different
+        /// loaded models may run at once). It may throw, as Engine::load may; a null return is
+        /// ANIRA_ERROR_INTERNAL.
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
     };
 

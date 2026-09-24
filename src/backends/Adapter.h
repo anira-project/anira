@@ -44,6 +44,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -210,11 +211,12 @@ struct ProviderInfo {
 /// ONNX Runtime's environment (its logger at the level in effect), LiteRT's environment (its
 /// logger likewise, and the accelerators it registers), ExecuTorch's runtime initialisation,
 /// LibTorch's intra-op thread count and c10 log level; TensorFlow Lite keeps nothing. The
-/// core owns one per compiled-in engine (Core::builtin_engine), initialises it right before
-/// the engine's first load, on the control thread under its lifecycle lock (Loaded::init),
-/// and hands it to every loaded model of the engine (make_builtin_loaded), which holds it:
-/// the object outlives every loaded model of its engine, as a custom engine's carrier does,
-/// and dies with the core.
+/// core hands out one per compiled-in engine (Core::builtin_engine), initialises it right
+/// before the engine's first load, on the control thread under its lifecycle lock
+/// (Loaded::init), and hands it to every loaded model of the engine (make_builtin_loaded),
+/// which holds it: the object lives while a loaded model of its engine (or a probe) holds it,
+/// the last holder frees it on its own thread, and the next load makes a new one whose init
+/// runs again.
 class ANIRA_API BuiltinEngine {
 public:
     explicit BuiltinEngine(anira_engine engine) noexcept : m_engine(engine) {}
@@ -296,7 +298,18 @@ public:
     /// stream (a built-in engine's own executor, made and warmed up here); for a shared one it
     /// routes every call through the claim loop. Throws anira::StatusError (ENGINE, CONFIG,
     /// INVALID_STATE on a model that was never loaded) with the message the caller reads.
+    /// Holds prepare_mutex() around do_prepare: the prepares of one loaded model never overlap
+    /// (a custom engine's prepare runs on the handler's thread, outside the core's lifecycle
+    /// lock, and a pooled loaded model is every equal handler's).
     std::unique_ptr<Prepared> prepare(const PrepareRequest& request);
+
+    /// The lock of prepare and unprepare on this loaded model: prepare holds it around
+    /// do_prepare and a custom engine's Prepared holds it around the engine's unprepare, so
+    /// the prepares and unprepares of one loaded model never overlap (two handlers prepared on
+    /// two threads reach the engine's loaded pointer one after the other) while those of
+    /// different loaded models run at once. Taken after the core's lifecycle lock where both
+    /// are held (create_session, release_session), never before it.
+    std::mutex& prepare_mutex() noexcept { return m_prepare_mutex; }
 
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
@@ -370,6 +383,7 @@ private:
     std::vector<std::atomic<bool>> m_busy;  ///< one busy flag per shared slot, sized at load
     uint32_t m_num_instances = 0;           ///< the shared slots; 0 before load
     bool m_loaded = false;
+    std::mutex m_prepare_mutex;
 };
 
 /// One session's handle over a loaded model: the C lifecycle's prepared pointer as a class.

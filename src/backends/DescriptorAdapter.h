@@ -10,19 +10,22 @@
  * destructor gives it back to the engine's unload), and one session's handle over it is one
  * DescriptorPrepared (prepare calls the engine's prepare slot with the shared prepare record
  * and the loaded pointer, keeping the prepared pointer; every inference is one process call
- * with the context the scheduler built, the loaded pointer in it; the reset slot runs where the
- * scheduler asks for it; the destructor gives the prepared pointer back to the engine's
- * unprepare).
+ * with the context the scheduler built, the loaded pointer in it and the engine-side extents of
+ * the load record's templates on its descriptors (engine_view); the reset slot runs where the
+ * scheduler asks for it, over the same view; the destructor gives the prepared pointer back to the
+ * engine's unprepare).
  */
 #include <anira/abi/engine.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/system/Exports.h>
 
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "Adapter.h"
 
@@ -113,8 +116,9 @@ private:
 /// this session's prepared pointer (NULL, and nothing called, for a descriptor without a
 /// prepare); a status other than ANIRA_OK is anira::StatusError with it, naming the engine.
 /// process is the descriptor's process over the call as (ctx, prepared, user_data), reset its
-/// reset when the slot is filled, and the destructor calls unprepare once for a successful
-/// prepare.
+/// reset when the slot is filled, both over the engine's view of the call (engine_view: the
+/// chunk's descriptors with the engine-side extents of the load record's templates, over the
+/// same memory), and the destructor calls unprepare once for a successful prepare.
 class ANIRA_API DescriptorPrepared final : public Prepared {
 public:
     DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRequest& request);
@@ -135,9 +139,24 @@ protected:
     void reset(const anira_engine_ctx& call) noexcept override;
 
 private:
+    /// The engine's view of one call: the context with its descriptors copied and given the
+    /// engine-side extents of the record (the load record's templates: the entry's layout
+    /// applied to the spec's), over the chunk's memory as it is. One per shared slot, since a
+    /// shared handle's calls run on distinct slots at once (an exclusive handle's one at a
+    /// time, on index 0); sized at prepare, so nothing is allocated per call.
+    struct View {
+        anira_engine_ctx m_ctx{};
+        std::vector<anira_tensor> m_inputs;
+        std::vector<anira_tensor> m_outputs;
+    };
+    /// Fills the view of the call's slot and returns it; a side whose count is not the
+    /// record's keeps the caller's descriptors.
+    const anira_engine_ctx& engine_view(const anira_engine_ctx& call) noexcept;
+
     const anira::capi::EngineCarrier* m_carrier;
     void* m_prepared = nullptr;
     bool m_unprepare_owed = false;  ///< a successful prepare is outstanding
+    std::vector<View> m_views;
 };
 
 }  // namespace anira::backend

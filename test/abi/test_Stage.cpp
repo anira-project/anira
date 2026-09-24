@@ -2100,10 +2100,11 @@ TEST(AbiStage, FailingPostProcessKeepsTheStreamAligned) {
 // The real-time promise: anira_stage_desc.flags against the placement
 // ============================================================================================
 
-// Under a Hard contract a filled pre_process or post_process runs on the driving thread: the
-// stage must promise ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare is CONFIG naming the flag,
-// and the handler stays unprepared. The hooks need no promise (an inference thread), and the
-// promise alone, without the hooks' bit, suffices for the two host-end phases.
+// Under a Hard contract a filled pre_process, post_process or reset runs on the driving thread
+// (the reset right before the first pre_process of a new stream): the stage must promise
+// ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare is CONFIG naming the phase and the flag, and
+// the handler stays unprepared. The hooks need no promise (an inference thread), and the promise
+// alone, without the hooks' bit, suffices for the three driving-thread slots.
 TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     const Context context;
     const anira::ContractHandle contract = zeros_contract();
@@ -2151,6 +2152,49 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         expect_same_stream(stream.m_out, stream.expected());
         EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_AFTER_INFERENCE).load(), 3);
+    }
+    {
+        // reset alone runs on the driving thread too (right before the first pre_process of a
+        // new stream): the same promise, else CONFIG naming reset.
+        ResetLog log;
+        anira_stage_desc stage = promising_stage(&log);
+        stage.flags = 0;
+        stage.reset = reset_log_reset;
+        StagedHandler handler(context, stream_model(), {stage});
+        ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: reset is filled"), nullptr)
+            << handler.m_err.message;
+        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_STAGE_FLAG_REALTIME_PRE_POST"), nullptr)
+            << handler.m_err.message;
+        EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
+        EXPECT_EQ(log.m_resets.load(), 0U);
+    }
+    {
+        // reset beside the hooks, with the hooks' bit alone: still the wrong promise.
+        ResetLog log;
+        anira_stage_desc stage = promising_stage(&log);
+        stage.flags = ANIRA_STAGE_FLAG_REALTIME_HOOKS;
+        stage.reset = reset_log_reset;
+        StagedHandler handler(context, stream_model(), {stage});
+        EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: reset is filled"), nullptr)
+            << handler.m_err.message;
+    }
+    {
+        // reset under the promise: prepare passes and the reset runs once, at the stream's
+        // start.
+        ResetLog log;
+        anira_stage_desc stage = promising_stage(&log);
+        stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
+        stage.reset = reset_log_reset;
+        StagedHandler handler(context, stream_model(), {stage});
+        ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+        Stream stream(handler.m_handler);
+        stream.blocks(3);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        expect_same_stream(stream.m_out, stream.expected());
+        EXPECT_EQ(log.m_resets.load(), 1U);
     }
     {
         Probe probe;

@@ -55,19 +55,28 @@ struct Core::State {
     std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
 
     /**
-     * @brief The engine objects of the built-in engines, one per engine, made at the first
-     * use (find_or_make_builtin_engine) and kept until the core is freed
+     * @brief The engine objects of the built-in engines, one entry per engine, made at the
+     * first use (find_or_make_builtin_engine) and held weakly
      *
      * What a built-in engine builds at its init (an environment with the level in effect on
-     * its logger, a runtime's initialisation, a process-wide thread count) lives here, once
-     * per process, and outlives every loaded model of the engine, which holds the object
-     * (declared before the pool, so the pool is destroyed first). Under m_engine_mutex, a
-     * lock of its own, so that the context's probe, which asks an object for its providers,
-     * never waits on the lifecycle lock: a custom engine's init runs under that lock and is
-     * allowed to query a context.
+     * its logger, a runtime's initialisation, a process-wide thread count) lives on the
+     * object, which every loaded model of the engine holds (the pool is declared after this,
+     * so it is destroyed first) and the context's probe holds while it asks; the entry here
+     * names the object without keeping it, so the last holder frees it on its own thread: a
+     * failed load or the last unload of the engine's models frees the runtime's environment
+     * right there, never at process exit, where the unload hook would tear it down after the
+     * runtime's own C++ statics on macOS (dyld runs an image's static destructors before its
+     * terminators, and ONNX Runtime's release takes a static mutex: the process aborted). The
+     * next load makes a new object and runs its init again. Under m_engine_mutex, a lock of
+     * its own, so that the probe never waits on the lifecycle lock: a custom engine's init
+     * runs under that lock and is allowed to query a context.
      */
+    struct EngineEntry {
+        anira_engine m_engine;
+        std::weak_ptr<backend::BuiltinEngine> m_object;
+    };
     std::mutex m_engine_mutex;
-    std::vector<std::shared_ptr<backend::BuiltinEngine>> m_engines;
+    std::vector<EngineEntry> m_engines;
 
     std::unique_ptr<thl::Logger::rt::Queue> m_log_queue;  ///< Real-time log queue (created
                                                           ///< once per core, capacity from the
@@ -722,11 +731,16 @@ std::shared_ptr<backend::BuiltinEngine> Core::builtin_engine(anira_engine engine
 std::shared_ptr<backend::BuiltinEngine> Core::find_or_make_builtin_engine(State& state,
                                                                           anira_engine engine) {
     const std::scoped_lock<std::mutex> engine_lock(state.m_engine_mutex);
-    for (const std::shared_ptr<backend::BuiltinEngine>& object : state.m_engines) {
-        if (object->engine() == engine) { return object; }
+    for (State::EngineEntry& entry : state.m_engines) {
+        if (entry.m_engine != engine) { continue; }
+        if (std::shared_ptr<backend::BuiltinEngine> held = entry.m_object.lock()) { return held; }
+        // The last holder let go: a new object, whose init runs before its first load.
+        std::shared_ptr<backend::BuiltinEngine> fresh = backend::make_builtin_engine(engine);
+        entry.m_object = fresh;
+        return fresh;
     }
     std::shared_ptr<backend::BuiltinEngine> object = backend::make_builtin_engine(engine);
-    if (object != nullptr) { state.m_engines.push_back(object); }
+    if (object != nullptr) { state.m_engines.push_back({.m_engine = engine, .m_object = object}); }
     return object;
 }
 

@@ -85,7 +85,8 @@ void probe(anira_capabilities& capabilities) {
     std::vector<anira_edge_info> edges;
     std::deque<std::string> strings;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
-        // The core's engine object of the engine, made here when no session made it yet.
+        // The core's engine object of the engine: the one its loaded models hold, or one made
+        // for this query alone and freed with it.
         const std::shared_ptr<anira::backend::BuiltinEngine> object =
             anira::Core::builtin_engine(engine);
         if (object == nullptr) { continue; }

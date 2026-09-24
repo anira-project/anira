@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -88,6 +89,9 @@ std::unique_ptr<Prepared> Loaded::prepare(const PrepareRequest& request) {
         throw StatusError(ANIRA_ERROR_INVALID_STATE,
                           "the model was never loaded: nothing to prepare a session on");
     }
+    // One prepare of this loaded model at a time (a custom engine's runs on the handler's
+    // thread, outside the lifecycle lock; the pooled model is every equal handler's).
+    const std::scoped_lock<std::mutex> lock(m_prepare_mutex);
     return do_prepare(request);
 }
 

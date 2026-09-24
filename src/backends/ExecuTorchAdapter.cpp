@@ -29,6 +29,7 @@
 #include <cstring>
 #include <exception>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -550,15 +551,20 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// the platform abstraction layer; the kernels and the backends register at static
 /// initialisation) and the XNNPACK delegate's options for the process (a workspace per delegate
 /// instance, no weight cache: set_xnnpack_options_of_the_process, read back), run once at the
-/// engine's init; the thread-pool guard is per call. The core keeps one object per engine
-/// (Core::builtin_engine); every loaded model holds it.
+/// engine's init; the thread-pool guard is per call. The core hands out one object per engine
+/// while a loaded model holds it (Core::builtin_engine); the next one after the last let go
+/// runs its init again.
 class ExecuTorchEngine final : public BuiltinEngine {
 public:
     ExecuTorchEngine() : BuiltinEngine(ANIRA_ENGINE_EXECUTORCH) {}
 
 protected:
     void do_init(const anira_init_info& /*info*/) override {
-        executorch::runtime::runtime_init();
+        // The runtime's global initialisation once per process (a second call is no part of
+        // its contract), the delegate's options with every object. The flag is trivially
+        // destructible: nothing is registered for static teardown.
+        static std::once_flag s_runtime_init;
+        std::call_once(s_runtime_init, [] { executorch::runtime::runtime_init(); });
         set_xnnpack_options_of_the_process();
     }
 

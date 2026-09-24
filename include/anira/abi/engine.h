@@ -310,9 +310,12 @@ typedef void (ANIRA_CALL* anira_engine_unload_fn)(void* loaded, void* user_data)
  * the process calls of an exclusive handler claim no shared slot of the loaded model; a
  * handler whose model is stateless needs nothing here and may hand back NULL. Of anira
  * it may call the [callback-safe] entries, the handler's getters and the two Static
- * entries, never prepare, destroy or a Hard entry. A status other than ANIRA_OK fails
- * anira_handler_prepare with that status, the message naming the engine, and leaves the
- * handler unprepared; unprepare is not called then.
+ * entries, never prepare, destroy or a Hard entry. The prepares and unprepares of one
+ * loaded model never overlap: anira serialises them per loaded model, so two handlers
+ * prepared on two threads reach the same loaded pointer one after the other (those of
+ * different loaded models may run at once, each on its handler's thread). A status other
+ * than ANIRA_OK fails anira_handler_prepare with that status, the message naming the
+ * engine, and leaves the handler unprepared; unprepare is not called then.
  * @param info The record; valid until the callback returns.
  * @param loaded What the load of the model this handler runs on handed back.
  * @param user_data The descriptor's user_data.
@@ -333,7 +336,9 @@ typedef anira_status (ANIRA_CALL* anira_engine_prepare_fn)(const anira_prepare_i
  * the new prepare; a later prepare that fails earlier unprepares the previous one all
  * the same) and at anira_handler_destroy, after the handler's in-flight inferences
  * drained and before the loaded model it ran on is released, so no process or reset with
- * this prepared pointer runs afterwards. NULL: none.
+ * this prepared pointer runs afterwards; it never overlaps a prepare or another
+ * unprepare of the same loaded model (anira serialises them per loaded model). NULL:
+ * none.
  * @param prepared What the matching prepare handed back.
  * @param user_data The descriptor's user_data.
  * @par Thread contract

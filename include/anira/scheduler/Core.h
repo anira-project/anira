@@ -246,16 +246,21 @@ public:
 
     /**
      * @brief The core's engine object of a built-in engine of this build, one per engine
+     * while anything holds it
      *
-     * Made at the first call (backend::make_builtin_engine) and kept until the core is freed
-     * (release_core_if_idle), so what the engine builds at its init (an ONNX Runtime or a
-     * LiteRT environment with the level in effect on its logger, ExecuTorch's runtime
-     * initialisation, LibTorch's thread count) is built once per process and outlives every
-     * loaded model of the engine, which holds the object. The first session that loads a
-     * model of the engine initialises it (acquire_loaded_locked, under the lifecycle lock);
-     * the context's probe asks the object for its providers before or after that. Takes the
-     * engine mutex alone, never the lifecycle lock, so a callback that runs under that lock
-     * may probe a context.
+     * Made at the first call (backend::make_builtin_engine) and remembered weakly: every
+     * loaded model of the engine holds the one object (make_builtin_loaded), the context's
+     * probe holds it while it asks, and the last holder frees it on its own thread. So what
+     * the engine builds at its init (an ONNX Runtime or a LiteRT environment with the level
+     * in effect on its logger, ExecuTorch's runtime initialisation, LibTorch's thread count)
+     * is shared by every loaded model of the engine and dies with the last of them: a failed
+     * load leaves nothing behind, and no runtime environment is torn down at process exit by
+     * the unload hook, after the runtime's own statics (where macOS aborted). The next call
+     * makes a new object whose init runs again. The first session that loads a model of the
+     * engine initialises it (acquire_loaded_locked, under the lifecycle lock); the context's
+     * probe asks the object for its providers before or after that. Takes the engine mutex
+     * alone, never the lifecycle lock, so a callback that runs under that lock may probe a
+     * context.
      *
      * @param engine A built-in engine
      * @return The object, or NULL for an engine this build does not carry

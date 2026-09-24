@@ -59,8 +59,8 @@ The rules in short
   not handle itself; a ``NULL`` slot (a phase left out of ``phases()``) means the default runs
   for ``pre_process`` and ``post_process``, and that the stage takes no part in a hook, which
   has no default.
-- ``pre_process`` and ``post_process`` run on the thread that drives the Hard entries; under a
-  Hard contract they need ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` in the flags, and the body must
+- ``pre_process``, ``post_process`` and ``reset`` run on the thread that drives the Hard entries;
+  under a Hard contract they need ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` in the flags, and the body must
   keep the promise: no allocation, no lock, no system call, only the ``[callback-safe]``
   entries of anira. ``before_inference`` and ``after_inference`` run on an inference thread;
   ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` is a promise, not a requirement, in this pre-release.
@@ -480,7 +480,7 @@ dies, whether init ever ran or not:
     }
 
 ``anira_handler_prepare`` then validates the stage with the rest: under a Hard contract a
-filled ``pre_process`` or ``post_process`` without ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is
+filled ``pre_process``, ``post_process`` or ``reset`` without ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is
 ``ANIRA_ERROR_CONFIG`` naming the flag, a ring dtype that differs from its spec's is accepted
 only where the stage fills the phase that moves that ring, and the stage runs last: its
 ``init`` when this is the first prepare of a handler of the pipeline (a status it returns, or
