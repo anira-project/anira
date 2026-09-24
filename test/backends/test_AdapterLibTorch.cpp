@@ -302,7 +302,7 @@ TEST(AdapterLibTorch, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
 // The schema carries no shapes: an output of another shape than the record's is caught on the
 // warm-up's first result at prepare (CONFIG naming both shapes), and, without a warm-up, at
 // the first run (the chunk fails with ENGINE; nothing is written).
-TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtTheWarmUpOrFailsTheRun) {
+TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtLoadWithOrWithoutAWarmUp) {
     const anira::InferenceConfig config(
         {anira::ModelData(gain_model_path(), anira::InferenceBackend::LIBTORCH)},
         {anira::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {2}})},
@@ -311,25 +311,28 @@ TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtTheWarmUpOrFailsTheRun) {
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
     const Model warmed = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
-    try {
-        libtorch_adapter()->prepare(warmed);
-        FAIL() << "a [2] output passed for a [1] return";
-    } catch (const anira::StatusError& error) {
-        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
-        const std::string message = error.what();
-        EXPECT_NE(message.find("libtorch: output tensor"), std::string::npos) << message;
-        EXPECT_NE(message.find("[1]"), std::string::npos) << message;
-        EXPECT_NE(message.find("[2]"), std::string::npos) << message;
-    }
-
-    Model unwarmed = warmed;
-    unwarmed.m_warm_up = 0;
-    const std::shared_ptr<Rig> adapter = libtorch_adapter();
-    adapter->prepare(unwarmed);
-    std::vector<anira::BufferF> input = filled_buffers({512, 1}, 0.5F);
-    std::vector<anira::BufferF> output = filled_buffers({512, 2}, -1.F);
-    EXPECT_EQ(run_once(*adapter, input, output), ANIRA_ERROR_ENGINE);
-    EXPECT_EQ(output[1].get_sample(0, 0), -1.F) << "nothing was written";
+    const Model unwarmed = [&warmed] {
+        Model record = warmed;
+        record.m_warm_up = 0;
+        return record;
+    }();
+    // The schema carries no output shapes, so the check is the first forward's: the warm-up's
+    // where the record has one, one run on the probe at load where it has none.
+    const auto expect_refused_at_load = [](const Model& record) {
+        try {
+            libtorch_adapter()->prepare(record);
+            ADD_FAILURE() << "a [2] output passed for a [1] return (warm_up " << record.m_warm_up
+                          << ")";
+        } catch (const anira::StatusError& error) {
+            EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+            const std::string message = error.what();
+            EXPECT_NE(message.find("libtorch: output tensor"), std::string::npos) << message;
+            EXPECT_NE(message.find("[1]"), std::string::npos) << message;
+            EXPECT_NE(message.find("[2]"), std::string::npos) << message;
+        }
+    };
+    expect_refused_at_load(warmed);
+    expect_refused_at_load(unwarmed);
 }
 
 #endif  // USE_LIBTORCH
