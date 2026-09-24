@@ -18,6 +18,7 @@
 #include <string_view>
 #include <vector>
 
+#include "../backends/Adapter.h"
 #include "../backends/Adapters.h"
 #include "../utils/StatusError.h"
 #include "engine.h"

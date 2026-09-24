@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "backends/Adapter.h"
 #include "backends/Adapters.h"
 #include "capi/capi_internal.h"
 
