@@ -1,6 +1,7 @@
 /*
- * The LiteRT adapter: one environment (carrying the log level), one model and one
- * compilation options object per loaded model, shared by every executor, and one compiled
+ * The LiteRT adapter: one environment per process, on the engine object, created at the
+ * engine's init with anira's log level, one model and one compilation options object per
+ * loaded model, shared by every executor, and one compiled
  * model per executor, run through the model's first signature (LiteRT synthesizes one for a
  * file without signatures, keyed by the tensor names), the slots bound to the signature's
  * inputs and outputs by name where the entry's tensors record or the canonical name matches a
@@ -16,6 +17,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/utils/Logger.h>
 
@@ -225,20 +227,71 @@ EngineTensor engine_tensor_of(LiteRtSignature signature, const char* name, bool 
     return tensor;
 }
 
-/// What one load shares between its executors: the environment (with anira's log level), the
-/// model (a file or the bytes of the record, which its owner keeps alive for the loaded
-/// model's life, as LiteRT asks) and the compilation options (the CPU, one thread), which the
-/// C API leaves to the caller once a compiled model was created over them. Immutable after
-/// load, held by the loaded model and by every executor, freed with the last of them.
+/// The engine object: the environment every model and compiled model of every loaded model
+/// is created over, made at the engine's init with anira's log level as its logger's minimum
+/// severity (the logger C API is not exported from the prebuilt runtime, so the env option is
+/// the only route, else LiteRT spams INFO logs on every environment creation and model
+/// compilation; severity values follow litert/c/internal/litert_logging.h: verbose=0, info=1,
+/// warning=2, error=3, numerically identical to anira's LogLevel enum, with Debug mapping to
+/// LiteRT's verbose severity), and the accelerators its automatic registration loaded, which a
+/// load's record is checked against. Every loaded model holds the object, so the environment
+/// outlives every compiled model and is destroyed with the object; the core keeps one object
+/// per engine (Core::builtin_engine).
+class LiteRtEngine final : public BuiltinEngine {
+public:
+    LiteRtEngine() : BuiltinEngine(ANIRA_ENGINE_LITERT) {}
+    ~LiteRtEngine() override {
+        if (m_env != nullptr) { LiteRtDestroyEnvironment(m_env); }
+    }
+    LiteRtEngine(const LiteRtEngine&) = delete;
+    LiteRtEngine& operator=(const LiteRtEngine&) = delete;
+    LiteRtEngine(LiteRtEngine&&) = delete;
+    LiteRtEngine& operator=(LiteRtEngine&&) = delete;
+
+    /// The environment init created. Throws ANIRA_ERROR_INVALID_STATE before init.
+    LiteRtEnvironment env() const {
+        if (!initialised()) {
+            throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                              "litert: the engine was never initialised (init runs before load)");
+        }
+        return m_env;
+    }
+
+protected:
+    void do_init(const anira_init_info& info) override {
+        const auto litert_severity = static_cast<int64_t>(info.log_level);
+        const std::array<LiteRtEnvOption, 1> env_options = {{
+            {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
+             .value = {.type = kLiteRtAnyTypeInt, .int_value = litert_severity}},
+        }};
+        LiteRtEnvironment env = nullptr;
+        litert_check(LiteRtCreateEnvironment(1, env_options.data(), &env),
+                     "LiteRtCreateEnvironment");
+        m_env = env;
+    }
+
+    std::vector<ProviderInfo> runtime_providers() const override { return litert_providers(); }
+
+private:
+    LiteRtEnvironment m_env = nullptr;  ///< null until init
+};
+
+/// What one load shares between its executors: the engine object (whose environment the model
+/// and every compiled model are created over), the model (a file or the bytes of the record,
+/// which its owner keeps alive for the loaded model's life, as LiteRT asks) and the
+/// compilation options (the CPU, one thread), which the C API leaves to the caller once a
+/// compiled model was created over them. Immutable after load, held by the loaded model and by
+/// every executor, freed with the last of them; the object outlives them all.
 struct SharedModel {
-    explicit SharedModel(const Model& model);
+    SharedModel(std::shared_ptr<const LiteRtEngine> engine, const Model& model);
     ~SharedModel() { release(); }
     SharedModel(const SharedModel&) = delete;
     SharedModel& operator=(const SharedModel&) = delete;
     SharedModel(SharedModel&&) = delete;
     SharedModel& operator=(SharedModel&&) = delete;
 
-    LiteRtEnvironment m_env = nullptr;
+    std::shared_ptr<const LiteRtEngine> m_engine;
+    LiteRtEnvironment m_env = nullptr;  ///< the engine object's; not owned here
     LiteRtModel m_model = nullptr;
     LiteRtOptions m_options = nullptr;
 
@@ -248,24 +301,11 @@ private:
     void release() noexcept;
 };
 
-SharedModel::SharedModel(const Model& model) {
+SharedModel::SharedModel(std::shared_ptr<const LiteRtEngine> engine, const Model& model)
+    : m_engine(std::move(engine)), m_env(m_engine->env()) {
     // Any litert_check below can throw; if it does mid-construction the destructor never
     // runs, so release the handles created so far before propagating.
     try {
-        // Forward anira's log level to LiteRT's default logger, otherwise LiteRT spams INFO
-        // logs on every environment creation and model compilation. The logger C API is not
-        // exported from the prebuilt runtime, so this env option is the only route. Severity
-        // values follow litert/c/internal/litert_logging.h: verbose=0, info=1, warning=2,
-        // error=3 — numerically identical to anira's LogLevel enum, with Debug mapping to
-        // LiteRT's verbose severity.
-        const auto litert_severity = static_cast<int64_t>(model.m_log_level);
-        const std::array<LiteRtEnvOption, 1> env_options = {{
-            {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
-             .value = {.type = kLiteRtAnyTypeInt, .int_value = litert_severity}},
-        }};
-        litert_check(LiteRtCreateEnvironment(1, env_options.data(), &m_env),
-                     "LiteRtCreateEnvironment");
-
         // The accelerator of the record: the CPU for the default provider, the hardware a
         // custom name spells else, and the environment must have registered one that supports
         // it (its automatic registration loads the accelerator libraries it finds), or the
@@ -347,10 +387,6 @@ void SharedModel::release() noexcept {
     if (m_model) {
         LiteRtDestroyModel(m_model);
         m_model = nullptr;
-    }
-    if (m_env) {
-        LiteRtDestroyEnvironment(m_env);
-        m_env = nullptr;
     }
 }
 
@@ -597,6 +633,9 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// without a shared slot, the spare of the first exclusive session.
 class LiteRtLoaded final : public ExecutorLoaded {
 public:
+    explicit LiteRtLoaded(std::shared_ptr<LiteRtEngine> engine)
+        : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
+
     /// The default provider (the CPU accelerator), or an accelerator by its hardware's name
     /// beside ANIRA_PROVIDER_DEFAULT; whether the environment registers one is load's
     /// question. No provider of the enum names a LiteRT accelerator.
@@ -624,7 +663,7 @@ public:
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        m_shared = std::make_shared<const SharedModel>(model);
+        m_shared = std::make_shared<const SharedModel>(m_engine, model);
         auto probe = std::make_unique<Instance>(m_shared);
         const std::vector<EngineTensor> inputs = probe->inputs();
         const std::vector<EngineTensor> outputs = probe->outputs();
@@ -648,6 +687,7 @@ protected:
     }
 
 private:
+    std::shared_ptr<LiteRtEngine> m_engine;       ///< the core's, held for the model's life
     std::shared_ptr<const SharedModel> m_shared;  ///< freed with the last executor over it
     std::vector<SlotBinding> m_input_bindings;
     std::vector<SlotBinding> m_output_bindings;
@@ -655,20 +695,29 @@ private:
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_litert_loaded() {
-    return std::make_shared<LiteRtLoaded>();
+std::shared_ptr<BuiltinEngine> make_litert_engine() {
+    return std::make_shared<LiteRtEngine>();
 }
 
-std::vector<ProviderInfo> litert_providers(anira::LogLevel level) {
+std::shared_ptr<Loaded> make_litert_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    std::shared_ptr<LiteRtEngine> own = std::dynamic_pointer_cast<LiteRtEngine>(engine);
+    if (own == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          "litert: the engine object is not this adapter's");
+    }
+    return std::make_shared<LiteRtLoaded>(std::move(own));
+}
+
+std::vector<ProviderInfo> litert_providers() {
     std::vector<ProviderInfo> providers;
     // A library that cannot be asked lists no accelerator: an environment is not worth creating.
     if (!k_accelerator_query) { return providers; }
     // A fresh environment registers the accelerators it can load (its automatic registration).
     // An accelerator it cannot load is this query's answer, not a warning: the environment's
-    // logger keeps errors alone, whatever anira's level; the adapter's environments at load
-    // keep anira's level, so a load that asks for an accelerator says why it failed.
-    const auto severity =
-        std::max(static_cast<int64_t>(level), static_cast<int64_t>(anira::LogLevel::Error));
+    // logger keeps errors alone, whatever anira's level. The engine object's environment, made
+    // at init with anira's level, is not touched, so the query runs beside an init on another
+    // thread, and a load that asks for an accelerator says why it failed.
+    const auto severity = static_cast<int64_t>(anira::LogLevel::Error);
     const std::array<LiteRtEnvOption, 1> env_options = {{
         {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
          .value = {.type = kLiteRtAnyTypeInt, .int_value = severity}},

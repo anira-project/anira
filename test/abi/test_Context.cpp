@@ -648,9 +648,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     size_t total = 0;
     for (const anira_engine engine : expected) {
         SCOPED_TRACE(static_cast<int>(engine));
-        // The level only steers LiteRT's own logger during its query, never the rows.
         const std::vector<anira::backend::ProviderInfo> oracle =
-            anira::backend::builtin_providers(engine, anira::LogLevel::Error);
+            anira::backend::builtin_providers(engine);
         const std::vector<anira_backend_id> rows = rows_of(backends, engine);
         ASSERT_EQ(rows.size(), oracle.size()) << "one row per provider the runtime reports";
         ASSERT_FALSE(rows.empty());

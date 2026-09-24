@@ -12,6 +12,7 @@
  */
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/utils/Logger.h>
@@ -425,12 +426,31 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
     }
 }
 
+/// The engine object: what LibTorch keeps per process, set at the engine's init: one intra-op
+/// thread (anira's inference threads are the parallelism) and c10's glog-style log level from
+/// anira's (INFO=0, WARNING=1, ERROR=2, FATAL=3; c10 has no severity below INFO, so Debug and
+/// Info both map to INFO). The core keeps one object per engine (Core::builtin_engine); every
+/// loaded model holds it.
+class LibTorchEngine final : public BuiltinEngine {
+public:
+    LibTorchEngine() : BuiltinEngine(ANIRA_ENGINE_LIBTORCH) {}
+
+protected:
+    void do_init(const anira_init_info& info) override {
+        torch::set_num_threads(1);
+        FLAGS_caffe2_log_level = std::max(static_cast<int>(info.log_level) - 1, 0);
+    }
+};
+
 /// The loaded model: the binding read off a probe module (every module loads the same file),
 /// the probe the executor of shared slot 0 or, for a record without a shared slot, the spare of
 /// the first exclusive session; every executor loads its own module (its own functions and
 /// graph executors, and its own copy of the weights).
 class LibTorchLoaded final : public ExecutorLoaded {
 public:
+    explicit LibTorchLoaded(std::shared_ptr<LibTorchEngine> engine)
+        : ExecutorLoaded(std::move(engine)) {}
+
     std::string provider_reason() const override {
         return "a LibTorch device needs the device-domain edges of a later pre-release (a "
                ".to(device) per call allocates), so the adapter runs the default provider "
@@ -440,12 +460,6 @@ public:
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        torch::set_num_threads(1);
-        // Forward anira's log level to c10's glog-style logging (INFO=0, WARNING=1,
-        // ERROR=2, FATAL=3). c10 has no severity below INFO, so both Debug and Info
-        // map to INFO.
-        FLAGS_caffe2_log_level = std::max(static_cast<int>(model.m_log_level) - 1, 0);
-
         auto probe = std::make_unique<Instance>(model);
         const Instance& first = *probe;
 
@@ -507,8 +521,17 @@ private:
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_libtorch_loaded() {
-    return std::make_shared<LibTorchLoaded>();
+std::shared_ptr<BuiltinEngine> make_libtorch_engine() {
+    return std::make_shared<LibTorchEngine>();
+}
+
+std::shared_ptr<Loaded> make_libtorch_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    std::shared_ptr<LibTorchEngine> own = std::dynamic_pointer_cast<LibTorchEngine>(engine);
+    if (own == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          "libtorch: the engine object is not this adapter's");
+    }
+    return std::make_shared<LibTorchLoaded>(std::move(own));
 }
 
 }  // namespace anira::backend

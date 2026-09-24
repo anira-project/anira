@@ -39,7 +39,6 @@
 #include <anira/abi/tensor.h>
 #include <anira/system/Exports.h>
 #include <anira/utils/Buffer.h>
-#include <anira/utils/Logger.h>
 
 #include <atomic>
 #include <cstddef>
@@ -115,7 +114,6 @@ struct ANIRA_API Model {
     uint32_t m_instances = 1;
     uint32_t m_warm_up = 0;  ///< the inferences load runs on every executor before the first
                              ///< real one
-    anira::LogLevel m_log_level = anira::LogLevel::Warning;  ///< the level in effect at load
 
     bool operator==(const Model& other) const;
 };
@@ -175,6 +173,74 @@ public:
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
 };
 
+/// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
+/// ANIRA_PROVIDER_DEFAULT with a name in the runtime's own words (an ONNX Runtime execution
+/// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
+/// "webnn"). What the context's capabilities list per (engine, provider).
+struct ProviderInfo {
+    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_provider_id;
+
+    bool operator==(const ProviderInfo& other) const = default;
+};
+
+/// One built-in engine of this build as an object, the twin of a custom engine's carrier
+/// (src/capi/engine.h): what the engine keeps per process rather than per loaded model, built
+/// by its init once, with the facts of the core in effect, and kept for the object's life:
+/// ONNX Runtime's environment (its logger at the level in effect), LiteRT's environment (its
+/// logger likewise, and the accelerators it registers), ExecuTorch's runtime initialisation,
+/// LibTorch's intra-op thread count and c10 log level; TensorFlow Lite keeps nothing. The
+/// core owns one per compiled-in engine (Core::builtin_engine), initialises it right before
+/// the engine's first load, on the control thread under its lifecycle lock (Loaded::init),
+/// and hands it to every loaded model of the engine (make_builtin_loaded), which holds it:
+/// the object outlives every loaded model of its engine, as a custom engine's carrier does,
+/// and dies with the core.
+class ANIRA_API BuiltinEngine {
+public:
+    explicit BuiltinEngine(anira_engine engine) noexcept : m_engine(engine) {}
+    virtual ~BuiltinEngine() = default;
+    BuiltinEngine(const BuiltinEngine&) = delete;
+    BuiltinEngine& operator=(const BuiltinEngine&) = delete;
+    BuiltinEngine(BuiltinEngine&&) = delete;
+    BuiltinEngine& operator=(BuiltinEngine&&) = delete;
+
+    /// The engine this object is.
+    anira_engine engine() const noexcept { return m_engine; }
+
+    /// The engine's init, once per object: the first call runs do_init with the record and
+    /// remembers a success, every later call returns at once; a throw leaves the object
+    /// uninitialised, so the next call runs do_init again. Control thread, under the core's
+    /// lifecycle lock (the core calls it through Loaded::init). Throws anira::StatusError
+    /// with the message the caller reads.
+    void ensure_init(const anira_init_info& info);
+
+    /// Whether init ran and succeeded: false until then, and after a throw.
+    bool initialised() const noexcept { return m_initialised; }
+
+    /// The providers the engine serves here: the default provider first, then what its
+    /// runtime reports usable (runtime_providers), each once. What the context's capabilities
+    /// list per (engine, provider), asked at every probe. Runs on any control thread, before
+    /// or after init and any number of times, without a lock: it touches nothing init builds
+    /// (the runtime is asked directly; LiteRT's query creates an environment of its own).
+    std::vector<ProviderInfo> providers() const;
+
+protected:
+    /// What the engine builds once per process, with the facts of the record (the level in
+    /// effect above all). Nothing by default. Throws anira::StatusError (ENGINE,
+    /// NOT_SUPPORTED) with the message the caller reads.
+    virtual void do_init(const anira_init_info& info) { static_cast<void>(info); }
+
+    /// What the runtime reports usable here beyond the default provider, which the caller
+    /// lists first: ONNX Runtime's available execution providers, LiteRT's registered
+    /// accelerators, ExecuTorch's registered backends; nothing for TFLite and LibTorch in this
+    /// pre-release. Empty, with a warning logged, when the runtime cannot be asked.
+    virtual std::vector<ProviderInfo> runtime_providers() const { return {}; }
+
+private:
+    anira_engine m_engine;
+    bool m_initialised = false;
+};
+
 class Prepared;
 
 /// One loaded model: the C lifecycle's loaded pointer as a class. load once on the control
@@ -191,10 +257,11 @@ public:
     Loaded& operator=(Loaded&&) = delete;
 
     /// Control thread, under the core's lifecycle lock, right before load: the engine's init,
-    /// once per engine object, with the facts of the core in effect (a custom engine's init
-    /// slot; the carrier remembers, so a second loaded model of the object calls nothing).
-    /// Nothing by default: a built-in engine has no init of its own. Throws anira::StatusError
-    /// with the status a refused init returned, naming the engine.
+    /// once per engine object, with the facts of the core in effect (a built-in engine's
+    /// object, ExecutorLoaded; a custom engine's init slot through its carrier,
+    /// DescriptorLoaded; the object remembers, so a second loaded model of it calls nothing).
+    /// Nothing by default (the 2.x adapters). Throws anira::StatusError with the status a
+    /// refused init returned, naming the engine.
     virtual void init(const anira_init_info& info) { static_cast<void>(info); }
 
     /// Control thread, once, under the core's lifecycle lock: keeps a copy of the record, loads
@@ -258,6 +325,11 @@ protected:
     /// 2.x BackendBase takes no instance index and is called as concurrently as the scheduler
     /// dispatches, as it always was.
     virtual bool claims_instances() const noexcept { return true; }
+    /// The first check of load: that the engine's init ran (ExecutorLoaded: its engine
+    /// object's; DescriptorLoaded: its carrier's), since what load builds runs over what init
+    /// built. Throws anira::StatusError(ANIRA_ERROR_INVALID_STATE) naming the engine when it
+    /// has not; nothing by default (the 2.x adapters have no init).
+    virtual void require_initialised() const {}
     /// What do_load reports for the slots it bound (bind_slots): one entry per slot of either
     /// side of the record.
     void set_bindings(Bindings bindings) noexcept { m_bindings = std::move(bindings); }
@@ -335,10 +407,25 @@ private:
 /// shared call on the executor of the claimed slot and an exclusive call on the session's own.
 class ANIRA_API ExecutorLoaded : public Loaded {
 public:
+    /// Over the engine object of the engine (the core's one per built-in engine,
+    /// Core::builtin_engine), which the loaded model holds for its life: what load builds runs
+    /// over what the object's init built.
+    explicit ExecutorLoaded(std::shared_ptr<BuiltinEngine> engine) noexcept
+        : m_engine(std::move(engine)) {}
+
+    /// The engine object; initialised by the time load ran.
+    BuiltinEngine& engine() const noexcept { return *m_engine; }
+
+    /// The engine object's init, once per object (BuiltinEngine::ensure_init).
+    void init(const anira_init_info& info) override { m_engine->ensure_init(info); }
+
     /// The executor of a shared slot; the slot is below num_instances().
     Executor& executor(uint32_t instance) const noexcept { return *m_shared[instance]; }
 
 protected:
+    /// ANIRA_ERROR_INVALID_STATE naming the engine when its object was never initialised.
+    void require_initialised() const override;
+
     /// One more executor over the loaded object, bound as the shared ones are, not yet warmed
     /// up (the caller warms it): what an exclusive session's prepare takes when no spare is
     /// left. Control thread; throws anira::StatusError with the message the caller reads.
@@ -355,6 +442,7 @@ protected:
 
 private:
     friend class ExecutorPrepared;
+    std::shared_ptr<BuiltinEngine> m_engine;  ///< declared first: outlives the executors
     std::vector<std::unique_ptr<Executor>> m_shared;
     std::unique_ptr<Executor> m_spare;
 };

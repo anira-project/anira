@@ -1,8 +1,9 @@
 /*
- * The ONNX Runtime adapter: one environment handle and one session-options object per loaded
- * model, shared by every executor (ONNX Runtime keeps one environment per process behind the
- * handle; the web build creates it with a global thread pool of one thread, since a
- * WebAssembly session cannot spawn its own), and one Ort::Session per executor (kept per
+ * The ONNX Runtime adapter: one environment per process, on the engine object, created at
+ * the engine's init with anira's log level (ONNX Runtime keeps one environment per process
+ * behind every handle; the web build creates it with a global thread pool of one thread,
+ * since a WebAssembly session cannot spawn its own), one session-options object per loaded
+ * model, shared by every executor, and one Ort::Session per executor (kept per
  * executor, so that no two executors share a session's allocator), the slots bound to the
  * graph's inputs and outputs by name where the entry's tensors record or the canonical name
  * matches one and by graph position otherwise, checked against the graph's shapes at load,
@@ -14,6 +15,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/utils/Logger.h>
@@ -192,30 +194,74 @@ void append_provider(Ort::SessionOptions& options, const Model& model) {
     }
 }
 
-/// What one load shares between its executors: the environment handle (anira's log level on
-/// it; ONNX Runtime keeps one environment per process behind every handle) and the session
-/// options (one intra-op thread, the record's provider appended), which a session reads at its
-/// creation on the control thread and never again. Immutable after load, held by the loaded
-/// model and by every executor, freed with the last of them.
-struct SharedEnvironment {
-    explicit SharedEnvironment(const Model& model);
+/// The engine object: the environment every session of every loaded model is created over,
+/// made at the engine's init with anira's log level as its logger's severity (ONNX Runtime
+/// keeps one environment per process behind every handle, and the first handle's logger is
+/// the process's, so the level in effect at init is the one the runtime logs at; the web
+/// build gives it a global thread pool of one intra-op thread, since a WebAssembly session
+/// cannot spawn its own). Every loaded model holds the object, so the environment outlives
+/// every session; the core keeps one object per engine (Core::builtin_engine).
+class OnnxRuntimeEngine final : public BuiltinEngine {
+public:
+    OnnxRuntimeEngine() : BuiltinEngine(ANIRA_ENGINE_ONNXRUNTIME), m_env(nullptr) {}
 
-    Ort::Env m_env;
+    /// The environment init created. Throws ANIRA_ERROR_INVALID_STATE before init.
+    const Ort::Env& env() const {
+        if (!initialised()) {
+            throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                              "onnxruntime: the engine was never initialised (init runs before "
+                              "load)");
+        }
+        return m_env;
+    }
+
+protected:
+    void do_init(const anira_init_info& info) override {
+        throw_if_foreign_onnxruntime();
+        const OrtLoggingLevel severity =
+            to_ort_logging_level(static_cast<anira::LogLevel>(info.log_level));
+        try {
+#ifdef USE_ANIRA_WEB
+            // No session-owned threads in WebAssembly: the environment carries a global thread
+            // pool of one intra-op thread the sessions run on. The environment copies the
+            // threading options, which die with this scope.
+            Ort::ThreadingOptions threading;
+            threading.SetGlobalIntraOpNumThreads(1);
+            m_env = Ort::Env(threading, severity, "Default");
+#else
+            m_env = Ort::Env(severity, "Default");
+#endif
+        } catch (const Ort::Exception& e) {
+            throw StatusError(
+                ANIRA_ERROR_ENGINE,
+                std::string("onnxruntime: the environment could not be created: ") + e.what());
+        }
+    }
+
+    std::vector<ProviderInfo> runtime_providers() const override { return onnxruntime_providers(); }
+
+private:
+    Ort::Env m_env;  ///< null until init
+};
+
+/// What one load shares between its executors: the engine object, whose environment every
+/// session is created over, and the session options (one intra-op thread, the record's
+/// provider appended), which a session reads at its creation on the control thread and never
+/// again. Immutable after load, held by the loaded model and by every executor, freed with the
+/// last of them; the object outlives them all.
+struct SharedEnvironment {
+    SharedEnvironment(std::shared_ptr<const OnnxRuntimeEngine> engine, const Model& model);
+
+    /// The environment of the engine object.
+    const Ort::Env& env() const { return m_engine->env(); }
+
+    std::shared_ptr<const OnnxRuntimeEngine> m_engine;
     Ort::SessionOptions m_options;
 };
 
-SharedEnvironment::SharedEnvironment(const Model& model)
-#ifdef USE_ANIRA_WEB
-    : m_env(nullptr) {
-    // No session-owned threads in WebAssembly: the environment carries a global thread pool of
-    // one intra-op thread the sessions run on. The environment copies the threading options,
-    // which die with this scope.
-    Ort::ThreadingOptions threading;
-    threading.SetGlobalIntraOpNumThreads(1);
-    m_env = Ort::Env(threading, to_ort_logging_level(model.m_log_level), "Default");
-#else
-    : m_env(to_ort_logging_level(model.m_log_level), "Default") {
-#endif
+SharedEnvironment::SharedEnvironment(std::shared_ptr<const OnnxRuntimeEngine> engine,
+                                     const Model& model)
+    : m_engine(std::move(engine)) {
     m_options.SetIntraOpNumThreads(1);
     append_provider(m_options, model);
 }
@@ -278,7 +324,7 @@ Instance::Instance(std::shared_ptr<const SharedEnvironment> shared, const Model&
     , m_shared(std::move(shared)) {
     if (model.m_bytes != nullptr) {
         try {
-            m_session = std::make_unique<Ort::Session>(m_shared->m_env,
+            m_session = std::make_unique<Ort::Session>(m_shared->env(),
                                                        model.m_bytes,
                                                        model.m_num_bytes,
                                                        m_shared->m_options);
@@ -295,7 +341,7 @@ Instance::Instance(std::shared_ptr<const SharedEnvironment> shared, const Model&
         const std::string& ort_path = modelpath;
 #endif
         try {
-            m_session = std::make_unique<Ort::Session>(m_shared->m_env,
+            m_session = std::make_unique<Ort::Session>(m_shared->env(),
                                                        ort_path.c_str(),
                                                        m_shared->m_options);
         } catch (const Ort::Exception& e) {
@@ -454,14 +500,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// spare of the first exclusive session; every executor a session of its own.
 class OnnxRuntimeLoaded final : public ExecutorLoaded {
 public:
+    explicit OnnxRuntimeLoaded(std::shared_ptr<OnnxRuntimeEngine> engine)
+        : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
+
     /// The default provider always; a provider of the enum or a registered name when the
-    /// runtime lists it among its available execution providers (never Vulkan, which ONNX
-    /// Runtime has no provider for).
+    /// runtime lists it among its available execution providers (the engine object's list;
+    /// never Vulkan, which ONNX Runtime has no provider for).
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
         if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
         if (provider == ANIRA_PROVIDER_VULKAN) { return false; }
         try {
-            for (const ProviderInfo& info : onnxruntime_providers()) {
+            for (const ProviderInfo& info : m_engine->providers()) {
                 if (info.m_provider == provider && info.m_provider_id == provider_id) {
                     return true;
                 }
@@ -477,7 +526,10 @@ public:
             "beyond the CPU: ";
         std::string listed;
         try {
-            for (const ProviderInfo& info : onnxruntime_providers()) {
+            for (const ProviderInfo& info : m_engine->providers()) {
+                if (info.m_provider == ANIRA_PROVIDER_DEFAULT && info.m_provider_id.empty()) {
+                    continue;  // the default provider, listed first
+                }
                 if (!listed.empty()) { listed += ", "; }
                 listed += anira::capi::provider_label(info.m_provider, info.m_provider_id);
             }
@@ -491,8 +543,7 @@ public:
 protected:
     void do_load(const Model& model) override {
         require_f32(model, k_engine);
-        throw_if_foreign_onnxruntime();
-        m_shared = std::make_shared<const SharedEnvironment>(model);
+        m_shared = std::make_shared<const SharedEnvironment>(m_engine, model);
         auto probe = std::make_unique<Instance>(m_shared, model);
         const std::vector<EngineTensor> inputs = probe->inputs();
         const std::vector<EngineTensor> outputs = probe->outputs();
@@ -516,6 +567,7 @@ protected:
     }
 
 private:
+    std::shared_ptr<OnnxRuntimeEngine> m_engine;        ///< the core's, held for the model's life
     std::shared_ptr<const SharedEnvironment> m_shared;  ///< freed with the last executor over it
     std::vector<SlotBinding> m_input_bindings;
     std::vector<SlotBinding> m_output_bindings;
@@ -523,8 +575,17 @@ private:
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_onnxruntime_loaded() {
-    return std::make_shared<OnnxRuntimeLoaded>();
+std::shared_ptr<BuiltinEngine> make_onnxruntime_engine() {
+    return std::make_shared<OnnxRuntimeEngine>();
+}
+
+std::shared_ptr<Loaded> make_onnxruntime_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    std::shared_ptr<OnnxRuntimeEngine> own = std::dynamic_pointer_cast<OnnxRuntimeEngine>(engine);
+    if (own == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          "onnxruntime: the engine object is not this adapter's");
+    }
+    return std::make_shared<OnnxRuntimeLoaded>(std::move(own));
 }
 
 std::vector<ProviderInfo> onnxruntime_providers() {

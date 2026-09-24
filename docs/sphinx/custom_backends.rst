@@ -174,6 +174,16 @@ stage's ``init`` receives the same record):
   capabilities (``anira_context_capabilities``) are legal to query; valid until ``init``
   returns, never kept.
 
+A built-in engine has the same level. The core keeps one engine object per compiled-in engine
+for its own life and runs the engine's init once, with the same record, right before its
+first ``load``: ONNX Runtime creates its environment there, with the level in effect as its
+logger's severity, and every session of every loaded model is created over it; LiteRT its
+environment likewise, with the accelerators its registration finds, which a load's record is
+checked against; ExecuTorch initialises its runtime; LibTorch sets its intra-op thread count
+to one and c10's log level; TensorFlow Lite has nothing per process. What an engine builds at
+init outlives every loaded model of the engine on both sides, and a load before the init is
+``ANIRA_ERROR_INVALID_STATE`` on both.
+
 A status other than ``ANIRA_OK`` fails that ``anira_handler_prepare`` with it, the message
 naming the engine (``the engine 'com.example.myengine' refused init: it returned N``), and
 leaves the object uninitialised, so the next prepare calls ``init`` again. The engine's
@@ -243,18 +253,20 @@ session, an interpreter, a method), and it owns everything with run-time state; 
 shares between its executors is only what is immutable during a run. The built-in engines
 draw the line so (``src/backends/``, internal):
 
-- ONNX Runtime: one environment handle and one session-options object per loaded model,
-  shared; one ``Ort::Session`` per executor, kept per executor so that no two executors share
-  a session's allocator. The web build creates the environment with a global thread pool of
-  one thread through ``Ort::ThreadingOptions``, since a WebAssembly session cannot spawn its
-  own.
+- ONNX Runtime: one session-options object per loaded model, shared, over the engine object's
+  environment (one per process, created at the engine's init with anira's log level; the web
+  build creates it with a global thread pool of one thread through ``Ort::ThreadingOptions``,
+  since a WebAssembly session cannot spawn its own); one ``Ort::Session`` per executor, kept
+  per executor so that no two executors share a session's allocator.
 - LibTorch: one TorchScript module per executor, each with its own copy of the weights, since
   a module is not shareable between threads; what one load shares is the record and the
   binding tables.
 - TensorFlow Lite: one ``TfLiteModel`` (the flatbuffer parsed once) and one options object per
   loaded model, shared; one interpreter, with its signature runner, per executor.
-- LiteRT: one environment (carrying anira's log level), one model and one compilation-options
-  object per loaded model, shared; one compiled model with its managed buffers per executor.
+- LiteRT: one model and one compilation-options object per loaded model, shared, over the
+  engine object's environment (one per process, created at the engine's init with anira's log
+  level, the accelerators it registered checked at load); one compiled model with its managed
+  buffers per executor.
 - ExecuTorch: one data loader and one ``Program`` (the ``.pte`` parsed once) per loaded model,
   shared; one ``Module`` over that program, with its own loaded method, per executor. Every
   method is loaded with the XNNPACK delegate's runtime options set to a workspace per delegate

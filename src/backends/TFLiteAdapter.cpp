@@ -461,6 +461,14 @@ void Instance::reset(const anira_engine_ctx& /*ctx*/) noexcept {
     }
 }
 
+/// The engine object: nothing per process, since the prebuilt TensorFlow Lite runtime has no
+/// global state anira sets (no runtime logger; the thread count is the interpreter options').
+/// The core keeps one object per engine (Core::builtin_engine); every loaded model holds it.
+class TFLiteEngine final : public BuiltinEngine {
+public:
+    TFLiteEngine() : BuiltinEngine(ANIRA_ENGINE_TFLITE) {}
+};
+
 /// The loaded model: the model and the options every executor shares (SharedModel, loaded
 /// once), the names of a probe interpreter over them bind the slots, the check against the
 /// dims runs in bind, after the resize and the allocation, on every executor; the probe is
@@ -468,6 +476,9 @@ void Instance::reset(const anira_engine_ctx& /*ctx*/) noexcept {
 /// first exclusive session.
 class TFLiteLoaded final : public ExecutorLoaded {
 public:
+    explicit TFLiteLoaded(std::shared_ptr<TFLiteEngine> engine)
+        : ExecutorLoaded(std::move(engine)) {}
+
     std::string provider_reason() const override {
         return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
                "adapter runs the default provider alone in this pre-release";
@@ -502,8 +513,17 @@ private:
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_tflite_loaded() {
-    return std::make_shared<TFLiteLoaded>();
+std::shared_ptr<BuiltinEngine> make_tflite_engine() {
+    return std::make_shared<TFLiteEngine>();
+}
+
+std::shared_ptr<Loaded> make_tflite_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    std::shared_ptr<TFLiteEngine> own = std::dynamic_pointer_cast<TFLiteEngine>(engine);
+    if (own == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          "tflite: the engine object is not this adapter's");
+    }
+    return std::make_shared<TFLiteLoaded>(std::move(own));
 }
 
 }  // namespace anira::backend

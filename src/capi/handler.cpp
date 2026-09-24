@@ -966,7 +966,6 @@ anira::backend::Model model_of_row(const anira_model_config& model,
     record.m_instances =
         config.m_session_exclusive_processor ? 0U : config.m_num_parallel_processors;
     record.m_warm_up = config.m_warm_up;
-    record.m_log_level = anira::get_log_level();
     return record;
 }
 

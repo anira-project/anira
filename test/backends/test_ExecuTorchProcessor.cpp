@@ -9,10 +9,12 @@
 #include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
+#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -59,6 +61,10 @@ public:
 
     void prepare(const anira::backend::Model& model) {
         m_prepared.reset();
+        // The engine object's init, as the core runs it before a load: the level in effect.
+        anira_init_info info = ANIRA_INIT_INFO_INIT;
+        info.log_level = static_cast<uint32_t>(anira::get_log_level());
+        m_loaded->init(info);
         m_loaded->load(model);
         m_prepared =
             m_loaded->prepare(anira::backend::PrepareRequest{.m_exclusive = model.m_instances == 0,
@@ -79,8 +85,8 @@ private:
 };
 
 std::shared_ptr<Rig> executorch_adapter() {
-    std::shared_ptr<anira::backend::Loaded> loaded =
-        anira::backend::make_builtin_loaded(ANIRA_ENGINE_EXECUTORCH);
+    std::shared_ptr<anira::backend::Loaded> loaded = anira::backend::make_builtin_loaded(
+        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
     EXPECT_NE(loaded, nullptr);
     return std::make_shared<Rig>(std::move(loaded));
 }
@@ -142,8 +148,8 @@ TEST(ExecuTorchProcessor, TheProviderIsTheExportsBackend) {
     EXPECT_TRUE(lists_xnnpack);
 
     const std::shared_ptr<Rig> adapter = executorch_adapter();
-    const std::shared_ptr<anira::backend::Loaded> fresh =
-        anira::backend::make_builtin_loaded(ANIRA_ENGINE_EXECUTORCH);
+    const std::shared_ptr<anira::backend::Loaded> fresh = anira::backend::make_builtin_loaded(
+        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
     ASSERT_NE(fresh, nullptr);
     const anira::backend::Loaded& loaded = *fresh;
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));

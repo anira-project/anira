@@ -24,6 +24,7 @@
 #include <utility>
 #include <vector>
 
+#include "../backends/Adapter.h"
 #include "../backends/Adapters.h"
 #include "capi_internal.h"
 #include "enumerate.h"
@@ -85,10 +86,12 @@ void probe(anira_capabilities& capabilities) {
     std::vector<anira_backend_id> backends;
     std::vector<anira_edge_info> edges;
     std::deque<std::string> strings;
-    const anira::LogLevel level = anira::get_log_level();
     for (const anira_engine engine : anira::capi::enabled_engines()) {
-        for (const anira::backend::ProviderInfo& provider :
-             anira::backend::builtin_providers(engine, level)) {
+        // The core's engine object of the engine, made here when no session made it yet.
+        const std::shared_ptr<anira::backend::BuiltinEngine> object =
+            anira::Core::builtin_engine(engine);
+        if (object == nullptr) { continue; }
+        for (const anira::backend::ProviderInfo& provider : object->providers()) {
             const char* provider_id = nullptr;
             if (!provider.m_provider_id.empty()) {
                 strings.push_back(provider.m_provider_id);

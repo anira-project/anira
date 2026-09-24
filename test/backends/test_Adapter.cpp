@@ -8,11 +8,13 @@
 #include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
+#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <array>
@@ -35,7 +37,9 @@
 
 namespace {
 
+using anira::StatusError;
 using anira::backend::Bindings;
+using anira::backend::BuiltinEngine;
 using anira::backend::ChunkBuffers;
 using anira::backend::EngineTensor;
 using anira::backend::Executor;
@@ -114,6 +118,13 @@ Model gain_model(uint32_t instances = 1) {
     return model;
 }
 
+/// The init record the core hands an engine: the level in effect, no thread pool, no context.
+anira_init_info init_info() {
+    anira_init_info info = ANIRA_INIT_INFO_INIT;
+    info.log_level = static_cast<uint32_t>(anira::get_log_level());
+    return info;
+}
+
 /// What every executor of a RecordingLoaded records: the calls, whether two calls ever ran at
 /// once on one executor, the calls per shared slot, the calls out of range, the resets and the
 /// flags of the last call.
@@ -167,9 +178,39 @@ private:
     std::atomic<bool> m_in_use{false};
 };
 
-/// A loaded model of recording executors: the probe and every further one made over it.
+/// The engine object of the recording doubles: counts its inits, refuses them when told to.
+class RecordingEngine final : public BuiltinEngine {
+public:
+    /// Under any engine value: a double that says it is a built-in engine's object is one an
+    /// adapter refuses.
+    explicit RecordingEngine(anira_engine engine = ANIRA_ENGINE_NONE) : BuiltinEngine(engine) {}
+
+    uint32_t m_inits = 0;
+    anira_status m_refuse = ANIRA_OK;  ///< what do_init throws while not ANIRA_OK
+
+protected:
+    void do_init(const anira_init_info& /*info*/) override {
+        ++m_inits;
+        if (m_refuse != ANIRA_OK) { throw StatusError(m_refuse, "the recording engine refused"); }
+    }
+};
+
+/// The engine object of a recording loaded model, initialised as the core has it before a
+/// load.
+std::shared_ptr<RecordingEngine> initialised_engine() {
+    auto engine = std::make_shared<RecordingEngine>();
+    engine->ensure_init(init_info());
+    return engine;
+}
+
+/// A loaded model of recording executors: the probe and every further one made over it, over
+/// an initialised engine object of its own unless one is given.
 class RecordingLoaded final : public ExecutorLoaded {
 public:
+    RecordingLoaded() : ExecutorLoaded(initialised_engine()) {}
+    explicit RecordingLoaded(std::shared_ptr<BuiltinEngine> engine)
+        : ExecutorLoaded(std::move(engine)) {}
+
     Recording m_recording;
 
 protected:
@@ -518,9 +559,8 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     const Model a = gain_model(2);
     Model b = gain_model(2);
     EXPECT_EQ(a, b);
-    b.m_log_level = anira::LogLevel::Debug;
     b.m_bytes_owner = std::shared_ptr<const void>(std::make_shared<int>(1));
-    EXPECT_EQ(a, b) << "the level and the owner are no part of the identity";
+    EXPECT_EQ(a, b) << "the owner is no part of the identity";
     b = gain_model(3);
     EXPECT_NE(a, b) << "the instances are";
     b = gain_model(2);
@@ -1039,22 +1079,84 @@ TEST(Adapter, LoadReportsPositionForEverySlotUntilTheEngineSaysOtherwise) {
 // The built-in adapters
 // ============================================================================================
 
-// Every engine of the build has an adapter (unloaded until load loads a model); an engine the
-// build does not carry, and the custom engine, have none.
-TEST(Adapter, MakeBuiltInLoadedAnswersTheEnginesOfTheBuild) {
-    EXPECT_EQ(anira::backend::make_builtin_loaded(ANIRA_ENGINE_NONE), nullptr);
+// Every engine of the build has an engine object (uninitialised until a loaded model's init)
+// and an adapter over it (unloaded until load loads a model); an engine the build does not
+// carry, and the custom engine, have neither.
+TEST(Adapter, MakeBuiltInEngineAndLoadedAnswerTheEnginesOfTheBuild) {
+    EXPECT_EQ(anira::backend::make_builtin_engine(ANIRA_ENGINE_NONE), nullptr);
+    EXPECT_EQ(anira::backend::make_builtin_loaded(nullptr), nullptr);
     EXPECT_EQ(anira::backend::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_NONE);
     for (const anira::InferenceBackend backend : every_backend()) {
         if (backend == anira::InferenceBackend::CUSTOM) { continue; }
         const anira_engine engine = anira::backend::engine_of(backend);
         ASSERT_NE(engine, ANIRA_ENGINE_NONE);
-        const std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(engine);
+        const std::shared_ptr<BuiltinEngine> object = anira::backend::make_builtin_engine(engine);
+        ASSERT_NE(object, nullptr) << "engine " << static_cast<int>(engine);
+        EXPECT_EQ(object->engine(), engine);
+        EXPECT_FALSE(object->initialised());
+        const std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(object);
         ASSERT_NE(loaded, nullptr) << "engine " << static_cast<int>(engine);
         EXPECT_FALSE(loaded->loaded());
+        EXPECT_EQ(&dynamic_cast<ExecutorLoaded&>(*loaded).engine(), object.get())
+            << "the loaded model holds the object it was made over";
+        // The query needs no init and lists the default provider first.
+        const std::vector<anira::backend::ProviderInfo> providers = object->providers();
+        ASSERT_FALSE(providers.empty());
+        EXPECT_EQ(providers.front(), anira::backend::ProviderInfo{});
+        EXPECT_EQ(providers, anira::backend::builtin_providers(engine));
+        EXPECT_FALSE(object->initialised()) << "the query initialises nothing";
+        // An object that claims the engine but is not the adapter's own is refused.
+        const auto foreign = std::make_shared<RecordingEngine>(engine);
+        try {
+            static_cast<void>(anira::backend::make_builtin_loaded(foreign));
+            ADD_FAILURE() << "a recording engine object passed as engine "
+                          << static_cast<int>(engine);
+        } catch (const StatusError& e) { EXPECT_EQ(e.status(), ANIRA_ERROR_INVALID_ARGUMENT); }
     }
 #ifndef USE_ONNXRUNTIME
-    EXPECT_EQ(anira::backend::make_builtin_loaded(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
+    EXPECT_EQ(anira::backend::make_builtin_engine(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
 #endif
+}
+
+// A built-in engine's init is its object's, once: the first loaded model's init runs it with
+// the record, every later one finds it done, and load refuses to run before it (what load
+// builds runs over what init built). A refused init is not remembered, so the next init runs
+// it again.
+TEST(Adapter, ALoadedModelInitialisesItsEngineObjectOnceAndLoadsAfterItAlone) {
+    const auto engine = std::make_shared<RecordingEngine>();
+    RecordingLoaded first(engine);
+    RecordingLoaded second(engine);
+    EXPECT_EQ(&first.engine(), engine.get());
+    EXPECT_FALSE(engine->initialised());
+    try {
+        first.load(gain_model());
+        ADD_FAILURE() << "a load before init";
+    } catch (const StatusError& e) {
+        EXPECT_EQ(e.status(), ANIRA_ERROR_INVALID_STATE);
+        EXPECT_NE(std::string(e.what()).find("init runs before load"), std::string::npos)
+            << e.what();
+    }
+    EXPECT_FALSE(first.loaded());
+    EXPECT_EQ(engine->m_inits, 0U);
+
+    engine->m_refuse = ANIRA_ERROR_ENGINE;
+    try {
+        first.init(init_info());
+        ADD_FAILURE() << "a refused init";
+    } catch (const StatusError& e) { EXPECT_EQ(e.status(), ANIRA_ERROR_ENGINE); }
+    EXPECT_FALSE(engine->initialised()) << "a refused init is not remembered";
+    EXPECT_EQ(engine->m_inits, 1U);
+
+    engine->m_refuse = ANIRA_OK;
+    first.init(init_info());
+    EXPECT_TRUE(engine->initialised());
+    EXPECT_EQ(engine->m_inits, 2U);
+    second.init(init_info());
+    EXPECT_EQ(engine->m_inits, 2U) << "once per object";
+    first.load(gain_model());
+    second.load(gain_model());
+    EXPECT_TRUE(first.loaded());
+    EXPECT_TRUE(second.loaded());
 }
 
 namespace {
@@ -1068,6 +1170,7 @@ public:
 
     void prepare(const Model& model) {
         m_prepared.reset();
+        m_loaded->init(init_info());
         m_loaded->load(model);
         m_prepared = m_loaded->prepare(
             PrepareRequest{.m_exclusive = model.m_instances == 0, .m_info = nullptr});
@@ -1087,7 +1190,8 @@ private:
 
 /// The rig of a built-in engine of the build; a null loaded model for one it does not carry.
 std::shared_ptr<Rig> builtin_rig(anira_engine engine) {
-    std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(engine);
+    std::shared_ptr<Loaded> loaded =
+        anira::backend::make_builtin_loaded(anira::backend::make_builtin_engine(engine));
     return loaded == nullptr ? nullptr : std::make_shared<Rig>(std::move(loaded));
 }
 
@@ -1614,8 +1718,7 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
               std::string::npos)
         << refused.what();
 
-    const std::vector<anira::backend::ProviderInfo> listed =
-        anira::backend::litert_providers(anira::LogLevel::Error);
+    const std::vector<anira::backend::ProviderInfo> listed = anira::backend::litert_providers();
     const bool has_gpu = std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
         return p.m_provider_id == "gpu";
     });

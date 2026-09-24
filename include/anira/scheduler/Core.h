@@ -28,6 +28,9 @@ namespace anira::backend {
 struct PlanRequest;
 /// The loaded model of a plan (src/backends/Adapter.h); a return type here, complete in Core.cpp.
 class Loaded;
+/// The engine object of a built-in engine (src/backends/Adapter.h); a return type here,
+/// complete in Core.cpp and at every caller.
+class BuiltinEngine;
 }  // namespace anira::backend
 
 namespace anira {
@@ -240,6 +243,24 @@ public:
      * @return True if the core is allocated
      */
     static bool has_core();
+
+    /**
+     * @brief The core's engine object of a built-in engine of this build, one per engine
+     *
+     * Made at the first call (backend::make_builtin_engine) and kept until the core is freed
+     * (release_core_if_idle), so what the engine builds at its init (an ONNX Runtime or a
+     * LiteRT environment with the level in effect on its logger, ExecuTorch's runtime
+     * initialisation, LibTorch's thread count) is built once per process and outlives every
+     * loaded model of the engine, which holds the object. The first session that loads a
+     * model of the engine initialises it (acquire_loaded_locked, under the lifecycle lock);
+     * the context's probe asks the object for its providers before or after that. Takes the
+     * engine mutex alone, never the lifecycle lock, so a callback that runs under that lock
+     * may probe a context.
+     *
+     * @param engine A built-in engine
+     * @return The object, or NULL for an engine this build does not carry
+     */
+    static std::shared_ptr<backend::BuiltinEngine> builtin_engine(anira_engine engine);
 
     /**
      * @brief Registers a 3.x context as a user of the core
@@ -889,6 +910,19 @@ private:
      * @param session The session whose plans are released
      */
     static void release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief The core's engine object of a built-in engine, made at the first call
+     *
+     * Under the state's engine mutex alone, never the lifecycle lock, which the caller may
+     * hold (the pool's acquisition does, the context's probe does not).
+     *
+     * @param state The core's state
+     * @param engine A built-in engine
+     * @return The object, or NULL for an engine this build does not carry
+     */
+    static std::shared_ptr<backend::BuiltinEngine> find_or_make_builtin_engine(State& state,
+                                                                               anira_engine engine);
 
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference

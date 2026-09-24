@@ -73,6 +73,11 @@ anira_status EngineCarrier::ensure_init(const anira_init_info& info) const {
     return ANIRA_OK;
 }
 
+bool EngineCarrier::initialised() const {
+    const std::scoped_lock<std::mutex> lock(m_init_mutex);
+    return m_initialised;
+}
+
 anira_status EngineCarrier::query(const anira_init_info& info, uint64_t& available) const {
     const uint64_t all =
         m_providers.size() >= 64 ? ~uint64_t{0} : (uint64_t{1} << m_providers.size()) - 1;

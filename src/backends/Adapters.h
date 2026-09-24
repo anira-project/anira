@@ -36,9 +36,10 @@ namespace anira::backend {
 
 /// Where a plan's loaded model comes from.
 enum class Source : uint8_t {
-    /// A built-in engine (make_builtin_loaded): pooled by the record across the sessions of the
-    /// process, loaded once per pooled record and shared by every session that runs it,
-    /// exclusive ones included.
+    /// A built-in engine (make_builtin_loaded over the core's engine object of the engine,
+    /// Core::builtin_engine, initialised once per process): pooled by the record across the
+    /// sessions of the process, loaded once per pooled record and shared by every session that
+    /// runs it, exclusive ones included.
     BuiltIn,
     /// A registered engine: the request's own loaded model over its carrier's descriptor
     /// (DescriptorLoaded, m_loaded), pooled by the record and the carrier like a built-in
@@ -76,34 +77,30 @@ struct PlanRequest {
     anira::InferenceBackend m_legacy_backend = anira::InferenceBackend::CUSTOM;
 };
 
-/// The loaded model of a built-in engine of this build, unloaded; NULL for an engine this
+/// The engine object of a built-in engine of this build (BuiltinEngine, uninitialised): what
+/// the core makes once per engine and keeps (Core::builtin_engine); NULL for an engine this
 /// build does not carry (the factories below, one per engine).
-ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(anira_engine engine);
+ANIRA_API std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine);
 
-/// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
-/// ANIRA_PROVIDER_DEFAULT with a name in the runtime's own words (an ONNX Runtime execution
-/// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
-/// "webnn"). What the context's capabilities list per (engine, provider).
-struct ProviderInfo {
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
-    std::string m_provider_id;
+/// The loaded model of a built-in engine over its engine object, unloaded: the adapter of the
+/// object's engine, which holds the object for its life; NULL for a null object. Throws
+/// anira::StatusError(ANIRA_ERROR_INVALID_ARGUMENT) for an object that is not the adapter's
+/// own (make_builtin_engine's are).
+ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(std::shared_ptr<BuiltinEngine> engine);
 
-    bool operator==(const ProviderInfo& other) const = default;
-};
+/// What a fresh engine object of a built-in engine of this build answers for its providers
+/// (BuiltinEngine::providers: the default provider first, then what its runtime reports
+/// usable here, each once); the context's probe asks the core's object, which answers the
+/// same. Empty for an engine this build does not carry. The tests' oracle.
+ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine);
 
-/// The providers an engine of this build serves here: the default provider first, then what
-/// its runtime reports (ONNX Runtime: Ort::GetAvailableProviders(), the enum's value where one
-/// fits and the runtime's name else; LiteRT: the accelerators a fresh environment registers, by
-/// hardware; ExecuTorch: the backends registered to its runtime, the delegates an export may be
-/// lowered to; TFLite and LibTorch the default provider alone in this pre-release), an equal
-/// provider once. Empty for an engine this build does not carry. `level` is the level the
-/// runtime's own logger is created with where the query needs one (LiteRT's environment).
-ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel level);
-
-/// The built-in adapters, one factory each, each defined in its own translation unit
-/// (<Engine>Adapter.cpp) where the engine's headers stay; unloaded.
+/// The built-in adapters, one engine-object factory and one loaded-model factory each, each
+/// defined in its own translation unit (<Engine>Adapter.cpp) where the engine's headers stay.
+/// The loaded model takes the object its own engine factory made; any other object is
+/// ANIRA_ERROR_INVALID_ARGUMENT.
 #ifdef USE_ONNXRUNTIME
-ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded();
+ANIRA_API std::shared_ptr<BuiltinEngine> make_onnxruntime_engine();
+ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded(std::shared_ptr<BuiltinEngine> engine);
 /// The execution providers the ONNX Runtime of this build reports available
 /// (Ort::GetAvailableProviders()), the CPU provider left out: the enum's value for CUDA,
 /// DirectML, CoreML, WebGPU and XNNPACK, the runtime's registered name in provider_id for
@@ -111,22 +108,28 @@ ANIRA_API std::shared_ptr<Loaded> make_onnxruntime_loaded();
 ANIRA_API std::vector<ProviderInfo> onnxruntime_providers();
 #endif
 #ifdef USE_LIBTORCH
-ANIRA_API std::shared_ptr<Loaded> make_libtorch_loaded();
+ANIRA_API std::shared_ptr<BuiltinEngine> make_libtorch_engine();
+ANIRA_API std::shared_ptr<Loaded> make_libtorch_loaded(std::shared_ptr<BuiltinEngine> engine);
 #endif
 #ifdef USE_TFLITE
-ANIRA_API std::shared_ptr<Loaded> make_tflite_loaded();
+ANIRA_API std::shared_ptr<BuiltinEngine> make_tflite_engine();
+ANIRA_API std::shared_ptr<Loaded> make_tflite_loaded(std::shared_ptr<BuiltinEngine> engine);
 #endif
 #ifdef USE_LITERT
-ANIRA_API std::shared_ptr<Loaded> make_litert_loaded();
+ANIRA_API std::shared_ptr<BuiltinEngine> make_litert_engine();
+ANIRA_API std::shared_ptr<Loaded> make_litert_loaded(std::shared_ptr<BuiltinEngine> engine);
 /// The accelerators a fresh LiteRT environment registers here (its automatic registration,
 /// which loads the accelerator libraries it finds), by the hardware they support: "gpu",
 /// "npu", "webnn" as custom providers beside ANIRA_PROVIDER_DEFAULT, the CPU accelerator left
-/// out. Empty when the environment cannot be created. The environment is created with
-/// `level` as its logger's minimum severity and destroyed before the call returns.
-ANIRA_API std::vector<ProviderInfo> litert_providers(anira::LogLevel level);
+/// out. Empty when the environment cannot be created. The environment is the query's own,
+/// created with its logger at the error severity (an accelerator it cannot load is the
+/// answer, not a warning) and destroyed before the call returns; the engine object's
+/// environment is not touched, so the query runs beside an init on another thread.
+ANIRA_API std::vector<ProviderInfo> litert_providers();
 #endif
 #ifdef USE_EXECUTORCH
-ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded();
+ANIRA_API std::shared_ptr<BuiltinEngine> make_executorch_engine();
+ANIRA_API std::shared_ptr<Loaded> make_executorch_loaded(std::shared_ptr<BuiltinEngine> engine);
 /// The backends registered to the ExecuTorch runtime of this build and available, the
 /// delegates an export may be lowered to: the enum's value for XnnpackBackend, CoreMLBackend
 /// and VulkanBackend, the registered name in provider_id for every other.
@@ -145,7 +148,7 @@ ANIRA_API std::vector<PlanRequest> legacy_plan_requests(const anira::InferenceCo
 /// path and no bytes), the backend-qualified tensor shapes (the universal ones without any),
 /// float32 everywhere, the shared slots (the configuration's parallel processors; none for a
 /// session-exclusive configuration, whose calls run on an executor of the session's own) and
-/// the warm-up of the configuration, the level in effect. The names stay empty: the 2.x path
+/// the warm-up of the configuration. The names stay empty: the 2.x path
 /// binds by position.
 ANIRA_API Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend backend);
 

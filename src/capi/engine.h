@@ -61,6 +61,8 @@ public:
     /// an init slot. Serialised by a mutex of the carrier: two handlers of two pipelines may
     /// reach one engine object from two threads.
     anira_status ensure_init(const anira_init_info& info) const;
+    /// Whether init ran and succeeded (ensure_init): false until then.
+    bool initialised() const;
 
     /// The engine's query slot: which of the descriptor's providers are usable here, now, as
     /// a bitmask over the list (bit i: providers()[i]); every listed provider for a descriptor

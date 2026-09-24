@@ -2,6 +2,7 @@
 
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
@@ -33,7 +34,27 @@ bool Model::operator==(const Model& other) const {
 
 // ---- Loaded ---------------------------------------------------------------------------------
 
+void BuiltinEngine::ensure_init(const anira_init_info& info) {
+    if (m_initialised) { return; }
+    do_init(info);
+    m_initialised = true;
+}
+
+std::vector<ProviderInfo> BuiltinEngine::providers() const {
+    // The default provider first, then the runtime's, each once.
+    std::vector<ProviderInfo> listed;
+    listed.push_back(ProviderInfo{});
+    std::vector<ProviderInfo> reported = runtime_providers();
+    for (ProviderInfo& provider : reported) {
+        if (std::ranges::find(listed, provider) == listed.end()) {
+            listed.push_back(std::move(provider));
+        }
+    }
+    return listed;
+}
+
 void Loaded::load(const Model& model) {
+    require_initialised();
     // A second load starts over: nothing of a failed or earlier one is kept.
     m_loaded = false;
     m_num_instances = 0;
@@ -113,6 +134,14 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
 }
 
 // ---- ExecutorLoaded -------------------------------------------------------------------------
+
+void ExecutorLoaded::require_initialised() const {
+    if (m_engine->initialised()) { return; }
+    std::string message = "engine '";
+    message += anira::capi::engine_word(m_engine->engine());
+    message += "' was never initialised: init runs before load";
+    throw StatusError(ANIRA_ERROR_INVALID_STATE, message);
+}
 
 void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
     m_shared.clear();

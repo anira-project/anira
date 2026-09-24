@@ -98,6 +98,12 @@ void DescriptorLoaded::unload() noexcept {
     m_loaded_pointer = nullptr;
 }
 
+void DescriptorLoaded::require_initialised() const {
+    if (m_carrier->initialised()) { return; }
+    throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                      "the engine '" + id() + "' was never initialised: init runs before load");
+}
+
 void DescriptorLoaded::do_load(const Model& model) {
     // A second load starts over: what the first one loaded goes back to the engine first.
     unload();

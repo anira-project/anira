@@ -1,11 +1,9 @@
 #include "Adapters.h"
 
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/utils/InferenceBackend.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -48,57 +46,53 @@ PlanRequest legacy_request(const anira::InferenceConfig& config,
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_builtin_loaded(anira_engine engine) {
+std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine) {
     switch (engine) {
 #ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded();
+        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_engine();
 #endif
 #ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_loaded();
+        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_engine();
 #endif
 #ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return make_tflite_loaded();
+        case ANIRA_ENGINE_TFLITE: return make_tflite_engine();
 #endif
 #ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return make_litert_loaded();
+        case ANIRA_ENGINE_LITERT: return make_litert_engine();
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_loaded();
+        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_engine();
 #endif
         default: return nullptr;
     }
 }
 
-std::vector<ProviderInfo> builtin_providers(anira_engine engine, anira::LogLevel level) {
-    static_cast<void>(level);
-    std::vector<ProviderInfo> providers;
-    switch (engine) {
+std::shared_ptr<Loaded> make_builtin_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    if (engine == nullptr) { return nullptr; }
+    switch (engine->engine()) {
 #ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: break;
+        case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded(std::move(engine));
 #endif
 #ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: providers = onnxruntime_providers(); break;
+        case ANIRA_ENGINE_ONNXRUNTIME: return make_onnxruntime_loaded(std::move(engine));
 #endif
 #ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: break;
+        case ANIRA_ENGINE_TFLITE: return make_tflite_loaded(std::move(engine));
 #endif
 #ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: providers = litert_providers(level); break;
+        case ANIRA_ENGINE_LITERT: return make_litert_loaded(std::move(engine));
 #endif
 #ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: providers = executorch_providers(); break;
+        case ANIRA_ENGINE_EXECUTORCH: return make_executorch_loaded(std::move(engine));
 #endif
-        default: return providers;  // not in this build: no provider at all
+        default: return nullptr;  // an object of an engine this build does not carry
     }
-    // The default provider first, then the runtime's, each once.
-    std::vector<ProviderInfo> listed;
-    listed.push_back(ProviderInfo{});
-    for (ProviderInfo& provider : providers) {
-        if (std::ranges::find(listed, provider) == listed.end()) {
-            listed.push_back(std::move(provider));
-        }
-    }
-    return listed;
+}
+
+std::vector<ProviderInfo> builtin_providers(anira_engine engine) {
+    const std::shared_ptr<BuiltinEngine> object = make_builtin_engine(engine);
+    if (object == nullptr) { return {}; }  // not in this build: no provider at all
+    return object->providers();
 }
 
 anira_engine engine_of(anira::InferenceBackend backend) noexcept {
@@ -154,7 +148,6 @@ Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend bac
     model.m_instances =
         config.m_session_exclusive_processor ? 0U : config.m_num_parallel_processors;
     model.m_warm_up = config.m_warm_up;
-    model.m_log_level = anira::get_log_level();
     return model;
 }
 

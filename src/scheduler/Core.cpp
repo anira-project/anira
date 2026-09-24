@@ -54,6 +54,21 @@ struct Core::State {
 
     std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
 
+    /**
+     * @brief The engine objects of the built-in engines, one per engine, made at the first
+     * use (find_or_make_builtin_engine) and kept until the core is freed
+     *
+     * What a built-in engine builds at its init (an environment with the level in effect on
+     * its logger, a runtime's initialisation, a process-wide thread count) lives here, once
+     * per process, and outlives every loaded model of the engine, which holds the object
+     * (declared before the pool, so the pool is destroyed first). Under m_engine_mutex, a
+     * lock of its own, so that the context's probe, which asks an object for its providers,
+     * never waits on the lifecycle lock: a custom engine's init runs under that lock and is
+     * allowed to query a context.
+     */
+    std::mutex m_engine_mutex;
+    std::vector<std::shared_ptr<backend::BuiltinEngine>> m_engines;
+
     std::unique_ptr<thl::Logger::rt::Queue> m_log_queue;  ///< Real-time log queue (created
                                                           ///< once per core, capacity from the
                                                           ///< first user's config)
@@ -605,9 +620,6 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         if (pool_size > 0 && request.m_model.m_instances > pool_size) {
             request.m_model.m_instances = static_cast<uint32_t>(pool_size);
         }
-        // What an engine's environment is created with: the level in effect now that the
-        // configuration is applied.
-        request.m_model.m_log_level = get_log_level();
     }
 
     // Each session owns one explicit producer token for the global inference
@@ -691,6 +703,21 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     return session;
 }
 
+std::shared_ptr<backend::BuiltinEngine> Core::builtin_engine(anira_engine engine) {
+    return find_or_make_builtin_engine(get_state(), engine);
+}
+
+std::shared_ptr<backend::BuiltinEngine> Core::find_or_make_builtin_engine(State& state,
+                                                                          anira_engine engine) {
+    const std::scoped_lock<std::mutex> engine_lock(state.m_engine_mutex);
+    for (const std::shared_ptr<backend::BuiltinEngine>& object : state.m_engines) {
+        if (object->engine() == engine) { return object; }
+    }
+    std::shared_ptr<backend::BuiltinEngine> object = backend::make_builtin_engine(engine);
+    if (object != nullptr) { state.m_engines.push_back(object); }
+    return object;
+}
+
 std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
                                                              const backend::PlanRequest& request,
                                                              InferenceConfig& inference_config,
@@ -726,7 +753,9 @@ std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
     }
     std::shared_ptr<backend::Loaded> loaded;
     if (request.m_source == backend::Source::BuiltIn) {
-        loaded = backend::make_builtin_loaded(request.m_model.m_engine);
+        // Over the core's engine object of the engine, whose init runs below, once.
+        loaded = backend::make_builtin_loaded(
+            find_or_make_builtin_engine(state, request.m_model.m_engine));
         if (loaded == nullptr) {
             // A built-in engine this build does not carry. The C path refuses it at create.
             throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
@@ -744,10 +773,10 @@ std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
                                   request.m_model.m_engine_id + "' without a loaded model");
         }
     }
-    // The engine's init (a registered engine's, once per engine object), with the facts of the
-    // core in effect: the level applied above, the pool the session will run on, the context
-    // of the handler asking. Then load once per loaded model; a throw leaves the pool
-    // untouched.
+    // The engine's init, once per engine object (a built-in engine's, the core's own; a
+    // registered engine's carrier), with the facts of the core in effect: the level applied
+    // above, the pool the session will run on, the context of the handler asking. Then load
+    // once per loaded model; a throw leaves the pool untouched.
     anira_init_info init = ANIRA_INIT_INFO_INIT;
     init.log_level = static_cast<uint32_t>(get_log_level());
     init.num_threads = static_cast<uint32_t>(pool_size);

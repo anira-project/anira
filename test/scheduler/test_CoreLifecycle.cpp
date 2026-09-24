@@ -2,6 +2,7 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/utils/HostConfig.h>
@@ -12,6 +13,7 @@
 #include <thread>
 #include <vector>
 
+#include "backends/Adapter.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -214,4 +216,35 @@ TEST(CoreLifecycleTest, ReleaseCoreIfIdleKeepsCoreWhileUserThreadRuns) {
     user_thread.reset();
     EXPECT_TRUE(Core::release_core_if_idle());
     EXPECT_FALSE(Core::has_core());
+}
+
+// The core keeps one engine object per built-in engine for its own life: what the engine
+// builds at its init (an environment with the level in effect on its logger, a runtime's
+// initialisation) lives once per process and outlives every loaded model of the engine. The
+// same object answers every call, an engine the build does not carry has none, the objects
+// alone do not keep the core, and a freed core starts over.
+TEST(CoreLifecycleTest, OneEngineObjectPerBuiltInEngineForTheCoresLife) {
+    Core::release_core_if_idle();
+    ASSERT_FALSE(Core::has_core());
+    EXPECT_EQ(Core::builtin_engine(ANIRA_ENGINE_NONE), nullptr);
+    std::vector<std::shared_ptr<anira::backend::BuiltinEngine>> objects;
+    for (const anira_engine engine : {ANIRA_ENGINE_LIBTORCH,
+                                      ANIRA_ENGINE_ONNXRUNTIME,
+                                      ANIRA_ENGINE_TFLITE,
+                                      ANIRA_ENGINE_LITERT,
+                                      ANIRA_ENGINE_EXECUTORCH}) {
+        const std::shared_ptr<anira::backend::BuiltinEngine> object = Core::builtin_engine(engine);
+        if (object == nullptr) { continue; }  // not in this build
+        EXPECT_EQ(object->engine(), engine);
+        EXPECT_FALSE(object->initialised()) << "no session loaded a model of the engine";
+        EXPECT_EQ(Core::builtin_engine(engine), object) << "one object per engine";
+        objects.push_back(object);
+    }
+    EXPECT_TRUE(Core::has_core()) << "the first call made the core";
+    EXPECT_TRUE(Core::release_core_if_idle()) << "the objects alone do not keep the core";
+    EXPECT_FALSE(Core::has_core());
+    for (const std::shared_ptr<anira::backend::BuiltinEngine>& object : objects) {
+        EXPECT_NE(Core::builtin_engine(object->engine()), object) << "a freed core starts over";
+    }
+    Core::release_core_if_idle();
 }

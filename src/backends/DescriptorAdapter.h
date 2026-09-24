@@ -92,6 +92,8 @@ public:
 protected:
     void do_load(const Model& model) override;
     std::unique_ptr<Prepared> do_prepare(const PrepareRequest& request) override;
+    /// ANIRA_ERROR_INVALID_STATE naming the engine when the carrier's init never ran.
+    void require_initialised() const override;
 
 private:
     /// The unload of a successful load, once.

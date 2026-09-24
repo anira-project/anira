@@ -18,6 +18,7 @@
 
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/utils/Logger.h>
 
@@ -58,6 +59,7 @@
 #include "executorch/runtime/core/tag.h"
 #include "executorch/runtime/executor/method_meta.h"
 #include "executorch/runtime/executor/program.h"
+#include "executorch/runtime/platform/runtime.h"
 // IWYU pragma: end_keep
 
 namespace anira::backend {
@@ -121,6 +123,21 @@ std::string backends_list(const std::vector<std::string>& names) {
     }
     return text.empty() ? "none" : text;
 }
+
+/// The engine object: the runtime's global initialisation (executorch::runtime::runtime_init,
+/// the platform abstraction layer; the kernels and the backends register at static
+/// initialisation), run once at the engine's init. Nothing else is per process: the delegate
+/// options are per method, the thread-pool guard per call. The core keeps one object per
+/// engine (Core::builtin_engine); every loaded model holds it.
+class ExecuTorchEngine final : public BuiltinEngine {
+public:
+    ExecuTorchEngine() : BuiltinEngine(ANIRA_ENGINE_EXECUTORCH) {}
+
+protected:
+    void do_init(const anira_init_info& /*info*/) override { executorch::runtime::runtime_init(); }
+
+    std::vector<ProviderInfo> runtime_providers() const override { return executorch_providers(); }
+};
 
 // Every fallible ExecuTorch call returns a runtime::Error (or a Result carrying one). A failure
 // here means a setup or runtime problem, so it becomes a StatusError with the failing call and
@@ -462,6 +479,9 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 /// session.
 class ExecuTorchLoaded final : public ExecutorLoaded {
 public:
+    explicit ExecuTorchLoaded(std::shared_ptr<ExecuTorchEngine> engine)
+        : ExecutorLoaded(std::move(engine)) {}
+
     /// The default provider (a portable export, or whatever delegates the runtime has for the
     /// export's), or a backend registered to this runtime and available, by the name the
     /// enum's spelling maps to or the registered name itself.
@@ -543,8 +563,17 @@ private:
 
 }  // namespace
 
-std::shared_ptr<Loaded> make_executorch_loaded() {
-    return std::make_shared<ExecuTorchLoaded>();
+std::shared_ptr<BuiltinEngine> make_executorch_engine() {
+    return std::make_shared<ExecuTorchEngine>();
+}
+
+std::shared_ptr<Loaded> make_executorch_loaded(std::shared_ptr<BuiltinEngine> engine) {
+    std::shared_ptr<ExecuTorchEngine> own = std::dynamic_pointer_cast<ExecuTorchEngine>(engine);
+    if (own == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          "executorch: the engine object is not this adapter's");
+    }
+    return std::make_shared<ExecuTorchLoaded>(std::move(own));
 }
 
 std::vector<ProviderInfo> executorch_providers() {
