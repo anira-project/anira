@@ -1732,7 +1732,20 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
         const std::string message = no_gpu.what();
         EXPECT_NE(message.find("no registered accelerator supports 'gpu'"), std::string::npos)
             << message;
-        EXPECT_NE(message.find("cpu"), std::string::npos) << message;
+        // The refusal lists what the runtime registered: the CPU accelerator where the package
+        // carries one, then the accelerators the provider list names. A package without any
+        // registered accelerator (Windows arm64's static one, which runs on LiteRT's built-in
+        // kernels) lists none.
+        std::string others;
+        for (const anira::backend::ProviderInfo& provider : listed) {
+            if (!others.empty()) { others += ", "; }
+            others += provider.m_provider_id;
+        }
+        const std::string with_cpu = others.empty() ? "cpu" : "cpu, " + others;
+        const std::string without_cpu = others.empty() ? "none" : others;
+        EXPECT_TRUE(message.find("support: " + with_cpu) != std::string::npos ||
+                    message.find("support: " + without_cpu) != std::string::npos)
+            << message;
     }
 }
 

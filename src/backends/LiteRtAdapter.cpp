@@ -112,7 +112,9 @@ LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment env) noexcept {
 constexpr bool k_accelerator_query = false;
 
 // The CPU accelerator alone: this LiteRT library does not export its accelerator query, so no
-// accelerator beyond the one every environment registers is known here.
+// accelerator beyond the CPU's (which an environment registers where the package carries it;
+// the Windows arm64 static package carries none and runs on LiteRT's built-in kernels) is
+// known here.
 LiteRtHwAcceleratorSet registered_hardware(LiteRtEnvironment /*env*/) noexcept {
     return kLiteRtHwAcceleratorCpu;
 }
