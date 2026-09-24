@@ -45,6 +45,8 @@
 #include <anira/system/Exports.h>
 
 #include <cstdarg>
+#include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <string>
 
@@ -55,6 +57,18 @@ namespace anira::capi {
 /// The control-path exception (src/utils/StatusError.h), spelled in this namespace for
 /// the C layer's own throw sites.
 using StatusError = anira::StatusError;
+
+/// The record at `index` of a caller's array of Tier-2 records, laid out at the caller's
+/// stride: the struct_size of the array's first record, since an array has one. The caller
+/// reads the record's struct_size first and copies min(struct_size, the library's record size)
+/// bytes of it, never more; the pointer is never dereferenced as a whole record.
+template <class T>
+const T* record_at(const T* base, uint32_t index, uint32_t stride) noexcept {
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) a byte walk at the caller's
+    // stride
+    return reinterpret_cast<const T*>(reinterpret_cast<const unsigned char*>(base) +
+                                      static_cast<size_t>(index) * stride);
+}
 
 /// The failure choke point: writes status and a printf-formatted message into err
 /// (nullable), truncated to the record's capacity and always NUL-terminated, then runs

@@ -446,6 +446,10 @@ int anira_header_c_probe(void) {
                       : 0;
         checks +=
             load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == NULL ? 1 : 0;
+        checks += load_info.option_keys == NULL && load_info.option_values == NULL &&
+                          load_info.num_options == 0u
+                      ? 1
+                      : 0;
         checks += sizeof(anira_engine_ctx) == 64u && offsetof(anira_engine_ctx, inputs) == 32u &&
                           offsetof(anira_engine_ctx, loaded) == 48u &&
                           offsetof(anira_engine_ctx, reserved_ptr1) == 56u

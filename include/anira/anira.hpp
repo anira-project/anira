@@ -216,9 +216,13 @@ struct Entry {
 
 /// The "provider_options" kind, on the context config: the options an engine's runtime takes
 /// for a provider, one set per backend, as string pairs in the runtime's own vocabulary
-/// (ONNX Runtime's execution provider option keys). Read at load by the ONNX Runtime adapter
-/// for the plan's backend; a set for a backend no plan runs on is not an error; the options
-/// are part of the loaded model.
+/// (ONNX Runtime's execution provider option keys; an Engine's own words). Each set is checked
+/// against its backend: the engine must consume the kind (the ONNX Runtime adapter, which reads
+/// the set at load into the execution provider's options; an Engine whose consumed_kinds()
+/// lists "context:provider_options", which reads it through EngineLoadInfo::option_keys()),
+/// else the set is refused as unconsumed naming the backend, and the provider must be one the
+/// engine serves here, else ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create; a set for a
+/// backend no plan runs on is not an error. The options are part of the loaded model.
 struct ProviderOptions {
     struct Set {
         EngineKind engine = ANIRA_ENGINE_NONE;  ///< ANIRA_ENGINE_NONE with engine_id for a custom
@@ -2431,6 +2435,20 @@ public:
     std::string_view provider_id() const noexcept {
         return m_info->provider_id != nullptr ? std::string_view(m_info->provider_id)
                                               : std::string_view();
+    }
+    /// The provider options of this backend: the set of the context config's
+    /// "provider_options" extension for the engine on this provider (ext::ProviderOptions), as
+    /// two parallel spans of the keys and the values in the engine's own vocabulary. Handed to
+    /// an Engine whose consumed_kinds() lists "context:provider_options" and empty otherwise
+    /// (a set for an Engine that does not list it is refused at anira_handler_create, naming
+    /// the backend). The options are part of the loaded model: two contexts with different
+    /// options for one backend load twice. Valid for the duration of the call.
+    std::span<const char* const> option_keys() const noexcept {
+        return {m_info->option_keys, m_info->num_options};
+    }
+    /// The values, one per key.
+    std::span<const char* const> option_values() const noexcept {
+        return {m_info->option_values, m_info->num_options};
     }
 
     const anira_engine_load_info* native() const noexcept { return m_info; }

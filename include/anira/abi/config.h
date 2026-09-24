@@ -62,20 +62,26 @@ typedef struct anira_ext_entry {
  * @brief One set of anira_ext_provider_options: a backend (an engine on a provider, the
  * two-axis id as anira_backend_id spells it) and the options its runtime takes for the
  * provider, as string pairs in the runtime's own vocabulary (ONNX Runtime's execution
- * provider option keys: device_id for CUDA, backend_path for QNN, ...). Tier 2,
- * struct_size first, read within it; copied by the set call. A NULL keys or values with
- * a count above 0 reads as no options.
+ * provider option keys: device_id for CUDA, backend_path for QNN, ...), kept in key
+ * order (two sets with the same pairs are one set, whatever their order). Tier 2,
+ * struct_size first, read within it; copied by the set call, which refuses a malformed
+ * set with ANIRA_ERROR_INVALID_ARGUMENT naming it: a struct_size below the fixed head or
+ * unlike the first record's (an array has one stride), an engine or a provider value
+ * this header does not name, no provider (the default provider takes no options), a
+ * provider of the enum beside a provider_id, an empty provider_id, or a count of options
+ * without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet.
  */
 typedef struct anira_provider_option_set {
     uint32_t struct_size;  /**< sizeof(anira_provider_option_set) of the caller's header. */
     /**
-     * anira_engine of the backend; ANIRA_ENGINE_NONE with an engine_id for a custom engine (no
-     * custom engine reads the kind in this pre-release).
+     * anira_engine of the backend; ANIRA_ENGINE_NONE with an engine_id for a custom engine,
+     * which receives the set in its load record (anira_engine_load_info.option_keys) when its
+     * descriptor lists "context:provider_options".
      */
     uint32_t engine;
     /**
-     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a provider_id. A set for the
-     * default provider has no execution provider to feed and is ignored.
+     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a provider_id, never alone:
+     * the default provider takes no options, and a set for it is refused.
      */
     uint32_t provider;
     uint32_t num_options;  /**< The number of key/value pairs. */
@@ -96,21 +102,31 @@ typedef struct anira_provider_option_set {
 /**
  * @brief Extension "provider_options", version 1, on the context config: the options an
  * engine's runtime takes for a provider, one set per backend
- * (anira_provider_option_set). Consumed by the ONNX Runtime adapter in this pre-release,
- * which reads the set of the plan's backend at load into the execution provider's
- * options (CUDA's own entry and the generic one alike); a set for a backend no plan runs
- * on is not an error. The options are part of the loaded model: two contexts with
- * different options for one backend load twice. JSON: {"version": 1, "sets": [{"engine":
- * "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}: the pair as its
- * two keys, as a model entry spells them (a built-in engine's word or a custom engine's
- * id; the enum's spelling or a custom provider's name, never the default provider, which
- * takes no options), every option value a string.
+ * (anira_provider_option_set). Each set is checked against the backend it names. Its
+ * engine must consume the kind: the ONNX Runtime adapter, which reads the set of the
+ * plan's backend at load into the execution provider's options (CUDA's own entry and the
+ * generic one alike), or a custom engine whose descriptor lists
+ * "context:provider_options", which receives the set in its load record; a set for
+ * another engine is ANIRA_ERROR_EXTENSION_UNCONSUMED naming the backend, at
+ * anira_context_create for a built-in engine (no adapter of the build reads the kind for
+ * it) and at anira_handler_create for a custom engine of the pipeline. Its provider must
+ * be one the engine serves here, the context's capabilities for a built-in engine and
+ * the descriptor's list for a custom one, else ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create, so a misspelled provider word is refused and never silently
+ * ignored. A set for a custom engine no pipeline of the handler adds, or for a backend
+ * no plan runs on, is not an error. The options are part of the loaded model where its
+ * engine reads them: two contexts with different options for one backend load twice.
+ * JSON: {"version": 1, "sets": [{"engine": "onnxruntime", "provider": "cuda", "options":
+ * {"device_id": "0"}}]}: the pair as its two keys, as a model entry spells them (a
+ * built-in engine's word or a custom engine's id; the enum's spelling or a custom
+ * provider's name, never the default provider, which takes no options), every option
+ * value a string.
  */
 typedef struct anira_ext_provider_options {
     anira_ext_header header;  /**< {sizeof(anira_ext_provider_options), 1, "provider_options"}. */
     /**
-     * num_sets records, each read within its struct_size; copied. NULL with a count of 0 for
-     * none.
+     * num_sets records at the stride of the first record's struct_size (an array has one), each
+     * read within it; copied. NULL with a count of 0 for none.
      */
     const anira_provider_option_set* sets;
     uint32_t num_sets;  /**< The number of sets. */

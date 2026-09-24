@@ -457,6 +457,7 @@ public:
             info.model_engine_id(info.row()).empty() || info.inputs().empty() ||
             info.inputs().size() != info.input_names().size() ||
             info.outputs().size() != info.output_names().size() ||
+            info.option_keys().size() != info.option_values().size() ||
             (info.model_path(info.row()).empty() && info.model_bytes(info.row()).empty())) {
             throw anira::Error(ANIRA_ERROR_CONFIG, "nothing to load");
         }

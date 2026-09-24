@@ -286,10 +286,11 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant
  *         list, a NULL entry in it, a NULL candidates with num_candidates above 0, a candidate
- *         whose struct_size is too small, or a candidate whose provider is no value of
- *         anira_provider, carries a provider of the enum and a provider_id at once, or an empty
- *         provider_id; ANIRA_ERROR_CONFIG for a second inference stage;
- *         ANIRA_ERROR_NOT_SUPPORTED for more than one variant.
+ *         whose struct_size is below the record's head or unlike the first candidate's (the
+ *         array's one stride), or a candidate whose provider is no value of anira_provider,
+ *         carries a provider of the enum and a provider_id at once, or an empty provider_id;
+ *         ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more
+ *         than one variant.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2

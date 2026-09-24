@@ -86,6 +86,14 @@ inline const char* engine_word(anira_engine engine) noexcept {
     return "none";
 }
 
+/// Whether a value is an engine the enum names (ANIRA_ENGINE_NONE names none).
+inline bool known_engine(anira_engine engine) noexcept {
+    for (const auto& [name, value] : k_engine_words) {
+        if (value == engine) { return true; }
+    }
+    return false;
+}
+
 /// The label of a backend in a message or a log line: the engine's word (a custom engine's
 /// id) and, beyond the default provider, the provider's label after a ':' ("onnxruntime:cuda",
 /// "com.example.gain:com.example.npu"). A label for humans only: JSON spells the pair as its

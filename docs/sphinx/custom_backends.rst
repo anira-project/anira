@@ -106,7 +106,10 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   ``context``, ``contract``), copied. They join the consumed-or-fail walk for the entries of
   this engine, keyed by its id: its ``model:`` kinds read its own entries alone, its other
   kinds any host, and each consumed slot is an ``anira_plan_ext`` row of the plan whose
-  consumer reads the engine's id.
+  consumer reads the engine's id. An engine that lists ``"context:provider_options"``
+  receives, at ``load``, the provider options the context config carries for its backend
+  (the load record, below); a set for an engine that does not list it is refused at
+  ``anira_handler_create``.
 - ``flags``: the engine's promises, an OR of the four ``ANIRA_ENGINE_FLAG_*`` bits below;
   ``0`` promises nothing.
 - ``providers`` / ``num_providers``: the providers the engine serves beyond
@@ -197,6 +200,13 @@ what it keeps and never keeps the pointers):
   ``loaded``; a load that cannot serve the one it is asked for returns
   ``ANIRA_ERROR_NOT_SUPPORTED`` (the handler checked the plan's provider against the list at
   create, so this is a device missing at run time).
+- ``option_keys`` / ``option_values`` / ``num_options``: the provider options of this
+  backend, the set of the context config's ``provider_options`` extension for the engine on
+  this provider (:doc:`usage` section 3.1), as string pairs in the engine's own vocabulary;
+  on the record only for an engine whose ``consumed_kinds`` lists
+  ``"context:provider_options"``, ``NULL`` with a count of ``0`` otherwise and for none. The
+  options are part of the loaded model: two contexts with different options for one backend
+  load twice.
 - ``instances``: the **shared call slots** of this loaded model, the ``process`` calls that
   may run at once on them, each on its own instance below this count (``ctx->instance``): the
   model's ``max_instances`` for a stateless model, clamped to the size of the inference-thread
@@ -649,8 +659,9 @@ base ``reset`` does nothing). The records are views: :cpp:class:`anira::InitInfo
 (``log_level()``, ``num_threads()``, ``context()``), :cpp:class:`anira::EngineLoadInfo`
 (``row()``, ``model()``, the getters ``model_path(i)``, ``model_bytes(i)``,
 ``model_engine_id(i)``, ``inputs()`` / ``outputs()`` as ``std::span<const Tensor>``,
-``input_names()`` / ``output_names()``, ``instances()``, ``provider()`` and
-``provider_id()``), :cpp:class:`anira::PrepareInfo`
+``input_names()`` / ``output_names()``, ``instances()``, ``provider()``,
+``provider_id()`` and the options ``option_keys()`` / ``option_values()``),
+:cpp:class:`anira::PrepareInfo`
 (``handler()``, ``report()``, ``num_entries()``, ``inputs()`` / ``outputs()``,
 ``input_names()`` / ``output_names()``, ``flags()`` and ``exclusive()``), and
 :cpp:class:`anira::EngineContext` the context (``instance()``, ``entry()``, ``ticket()``,

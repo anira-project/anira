@@ -5,6 +5,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <cstdint>
 #include <cstring>
 #include <string>
 #include <utility>
@@ -43,10 +44,10 @@ TEST(AbiExtRegistry, RegistryRowsAndKinds) {
     EXPECT_STREQ(anira::capi::ext_kinds()[1], "provider_options");
 }
 
-// The "provider_options" kind: a C record of sets (each read within its struct_size, the
-// strings and arrays copied) becomes a payload whose C view points into itself and survives a
-// copy of the bag; the JSON twin spells a set's backend as its two keys, "engine" and
-// "provider", as a model entry does, and the options as an object of strings; find answers by
+// The "provider_options" kind: a C record of sets (each read within its struct_size at the
+// array's stride, the strings and arrays copied) becomes a payload whose C view points into itself
+// and survives a copy of the bag; the JSON twin spells a set's backend as its two keys, "engine"
+// and "provider", as a model entry does, and the options as an object of strings; find answers by
 // the two-axis id.
 TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     std::string device = "0";  // the caller's strings may die after the call
@@ -68,7 +69,7 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     sets[2].engine = ANIRA_ENGINE_NONE;
     sets[2].engine_id = "org.example.engine";
     sets[2].provider_id = "fast";
-    sets[2].num_options = 3;  // a count without arrays reads as no options
+    sets[2].num_options = 0;  // no options (a count without arrays is refused, below)
     anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
     record.sets = sets.data();
     record.num_sets = 3;
@@ -83,8 +84,8 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     EXPECT_EQ(payload->m_sets[0].m_provider, ANIRA_PROVIDER_CUDA);
     EXPECT_EQ(payload->m_sets[0].m_options,
               (std::vector<std::pair<std::string, std::string>>{
-                  {"device_id", "0"},
-                  {"arena_extend_strategy", "kNextPowerOfTwo"}}));
+                  {"arena_extend_strategy", "kNextPowerOfTwo"},
+                  {"device_id", "0"}}));
     EXPECT_EQ(payload->m_sets[1].m_provider_id, "QNNExecutionProvider");
     EXPECT_EQ(payload->m_sets[1].m_options.size(), 1u);
     EXPECT_EQ(payload->m_sets[2].m_engine_id, "org.example.engine");
@@ -93,8 +94,8 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     // The C view points into the payload.
     ASSERT_EQ(payload->m_hdr.num_sets, 3u);
     EXPECT_NE(payload->m_hdr.sets, sets.data());
-    EXPECT_STREQ(payload->m_hdr.sets[0].keys[0], "device_id");
-    EXPECT_STREQ(payload->m_hdr.sets[0].values[0], "0");
+    EXPECT_STREQ(payload->m_hdr.sets[0].keys[0], "arena_extend_strategy");
+    EXPECT_STREQ(payload->m_hdr.sets[0].values[0], "kNextPowerOfTwo");
     EXPECT_STREQ(payload->m_hdr.sets[1].provider_id, "QNNExecutionProvider");
     EXPECT_EQ(payload->m_hdr.sets[2].keys, nullptr);
     // find: by value for a built-in engine and a provider of the enum, by name else.
@@ -116,11 +117,11 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     EXPECT_NE(copied, payload);
     ASSERT_EQ(copied->m_sets.size(), 3u);
     EXPECT_EQ(copied->m_sets[0].m_options, payload->m_sets[0].m_options);
-    EXPECT_STREQ(copied->m_hdr.sets[0].keys[1], "arena_extend_strategy");
+    EXPECT_STREQ(copied->m_hdr.sets[0].keys[1], "device_id");
     // The JSON twin, both ways.
     EXPECT_EQ(
         bag.find("provider_options")->to_json(),
-        R"({"sets":[{"engine":"onnxruntime","provider":"cuda","options":{"device_id":"0","arena_extend_strategy":"kNextPowerOfTwo"}},)"
+        R"({"sets":[{"engine":"onnxruntime","provider":"cuda","options":{"arena_extend_strategy":"kNextPowerOfTwo","device_id":"0"}},)"
         R"({"engine":"onnxruntime","provider":"QNNExecutionProvider","options":{"device_id":"0"}},)"
         R"({"engine":"org.example.engine","provider":"fast","options":{}}]})");
     ExtBag parsed;
@@ -171,6 +172,108 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
             &err),
         ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "sets[0].options.device_id"), nullptr) << err.message;
+}
+
+// The sets are read at the caller's stride, the first record's struct_size: a caller whose
+// record is wider than the library's (a later header, here a padded layout) is read at its own
+// stride, min(struct_size, the library's size) bytes per record. A malformed record is refused
+// at the set call, naming the set: a foreign stride, no provider, a provider of the enum beside
+// a provider_id, an empty provider_id, a count of options without both arrays, a NULL entry,
+// an engine or provider value the header does not name, a struct_size below the head.
+TEST(AbiExtRegistry, ProviderOptionSetsAreReadAtTheCallersStrideAndCheckedAtSet) {
+    constexpr size_t k_stride = sizeof(anira_provider_option_set) + 16;
+    std::array<unsigned char, 2 * k_stride> bytes{};
+    const std::array<const char*, 1> keys{"device_id"};
+    const std::array<const char*, 1> values{"0"};
+    anira_provider_option_set first = ANIRA_PROVIDER_OPTION_SET_INIT;
+    first.struct_size = static_cast<uint32_t>(k_stride);
+    first.engine = ANIRA_ENGINE_ONNXRUNTIME;
+    first.provider = ANIRA_PROVIDER_CUDA;
+    first.keys = keys.data();
+    first.values = values.data();
+    first.num_options = 1;
+    anira_provider_option_set second = ANIRA_PROVIDER_OPTION_SET_INIT;
+    second.struct_size = static_cast<uint32_t>(k_stride);
+    second.engine = ANIRA_ENGINE_NONE;
+    second.engine_id = "org.example.engine";
+    second.provider_id = "fast";
+    std::memcpy(bytes.data(), &first, sizeof(first));
+    std::memcpy(bytes.data() + k_stride, &second, sizeof(second));
+    anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the caller's array at its stride
+    record.sets = reinterpret_cast<const anira_provider_option_set*>(bytes.data());
+    record.num_sets = 2;
+    ExtBag bag;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(bag.set(&record.header, &err), ANIRA_OK) << err.message;
+    const auto* payload = bag.payload<anira::capi::ProviderOptionsPayload>("provider_options");
+    ASSERT_NE(payload, nullptr);
+    ASSERT_EQ(payload->m_sets.size(), 2u);
+    EXPECT_EQ(payload->m_sets[0].m_provider, ANIRA_PROVIDER_CUDA);
+    EXPECT_EQ(payload->m_sets[0].m_options,
+              (std::vector<std::pair<std::string, std::string>>{{"device_id", "0"}}));
+    EXPECT_EQ(payload->m_sets[1].m_engine_id, "org.example.engine");
+    EXPECT_EQ(payload->m_sets[1].m_provider_id, "fast");
+
+    // The refusals, each naming its set; a refused record leaves the bag as it was.
+    const auto refused = [&](const anira_provider_option_set& bad, const char* fragment) {
+        std::array<anira_provider_option_set, 2> sets{first, bad};
+        sets[0].struct_size = sizeof(anira_provider_option_set);
+        anira_ext_provider_options two = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+        two.sets = sets.data();
+        two.num_sets = 2;
+        anira_error local = ANIRA_ERROR_INIT;
+        EXPECT_EQ(bag.set(&two.header, &local), ANIRA_ERROR_INVALID_ARGUMENT) << fragment;
+        EXPECT_NE(std::strstr(local.message, "sets[1]"), nullptr) << local.message;
+        EXPECT_NE(std::strstr(local.message, fragment), nullptr) << local.message;
+    };
+    anira_provider_option_set bad = ANIRA_PROVIDER_OPTION_SET_INIT;
+    bad.engine = ANIRA_ENGINE_ONNXRUNTIME;
+    bad.provider = ANIRA_PROVIDER_CUDA;
+    bad.struct_size = sizeof(anira_provider_option_set) + 8;
+    refused(bad, "one stride");
+    bad.struct_size = sizeof(anira_provider_option_set);
+    bad.provider = ANIRA_PROVIDER_DEFAULT;
+    refused(bad, "takes no options");
+    bad.provider = ANIRA_PROVIDER_CUDA;
+    bad.provider_id = "cuda";
+    refused(bad, "at once");
+    bad.provider = ANIRA_PROVIDER_DEFAULT;
+    bad.provider_id = "";
+    refused(bad, "empty");
+    bad.provider_id = nullptr;
+    bad.provider = ANIRA_PROVIDER_CUDA;
+    bad.num_options = 2;
+    refused(bad, "without both arrays");
+    const std::array<const char*, 2> holed{"a", nullptr};
+    bad.keys = holed.data();
+    bad.values = holed.data();
+    refused(bad, "is NULL");
+    bad.num_options = 0;
+    bad.keys = nullptr;
+    bad.values = nullptr;
+    bad.engine = 99;
+    refused(bad, "not an engine");
+    bad.engine = ANIRA_ENGINE_NONE;
+    refused(bad, "names no engine");
+    bad.engine = ANIRA_ENGINE_ONNXRUNTIME;
+    bad.provider = 99;
+    refused(bad, "not a provider");
+    bad.provider = ANIRA_PROVIDER_CUDA;
+    bad.engine_id = "org.example.engine";
+    refused(bad, "at once");
+    bad.engine_id = nullptr;
+    bad.struct_size = 4;
+    // A short first record is the stride's fault, named as sets[0].
+    std::array<anira_provider_option_set, 1> one{bad};
+    anira_ext_provider_options short_record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    short_record.sets = one.data();
+    short_record.num_sets = 1;
+    EXPECT_EQ(bag.set(&short_record.header, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(std::strstr(err.message, "sets[0].struct_size"), nullptr) << err.message;
+    EXPECT_EQ(bag.payload<anira::capi::ProviderOptionsPayload>("provider_options")->m_sets.size(),
+              2u)
+        << "a refused record leaves the bag as it was";
 }
 
 TEST(AbiExtRegistry, SetDeepCopiesAKnownKind) {

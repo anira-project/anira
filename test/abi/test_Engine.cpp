@@ -221,6 +221,7 @@ struct GainLoaded {
     uint32_t m_instances = 0;
     uint32_t m_provider = ANIRA_PROVIDER_DEFAULT;
     std::string m_provider_id;
+    std::vector<std::pair<std::string, std::string>> m_options;  ///< the record's provider options
     std::vector<anira_tensor> m_inputs;
     std::vector<anira_tensor> m_outputs;
     std::vector<std::string> m_input_names;
@@ -344,6 +345,9 @@ anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
     loaded->m_instances = info->instances;
     loaded->m_provider = info->provider;
     loaded->m_provider_id = info->provider_id != nullptr ? info->provider_id : "";
+    for (uint32_t k = 0; k < info->num_options; ++k) {
+        loaded->m_options.emplace_back(info->option_keys[k], info->option_values[k]);
+    }
     for (uint32_t i = 0; i < info->num_inputs; ++i) {
         loaded->m_inputs.push_back(info->inputs[i]);
         loaded->m_input_names.emplace_back(info->input_names[i]);
@@ -1261,6 +1265,239 @@ TEST(AbiEngine, ThePoolKeyHoldsTheProvider) {
     on_coreml.destroy();
     on_default.destroy();
     EXPECT_EQ(gain.m_released, 1);
+}
+
+namespace {
+
+// A context whose config carries a provider_options extension in JSON, for the tests of the
+// sets against a registered engine.
+struct OptionsContext {
+    explicit OptionsContext(const char* sets_json) {
+        EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK) << m_err.message;
+        EXPECT_EQ(anira_context_config_set_threads(m_config, 2, ANIRA_WAIT_SPIN_BACKOFF), ANIRA_OK);
+        EXPECT_EQ(anira_context_config_set_log_level(m_config, ANIRA_LOG_ERROR), ANIRA_OK);
+        EXPECT_EQ(anira_context_config_set_log_drain(m_config, ANIRA_LOG_DRAIN_MANUAL, 10),
+                  ANIRA_OK);
+        EXPECT_EQ(anira_context_config_set_ext_json(m_config,
+                                                    "provider_options",
+                                                    sets_json,
+                                                    std::strlen(sets_json),
+                                                    &m_err),
+                  ANIRA_OK)
+            << m_err.message;
+        m_status = anira_context_create(m_config, &m_context, &m_err);
+    }
+    ~OptionsContext() {
+        anira_context_destroy(m_context);
+        anira_context_config_destroy(m_config);
+    }
+    OptionsContext(const OptionsContext&) = delete;
+    OptionsContext& operator=(const OptionsContext&) = delete;
+    OptionsContext(OptionsContext&&) = delete;
+    OptionsContext& operator=(OptionsContext&&) = delete;
+
+    anira_context_config* m_config = nullptr;
+    anira_context* m_context = nullptr;
+    anira_status m_status = ANIRA_OK;
+    anira_error m_err = ANIRA_ERROR_INIT;
+};
+
+/// The gain engine's descriptor serving coreml and, when asked, listing the provider_options
+/// kind.
+anira_engine_desc gain_desc_options(GainEngine& engine, bool consumes) {
+    static constexpr std::array<const char*, 1> k_served{"coreml"};
+    static constexpr std::array<const char*, 1> k_kinds{"context:provider_options"};
+    anira_engine_desc desc = gain_desc_serving(engine, k_served);
+    if (consumes) {
+        desc.consumed_kinds = k_kinds.data();
+        desc.num_consumed_kinds = 1;
+    }
+    return desc;
+}
+
+}  // namespace
+
+// A registered engine whose descriptor lists "context:provider_options" receives the set of
+// its backend in its load record, in key order; the options are part of the loaded
+// model, so two contexts with different sets load twice and two with equal sets share.
+TEST(AbiEngine, AProviderOptionsSetReachesARegisteredEngineThatConsumesIt) {
+    const OptionsContext first(
+        R"({"sets": [{"engine": "org.example.gain", "provider": "coreml",
+                      "options": {"units": "all", "cache": "off"}}]})");
+    ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+    const OptionsContext second(
+        R"({"sets": [{"engine": "org.example.gain", "provider": "coreml",
+                      "options": {"units": "cpu"}}]})");
+    ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+    const OptionsContext third(
+        R"({"sets": [{"engine": "org.example.gain", "provider": "coreml",
+                      "options": {"units": "all", "cache": "off"}}]})");
+    ASSERT_EQ(third.m_status, ANIRA_OK) << third.m_err.message;
+    GainEngine gain;
+    const anira_engine_desc desc = gain_desc_options(gain, true);
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_custom_engine_create(k_gain_id, &desc, &engine, &err), ANIRA_OK) << err.message;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_engine(engine), ANIRA_OK) << pipe.m_err.message;
+    anira_custom_engine_destroy(engine);
+    pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+    anira_handler* on_first = nullptr;
+    anira_handler* on_second = nullptr;
+    anira_handler* on_third = nullptr;
+    ASSERT_EQ(anira_handler_create(first.m_context, pipe.m_pipeline, &on_first, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_create(second.m_context, pipe.m_pipeline, &on_second, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_handler_create(third.m_context, pipe.m_pipeline, &on_third, &err), ANIRA_OK)
+        << err.message;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(on_first, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(gain.m_loaded, 1);
+    EXPECT_EQ(kept_of(gain).m_provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
+    EXPECT_EQ(
+        kept_of(gain).m_options,
+        (std::vector<std::pair<std::string, std::string>>{{"cache", "off"}, {"units", "all"}}));
+    ASSERT_EQ(anira_handler_prepare(on_second, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(gain.m_loaded, 2) << "another set: another loaded model";
+    EXPECT_EQ(kept_of(gain, 1).m_options,
+              (std::vector<std::pair<std::string, std::string>>{{"units", "cpu"}}));
+    ASSERT_EQ(anira_handler_prepare(on_third, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(gain.m_loaded, 2) << "an equal set: the first loaded model, shared";
+    EXPECT_EQ(anira_test::session_of(on_first)->m_plans.at(0).m_loaded,
+              anira_test::session_of(on_third)->m_plans.at(0).m_loaded);
+    anira_handler_destroy(on_first);
+    anira_handler_destroy(on_second);
+    anira_handler_destroy(on_third);
+    EXPECT_EQ(gain.m_unloaded, 2);
+}
+
+// A set is checked against its backend at anira_handler_create: a set for a registered engine
+// of the pipeline whose descriptor does not list the kind is refused as unconsumed, naming the
+// engine, and never rides into the plan's key; a set naming a provider the engine's descriptor
+// does not list is ANIRA_ERROR_NOT_SUPPORTED naming the provider, so a misspelled word is never
+// silently ignored; a set for a custom engine this pipeline does not add is another pipeline's
+// and passes. A set for a built-in engine names a provider the context serves, else the same
+// refusal.
+TEST(AbiEngine, AProviderOptionsSetIsCheckedAgainstItsBackendAtCreate) {
+    const OptionsContext no_reader(
+        R"({"sets": [{"engine": "org.example.gain", "provider": "coreml", "options": {"u": "1"}}]})");
+    ASSERT_EQ(no_reader.m_status, ANIRA_OK) << no_reader.m_err.message;
+    {
+        GainEngine gain;
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_options(gain, false)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_handler_create(no_reader.m_context, pipe.m_pipeline, &handler, &err),
+                  ANIRA_ERROR_EXTENSION_UNCONSUMED);
+        EXPECT_EQ(handler, nullptr);
+        EXPECT_NE(std::strstr(err.message, "org.example.gain"), nullptr) << err.message;
+        EXPECT_NE(std::strstr(err.message, "context:provider_options"), nullptr) << err.message;
+    }
+    const OptionsContext unserved(
+        R"({"sets": [{"engine": "org.example.gain", "provider": "cuda", "options": {"u": "1"}}]})");
+    ASSERT_EQ(unserved.m_status, ANIRA_OK) << unserved.m_err.message;
+    {
+        GainEngine gain;
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_options(gain, true)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_handler_create(unserved.m_context, pipe.m_pipeline, &handler, &err),
+                  ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_EQ(handler, nullptr);
+        EXPECT_NE(std::strstr(err.message, "'cuda'"), nullptr) << err.message;
+        EXPECT_NE(std::strstr(err.message, "coreml"), nullptr)
+            << "the served list: " << err.message;
+    }
+    const OptionsContext other_engine(
+        R"({"sets": [{"engine": "org.example.other", "provider": "cuda", "options": {"u": "1"}}]})");
+    ASSERT_EQ(other_engine.m_status, ANIRA_OK) << other_engine.m_err.message;
+    {
+        GainEngine gain;
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_options(gain, false)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_handler_create(other_engine.m_context, pipe.m_pipeline, &handler, &err),
+                  ANIRA_OK)
+            << err.message;
+        anira_handler_destroy(handler);
+    }
+#ifdef USE_ONNXRUNTIME
+    // A built-in engine's set names a provider the context's capabilities do not list: a
+    // custom name no execution provider of this ONNX Runtime has.
+    const OptionsContext misspelled(
+        R"({"sets": [{"engine": "onnxruntime", "provider": "com.example.cdua", "options": {"device_id": "0"}}]})");
+    ASSERT_EQ(misspelled.m_status, ANIRA_OK) << misspelled.m_err.message;
+    {
+        GainEngine gain;
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+        pipe.add_inference(gain_model());
+        anira_handler* handler = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_handler_create(misspelled.m_context, pipe.m_pipeline, &handler, &err),
+                  ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_EQ(handler, nullptr);
+        EXPECT_NE(std::strstr(err.message, "'com.example.cdua'"), nullptr) << err.message;
+        EXPECT_NE(std::strstr(err.message, "onnxruntime"), nullptr) << err.message;
+    }
+#endif
+}
+
+// The candidates of anira_pipeline_add_inference are read at the caller's stride, the first
+// record's struct_size: a caller whose record is wider than the library's (a later header,
+// here a padded layout) hands its array over as it is, and a record whose struct_size differs
+// from the first's is refused naming it.
+TEST(AbiEngine, CandidatesAreReadAtTheCallersStride) {
+    const Context context;
+    constexpr size_t k_stride = sizeof(anira_backend_id) + 16;
+    std::array<unsigned char, 2 * k_stride> bytes{};
+    const std::vector<anira_backend_id> ids =
+        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_DEFAULT, nullptr}});
+    for (size_t i = 0; i < ids.size(); ++i) {
+        anira_backend_id wide = ids[i];
+        wide.struct_size = static_cast<uint32_t>(k_stride);
+        std::memcpy(bytes.data() + i * k_stride, &wide, sizeof(wide));
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the caller's array at its stride
+    const auto* candidates = reinterpret_cast<const anira_backend_id*>(bytes.data());
+    GainEngine gain;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_options(gain, false)), ANIRA_OK)
+        << pipe.m_err.message;
+    const ModelConfig model = gain_model();
+    const std::array<const anira_model_config*, 1> variants{model.native()};
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(
+        anira_pipeline_add_inference(pipe.m_pipeline, variants.data(), 1, candidates, 2, &err),
+        ANIRA_OK)
+        << err.message;
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(anira_plan_report_num_plans(anira_handler_plan_report(handler)), 2U)
+        << "both candidates, the second read at the caller's stride";
+    anira_handler_destroy(handler);
+
+    // A second record unlike the first: refused, naming it.
+    anira_backend_id narrow = ids[1];
+    std::memcpy(bytes.data() + k_stride, &narrow, sizeof(narrow));
+    const Pipe other;
+    EXPECT_EQ(
+        anira_pipeline_add_inference(other.m_pipeline, variants.data(), 1, candidates, 2, &err),
+        ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_NE(std::strstr(err.message, "candidates[1]"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "one stride"), nullptr) << err.message;
 }
 
 // A pinned entry runs on its provider alone: two entries of one engine are legal when their

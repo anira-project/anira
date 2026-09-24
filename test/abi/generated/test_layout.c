@@ -401,7 +401,11 @@ _Static_assert(sizeof(anira_engine_load_info) ==
                    sizeof(((const anira_engine_load_info*)0)->num_outputs) +
                    sizeof(((const anira_engine_load_info*)0)->instances) +
                    sizeof(((const anira_engine_load_info*)0)->provider) +
-                   sizeof(((const anira_engine_load_info*)0)->provider_id),
+                   sizeof(((const anira_engine_load_info*)0)->provider_id) +
+                   sizeof(((const anira_engine_load_info*)0)->option_keys) +
+                   sizeof(((const anira_engine_load_info*)0)->option_values) +
+                   sizeof(((const anira_engine_load_info*)0)->num_options) +
+                   sizeof(((const anira_engine_load_info*)0)->reserved),
                "anira_engine_load_info has no implicit padding");
 
 _Static_assert(sizeof(anira_engine_ctx) == 64, "anira_engine_ctx size");

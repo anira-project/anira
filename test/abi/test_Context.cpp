@@ -235,6 +235,31 @@ TEST(AbiContext, ProviderOptionsAreConsumedByTheOnnxRuntimeAdapter) {
     EXPECT_NE(json.find("\"cuda\""), std::string::npos) << json;
 }
 
+// A provider_options set is consumed set by set: a set for an engine no adapter of this build
+// reads the kind for (LiteRT's takes no provider options, and a build without LiteRT has no
+// adapter for it at all) is refused at create as unconsumed, naming the backend, even in a
+// build whose ONNX Runtime adapter reads the kind; it never rides into the plans' keys to be
+// ignored there.
+TEST(AbiContext, AProviderOptionsSetForAnEngineWithoutAReaderIsRefused) {
+    const Config config;
+    anira_error err = ANIRA_ERROR_INIT;
+    const char* text =
+        R"({"sets": [{"engine": "litert", "provider": "gpu", "options": {"x": "1"}}]})";
+    ASSERT_EQ(anira_context_config_set_ext_json(config.m_config,
+                                                "provider_options",
+                                                text,
+                                                std::strlen(text),
+                                                &err),
+              ANIRA_OK)
+        << err.message;
+    anira_context* context = nullptr;
+    EXPECT_EQ(anira_context_create(config.m_config, &context, &err),
+              ANIRA_ERROR_EXTENSION_UNCONSUMED);
+    EXPECT_EQ(context, nullptr);
+    EXPECT_NE(std::strstr(err.message, "provider_options"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "'litert:gpu'"), nullptr) << err.message;
+}
+
 TEST(AbiContext, AnUnconsumedContextExtensionIsRefused) {
     const Config config;
     anira_error err = ANIRA_ERROR_INIT;

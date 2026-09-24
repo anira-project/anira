@@ -130,6 +130,20 @@ void DescriptorLoaded::do_load(const Model& model) {
     // The provider this load is for: a value of the enum, or DEFAULT beside the custom name.
     info.provider = static_cast<uint32_t>(model.m_provider);
     info.provider_id = model.m_provider_id.empty() ? nullptr : model.m_provider_id.c_str();
+    // The provider options of this backend: the set the context's "provider_options"
+    // extension carries for it, on the record only for an engine whose descriptor lists the
+    // kind (the handler attached them then); two parallel arrays of the pairs.
+    std::vector<const char*> option_keys;
+    std::vector<const char*> option_values;
+    option_keys.reserve(model.m_options.size());
+    option_values.reserve(model.m_options.size());
+    for (const auto& [key, value] : model.m_options) {
+        option_keys.push_back(key.c_str());
+        option_values.push_back(value.c_str());
+    }
+    info.option_keys = option_keys.empty() ? nullptr : option_keys.data();
+    info.option_values = option_values.empty() ? nullptr : option_values.data();
+    info.num_options = static_cast<uint32_t>(option_keys.size());
 
     void* loaded = nullptr;
     const anira_status status = desc.load(&info, desc.user_data, &loaded);

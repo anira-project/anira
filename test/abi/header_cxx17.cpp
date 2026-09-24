@@ -174,6 +174,7 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
                       engine.providers == nullptr && engine.num_providers == 0U
                   ? 1
                   : 0;
+    checks += load_info.option_keys == nullptr && load_info.num_options == 0U ? 1 : 0;
     checks += engine_ctx.inputs == nullptr && engine_ctx.outputs_bits == 0u &&
                       engine_ctx.loaded == nullptr
                   ? 1

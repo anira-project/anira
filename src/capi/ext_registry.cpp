@@ -79,6 +79,13 @@ constexpr const char* k_provider_options = "provider_options";
 // The fixed head of anira_provider_option_set: struct_size, engine, provider, num_options.
 constexpr uint32_t k_option_set_head = 4 * sizeof(uint32_t);
 
+// The options of a set are kept in key order: two sets with the same pairs are one set, and
+// one key of the pool, whatever the caller's or the file's order.
+void sort_options(ProviderOptionSet& set) {
+    std::ranges::stable_sort(set.m_options,
+                             [](const auto& a, const auto& b) { return a.first < b.first; });
+}
+
 void provider_options_fix_header(ProviderOptionsPayload& payload) {
     payload.fix_header();
 }
@@ -90,15 +97,18 @@ void* provider_options_clone(const anira_ext_header* header) {
                                 : sizeof(anira_ext_provider_options);
     std::memcpy(&record, header, readable);
     auto* payload = new ProviderOptionsPayload();
-    if (record.sets != nullptr) {
+    if (record.sets != nullptr && record.num_sets > 0) {
+        // The records at the caller's stride, the first record's struct_size (an array has
+        // one; provider_options_check refused anything else before this clone).
+        const uint32_t stride = record.sets[0].struct_size;
         for (uint32_t i = 0; i < record.num_sets; ++i) {
+            const anira_provider_option_set* given = record_at(record.sets, i, stride);
+            if (given->struct_size < k_option_set_head) { continue; }
             anira_provider_option_set set = ANIRA_PROVIDER_OPTION_SET_INIT;
-            const anira_provider_option_set& given = record.sets[i];
-            if (given.struct_size < k_option_set_head) { continue; }
-            const size_t bytes = given.struct_size < sizeof(anira_provider_option_set)
-                                     ? given.struct_size
+            const size_t bytes = given->struct_size < sizeof(anira_provider_option_set)
+                                     ? given->struct_size
                                      : sizeof(anira_provider_option_set);
-            std::memcpy(&set, &given, bytes);
+            std::memcpy(&set, given, bytes);
             ProviderOptionSet copy;
             copy.m_engine = static_cast<anira_engine>(set.engine);
             copy.m_engine_id = set.engine_id != nullptr ? set.engine_id : "";
@@ -110,11 +120,123 @@ void* provider_options_clone(const anira_ext_header* header) {
                     copy.m_options.emplace_back(set.keys[k], set.values[k]);
                 }
             }
+            sort_options(copy);
             payload->m_sets.push_back(std::move(copy));
         }
     }
     provider_options_fix_header(*payload);
     return payload;
+}
+
+// The C record of the kind, before it is cloned: every set names an engine (a value of the
+// enum, or ANIRA_ENGINE_NONE with a custom engine's reverse-URI id) and a provider (a value of
+// the enum, or a custom name beside ANIRA_PROVIDER_DEFAULT; never the default provider alone,
+// which takes no options), its options come with both arrays and no NULL entry, and every
+// record has the array's one stride. A fault is ANIRA_ERROR_INVALID_ARGUMENT naming the set,
+// where the JSON form refuses the same at parse: nothing is dropped or ignored on the quiet.
+anira_status provider_options_check(const anira_ext_header* header, anira_error* err) {
+    anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
+    const size_t readable = header->struct_size < sizeof(anira_ext_provider_options)
+                                ? header->struct_size
+                                : sizeof(anira_ext_provider_options);
+    std::memcpy(&record, header, readable);
+    if (record.num_sets == 0) { return ANIRA_OK; }
+    ANIRA_CAPI_REQUIRE(record.sets != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "provider_options: sets is NULL with num_sets %u",
+                       record.num_sets);
+    const uint32_t stride = record.sets[0].struct_size;
+    ANIRA_CAPI_REQUIRE(stride >= k_option_set_head,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "provider_options: sets[0].struct_size %u is below the record's head (%u)",
+                       stride,
+                       k_option_set_head);
+    for (uint32_t i = 0; i < record.num_sets; ++i) {
+        const anira_provider_option_set* given = record_at(record.sets, i, stride);
+        ANIRA_CAPI_REQUIRE(given->struct_size == stride,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u].struct_size %u differs from sets[0]'s %u; "
+                           "an array has one stride",
+                           i,
+                           given->struct_size,
+                           stride);
+        anira_provider_option_set set = ANIRA_PROVIDER_OPTION_SET_INIT;
+        std::memcpy(&set,
+                    given,
+                    stride < sizeof(anira_provider_option_set) ? stride
+                                                               : sizeof(anira_provider_option_set));
+        const bool custom = set.engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+        ANIRA_CAPI_REQUIRE(custom || known_engine(static_cast<anira_engine>(set.engine)),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u].engine %u is not an engine this header "
+                           "names",
+                           i,
+                           set.engine);
+        ANIRA_CAPI_REQUIRE(
+            !custom || (set.engine_id != nullptr && std::strchr(set.engine_id, '.') != nullptr),
+            err,
+            ANIRA_ERROR_INVALID_ARGUMENT,
+            "provider_options: sets[%u] names no engine (ANIRA_ENGINE_NONE needs a "
+            "custom engine's reverse-URI engine_id)",
+            i);
+        ANIRA_CAPI_REQUIRE(custom || set.engine_id == nullptr,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u] names a built-in engine (%u) and an "
+                           "engine_id ('%s') at once",
+                           i,
+                           set.engine,
+                           set.engine_id);
+        ANIRA_CAPI_REQUIRE(known_provider(static_cast<anira_provider>(set.provider)),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u].provider %u is not a provider this header "
+                           "names; a custom provider travels as provider_id beside "
+                           "ANIRA_PROVIDER_DEFAULT",
+                           i,
+                           set.provider);
+        ANIRA_CAPI_REQUIRE(set.provider_id == nullptr ||
+                               set.provider == static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u] names a provider of the enum (%u) and a "
+                           "provider_id ('%s') at once",
+                           i,
+                           set.provider,
+                           set.provider_id);
+        ANIRA_CAPI_REQUIRE(set.provider_id == nullptr || set.provider_id[0] != '\0',
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u].provider_id is empty",
+                           i);
+        ANIRA_CAPI_REQUIRE(set.provider != static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT) ||
+                               set.provider_id != nullptr,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u] names no provider; the default provider "
+                           "takes no options",
+                           i);
+        ANIRA_CAPI_REQUIRE(set.num_options == 0 || (set.keys != nullptr && set.values != nullptr),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u] counts %u options without both arrays",
+                           i,
+                           set.num_options);
+        for (uint32_t k = 0; k < set.num_options; ++k) {
+            ANIRA_CAPI_REQUIRE(set.keys[k] != nullptr && set.values[k] != nullptr,
+                               err,
+                               ANIRA_ERROR_INVALID_ARGUMENT,
+                               "provider_options: sets[%u].keys[%u] or values[%u] is NULL",
+                               i,
+                               k,
+                               k);
+        }
+    }
+    return ANIRA_OK;
 }
 
 void provider_options_destroy(void* payload) {
@@ -211,6 +333,7 @@ void* provider_options_from_json(std::string_view utf8, std::string& error) {
                 set.m_options.emplace_back(key, value.get<std::string>());
             }
         }
+        sort_options(set);
         payload->m_sets.push_back(std::move(set));
     }
     provider_options_fix_header(*payload);
@@ -219,7 +342,7 @@ void* provider_options_from_json(std::string_view utf8, std::string& error) {
 
 std::string provider_options_to_json(const void* payload) {
     const auto* options = static_cast<const ProviderOptionsPayload*>(payload);
-    // The keys in the order a reader expects: the pair, then the options in the set's order.
+    // The keys in the order a reader expects: the pair, then the options in key order.
     nlohmann::ordered_json sets = nlohmann::ordered_json::array();
     for (const ProviderOptionSet& set : options->m_sets) {
         nlohmann::ordered_json pairs = nlohmann::ordered_json::object();
@@ -312,7 +435,8 @@ const std::vector<ExtRow>& ext_rows() {
          .m_clone = provider_options_clone,
          .m_destroy = provider_options_destroy,
          .m_from_json = provider_options_from_json,
-         .m_to_json = provider_options_to_json},
+         .m_to_json = provider_options_to_json,
+         .m_check = provider_options_check},
     };
     return k_rows;
 }
@@ -479,6 +603,10 @@ anira_status ExtBag::set(const anira_ext_header* header, anira_error* err) {
              static_cast<unsigned>(header->version));
         return ANIRA_ERROR_EXTENSION_VERSION;
     }
+    if (row != nullptr && row->m_check != nullptr) {
+        const anira_status checked = row->m_check(header, err);
+        if (ANIRA_FAILED(checked)) { return checked; }
+    }
     ExtSlot& slot = slot_for(header->kind);
     slot.m_version = header->version;
     if (row != nullptr) {
@@ -624,6 +752,53 @@ std::vector<const char*> pipeline_consumers_of(std::string_view host,
     return names;
 }
 
+// Whether an adapter of this build reads "<host>:<kind>" for a built-in engine.
+bool adapter_consumes(anira_engine engine, std::string_view wanted) {
+    for (const ExtConsumer& consumer : ext_consumers()) {
+        if (consumer.m_engine != engine) { continue; }
+        if (std::ranges::find(consumer.m_consumed, wanted) != consumer.m_consumed.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// The "provider_options" kind is consumed set by set, since a set names the engine it is for:
+// a set for a built-in engine needs an adapter of this build that reads the kind for THAT
+// engine (the ONNX Runtime adapter's, in this pre-release), else it would ride into the
+// plans' keys and be ignored; a set for a custom engine is the pipeline's question, answered
+// at anira_handler_create (the engine's descriptor must list the kind). With at least one set
+// the sets are the consumers: the generic rule of the kind is not asked. ANIRA_OK, or the
+// refusal naming the set's backend.
+anira_status check_provider_option_sets(const ExtBag& bag,
+                                        std::string_view host,
+                                        std::string_view kind,
+                                        anira_error* err,
+                                        bool& decided) {
+    decided = false;
+    const auto* payload = bag.payload<ProviderOptionsPayload>(kind);
+    if (payload == nullptr || payload->m_sets.empty()) { return ANIRA_OK; }
+    decided = true;
+    const std::string wanted = std::string(host) + ":" + std::string(kind);
+    for (const ProviderOptionSet& set : payload->m_sets) {
+        if (!set.m_engine_id.empty()) { continue; }  // a custom engine's: the pipeline's question
+        if (adapter_consumes(set.m_engine, wanted)) { continue; }
+        const std::string backend =
+            backend_label(set.m_engine, set.m_engine_id, set.m_provider, set.m_provider_id);
+        fail(err,
+             ANIRA_ERROR_EXTENSION_UNCONSUMED,
+             nullptr,
+             "extension '%s' on %s: the set for backend '%s' is not consumed: no adapter of this "
+             "build reads provider options for engine '%s'",
+             std::string(kind).c_str(),
+             host_name(host),
+             backend.c_str(),
+             engine_word(set.m_engine));
+        return ANIRA_ERROR_EXTENSION_UNCONSUMED;
+    }
+    return ANIRA_OK;
+}
+
 // One host's bag: every slot known and consumed, else the failure names it. With rows, each
 // consumed slot is recorded as one plan row per consumer: anira's own adapter, then the
 // pipeline's consumers.
@@ -647,6 +822,13 @@ anira_status check_bag(const ExtBag& bag,
                  host_name(host),
                  where.c_str());
             return ANIRA_ERROR_EXTENSION_UNKNOWN;
+        }
+        if (host == "context" && slot.kind() == k_provider_options) {
+            bool decided = false;
+            const anira_status sets =
+                check_provider_option_sets(bag, host, slot.kind(), err, decided);
+            if (ANIRA_FAILED(sets)) { return sets; }
+            if (decided) { continue; }
         }
         const char* consumer =
             consumer_of(host, slot.kind(), entry_engine, candidates, num_candidates);

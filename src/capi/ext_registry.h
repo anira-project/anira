@@ -41,6 +41,9 @@ struct ExtRow {
     void* (*m_from_json)(std::string_view utf8, std::string& error);
     /// The extension object as JSON text, without the "version" member.
     std::string (*m_to_json)(const void* payload);
+    /// Refuses a malformed C record before it is cloned (ANIRA_ERROR_INVALID_ARGUMENT naming
+    /// the fault); NULL for a kind whose clone reads any record.
+    anira_status (*m_check)(const anira_ext_header* header, anira_error* err) = nullptr;
 };
 
 /// A stage or an engine and what it reads, as "<host>:<kind>" entries (hosts: tensor_spec,

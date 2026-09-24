@@ -98,7 +98,7 @@ extern "C" {
 
 /**
  * @brief What anira_engine_load_fn receives: the model to load and the tensors the engine will
- * be handed. Tier 2, struct_size first, no implicit padding (LP64 72 bytes, ILP32 48);
+ * be handed. Tier 2, struct_size first, no implicit padding (LP64 96 bytes, ILP32 64);
  * anira fills it, so it carries no struct_id. Valid for the duration of the call: the
  * engine copies what it keeps and never keeps the pointers.
  */
@@ -151,11 +151,26 @@ typedef struct anira_engine_load_info {
      * returns.
      */
     const char* provider_id;
+    /**
+     * num_options option names: the provider options of this backend, the set of the context
+     * config's "provider_options" extension for the engine on this provider, handed to an
+     * engine whose descriptor lists "context:provider_options" (a set for an engine that does
+     * not list it is refused at anira_handler_create); NULL with a count of 0 for none. A tail
+     * field: the options are part of the loaded model, two contexts with different options for
+     * one backend load twice.
+     */
+    const char* const* option_keys;
+    /**
+     * num_options option values, one per key, NUL-terminated.
+     */
+    const char* const* option_values;
+    uint32_t num_options;  /**< The number of key/value pairs. */
+    uint32_t reserved;  /**< 0. */
 } anira_engine_load_info;
 /**
  * @brief No model: what a test fills by hand.
  */
-#define ANIRA_ENGINE_LOAD_INFO_INIT ANIRA_INIT(anira_engine_load_info, sizeof(anira_engine_load_info), 0u, NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u, NULL)
+#define ANIRA_ENGINE_LOAD_INFO_INIT ANIRA_INIT(anira_engine_load_info, sizeof(anira_engine_load_info), 0u, NULL, NULL, NULL, NULL, NULL, 0u, 0u, 0u, 0u, NULL, NULL, NULL, 0u, 0u)
 
 /**
  * @brief What a process or reset call of an engine sees. Tier 1: 64 bytes, frozen, identical on
