@@ -204,7 +204,7 @@ TEST(AbiContext, ProviderOptionsAreConsumedByTheOnnxRuntimeAdapter) {
     const Config config;
     anira_error err = ANIRA_ERROR_INIT;
     const char* text =
-        R"({"sets": [{"backend": "onnxruntime:cuda", "options": {"device_id": "0"}}]})";
+        R"({"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]})";
     ASSERT_EQ(anira_context_config_set_ext_json(config.m_config,
                                                 "provider_options",
                                                 text,
@@ -232,7 +232,7 @@ TEST(AbiContext, ProviderOptionsAreConsumedByTheOnnxRuntimeAdapter) {
               ANIRA_OK);
     json.resize(len);
     EXPECT_NE(json.find("\"provider_options\""), std::string::npos) << json;
-    EXPECT_NE(json.find("\"onnxruntime:cuda\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"cuda\""), std::string::npos) << json;
 }
 
 TEST(AbiContext, AnUnconsumedContextExtensionIsRefused) {

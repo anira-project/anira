@@ -45,8 +45,9 @@ TEST(AbiExtRegistry, RegistryRowsAndKinds) {
 
 // The "provider_options" kind: a C record of sets (each read within its struct_size, the
 // strings and arrays copied) becomes a payload whose C view points into itself and survives a
-// copy of the bag; the JSON twin spells a backend as a model entry's "engine" word with its
-// provider suffix and the options as an object of strings; find answers by the two-axis id.
+// copy of the bag; the JSON twin spells a set's backend as its two keys, "engine" and
+// "provider", as a model entry does, and the options as an object of strings; find answers by
+// the two-axis id.
 TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     std::string device = "0";  // the caller's strings may die after the call
     const std::array<const char*, 2> keys{"device_id", "arena_extend_strategy"};
@@ -119,15 +120,15 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     // The JSON twin, both ways.
     EXPECT_EQ(
         bag.find("provider_options")->to_json(),
-        R"({"sets":[{"backend":"onnxruntime:cuda","options":{"arena_extend_strategy":"kNextPowerOfTwo","device_id":"0"}},)"
-        R"({"backend":"onnxruntime:QNNExecutionProvider","options":{"device_id":"0"}},)"
-        R"({"backend":"org.example.engine:fast","options":{}}]})");
+        R"({"sets":[{"engine":"onnxruntime","provider":"cuda","options":{"device_id":"0","arena_extend_strategy":"kNextPowerOfTwo"}},)"
+        R"({"engine":"onnxruntime","provider":"QNNExecutionProvider","options":{"device_id":"0"}},)"
+        R"({"engine":"org.example.engine","provider":"fast","options":{}}]})");
     ExtBag parsed;
     ASSERT_EQ(
         parsed.set_json(
             "provider_options",
-            R"({"sets": [{"backend": "onnxruntime:coreml", "options": {"MLComputeUnits": "ALL"}},
-                                           {"backend": "executorch"}]})",
+            R"({"sets": [{"engine": "onnxruntime", "provider": "coreml", "options": {"MLComputeUnits": "ALL"}},
+                                           {"engine": "executorch", "provider": "xnnpack"}]})",
             &err),
         ANIRA_OK)
         << err.message;
@@ -138,23 +139,37 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     EXPECT_EQ(from_json->m_sets[0].m_options,
               (std::vector<std::pair<std::string, std::string>>{{"MLComputeUnits", "ALL"}}));
     EXPECT_EQ(from_json->m_sets[1].m_engine, ANIRA_ENGINE_EXECUTORCH);
-    EXPECT_EQ(from_json->m_sets[1].m_provider, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(from_json->m_sets[1].m_provider, ANIRA_PROVIDER_XNNPACK);
     EXPECT_TRUE(from_json->m_sets[1].m_options.empty());
     // The refusals name the path.
     EXPECT_EQ(parsed.set_json("provider_options", R"({"sets": 1})", &err), ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "provider_options.sets"), nullptr) << err.message;
-    EXPECT_EQ(
-        parsed.set_json("provider_options", R"({"sets": [{"backend": "nobody:cuda"}]})", &err),
-        ANIRA_ERROR_JSON);
-    EXPECT_NE(std::strstr(err.message, "sets[0].backend"), nullptr) << err.message;
-    EXPECT_EQ(
-        parsed.set_json("provider_options", R"({"sets": [{"backend": "onnxruntime:"}]})", &err),
-        ANIRA_ERROR_JSON);
-    EXPECT_EQ(parsed.set_json(
-                  "provider_options",
-                  R"({"sets": [{"backend": "onnxruntime:cuda", "options": {"device_id": 0}}]})",
-                  &err),
+    EXPECT_EQ(parsed.set_json("provider_options",
+                              R"({"sets": [{"engine": "nobody", "provider": "cuda"}]})",
+                              &err),
               ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "sets[0].engine"), nullptr) << err.message;
+    // The pair is two keys: a suffix on the engine word is refused naming the key.
+    EXPECT_EQ(parsed.set_json("provider_options",
+                              R"({"sets": [{"engine": "onnxruntime:cuda", "provider": "cuda"}]})",
+                              &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "sets[0].engine"), nullptr) << err.message;
+    // A set names its provider, and never the default one, which takes no options.
+    EXPECT_EQ(parsed.set_json("provider_options", R"({"sets": [{"engine": "onnxruntime"}]})", &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "sets[0].provider"), nullptr) << err.message;
+    EXPECT_EQ(parsed.set_json("provider_options",
+                              R"({"sets": [{"engine": "onnxruntime", "provider": "default"}]})",
+                              &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "takes no options"), nullptr) << err.message;
+    EXPECT_EQ(
+        parsed.set_json(
+            "provider_options",
+            R"({"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": 0}}]})",
+            &err),
+        ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "sets[0].options.device_id"), nullptr) << err.message;
 }
 

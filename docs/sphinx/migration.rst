@@ -483,7 +483,8 @@ config serve every build, and ``ANIRA_ENGINE_NONE`` in the list keeps the custom
 entries. The consumed-or-fail walk over the extensions runs over the entries that survive, so
 an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
 is not a candidate. The bridge's candidates name engines on the default provider: a model
-entry pinned to a provider (``"engine": "executorch:xnnpack"``, :doc:`usage` section 1.1) is
+entry pinned to a provider (``"provider": "xnnpack"`` beside its ``"engine"``, :doc:`usage`
+section 1.1) is
 no candidate under an explicit engine list, and under none its pin is not applied, since the
 2.x runtime runs every model on the default provider; providers, pins and provider options
 are the C handler's (:doc:`usage` sections 3.1 and 3.2).

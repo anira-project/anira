@@ -637,7 +637,10 @@ typedef enum anira_engine {
  * (anira/abi/engine.h).
  */
 typedef enum anira_provider {
-    ANIRA_PROVIDER_DEFAULT = 0,  /**< The engine's own CPU path (JSON: no suffix). */
+    /**
+     * The engine's own CPU path (JSON: a model entry without a "provider" key).
+     */
+    ANIRA_PROVIDER_DEFAULT = 0,
     ANIRA_PROVIDER_CUDA = 1,  /**< CUDA (JSON ":cuda"). */
     ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON ":webgpu"). */
     ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON ":directml"). */

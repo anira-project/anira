@@ -420,28 +420,37 @@ void set_engine_from_json(const Json& node,
     engine_id = word;
 }
 
-// models[].engine: the engine word, with an optional provider suffix after the first ':'
-// ("executorch:coreml" for the enum's spellings, "executorch:com.example.npu" for a custom
-// provider), which pins the entry (anira_model_config_set_model_provider).
+// models[].engine: the engine word alone, a built-in engine's spelling or a custom engine's
+// reverse-URI id. The pair is two keys: the provider an entry is pinned to has its own.
 void set_entry_engine_from_json(const Json& node,
                                 const std::string& path,
                                 anira::capi::ModelEntry& entry) {
     const std::string word = require_string(node, path);
-    const size_t colon = word.find(':');
-    if (colon == std::string::npos) {
-        set_engine_from_json(node, path, entry.m_engine, entry.m_engine_id);
-        return;
+    if (word.find(':') != std::string::npos) {
+        fail_json(path,
+                  R"(")" + word +
+                      R"(" carries a ':'; the provider an entry is pinned to is spelled under )"
+                      R"("provider", beside "engine")");
     }
-    const std::string suffix = word.substr(colon + 1);
-    if (suffix.empty()) { fail_json(path, R"(")" + word + R"(" names no provider after the ':')"); }
-    set_engine_from_json(Json(word.substr(0, colon)), path, entry.m_engine, entry.m_engine_id);
+    set_engine_from_json(node, path, entry.m_engine, entry.m_engine_id);
+}
+
+// models[].provider: the provider the entry is pinned to
+// (anira_model_config_set_model_provider): the enum's spelling ("coreml"; "default" spells a
+// neutral entry, as no key does) or a custom provider's name in the engine's vocabulary
+// ("com.example.npu").
+void set_entry_provider_from_json(const Json& node,
+                                  const std::string& path,
+                                  anira::capi::ModelEntry& entry) {
+    const std::string word = require_string(node, path);
+    if (word.empty()) { fail_json(path, "must not be empty"); }
     entry.m_provider = ANIRA_PROVIDER_DEFAULT;
     entry.m_provider_id.clear();
-    if (const std::optional<anira_provider> known = anira::capi::provider_of_word(suffix)) {
-        entry.m_provider = *known;  // "default" spells a neutral entry
+    if (const std::optional<anira_provider> known = anira::capi::provider_of_word(word)) {
+        entry.m_provider = *known;
         return;
     }
-    entry.m_provider_id = suffix;
+    entry.m_provider_id = word;
 }
 
 // models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
@@ -561,6 +570,8 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                     if (ekey == "engine") {
                         set_entry_engine_from_json(evalue, ekey_path, entry);
                         has_engine = true;
+                    } else if (ekey == "provider") {
+                        set_entry_provider_from_json(evalue, ekey_path, entry);
                     } else if (ekey == "path") {
                         entry.m_path = resolve_path(require_string(evalue, ekey_path), base_dir);
                         if (entry.m_path.empty()) { fail_json(ekey_path, "must not be empty"); }
@@ -1365,14 +1376,14 @@ Json model_to_json(const anira_model_config& cfg) {
     Json models = Json::array();
     for (const anira::capi::ModelEntry& entry : cfg.m_models) {
         Json object = Json::object();
-        std::string engine_word =
+        object["engine"] =
             entry.is_custom() ? entry.m_engine_id : word_of(entry.m_engine, k_engines);
+        // The pin under its own key; a neutral entry has none.
         if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
-            engine_word += std::string(":") + anira::capi::provider_word(entry.m_provider);
+            object["provider"] = anira::capi::provider_word(entry.m_provider);
         } else if (!entry.m_provider_id.empty()) {
-            engine_word += ":" + entry.m_provider_id;
+            object["provider"] = entry.m_provider_id;
         }
-        object["engine"] = engine_word;
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
         write_tensor_records(object, entry);
         write_exts(object, entry.m_ext);

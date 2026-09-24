@@ -86,6 +86,23 @@ inline const char* engine_word(anira_engine engine) noexcept {
     return "none";
 }
 
+/// The label of a backend in a message or a log line: the engine's word (a custom engine's
+/// id) and, beyond the default provider, the provider's label after a ':' ("onnxruntime:cuda",
+/// "com.example.gain:com.example.npu"). A label for humans only: JSON spells the pair as its
+/// two keys, "engine" and "provider", as the C records spell it as two fields.
+inline std::string backend_label(anira_engine engine,
+                                 std::string_view engine_id,
+                                 anira_provider provider,
+                                 std::string_view provider_id) {
+    std::string label =
+        engine_id.empty() ? std::string(engine_word(engine)) : std::string(engine_id);
+    if (provider != ANIRA_PROVIDER_DEFAULT || !provider_id.empty()) {
+        label += ':';
+        label += provider_label(provider, provider_id);
+    }
+    return label;
+}
+
 /// The words of anira_phase, the lower-case names of its values: how every message anira writes
 /// about a slot names the phase (a stage phase that fails or that an accessor refuses, a refused
 /// init, load or prepare of a stage or an engine, a failed engine call).

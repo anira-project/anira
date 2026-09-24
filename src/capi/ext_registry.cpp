@@ -121,50 +121,56 @@ void provider_options_destroy(void* payload) {
     delete static_cast<ProviderOptionsPayload*>(payload);
 }
 
-// The backend word of a set: a model entry's "engine" word with its provider suffix.
-bool parse_backend_word(std::string_view word, ProviderOptionSet& set, std::string& error) {
-    const size_t colon = word.find(':');
-    const std::string_view engine = word.substr(0, colon);
-    if (engine.empty()) {
-        error = "provider_options.sets[].backend: names no engine";
+// A set's backend, spelled as JSON spells every pair: its "engine" (a built-in engine's word
+// or a custom engine's reverse-URI id) and its "provider" (the enum's spelling or a custom
+// provider's name in the engine's vocabulary; never the default provider, which takes no
+// options). `at` names the set in an error.
+bool parse_set_backend(const nlohmann::json& node,
+                       const std::string& at,
+                       ProviderOptionSet& set,
+                       std::string& error) {
+    const auto engine = node.find("engine");
+    if (engine == node.end() || !engine->is_string()) {
+        error = at + ".engine: a string is required";
         return false;
     }
-    if (const std::optional<anira_engine> known = engine_of_word(engine)) {
+    const std::string engine_given = engine->get<std::string>();
+    if (const std::optional<anira_engine> known = engine_of_word(engine_given)) {
         set.m_engine = *known;
         set.m_engine_id.clear();
-    } else if (engine.find('.') != std::string_view::npos) {
+    } else if (engine_given.find('.') != std::string::npos &&
+               engine_given.find(':') == std::string::npos) {
         set.m_engine = ANIRA_ENGINE_NONE;
-        set.m_engine_id = std::string(engine);
+        set.m_engine_id = engine_given;
     } else {
-        error = "provider_options.sets[].backend: '" + std::string(engine) +
-                "' is neither a built-in engine's word nor a custom engine's reverse-URI id";
+        error = at + ".engine: '" + engine_given +
+                "' is neither a built-in engine's word nor a custom engine's reverse-URI id "
+                "(the provider is spelled under \"provider\")";
         return false;
     }
+    const auto provider = node.find("provider");
+    if (provider == node.end() || !provider->is_string()) {
+        error = at +
+                ".provider: a string is required (a set names the provider its options "
+                "are for)";
+        return false;
+    }
+    const std::string provider_given = provider->get<std::string>();
     set.m_provider = ANIRA_PROVIDER_DEFAULT;
     set.m_provider_id.clear();
-    if (colon == std::string_view::npos) { return true; }
-    const std::string_view suffix = word.substr(colon + 1);
-    if (suffix.empty()) {
-        error = "provider_options.sets[].backend: names no provider after the ':'";
-        return false;
-    }
-    if (const std::optional<anira_provider> known = provider_of_word(suffix)) {
+    if (const std::optional<anira_provider> known = provider_of_word(provider_given)) {
+        if (*known == ANIRA_PROVIDER_DEFAULT) {
+            error = at + ".provider: the default provider takes no options";
+            return false;
+        }
         set.m_provider = *known;
+    } else if (provider_given.empty()) {
+        error = at + ".provider: must not be empty";
+        return false;
     } else {
-        set.m_provider_id = std::string(suffix);
+        set.m_provider_id = provider_given;
     }
     return true;
-}
-
-std::string backend_word(const ProviderOptionSet& set) {
-    std::string word = set.m_engine_id.empty() ? engine_word(set.m_engine) : set.m_engine_id;
-    if (set.m_provider != ANIRA_PROVIDER_DEFAULT) {
-        word += ":";
-        word += provider_word(set.m_provider);
-    } else if (!set.m_provider_id.empty()) {
-        word += ":" + set.m_provider_id;
-    }
-    return word;
 }
 
 void* provider_options_from_json(std::string_view utf8, std::string& error) {
@@ -186,16 +192,8 @@ void* provider_options_from_json(std::string_view utf8, std::string& error) {
             error = at + ": not a JSON object";
             return nullptr;
         }
-        const auto backend = node.find("backend");
-        if (backend == node.end() || !backend->is_string()) {
-            error = at + ".backend: a string is required";
-            return nullptr;
-        }
         ProviderOptionSet set;
-        if (!parse_backend_word(backend->get<std::string>(), set, error)) {
-            error.replace(0, std::strlen("provider_options.sets[]"), at);
-            return nullptr;
-        }
+        if (!parse_set_backend(node, at, set, error)) { return nullptr; }
         const auto options = node.find("options");
         if (options != node.end()) {
             if (!options->is_object()) {
@@ -221,13 +219,21 @@ void* provider_options_from_json(std::string_view utf8, std::string& error) {
 
 std::string provider_options_to_json(const void* payload) {
     const auto* options = static_cast<const ProviderOptionsPayload*>(payload);
-    nlohmann::json sets = nlohmann::json::array();
+    // The keys in the order a reader expects: the pair, then the options in the set's order.
+    nlohmann::ordered_json sets = nlohmann::ordered_json::array();
     for (const ProviderOptionSet& set : options->m_sets) {
-        nlohmann::json pairs = nlohmann::json::object();
+        nlohmann::ordered_json pairs = nlohmann::ordered_json::object();
         for (const auto& [key, value] : set.m_options) { pairs[key] = value; }
-        sets.push_back(nlohmann::json{{"backend", backend_word(set)}, {"options", pairs}});
+        nlohmann::ordered_json object = nlohmann::ordered_json::object();
+        object["engine"] =
+            set.m_engine_id.empty() ? std::string(engine_word(set.m_engine)) : set.m_engine_id;
+        object["provider"] = provider_label(set.m_provider, set.m_provider_id);
+        object["options"] = pairs;
+        sets.push_back(object);
     }
-    return nlohmann::json{{"sets", sets}}.dump();
+    nlohmann::ordered_json root = nlohmann::ordered_json::object();
+    root["sets"] = sets;
+    return root.dump();
 }
 
 const char* host_name(std::string_view host) {

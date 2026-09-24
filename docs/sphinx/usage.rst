@@ -241,8 +241,8 @@ not here, so one config serves every build.
   compiled for an execution provider) is **pinned** to it: ``model_provider(i,
   ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, ANIRA_PROVIDER_DEFAULT, "com.example.npu")``
   (``anira_model_config_set_model_provider``, the getters ``anira_model_config_model_provider``
-  and ``anira_model_config_model_provider_id``), in a model file the ``"engine"`` word's
-  suffix, ``"executorch:xnnpack"`` or ``"executorch:com.example.npu"``. A pinned entry runs on
+  and ``anira_model_config_model_provider_id``), in a model file the entry's ``"provider"``
+  key beside its ``"engine"``, ``"xnnpack"`` or ``"com.example.npu"``. A pinned entry runs on
   its pin alone, and two entries of one engine are legal when their pins differ (an export per
   backend); an ExecuTorch entry pinned to a backend its method does not use is a mislabeled
   export, refused at prepare.
@@ -450,7 +450,7 @@ document), so a typo never turns into a default.
         { "engine": "onnxruntime", "path": "model.onnx",
           "tensors": { "audio_in": "input.1", "mask_out": "output" } },
         { "engine": "libtorch", "path": "model.pt", "entry": { "name": "forward_streaming" } },
-        { "engine": "executorch:xnnpack", "path": "model_xnnpack.pte" }
+        { "engine": "executorch", "provider": "xnnpack", "path": "model_xnnpack.pte" }
       ],
       "default_engine": "onnxruntime",
       "state": "stateless",

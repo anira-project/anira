@@ -716,7 +716,7 @@ headers:
         terminator: ANIRA_PROVIDER_FORCE32
         doc: "Execution provider, the other backend axis; a provider name means the same thing across engines. A provider the enum does not name travels as a string beside it, provider_id (anira_backend_id, anira_plan_info, anira_engine_load_info, the pin of a model entry), in the engine's own vocabulary: the runtime's name for a built-in engine (what the context's capabilities report), an entry of the descriptor's providers list for a custom engine; provider is ANIRA_PROVIDER_DEFAULT beside a provider_id. A provider is part of the loaded model: two providers of one model load twice (anira/abi/engine.h)."
         values:
-          - {name: ANIRA_PROVIDER_DEFAULT, value: 0, doc: "The engine's own CPU path (JSON: no suffix)."}
+          - {name: ANIRA_PROVIDER_DEFAULT, value: 0, doc: "The engine's own CPU path (JSON: a model entry without a \"provider\" key)."}
           - {name: ANIRA_PROVIDER_CUDA, value: 1, doc: "CUDA (JSON \":cuda\")."}
           - {name: ANIRA_PROVIDER_WEBGPU, value: 2, doc: "WebGPU (JSON \":webgpu\")."}
           - {name: ANIRA_PROVIDER_DIRECTML, value: 3, doc: "DirectML (JSON \":directml\")."}
@@ -1335,7 +1335,7 @@ headers:
       - kind: struct
         name: anira_ext_provider_options
         tier: 2
-        doc: "Extension \"provider_options\", version 1, on the context config: the options an engine's runtime takes for a provider, one set per backend (anira_provider_option_set). Consumed by the ONNX Runtime adapter in this pre-release, which reads the set of the plan's backend at load into the execution provider's options (CUDA's own entry and the generic one alike); a set for a backend no plan runs on is not an error. The options are part of the loaded model: two contexts with different options for one backend load twice. JSON: {\"version\": 1, \"sets\": [{\"backend\": \"onnxruntime:cuda\", \"options\": {\"device_id\": \"0\"}}]}, the backend as a model entry's \"engine\" word with its provider suffix, every option value a string."
+        doc: "Extension \"provider_options\", version 1, on the context config: the options an engine's runtime takes for a provider, one set per backend (anira_provider_option_set). Consumed by the ONNX Runtime adapter in this pre-release, which reads the set of the plan's backend at load into the execution provider's options (CUDA's own entry and the generic one alike); a set for a backend no plan runs on is not an error. The options are part of the loaded model: two contexts with different options for one backend load twice. JSON: {\"version\": 1, \"sets\": [{\"engine\": \"onnxruntime\", \"provider\": \"cuda\", \"options\": {\"device_id\": \"0\"}}]}: the pair as its two keys, as a model entry spells them (a built-in engine's word or a custom engine's id; the enum's spelling or a custom provider's name, never the default provider, which takes no options), every option value a string."
         fields:
           - {name: header, type: anira_ext_header, doc: "{sizeof(anira_ext_provider_options), 1, \"provider_options\"}."}
           - {name: sets, type: const anira_provider_option_set*, doc: "num_sets records, each read within its struct_size; copied. NULL with a count of 0 for none."}
@@ -2107,7 +2107,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered to a backend, an ONNX Runtime .ort compiled for an execution provider), so only a candidate naming that provider runs it, and a candidate naming it picks this entry. An entry without a pin is neutral: it runs on any provider of its engine, the candidate deciding. Two entries of one engine may coexist when their pins differ. JSON: the \"engine\" word's suffix, \"executorch:coreml\" (the enum's spellings) or \"executorch:com.example.npu\" (a custom name)."
+        doc: "Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered to a backend, an ONNX Runtime .ort compiled for an execution provider), so only a candidate naming that provider runs it, and a candidate naming it picks this entry. An entry without a pin is neutral: it runs on any provider of its engine, the candidate deciding. Two entries of one engine may coexist when their pins differ. JSON: the entry's \"provider\" key beside its \"engine\", \"coreml\" (the enum's spellings) or \"com.example.npu\" (a custom name); \"default\" or no key is a neutral entry."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an index out of range, an unknown provider value, both a provider of the enum and a provider_id, or an empty provider_id."
       - kind: function
         name: anira_model_config_model_provider

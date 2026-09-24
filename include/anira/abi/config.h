@@ -100,9 +100,11 @@ typedef struct anira_provider_option_set {
  * which reads the set of the plan's backend at load into the execution provider's
  * options (CUDA's own entry and the generic one alike); a set for a backend no plan runs
  * on is not an error. The options are part of the loaded model: two contexts with
- * different options for one backend load twice. JSON: {"version": 1, "sets":
- * [{"backend": "onnxruntime:cuda", "options": {"device_id": "0"}}]}, the backend as a
- * model entry's "engine" word with its provider suffix, every option value a string.
+ * different options for one backend load twice. JSON: {"version": 1, "sets": [{"engine":
+ * "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}: the pair as its
+ * two keys, as a model entry spells them (a built-in engine's word or a custom engine's
+ * id; the enum's spelling or a custom provider's name, never the default provider, which
+ * takes no options), every option value a string.
  */
 typedef struct anira_ext_provider_options {
     anira_ext_header header;  /**< {sizeof(anira_ext_provider_options), 1, "provider_options"}. */
@@ -1156,8 +1158,8 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_
  * candidate naming that provider runs it, and a candidate naming it picks this entry. An
  * entry without a pin is neutral: it runs on any provider of its engine, the candidate
  * deciding. Two entries of one engine may coexist when their pins differ. JSON: the
- * "engine" word's suffix, "executorch:coreml" (the enum's spellings) or
- * "executorch:com.example.npu" (a custom name).
+ * entry's "provider" key beside its "engine", "coreml" (the enum's spellings) or
+ * "com.example.npu" (a custom name); "default" or no key is a neutral entry.
  * @param config The config.
  * @param model_index An entry.
  * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT with a provider_id for a

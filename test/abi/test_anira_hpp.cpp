@@ -662,8 +662,9 @@ TEST(AbiCxx, ProviderOptionsExtensionMintsASelfContainedRecord) {
     config.ext(value);
     const std::string json = config.to_json();
     EXPECT_NE(json.find("\"provider_options\""), std::string::npos) << json;
-    EXPECT_NE(json.find("\"onnxruntime:cuda\""), std::string::npos) << json;
-    EXPECT_NE(json.find("\"org.example.engine:fast\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"cuda\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"org.example.engine\""), std::string::npos) << json;
+    EXPECT_NE(json.find("\"fast\""), std::string::npos) << json;
 }
 
 // ---- after the header review ------------------------------------------------------------------

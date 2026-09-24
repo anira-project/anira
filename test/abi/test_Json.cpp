@@ -215,15 +215,16 @@ TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
         ANIRA_ERROR_JSON);
 }
 
-// The "engine" word's suffix pins the entry: the enum's spelling to its value, any other word
-// to a custom provider's name, "default" to a neutral entry; to_json writes the suffix back,
-// so the pin survives a round trip and two entries of one engine may differ in it alone.
-TEST(AbiJsonModel, AProviderSuffixPinsTheEntry) {
+// The "provider" key beside "engine" pins the entry: the enum's spelling to its value, any
+// other word to a custom provider's name, "default" to a neutral entry, as no key does; to_json
+// writes the key back, so the pin survives a round trip and two entries of one engine may
+// differ in it alone. The pair is two keys: a ':' in the engine word is refused naming the key.
+TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
     const Loaded loaded(R"({"models": [
-        {"engine": "executorch:coreml", "path": "net.coreml.pte"},
-        {"engine": "executorch:com.example.npu", "path": "net.npu.pte"},
-        {"engine": "com.example.engine:fast", "path": "net.bin"},
-        {"engine": "onnxruntime:default", "path": "net.onnx"},
+        {"engine": "executorch", "provider": "coreml", "path": "net.coreml.pte"},
+        {"engine": "executorch", "provider": "com.example.npu", "path": "net.npu.pte"},
+        {"engine": "com.example.engine", "provider": "fast", "path": "net.bin"},
+        {"engine": "onnxruntime", "provider": "default", "path": "net.onnx"},
         {"engine": "libtorch", "path": "net.pt"}]})");
     ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
     EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 0), ANIRA_ENGINE_EXECUTORCH);
@@ -237,22 +238,27 @@ TEST(AbiJsonModel, AProviderSuffixPinsTheEntry) {
     EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 3), nullptr);
     EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 4), nullptr);
     const std::string text = model_text(loaded.m_config);
-    EXPECT_NE(text.find("\"engine\": \"executorch:coreml\""), std::string::npos) << text;
-    EXPECT_NE(text.find("\"engine\": \"executorch:com.example.npu\""), std::string::npos) << text;
-    EXPECT_NE(text.find("\"engine\": \"com.example.engine:fast\""), std::string::npos) << text;
-    EXPECT_NE(text.find("\"engine\": \"onnxruntime\""), std::string::npos)
-        << "a neutral entry carries no suffix:\n"
+    EXPECT_NE(text.find("\"engine\": \"executorch\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"provider\": \"coreml\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"provider\": \"com.example.npu\""), std::string::npos) << text;
+    EXPECT_NE(text.find("\"provider\": \"fast\""), std::string::npos) << text;
+    EXPECT_EQ(text.find("\"provider\": \"default\""), std::string::npos)
+        << "a neutral entry carries no provider key:\n"
         << text;
     const Loaded again(text.c_str());
     ASSERT_EQ(again.m_status, ANIRA_OK) << again.m_err.message;
     EXPECT_EQ(model_text(again.m_config), text);
-    EXPECT_EQ(
-        load_fails(R"({"models": [{"engine": "executorch:", "path": "x"}]})", "models[0].engine"),
-        ANIRA_ERROR_JSON)
-        << "a colon without a provider";
-    EXPECT_EQ(
-        load_fails(R"({"models": [{"engine": "foo:coreml", "path": "x"}]})", "models[0].engine"),
-        ANIRA_ERROR_JSON)
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "executorch:coreml", "path": "x"}]})",
+                         "models[0].engine"),
+              ANIRA_ERROR_JSON)
+        << "a suffix on the engine word: the pair is two keys";
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "executorch", "provider": "", "path": "x"}]})",
+                         "models[0].provider"),
+              ANIRA_ERROR_JSON)
+        << "an empty provider";
+    EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "provider": "coreml", "path": "x"}]})",
+                         "models[0].engine"),
+              ANIRA_ERROR_JSON)
         << "the engine word is checked as before";
 }
 
