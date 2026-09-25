@@ -108,6 +108,59 @@ To update to a newer tanh-tooling release, run its installer with the new tag, c
 
 Style changes themselves belong in tanh-tooling, not here.
 
+Running the format and tidy checks locally
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+CI runs both tools at LLVM 20 (``lint.yml``'s ``clang-format`` job, ``clang_tidy.yml``), and another major formats and flags differently. Where the system ships another LLVM, the PyPI wheels give the same major beside it:
+
+.. code-block:: bash
+
+    python3 -m venv ~/.local/llvm20
+    ~/.local/llvm20/bin/pip install "clang-tidy==20.*" "clang-format==20.*"
+    export PATH="$HOME/.local/llvm20/bin:$PATH"
+
+**clang-format.** Check mode over the tracked sources (a superset of the queue job's ``src/ include/ test/ examples/``):
+
+.. code-block:: bash
+
+    git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs -P "$(nproc)" -n 20 clang-format --dry-run --Werror
+
+Fix only what the branch changes (put the pull request's base branch in place of ``origin/main``):
+
+.. code-block:: bash
+
+    git diff --name-only --diff-filter=d origin/main... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
+
+Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
+
+**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
+
+.. code-block:: bash
+
+    cmake --preset clang-tidy
+    cmake --build build/clang-tidy
+
+A pull request checks the ``.cpp`` files it changes:
+
+.. code-block:: bash
+
+    git diff --name-only --diff-filter=d origin/main... -- '*.cpp' \
+        | xargs -r -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
+
+The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep the list below in step with it):
+
+.. code-block:: bash
+
+    find src/engines/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
+         src/InferenceHandler.cpp src/PrePostProcessor.cpp test/engines/ test/scheduler/ test/utils/ \
+         test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
+         test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
+        | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
+
+The sweep is about an hour of CPU time for some 115 files: 3 minutes on 32 cores, and no core count brings it much below 2, since single files take that long. The time goes to the test files: one of ``test/abi/`` includes googletest and the whole C++ face and runs the static analyzer over dozens of test bodies, 80 to 125 s per file, where a library file takes 5 to 55 s. A pull request that changes a test file therefore spends minutes on it, not seconds.
+
+Every configure preset exports ``compile_commands.json`` into its tree, so clangd works on any of them: ``.clangd`` reads ``build/desktop/Debug/`` (the ``desktop-debug`` preset, library sources only); for the tests, point it at a test tree such as ``build/desktop/Tests/Debug/`` in a local, untracked config.
+
 Documentation
 ~~~~~~~~~~~~~
 
