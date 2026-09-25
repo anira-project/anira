@@ -121,8 +121,11 @@ using VoidFn = void (*)();
 
 struct Api {
     CreateFn m_create = nullptr;
+    CreateFn m_create_builtin = nullptr;
+    IntFn m_num_builtin_engines = nullptr;
     PrepareFn m_prepare = nullptr;
     ProcessFn m_process = nullptr;
+    ProcessFn m_process_wait = nullptr;
     DestroyFn m_destroy = nullptr;
     IntFn m_create_throwing = nullptr;
     UIntFn m_num_inference_threads = nullptr;
@@ -152,8 +155,11 @@ public:
         }
 #endif
         return resolve(m_api.m_create, "unloadtest_create") &&
+               resolve(m_api.m_create_builtin, "unloadtest_create_builtin") &&
+               resolve(m_api.m_num_builtin_engines, "unloadtest_num_builtin_engines") &&
                resolve(m_api.m_prepare, "unloadtest_prepare") &&
                resolve(m_api.m_process, "unloadtest_process") &&
+               resolve(m_api.m_process_wait, "unloadtest_process_wait") &&
                resolve(m_api.m_destroy, "unloadtest_destroy") &&
                resolve(m_api.m_create_throwing, "unloadtest_create_throwing") &&
                resolve(m_api.m_num_inference_threads, "unloadtest_num_inference_threads") &&
@@ -298,16 +304,27 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
 
 // A host that unloads while an instance is still alive: the library-unload hook joins
 // the pool (POSIX). On Windows there is no hook that may join; the plugin's module-exit
-// entry point calls shutdown() instead, which is mirrored here.
+// entry point calls shutdown() instead, which is mirrored here. The leaked session runs a
+// built-in engine: an engine whose code is the module's own cannot outlive the module, which
+// the loader may unmap before the hook joins the pool.
 TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     Module module;
     ASSERT_TRUE(module.load()) << module.error();
     const Api& api = module.api();
+    if (api.m_num_builtin_engines() == 0) {
+        module.unload();
+        GTEST_SKIP() << "no built-in engine: a module-owned engine cannot outlive its module";
+    }
 
-    void* instance = api.m_create();
+    void* instance = api.m_create_builtin();
     ASSERT_NE(instance, nullptr);
     api.m_prepare(instance);
-    api.m_process(instance, 10);
+    // Each block waits for its inference: the hook joins the pool under the loader lock, and a
+    // runtime's first inference on a thread may take that lock (LibTorch registering its
+    // thread_local destructors through __cxa_thread_atexit, glibc's dl_load_lock), so an
+    // inference still in flight at the unload deadlocks the join. The session stays alive and
+    // registered, the pool threads idle.
+    api.m_process_wait(instance, 10);
     ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
 
 #if defined(_WIN32)
