@@ -26,6 +26,14 @@ static_assert(v2::to_backend(v2::to_engine(v2::LITERT)) == v2::LITERT);
 static_assert(v2::to_backend(v2::to_engine(v2::EXECUTORCH)) == v2::EXECUTORCH);
 static_assert(v2::to_backend(v2::to_engine(v2::CUSTOM)) == v2::CUSTOM);
 static_assert(std::is_same_v<decltype(v2::to_engine(v2::CUSTOM)), anira::EngineRef>);
+// Each enumerator is its engine's anira_engine value.
+static_assert(v2::ONNX == static_cast<uint32_t>(ANIRA_ENGINE_ONNXRUNTIME));
+static_assert(v2::EXECUTORCH == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH));
+static_assert(v2::LITERT == static_cast<uint32_t>(ANIRA_ENGINE_LITERT));
+static_assert(v2::LIBTORCH == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH));
+static_assert(v2::TFLITE == static_cast<uint32_t>(ANIRA_ENGINE_TFLITE));
+static_assert(v2::CUSTOM == static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+static_assert(v2::to_engine(v2::TFLITE).kind == ANIRA_ENGINE_TFLITE);
 static_assert(v2::to_engine(v2::CUSTOM).kind == ANIRA_ENGINE_CUSTOM);
 static_assert(v2::names(v2::to_engine(v2::CUSTOM), v2::CUSTOM));
 static_assert(!v2::names(anira::EngineRef{.kind = ANIRA_ENGINE_CUSTOM, .id = "org.example.x"},

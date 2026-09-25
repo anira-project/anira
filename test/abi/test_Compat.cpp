@@ -395,7 +395,7 @@ anira_status status_of(Call&& call) {
 
 // ---- the enum --------------------------------------------------------------------------------
 
-// The shim's values are its own, both conversions are switches, and CUSTOM is the pair on
+// The shim's values are the anira_engine values under the 2.x names, and CUSTOM is the pair on
 // anira.v2.custom: an entry of another custom id is CUSTOM to a processor but not the shim's.
 TEST(AbiCompatConfig, TheBackendsConvertByName) {
     const std::array<std::pair<v2::InferenceBackend, anira_engine>, 5> built_in{{
@@ -406,6 +406,8 @@ TEST(AbiCompatConfig, TheBackendsConvertByName) {
         {v2::EXECUTORCH, ANIRA_ENGINE_EXECUTORCH},
     }};
     for (const auto& [backend, engine] : built_in) {
+        EXPECT_EQ(static_cast<uint32_t>(backend), static_cast<uint32_t>(engine))
+            << "the value is the engine's";
         EXPECT_EQ(v2::to_engine(backend).kind, engine);
         EXPECT_TRUE(v2::to_engine(backend).id.empty());
         EXPECT_EQ(v2::to_backend(anira::EngineRef{.kind = engine, .id = {}}), backend);

@@ -77,50 +77,58 @@ inline constexpr const char* k_custom_engine_id = "anira.v2.custom";
 
 // NOLINTBEGIN(readability-identifier-naming) the enumerators spell the 2.x names
 /**
- * @brief The 2.x backend enum. Every enumerator exists in every build, whatever engines it
- * carries; the values are the shim's own (the 2.x values depended on the engines of the build,
- * so a cast to or from int was never portable) and convert to and from the 3.x engine by
- * to_engine and to_backend, never by a cast. Unscoped, as in 2.x: TFLITE and
+ * @brief The 2.x backend enum under its 2.x names, each value the anira_engine value of its
+ * engine, in the 3.x order: ONNX is ANIRA_ENGINE_ONNXRUNTIME, EXECUTORCH, LITERT, LIBTORCH and
+ * TFLITE their engines', CUSTOM is ANIRA_ENGINE_CUSTOM. Every enumerator exists in every build,
+ * whatever engines it carries. Source compatibility is in the names: the 2.x values shifted
+ * with the engines of the build, so code that stored a backend as an integer or indexed an
+ * array by it is not source-compatible. Unscoped, as in 2.x: TFLITE and
  * InferenceBackend::TFLITE both spell.
  */
-enum InferenceBackend : int32_t {
-    LIBTORCH = 0,
-    ONNX = 1,
-    TFLITE = 2,
-    LITERT = 3,
-    EXECUTORCH = 4,
-    CUSTOM = 5
+enum InferenceBackend : uint32_t {
+    ONNX = ANIRA_ENGINE_ONNXRUNTIME,
+    EXECUTORCH = ANIRA_ENGINE_EXECUTORCH,
+    LITERT = ANIRA_ENGINE_LITERT,
+    LIBTORCH = ANIRA_ENGINE_LIBTORCH,
+    TFLITE = ANIRA_ENGINE_TFLITE,
+    CUSTOM = ANIRA_ENGINE_CUSTOM
 };
 // NOLINTEND(readability-identifier-naming)
 
-/// The backend as the engine pair of anira 3: LIBTORCH is ANIRA_ENGINE_LIBTORCH, ONNX
-/// ANIRA_ENGINE_ONNXRUNTIME, TFLITE, LITERT and EXECUTORCH likewise; CUSTOM is
-/// ANIRA_ENGINE_CUSTOM with k_custom_engine_id. No provider: every plan the shim builds is on
-/// the engine's CPU path (ANIRA_PROVIDER_CPU). A value outside the enum is {ANIRA_ENGINE_NONE}.
-constexpr anira::EngineRef to_engine(InferenceBackend backend) noexcept {
-    switch (backend) {
-        case LIBTORCH: return anira::EngineRef{.kind = ANIRA_ENGINE_LIBTORCH, .id = {}};
-        case ONNX: return anira::EngineRef{.kind = ANIRA_ENGINE_ONNXRUNTIME, .id = {}};
-        case TFLITE: return anira::EngineRef{.kind = ANIRA_ENGINE_TFLITE, .id = {}};
-        case LITERT: return anira::EngineRef{.kind = ANIRA_ENGINE_LITERT, .id = {}};
-        case EXECUTORCH: return anira::EngineRef{.kind = ANIRA_ENGINE_EXECUTORCH, .id = {}};
-        case CUSTOM: return anira::EngineRef{.kind = ANIRA_ENGINE_CUSTOM, .id = k_custom_engine_id};
-    }
-    return anira::EngineRef{};
+static_assert(ONNX == static_cast<uint32_t>(ANIRA_ENGINE_ONNXRUNTIME));
+static_assert(EXECUTORCH == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH));
+static_assert(LITERT == static_cast<uint32_t>(ANIRA_ENGINE_LITERT));
+static_assert(LIBTORCH == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH));
+static_assert(TFLITE == static_cast<uint32_t>(ANIRA_ENGINE_TFLITE));
+static_assert(CUSTOM == static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+
+namespace detail {
+
+/// Whether an engine value is one of the five built-in engines the enum names.
+constexpr bool is_built_in(uint32_t value) noexcept {
+    return value == ONNX || value == EXECUTORCH || value == LITERT || value == LIBTORCH ||
+           value == TFLITE;
 }
 
-/// The engine pair as a 2.x backend: the five built-in engines by name, ANIRA_ENGINE_CUSTOM as
+}  // namespace detail
+
+/// The backend as the engine pair of anira 3: the same value as anira_engine, and for CUSTOM
+/// the id k_custom_engine_id. No provider: every plan the shim builds is on the engine's CPU
+/// path (ANIRA_PROVIDER_CPU). A value outside the enum is {ANIRA_ENGINE_NONE}.
+constexpr anira::EngineRef to_engine(InferenceBackend backend) noexcept {
+    if (backend == CUSTOM) {
+        return anira::EngineRef{.kind = ANIRA_ENGINE_CUSTOM, .id = k_custom_engine_id};
+    }
+    if (!detail::is_built_in(backend)) { return anira::EngineRef{}; }
+    return anira::EngineRef{.kind = static_cast<anira_engine>(backend), .id = {}};
+}
+
+/// The engine pair as a 2.x backend: a built-in engine's value as it is, ANIRA_ENGINE_CUSTOM as
 /// CUSTOM whatever its id (to a 2.x processor every custom engine is CUSTOM), and anything else
 /// (ANIRA_ENGINE_NONE, which no plan carries) as CUSTOM.
 constexpr InferenceBackend to_backend(anira::EngineRef engine) noexcept {
-    switch (engine.kind) {
-        case ANIRA_ENGINE_LIBTORCH: return LIBTORCH;
-        case ANIRA_ENGINE_ONNXRUNTIME: return ONNX;
-        case ANIRA_ENGINE_TFLITE: return TFLITE;
-        case ANIRA_ENGINE_LITERT: return LITERT;
-        case ANIRA_ENGINE_EXECUTORCH: return EXECUTORCH;
-        default: return CUSTOM;
-    }
+    const auto value = static_cast<uint32_t>(engine.kind);
+    return detail::is_built_in(value) ? static_cast<InferenceBackend>(value) : CUSTOM;
 }
 
 /// Whether an entry's or a plan's engine pair is this backend's: the engine equal, and for
@@ -158,13 +166,23 @@ inline void warn(const std::string& message) noexcept {
     anira_log(ANIRA_LOG_WARNING, "anira.compat", message.c_str());
 }
 
-/// The index of a backend into a per-backend table; InferenceBackend values are 0 to 5.
+/// The backends in the enum's order, and the index of each into a per-backend table.
 inline constexpr std::size_t k_num_backends = 6;
-constexpr std::size_t backend_index(InferenceBackend backend) noexcept {
-    return static_cast<std::size_t>(backend);
-}
+inline constexpr std::array<InferenceBackend, k_num_backends> k_backends{ONNX,
+                                                                         EXECUTORCH,
+                                                                         LITERT,
+                                                                         LIBTORCH,
+                                                                         TFLITE,
+                                                                         CUSTOM};
 constexpr bool is_backend(InferenceBackend backend) noexcept {
-    return backend >= LIBTORCH && backend <= CUSTOM;
+    return backend == CUSTOM || is_built_in(backend);
+}
+/// The table index of a backend of the enum (is_backend).
+constexpr std::size_t backend_index(InferenceBackend backend) noexcept {
+    for (std::size_t i = 0; i < k_num_backends; ++i) {
+        if (k_backends[i] == backend) { return i; }
+    }
+    return 0;
 }
 
 /// The word the version-2 document spells a backend with.
@@ -1190,7 +1208,7 @@ private:
         m_tensor_shape.emplace_back(m_input_shape, m_output_shape);
         std::vector<InferenceBackend> clones;
         for (size_t b = 0; b < detail::k_num_backends; ++b) {
-            const auto backend = static_cast<InferenceBackend>(b);
+            const InferenceBackend backend = detail::k_backends[b];
             m_input_shapes[b] = m_input_shape;
             m_output_shapes[b] = m_output_shape;
             for (uint32_t e = 0; e < num_entries; ++e) {

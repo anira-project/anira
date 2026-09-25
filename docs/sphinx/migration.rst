@@ -225,12 +225,14 @@ What differs from 2.x:
   ``ANIRA_ERROR_CONFIG``, all from the constructor, where 2.x logged and returned ``nullptr``;
   ``get_inference_config()`` on a document that carries only a ``context_config`` throws
   ``ANIRA_ERROR_CONFIG``.
-- **The backend values** are the header's own (``LIBTORCH`` 0 to ``CUSTOM`` 5, every enumerator
-  in every build) and convert to and from the 3.x engine by name: ``to_engine(backend)``
-  answers the ``anira::EngineRef`` (``CUSTOM`` is ``ANIRA_ENGINE_CUSTOM`` with
-  ``anira::v2::k_custom_engine_id``, ``"anira.v2.custom"``), ``to_backend(engine)`` the
-  backend, ``is_available(backend)`` whether this build has the engine. The 2.x values
-  depended on the engines of the build, so a cast to or from ``int`` was never portable.
+- **The backend values** are the ``anira_engine`` values of the engines (``ONNX`` is
+  ``ANIRA_ENGINE_ONNXRUNTIME``, ``CUSTOM`` is ``ANIRA_ENGINE_CUSTOM``, and so on; every
+  enumerator in every build): the 2.x names are what stays. The 2.x values shifted with the
+  engines of the build, so code that stored a backend as an integer or indexed an array by it
+  is not source-compatible. ``to_engine(backend)`` answers the ``anira::EngineRef`` (for
+  ``CUSTOM`` with ``anira::v2::k_custom_engine_id``, ``"anira.v2.custom"``),
+  ``to_backend(engine)`` the backend (``CUSTOM`` for every custom engine),
+  ``is_available(backend)`` whether this build has the engine.
 - **Shapes.** A backend row must hold the universal shapes with their axes permuted or unit
   axes inserted, the per-entry layout of anira 3; a row that reshapes (the same element count,
   other extents) is ``ANIRA_ERROR_JSON``, and so is a streamed tensor with more than one channel
