@@ -125,11 +125,11 @@ CI runs both tools at LLVM 20 (``lint.yml``'s ``clang-format`` job, ``clang_tidy
 
     git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs -P "$(nproc)" -n 20 clang-format --dry-run --Werror
 
-Fix only what the branch changes (put the pull request's base branch in place of ``origin/main``):
+Fix only what the branch changes. ``<base>`` here and below is the branch your pull request targets: ``main``, or ``v3`` while 3.x is developed there.
 
 .. code-block:: bash
 
-    git diff --name-only --diff-filter=d origin/main... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
+    git diff --name-only --diff-filter=d origin/<base>... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
 
 Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
 
@@ -144,7 +144,7 @@ A pull request checks the ``.cpp`` files it changes:
 
 .. code-block:: bash
 
-    git diff --name-only --diff-filter=d origin/main... -- '*.cpp' \
+    git diff --name-only --diff-filter=d origin/<base>... -- '*.cpp' \
         | xargs -r -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
 
 The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep the list below in step with it):
