@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
-#include "../support/extras_fixtures.h"
+#include "../support/v2_objects.h"
 #include "backends/Adapter.h"
 #include "backends/Adapters.h"
 #include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
@@ -103,7 +103,7 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.
     const InferenceConfig hybridnn_config =
-        anira_test::bridged(k_hybridnn_model_json, k_hybridnn_contract_json);
+        anira_test::inference_config_of(k_hybridnn_model_json, k_hybridnn_contract_json);
     auto* config_a = new InferenceConfig(hybridnn_config);
     auto* pp_a = new PrePostProcessor(*config_a);
     auto session_a = Core::create_session(*pp_a,

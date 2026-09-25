@@ -1,7 +1,8 @@
 // End-to-end tests for one-sided streaming: a generator (no streamable input,
 // pulled by output demand) and an analyser (no streamable output, results read
 // as latest-completed values). No model files -- deterministic custom backends.
-// Also covers the push-side collection of issue #99.
+// Also covers the push-side collection of issue #99. The cases that read the 2.x session's
+// struct pool (Core::get_sessions) are test/scheduler/test_OneSidedStreamingInternals.cpp.
 //
 // Timing contract the waits rely on: with blocking_ratio == 0 the pull that
 // submits an inference never pops that inference's own result (the calculated
@@ -13,34 +14,25 @@
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
-#include <anira/abi/enums.h>
-#include <anira/abi/log.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/scheduler/Core.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <cstdint>
 #include <functional>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "tanh/core/Logger.h"
 
 using namespace anira;
 
@@ -241,40 +233,6 @@ void drive_generator_with_process(InferenceHandler& handler,
     }
 }
 
-// Collects what thl::Logger delivers to its sinks, so a test can assert on records anira
-// logs from the real-time paths. Those go into the core's lock-free queue; under
-// LogDrain::Manual the test delivers them deterministically with
-// InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
-// assertions, or a stderr capture that never sees the sinks).
-struct LogRecordCollector {
-    LogRecordCollector() {
-        m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG);
-    }
-    ~LogRecordCollector() { anira::detail::remove_log_sink(m_sink); }
-    static void on_record(const anira_log_record* record, void* user_data) {
-        auto* self = static_cast<LogRecordCollector*>(user_data);
-        const std::scoped_lock lock(self->m_mutex);
-        self->m_messages += record->message;
-        self->m_messages += '\n';
-    }
-    LogRecordCollector(const LogRecordCollector&) = delete;
-    LogRecordCollector& operator=(const LogRecordCollector&) = delete;
-    LogRecordCollector(LogRecordCollector&&) = delete;
-    LogRecordCollector& operator=(LogRecordCollector&&) = delete;
-
-    /// The messages collected so far, and starts over.
-    std::string take() {
-        const std::scoped_lock lock(m_mutex);
-        std::string out;
-        out.swap(m_messages);
-        return out;
-    }
-
-    std::mutex m_mutex;
-    std::string m_messages;
-    anira::detail::LogSinkId m_sink = 0;
-};
-
 class OneSidedStreamingTest : public ::testing::TestWithParam<bool> {};
 
 }  // namespace
@@ -348,42 +306,6 @@ TEST_P(OneSidedStreamingTest, GeneratorPushPopEquivalent) {
         ASSERT_EQ(handler.get_available_samples(0, 0), model.expected_ring_fill());
     }
     ASSERT_EQ(static_cast<size_t>(backend.m_calls.load()), model.m_submitted.size());
-}
-
-TEST(OneSidedStreamingStandalone, GeneratorPushDataNeverSubmits) {
-    InferenceConfig config = generator_config();
-    PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
-
-    unsigned int const latency = handler.get_latency(0);
-
-    std::vector<float> params{5.f, 0.f, 0.f, 0.f};
-    std::array<const float*, 1> param_channels{params.data()};
-    for (int i = 0; i < 64; ++i) { handler.push_data(param_channels.data(), 4, 0); }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-
-    EXPECT_EQ(backend.m_calls.load(), 0)
-        << "push_data on a generator must only store parameters, never submit.";
-    EXPECT_EQ(handler.get_available_samples(0, 0), static_cast<size_t>(latency))
-        << "Only the latency pre-fill may be in the ring.";
-
-    // The struct pool must be untouched: every struct free, no pending timestamps.
-    auto const sessions = Core::get_sessions();
-    ASSERT_EQ(sessions.size(), 1u);
-    EXPECT_TRUE(sessions[0]->m_time_stamps.empty());
-    for (const auto& ts_struct : sessions[0]->m_inference_queue) {
-        EXPECT_TRUE(ts_struct->m_free.load());
-    }
-
-    // One full hop of demand submits exactly one inference.
-    std::vector<float> out(k_hop, -1.f);
-    std::array<float*, 1> out_channels{out.data()};
-    size_t const received = handler.pop_data(out_channels.data(), k_hop, 0);
-    EXPECT_EQ(received, k_hop);
-    EXPECT_TRUE(wait_for([&] { return backend.m_calls.load() == 1; }))
-        << "The first hop of demand must submit exactly one inference.";
 }
 
 TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
@@ -621,46 +543,6 @@ TEST_P(OneSidedStreamingTest, AnalyserProcessLatestCompleted) {
     EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), fed.size() / k_hop);
 }
 
-TEST(OneSidedStreamingStandalone, AnalyserPushOnlyNeverStalls) {
-    // Issue #99: a push-only host (mic in, probability out via get_output) stalled
-    // permanently once all inference structs were used, because completed
-    // inferences were only collected on the pop side.
-    InferenceConfig config = analyser_config();
-    PrePostProcessor pp_processor(config);
-    MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
-
-    float const param = 10.f;
-    pp_processor.set_input(param, 1, 0);
-
-    auto const sessions = Core::get_sessions();
-    ASSERT_EQ(sessions.size(), 1u);
-    size_t const num_structs = sessions[0]->m_num_structs;
-    ASSERT_GE(num_structs, 1u);
-
-    size_t const windows = 8 * num_structs + 4;
-    std::vector<float> fed;
-    for (size_t window = 0; window < windows; ++window) {
-        for (size_t block = 0; block < k_hop / 512; ++block) {
-            std::vector<float> audio(512, static_cast<float>(window));
-            std::array<const float*, 1> audio_channels{audio.data()};
-            handler.push_data(audio_channels.data(), 512, 0);
-            fed.insert(fed.end(), audio.begin(), audio.end());
-        }
-        // Stay push-only: poll by pushing zero samples (a pure collection point).
-        float const expected = static_cast<float>(window) + param;
-        ASSERT_TRUE(wait_for([&] {
-            std::array<const float*, 1> empty_channels{nullptr};
-            handler.push_data(empty_channels.data(), 0, 0);
-            return pp_processor.get_output(0, 0) == expected;
-        })) << "window "
-            << window << ": push-only pipeline stalled (issue #99)";
-    }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), windows)
-        << "Every window must have been inferred; a stall stops at m_num_structs.";
-}
-
 TEST(OneSidedStreamingStandalone, AnalyserResetKeepsLatestValue) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
@@ -729,129 +611,6 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushEveryBlockPopEveryBlock) {
     }
     EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), fed.size() / k_hop)
         << "Push-side collection must not change the submission schedule.";
-}
-
-TEST(OneSidedStreamingStandalone, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
-    InferenceConfig config = two_sided_config();
-    PrePostProcessor pp_processor(config);
-    CountingCopyBackend backend(config);
-    // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level
-    // the core applies from its CoreConfig (Error in release builds), and queued
-    // in the core's real-time log queue: with LogDrain::Manual the test drains it
-    // itself, right before each assertion, into the LogRecordCollector below.
-    CoreConfig core_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
-    core_config.m_log.m_drain = LogDrain::Manual;
-    InferenceHandler handler(pp_processor, config, backend, core_config);
-    handler.prepare(HostConfig(512, 48000, false));
-    LogRecordCollector log_records;
-
-    unsigned int const latency = handler.get_latency(0);
-    auto const sessions = Core::get_sessions();
-    ASSERT_EQ(sessions.size(), 1u);
-    SessionElement& session = *sessions[0];
-    size_t const num_structs = session.m_num_structs;
-    ASSERT_EQ(session.m_inference_queue.size(), num_structs);
-    RingBuffer& ring = session.m_receive_buffer[0];
-    size_t const ring_capacity = ring.get_num_samples();
-    ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
-        << "The receive ring holds the latency pre-fill plus one hop per struct.";
-
-    std::vector<float> fed;
-    auto push_window = [&](size_t window) {
-        for (size_t block = 0; block < k_hop / 512; ++block) {
-            std::vector<float> const audio(
-                512,
-                static_cast<float>(window) + static_cast<float>(block) / 10.f);
-            std::array<const float*, 1> audio_channels{audio.data()};
-            handler.push_data(audio_channels.data(), 512, 0);
-            fed.insert(fed.end(), audio.begin(), audio.end());
-        }
-    };
-    // A push without samples only collects; polling with it keeps the test push-only.
-    auto push_collect_only = [&] {
-        std::array<const float*, 1> empty_channels{nullptr};
-        handler.push_data(empty_channels.data(), 0, 0);
-    };
-    auto wait_for_window = [&](size_t window) {
-        return wait_for([&] {
-            push_collect_only();
-            return static_cast<size_t>(backend.m_calls.load()) >= window + 1;
-        });
-    };
-
-    // Phase 1: one window per struct, never popped. Every result fits, so push_data
-    // places it (#99): the ring ends up exactly full, every struct is released and
-    // nothing is warned.
-    for (size_t window = 0; window < num_structs; ++window) {
-        push_window(window);
-        ASSERT_TRUE(wait_for_window(window));
-    }
-    ASSERT_TRUE(wait_for([&] {
-        push_collect_only();
-        return ring.get_available_samples(0) == ring_capacity;
-    })) << "push_data must collect finished inferences while the receive ring has room.";
-    for (const auto& ts_struct : session.m_inference_queue) {
-        EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
-    }
-    handler.drain_log();
-    std::string const captured_fitting = log_records.take();
-    EXPECT_EQ(captured_fitting.find("Output stream not consumed"), std::string::npos)
-        << "No warning while every result fits into the receive ring.";
-
-    // Phase 2: one more window per struct with the ring full. The gate holds every
-    // finished result in its struct: the ring occupancy does not change, no unread
-    // sample is overwritten, and a push that cannot place a result warns.
-    for (size_t window = num_structs; window < 2 * num_structs; ++window) {
-        push_window(window);
-        ASSERT_TRUE(wait_for_window(window));
-    }
-    // Let the workers publish the last done flags, so neither the checks below nor the
-    // drain see a completed-but-unpublished result as "not ready".
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    push_collect_only();
-    EXPECT_EQ(ring.get_available_samples(0), ring_capacity)
-        << "The gate must hold results in their structs instead of overwriting unread "
-           "output.";
-    for (const auto& ts_struct : session.m_inference_queue) {
-        EXPECT_FALSE(ts_struct->m_free.load())
-            << "Every struct holds a result the full ring cannot take.";
-    }
-    handler.drain_log();
-    std::string const captured_gated = log_records.take();
-    // tanh-lib compiles records above THL_LOG_COMPILED_MAX_LEVEL out (Error only in
-    // Release builds, see the note on CoreConfig::m_log), so the warning can only be
-    // asserted where Warning is compiled in; the gate itself is asserted either way.
-    constexpr bool k_warning_compiled_in =
-        static_cast<std::uint32_t>(THL_LOG_COMPILED_MAX_LEVEL) >=
-        static_cast<std::uint32_t>(thl::Logger::LogLevel::Warning);
-    if (is_logging_enabled() && k_warning_compiled_in) {
-        EXPECT_NE(captured_gated.find("Output stream not consumed"), std::string::npos)
-            << "Over-pushing without popping must warn.";
-    }
-    EXPECT_EQ(captured_gated.find("No free inference queue"), std::string::npos)
-        << "One window per struct never exhausts the pool.";
-
-    // Now pop everything: every window must come out intact, in order, after the
-    // latency pre-fill -- nothing overwritten, nothing lost.
-    size_t const total_windows = 2 * num_structs;
-    size_t const total_samples = static_cast<size_t>(latency) + total_windows * k_hop;
-    std::vector<float> received_all;
-    ASSERT_TRUE(wait_for([&] {
-        while (received_all.size() < total_samples) {
-            std::vector<float> out(512, -1.f);
-            std::array<float*, 1> out_channels{out.data()};
-            size_t const received = handler.pop_data(out_channels.data(), 512, 0);
-            if (received == 0) { break; }
-            received_all.insert(received_all.end(), out.begin(), out.begin() + received);
-        }
-        return received_all.size() >= total_samples;
-    })) << "Draining after over-pushing must eventually deliver every window.";
-
-    for (size_t g = 0; g < total_samples; ++g) {
-        float const expected = g < latency ? 0.f : fed[g - latency];
-        ASSERT_EQ(received_all[g], expected) << "sample " << g << " corrupted or lost";
-    }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), total_windows);
 }
 
 // -----------------------------------------------------------------------------

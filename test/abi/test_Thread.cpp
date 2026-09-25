@@ -3,6 +3,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
@@ -20,10 +21,8 @@
 #include <cstring>
 #include <thread>
 
-#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../extras/models/model_files.h"
-#include "../support/extras_fixtures.h"
+#include "../support/v2_objects.h"
 
 using namespace anira;
 
@@ -123,16 +122,14 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
     constexpr double k_sample_rate = 44100.0;
     const UserThreadContext context;
 
+    // The bundled gain model's custom row on the 2.x pass-through: one block run by the
+    // user's thread is the whole check.
     InferenceConfig inference_config =
-        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
-    HybridNNPrePostProcessor pp_processor(inference_config);
-    HybridNNBypassProcessor bypass_processor(inference_config);
+        anira_test::inference_config_of(k_gain_model_json, k_gain_contract_json, true);
+    PrePostProcessor pp_processor(inference_config);
     // Zero auto-pool threads, like the context: the user owns the threading.
     const CoreConfig core_config(0, WaitStrategy::SpinBackoff, LogLevel::Error);
-    InferenceHandler inference_handler(pp_processor,
-                                       inference_config,
-                                       bypass_processor,
-                                       core_config);
+    InferenceHandler inference_handler(pp_processor, inference_config, core_config);
 
     anira_inference_thread* thread = nullptr;
     anira_error err = ANIRA_ERROR_INIT;

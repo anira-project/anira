@@ -2,6 +2,7 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/InferenceBackend.h>
@@ -10,10 +11,8 @@
 #include <cstddef>
 #include <thread>
 
-#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../../extras/models/model_files.h"
-#include "../support/extras_fixtures.h"
+#include "../support/v2_objects.h"
 #include "gtest/gtest.h"
 
 // Generous hang-guard, not a performance bound: the loop below exits as soon as the
@@ -26,23 +25,21 @@ using namespace anira;
 // Drives an InferenceHandler with no auto-pool threads — the caller creates
 // and manages the InferenceThread that actually runs inference. This is the
 // same pattern the wasm build uses under the hood (one JS Worker per
-// InferenceThread), now available natively as first-party.
+// InferenceThread), now available natively as first-party. The model is the
+// bundled gain model's custom row on the 2.x pass-through: the case checks only
+// that a user-driven thread runs one block.
 TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     constexpr int k_buffer_size = 512;
     constexpr double k_sample_rate = 44100.0;
 
     InferenceConfig inference_config =
-        anira_test::bridged_with_custom(k_hybridnn_model_json, k_hybridnn_contract_json);
-    HybridNNPrePostProcessor pp_processor(inference_config);
-    HybridNNBypassProcessor bypass_processor(inference_config);
+        anira_test::inference_config_of(k_gain_model_json, k_gain_contract_json, true);
+    PrePostProcessor pp_processor(inference_config);
 
     // Zero auto-pool threads — the user owns the threading.
     CoreConfig const core_config(0);
 
-    InferenceHandler inference_handler(pp_processor,
-                                       inference_config,
-                                       bypass_processor,
-                                       core_config);
+    InferenceHandler inference_handler(pp_processor, inference_config, core_config);
 
     auto user_thread = Core::make_inference_thread();
     ASSERT_NE(user_thread, nullptr);

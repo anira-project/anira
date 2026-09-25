@@ -60,6 +60,24 @@ function(anira_add_test_binary TARGET)
     endif ()
 endfunction()
 
+# The partition of the test suite for the 3.x cut-over (decision 22 of the M2 plan): every TU
+# targets one API and moves once.
+#   (a) through anira/compat/v2.hpp, the 2.x source-compatible face over the C ABI:
+#       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
+#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Stages).
+#   (c) white-box over the private headers (the src include directory): test_scheduler,
+#       test_backends, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
+#       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
+#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal (test_abi's
+#       internal probes and the v2_objects.h oracle arms, PR 12).
+#   (d) retired with their subject: test_PrePostProcessor (folded into test_Stage),
+#       test_JsonConfigLoader and its Errors suite (PR 10, with the 2.x loader class),
+#       test_Bridge / test_Translate (PR 10, into test_Prepare), test_HighPriorityThread (PR 12).
+#   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
+#       onto the enabled-engines entry in PR 12).
+# test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
+# test/support/extras_fixtures.h serves the TUs of (b) and (d) until they go.
+
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
@@ -69,6 +87,8 @@ anira_add_test_binary(test_utils
 	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
 	system/test_HighPriorityThread.cpp
+	test_CoreConfig.cpp
+	test_InferenceConfig.cpp
 )
 
 anira_add_test_binary(test_scheduler
@@ -82,12 +102,14 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_InferenceThread.cpp
 	scheduler/test_LatencyCalculator.cpp
+	scheduler/test_OneSidedStreamingInternals.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
 )
-# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling.
+# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
+# and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_backends
@@ -102,8 +124,6 @@ target_include_directories(test_backends PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_handler
 	contracts/test_EngineLinkage.cpp
-	test_CoreConfig.cpp
-	test_InferenceConfig.cpp
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
