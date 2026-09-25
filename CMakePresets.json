@@ -498,7 +498,7 @@
             "targets": [
                 "test_utils",
                 "test_scheduler",
-                "test_backends",
+                "test_engines",
                 "test_handler",
                 "simple-benchmark",
                 "advanced-benchmark",
@@ -512,7 +512,7 @@
             "targets": [
                 "test_utils",
                 "test_scheduler",
-                "test_backends",
+                "test_engines",
                 "test_handler",
                 "simple-benchmark",
                 "advanced-benchmark",

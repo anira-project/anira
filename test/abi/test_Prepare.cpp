@@ -44,7 +44,6 @@ using anira::ContractHandle;
 using anira::Hard;
 using anira::ModelConfig;
 using anira::TensorSpec;
-using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::count_records;
 using anira_test::custom_candidates;
@@ -54,7 +53,7 @@ using anira_test::expect_same_block;
 using anira_test::explicit_contract;
 using anira_test::find_record;
 using anira_test::gain_with_custom;
-using anira_test::GateBackend;
+using anira_test::GateEngine;
 using anira_test::generator_model;
 using anira_test::Handler;
 using anira_test::k_block;
@@ -83,7 +82,7 @@ TensorSpec streamed(std::string_view name, int64_t time = 512, int64_t channels 
 
 /// An engine this build does not carry, if there is one.
 std::optional<anira_engine> missing_engine() {
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     for (anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
                                 ANIRA_ENGINE_LIBTORCH,
                                 ANIRA_ENGINE_TFLITE,
@@ -241,6 +240,88 @@ TEST(AbiPrepare, RingDtypeRulesAreConfigAtPrepare) {
     run_waited_block(handler.m_handler, 1);
 }
 
+namespace {
+
+/// A mono stream in, two mono streams out (the custom row's pass-through copies the first and
+/// zeroes the second), every tensor 512 wide; the second output carries a model latency of 256.
+ModelConfig two_stream_outputs_model() {
+    ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    model.input(streamed("audio_in"));
+    model.output(streamed("audio_out"));
+    TensorSpec aux = streamed("aux_out");
+    aux.latency(256);
+    model.output(aux);
+    return model;
+}
+
+/// explicit_contract() with the declared stream latency of one output, set through the C entry.
+ContractHandle with_latency(const char* canonical, uint32_t samples) {
+    ContractHandle contract = explicit_contract();
+    EXPECT_EQ(anira_contract_hard_set_latency(contract.native(), canonical, samples), ANIRA_OK);
+    return contract;
+}
+
+}  // namespace
+
+// The declared stream latency of an output resolves at prepare: a name that is no tensor, an
+// input, a Static output and a figure below the model's internal latency are CONFIG. A legal
+// declaration replaces the computed figure of its slot alone, and the receive ring is primed
+// with it: the first samples popped after prepare are that many zeros.
+TEST(AbiPrepare, LatencyRulesAreConfigAtPrepare) {
+    const Context context;
+    {
+        const ModelConfig model = gain_with_custom();
+        const std::vector<anira_backend_id> candidates = custom_candidates();
+        Handler handler(context, model, candidates);
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(handler.prepare(with_latency("ghost", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "contract: the latency of 'ghost' names no tensor");
+        EXPECT_EQ(handler.prepare(with_latency("audio_in", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "the latency of 'audio_in' is set on an input tensor");
+        EXPECT_EQ(handler.prepare(with_latency("gain_out", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "the latency of 'gain_out' is set on a Static tensor");
+        expect_unprepared(handler.m_handler);
+    }
+
+    const ModelConfig model = two_stream_outputs_model();
+    const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
+                                              .engine = ANIRA_ENGINE_CUSTOM,
+                                              .provider = ANIRA_PROVIDER_CPU,
+                                              .engine_id = anira_test::k_custom}};
+    Handler handler(context, model, none);
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(handler.prepare(with_latency("aux_out", 100), &err), ANIRA_ERROR_CONFIG);
+    expect_contains(err.message,
+                    "the latency of 'aux_out' is 100 but the model's internal latency is 256");
+
+    // The computed figures, then the declaration on slot 0 alone.
+    ASSERT_EQ(handler.prepare(explicit_contract(), &err), ANIRA_OK) << err.message;
+    const uint32_t computed_0 = anira_handler_get_latency(handler.m_handler, 0);
+    const uint32_t computed_1 = anira_handler_get_latency(handler.m_handler, 1);
+    ASSERT_NE(computed_0, 4096U);
+    ASSERT_EQ(handler.prepare(with_latency("audio_out", 4096), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(anira_handler_get_latency(handler.m_handler, 0), 4096U);
+    EXPECT_EQ(anira_handler_get_latency(handler.m_handler, 1), computed_1)
+        << "an output never named keeps the computed figure";
+    uint32_t count = 2;
+    std::array<uint32_t, 2> latencies{0, 0};
+    ASSERT_EQ(anira_handler_get_latencies(handler.m_handler, &count, latencies.data()), ANIRA_OK);
+    EXPECT_EQ(count, 2U);
+    EXPECT_EQ(latencies[0], 4096U) << "index-aligned with the output list";
+    EXPECT_EQ(latencies[1], computed_1);
+
+    // The priming: the receive ring of slot 0 holds 4096 zeros before any block ran.
+    EXPECT_EQ(anira_test::available(handler.m_handler, 0), 4096U);
+    std::vector<float> primed(4096, -1.0F);
+    const std::array<float*, 1> ch{primed.data()};
+    const anira_tensor out = anira_test::planar_f32(ch.data(), 1, primed.size());
+    size_t delivered = 0;
+    EXPECT_EQ(anira_handler_pop_data(handler.m_handler, &out, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(delivered, 4096U);
+    expect_all(primed, 0.0F, "the priming of the declared latency");
+}
+
 // The declared host-end domain of a tensor resolves at prepare: a name that is no tensor is
 // CONFIG, any domain but host memory is NOT_SUPPORTED naming the tensor (the declaration is
 // data in this pre-release), and a Static tensor takes a declaration like a Streamed one. The
@@ -316,9 +397,9 @@ TEST(AbiPrepare, BypassIsRefusedOnAGenerator) {
     const Context context;
     const ModelConfig model = generator_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
-                                              .engine = ANIRA_ENGINE_NONE,
-                                              .provider = ANIRA_PROVIDER_DEFAULT,
-                                              .engine_id = nullptr}};
+                                              .engine = ANIRA_ENGINE_CUSTOM,
+                                              .provider = ANIRA_PROVIDER_CPU,
+                                              .engine_id = anira_test::k_custom}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(explicit_contract(2048, k_rate, ANIRA_MISS_BYPASS, 0.0, 10.0), &err),
@@ -518,7 +599,9 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG);
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
     anira::ContractHandle contract = explicit_contract(k_block, k_rate, policy);
     if (policy == ANIRA_MISS_CALLBACK) { contract.hard_miss_fn(&fill_backup, nullptr); }
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
@@ -526,9 +609,6 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     ASSERT_EQ(anira_handler_get_latency(h, 0), k_block) << "one block of priming";
     anira_drain_log();
     RecordCollector collector;
-    GateBackend gate(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
-    const DestroyFirst destroy_first(handler, &gate);
     std::vector<float> out;
     float gain_out = -1.0F;
 
@@ -653,13 +733,12 @@ TEST(AbiPrepare, TensorsBuiltOnceSurviveAMiss) {
     const Context context;
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
     ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS)), ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    GateBackend gate(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
-    const DestroyFirst destroy_first(handler, &gate);
 
     std::vector<float> in(k_block, 0.0F);
     std::vector<float> out(k_block, -1.0F);
@@ -767,7 +846,7 @@ TEST(AbiPrepare, ZeroPlansIsConfigAtCreate) {
     model.output(streamed("out"));
     const std::vector<anira_backend_id> only_onnx{{.struct_size = sizeof(anira_backend_id),
                                                    .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                                   .provider = ANIRA_PROVIDER_DEFAULT,
+                                                   .provider = ANIRA_PROVIDER_CPU,
                                                    .engine_id = nullptr}};
     const CreateOutcome outcome = try_create(context, model, only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
@@ -793,6 +872,18 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
         expect_contains(outcome.m_message, "is not added to this pipeline");
     }
+    {
+        // anira.v2.custom is no exception: without an engine on the pipeline its row is refused
+        // like any other custom id's.
+        ModelConfig bare;
+        bare.add_model_path(k_custom, "model.custom");
+        bare.input(streamed("in"));
+        bare.output(streamed("out"));
+        const CreateOutcome outcome = try_create(context, bare, {});
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message,
+                        "custom engine 'anira.v2.custom' is not added to this pipeline");
+    }
     const std::optional<anira_engine> missing = missing_engine();
     if (missing.has_value()) {
         ModelConfig with_custom;
@@ -810,7 +901,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         }
         const std::vector<anira_backend_id> missing_only{{.struct_size = sizeof(anira_backend_id),
                                                           .engine = static_cast<uint32_t>(*missing),
-                                                          .provider = ANIRA_PROVIDER_DEFAULT,
+                                                          .provider = ANIRA_PROVIDER_CPU,
                                                           .engine_id = nullptr}};
         CreateOutcome outcome = try_create(context, with_custom, missing_only);
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
@@ -861,15 +952,57 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
                                 .provider_id = "com.example.npu"};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &both, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "at once");
+    expect_contains(err.message, "the provider_id is set if and only if");
     const anira_backend_id empty_id{.struct_size = sizeof(anira_backend_id),
                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                    .provider = ANIRA_PROVIDER_CUSTOM,
                                     .engine_id = nullptr,
                                     .provider_id = ""};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &empty_id, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "provider_id is empty");
+    expect_contains(err.message, "never empty");
+    // The pair rule on both axes: a name beside CPU, CUSTOM without an id, NONE (which names
+    // no engine, and no provider) and an id beside a built-in engine are refused here.
+    const anira_backend_id named_cpu{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = ANIRA_PROVIDER_CPU,
+                                     .engine_id = nullptr,
+                                     .provider_id = "com.example.npu"};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &named_cpu, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the provider_id is set if and only if");
+    const anira_backend_id no_provider{.struct_size = sizeof(anira_backend_id),
+                                       .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                       .provider = ANIRA_PROVIDER_NONE,
+                                       .engine_id = nullptr,
+                                       .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &no_provider, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "names no provider (ANIRA_PROVIDER_NONE)");
+    const anira_backend_id nameless{.struct_size = sizeof(anira_backend_id),
+                                    .engine = ANIRA_ENGINE_CUSTOM,
+                                    .provider = ANIRA_PROVIDER_CPU,
+                                    .engine_id = nullptr,
+                                    .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &nameless, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the engine_id is set if and only if");
+    const anira_backend_id no_engine{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_NONE,
+                                     .provider = ANIRA_PROVIDER_CPU,
+                                     .engine_id = nullptr,
+                                     .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &no_engine, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "neither a built-in engine nor ANIRA_ENGINE_CUSTOM");
+    const anira_backend_id builtin_id{.struct_size = sizeof(anira_backend_id),
+                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                      .provider = ANIRA_PROVIDER_CPU,
+                                      .engine_id = "com.example.engine",
+                                      .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &builtin_id, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the engine_id is set if and only if");
     if (const std::vector<anira_engine> engines = anira_test::oracle_engines(); !engines.empty()) {
         // Well formed, and a provider this context's capabilities do not list for the engine
         // (no CUDA on the CI legs): refused at create, naming the entry, the engine and the
@@ -886,7 +1019,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     }
     const anira_backend_id short_row{.struct_size = 4,
                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .provider = ANIRA_PROVIDER_CPU,
                                      .engine_id = nullptr};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &short_row, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
@@ -907,7 +1040,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
 #if defined(USE_LIBTORCH) || defined(USE_ONNXRUNTIME)
 TEST(AbiPrepare, AModelThatDoesNotLoadIsReportedAtPrepare) {
     const Context context;
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     ASSERT_FALSE(enabled.empty());
     const auto first_engine = static_cast<anira_engine>(enabled.front().engine);
     {
@@ -1023,7 +1156,7 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
     const std::string custom = "plan " + std::to_string(anira_handler_get_plan(h)) +
                                ": variant 0, engine " + k_custom +
-                               ", provider default, budget 5.000 ms";
+                               ", provider cpu, budget 5.000 ms";
     EXPECT_EQ(count_records(collector, custom.c_str(), "native"), 1U);
 #endif
 
@@ -1076,6 +1209,7 @@ TEST(AbiPrepare, TheContextOutlivesItsDestroyWhileAHandlerLives) {
     const std::vector<anira_backend_id> candidates = custom_candidates();
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline,
                                            variants.data(),

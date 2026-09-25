@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapter.h"
+#include "../engines/Adapter.h"
 #include "capi_internal.h"
 #include "enumerate.h"
 #include "ext_registry.h"
@@ -70,14 +70,14 @@ bool has_device_block(const anira_context_config& config) {
 }
 
 // The CPU rule of the edge registry (providers.h cpu_provider), on a probed provider.
-bool cpu_provider(const anira::backend::ProviderInfo& provider) noexcept {
+bool cpu_provider(const anira::engine::ProviderInfo& provider) noexcept {
     return anira::capi::cpu_provider(provider.m_provider, provider.m_provider_id);
 }
 
 // The Host-only capability report of this pre-release: every compiled-in engine on the
-// providers its runtime reports usable here (the default provider first; ONNX Runtime's
-// available execution providers, LiteRT's registered accelerators; the other engines the
-// default provider alone), the host domain, the registered extension kinds, and one edge from
+// providers its runtime reports usable here (the CPU path first; ONNX Runtime's available
+// execution providers, LiteRT's registered accelerators; the other engines the CPU path
+// alone), the host domain, the registered extension kinds, and one edge from
 // host memory to each backend row: zero-copy to a CPU provider, a copy the engine makes for
 // itself to a device one. The runtimes are asked at every probe; nothing is cached.
 void probe(anira_capabilities& capabilities) {
@@ -87,10 +87,10 @@ void probe(anira_capabilities& capabilities) {
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         // The core's engine object of the engine: the one its loaded models hold, or one made
         // for this query alone and freed with it.
-        const std::shared_ptr<anira::backend::BuiltinEngine> object =
+        const std::shared_ptr<anira::engine::BuiltinEngine> object =
             anira::Core::builtin_engine(engine);
         if (object == nullptr) { continue; }
-        for (const anira::backend::ProviderInfo& provider : object->providers()) {
+        for (const anira::engine::ProviderInfo& provider : object->providers()) {
             const char* provider_id = nullptr;
             if (!provider.m_provider_id.empty()) {
                 strings.push_back(provider.m_provider_id);
@@ -296,13 +296,14 @@ anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabi
     return ANIRA_ERROR_EDGE_UNREACHABLE;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
-                                               uint32_t* count,
-                                               anira_backend_id* out) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_enabled_engines(uint32_t element_size,
+                                              uint32_t* count,
+                                              anira_backend_id* out) ANIRA_NOEXCEPT try {
     std::vector<anira_backend_id> backends;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         anira_backend_id id = ANIRA_BACKEND_ID_INIT;
         id.engine = static_cast<uint32_t>(engine);
+        id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
         backends.push_back(id);
     }
     return anira::capi::enumerate_records(backends, element_size, count, out);

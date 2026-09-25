@@ -2,7 +2,7 @@
 #
 # The anira::<engine> targets of this installed anira, defined with the same
 # function and the same usage requirements as in anira's build tree
-# (aniraBackendHelpers.cmake, shipped next to this file). Included by
+# (aniraEngineHelpers.cmake, shipped next to this file). Included by
 # aniraConfig.cmake before aniraTargets.cmake, so that the $<LINK_ONLY:anira::<engine>>
 # link dependencies of a static anira resolve. Everything is relative to
 # PACKAGE_PREFIX_DIR (set by aniraConfig.cmake), so the installed tree is relocatable.
@@ -16,7 +16,7 @@
 
 set(_anira_libdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_LIBDIR@")
 set(_anira_bindir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_BINDIR@")
-set(_anira_incdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/anira-backends")
+set(_anira_incdir "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_INCLUDEDIR@/anira-engines")
 
 @ANIRA_INSTALLED_BACKEND_TARGETS@
 unset(_anira_libdir)

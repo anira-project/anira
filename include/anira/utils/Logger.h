@@ -61,11 +61,11 @@ inline constexpr const char* k_config = "anira.config";
 inline constexpr const char* k_capi = "anira.capi";
 inline constexpr const char* k_system = "anira.system";
 inline constexpr const char* k_web = "anira.web";
-inline constexpr const char* k_backend_libtorch = "anira.backend.libtorch";
-inline constexpr const char* k_backend_onnx = "anira.backend.onnxruntime";
-inline constexpr const char* k_backend_tflite = "anira.backend.tflite";
-inline constexpr const char* k_backend_litert = "anira.backend.litert";
-inline constexpr const char* k_backend_executorch = "anira.backend.executorch";
+inline constexpr const char* k_engine_libtorch = "anira.engine.libtorch";
+inline constexpr const char* k_engine_onnx = "anira.engine.onnxruntime";
+inline constexpr const char* k_engine_tflite = "anira.engine.tflite";
+inline constexpr const char* k_engine_litert = "anira.engine.litert";
+inline constexpr const char* k_engine_executorch = "anira.engine.executorch";
 }  // namespace log_group
 
 inline bool is_logging_enabled() {

@@ -18,6 +18,7 @@
 
 #include "capi/handles.h"
 #include "capi/layout.h"
+#include "pair_read.h"
 
 namespace {
 
@@ -140,6 +141,7 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
     uint32_t index = 99;
     EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_ONNXRUNTIME,
+                                                nullptr,
                                                 "model.onnx",
                                                 &index,
                                                 &m.m_err),
@@ -148,6 +150,7 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
     const std::array<unsigned char, 4> blob{1, 2, 3, 4};
     EXPECT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                  ANIRA_ENGINE_LIBTORCH,
+                                                 nullptr,
                                                  blob.data(),
                                                  blob.size(),
                                                  ANIRA_BYTES_COPY,
@@ -157,17 +160,18 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
                                                  &m.m_err),
               ANIRA_OK);
     EXPECT_EQ(index, 1u);
-    EXPECT_EQ(anira_model_config_add_model_path_custom(m.m_config,
-                                                       "com.example.engine",
-                                                       "model.bin",
-                                                       &index,
-                                                       &m.m_err),
+    EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_CUSTOM,
+                                                "com.example.engine",
+                                                "model.bin",
+                                                &index,
+                                                &m.m_err),
               ANIRA_OK);
     EXPECT_EQ(index, 2u);
     EXPECT_EQ(anira_model_config_model_count(m.m_config), 3u);
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 0), ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 0),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_ONNXRUNTIME, ""}));
     EXPECT_STREQ(anira_model_config_model_path(m.m_config, 0), "model.onnx");
-    EXPECT_EQ(anira_model_config_model_engine_id(m.m_config, 0), nullptr);
     EXPECT_EQ(anira_model_config_model_path(m.m_config, 1), nullptr) << "a bytes entry has no path";
     const void* bytes = nullptr;
     size_t size = 0;
@@ -178,9 +182,10 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
     EXPECT_EQ(anira_model_config_model_bytes(m.m_config, 0, &bytes, &size),
               ANIRA_ERROR_INVALID_STATE)
         << "a path entry";
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 2), ANIRA_ENGINE_NONE);
-    EXPECT_STREQ(anira_model_config_model_engine_id(m.m_config, 2), "com.example.engine");
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 3), ANIRA_ENGINE_NONE) << "out of range";
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 2),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_CUSTOM, "com.example.engine"}));
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 3).status, ANIRA_ERROR_INVALID_ARGUMENT)
+        << "out of range";
     EXPECT_EQ(anira_model_config_model_path(m.m_config, 3), nullptr);
 }
 
@@ -191,38 +196,40 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
     uint32_t index = 0;
     ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_EXECUTORCH,
+                                                nullptr,
                                                 "net.pte",
                                                 &index,
                                                 &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}))
         << "neutral until pinned";
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
                                                     ANIRA_PROVIDER_COREML,
                                                     nullptr,
                                                     &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_COREML, ""}));
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
-                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    ANIRA_PROVIDER_CUSTOM,
                                                     "com.example.npu",
                                                     &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
-        << "a custom provider travels beside DEFAULT";
-    EXPECT_STREQ(anira_model_config_model_provider_id(m.m_config, 0), "com.example.npu");
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "com.example.npu"}))
+        << "a custom provider is CUSTOM with its name";
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
-                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    ANIRA_PROVIDER_NONE,
                                                     nullptr,
                                                     &m.m_err),
               ANIRA_OK)
         << "unpinned again";
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}));
     // The refusals.
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     1,
@@ -239,10 +246,24 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
                                                     &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT)
         << "both at once";
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_NONE,
+                                                    "com.example.npu",
+                                                    &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a name beside DEFAULT";
     EXPECT_EQ(
-        anira_model_config_set_model_provider(m.m_config, 0, ANIRA_PROVIDER_DEFAULT, "", &m.m_err),
+        anira_model_config_set_model_provider(m.m_config, 0, ANIRA_PROVIDER_CUSTOM, "", &m.m_err),
         ANIRA_ERROR_INVALID_ARGUMENT)
         << "an empty name";
+    EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
+                                                    0,
+                                                    ANIRA_PROVIDER_CUSTOM,
+                                                    nullptr,
+                                                    &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "CUSTOM without a name";
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
                                                     bad_enum<anira_provider>(0x1000),
@@ -253,33 +274,40 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
     EXPECT_EQ(
         anira_model_config_set_model_provider(nullptr, 0, ANIRA_PROVIDER_CUDA, nullptr, &m.m_err),
         ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}))
         << "a refused call leaves the entry as it was";
-    EXPECT_EQ(anira_model_config_model_provider(nullptr, 0), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_model_provider_id(nullptr, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(nullptr, 0).status, ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 TEST(AbiModelConfig, EntryRejections) {
     Model m;
     uint32_t index = 0;
-    EXPECT_EQ(
-        anira_model_config_add_model_path(m.m_config, ANIRA_ENGINE_NONE, "x", &index, &m.m_err),
-        ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_NONE,
+                                                nullptr,
+                                                "x",
+                                                &index,
+                                                &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(m.m_err.message, "engine"), nullptr);
     EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 bad_enum<anira_engine>(0x1000),
+                                                nullptr,
                                                 "x",
                                                 &index,
                                                 &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_ONNXRUNTIME,
+                                                nullptr,
                                                 "",
                                                 &index,
                                                 &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                  ANIRA_ENGINE_ONNXRUNTIME,
+                                                 nullptr,
                                                  nullptr,
                                                  4,
                                                  ANIRA_BYTES_COPY,
@@ -291,6 +319,7 @@ TEST(AbiModelConfig, EntryRejections) {
     const std::array<unsigned char, 4> blob{};
     EXPECT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                  ANIRA_ENGINE_ONNXRUNTIME,
+                                                 nullptr,
                                                  blob.data(),
                                                  0,
                                                  ANIRA_BYTES_COPY,
@@ -301,6 +330,7 @@ TEST(AbiModelConfig, EntryRejections) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                  ANIRA_ENGINE_ONNXRUNTIME,
+                                                 nullptr,
                                                  blob.data(),
                                                  4,
                                                  bad_enum<anira_bytes_ownership>(5),
@@ -309,9 +339,45 @@ TEST(AbiModelConfig, EntryRejections) {
                                                  &index,
                                                  &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_add_model_path_custom(m.m_config, "noDot", "x", &index, &m.m_err),
+    EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_CUSTOM,
+                                                "noDot",
+                                                "x",
+                                                &index,
+                                                &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(m.m_err.message, "reverse-URI"), nullptr);
+    // The pair rule: an id if and only if the engine is ANIRA_ENGINE_CUSTOM.
+    EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_CUSTOM,
+                                                nullptr,
+                                                "x",
+                                                &index,
+                                                &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "CUSTOM without an id";
+    EXPECT_NE(std::strstr(m.m_err.message, "if and only if"), nullptr) << m.m_err.message;
+    EXPECT_EQ(anira_model_config_add_model_path(m.m_config,
+                                                ANIRA_ENGINE_ONNXRUNTIME,
+                                                "com.example.engine",
+                                                "x",
+                                                &index,
+                                                &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "an id beside a built-in engine";
+    EXPECT_EQ(anira_model_config_add_model_bytes(m.m_config,
+                                                 ANIRA_ENGINE_CUSTOM,
+                                                 nullptr,
+                                                 blob.data(),
+                                                 4,
+                                                 ANIRA_BYTES_COPY,
+                                                 nullptr,
+                                                 nullptr,
+                                                 &index,
+                                                 &m.m_err),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "the bytes twin: CUSTOM without an id";
+    EXPECT_EQ(anira_model_config_model_count(m.m_config), 0u) << "every refusal adds nothing";
     EXPECT_EQ(anira_model_config_set_model_bytes(m.m_config,
                                                  0,
                                                  blob.data(),
@@ -330,6 +396,7 @@ TEST(AbiModelConfig, SetModelBytesPatchesAPathEntry) {
     uint32_t index = 0;
     ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_EXECUTORCH,
+                                                nullptr,
                                                 "model.pte",
                                                 &index,
                                                 &m.m_err),
@@ -361,6 +428,7 @@ TEST(AbiModelConfig, BorrowedBytesReleaseFiresOnceWhenTheLastCarrierDies) {
         uint32_t index = 0;
         ASSERT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                      ANIRA_ENGINE_LIBTORCH,
+                                                     nullptr,
                                                      blob.data(),
                                                      blob.size(),
                                                      ANIRA_BYTES_BORROW,
@@ -385,6 +453,7 @@ TEST(AbiModelConfig, BorrowedBytesReleaseFiresOnceWhenTheLastCarrierDies) {
         uint32_t index = 0;
         ASSERT_EQ(anira_model_config_add_model_bytes(m.m_config,
                                                      ANIRA_ENGINE_LIBTORCH,
+                                                     nullptr,
                                                      blob.data(),
                                                      blob.size(),
                                                      ANIRA_BYTES_COPY,
@@ -411,13 +480,39 @@ TEST(AbiModelConfig, SpecsAreCopiedAndTheRestIsScalar) {
     EXPECT_EQ(m.m_config->m_inputs.size(), 1u);
     EXPECT_EQ(m.m_config->m_outputs[0].m_role, ANIRA_ROLE_STATIC);
     EXPECT_EQ(anira_model_config_add_input(m.m_config, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config, ANIRA_ENGINE_TFLITE), ANIRA_OK);
-    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config, bad_enum<anira_engine>(42)),
+    EXPECT_EQ(
+        anira_model_config_set_default_engine(m.m_config, ANIRA_ENGINE_TFLITE, nullptr, nullptr),
+        ANIRA_OK);
+    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config,
+                                                    bad_enum<anira_engine>(42),
+                                                    nullptr,
+                                                    nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_set_default_engine_custom(m.m_config, "com.example.x"), ANIRA_OK);
-    EXPECT_EQ(m.m_config->m_default_engine, ANIRA_ENGINE_NONE);
-    EXPECT_EQ(anira_model_config_set_default_engine_custom(m.m_config, "nodot"),
-              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config,
+                                                    ANIRA_ENGINE_CUSTOM,
+                                                    "com.example.x",
+                                                    nullptr),
+              ANIRA_OK);
+    EXPECT_EQ(m.m_config->m_default_engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(
+        anira_model_config_set_default_engine(m.m_config, ANIRA_ENGINE_CUSTOM, "nodot", nullptr),
+        ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(
+        anira_model_config_set_default_engine(m.m_config, ANIRA_ENGINE_CUSTOM, nullptr, nullptr),
+        ANIRA_ERROR_INVALID_ARGUMENT)
+        << "CUSTOM without an id";
+    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config,
+                                                    ANIRA_ENGINE_TFLITE,
+                                                    "com.example.x",
+                                                    nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "an id beside a built-in engine";
+    EXPECT_EQ(anira_model_config_set_default_engine(m.m_config,
+                                                    ANIRA_ENGINE_NONE,
+                                                    "com.example.x",
+                                                    nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "an id beside NONE";
     EXPECT_EQ(anira_model_config_set_state(m.m_config, ANIRA_MODEL_STATEFUL), ANIRA_OK);
     EXPECT_EQ(anira_model_config_set_state(m.m_config, bad_enum<anira_model_state>(3)),
               ANIRA_ERROR_INVALID_ARGUMENT);
@@ -432,6 +527,7 @@ TEST(AbiModelConfig, SpecsAreCopiedAndTheRestIsScalar) {
     uint32_t index = 0;
     ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_ONNXRUNTIME,
+                                                nullptr,
                                                 "m.onnx",
                                                 &index,
                                                 &m.m_err),
@@ -449,6 +545,7 @@ TEST(AbiModelConfig, TensorLayoutRecord) {
     uint32_t index = 0;
     ASSERT_EQ(anira_model_config_add_model_path(m.m_config,
                                                 ANIRA_ENGINE_TFLITE,
+                                                nullptr,
                                                 "m.tflite",
                                                 &index,
                                                 &m.m_err),
@@ -770,6 +867,26 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_set_ring_dtype(async_contract, "audio_in", ANIRA_DTYPE_F32),
               ANIRA_ERROR_WRONG_CONTRACT);
+    // The declared stream latency: by canonical name, a second set replaces, at most INT32_MAX;
+    // the name resolves at prepare.
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", 1024), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 1024u);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", 4096), ANIRA_OK)
+        << "a second set replaces";
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 4096u);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "ghost", 0), ANIRA_OK) << "resolved at prepare";
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", INT32_MAX), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", uint32_t{INT32_MAX} + 1U),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), static_cast<uint32_t>(INT32_MAX))
+        << "untouched by the refused set";
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "", 1024), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, nullptr, 1024), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(nullptr, "audio_out", 1024),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(async_contract, "audio_out", 1024),
+              ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(hard->hard()->m_latencies.size(), 2u);
     EXPECT_EQ(anira_contract_async_set_deadline(hard, 10.0), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_async_set_policy(hard,
                                               ANIRA_LATE_DROP,

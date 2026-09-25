@@ -5,7 +5,7 @@
 #   cd build && cpack -G DEB      # then: apt install ./libanira*.deb && ldconfig
 include(${CMAKE_CURRENT_LIST_DIR}/tanh/package.cmake)
 
-set(_anira_deps_components deps-backends Devel Unspecified)
+set(_anira_deps_components deps-engines Devel Unspecified)
 if(ANIRA_WITH_BENCHMARK)
     list(APPEND _anira_deps_components gtest gmock)
 endif()

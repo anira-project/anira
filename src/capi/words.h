@@ -22,14 +22,22 @@
 
 namespace anira::capi {
 
+/// The id of a 2.x custom backend, ANIRA_ENGINE_CUSTOM's name for the 2.x CUSTOM backend: what
+/// the version-2 upgrade names every "CUSTOM" row, the engine of the 2.x runtime's CUSTOM
+/// plans, and the one id with anira's prefix "anira." a host may create an engine under
+/// (anira/compat/v2.hpp does). On the C path it needs an engine on the pipeline like every
+/// custom id; the bridge, which has no pipeline, serves it with the 2.x pass-through until the
+/// cut-over.
+inline constexpr const char* k_v2_custom_engine = "anira.v2.custom";
+
 inline constexpr std::array<std::pair<const char*, anira_provider>, 7> k_provider_words{{
-    {"default", ANIRA_PROVIDER_DEFAULT},
+    {"cpu", ANIRA_PROVIDER_CPU},
     {"cuda", ANIRA_PROVIDER_CUDA},
     {"webgpu", ANIRA_PROVIDER_WEBGPU},
+    {"vulkan", ANIRA_PROVIDER_VULKAN},
     {"directml", ANIRA_PROVIDER_DIRECTML},
     {"coreml", ANIRA_PROVIDER_COREML},
     {"xnnpack", ANIRA_PROVIDER_XNNPACK},
-    {"vulkan", ANIRA_PROVIDER_VULKAN},
 }};
 
 /// The provider a word spells; nothing for a word the enum does not name (a custom provider).
@@ -40,24 +48,57 @@ inline std::optional<anira_provider> provider_of_word(std::string_view word) noe
     return std::nullopt;
 }
 
-/// The word of a provider of the enum; "unknown" for a value the enum does not name.
+/// The words no provider is named by: "none" spells no provider and "default" the removed
+/// default provider, so neither may name a custom one. Refused where a name is read (a
+/// model entry's "provider" and "default_provider" keys, a provider option set's "provider",
+/// an entry of a descriptor's providers list).
+inline bool reserved_provider_word(std::string_view word) noexcept {
+    return word == "none" || word == "default";
+}
+
+/// Why a reserved word names no provider, for the refusal's message.
+inline constexpr const char* k_reserved_provider_reason =
+    "is no provider's name (\"cpu\" names the CPU path, and no provider is spelled by leaving "
+    "it out)";
+
+/// The word of a provider of the enum; "custom" for ANIRA_PROVIDER_CUSTOM (whose name is its
+/// provider_id, never this word), "none" for ANIRA_PROVIDER_NONE, "unknown" for a value the
+/// enum does not name.
 inline constexpr const char* provider_word(anira_provider provider) noexcept {
     for (const auto& [name, value] : k_provider_words) {
         if (value == provider) { return name; }
     }
-    return "unknown";
+    if (provider == ANIRA_PROVIDER_NONE) { return "none"; }
+    return provider == ANIRA_PROVIDER_CUSTOM ? "custom" : "unknown";
 }
 
-/// Whether a value is one the enum names.
+/// Whether a value names a provider: one of the enum's, ANIRA_PROVIDER_CUSTOM included, never
+/// ANIRA_PROVIDER_NONE (which names none: a candidate or an option set refuses it, and the
+/// pin and default setters accept it on their own).
 inline bool known_provider(anira_provider provider) noexcept {
+    if (provider == ANIRA_PROVIDER_CUSTOM) { return true; }
     for (const auto& [name, value] : k_provider_words) {
         if (value == provider) { return true; }
     }
     return false;
 }
 
+/// The pair rule of anira_provider: a name if and only if the provider is
+/// ANIRA_PROVIDER_CUSTOM, and never an empty one. The value itself is known_provider's question.
+inline bool provider_pair_ok(anira_provider provider, const char* provider_id) noexcept {
+    if (provider != ANIRA_PROVIDER_CUSTOM) { return provider_id == nullptr; }
+    return provider_id != nullptr && provider_id[0] != '\0';
+}
+
+/// The provider a word names where the word is the whole of it (a model entry's "provider"
+/// key, an entry of a descriptor's providers list, a provider option set's key): the enum's
+/// value for one of its words, ANIRA_PROVIDER_CUSTOM for any other, the word then its name.
+inline anira_provider provider_of_name(std::string_view word) noexcept {
+    return provider_of_word(word).value_or(ANIRA_PROVIDER_CUSTOM);
+}
+
 /// The name of a provider in a message: a custom provider's own name where there is one, the
-/// enum's word else ("default" for a neutral plan).
+/// enum's word else ("cpu" for the CPU path, "none" for no provider).
 inline std::string provider_label(anira_provider provider, std::string_view provider_id) {
     return provider_id.empty() ? std::string(provider_word(provider)) : std::string(provider_id);
 }
@@ -66,10 +107,10 @@ inline std::string provider_label(anira_provider provider, std::string_view prov
 /// words of every message that names an engine.
 inline constexpr std::array<std::pair<const char*, anira_engine>, 5> k_engine_words{{
     {"onnxruntime", ANIRA_ENGINE_ONNXRUNTIME},
+    {"executorch", ANIRA_ENGINE_EXECUTORCH},
+    {"litert", ANIRA_ENGINE_LITERT},
     {"libtorch", ANIRA_ENGINE_LIBTORCH},
     {"tflite", ANIRA_ENGINE_TFLITE},
-    {"litert", ANIRA_ENGINE_LITERT},
-    {"executorch", ANIRA_ENGINE_EXECUTORCH},
 }};
 
 /// The built-in engine a word spells; nothing for a word the enum does not name (a custom
@@ -81,12 +122,13 @@ inline std::optional<anira_engine> engine_of_word(std::string_view word) noexcep
     return std::nullopt;
 }
 
-/// The word of a built-in engine; "none" for ANIRA_ENGINE_NONE and any other value.
+/// The word of a built-in engine; "custom" for ANIRA_ENGINE_CUSTOM (whose name is its
+/// engine_id, never this word), "none" for ANIRA_ENGINE_NONE and any other value.
 inline constexpr const char* engine_word(anira_engine engine) noexcept {
     for (const auto& [name, value] : k_engine_words) {
         if (value == engine) { return name; }
     }
-    return "none";
+    return engine == ANIRA_ENGINE_CUSTOM ? "custom" : "none";
 }
 
 /// Whether a value is an engine the enum names (ANIRA_ENGINE_NONE names none).
@@ -95,6 +137,14 @@ inline bool known_engine(anira_engine engine) noexcept {
         if (value == engine) { return true; }
     }
     return false;
+}
+
+/// The pair rule of anira_engine: an id if and only if the engine is ANIRA_ENGINE_CUSTOM, a
+/// reverse-URI one (it contains a '.'); a built-in engine and ANIRA_ENGINE_NONE take none.
+/// Whether NONE is legal is the caller's question, the value known_engine's.
+inline bool engine_pair_ok(anira_engine engine, const char* engine_id) noexcept {
+    if (engine != ANIRA_ENGINE_CUSTOM) { return engine_id == nullptr; }
+    return engine_id != nullptr && std::string_view(engine_id).find('.') != std::string_view::npos;
 }
 
 /// The name of an engine in a message: a custom engine's id where there is one, the enum's
@@ -130,16 +180,18 @@ inline constexpr const char* domain_word(anira_domain domain) noexcept {
 }
 
 /// The label of a backend in a message or a log line: the engine's word (a custom engine's
-/// id) and, beyond the default provider, the provider's label after a ':' ("onnxruntime:cuda",
-/// "com.example.gain:com.example.npu"). A label for humans only: JSON spells the pair as its
-/// two keys, "engine" and "provider", as the C records spell it as two fields.
+/// id) and, beyond the CPU path (and no provider), the provider's label after a ':'
+/// ("onnxruntime:cuda", "com.example.gain:com.example.npu"). A label for humans only: JSON
+/// spells the pair as its two keys, "engine" and "provider", as the C records spell it as two
+/// fields.
 inline std::string backend_label(anira_engine engine,
                                  std::string_view engine_id,
                                  anira_provider provider,
                                  std::string_view provider_id) {
     std::string label =
         engine_id.empty() ? std::string(engine_word(engine)) : std::string(engine_id);
-    if (provider != ANIRA_PROVIDER_DEFAULT || !provider_id.empty()) {
+    if ((provider != ANIRA_PROVIDER_CPU && provider != ANIRA_PROVIDER_NONE) ||
+        !provider_id.empty()) {
         label += ':';
         label += provider_label(provider, provider_id);
     }

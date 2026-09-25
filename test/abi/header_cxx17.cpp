@@ -62,10 +62,13 @@ static_assert(ANIRA_PREPARE_EXCLUSIVE == k_bit0, "the exclusive bit of a prepare
 static_assert(ANIRA_ENGINE_CALL_EXCLUSIVE == k_bit0, "the exclusive bit of an engine call");
 static_assert(ANIRA_ENGINE_FLAG_STATE_ALIAS == (k_bit0 << 3), "the fourth engine promise");
 // anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
-// slots (the frame and three reserved ones), and travels by value like the tensor.
+// slots (the frame, the pair's two ids and a reserved one), and travels by value like the
+// tensor.
 static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
               "anira_stage_ctx is frozen");
 static_assert(offsetof(anira_stage_ctx, frame) == 32 &&
+                  offsetof(anira_stage_ctx, engine_id) == 40 &&
+                  offsetof(anira_stage_ctx, provider_id) == 48 &&
                   offsetof(anira_stage_ctx, reserved_ptr2) == 56,
               "the four pointer slots follow the eight scalars");
 static_assert(std::is_trivially_copyable_v<anira_stage_ctx> &&
@@ -170,7 +173,7 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
     checks += load_info.struct_size == sizeof(anira_engine_load_info) && load_info.instances == 0U
                   ? 1
                   : 0;
-    checks += load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == nullptr &&
+    checks += load_info.provider == ANIRA_PROVIDER_CPU && load_info.provider_id == nullptr &&
                       engine.providers == nullptr && engine.num_providers == 0U &&
                       engine.query == nullptr
                   ? 1
@@ -238,6 +241,63 @@ static_assert(noexcept(
     anira_pipeline_capabilities_edge(nullptr, nullptr, ANIRA_DOMAIN_HOST, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
+// The read-back of anira/abi/config.h: one pin per shape (a string, a count, an enum, a spec
+// pointer and an extension record out of a value getter; a status getter over an enum and an
+// int64_t, a string, a function pointer and a void*, and a Tier-2 record), and the axis
+// getter's signature.
+static_assert(noexcept(anira_tensor_spec_name(nullptr)));
+static_assert(noexcept(anira_tensor_spec_ndim(nullptr)));
+static_assert(noexcept(anira_tensor_spec_role(nullptr)));
+static_assert(noexcept(anira_model_config_input(nullptr, 0)));
+static_assert(noexcept(anira_model_config_model_ext(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_tensor_spec_axis(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_tensor_layout(nullptr, 0, nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_hard_ring_dtype(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_hard_miss_fn(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_edge_cost(nullptr)));
+static_assert(noexcept(anira_contract_hard_set_latency(nullptr, nullptr, 0)));
+static_assert(noexcept(anira_contract_hard_num_latencies(nullptr)));
+static_assert(noexcept(anira_contract_hard_latency(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
+// The engine word on the public surface: the default provider and its read-back, the pair
+// getters and the stage's two pair accessors (a status, the value and the nullable id), the
+// renamed enumeration and the pair setters.
+static_assert(
+    noexcept(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_NONE, nullptr)));
+static_assert(noexcept(anira_model_config_default_provider(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_default_engine(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_model_engine(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_model_provider(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_stage_engine(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_stage_provider(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_enabled_engines(0, nullptr, nullptr)));
+static_assert(noexcept(
+    anira_model_config_set_default_engine(nullptr, ANIRA_ENGINE_CUSTOM, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_add_model_path(nullptr,
+                                                         ANIRA_ENGINE_CUSTOM,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr)));
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_model_config_model_engine),
+                                    const anira_model_config*,
+                                    uint32_t,
+                                    anira_engine*,
+                                    const char**>);
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_stage_provider),
+                                    const anira_stage_ctx*,
+                                    anira_provider*,
+                                    const char**>);
+static_assert(
+    std::is_same_v<decltype(anira_model_config_input(nullptr, 0)), const anira_tensor_spec*>);
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_tensor_spec_axis),
+                                    const anira_tensor_spec*,
+                                    uint32_t,
+                                    anira_axis_tag*,
+                                    int64_t*>);
 // The callback typedef carries no real-time attribute: a plain function converts to it.
 static_assert(std::is_same_v<decltype(anira_stage_ctx::entry), uint32_t>);
 static_assert(std::is_same_v<decltype(anira_stage_desc::flags), uint32_t>);

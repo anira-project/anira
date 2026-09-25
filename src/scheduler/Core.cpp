@@ -29,10 +29,10 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapter.h"
-#include "../backends/Adapters.h"
-#include "../backends/LegacyAdapter.h"
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
+#include "../engines/Adapter.h"
+#include "../engines/Adapters.h"
+#include "../engines/LegacyAdapter.h"
 #include "../utils/StatusError.h"
 #include "LogDrainLoop.h"
 
@@ -73,7 +73,7 @@ struct Core::State {
      */
     struct EngineEntry {
         anira_engine m_engine;
-        std::weak_ptr<backend::BuiltinEngine> m_object;
+        std::weak_ptr<engine::BuiltinEngine> m_object;
     };
     std::mutex m_engine_mutex;
     std::vector<EngineEntry> m_engines;
@@ -142,9 +142,9 @@ struct Core::State {
      * of its engine.
      */
     struct PoolEntry {
-        backend::Model m_model;
+        engine::Model m_model;
         const void* m_carrier = nullptr;
-        std::shared_ptr<backend::Loaded> m_loaded;
+        std::shared_ptr<engine::Loaded> m_loaded;
     };
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
 };
@@ -206,7 +206,7 @@ const char* drain_word(anira_log_drain drain) {
 
 // Whether the plan table of any session of `sessions` holds `loaded`.
 bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions,
-                    const std::shared_ptr<backend::Loaded>& loaded) {
+                    const std::shared_ptr<engine::Loaded>& loaded) {
     return std::ranges::any_of(sessions, [&loaded](const std::shared_ptr<SessionElement>& s) {
         return std::ranges::any_of(s->m_plans, [&loaded](const SessionElement::PlanSlot& slot) {
             return slot.m_loaded == loaded;
@@ -381,7 +381,7 @@ void Core::apply_log_level_locked(State& state, const anira_context_config& cont
     // The level is process-global, like the thread pool; while users exist, the
     // lowest (most verbose) of the level in effect and the requested one wins, so no
     // user can silence the diagnostics another one asked for. The engines' objects take
-    // the level at their init, once per process (backend::BuiltinEngine).
+    // the level at their init, once per process (engine::BuiltinEngine).
     const anira_log_level level =
         has_users_locked(state)
             ? std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level)
@@ -602,7 +602,7 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 
 std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
                                                      InferenceConfig& inference_config,
-                                                     std::vector<backend::PlanRequest> requests,
+                                                     std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
                                                      RtLatch* rt_latch) {
     if (requests.empty()) {
@@ -632,7 +632,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                           session_id);
         inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
     }
-    for (backend::PlanRequest& request : requests) {
+    for (engine::PlanRequest& request : requests) {
         if (pool_size > 0 && request.m_model.m_instances > pool_size) {
             request.m_model.m_instances = static_cast<uint32_t>(pool_size);
         }
@@ -661,10 +661,10 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         // plan's is made here, with no record (a built-in engine and a 2.x backend read none).
         bool has_custom_backend = false;
         session->m_plans.reserve(requests.size());
-        for (const backend::PlanRequest& request : requests) {
+        for (const engine::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
             slot.m_loaded = acquire_loaded_locked(state, request, inference_config, pool_size);
-            slot.m_registered = request.m_source == backend::Source::Registered;
+            slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
@@ -679,11 +679,11 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             session->m_plans.push_back(std::move(slot));
             SessionElement::PlanSlot& placed = session->m_plans.back();
             if (!placed.m_registered) {
-                placed.m_prepared = placed.m_loaded->prepare(backend::PrepareRequest{
+                placed.m_prepared = placed.m_loaded->prepare(engine::PrepareRequest{
                     .m_exclusive = inference_config.m_session_exclusive_processor,
                     .m_info = nullptr});
             }
-            has_custom_backend = has_custom_backend || request.m_source == backend::Source::Legacy;
+            has_custom_backend = has_custom_backend || request.m_source == engine::Source::Legacy;
         }
 
         // The initial selection: the CUSTOM row when the table has one (a 2.x table always
@@ -702,8 +702,8 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         // remains, as before.
         if (!has_custom_backend) {
             for (uint32_t plan = 0; plan < requests.size(); ++plan) {
-                const backend::Source source = requests[plan].m_source;
-                if (source == backend::Source::BuiltIn || source == backend::Source::Registered) {
+                const engine::Source source = requests[plan].m_source;
+                if (source == engine::Source::BuiltIn || source == engine::Source::Registered) {
                     session->select_plan(plan);
                     break;
                 }
@@ -724,50 +724,50 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     return session;
 }
 
-std::shared_ptr<backend::BuiltinEngine> Core::builtin_engine(anira_engine engine) {
+std::shared_ptr<engine::BuiltinEngine> Core::builtin_engine(anira_engine engine) {
     return find_or_make_builtin_engine(get_state(), engine);
 }
 
-std::shared_ptr<backend::BuiltinEngine> Core::find_or_make_builtin_engine(State& state,
-                                                                          anira_engine engine) {
+std::shared_ptr<engine::BuiltinEngine> Core::find_or_make_builtin_engine(State& state,
+                                                                         anira_engine engine) {
     const std::scoped_lock<std::mutex> engine_lock(state.m_engine_mutex);
     for (State::EngineEntry& entry : state.m_engines) {
         if (entry.m_engine != engine) { continue; }
-        if (std::shared_ptr<backend::BuiltinEngine> held = entry.m_object.lock()) { return held; }
+        if (std::shared_ptr<engine::BuiltinEngine> held = entry.m_object.lock()) { return held; }
         // The last holder let go: a new object, whose init runs before its first load.
-        std::shared_ptr<backend::BuiltinEngine> fresh = backend::make_builtin_engine(engine);
+        std::shared_ptr<engine::BuiltinEngine> fresh = engine::make_builtin_engine(engine);
         entry.m_object = fresh;
         return fresh;
     }
-    std::shared_ptr<backend::BuiltinEngine> object = backend::make_builtin_engine(engine);
+    std::shared_ptr<engine::BuiltinEngine> object = engine::make_builtin_engine(engine);
     if (object != nullptr) { state.m_engines.push_back({.m_engine = engine, .m_object = object}); }
     return object;
 }
 
-std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
-                                                             const backend::PlanRequest& request,
-                                                             InferenceConfig& inference_config,
-                                                             size_t pool_size) {
+std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
+                                                            const engine::PlanRequest& request,
+                                                            InferenceConfig& inference_config,
+                                                            size_t pool_size) {
     switch (request.m_source) {
-        case backend::Source::Legacy: {
+        case engine::Source::Legacy: {
             // A caller's 2.x backend: this session's alone, loaded through the adapter.
             if (request.m_backend == nullptr) {
                 throw StatusError(ANIRA_ERROR_INTERNAL,
                                   "Core::create_session: a Legacy plan request without a "
                                   "backend");
             }
-            auto loaded = std::make_shared<backend::LegacyLoaded>(*request.m_backend);
+            auto loaded = std::make_shared<engine::LegacyLoaded>(*request.m_backend);
             loaded->load(request.m_model);
             return loaded;
         }
-        case backend::Source::Roundtrip: {
+        case engine::Source::Roundtrip: {
             // The 2.x default processor over this session's configuration: its own.
-            auto loaded = std::make_shared<backend::LegacyLoaded>(inference_config);
+            auto loaded = std::make_shared<engine::LegacyLoaded>(inference_config);
             loaded->load(request.m_model);
             return loaded;
         }
-        case backend::Source::BuiltIn:
-        case backend::Source::Registered: break;
+        case engine::Source::BuiltIn:
+        case engine::Source::Registered: break;
     }
 
     // Shared: the entry whose record equals the request's on the same carrier.
@@ -777,10 +777,10 @@ std::shared_ptr<backend::Loaded> Core::acquire_loaded_locked(State& state,
             return entry.m_loaded;
         }
     }
-    std::shared_ptr<backend::Loaded> loaded;
-    if (request.m_source == backend::Source::BuiltIn) {
+    std::shared_ptr<engine::Loaded> loaded;
+    if (request.m_source == engine::Source::BuiltIn) {
         // Over the core's engine object of the engine, whose init runs below, once.
-        loaded = backend::make_builtin_loaded(
+        loaded = engine::make_builtin_loaded(
             find_or_make_builtin_engine(state, request.m_model.m_engine));
         if (loaded == nullptr) {
             // A built-in engine this build does not carry. The C path refuses it at create.

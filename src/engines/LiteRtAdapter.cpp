@@ -10,7 +10,7 @@
  * index order (what LiteRtRunCompiledModel takes), filled from and read into the descriptors'
  * memory through a lock and a memcpy per call (the managed buffers need LiteRT's own
  * alignment; binding anira's memory in place waits for the aligned chunk storage). File-local
- * over anira::backend::Model: nothing of LiteRT enters a public header.
+ * over anira::engine::Model: nothing of LiteRT enters a public header.
  */
 #ifdef USE_LITERT
 
@@ -54,20 +54,20 @@
 #include "litert/c/litert_tensor_buffer_types.h"
 
 // The accelerator query is internal to LiteRT and exported by every package but the Windows
-// DLL (cmake/backends/litert.cmake defines ANIRA_LITERT_ACCELERATOR_QUERY where it is).
+// DLL (cmake/engines/litert.cmake defines ANIRA_LITERT_ACCELERATOR_QUERY where it is).
 #if defined(ANIRA_LITERT_ACCELERATOR_QUERY)
 #include "litert/c/internal/litert_accelerator.h"
 #endif
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
 constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_LITERT);
 
 // The accelerators LiteRT can take beyond the CPU, by the hardware they support, as the
-// provider names anira gives them (custom providers beside ANIRA_PROVIDER_DEFAULT): "gpu",
-// "npu" and, in the web build, "webnn". The CPU accelerator is the default provider.
+// provider names anira gives them (custom providers, ANIRA_PROVIDER_CUSTOM with the name): "gpu",
+// "npu" and, in the web build, "webnn". The CPU accelerator is ANIRA_PROVIDER_CPU.
 #if defined(__EMSCRIPTEN__)
 constexpr size_t k_hardware_count = 3;
 #else
@@ -309,7 +309,7 @@ SharedModel::SharedModel(std::shared_ptr<const LiteRtEngine> engine, const Model
     // Any litert_check below can throw; if it does mid-construction the destructor never
     // runs, so release the handles created so far before propagating.
     try {
-        // The accelerator of the record: the CPU for the default provider, the hardware a
+        // The accelerator of the record: the CPU for ANIRA_PROVIDER_CPU, the hardware a
         // custom name spells else, and the environment must have registered one that supports
         // it (its automatic registration loads the accelerator libraries it finds), or the
         // load is refused here rather than at the compiled model.
@@ -619,17 +619,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert,
                                "litert threw a non-std exception out of LiteRtRunCompiledModel");
         }
         return ANIRA_ERROR_ENGINE;
@@ -669,12 +669,12 @@ public:
     explicit LiteRtLoaded(std::shared_ptr<LiteRtEngine> engine)
         : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
 
-    /// The default provider (the CPU accelerator), or an accelerator by its hardware's name
-    /// beside ANIRA_PROVIDER_DEFAULT; whether the environment registers one is load's
-    /// question. No provider of the enum names a LiteRT accelerator.
+    /// The CPU path (the CPU accelerator), or an accelerator by its hardware's name
+    /// (ANIRA_PROVIDER_CUSTOM with the name); whether the environment registers one is load's
+    /// question. No other provider of the enum names a LiteRT accelerator.
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
-        if (provider != ANIRA_PROVIDER_DEFAULT) { return false; }
-        return provider_id.empty() || hardware_of(provider_id) != 0;
+        if (provider == ANIRA_PROVIDER_CPU) { return provider_id.empty(); }
+        return provider == ANIRA_PROVIDER_CUSTOM && hardware_of(provider_id) != 0;
     }
 
     std::string provider_reason() const override {
@@ -686,7 +686,7 @@ public:
             names += "'";
         }
         std::string reason =
-            "LiteRT takes an accelerator by the hardware's name beside ANIRA_PROVIDER_DEFAULT (";
+            "LiteRT takes an accelerator by the hardware's name as a custom provider (";
         reason += names;
         reason += "); no provider of the enum names one";
         if (!k_accelerator_query) { reason += k_no_query_note; }
@@ -751,9 +751,9 @@ std::vector<ProviderInfo> litert_providers() {
     }};
     LiteRtEnvironment env = nullptr;
     if (LiteRtCreateEnvironment(1, env_options.data(), &env) != kLiteRtStatusOk || env == nullptr) {
-        ANIRA_LOG_WARNING(anira::log_group::k_backend_litert,
+        ANIRA_LOG_WARNING(anira::log_group::k_engine_litert,
                           "litert: no environment could be created to ask for the accelerators; "
-                          "the capabilities list the default provider alone");
+                          "the capabilities list the CPU path alone");
         return providers;
     }
     const LiteRtHwAcceleratorSet registered = registered_hardware(env);
@@ -761,12 +761,13 @@ std::vector<ProviderInfo> litert_providers() {
     for (const auto& [hardware, name] : k_hardware) {
         if ((registered & hardware) == 0) { continue; }
         ProviderInfo info;
+        info.m_provider = ANIRA_PROVIDER_CUSTOM;
         info.m_provider_id = name;
         providers.push_back(std::move(info));
     }
     return providers;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 #endif  // USE_LITERT

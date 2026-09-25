@@ -13,13 +13,12 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "../backends/Adapter.h"
-#include "../backends/Adapters.h"
+#include "../engines/Adapter.h"
+#include "../engines/Adapters.h"
 #include "../utils/StatusError.h"
 #include "engine.h"
 #include "handles.h"
@@ -29,32 +28,29 @@ namespace anira::capi {
 
 namespace {
 
-constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-
-anira::backend::ProviderInfo default_provider() {
-    return anira::backend::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = ""};
+anira::engine::ProviderInfo cpu_path() {
+    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = ""};
 }
 
 // A declared provider of a custom engine's list: a word of the enum by its value, any other
-// word a custom provider by its name.
-anira::backend::ProviderInfo declared_provider(const std::string& word) {
-    if (const std::optional<anira_provider> known = provider_of_word(word)) {
-        return anira::backend::ProviderInfo{.m_provider = *known, .m_provider_id = ""};
-    }
-    return anira::backend::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT,
-                                        .m_provider_id = word};
+// word a custom provider by its name (ANIRA_PROVIDER_CUSTOM).
+anira::engine::ProviderInfo declared_provider(const std::string& word) {
+    const anira_provider provider = provider_of_name(word);
+    return anira::engine::ProviderInfo{
+        .m_provider = provider,
+        .m_provider_id = provider == ANIRA_PROVIDER_CUSTOM ? word : std::string()};
 }
 
-bool same(const anira::backend::ProviderInfo& info,
+bool same(const anira::engine::ProviderInfo& info,
           anira_provider provider,
           std::string_view provider_id) noexcept {
     return info.m_provider == provider && info.m_provider_id == provider_id;
 }
 
-// "default, coreml, com.example.npu"; "none" for an empty list.
-std::string provider_list(const std::vector<anira::backend::ProviderInfo>& providers) {
+// "cpu, coreml, com.example.npu"; "none" for an empty list.
+std::string provider_list(const std::vector<anira::engine::ProviderInfo>& providers) {
     std::string text;
-    for (const anira::backend::ProviderInfo& info : providers) {
+    for (const anira::engine::ProviderInfo& info : providers) {
         if (!text.empty()) { text += ", "; }
         text += provider_label(info.m_provider, info.m_provider_id);
     }
@@ -65,7 +61,7 @@ std::string provider_list(const std::vector<anira::backend::ProviderInfo>& provi
 
 bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept {
     return provider_id.empty() &&
-           (provider == ANIRA_PROVIDER_DEFAULT || provider == ANIRA_PROVIDER_XNNPACK);
+           (provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK);
 }
 
 anira_init_info query_info(const anira_context& context) {
@@ -79,7 +75,7 @@ anira_init_info query_info(const anira_context& context) {
 }
 
 bool ServedProviders::serves(anira_provider provider, std::string_view provider_id) const noexcept {
-    for (const anira::backend::ProviderInfo& info : m_available) {
+    for (const anira::engine::ProviderInfo& info : m_available) {
         if (same(info, provider, provider_id)) { return true; }
     }
     return false;
@@ -87,7 +83,7 @@ bool ServedProviders::serves(anira_provider provider, std::string_view provider_
 
 bool ServedProviders::declares(anira_provider provider,
                                std::string_view provider_id) const noexcept {
-    for (const anira::backend::ProviderInfo& info : m_declared) {
+    for (const anira::engine::ProviderInfo& info : m_declared) {
         if (same(info, provider, provider_id)) { return true; }
     }
     return false;
@@ -100,7 +96,7 @@ ServedProviders served_by_builtin(const anira_context& context, anira_engine eng
     const std::scoped_lock<std::mutex> lock(context.m_capabilities.m_mutex);
     for (const anira_backend_id& row : context.m_capabilities.m_backends) {
         if (row.engine != static_cast<uint32_t>(engine)) { continue; }
-        served.m_available.push_back(anira::backend::ProviderInfo{
+        served.m_available.push_back(anira::engine::ProviderInfo{
             .m_provider = static_cast<anira_provider>(row.provider),
             .m_provider_id = row.provider_id != nullptr ? row.provider_id : ""});
     }
@@ -112,7 +108,10 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
     ServedProviders served;
     served.m_kind = ServedProviders::Kind::Custom;
     served.m_label = engine.id();
-    served.m_declared.push_back(default_provider());
+    // A descriptor without a list serves the CPU path alone; one with a list exactly what it
+    // lists, the CPU path only when it lists "cpu".
+    const bool listless = engine.providers().empty();
+    if (listless) { served.m_declared.push_back(cpu_path()); }
     for (const std::string& word : engine.providers()) {
         served.m_declared.push_back(declared_provider(word));
     }
@@ -130,10 +129,10 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
         message += ")";
         throw StatusError(status, message);
     }
-    served.m_available.push_back(default_provider());
+    if (listless) { served.m_available.push_back(cpu_path()); }
     for (size_t i = 0; i < engine.providers().size() && i < 64; ++i) {
         if ((available & (uint64_t{1} << i)) != 0) {
-            served.m_available.push_back(served.m_declared[i + 1]);
+            served.m_available.push_back(served.m_declared[i]);
         }
     }
     return served;
@@ -146,15 +145,10 @@ ServedProviders served_providers(const anira_context& context,
         for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
             if (engine->id() == row.m_engine_id) { return served_by_custom(context, *engine); }
         }
-        // The 2.x pass-through (validate refused every other unknown id): the default
-        // provider alone.
-        ServedProviders served;
-        served.m_kind = ServedProviders::Kind::Passthrough;
-        served.m_label =
-            row.m_engine_id.empty() ? std::string(k_v2_custom_engine) : row.m_engine_id;
-        served.m_available.push_back(default_provider());
-        served.m_declared = served.m_available;
-        return served;
+        // validate refused a custom id no engine of the pipeline has.
+        throw StatusError(
+            ANIRA_ERROR_INTERNAL,
+            "providers: custom engine '" + row.m_engine_id + "' passed validate without an engine");
     }
     return served_by_builtin(context, row.m_engine);
 }
@@ -182,13 +176,6 @@ std::string unserved_message(const ServedProviders& served,
                 message += ")";
             }
             return message;
-        case ServedProviders::Kind::Passthrough:
-            message += "engine '";
-            message += served.m_label;
-            message += "' serves the default provider alone; asked for '";
-            message += wanted;
-            message += "'";
-            return message;
         case ServedProviders::Kind::BuiltIn: break;
     }
     message += "engine '";
@@ -205,7 +192,7 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
     CustomRows rows;
     for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
         const ServedProviders served = served_by_custom(context, *engine);
-        for (const anira::backend::ProviderInfo& info : served.m_available) {
+        for (const anira::engine::ProviderInfo& info : served.m_available) {
             // The strings are the carrier's: its id, and the declared word of a custom
             // provider (the list's own string, at a stable address while the carrier lives).
             const char* provider_id = nullptr;
@@ -215,16 +202,17 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
                 }
             }
             anira_backend_id id = ANIRA_BACKEND_ID_INIT;
-            id.engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+            id.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             id.provider = static_cast<uint32_t>(info.m_provider);
             id.engine_id = engine->id().c_str();
             id.provider_id = provider_id;
             rows.m_backends.push_back(id);
             anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
             edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
-            edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+            edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             edge.to_provider = static_cast<uint32_t>(info.m_provider);
             edge.to_provider_id = provider_id;
+            edge.to_engine_id = engine->id().c_str();
             edge.available = 1;
             if (cpu_provider(info.m_provider, info.m_provider_id)) {
                 edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);

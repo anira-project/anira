@@ -1,8 +1,8 @@
-#ifndef ANIRA_BACKENDS_DESCRIPTORADAPTER_H
-#define ANIRA_BACKENDS_DESCRIPTORADAPTER_H
+#ifndef ANIRA_ENGINES_DESCRIPTORADAPTER_H
+#define ANIRA_ENGINES_DESCRIPTORADAPTER_H
 /*
  * The adapter over a custom engine's descriptor (anira/abi/engine.h): what runs a custom
- * engine added to pipelines (anira_pipeline_add_engine) under its id. Private to src/backends
+ * engine added to pipelines (anira_pipeline_add_engine) under its id. Private to src/engines
  * and the scheduler (and the tests through the src/ include directory). The C lifecycle's
  * levels are the engine room's: one loaded model of one custom engine is one
  * DescriptorLoaded (init on the engine object once, before its first load; load builds the
@@ -35,7 +35,7 @@ namespace anira::capi {
 class EngineCarrier;
 }  // namespace anira::capi
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// A custom engine's loaded model behind the engine room's interface. init(info) runs the
 /// engine's init slot once per engine object (the carrier remembers; a refused init throws and
@@ -159,6 +159,6 @@ private:
     std::vector<View> m_views;
 };
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_DESCRIPTORADAPTER_H
+#endif  // ANIRA_ENGINES_DESCRIPTORADAPTER_H

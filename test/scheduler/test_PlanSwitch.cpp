@@ -39,8 +39,8 @@
 #include <utility>
 #include <vector>
 
-#include "backends/Adapters.h"
 #include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
+#include "engines/Adapters.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -181,12 +181,12 @@ anira_context_config two_threads() {
 // Two plans on one backend, in the manager's own words: the 2.x table's row for `backend`
 // (the custom backend, or the roundtrip without one) twice. The table is the session's from
 // create, so a test that wants two plans on one backend asks for them there.
-std::vector<backend::PlanRequest> two_plans_on(InferenceConfig& config,
-                                               InferenceBackend backend,
-                                               BackendBase* custom) {
-    const std::vector<backend::PlanRequest> table = backend::legacy_plan_requests(config, custom);
-    std::vector<backend::PlanRequest> requests;
-    for (const backend::PlanRequest& request : table) {
+std::vector<engine::PlanRequest> two_plans_on(InferenceConfig& config,
+                                              InferenceBackend backend,
+                                              BackendBase* custom) {
+    const std::vector<engine::PlanRequest> table = engine::legacy_plan_requests(config, custom);
+    std::vector<engine::PlanRequest> requests;
+    for (const engine::PlanRequest& request : table) {
         if (request.m_legacy_backend == backend) {
             requests.push_back(request);
             requests.push_back(request);
@@ -340,7 +340,7 @@ TEST(PlanSwitch, AnIndexOutOfRangeLeavesTheSelection) {
     EXPECT_FALSE(manager.set_plan(2));
     EXPECT_EQ(manager.get_plan(), 1U);
     // An empty table is refused at create: a session always has a plan.
-    EXPECT_THROW(InferenceManager(pp, config, std::vector<backend::PlanRequest>{}, two_threads()),
+    EXPECT_THROW(InferenceManager(pp, config, std::vector<engine::PlanRequest>{}, two_threads()),
                  std::invalid_argument);
 }
 

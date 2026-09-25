@@ -59,7 +59,8 @@ namespace anira::v3compat {
  *
  * @param model The model config.
  * @param contract A Hard contract with an explicit budget and a FIXED or NONE warmup.
- * @param candidates The engines to keep, or NULL for every entry (see the file comment).
+ * @param candidates The engines to keep, or NULL for every entry (see the file comment);
+ *        ANIRA_ENGINE_CUSTOM keeps the 2.x CUSTOM rows (the custom engine anira.v2.custom).
  * @param num_candidates Entries in `candidates`.
  * @param out Receives the configuration on success; untouched on failure.
  * @param err Nullable; receives the status and the reason on failure.

@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -37,7 +38,7 @@ bool valid_axis_tag(anira_axis_tag tag) {
     return tag >= ANIRA_AXIS_BATCH && tag <= ANIRA_AXIS_ANY;
 }
 bool builtin_engine(anira_engine engine) {
-    return engine >= ANIRA_ENGINE_ONNXRUNTIME && engine <= ANIRA_ENGINE_EXECUTORCH;
+    return anira::capi::known_engine(engine);
 }
 bool valid_bytes_ownership(anira_bytes_ownership ownership) {
     return ownership == ANIRA_BYTES_COPY || ownership == ANIRA_BYTES_BORROW;
@@ -81,11 +82,13 @@ bool valid_model_state(anira_model_state state) {
 bool valid_pad_policy(anira_pad_policy policy) {
     return policy == ANIRA_PAD_REJECT || policy == ANIRA_PAD_ZEROS;
 }
-bool custom_engine_id(const char* engine_id) {
-    return engine_id != nullptr && std::strchr(engine_id, '.') != nullptr;
-}
 bool non_empty(const char* text) {
     return text != nullptr && text[0] != '\0';
+}
+// The id half of a stored pair as the getters hand it out: NULL where the value is not CUSTOM
+// (the id is empty then, the pair rule), the object's own string else.
+const char* id_of(const std::string& id) noexcept {
+    return id.empty() ? nullptr : id.c_str();
 }
 
 // Canonical names are unique across both sides: the per-entry tensor records and the anchor
@@ -386,6 +389,21 @@ anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contr
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
+// Whether the name is a Streamed output, and whether the figure covers the model's internal
+// latency, is validate's question at prepare: the contract does not know the model here.
+anira_status ANIRA_CALL anira_contract_hard_set_latency(anira_contract* contract,
+                                                        const char* canonical,
+                                                        uint32_t samples) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || !non_empty(canonical) ||
+        samples > static_cast<uint32_t>(INT32_MAX)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    hard->m_latencies[canonical] = samples;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
 anira_status ANIRA_CALL anira_contract_async_set_deadline(anira_contract* contract,
                                                           double deadline_ms) ANIRA_NOEXCEPT try {
     if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -666,10 +684,34 @@ anira_status add_entry(anira_model_config* config,
     return ANIRA_OK;
 }
 
+// The engine of a model entry under the pair rule: a built-in engine with a NULL id, or
+// ANIRA_ENGINE_CUSTOM with a reverse-URI id; ANIRA_ENGINE_NONE names no engine for an entry.
+anira_status check_entry_engine(const char* entry_name,
+                                anira_engine engine,
+                                const char* engine_id,
+                                anira_error* err) {
+    ANIRA_CAPI_REQUIRE_AT(entry_name,
+                          builtin_engine(engine) || engine == ANIRA_ENGINE_CUSTOM,
+                          err,
+                          ANIRA_ERROR_INVALID_ARGUMENT,
+                          "model entry: engine %d is neither a built-in engine nor "
+                          "ANIRA_ENGINE_CUSTOM",
+                          static_cast<int>(engine));
+    ANIRA_CAPI_REQUIRE_AT(entry_name,
+                          anira::capi::engine_pair_ok(engine, engine_id),
+                          err,
+                          ANIRA_ERROR_INVALID_ARGUMENT,
+                          "model entry: the engine_id is set if and only if the engine is "
+                          "ANIRA_ENGINE_CUSTOM, and a custom engine id is reverse-URI (contains "
+                          "a '.')");
+    return ANIRA_OK;
+}
+
 }  // namespace
 
 anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* config,
                                                           anira_engine engine,
+                                                          const char* engine_id,
                                                           const char* utf8_path,
                                                           uint32_t* out_index,
                                                           anira_error* err) ANIRA_NOEXCEPT try {
@@ -677,23 +719,24 @@ anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* co
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(builtin_engine(engine),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: engine %d is not a built-in engine",
-                       static_cast<int>(engine));
+    if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+        status != ANIRA_OK) {
+        return status;
+    }
     ANIRA_CAPI_REQUIRE(non_empty(utf8_path),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: NULL or empty path");
     anira::capi::ModelEntry entry;
     entry.m_engine = engine;
+    entry.m_engine_id = engine_id != nullptr ? engine_id : "";
     entry.m_path = utf8_path;
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* config,
                                                            anira_engine engine,
+                                                           const char* engine_id,
                                                            const void* bytes,
                                                            size_t size,
                                                            anira_bytes_ownership ownership,
@@ -705,11 +748,10 @@ anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* c
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(builtin_engine(engine),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: engine %d is not a built-in engine",
-                       static_cast<int>(engine));
+    if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+        status != ANIRA_OK) {
+        return status;
+    }
     ANIRA_CAPI_REQUIRE(bytes != nullptr && size > 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -721,63 +763,7 @@ anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* c
                        static_cast<int>(ownership));
     anira::capi::ModelEntry entry;
     entry.m_engine = engine;
-    entry.m_bytes = make_carrier(bytes, size, ownership, release, ctx);
-    return add_entry(config, std::move(entry), out_index, err);
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status ANIRA_CALL anira_model_config_add_model_path_custom(anira_model_config* config,
-                                                                 const char* engine_id,
-                                                                 const char* utf8_path,
-                                                                 uint32_t* out_index,
-                                                                 anira_error* err) ANIRA_NOEXCEPT
-    try {
-    ANIRA_CAPI_REQUIRE(config != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(custom_engine_id(engine_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a custom engine id is reverse-URI (contains a '.')");
-    ANIRA_CAPI_REQUIRE(non_empty(utf8_path),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: NULL or empty path");
-    anira::capi::ModelEntry entry;
-    entry.m_engine_id = engine_id;
-    entry.m_path = utf8_path;
-    return add_entry(config, std::move(entry), out_index, err);
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status ANIRA_CALL anira_model_config_add_model_bytes_custom(anira_model_config* config,
-                                                                  const char* engine_id,
-                                                                  const void* bytes,
-                                                                  size_t size,
-                                                                  anira_bytes_ownership ownership,
-                                                                  anira_bytes_release_fn release,
-                                                                  void* ctx,
-                                                                  uint32_t* out_index,
-                                                                  anira_error* err) ANIRA_NOEXCEPT
-    try {
-    ANIRA_CAPI_REQUIRE(config != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(custom_engine_id(engine_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a custom engine id is reverse-URI (contains a '.')");
-    ANIRA_CAPI_REQUIRE(bytes != nullptr && size > 0,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: NULL bytes or zero size");
-    ANIRA_CAPI_REQUIRE(valid_bytes_ownership(ownership),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: unknown ownership %d",
-                       static_cast<int>(ownership));
-    anira::capi::ModelEntry entry;
-    entry.m_engine_id = engine_id;
+    entry.m_engine_id = engine_id != nullptr ? engine_id : "";
     entry.m_bytes = make_carrier(bytes, size, ownership, release, ctx);
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
@@ -818,18 +804,18 @@ uint32_t ANIRA_CALL anira_model_config_model_count(const anira_model_config* con
     return config == nullptr ? 0u : static_cast<uint32_t>(config->m_models.size());
 }
 
-anira_engine ANIRA_CALL anira_model_config_model_engine(const anira_model_config* config,
-                                                        uint32_t model_index) ANIRA_NOEXCEPT {
-    if (config == nullptr || model_index >= config->m_models.size()) { return ANIRA_ENGINE_NONE; }
-    return config->m_models[model_index].m_engine;
-}
-
-const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_model_config* config,
-                                                          uint32_t model_index) ANIRA_NOEXCEPT {
-    if (config == nullptr || model_index >= config->m_models.size()) { return nullptr; }
+anira_status ANIRA_CALL anira_model_config_model_engine(const anira_model_config* config,
+                                                        uint32_t model_index,
+                                                        anira_engine* engine,
+                                                        const char** engine_id) ANIRA_NOEXCEPT try {
+    if (config == nullptr || engine == nullptr || model_index >= config->m_models.size()) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     const anira::capi::ModelEntry& entry = config->m_models[model_index];
-    return entry.is_custom() ? entry.m_engine_id.c_str() : nullptr;
-}
+    *engine = entry.m_engine;
+    if (engine_id != nullptr) { *engine_id = id_of(entry.m_engine_id); }
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config* config,
                                                               uint32_t model_index,
@@ -846,40 +832,36 @@ anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config
                        "model entry: index %u is out of range (%zu entries)",
                        model_index,
                        config->m_models.size());
-    ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
+    // ANIRA_PROVIDER_NONE unpins the entry.
+    ANIRA_CAPI_REQUIRE(provider == ANIRA_PROVIDER_NONE || anira::capi::known_provider(provider),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: provider %d is not a provider this header names",
                        static_cast<int>(provider));
-    ANIRA_CAPI_REQUIRE(provider_id == nullptr || provider == ANIRA_PROVIDER_DEFAULT,
+    ANIRA_CAPI_REQUIRE(anira::capi::provider_pair_ok(provider, provider_id),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a provider of the enum and a provider_id at once; a custom "
-                       "provider travels as provider_id beside ANIRA_PROVIDER_DEFAULT");
-    ANIRA_CAPI_REQUIRE(provider_id == nullptr || non_empty(provider_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: an empty provider_id");
+                       "model entry: the provider_id is set if and only if the provider is "
+                       "ANIRA_PROVIDER_CUSTOM, and never empty");
     anira::capi::ModelEntry& entry = config->m_models[model_index];
     entry.m_provider = provider;
     entry.m_provider_id = provider_id != nullptr ? provider_id : "";
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_provider ANIRA_CALL anira_model_config_model_provider(const anira_model_config* config,
-                                                            uint32_t model_index) ANIRA_NOEXCEPT {
-    if (config == nullptr || model_index >= config->m_models.size()) {
-        return ANIRA_PROVIDER_DEFAULT;
+anira_status ANIRA_CALL anira_model_config_model_provider(const anira_model_config* config,
+                                                          uint32_t model_index,
+                                                          anira_provider* provider,
+                                                          const char** provider_id) ANIRA_NOEXCEPT
+    try {
+    if (config == nullptr || provider == nullptr || model_index >= config->m_models.size()) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    return config->m_models[model_index].m_provider;
-}
-
-const char* ANIRA_CALL anira_model_config_model_provider_id(const anira_model_config* config,
-                                                            uint32_t model_index) ANIRA_NOEXCEPT {
-    if (config == nullptr || model_index >= config->m_models.size()) { return nullptr; }
     const anira::capi::ModelEntry& entry = config->m_models[model_index];
-    return entry.m_provider_id.empty() ? nullptr : entry.m_provider_id.c_str();
-}
+    *provider = entry.m_provider;
+    if (provider_id != nullptr) { *provider_id = id_of(entry.m_provider_id); }
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
 
 const char* ANIRA_CALL anira_model_config_model_path(const anira_model_config* config,
                                                      uint32_t model_index) ANIRA_NOEXCEPT {
@@ -997,23 +979,37 @@ anira_status ANIRA_CALL anira_model_config_add_output(anira_model_config* config
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_model_config* config,
-                                                              anira_engine engine) ANIRA_NOEXCEPT
-    try {
-    if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (engine != ANIRA_ENGINE_NONE && !builtin_engine(engine)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
+                                                              anira_engine engine,
+                                                              const char* engine_id,
+                                                              anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(config != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model config: NULL handle");
+    // NONE (plan 0) is a default engine's value too; every other value is an entry's.
+    if (engine != ANIRA_ENGINE_NONE || engine_id != nullptr) {
+        if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+            status != ANIRA_OK) {
+            return status;
+        }
     }
     config->m_default_engine = engine;
-    config->m_default_engine_id.clear();
+    config->m_default_engine_id = engine_id != nullptr ? engine_id : "";
     return ANIRA_OK;
-} catch (...) { return translate_exception(nullptr, __func__); }
+} catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_model_config_set_default_engine_custom(anira_model_config* config,
-                                                                     const char* engine_id)
+anira_status ANIRA_CALL anira_model_config_set_default_provider(anira_model_config* config,
+                                                                anira_provider provider,
+                                                                const char* provider_id)
     ANIRA_NOEXCEPT try {
-    if (config == nullptr || !custom_engine_id(engine_id)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_default_engine = ANIRA_ENGINE_NONE;
-    config->m_default_engine_id = engine_id;
+    // ANIRA_PROVIDER_NONE clears the default provider.
+    if (config == nullptr ||
+        (provider != ANIRA_PROVIDER_NONE && !anira::capi::known_provider(provider)) ||
+        !anira::capi::provider_pair_ok(provider, provider_id)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    config->m_default_provider = provider;
+    config->m_default_provider_id = provider_id != nullptr ? provider_id : "";
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -1130,3 +1126,351 @@ anira_status ANIRA_CALL anira_job_options_set_ext_json(anira_job_options* option
 void ANIRA_CALL anira_job_options_destroy(anira_job_options* options) ANIRA_NOEXCEPT try {
     delete options;
 } catch (...) { report_void_failure(__func__); }
+
+// ==== read-back =============================================================================
+// What the setters and the loaders stored. A value getter answers a count, a pointer or an
+// enum whose no-value answer no live handle stores, without a status and without a handler
+// (nothing in it allocates); a status getter writes its out-parameters on success only, after
+// the checks in the order NULL handle, NULL out-parameter, contract kind, index.
+
+namespace {
+
+// The entry's tensor record of a canonical name, found without building a key string.
+const anira::capi::TensorBinding* tensor_record(const anira::capi::ModelEntry& entry,
+                                                const char* canonical) noexcept {
+    for (const auto& [name, record] : entry.m_tensors) {
+        if (name == canonical) { return &record; }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+// ---- tensor spec ----
+
+const char* ANIRA_CALL anira_tensor_spec_name(const anira_tensor_spec* spec) ANIRA_NOEXCEPT {
+    return spec == nullptr ? nullptr : spec->m_name.c_str();
+}
+
+anira_dtype ANIRA_CALL anira_tensor_spec_dtype(const anira_tensor_spec* spec) ANIRA_NOEXCEPT {
+    return spec == nullptr ? 0 : spec->m_dtype;
+}
+
+anira_role ANIRA_CALL anira_tensor_spec_role(const anira_tensor_spec* spec) ANIRA_NOEXCEPT {
+    return spec == nullptr ? ANIRA_ROLE_FORCE32 : spec->m_role;
+}
+
+uint32_t ANIRA_CALL anira_tensor_spec_ndim(const anira_tensor_spec* spec) ANIRA_NOEXCEPT {
+    return spec == nullptr ? 0u : spec->m_ndim;
+}
+
+// A hole below the rank reads the stored default of an unset Axis, {ANY, 0}: no special case.
+anira_status ANIRA_CALL anira_tensor_spec_axis(const anira_tensor_spec* spec,
+                                               uint32_t i,
+                                               anira_axis_tag* tag,
+                                               int64_t* extent) ANIRA_NOEXCEPT try {
+    if (spec == nullptr || tag == nullptr || extent == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    if (i >= spec->m_ndim) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    *tag = spec->m_axes[i].m_tag;
+    *extent = spec->m_axes[i].m_extent;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_tensor_spec_window(const anira_tensor_spec* spec,
+                                                 int64_t* window_min,
+                                                 int64_t* window_max,
+                                                 int64_t* overlap) ANIRA_NOEXCEPT try {
+    if (spec == nullptr || window_min == nullptr || window_max == nullptr || overlap == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *window_min = spec->m_window_min;
+    *window_max = spec->m_window_max;
+    *overlap = spec->m_overlap;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_tensor_spec_time_ratio(const anira_tensor_spec* spec,
+                                                     int64_t* num,
+                                                     int64_t* den) ANIRA_NOEXCEPT try {
+    if (spec == nullptr || num == nullptr || den == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *num = spec->m_ratio_num;
+    *den = spec->m_ratio_den;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+int64_t ANIRA_CALL anira_tensor_spec_latency(const anira_tensor_spec* spec) ANIRA_NOEXCEPT {
+    return spec == nullptr ? 0 : spec->m_latency;
+}
+
+const char* ANIRA_CALL anira_tensor_spec_state_source(const anira_tensor_spec* spec)
+    ANIRA_NOEXCEPT {
+    return spec == nullptr || spec->m_state_source.empty() ? nullptr : spec->m_state_source.c_str();
+}
+
+// ---- model config ----
+
+uint32_t ANIRA_CALL anira_model_config_num_inputs(const anira_model_config* config) ANIRA_NOEXCEPT {
+    return config == nullptr ? 0u : static_cast<uint32_t>(config->m_inputs.size());
+}
+
+uint32_t ANIRA_CALL anira_model_config_num_outputs(const anira_model_config* config)
+    ANIRA_NOEXCEPT {
+    return config == nullptr ? 0u : static_cast<uint32_t>(config->m_outputs.size());
+}
+
+// The config's own copy, an element of a vector: the next add_input or add_output may move it.
+const anira_tensor_spec* ANIRA_CALL anira_model_config_input(const anira_model_config* config,
+                                                             uint32_t index) ANIRA_NOEXCEPT {
+    if (config == nullptr || index >= config->m_inputs.size()) { return nullptr; }
+    return &config->m_inputs[index];
+}
+
+const anira_tensor_spec* ANIRA_CALL anira_model_config_output(const anira_model_config* config,
+                                                              uint32_t index) ANIRA_NOEXCEPT {
+    if (config == nullptr || index >= config->m_outputs.size()) { return nullptr; }
+    return &config->m_outputs[index];
+}
+
+anira_status ANIRA_CALL anira_model_config_default_engine(const anira_model_config* config,
+                                                          anira_engine* engine,
+                                                          const char** engine_id) ANIRA_NOEXCEPT
+    try {
+    if (config == nullptr || engine == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    *engine = config->m_default_engine;
+    if (engine_id != nullptr) { *engine_id = id_of(config->m_default_engine_id); }
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_model_config_default_provider(const anira_model_config* config,
+                                                            anira_provider* provider,
+                                                            const char** provider_id) ANIRA_NOEXCEPT
+    try {
+    if (config == nullptr || provider == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    *provider = config->m_default_provider;
+    if (provider_id != nullptr) { *provider_id = id_of(config->m_default_provider_id); }
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_model_state ANIRA_CALL anira_model_config_state(const anira_model_config* config)
+    ANIRA_NOEXCEPT {
+    return config == nullptr ? ANIRA_MODEL_STATE_FORCE32 : config->m_state;
+}
+
+uint32_t ANIRA_CALL anira_model_config_max_instances(const anira_model_config* config)
+    ANIRA_NOEXCEPT {
+    return config == nullptr ? 0u : config->m_max_instances;
+}
+
+const char* ANIRA_CALL anira_model_config_anchor(const anira_model_config* config) ANIRA_NOEXCEPT {
+    return config == nullptr || config->m_anchor.empty() ? nullptr : config->m_anchor.c_str();
+}
+
+const char* ANIRA_CALL anira_model_config_tensor_name(const anira_model_config* config,
+                                                      uint32_t model_index,
+                                                      const char* canonical) ANIRA_NOEXCEPT {
+    if (config == nullptr || model_index >= config->m_models.size() || canonical == nullptr) {
+        return nullptr;
+    }
+    const anira::capi::TensorBinding* record =
+        tensor_record(config->m_models[model_index], canonical);
+    return record == nullptr || record->m_name.empty() ? nullptr : record->m_name.c_str();
+}
+
+// The count protocol of anira_handler_get_latencies; a tensor without a record, or with a
+// name record alone, holds the spec's order: count 0.
+anira_status ANIRA_CALL anira_model_config_tensor_layout(const anira_model_config* config,
+                                                         uint32_t model_index,
+                                                         const char* canonical,
+                                                         uint32_t* count,
+                                                         uint32_t* axes) ANIRA_NOEXCEPT try {
+    if (config == nullptr || count == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (model_index >= config->m_models.size() || !non_empty(canonical)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::TensorBinding* record =
+        tensor_record(config->m_models[model_index], canonical);
+    const uint32_t total = record == nullptr ? 0u : static_cast<uint32_t>(record->m_layout.size());
+    if (axes == nullptr) {
+        *count = total;
+        return ANIRA_OK;
+    }
+    const uint32_t capacity = *count;
+    const uint32_t written = std::min(capacity, total);
+    for (uint32_t k = 0; k < written; ++k) { axes[k] = record->m_layout[k]; }
+    *count = total;
+    return capacity < total ? ANIRA_INCOMPLETE : ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+// Both set paths of a known kind end in a typed payload whose first member is the header
+// (ext_registry.h, ExtRow::m_clone and m_from_json); an unknown kind holds raw bytes or text.
+const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const anira_model_config* config,
+                                                                uint32_t model_index,
+                                                                const char* kind) ANIRA_NOEXCEPT {
+    if (config == nullptr || model_index >= config->m_models.size() || kind == nullptr) {
+        return nullptr;
+    }
+    const anira::capi::ExtSlot* slot = config->m_models[model_index].m_ext.find(kind);
+    return slot == nullptr || !slot->known() ? nullptr : slot->payload_as<anira_ext_header>();
+}
+
+// ---- contract ----
+
+anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
+                                                     uint32_t* block_min,
+                                                     uint32_t* block_max,
+                                                     double* rate) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || block_min == nullptr || block_max == nullptr || rate == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *block_min = hard->m_block_min;
+    *block_max = hard->m_block_max;
+    *rate = hard->m_rate;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_budget(const anira_contract* contract,
+                                                   anira_budget_kind* kind,
+                                                   double* explicit_ms) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || kind == nullptr || explicit_ms == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *kind = hard->m_budget;
+    *explicit_ms = hard->m_budget_ms;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_warmup(const anira_contract* contract,
+                                                   anira_warmup_mode* mode,
+                                                   uint32_t* iterations) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || mode == nullptr || iterations == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *mode = hard->m_warmup;
+    *iterations = hard->m_warmup_iterations;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_on_miss(const anira_contract* contract,
+                                                    anira_miss_policy* policy) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || policy == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *policy = hard->m_on_miss;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_miss_fn(const anira_contract* contract,
+                                                    anira_miss_fn* fn,
+                                                    void** user_data) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || fn == nullptr || user_data == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *fn = hard->m_miss_fn;
+    *user_data = hard->m_miss_user_data;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_contract_hard_wait_ratio(const anira_contract* contract,
+                                                       double* ratio) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || ratio == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    *ratio = hard->m_wait_ratio;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+uint32_t ANIRA_CALL anira_contract_hard_num_ring_dtypes(const anira_contract* contract)
+    ANIRA_NOEXCEPT {
+    const anira::capi::HardContract* hard = contract == nullptr ? nullptr : contract->hard();
+    return hard == nullptr ? 0u : static_cast<uint32_t>(hard->m_ring_dtypes.size());
+}
+
+// The map orders its keys by std::string's operator<, bytewise: the enumeration's order.
+anira_status ANIRA_CALL anira_contract_hard_ring_dtype(const anira_contract* contract,
+                                                       uint32_t index,
+                                                       const char** canonical,
+                                                       anira_dtype* dtype) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || canonical == nullptr || dtype == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    if (index >= hard->m_ring_dtypes.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const auto entry = std::next(hard->m_ring_dtypes.begin(), index);
+    *canonical = entry->first.c_str();
+    *dtype = entry->second;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+uint32_t ANIRA_CALL anira_contract_hard_num_latencies(const anira_contract* contract)
+    ANIRA_NOEXCEPT {
+    const anira::capi::HardContract* hard = contract == nullptr ? nullptr : contract->hard();
+    return hard == nullptr ? 0u : static_cast<uint32_t>(hard->m_latencies.size());
+}
+
+// The enumeration of anira_contract_hard_ring_dtype, over the declared stream latencies.
+anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contract* contract,
+                                                    uint32_t index,
+                                                    const char** canonical,
+                                                    uint32_t* samples) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || canonical == nullptr || samples == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    if (index >= hard->m_latencies.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const auto entry = std::next(hard->m_latencies.begin(), index);
+    *canonical = entry->first.c_str();
+    *samples = entry->second;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_edge_cost ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract) ANIRA_NOEXCEPT {
+    return contract == nullptr ? ANIRA_EDGE_COST_PERMISSIVE : contract->m_edge_cost;
+}
+
+// ---- context config ----
+
+anira_status ANIRA_CALL anira_context_config_threads(const anira_context_config* config,
+                                                     uint32_t* num_threads,
+                                                     anira_wait_strategy* wait) ANIRA_NOEXCEPT try {
+    if (config == nullptr || num_threads == nullptr || wait == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *num_threads = config->m_num_threads;
+    *wait = config->m_wait;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+// The record anira_context_config_set_log takes, written within the caller's struct_size (the
+// anira_capabilities_edge precedent), which stays; the minimum is the setter's.
+anira_status ANIRA_CALL anira_context_config_log(const anira_context_config* config,
+                                                 anira_log_desc* out) ANIRA_NOEXCEPT try {
+    if (config == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (out->struct_size < offsetof(anira_log_desc, callback)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    anira_log_desc value = ANIRA_LOG_DESC_INIT;
+    value.struct_size = out->struct_size;
+    value.user_data = config->m_sink_user_data;
+    value.callback = config->m_sink;
+    value.level = static_cast<uint32_t>(config->m_log_level);
+    value.drain = static_cast<uint32_t>(config->m_log_drain);
+    value.queue_capacity = config->m_queue_capacity;
+    value.drain_interval_ms = config->m_drain_interval_ms;
+    value.flags = config->m_log_flags;
+    std::memcpy(out, &value, std::min<size_t>(out->struct_size, sizeof(anira_log_desc)));
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }

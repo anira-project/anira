@@ -19,7 +19,7 @@ class SessionElement;  // Forward declaration as we have a circular dependency
  * backend implementations such as LibTorch, ONNX Runtime, and TensorFlow Lite processors.
  *
  * @par No engine in the public headers
- * The built-in engines are internal adapters (`src/backends/<Engine>Adapter.cpp`, one
+ * The built-in engines are internal adapters (`src/engines/<Engine>Adapter.cpp`, one
  * translation unit per engine, nothing of them in a public header): a consumer that
  * links `anira::anira` sees no engine header, and a consumer that uses an engine itself
  * links the matching `anira::<engine>` target explicitly. The `anira_header_isolation`

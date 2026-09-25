@@ -1,9 +1,9 @@
-#ifndef ANIRA_BACKENDS_PROCESSINGGUARD_H
-#define ANIRA_BACKENDS_PROCESSINGGUARD_H
+#ifndef ANIRA_ENGINES_PROCESSINGGUARD_H
+#define ANIRA_ENGINES_PROCESSINGGUARD_H
 
 /*
  * The busy-flag guard of the engine room's claim loop (Loaded::claim_and_run, Adapter.h).
- * Private to src/backends: the loop marks a shared slot busy with exchange(true) and runs the
+ * Private to src/engines: the loop marks a shared slot busy with exchange(true) and runs the
  * session's process on it under this guard, so the flag is released on every exit path, a
  * throw of a type the engine's own catch does not name included. Without it a failing
  * inference could leave the slot busy forever and starve every session on the model.
@@ -29,4 +29,4 @@ private:
 
 }  // namespace anira::detail
 
-#endif  // ANIRA_BACKENDS_PROCESSINGGUARD_H
+#endif  // ANIRA_ENGINES_PROCESSINGGUARD_H

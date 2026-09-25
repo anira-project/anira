@@ -11,7 +11,7 @@
  * delegate of every method is loaded with its runtime options set to no shared workspace and
  * no weight cache (the process-wide mutexes the prebuilt runtime otherwise takes around every
  * call), and it captures its thread pool at that load under NoThreadPoolGuard, so every call
- * runs inline on the inference thread that made it. File-local over anira::backend::Model:
+ * runs inline on the inference thread that made it. File-local over anira::engine::Model:
  * nothing of ExecuTorch enters a public header.
  */
 #ifdef USE_EXECUTORCH
@@ -26,6 +26,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -59,13 +60,14 @@
 #include "executorch/runtime/core/evalue.h"
 #include "executorch/runtime/core/exec_aten/exec_aten.h"
 #include "executorch/runtime/core/result.h"
+#include "executorch/runtime/core/span.h"
 #include "executorch/runtime/core/tag.h"
 #include "executorch/runtime/executor/method_meta.h"
 #include "executorch/runtime/executor/program.h"
 #include "executorch/runtime/platform/runtime.h"
 // IWYU pragma: end_keep
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -94,7 +96,7 @@ constexpr std::array<std::pair<const char*, anira_provider>, 3> k_provider_names
 }};
 
 // The registered name of a provider: the table's for one of the enum, the provider_id itself
-// (a registered name the capabilities listed) for a custom one; empty for the default provider
+// (a registered name the capabilities listed) for a custom one; empty for the CPU path
 // and for a provider of the enum no delegate spells.
 std::string registered_name(anira_provider provider, std::string_view provider_id) {
     if (!provider_id.empty()) { return std::string(provider_id); }
@@ -142,7 +144,7 @@ executorch::runtime::BackendOption xnnpack_option(const char* key,
     executorch::runtime::BackendOption option{};
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay) the key is a C array
     std::snprintf(option.key, sizeof(option.key), "%s", key);
-    option.value = std::move(value);
+    option.value = value;
     return option;
 }
 
@@ -183,7 +185,7 @@ void set_xnnpack_options_of_the_process() {
                                                                       options.size()));
     if (error == executorch::runtime::Error::NotFound) { return; }
     if (error != executorch::runtime::Error::Ok) {
-        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+        ANIRA_LOG_WARNING(log_group::k_engine_executorch,
                           "executorch: the XNNPACK delegate refused its runtime options "
                           "(workspace_sharing_mode %d, weight_cache_enabled 0): %s; this release "
                           "spells the option keys otherwise, and executors may meet on the "
@@ -196,7 +198,7 @@ void set_xnnpack_options_of_the_process() {
     if (!in_effect.has_value() ||
         in_effect->m_workspace_sharing_mode != k_xnnpack_workspace_per_instance ||
         in_effect->m_weight_cache_enabled) {
-        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+        ANIRA_LOG_WARNING(log_group::k_engine_executorch,
                           "executorch: the XNNPACK delegate reports workspace_sharing_mode %d "
                           "and weight_cache_enabled %d after its init set %d and 0: this "
                           "release spells the option keys otherwise, and executors may meet on "
@@ -530,17 +532,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch,
                                "executorch threw a non-std exception out of execute");
         }
         return ANIRA_ERROR_ENGINE;
@@ -581,11 +583,11 @@ public:
     explicit ExecuTorchLoaded(std::shared_ptr<ExecuTorchEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
-    /// The default provider (a portable export, or whatever delegates the runtime has for the
+    /// The CPU path (a portable export, or whatever delegates the runtime has for the
     /// export's), or a backend registered to this runtime and available, by the name the
     /// enum's spelling maps to or the registered name itself.
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
-        if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
+        if (provider == ANIRA_PROVIDER_CPU && provider_id.empty()) { return true; }
         try {
             const std::string wanted = registered_name(provider, provider_id);
             if (wanted.empty()) { return false; }
@@ -616,7 +618,7 @@ protected:
         // A pinned entry names the delegate (ExecuTorch's backend) its export was lowered for:
         // the method must use it, or the export is mislabeled and refused here rather than at
         // its first call.
-        if (model.m_provider != ANIRA_PROVIDER_DEFAULT || !model.m_provider_id.empty()) {
+        if (model.m_provider != ANIRA_PROVIDER_CPU || !model.m_provider_id.empty()) {
             const std::string wanted = registered_name(model.m_provider, model.m_provider_id);
             const std::vector<std::string> used = probe->backends();
             if (std::ranges::find(used, wanted) == used.end()) {
@@ -688,6 +690,7 @@ std::vector<ProviderInfo> executorch_providers() {
     std::vector<ProviderInfo> providers;
     for (const std::string& name : registered_backends()) {
         ProviderInfo info;
+        info.m_provider = ANIRA_PROVIDER_CUSTOM;
         info.m_provider_id = name;
         for (const auto& [registered, value] : k_provider_names) {
             if (name == registered) {
@@ -701,6 +704,6 @@ std::vector<ProviderInfo> executorch_providers() {
     return providers;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 #endif  // USE_EXECUTORCH

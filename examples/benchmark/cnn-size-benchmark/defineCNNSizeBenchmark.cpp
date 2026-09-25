@@ -133,10 +133,10 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_CNNSIZE)
     ->UseManualTime();
 
 anira::HostConfig configure(int model_size, int buffer_size) {
-    // Every engine of this build, plus ANIRA_ENGINE_NONE so the custom placeholder entry below
+    // Every engine of this build, plus ANIRA_ENGINE_CUSTOM so the custom placeholder entry below
     // survives the candidate filter.
     std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_NONE);
+    candidates.push_back(ANIRA_ENGINE_CUSTOM);
     anira::ModelConfig model_config =
         cnn_model_config(buffer_size, k_sizes[static_cast<size_t>(model_size)]);
     // The custom backend needs no model file, but the benchmark fixture resolves a model name

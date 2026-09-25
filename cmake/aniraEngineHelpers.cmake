@@ -1,11 +1,11 @@
 # ==============================================================================
-# aniraBackendHelpers.cmake — the anira::<engine> targets
+# aniraEngineHelpers.cmake — the anira::<engine> targets
 # ==============================================================================
 #
 # One imported target per inference engine, named anira::<engine> with <engine> =
 # onnxruntime | tflite | litert | libtorch | executorch, defined by the one function
-# below both in anira's build tree (cmake/backends.cmake) and in the installed
-# package (aniraBackendTargets.cmake, generated from aniraBackendTargets.cmake.in
+# below both in anira's build tree (cmake/engines.cmake) and in the installed
+# package (aniraEngineTargets.cmake, generated from aniraEngineTargets.cmake.in
 # and shipped next to this file), so that both trees expose the same names with the
 # same usage requirements.
 #
@@ -165,7 +165,7 @@ endfunction()
 # include directory of the given imported targets that lies under <from> to the
 # same path under <to>. For packages whose config hardwires its headers to
 # <prefix>/include (TorchConfig.cmake) while anira installs them per engine under
-# <prefix>/include/anira-backends/<engine>.
+# <prefix>/include/anira-engines/<engine>.
 # ------------------------------------------------------------------------------
 function(anira_relocate_include_dirs from to)
     get_filename_component(from "${from}" ABSOLUTE)

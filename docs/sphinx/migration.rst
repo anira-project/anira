@@ -35,7 +35,7 @@ Where the 2.x API stands in this pre-release
   3.x form is the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`),
   which runs on the C handler. A custom :cpp:class:`anira::BackendBase` stays with the 2.x
   handler likewise; its 3.x form is a *registered engine* (``anira_engine_desc``,
-  :cpp:class:`anira::Engine`; :doc:`custom_backends`), which runs on the C handler like a
+  :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs on the C handler like a
   built-in one. :ref:`migration-runtime` maps both onto their 3.x forms.
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
@@ -91,7 +91,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        id and registered with ``anira::Pipeline::register_engine(impl)`` or
        ``anira::stage::Inference(cfg).engine(impl)``)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
-       (``anira_model_config_add_model_path_custom``).
+       (``anira_model_config_add_model_path`` with ``ANIRA_ENGINE_CUSTOM`` and the id).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
      - ``cfg.add_model_bytes(engine, bytes, ownership, release, ctx)`` with a
        ``std::span<const std::byte>`` (``anira_model_config_add_model_bytes``);
@@ -115,11 +115,19 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - The extent of the tensor's ``ANIRA_AXIS_CHANNEL`` axis.
    * - ``anira::ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
      - ``spec.window(window_min, window_max, overlap)`` (``anira_tensor_spec_set_window``):
-       the window is the per-channel element count of the tensor, the context is the window
+       the window is the per-channel element count of the tensor, the overlap is the window
        minus the 2.x size (the samples kept from the previous window). A size of ``0``
        (non-streamable) is ``ANIRA_ROLE_STATIC``.
    * - ``anira::ProcessingSpec::internal_model_latency``
      - ``spec.latency(elements)`` on the output spec (``anira_tensor_spec_set_latency``).
+   * - ``anira::InferenceConfig::get_tensor_input_shape()`` / ``get_tensor_output_shape()``
+       and the size and channel getters (``get_preprocess_input_size()``, ...)
+     - ``cfg.input_spec(i)`` / ``cfg.output_spec(i)``, an ``anira::SpecView`` of the config's
+       own copy of the spec (``axis(k)``, ``window()``, ``latency()``, ...;
+       ``anira_model_config_input`` and the ``anira_tensor_spec`` getters), and
+       ``cfg.tensor_layout(i, canonical)`` for the order a backend's export holds the axes in
+       (``anira_model_config_tensor_layout``): the 2.x per-backend shape is the spec's
+       extents permuted by that entry's layout.
    * - ``anira::InferenceConfig::max_inference_time``
      - ``anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT, .budget_value =
        std::chrono::microseconds(...)}`` (``anira_contract_hard_set_budget(contract,
@@ -152,9 +160,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
        (the first streamable tensor).
    * - ``anira::InferenceHandler::set_inference_backend`` (the starting backend)
-     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``) selects the
-       starting plan; switching at run time is ``anira_handler_set_plan`` over the plan report
-       (``set_inference_backend`` on the 2.x handler).
+     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``), with
+       ``cfg.default_provider(provider)`` beside it for an engine with several providers,
+       selects the starting plan; switching at run time is ``anira_handler_set_plan`` over the
+       plan report (``set_inference_backend`` on the 2.x handler).
 
 .. _migration-runtime:
 
@@ -213,7 +222,17 @@ a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
        collected inference.
    * - ``get_latency()`` / ``get_latency_vector()``
      - ``anira_handler_get_latency(h, slot)`` / ``anira_handler_get_latencies(h, &count,
-       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output.
+       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output;
+       a figure the Hard contract declared for the slot (below) where it did.
+   * - ``prepare(host_config, custom_latency, tensor_index)`` and ``prepare(host_config,
+       std::vector<unsigned int> custom_latency)``
+     - The declared stream latency of an output on the Hard contract,
+       ``anira_contract_hard_set_latency(contract, "audio_out", samples)`` per named output
+       (``"latencies"`` in the contract file), then ``anira_handler_prepare``: the figure
+       replaces the computed one and primes the receive ring, as the 2.x custom latency did.
+       Where 2.x clamped a figure below the model's internal latency up to it with a warning,
+       prepare refuses it with ``ANIRA_ERROR_CONFIG``, as it refuses a name that is no
+       Streamed output; an output never named keeps the computed figure.
    * - ``reset()``
      - ``anira_handler_reset(h)``; it also re-initialises declared state.
    * - ``set_inference_backend(backend)``
@@ -307,7 +326,7 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        (:doc:`custom_preprocessing`).
 
 What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
-descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_backends`):
+descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_engines`):
 
 .. list-table::
    :header-rows: 1
@@ -324,7 +343,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        ``Pipeline::register_engine(impl)`` or brought along by
        ``stage::Inference(cfg).engine(impl)``; a model entry names the id
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
-       ``ANIRA_ENGINE_NONE`` with the id, selected with ``anira_handler_set_plan``.
+       ``ANIRA_ENGINE_CUSTOM`` with the id, selected with ``anira_handler_set_plan``.
    * - ``X(anira::InferenceConfig& config)`` and the members sized from it
      - Two levels. The loaded model: ``load(info, user_data, &loaded)`` receives an
        ``anira_engine_load_info`` (the record an earlier pre-release called
@@ -385,9 +404,12 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        (``Engine::Loaded`` is deleted there); ``release(user_data)`` once, with the last
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
-     - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_stage_ctx``,
-       ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend on
-       the C handler until the cut-over.
+     - ``ANIRA_ENGINE_CUSTOM`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
+       a stage reads the pair with ``anira_stage_engine``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
+       C handler runs it like every added id, on the engine added under it (the one id with
+       the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
+       adds it for a 2.x custom backend); the bridge keeps serving it without an engine until
+       the cut-over.
 
 .. _migration-bridge:
 
@@ -459,6 +481,13 @@ decoder with ``samplesPerBlock / 2048.f``).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
+   * - ``Hard.ring_dtypes``
+     - No 2.x counterpart: every 2.x stream was float32, so the bridge takes a ring dtype equal
+       to the spec's (float32) and nothing else.
+   * - ``Hard.latencies`` (the declared stream latency)
+     - No ``InferenceConfig`` counterpart: the 2.x handler takes the figure as the
+       ``custom_latency`` argument of its ``prepare`` overloads, which the bridge does not
+       call; pass it there.
    * - ``ContextConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
        log level, drain, interval and queue capacity
      - ``CoreConfig`` and its ``LogConfig``. The log sink, the log flags and the device
@@ -470,8 +499,10 @@ saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABL
 fixture does); a spec dtype other than float32; a layout that moves an axis of extent above 1
 (a transpose; a view over unit axes is fine); a dynamic Time extent on a Buffer tensor; an
 engine this build does not carry (see the candidates below); a custom engine other than
-``anira.v2.custom`` (the C handler runs a custom engine registered on its pipeline and
-refuses an unregistered id at ``anira_handler_create``, :doc:`custom_backends`). Every other
+``anira.v2.custom``, which the bridge serves with the 2.x pass-through (the C handler runs a
+custom engine added to its pipeline, ``anira.v2.custom`` included, and refuses an id without
+one at ``anira_handler_create``, :doc:`custom_engines`). Every other
+
 rule of section 1.1 that a configuration breaks is
 ``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that
 differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERROR_CONFIG``.
@@ -479,14 +510,14 @@ differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERRO
 **Candidates.** The candidate list narrows which entries reach the ``InferenceConfig``. With
 none (the default), every entry is one, and an entry naming an engine this build does not
 carry is refused; ``anira::v3compat::enabled_engines()`` is the list that lets one model
-config serve every build, and ``ANIRA_ENGINE_NONE`` in the list keeps the custom-engine
-entries. The consumed-or-fail walk over the extensions runs over the entries that survive, so
+config serve every build, and ``ANIRA_ENGINE_CUSTOM`` in the list keeps the custom-engine
+entries (the 2.x ``CUSTOM`` backend's, ``anira.v2.custom``). The consumed-or-fail walk over the extensions runs over the entries that survive, so
 an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
-is not a candidate. The bridge's candidates name engines on the default provider: a model
+is not a candidate. The bridge's candidates name engines on the CPU path: a model
 entry pinned to a provider (``"provider": "xnnpack"`` beside its ``"engine"``, :doc:`usage`
 section 1.2) is
 no candidate under an explicit engine list, and under none its pin is not applied, since the
-2.x runtime runs every model on the default provider; providers, pins and provider options
+2.x runtime runs every model on the CPU path; providers, pins and provider options
 are the C handler's (:doc:`usage` sections 3.1 and 3.2).
 
 **Lifetime.** A path entry is copied into the ``InferenceConfig``; a bytes entry is borrowed
@@ -497,7 +528,7 @@ reference only; passing a temporary does not compile.
 
 **Windows.** A flexible window (``window_min < window_max``) is pinned when
 ``to_inference_config`` runs: one host block per inference (``block_max`` scaled by the
-tensor's time ratio, plus the context), clamped to the window range; without a geometry on the
+tensor's time ratio, plus the overlap), clamped to the window range; without a geometry on the
 contract, the smallest window. When a spec's window is flexible, set the geometry before the
 call, or build the ``InferenceConfig`` at prepare. With fixed windows, which every bundled
 fixture uses, the order does not matter.
@@ -626,7 +657,9 @@ from its ``context_config`` block. Bridged, they are the 2.x objects the file de
 fixed key order. Both take ``(buf, cap, out_len)`` and return ``ANIRA_ERROR_BUFFER_TOO_SMALL``
 with the required length in ``out_len``, so call once with a NULL buffer to size it. The
 contract has no writer; write the ``{"hard": ...}`` file by hand from the values the legacy
-contract carries (section 1.5 of the :doc:`usage` guide shows the format).
+contract carries, which ``ContractHandle::hard()`` reads back into an ``anira::Hard`` (the
+``anira_contract_hard_*`` getters in C; section 1.5 of the :doc:`usage` guide shows the
+format).
 
 .. code-block:: c
 

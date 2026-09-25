@@ -22,16 +22,16 @@
 /// legal on the incomplete type; only Core.cpp needs the body.
 struct anira_context_config;
 
-namespace anira::backend {
-/// One plan a session asks for (src/backends/Adapters.h): where its loaded model comes from
+namespace anira::engine {
+/// One plan a session asks for (src/engines/Adapters.h): where its loaded model comes from
 /// and the record of it. A parameter type here, complete in Core.cpp and at every caller.
 struct PlanRequest;
-/// The loaded model of a plan (src/backends/Adapter.h); a return type here, complete in Core.cpp.
+/// The loaded model of a plan (src/engines/Adapter.h); a return type here, complete in Core.cpp.
 class Loaded;
-/// The engine object of a built-in engine (src/backends/Adapter.h); a return type here,
+/// The engine object of a built-in engine (src/engines/Adapter.h); a return type here,
 /// complete in Core.cpp and at every caller.
 class BuiltinEngine;
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 namespace anira {
 
@@ -48,7 +48,7 @@ struct RtLatch;
  *
  * The core coordinates every inference session in a process (or, for a plugin, in the
  * binary that embeds anira): it owns the shared inference thread pool, pools the prepared
- * models (the adapters of src/backends) between sessions whose plans describe the same
+ * models (the adapters of src/engines) between sessions whose plans describe the same
  * model, and hands out the global inference queue that the inference threads consume from.
  *
  * @par Lifetime
@@ -127,7 +127,7 @@ public:
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration
      * @param requests One plan per entry, in dense-index order: what the session's plan
-     * table holds (the 2.x constructors ask for backend::legacy_plan_requests, a 3.x
+     * table holds (the 2.x constructors ask for engine::legacy_plan_requests, a 3.x
      * handler for exactly its plans); never empty
      * @param context_config Configuration of the core as requested by this session: a 3.x
      * handler passes its context's config through unchanged, the 2.x InferenceManager maps
@@ -145,7 +145,7 @@ public:
     static std::shared_ptr<SessionElement> create_session(
         PrePostProcessor& pp_processor,
         InferenceConfig& inference_config,
-        std::vector<backend::PlanRequest> requests,
+        std::vector<engine::PlanRequest> requests,
         const anira_context_config& context_config,
         RtLatch* rt_latch = nullptr);
 
@@ -248,7 +248,7 @@ public:
      * @brief The core's engine object of a built-in engine of this build, one per engine
      * while anything holds it
      *
-     * Made at the first call (backend::make_builtin_engine) and remembered weakly: every
+     * Made at the first call (engine::make_builtin_engine) and remembered weakly: every
      * loaded model of the engine holds the one object (make_builtin_loaded), the context's
      * probe holds it while it asks, and the last holder frees it on its own thread. So what
      * the engine builds at its init (an ONNX Runtime or a LiteRT environment with the level
@@ -265,7 +265,7 @@ public:
      * @param engine A built-in engine
      * @return The object, or NULL for an engine this build does not carry
      */
-    static std::shared_ptr<backend::BuiltinEngine> builtin_engine(anira_engine engine);
+    static std::shared_ptr<engine::BuiltinEngine> builtin_engine(anira_engine engine);
 
     /**
      * @brief Registers a 3.x context as a user of the core
@@ -910,11 +910,10 @@ private:
      * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
      * for
      */
-    static std::shared_ptr<backend::Loaded> acquire_loaded_locked(
-        State& state,
-        const backend::PlanRequest& request,
-        InferenceConfig& inference_config,
-        size_t pool_size);
+    static std::shared_ptr<engine::Loaded> acquire_loaded_locked(State& state,
+                                                                 const engine::PlanRequest& request,
+                                                                 InferenceConfig& inference_config,
+                                                                 size_t pool_size);
 
     /**
      * @brief Releases the loaded models of a session's plan table
@@ -940,8 +939,8 @@ private:
      * @param engine A built-in engine
      * @return The object, or NULL for an engine this build does not carry
      */
-    static std::shared_ptr<backend::BuiltinEngine> find_or_make_builtin_engine(State& state,
-                                                                               anira_engine engine);
+    static std::shared_ptr<engine::BuiltinEngine> find_or_make_builtin_engine(State& state,
+                                                                              anira_engine engine);
 
     static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
                                                                      ///< capacity of the inference

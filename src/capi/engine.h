@@ -7,7 +7,7 @@
  * the pipeline's engines mean to the validator (engine_facts, the twin of stage_facts).
  * Private to src/capi (and the tests through the src/ include directory): nothing here enters
  * the ABI. What runs a custom engine is the engine room's DescriptorLoaded
- * (src/backends/DescriptorAdapter.h) over the carrier, one per loaded model, pooled by the
+ * (src/engines/DescriptorAdapter.h) over the carrier, one per loaded model, pooled by the
  * core like a built-in engine's with the carrier in the key: the carrier is the engine's
  * identity, and its id, fixed with it, is how model entries name it.
  */

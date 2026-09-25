@@ -28,14 +28,14 @@
 
 namespace anira {
 
-namespace backend {
-/// The engine room's interface (src/backends/Adapter.h): the loaded model a plan of the session
+namespace engine {
+/// The engine room's interface (src/engines/Adapter.h): the loaded model a plan of the session
 /// runs on and the session's prepared handle over it. Held through smart pointers, which need
 /// no complete type here (the destructor of the session is defined where the types are
 /// complete); no engine header is included by any public header.
 class Loaded;
 class Prepared;
-}  // namespace backend
+}  // namespace engine
 
 /**
  * @brief Session management class for individual inference instances
@@ -306,13 +306,13 @@ public:
         /// The loaded model the plan runs on (never null in a registered session): shared with
         /// the core's pool and with every other session on the same model, exclusive sessions
         /// included, or this session's own (a 2.x custom backend, the roundtrip).
-        std::shared_ptr<backend::Loaded> m_loaded;
+        std::shared_ptr<engine::Loaded> m_loaded;
         /// This session's handle over the loaded model, what the inference thread runs: made
         /// by Core::create_session for a built-in engine's and a 2.x plan, by the C handler's
         /// prepare (with the shared prepare record) for a registered engine's plan, and given
         /// back by Core::release_session after the session's in-flight inferences drained,
         /// before the loaded model is released. Declared after m_loaded, so it dies first.
-        std::unique_ptr<backend::Prepared> m_prepared;
+        std::unique_ptr<engine::Prepared> m_prepared;
         /// A registered engine's plan: its Prepared is the C handler's to make, with the
         /// record of its prepare; null until then.
         bool m_registered = false;
@@ -326,10 +326,10 @@ public:
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
         /// The backend a stage context reports for the chunk: a built-in engine, or
-        /// ANIRA_ENGINE_NONE with m_engine_id for a custom one, on a provider of the enum, or
-        /// ANIRA_PROVIDER_DEFAULT with m_provider_id for a custom one.
+        /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
+        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
-        anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+        anira_provider m_provider = ANIRA_PROVIDER_CPU;
         std::string m_engine_id;
         std::string m_provider_id;
         /// The 2.x backend the plan runs on: what set_backend selects by and get_backend
@@ -363,7 +363,7 @@ public:
     /**
      * @brief The plan table: dense plan index -> the plan.
      *
-     * Built by Core::create_session from the requests it is given (backend::PlanRequest): the
+     * Built by Core::create_session from the requests it is given (engine::PlanRequest): the
      * 2.x constructors ask for one row per configured model, in m_model_data order, then every
      * other backend of this build, so that every backend a 2.x caller can name has a row; a
      * 3.x handler asks for exactly its plans. Several rows may name one backend. Never empty

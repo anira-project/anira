@@ -62,8 +62,12 @@ Run tests to verify your setup:
 A test-enabled configure fetches the example-model fixtures into
 ``extras/models/``, pinned to fixed commits by the ``ANIRA_MODELS_<NAME>_REF``
 variables in ``extras/fetch-models.cmake`` (override with
-``-DANIRA_MODELS_<NAME>_REF=<sha>``). An existing subdirectory is never
-touched — delete it to refetch at the pin.
+``-DANIRA_MODELS_<NAME>_REF=<sha>``). Each fetched subdirectory carries a
+stamp (``.anira-pin``) naming the commit it was fetched at; a configure
+refetches a subdirectory whose stamp is missing or names another commit, so a
+bumped pin reaches an existing checkout too. The trees are snapshots: anything
+written into one is replaced at the next pin bump. The RAVE model is checked
+against its pinned SHA256 the same way.
 
 Coding Guidelines
 -----------------
@@ -126,12 +130,16 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 ``test/CMakeLists.txt``).
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/backends/`` mostly
-  covers ``src/backends/`` (the engine adapters), since ``include/anira/backends/`` holds
+  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
+  covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
   only ``BackendBase.h``.
 - Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
   ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
-  cross-unit integration suites (``test_OneSidedStreaming``).
+  cross-unit integration suites (``test_OneSidedStreaming``). For the 3.x cut-over a test
+  file's binary follows the API it targets, which the comment above the binaries in
+  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
+  compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
+  ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
   than of any one unit: header isolation, engine linkage, the library-unload harness,
   the installed-package consumer.
@@ -270,8 +278,11 @@ the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
 ``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
 travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
 (``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
-``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` on ``anira_edge_info``), a
-value of the enum or ``ANIRA_PROVIDER_DEFAULT`` beside a name in the engine's own vocabulary,
+``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` and ``to_engine_id`` on
+``anira_edge_info``), a
+value of the enum or ``ANIRA_PROVIDER_CUSTOM`` beside a name in the engine's own vocabulary
+(the pair rule: an id if and only if the value is ``ANIRA_ENGINE_CUSTOM`` /
+``ANIRA_PROVIDER_CUSTOM``),
 and the JSON spellings of both enums live in one place, ``src/capi/words.h``, which the JSON
 reader and writer, the messages, the carriers and the adapters share. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,

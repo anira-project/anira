@@ -14,10 +14,10 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
-#include "../support/extras_fixtures.h"
-#include "backends/Adapter.h"
-#include "backends/Adapters.h"
+#include "../support/v2_objects.h"
 #include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -39,17 +39,17 @@ namespace {
 // One inference through `prepared` over buffers of its loaded model's element counts, with
 // descriptors over them: what the inference thread hands the prepared handle, built by hand
 // for a session that was never prepared.
-anira_status run_once(backend::Prepared& prepared) {
-    const backend::Model& model = prepared.loaded().model();
+anira_status run_once(engine::Prepared& prepared) {
+    const engine::Model& model = prepared.loaded().model();
     std::vector<BufferF> inputs;
     std::vector<BufferF> outputs;
     std::vector<anira_tensor> input_tensors(model.m_inputs.size());
     std::vector<anira_tensor> output_tensors(model.m_outputs.size());
-    for (const backend::TensorInfo& tensor : model.m_inputs) {
+    for (const engine::TensorInfo& tensor : model.m_inputs) {
         inputs.emplace_back(1, tensor.m_num_elements);
         inputs.back().clear();
     }
-    for (const backend::TensorInfo& tensor : model.m_outputs) {
+    for (const engine::TensorInfo& tensor : model.m_outputs) {
         outputs.emplace_back(1, tensor.m_num_elements);
         outputs.back().clear();
     }
@@ -73,7 +73,7 @@ anira_status run_once(backend::Prepared& prepared) {
     ctx.ticket = ANIRA_TICKET_INVALID;
     ctx.inputs = input_tensors.data();
     ctx.outputs = output_tensors.data();
-    backend::ChunkBuffers buffers{.m_inputs = &inputs, .m_outputs = &outputs};
+    engine::ChunkBuffers buffers{.m_inputs = &inputs, .m_outputs = &outputs};
     return prepared.run(ctx, &buffers, false);
 }
 
@@ -103,19 +103,19 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
     // Two hosts, each owning an equal-valued InferenceConfig. Session A's config is
     // heap-allocated so its storage can be freed deterministically mid-test.
     const InferenceConfig hybridnn_config =
-        anira_test::bridged(k_hybridnn_model_json, k_hybridnn_contract_json);
+        anira_test::inference_config_of(k_hybridnn_model_json, k_hybridnn_contract_json);
     auto* config_a = new InferenceConfig(hybridnn_config);
     auto* pp_a = new PrePostProcessor(*config_a);
     auto session_a = Core::create_session(*pp_a,
                                           *config_a,
-                                          backend::legacy_plan_requests(*config_a, nullptr),
+                                          engine::legacy_plan_requests(*config_a, nullptr),
                                           core_config);
 
     auto config_b = std::make_unique<InferenceConfig>(hybridnn_config);
     auto pp_b = std::make_unique<PrePostProcessor>(*config_b);
     auto session_b = Core::create_session(*pp_b,
                                           *config_b,
-                                          backend::legacy_plan_requests(*config_b, nullptr),
+                                          engine::legacy_plan_requests(*config_b, nullptr),
                                           core_config);
 
     // Precondition: equal configs must actually share one pooled loaded model, otherwise the
@@ -127,7 +127,7 @@ TEST(ProcessorPoolingTest, PooledProcessorDoesNotAliasReleasedSessionConfig) {
 
     // Keep the pooled loaded model alive independently so it can be inspected after session A
     // is gone (this is what the core's pool does internally).
-    const std::shared_ptr<backend::Loaded> pooled = session_b->m_plans[0].m_loaded;
+    const std::shared_ptr<engine::Loaded> pooled = session_b->m_plans[0].m_loaded;
     const void* released_config_storage = static_cast<const void*>(config_a);
 
     // Release session A and free its config — exactly as a host destroying one plugin

@@ -1,4 +1,4 @@
-// The engine room's interface (src/backends/Adapter.h: Loaded, Prepared, Executor) and the
+// The engine room's interface (src/engines/Adapter.h: Loaded, Prepared, Executor) and the
 // legacy adapter over the 2.x virtual, driven directly: no core, no session. The claim loop
 // under several threads, the exclusive path, the float32 helpers of the built-in adapters, the
 // 2.x plan table as requests, and the copies the legacy adapter makes around a descriptor that
@@ -28,30 +28,30 @@
 #include <utility>
 #include <vector>
 
-#include "backends/Adapter.h"
-#include "backends/Adapters.h"
-#include "backends/LegacyAdapter.h"
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
+#include "engines/LegacyAdapter.h"
 #include "gtest/gtest.h"
 #include "utils/StatusError.h"
 
 namespace {
 
 using anira::StatusError;
-using anira::backend::Bindings;
-using anira::backend::BuiltinEngine;
-using anira::backend::ChunkBuffers;
-using anira::backend::EngineTensor;
-using anira::backend::Executor;
-using anira::backend::ExecutorLoaded;
-using anira::backend::ExtentRule;
-using anira::backend::Loaded;
-using anira::backend::Model;
-using anira::backend::PlanRequest;
-using anira::backend::Prepared;
-using anira::backend::PrepareRequest;
-using anira::backend::SlotBinding;
-using anira::backend::Source;
-using anira::backend::TensorInfo;
+using anira::engine::Bindings;
+using anira::engine::BuiltinEngine;
+using anira::engine::ChunkBuffers;
+using anira::engine::EngineTensor;
+using anira::engine::Executor;
+using anira::engine::ExecutorLoaded;
+using anira::engine::ExtentRule;
+using anira::engine::Loaded;
+using anira::engine::Model;
+using anira::engine::PlanRequest;
+using anira::engine::Prepared;
+using anira::engine::PrepareRequest;
+using anira::engine::SlotBinding;
+using anira::engine::Source;
+using anira::engine::TensorInfo;
 
 constexpr size_t k_block = 512;
 
@@ -462,22 +462,22 @@ TEST(Adapter, HostF32PackedAcceptsPackedAndAllZeroStrides) {
     const std::array<int64_t, 3> shape{1, 2, 4};
     anira_tensor tensor;
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), data.data()) << "all-zero strides";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "all-zero strides";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 4;
     tensor.strides[2] = 1;
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), data.data()) << "row-major strides";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "row-major strides";
 
     tensor.strides[0] = 999;  // an axis of extent 1 is never stepped
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), data.data());
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data());
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.byte_offset = sizeof(float);
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), data.data() + 1) << "the offset";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data() + 1) << "the offset";
 
     anira_tensor_init_pinned(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), data.data()) << "page-locked host";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "page-locked host";
 }
 
 TEST(Adapter, HostF32PackedRefusals) {
@@ -486,16 +486,16 @@ TEST(Adapter, HostF32PackedRefusals) {
     anira_tensor tensor;
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_I16, 3, shape.data());
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), nullptr) << "dtype";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "dtype";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 7), nullptr) << "wrong count";
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 9), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 7), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 9), nullptr) << "wrong count";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 1;
     tensor.strides[2] = 2;
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), nullptr) << "strided";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "strided";
 
     const std::array<const float*, 1> planes{data.data()};
     const std::array<int64_t, 2> planar_shape{1, 8};
@@ -506,29 +506,29 @@ TEST(Adapter, HostF32PackedRefusals) {
                                   2,
                                   planar_shape.data());
     ASSERT_EQ(tensor.dtype, ANIRA_DTYPE_F32);
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), nullptr) << "planar";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "planar";
 
     anira_tensor_init_host(&tensor, nullptr, ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), nullptr) << "no memory";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "no memory";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.domain = static_cast<uint32_t>(ANIRA_DOMAIN_CUDA);
-    EXPECT_EQ(anira::backend::host_f32_packed(tensor, 8), nullptr) << "a device domain";
+    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "a device domain";
 
     const anira_tensor zero{};
-    EXPECT_EQ(anira::backend::host_f32_packed(zero, 0), nullptr) << "a refused factory's record";
+    EXPECT_EQ(anira::engine::host_f32_packed(zero, 0), nullptr) << "a refused factory's record";
 }
 
 TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
     Model model = gain_model();
-    EXPECT_NO_THROW(anira::backend::require_f32(model, "onnxruntime"));
+    EXPECT_NO_THROW(anira::engine::require_f32(model, "onnxruntime"));
 
     model.m_inputs.push_back(f32_tensor("gain", {1}));
     model.m_inputs.back().m_dtype = ANIRA_DTYPE_I16;
     model.m_outputs.push_back(f32_tensor("peak", {1}));
     model.m_outputs.back().m_dtype = ANIRA_DTYPE_I32;
     try {
-        anira::backend::require_f32(model, "onnxruntime");
+        anira::engine::require_f32(model, "onnxruntime");
         FAIL() << "an int16 input passed";
     } catch (const anira::StatusError& e) {
         EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
@@ -540,7 +540,7 @@ TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
 
     model.m_inputs.back().m_dtype = ANIRA_DTYPE_F32;
     try {
-        anira::backend::require_f32(model, "libtorch");
+        anira::engine::require_f32(model, "libtorch");
         FAIL() << "an int32 output passed";
     } catch (const anira::StatusError& e) {
         EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
@@ -577,6 +577,7 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     b.m_provider = ANIRA_PROVIDER_CUDA;
     EXPECT_NE(a, b) << "the provider is";
     b = gain_model(2);
+    b.m_provider = ANIRA_PROVIDER_CUSTOM;
     b.m_provider_id = "QNNExecutionProvider";
     EXPECT_NE(a, b) << "a custom provider is";
     b = gain_model(2);
@@ -597,7 +598,7 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         if (backend != anira::InferenceBackend::CUSTOM) { expected.push_back(backend); }
     }
 
-    const std::vector<PlanRequest> without = anira::backend::legacy_plan_requests(config, nullptr);
+    const std::vector<PlanRequest> without = anira::engine::legacy_plan_requests(config, nullptr);
     ASSERT_EQ(without.size(), expected.size());
     for (size_t i = 0; i < expected.size(); ++i) {
         SCOPED_TRACE("plan " + std::to_string(i));
@@ -605,7 +606,7 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         EXPECT_EQ(without[i].m_source, Source::Roundtrip);
         EXPECT_EQ(without[i].m_backend, nullptr);
         EXPECT_EQ(without[i].m_missing_model, i > 0) << "the custom row has its model";
-        EXPECT_EQ(without[i].m_model.m_engine, anira::backend::engine_of(expected[i]));
+        EXPECT_EQ(without[i].m_model.m_engine, anira::engine::engine_of(expected[i]));
         EXPECT_EQ(without[i].m_model.m_instances, 2U);
         ASSERT_EQ(without[i].m_model.m_inputs.size(), 1U);
         EXPECT_EQ(without[i].m_model.m_inputs.at(0).m_dims, (std::vector<int64_t>{1, 1, k_block}));
@@ -613,10 +614,11 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         EXPECT_TRUE(without[i].m_model.m_inputs.at(0).m_export_name.empty());
     }
     EXPECT_EQ(without[0].m_model.m_path, "placeholder");
-    EXPECT_EQ(without[0].m_model.m_engine, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(without[0].m_model.m_engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(without[0].m_model.m_engine_id, "anira.v2.custom") << "the pair rule";
 
     RecordingBackend custom(config);
-    const std::vector<PlanRequest> with = anira::backend::legacy_plan_requests(config, &custom);
+    const std::vector<PlanRequest> with = anira::engine::legacy_plan_requests(config, &custom);
     ASSERT_EQ(with.size(), expected.size());
     EXPECT_EQ(with[0].m_source, Source::Legacy);
     EXPECT_EQ(with[0].m_backend, &custom);
@@ -645,14 +647,14 @@ TEST(Adapter, LegacyPlanRequestsOfEveryEngineOfTheBuildMatchTheDefaultTable) {
         /*blocking_ratio=*/0.F,
         /*num_parallel_processors=*/3);
 
-    const std::vector<PlanRequest> requests = anira::backend::legacy_plan_requests(config, nullptr);
+    const std::vector<PlanRequest> requests = anira::engine::legacy_plan_requests(config, nullptr);
     ASSERT_EQ(requests.size(), rows.size() + 1);
     for (size_t i = 0; i < rows.size(); ++i) {
         SCOPED_TRACE("plan " + std::to_string(i));
         EXPECT_EQ(requests[i].m_legacy_backend, rows[i].m_backend);
         EXPECT_EQ(requests[i].m_source, Source::BuiltIn);
         EXPECT_FALSE(requests[i].m_missing_model);
-        EXPECT_EQ(requests[i].m_model.m_engine, anira::backend::engine_of(rows[i].m_backend));
+        EXPECT_EQ(requests[i].m_model.m_engine, anira::engine::engine_of(rows[i].m_backend));
         EXPECT_NE(requests[i].m_model.m_engine, ANIRA_ENGINE_NONE);
         EXPECT_EQ(requests[i].m_model.m_path,
                   "model-" + std::to_string(static_cast<int>(rows[i].m_backend)));
@@ -672,7 +674,7 @@ TEST(Adapter, LegacyPlanRequestsOfEveryEngineOfTheBuildMatchTheDefaultTable) {
 TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyLoaded loaded(backend);
+    anira::engine::LegacyLoaded loaded(backend);
     EXPECT_EQ(loaded.wrapped(), &backend);
     loaded.load(gain_model());
     EXPECT_EQ(backend.m_prepares, 1);
@@ -705,7 +707,7 @@ TEST(Adapter, LegacyAdapterPreparesItsBackendAndPassesTheStructsBuffersThrough) 
 TEST(Adapter, LegacyAdapterCopiesAForeignSlotInAndOutAroundTheCall) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyLoaded loaded(backend);
+    anira::engine::LegacyLoaded loaded(backend);
     loaded.load(gain_model());
     const std::unique_ptr<Prepared> session = shared_session(loaded);
     Prepared& adapter = *session;
@@ -753,7 +755,7 @@ TEST(Adapter, LegacyAdapterCopiesAForeignSlotInAndOutAroundTheCall) {
 TEST(Adapter, LegacyAdapterFailsAChunkItCannotBindAndAThrowingBackend) {
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyLoaded loaded(backend);
+    anira::engine::LegacyLoaded loaded(backend);
     loaded.load(gain_model());
     const std::unique_ptr<Prepared> session = shared_session(loaded);
     Prepared& adapter = *session;
@@ -785,7 +787,7 @@ TEST(Adapter, LegacyAdapterFailsAChunkItCannotBindAndAThrowingBackend) {
 // by the adapter.
 TEST(Adapter, LegacyAdapterOverTheRoundtripPassesTheBlockThrough) {
     anira::InferenceConfig config = custom_only_config();
-    anira::backend::LegacyLoaded loaded(config);
+    anira::engine::LegacyLoaded loaded(config);
     loaded.load(gain_model());
     const std::unique_ptr<Prepared> session = shared_session(loaded);
     Prepared& adapter = *session;
@@ -810,7 +812,7 @@ TEST(Adapter, LegacyAdapterOverTheRoundtripPassesTheBlockThrough) {
 TEST(Adapter, LegacyAdapterTakesNoInstanceClaim) {
     anira::InferenceConfig config = custom_only_config();
     MeetingBackend backend(config, 2);
-    anira::backend::LegacyLoaded loaded(backend);
+    anira::engine::LegacyLoaded loaded(backend);
     loaded.load(gain_model(1));
     const std::unique_ptr<Prepared> session = shared_session(loaded);
     Prepared& adapter = *session;
@@ -841,7 +843,7 @@ TEST(Adapter, BindSlotsByRecordNameByCanonicalNameAndByPosition) {
                                         f32_tensor("extra", {1})};
     const std::vector<std::string> engine{"data", "gain", "other"};
     const std::vector<SlotBinding> bindings =
-        anira::backend::bind_slots(slots, engine, engine.size(), "test", "input");
+        anira::engine::bind_slots(slots, engine, engine.size(), "test", "input");
     ASSERT_EQ(bindings.size(), 3U);
     EXPECT_EQ(bindings[0].m_index, 0U);
     EXPECT_EQ(bindings[0].m_binding, ANIRA_BINDING_NAME) << "the record's name";
@@ -854,18 +856,18 @@ TEST(Adapter, BindSlotsByRecordNameByCanonicalNameAndByPosition) {
     const std::vector<TensorInfo> two{named_tensor("audio_in", "data", {1, 1, k_block}),
                                       f32_tensor("gain", {1})};
     const std::vector<SlotBinding> by_name =
-        anira::backend::bind_slots(two, reordered, 2, "test", "input");
+        anira::engine::bind_slots(two, reordered, 2, "test", "input");
     EXPECT_EQ(by_name[0].m_index, 1U);
     EXPECT_EQ(by_name[1].m_index, 0U);
 
     // A side without names: every slot by position.
     const std::vector<std::string> unnamed{"", ""};
     const std::vector<SlotBinding> positional =
-        anira::backend::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
-                                   unnamed,
-                                   2,
-                                   "test",
-                                   "output");
+        anira::engine::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
+                                  unnamed,
+                                  2,
+                                  "test",
+                                  "output");
     EXPECT_EQ(positional[0].m_index, 0U);
     EXPECT_EQ(positional[0].m_binding, ANIRA_BINDING_POSITION);
     EXPECT_EQ(positional[1].m_index, 1U);
@@ -873,7 +875,7 @@ TEST(Adapter, BindSlotsByRecordNameByCanonicalNameAndByPosition) {
 
     // The 2.x path: no names on either side.
     const std::vector<SlotBinding> legacy =
-        anira::backend::bind_slots({f32_tensor("", {1})}, unnamed, 1, "test", "input");
+        anira::engine::bind_slots({f32_tensor("", {1})}, unnamed, 1, "test", "input");
     EXPECT_EQ(legacy[0].m_index, 0U);
     EXPECT_EQ(legacy[0].m_binding, ANIRA_BINDING_POSITION);
 }
@@ -882,11 +884,11 @@ TEST(Adapter, BindSlotsRefusals) {
     // A record name the side lacks: CONFIG listing the names.
     {
         const anira::StatusError error = status_error_of([] {
-            anira::backend::bind_slots({named_tensor("in", "ghost", {1})},
-                                       {"data", "gain"},
-                                       2,
-                                       "onnxruntime",
-                                       "input");
+            anira::engine::bind_slots({named_tensor("in", "ghost", {1})},
+                                      {"data", "gain"},
+                                      2,
+                                      "onnxruntime",
+                                      "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -897,11 +899,11 @@ TEST(Adapter, BindSlotsRefusals) {
     // A record name on a side without names.
     {
         const anira::StatusError error = status_error_of([] {
-            anira::backend::bind_slots({named_tensor("out", "y", {1})},
-                                       {""},
-                                       1,
-                                       "libtorch",
-                                       "output");
+            anira::engine::bind_slots({named_tensor("out", "y", {1})},
+                                      {""},
+                                      1,
+                                      "libtorch",
+                                      "output");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("the side binds by position alone"),
@@ -911,11 +913,11 @@ TEST(Adapter, BindSlotsRefusals) {
     // A position the engine has no tensor at.
     {
         const anira::StatusError error = status_error_of([] {
-            anira::backend::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
-                                       {"x"},
-                                       1,
-                                       "test",
-                                       "input");
+            anira::engine::bind_slots({f32_tensor("a", {1}), f32_tensor("b", {1})},
+                                      {"x"},
+                                      1,
+                                      "test",
+                                      "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("binds by position, and the test model has 1"),
@@ -925,7 +927,7 @@ TEST(Adapter, BindSlotsRefusals) {
     // An engine tensor no slot binds.
     {
         const anira::StatusError error = status_error_of([] {
-            anira::backend::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 2, "test", "input");
+            anira::engine::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 2, "test", "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("'y' (index 1) is bound by no slot"),
@@ -935,15 +937,15 @@ TEST(Adapter, BindSlotsRefusals) {
     // The same engine tensor at or above `required` may stay unbound (a LibTorch argument
     // with a default value).
     EXPECT_NO_THROW(
-        anira::backend::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 1, "test", "input"));
+        anira::engine::bind_slots({f32_tensor("a", {1})}, {"x", "y"}, 1, "test", "input"));
     // Two slots on one engine tensor: one by name, one by position.
     {
         const anira::StatusError error = status_error_of([] {
-            anira::backend::bind_slots({f32_tensor("p", {1}), f32_tensor("x", {1})},
-                                       {"x", "y"},
-                                       2,
-                                       "test",
-                                       "input");
+            anira::engine::bind_slots({f32_tensor("p", {1}), f32_tensor("x", {1})},
+                                      {"x", "y"},
+                                      2,
+                                      "test",
+                                      "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -955,24 +957,24 @@ TEST(Adapter, BindSlotsRefusals) {
 
 TEST(Adapter, CheckEngineTensorComparesDtypeRankAndEveryStaticExtent) {
     const TensorInfo slot = f32_tensor("audio_in", {1, 1, k_block});
-    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
-                                                        engine_f32("data", {1, 1, k_block}),
-                                                        ExtentRule::Exact,
-                                                        "test",
-                                                        "input"));
-    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
-                                                        engine_f32("data", {1, 1, -1}),
-                                                        ExtentRule::Exact,
-                                                        "test",
-                                                        "input"))
+    EXPECT_NO_THROW(anira::engine::check_engine_tensor(slot,
+                                                       engine_f32("data", {1, 1, k_block}),
+                                                       ExtentRule::Exact,
+                                                       "test",
+                                                       "input"));
+    EXPECT_NO_THROW(anira::engine::check_engine_tensor(slot,
+                                                       engine_f32("data", {1, 1, -1}),
+                                                       ExtentRule::Exact,
+                                                       "test",
+                                                       "input"))
         << "a dynamic extent matches anything";
     {
         const anira::StatusError error = status_error_of([&slot] {
-            anira::backend::check_engine_tensor(slot,
-                                                engine_f32("data", {1, k_block}),
-                                                ExtentRule::Exact,
-                                                "test",
-                                                "input");
+            anira::engine::check_engine_tensor(slot,
+                                               engine_f32("data", {1, k_block}),
+                                               ExtentRule::Exact,
+                                               "test",
+                                               "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -983,11 +985,11 @@ TEST(Adapter, CheckEngineTensorComparesDtypeRankAndEveryStaticExtent) {
     }
     {
         const anira::StatusError error = status_error_of([&slot] {
-            anira::backend::check_engine_tensor(slot,
-                                                engine_f32("data", {1, 1, 256}),
-                                                ExtentRule::Exact,
-                                                "test",
-                                                "input");
+            anira::engine::check_engine_tensor(slot,
+                                               engine_f32("data", {1, 1, 256}),
+                                               ExtentRule::Exact,
+                                               "test",
+                                               "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -1000,25 +1002,25 @@ TEST(Adapter, CheckEngineTensorComparesDtypeRankAndEveryStaticExtent) {
         int16.m_dtype = ANIRA_DTYPE_I16;
         int16.m_type_word = "int16";
         const anira::StatusError error = status_error_of([&slot, &int16] {
-            anira::backend::check_engine_tensor(slot, int16, ExtentRule::Exact, "test", "input");
+            anira::engine::check_engine_tensor(slot, int16, ExtentRule::Exact, "test", "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::string(error.what()).find("element type is int16"), std::string::npos)
             << error.what();
     }
     // The upper-bound rule of a planned engine: at or below the bound matches, above does not.
-    EXPECT_NO_THROW(anira::backend::check_engine_tensor(slot,
-                                                        engine_f32("", {1, 1, 65536}),
-                                                        ExtentRule::UpperBound,
-                                                        "executorch",
-                                                        "input"));
+    EXPECT_NO_THROW(anira::engine::check_engine_tensor(slot,
+                                                       engine_f32("", {1, 1, 65536}),
+                                                       ExtentRule::UpperBound,
+                                                       "executorch",
+                                                       "input"));
     {
         const anira::StatusError error = status_error_of([&slot] {
-            anira::backend::check_engine_tensor(slot,
-                                                engine_f32("", {1, 1, 256}),
-                                                ExtentRule::UpperBound,
-                                                "executorch",
-                                                "input");
+            anira::engine::check_engine_tensor(slot,
+                                               engine_f32("", {1, 1, 256}),
+                                               ExtentRule::UpperBound,
+                                               "executorch",
+                                               "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
         const std::string message = error.what();
@@ -1028,11 +1030,11 @@ TEST(Adapter, CheckEngineTensorComparesDtypeRankAndEveryStaticExtent) {
     }
     {
         const anira::StatusError error = status_error_of([&slot] {
-            anira::backend::check_engine_tensor(slot,
-                                                engine_f32("data", {1, 1, 65536}),
-                                                ExtentRule::Exact,
-                                                "test",
-                                                "input");
+            anira::engine::check_engine_tensor(slot,
+                                               engine_f32("data", {1, 1, 65536}),
+                                               ExtentRule::Exact,
+                                               "test",
+                                               "input");
         });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG) << "exact means exact";
     }
@@ -1043,17 +1045,17 @@ TEST(Adapter, BindSideBindsThenChecksAndBindingsOfReports) {
                                         f32_tensor("gain", {1})};
     const std::vector<EngineTensor> engine{engine_f32("data", {1, 1, -1}), engine_f32("gain", {1})};
     const std::vector<SlotBinding> inputs =
-        anira::backend::bind_side(slots, engine, 2, ExtentRule::Exact, "test", "input");
+        anira::engine::bind_side(slots, engine, 2, ExtentRule::Exact, "test", "input");
     EXPECT_EQ(inputs[0].m_binding, ANIRA_BINDING_POSITION);
     EXPECT_EQ(inputs[1].m_binding, ANIRA_BINDING_NAME);
     const std::vector<EngineTensor> wrong{engine_f32("data", {1, 1, 256}), engine_f32("gain", {1})};
     const anira::StatusError error = status_error_of([&slots, &wrong] {
-        anira::backend::bind_side(slots, wrong, 2, ExtentRule::Exact, "test", "input");
+        anira::engine::bind_side(slots, wrong, 2, ExtentRule::Exact, "test", "input");
     });
     EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
     const Bindings report =
-        anira::backend::bindings_of(inputs,
-                                    {SlotBinding{.m_index = 0, .m_binding = ANIRA_BINDING_NAME}});
+        anira::engine::bindings_of(inputs,
+                                   {SlotBinding{.m_index = 0, .m_binding = ANIRA_BINDING_NAME}});
     EXPECT_EQ(report.m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_NAME}));
     EXPECT_EQ(report.m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
@@ -1069,7 +1071,7 @@ TEST(Adapter, LoadReportsPositionForEverySlotUntilTheEngineSaysOtherwise) {
     EXPECT_EQ(loaded.bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
     anira::InferenceConfig config = custom_only_config();
     RecordingBackend backend(config);
-    anira::backend::LegacyLoaded legacy(backend);
+    anira::engine::LegacyLoaded legacy(backend);
     legacy.load(gain_model());
     EXPECT_EQ(legacy.bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 }
@@ -1082,38 +1084,39 @@ TEST(Adapter, LoadReportsPositionForEverySlotUntilTheEngineSaysOtherwise) {
 // and an adapter over it (unloaded until load loads a model); an engine the build does not
 // carry, and the custom engine, have neither.
 TEST(Adapter, MakeBuiltInEngineAndLoadedAnswerTheEnginesOfTheBuild) {
-    EXPECT_EQ(anira::backend::make_builtin_engine(ANIRA_ENGINE_NONE), nullptr);
-    EXPECT_EQ(anira::backend::make_builtin_loaded(nullptr), nullptr);
-    EXPECT_EQ(anira::backend::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_NONE);
+    EXPECT_EQ(anira::engine::make_builtin_engine(ANIRA_ENGINE_NONE), nullptr);
+    EXPECT_EQ(anira::engine::make_builtin_loaded(nullptr), nullptr);
+    EXPECT_EQ(anira::engine::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(anira::engine::make_builtin_engine(ANIRA_ENGINE_CUSTOM), nullptr);
     for (const anira::InferenceBackend backend : every_backend()) {
         if (backend == anira::InferenceBackend::CUSTOM) { continue; }
-        const anira_engine engine = anira::backend::engine_of(backend);
+        const anira_engine engine = anira::engine::engine_of(backend);
         ASSERT_NE(engine, ANIRA_ENGINE_NONE);
-        const std::shared_ptr<BuiltinEngine> object = anira::backend::make_builtin_engine(engine);
+        const std::shared_ptr<BuiltinEngine> object = anira::engine::make_builtin_engine(engine);
         ASSERT_NE(object, nullptr) << "engine " << static_cast<int>(engine);
-        EXPECT_EQ(object->engine(), engine);
+        EXPECT_EQ(object->kind(), engine);
         EXPECT_FALSE(object->initialised());
-        const std::shared_ptr<Loaded> loaded = anira::backend::make_builtin_loaded(object);
+        const std::shared_ptr<Loaded> loaded = anira::engine::make_builtin_loaded(object);
         ASSERT_NE(loaded, nullptr) << "engine " << static_cast<int>(engine);
         EXPECT_FALSE(loaded->loaded());
-        EXPECT_EQ(&dynamic_cast<ExecutorLoaded&>(*loaded).engine(), object.get())
+        EXPECT_EQ(&dynamic_cast<ExecutorLoaded&>(*loaded).builtin(), object.get())
             << "the loaded model holds the object it was made over";
         // The query needs no init and lists the default provider first.
-        const std::vector<anira::backend::ProviderInfo> providers = object->providers();
+        const std::vector<anira::engine::ProviderInfo> providers = object->providers();
         ASSERT_FALSE(providers.empty());
-        EXPECT_EQ(providers.front(), anira::backend::ProviderInfo{});
-        EXPECT_EQ(providers, anira::backend::builtin_providers(engine));
+        EXPECT_EQ(providers.front(), anira::engine::ProviderInfo{});
+        EXPECT_EQ(providers, anira::engine::builtin_providers(engine));
         EXPECT_FALSE(object->initialised()) << "the query initialises nothing";
         // An object that claims the engine but is not the adapter's own is refused.
         const auto foreign = std::make_shared<RecordingEngine>(engine);
         try {
-            static_cast<void>(anira::backend::make_builtin_loaded(foreign));
+            static_cast<void>(anira::engine::make_builtin_loaded(foreign));
             ADD_FAILURE() << "a recording engine object passed as engine "
                           << static_cast<int>(engine);
         } catch (const StatusError& e) { EXPECT_EQ(e.status(), ANIRA_ERROR_INVALID_ARGUMENT); }
     }
 #ifndef USE_ONNXRUNTIME
-    EXPECT_EQ(anira::backend::make_builtin_engine(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
+    EXPECT_EQ(anira::engine::make_builtin_engine(ANIRA_ENGINE_ONNXRUNTIME), nullptr);
 #endif
 }
 
@@ -1125,7 +1128,7 @@ TEST(Adapter, ALoadedModelInitialisesItsEngineObjectOnceAndLoadsAfterItAlone) {
     const auto engine = std::make_shared<RecordingEngine>();
     RecordingLoaded first(engine);
     RecordingLoaded second(engine);
-    EXPECT_EQ(&first.engine(), engine.get());
+    EXPECT_EQ(&first.builtin(), engine.get());
     EXPECT_FALSE(engine->initialised());
     try {
         first.load(gain_model());
@@ -1190,7 +1193,7 @@ private:
 /// The rig of a built-in engine of the build; a null loaded model for one it does not carry.
 std::shared_ptr<Rig> builtin_rig(anira_engine engine) {
     std::shared_ptr<Loaded> loaded =
-        anira::backend::make_builtin_loaded(anira::backend::make_builtin_engine(engine));
+        anira::engine::make_builtin_loaded(anira::engine::make_builtin_engine(engine));
     return loaded == nullptr ? nullptr : std::make_shared<Rig>(std::move(loaded));
 }
 
@@ -1253,15 +1256,14 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
     ASSERT_NE(adapter, nullptr);
     const Loaded& loaded = adapter->loaded();
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CPU, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_VULKAN, ""));
-    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "com.example.nobody"));
-    const std::vector<anira::backend::ProviderInfo> listed =
-        anira::backend::onnxruntime_providers();
-    for (const anira::backend::ProviderInfo& info : listed) {
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "com.example.nobody"));
+    const std::vector<anira::engine::ProviderInfo> listed = anira::engine::onnxruntime_providers();
+    for (const anira::engine::ProviderInfo& info : listed) {
         EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
     }
-    const bool has_cuda = std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+    const bool has_cuda = std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
         return p.m_provider == ANIRA_PROVIDER_CUDA;
     });
     EXPECT_EQ(loaded.serves(ANIRA_PROVIDER_CUDA, ""), has_cuda);
@@ -1269,6 +1271,7 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
         << loaded.provider_reason();
 
     Model nobody = onnx_gain_model();
+    nobody.m_provider = ANIRA_PROVIDER_CUSTOM;
     nobody.m_provider_id = "com.example.nobody";
     const anira::StatusError refused =
         status_error_of([&nobody] { builtin_rig(ANIRA_ENGINE_ONNXRUNTIME)->prepare(nobody); });
@@ -1690,7 +1693,7 @@ TEST(AdapterLiteRt, TheGainBindsByPositionInTheSignaturesKeyOrder) {
     expect_gain_of_one_half(*adapter);
 }
 
-// The provider of the record on LiteRT: an accelerator by its hardware's name beside DEFAULT
+// The provider of the record on LiteRT: an accelerator by its hardware's name beside CUSTOM
 // ("gpu", "npu"), never a provider of the enum; a name whose hardware no registered
 // accelerator supports here is refused at load naming the registered ones (the environment's
 // automatic registration loads the accelerator libraries it finds; a LiteRT library that does
@@ -1699,10 +1702,10 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     const Loaded& loaded = adapter->loaded();
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "gpu"));
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "npu"));
-    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "tpu"));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CPU, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "gpu"));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "npu"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "tpu"));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
     EXPECT_NE(loaded.provider_reason().find("'gpu'"), std::string::npos)
@@ -1717,14 +1720,15 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
               std::string::npos)
         << refused.what();
 
-    const std::vector<anira::backend::ProviderInfo> listed = anira::backend::litert_providers();
-    const bool has_gpu = std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+    const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
+    const bool has_gpu = std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
         return p.m_provider_id == "gpu";
     });
     if (!has_gpu) {
         Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
         gpu.m_outputs[0].m_export_name = "output_0";
         gpu.m_outputs[1].m_export_name = "output_1";
+        gpu.m_provider = ANIRA_PROVIDER_CUSTOM;
         gpu.m_provider_id = "gpu";
         const anira::StatusError no_gpu =
             status_error_of([&gpu] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(gpu); });
@@ -1737,7 +1741,7 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
         // registered accelerator (Windows arm64's static one, which runs on LiteRT's built-in
         // kernels) lists none.
         std::string others;
-        for (const anira::backend::ProviderInfo& provider : listed) {
+        for (const anira::engine::ProviderInfo& provider : listed) {
             if (!others.empty()) { others += ", "; }
             others += provider.m_provider_id;
         }

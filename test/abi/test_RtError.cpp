@@ -31,7 +31,6 @@
 
 namespace {
 
-using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::count_records;
 using anira_test::custom_candidates;
@@ -41,13 +40,12 @@ using anira_test::expect_same_block;
 using anira_test::explicit_contract;
 using anira_test::find_record;
 using anira_test::gain_with_custom;
-using anira_test::GateBackend;
+using anira_test::GateEngine;
 using anira_test::Handler;
 using anira_test::k_block;
 using anira_test::ramp;
 using anira_test::RecordCollector;
 using anira_test::SummaryInterval;
-using anira_test::ThrowingBackend;
 using anira_test::wait_for_block;
 
 constexpr const char* k_missing_samples_site =
@@ -277,14 +275,13 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     const DebugContext context;
     const anira::ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
     ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     anira_drain_log();
     RecordCollector collector;
-    GateBackend gate(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
-    const DestroyFirst destroy_first(handler, &gate);
     gate.m_open.store(false);
 
     std::vector<float> block(k_block, 0.25F);
@@ -329,7 +326,6 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     EXPECT_EQ(rearm.m_level, static_cast<uint32_t>(ANIRA_LOG_WARNING));
     EXPECT_EQ(rearm.m_group, "anira.scheduler");
 #endif
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
     gate.m_open.store(false);
     for (int i = 0; i < 6; ++i) { starved_call(); }
 #ifdef ENABLE_LOGGING
@@ -347,14 +343,14 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     const DebugContext context;
     const anira::ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine engine;
+    Handler handler(context, model, candidates, {}, engine.engine());
+    const DestroyFirst destroy_first(handler, &engine);
     ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     anira_drain_log();
     RecordCollector collector;
-    ThrowingBackend backend(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
+    engine.m_fail.store(true);  // every inference fails from here on
 
     {
         std::vector<float> block = ramp(1);
@@ -376,8 +372,8 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     for (size_t k = 3; k <= 5; ++k) { waited_block(h, k); }
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    // The scheduler's record, latched: the engine call failed the chunk with ENGINE (a 2.x
-    // backend's throw is caught by its legacy adapter and returned as that status).
+    // The scheduler's record, latched: the engine call failed the chunk with ENGINE (the
+    // status the gate engine returns, as the legacy adapter did for a 2.x backend's throw).
     EXPECT_EQ(count_records(collector, "inference failed in session", "rt"), 1U);
     const RecordCollector::Record record =
         find_record(collector, "inference failed in session", "rt");
@@ -387,8 +383,8 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     EXPECT_EQ(record.m_flags & ANIRA_LOG_RECORD_CONTRACT_VIOLATION, 0U);
     EXPECT_EQ(record.m_level, static_cast<uint32_t>(ANIRA_LOG_ERROR));
     EXPECT_EQ(record.m_group, "anira.scheduler");
-    // The throw's text travels in the legacy adapter's own record, unlatched (no session
-    // reaches a 2.x backend behind the adapter): one per throw.
+    // The engine's own record, unlatched (anira_log_rt, beside the scheduler's): one per
+    // failed inference.
     EXPECT_EQ(count_records(collector, "test backend: inference failed", "rt"), 5U);
 #endif
     // The pool is intact.
@@ -397,8 +393,8 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
     EXPECT_TRUE(anira::Core::has_inference_threads());
 
     // The pass-through resumes: block k delivers ramp(k - 1).
-    backend.m_throw.store(false);
-    expect_all(waited_block(h, 6), 0.0F, "block 6: inference 5 threw");
+    engine.m_fail.store(false);
+    expect_all(waited_block(h, 6), 0.0F, "block 6: inference 5 failed");
     expect_same_block(waited_block(h, 7), ramp(6), 7);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_ENGINE) << "nothing cleared it";
     anira_handler_reset(h);
@@ -410,7 +406,8 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
                             "last prepare or reset",
                             "rt"),
               1U)
-        << "5 throws, 1 logged";
+        << "5 failures, 1 logged";
+
 #endif
 }
 

@@ -176,7 +176,7 @@ typedef struct anira_plan_ext {
     const char* kind;  /**< The extension kind (its registered reverse-URI name). */
     /**
      * Who consumes it: "stage" for the pipeline's stage, else the engine's word for a built-in
-     * engine's adapter ("onnxruntime", "libtorch", "executorch") or the id of a custom engine.
+     * engine's adapter ("onnxruntime", "executorch", "libtorch") or the id of a custom engine.
      */
     const char* consumer;
 } anira_plan_ext;
@@ -199,11 +199,11 @@ typedef struct anira_plan_info {
      */
     uint32_t variant;
     /**
-     * anira_engine; ANIRA_ENGINE_NONE for a custom engine, which engine_id names.
+     * anira_engine; ANIRA_ENGINE_CUSTOM for a custom engine, which engine_id names.
      */
     uint32_t engine;
     /**
-     * anira_provider of the plan; ANIRA_PROVIDER_DEFAULT beside a provider_id.
+     * anira_provider of the plan; ANIRA_PROVIDER_CUSTOM beside a provider_id.
      */
     uint32_t provider;
     /**
@@ -229,7 +229,7 @@ typedef struct anira_plan_info {
 /**
  * @brief No plan.
  */
-#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, 0.0, 0u, 0u, NULL)
+#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL)
 
 /**
  * @brief Creates an empty pipeline. A pipeline holds exactly one inference stage
@@ -261,37 +261,46 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * of its own: it is one more implementation a candidate's engine_id resolves to, added
  * to the pipeline with anira_pipeline_add_engine (before or after this call), and its
  * call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose id no
- * engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create
- * (anira.v2.custom, the 2.x CUSTOM backend of the bridge, needs no registration in this
- * pre-release).
+ * engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create:
+ * every custom id, anira.v2.custom included, needs an engine on the pipeline.
  * @param pipeline The pipeline.
  * @param variants The model configurations the stage may run, copied; exactly one in this
  *        pre-release.
  * @param num_variants The number of variants; 1 in this pre-release.
  * @param candidates The candidate backends, copied, or NULL (with num_candidates 0) for the
- *        default set: every engine this build carries on ANIRA_PROVIDER_DEFAULT,
- *        every custom entry (ANIRA_ENGINE_NONE), and every provider a model entry of
- *        the variant is pinned to, on that entry's engine, so that a pinned entry
- *        runs on its pin and a neutral one on the default provider. Under the
- *        default set a model entry for an engine this build lacks is skipped, not
- *        refused; name it as a candidate to have it checked. A candidate whose
- *        engine_id is set names a custom engine; ANIRA_ENGINE_NONE with a NULL
- *        engine_id keeps every custom entry. A candidate's provider (provider, or
- *        provider_id for a custom one beside ANIRA_PROVIDER_DEFAULT) is what its
- *        plans run on: a model entry without a pin runs on it, a pinned entry on its
- *        pin alone (a candidate naming another provider skips it); its syntax is
- *        checked here (a value of the enum, never both a provider and a provider_id,
- *        never an empty provider_id), whether the engine serves it at
- *        anira_handler_create.
+ *        default set: every engine this build carries on ANIRA_PROVIDER_CPU, every
+ *        custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), and every
+ *        provider a model entry of the variant is pinned to, on that entry's engine.
+ *        Under it every entry is one plan: a pinned entry on its pin, a neutral one
+ *        on its engine's home provider, ANIRA_PROVIDER_CPU for a built-in engine and
+ *        for a custom engine that serves it (no providers list, or "cpu" in it),
+ *        else the custom engine's first listed provider. Under the default set a
+ *        model entry for an engine this build lacks is skipped, not refused, and a
+ *        plan whose provider its engine cannot use here (a built-in engine's
+ *        provider the context's capabilities lack, a custom engine's declared
+ *        provider its query cleared) is dropped at anira_handler_create and
+ *        anira_handler_prepare, with its entry when no plan of the entry is left; a
+ *        variant left with no plan is ANIRA_ERROR_CONFIG. Name a candidate to have
+ *        it checked: a named candidate the engine cannot serve here is refused. A
+ *        candidate names a built-in engine by its value or a custom engine as
+ *        ANIRA_ENGINE_CUSTOM with its id; ANIRA_ENGINE_NONE names no engine. A
+ *        candidate's provider (a value of the enum, or ANIRA_PROVIDER_CUSTOM with a
+ *        provider_id for a custom one; never ANIRA_PROVIDER_NONE) is what its plans
+ *        run on: a model entry without a pin runs on it, a pinned entry on its pin
+ *        alone (a candidate naming another provider skips it); its syntax is checked
+ *        here (a known value on both axes and the pair rule of anira_engine and
+ *        anira_provider), whether the engine serves it at anira_handler_create.
  * @param num_candidates The number of candidates; 0 with a NULL list.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant
  *         list, a NULL entry in it, a NULL candidates with num_candidates above 0, a candidate
  *         whose struct_size is below the record's head or unlike the first candidate's (the
- *         array's one stride), or a candidate whose provider is no value of anira_provider,
- *         carries a provider of the enum and a provider_id at once, or an empty provider_id;
- *         ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more
- *         than one variant.
+ *         array's one stride), or a candidate whose engine is neither a built-in engine nor
+ *         ANIRA_ENGINE_CUSTOM, whose provider is ANIRA_PROVIDER_NONE or no value of
+ *         anira_provider, or whose pair breaks the pair rule of anira_engine and anira_provider
+ *         (an id beside a value other than CUSTOM, CUSTOM without an id, an empty provider_id,
+ *         a custom engine id without a '.'); ANIRA_ERROR_CONFIG for a second inference stage;
+ *         ANIRA_ERROR_NOT_SUPPORTED for more than one variant.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -349,23 +358,25 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
  * when the last reference dies (the handle, the pipelines, their handlers, the loaded
  * models), after every unload. A refused call creates nothing and never calls release.
  * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
- *        by (anira_model_config_add_model_path_custom), which
+ *        by (anira_model_config_add_model_path_engine_id), which
  *        anira_backend_id.engine_id, the plan report and every message about the
- *        engine carry; it must contain a '.', and the prefix "anira." is anira's own.
- *        The id belongs to the engine, in every pipeline it is added to, and is
- *        unique per pipeline (anira_pipeline_add_engine), not per process: two engine
- *        objects may carry one id in two pipelines.
+ *        engine carry; it must contain a '.', and the prefix "anira." is anira's own,
+ *        with one exception: "anira.v2.custom", the id anira/compat/v2.hpp creates a
+ *        2.x custom backend under, legal like any other id (a 2.x model file's
+ *        "CUSTOM" row names it). The id belongs to the engine, in every pipeline it
+ *        is added to, and is unique per pipeline (anira_pipeline_add_engine), not per
+ *        process: two engine objects may carry one id in two pipelines.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL engine_id, desc or out, an id
- *         without a '.' or with the prefix "anira.", a struct_size below the three leading
- *         slots {struct_size, abi_version, user_data}, a flags bit this header does not define,
- *         a NULL process, a NULL consumed_kinds (or a NULL entry in it) with a count above 0,
- *         or a NULL providers (or a NULL or empty entry in it) with a count above 0;
- *         ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+ *         without a '.' or with the prefix "anira." ("anira.v2.custom" excepted), a struct_size
+ *         below the three leading slots {struct_size, abi_version, user_data}, a flags bit this
+ *         header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it)
+ *         with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a
+ *         count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
  *         (anira_check_abi).
  * @par Thread contract
  * [main-thread]
@@ -432,15 +443,15 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipe
  * rows first (anira_capabilities_backends: the built-in engines on the providers their
  * runtimes report, as the last anira_context_probe left them), then, for every custom
  * engine added to the pipeline, in the order they were added, one row per provider
- * usable here: the default provider first, then each provider of the descriptor's list
- * whose query bit is set (anira_engine_query_fn; every listed provider for an engine
- * without a query), engine ANIRA_ENGINE_NONE with the engine's id in engine_id. Every
- * call runs the custom engines' queries; the built-in rows are refreshed by
- * anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a
- * custom provider's provider_id) and into the context's store (a built-in engine's
- * provider_id): valid until the pipeline is destroyed and until the context's next
- * probe. Stride-explicit enumeration: min(element_size, the library's record size) bytes
- * are written per element.
+ * usable here: ANIRA_PROVIDER_CPU alone for a descriptor without a providers list, else
+ * each provider of the list whose query bit is set (anira_engine_query_fn; every listed
+ * provider for an engine without a query), engine ANIRA_ENGINE_CUSTOM with the engine's
+ * id in engine_id. Every call runs the custom engines' queries; the built-in rows are
+ * refreshed by anira_context_probe alone. The strings point into the pipeline's engines
+ * (engine_id, a custom provider's provider_id) and into the context's store (a built-in
+ * engine's provider_id): valid until the pipeline is destroyed and until the context's
+ * next probe. Stride-explicit enumeration: min(element_size, the library's record size)
+ * bytes are written per element.
  * @param pipeline The pipeline whose custom engines are asked.
  * @param context The context whose probed rows lead the list.
  * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
@@ -464,7 +475,7 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * built-in engine the context's row (anira_capabilities_edge); for a custom engine added
  * to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable
  * here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to
- * the default provider and to XNNPACK, the CPU providers host memory reaches without a
+ * ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a
  * copy, a host copy the engine makes for itself to every other provider, the reason
  * saying the engine declared the provider and its query reported it usable. The strings'
  * lifetime is anira_pipeline_capabilities_backends's.
@@ -472,7 +483,8 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * @param context The context whose edge registry answers for a built-in engine.
  * @param from The tensor's domain.
  * @param to The backend; read within its struct_size. A custom engine by its engine_id (engine
- *        ANIRA_ENGINE_NONE), a custom provider by its provider_id.
+ *        ANIRA_ENGINE_CUSTOM), a custom provider by its provider_id (provider
+ *        ANIRA_PROVIDER_CUSTOM).
  * @param out Receives the row, read and written within its struct_size (set it before the
  *        call).
  * @return ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row
@@ -512,8 +524,8 @@ ANIRA_API void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA
  * skipped, and a variant left with no entry is ANIRA_ERROR_CONFIG) and checks every
  * plan's provider against what its engine serves: a built-in engine's against this
  * context's capabilities (anira_capabilities_backends, what its runtime reports), a
- * custom engine's against its descriptor's providers list, the 2.x pass-through serving
- * the default provider alone; a provider the engine does not serve is
+ * custom engine's against its descriptor's providers list (a descriptor without one
+ * serves ANIRA_PROVIDER_CPU alone); a provider the engine does not serve is
  * ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and the served
  * list (the engine's load may still refuse one at prepare, a device missing at run
  * time). Models are loaded at anira_handler_prepare in this pre-release, so a file that
@@ -586,9 +598,9 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
  * that names no Streamed tensor, or one that differs from its spec's dtype while the
  * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
- * field), and a stage whose filled pre_process or post_process carries no
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those two
- * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * field), and a stage whose filled pre_process, post_process or reset carries no
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
+ * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.
@@ -1051,7 +1063,9 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler*
  * not while anira_handler_prepare runs: the 2.x arithmetic including the wait_ratio
  * credit, so a host that calls the ANIRA_NONBLOCKING entries on a wait_ratio above 0
  * handler gets the same figure and more on_miss events. A generator counts from its
- * first process or pop after prepare or reset.
+ * first process or pop after prepare or reset. Where the Hard contract declared a stream
+ * latency for the slot (anira_contract_hard_set_latency), that figure replaces the
+ * computed one.
  * @param handler A prepared handler.
  * @param slot The slot: the tensor's position in the model config's output list.
  * @return The latency; 0 for an output that is not Streamed (Static, State), a NULL or
@@ -1065,7 +1079,8 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* han
 
 /**
  * @brief The latency vector, index-aligned with the output list; valid from prepare on and not
- * while anira_handler_prepare runs.
+ * while anira_handler_prepare runs. A slot the Hard contract declared a stream latency
+ * for (anira_contract_hard_set_latency) reports that figure.
  * @param handler A prepared handler.
  * @param count In: the capacity of out; out: the number of output tensors.
  * @param out Receives one latency per output slot, in slot order: one entry per tensor of the

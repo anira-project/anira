@@ -246,9 +246,10 @@ int anira_header_c_probe(void) {
         uint32_t count = 0;
         checks +=
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
-        checks += backend.provider == ANIRA_PROVIDER_DEFAULT && backend.provider_id == NULL ? 1 : 0;
+        checks += backend.provider == ANIRA_PROVIDER_NONE && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
         checks += edge.reason == NULL && edge.to_provider_id == NULL ? 1 : 0;
+        checks += edge.to_engine_id == NULL ? 1 : 0;
         checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
@@ -256,7 +257,7 @@ int anira_header_c_probe(void) {
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =
-                anira_enabled_backends((uint32_t)sizeof(anira_backend_id), &count, NULL);
+                anira_enabled_engines((uint32_t)sizeof(anira_backend_id), &count, NULL);
             checks += now > 0.0 && ANIRA_SUCCEEDED(status) && count > 0u ? 1 : 0;
             checks += anira_num_inference_threads() == 0u ? 1 : 0;
             checks += anira_handler_rt_error(NULL) == ANIRA_OK ? 1 : 0;
@@ -275,6 +276,96 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
+        }
+    }
+    {
+        /* The read-back of anira/abi/config.h from C11: one call per shape behind the
+           never-true branch. A value getter answers a pointer, a count or an enum; a status
+           getter fills enum, int64_t, double, string, function-pointer and void* out-parameters
+           and a Tier-2 record within its struct_size. */
+        const anira_tensor_spec* spec = NULL;
+        const anira_ext_header* ext = NULL;
+        const char* canonical = NULL;
+        anira_axis_tag tag = ANIRA_AXIS_ANY;
+        int64_t extent = 0;
+        uint32_t count = 0u;
+        uint32_t axes[ANIRA_MAX_RANK];
+        double ms = 0.0;
+        anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
+        anira_dtype dtype = 0u;
+        anira_miss_fn miss = NULL;
+        void* miss_user_data = NULL;
+        anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
+        anira_log_desc log = ANIRA_LOG_DESC_INIT;
+        anira_engine engine = ANIRA_ENGINE_FORCE32;
+        anira_provider provider = ANIRA_PROVIDER_FORCE32;
+        const char* pair_id = NULL;
+        axes[0] = 0u;
+        if (checks < 0) { /* never true: the object is never linked */
+            spec = anira_model_config_input(NULL, 0u);
+            checks += anira_tensor_spec_name(spec) == NULL ? 1 : 0;
+            checks += anira_tensor_spec_role(spec) == ANIRA_ROLE_FORCE32 ? 1 : 0;
+            checks += anira_tensor_spec_ndim(spec) == 0u ? 1 : 0;
+            checks +=
+                anira_tensor_spec_axis(spec, 0u, &tag, &extent) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
+                                                                                                : 0;
+            checks += anira_tensor_spec_latency(spec) == 0 ? 1 : 0;
+            checks += anira_model_config_num_outputs(NULL) == 0u ? 1 : 0;
+            checks += anira_model_config_state(NULL) == ANIRA_MODEL_STATE_FORCE32 ? 1 : 0;
+            checks += anira_model_config_set_default_provider(NULL, ANIRA_PROVIDER_CUDA, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            /* The pair getters: a status and two out-parameters, the id one nullable. */
+            checks += anira_model_config_default_provider(NULL, &provider, &pair_id) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_default_engine(NULL, &engine, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_model_engine(NULL, 0u, &engine, &pair_id) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_model_provider(NULL, 0u, &provider, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_tensor_layout(NULL, 0u, "audio_in", &count, axes) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            ext = anira_model_config_model_ext(NULL, 0u, "entry");
+            checks += ext == NULL ? 1 : 0;
+            checks += anira_contract_hard_budget(NULL, &budget, &ms) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_hard_miss_fn(NULL, &miss, &miss_user_data) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_hard_ring_dtype(NULL, 0u, &canonical, &dtype) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_COST_PERMISSIVE ? 1 : 0;
+            /* The declared stream latency: the setter, the count and the enumeration. */
+            checks += anira_contract_hard_set_latency(NULL, "audio_out", 1024u) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_hard_num_latencies(NULL) == 0u ? 1 : 0;
+            checks += anira_contract_hard_latency(NULL, 0u, &canonical, &count) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks +=
+                anira_context_config_threads(NULL, &count, &wait) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
+            checks += anira_context_config_log(NULL, &log) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
         }
     }
     {
@@ -344,6 +435,9 @@ int anira_header_c_probe(void) {
         anira_tensor model_end;
         anira_role role = ANIRA_ROLE_FORCE32;
         anira_ring* ring = NULL;
+        const char* name = NULL;
+        anira_engine plan_engine = ANIRA_ENGINE_FORCE32;
+        anira_provider plan_provider = ANIRA_PROVIDER_FORCE32;
         void* prepared = NULL;
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
@@ -378,7 +472,7 @@ int anira_header_c_probe(void) {
         stage.release = on_stage_release;
         checks += stage.flags == 3u ? 1 : 0;
         checks += sizeof(anira_stage_ctx) == 64u && offsetof(anira_stage_ctx, frame) == 32u ? 1 : 0;
-        checks += ctx.frame_bits != 0u && ctx.reserved_ptr0 == NULL ? 1 : 0;
+        checks += ctx.frame_bits != 0u && ctx.engine_id == NULL && ctx.provider_id == NULL ? 1 : 0;
         if (checks < 0) { /* never true: the object is never linked */
             checks += anira_sizeof(ANIRA_STRUCT_STAGE_CTX) == 64u ? 1 : 0;
             checks += anira_pipeline_add_stage(NULL, &stage, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
@@ -419,6 +513,13 @@ int anira_header_c_probe(void) {
             checks +=
                 anira_stage_output_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
                                                                                                 : 0;
+            checks += anira_stage_engine(NULL, &plan_engine, &name) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks +=
+                anira_stage_provider(NULL, &plan_provider, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
         }
     }
     {
@@ -454,8 +555,7 @@ int anira_header_c_probe(void) {
                           load_info.model == NULL && load_info.instances == 0u
                       ? 1
                       : 0;
-        checks +=
-            load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == NULL ? 1 : 0;
+        checks += load_info.provider == ANIRA_PROVIDER_CPU && load_info.provider_id == NULL ? 1 : 0;
         checks += load_info.option_keys == NULL && load_info.option_values == NULL &&
                           load_info.num_options == 0u
                       ? 1

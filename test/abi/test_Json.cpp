@@ -15,6 +15,7 @@
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "fixtures.h"
+#include "pair_read.h"
 
 namespace {
 
@@ -215,34 +216,42 @@ TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
         ANIRA_ERROR_JSON);
 }
 
-// The "provider" key beside "engine" pins the entry: the enum's spelling to its value, any
-// other word to a custom provider's name, "default" to a neutral entry, as no key does; to_json
-// writes the key back, so the pin survives a round trip and two entries of one engine may
+// The "provider" key beside "engine" pins the entry: the enum's spelling to its value ("cpu"
+// to the CPU path), any other word to a custom provider's name, no key to a neutral entry
+// (ANIRA_PROVIDER_NONE), "default" and "none" refused as no provider's name; to_json writes the
+// key back, so the pin survives a round trip and two entries of one engine may
 // differ in it alone. The pair is two keys: a ':' in the engine word is refused naming the key.
 TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
     const Loaded loaded(R"({"models": [
         {"engine": "executorch", "provider": "coreml", "path": "net.coreml.pte"},
         {"engine": "executorch", "provider": "com.example.npu", "path": "net.npu.pte"},
         {"engine": "com.example.engine", "provider": "fast", "path": "net.bin"},
-        {"engine": "onnxruntime", "provider": "default", "path": "net.onnx"},
+        {"engine": "onnxruntime", "provider": "cpu", "path": "net.onnx"},
         {"engine": "libtorch", "path": "net.pt"}]})");
     ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
-    EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 0), ANIRA_ENGINE_EXECUTORCH);
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 0), ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 0), nullptr);
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 1), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 1), "com.example.npu");
-    EXPECT_STREQ(anira_model_config_model_engine_id(loaded.m_config, 2), "com.example.engine");
-    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 2), "fast");
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 3), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 3), nullptr);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 4), nullptr);
+    const anira_model_config* config = loaded.m_config;
+    EXPECT_EQ(anira_test::model_engine(config, 0),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_EXECUTORCH, ""}));
+    EXPECT_EQ(anira_test::model_provider(config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_COREML, ""}));
+    EXPECT_EQ(anira_test::model_provider(config, 1),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "com.example.npu"}));
+    EXPECT_EQ(anira_test::model_engine(config, 2),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_CUSTOM, "com.example.engine"}));
+    EXPECT_EQ(anira_test::model_provider(config, 2),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "fast"}));
+    EXPECT_EQ(anira_test::model_provider(config, 3),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CPU, ""}))
+        << "\"cpu\" pins the entry to the CPU path";
+    EXPECT_EQ(anira_test::model_provider(config, 4),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}));
     const std::string text = model_text(loaded.m_config);
     EXPECT_NE(text.find("\"engine\": \"executorch\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"coreml\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"com.example.npu\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"fast\""), std::string::npos) << text;
-    EXPECT_EQ(text.find("\"provider\": \"default\""), std::string::npos)
+    EXPECT_NE(text.find("\"provider\": \"cpu\""), std::string::npos) << text;
+    EXPECT_EQ(text.find("\"provider\": \"none\""), std::string::npos)
         << "a neutral entry carries no provider key:\n"
         << text;
     const Loaded again(text.c_str());
@@ -256,6 +265,13 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
                          "models[0].provider"),
               ANIRA_ERROR_JSON)
         << "an empty provider";
+    for (const char* reserved : {"default", "none"}) {
+        const std::string json =
+            std::string(R"({"models": [{"engine": "executorch", "provider": ")") + reserved +
+            R"(", "path": "x"}]})";
+        EXPECT_EQ(load_fails(json.c_str(), "is no provider's name"), ANIRA_ERROR_JSON)
+            << reserved << ": no provider's name (no key is a neutral entry, \"cpu\" the CPU path)";
+    }
     EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "provider": "coreml", "path": "x"}]})",
                          "models[0].engine"),
               ANIRA_ERROR_JSON)
@@ -539,6 +555,41 @@ TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     EXPECT_NE(std::string(err.message).find("hard.ring_dtypes.audio_in"), std::string::npos)
         << err.message;
     EXPECT_EQ(hard, nullptr);
+}
+
+// The declared stream latency per output (anira_contract_hard_set_latency): non-negative
+// integers by canonical name, at most INT32_MAX like the setter; whether a name is a Streamed
+// output is prepare's question.
+TEST(AbiJsonContract, LatenciesAreReadByTensorName) {
+    static constexpr const char* k_text = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},
+        "latencies": {"audio_out": 1024, "aux_out": 0}
+    } })";
+    anira_contract* hard = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_from_json(k_text, std::strlen(k_text), &hard, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(hard->hard()->m_latencies.size(), 2u);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 1024u);
+    EXPECT_EQ(hard->hard()->m_latencies.at("aux_out"), 0u);
+    anira_contract_destroy(hard);
+
+    for (const char* bad : {R"({ "hard": { "latencies": {"audio_out": -1} } })",
+                            R"({ "hard": { "latencies": {"audio_out": 1024.5} } })",
+                            R"({ "hard": { "latencies": {"audio_out": "1024"} } })",
+                            R"({ "hard": { "latencies": {"audio_out": 2147483648} } })"}) {
+        hard = nullptr;
+        err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_contract_from_json(bad, std::strlen(bad), &hard, &err), ANIRA_ERROR_JSON)
+            << bad;
+        EXPECT_NE(std::string(err.message).find("hard.latencies.audio_out"), std::string::npos)
+            << err.message;
+        EXPECT_EQ(hard, nullptr);
+    }
+    static constexpr const char* k_not_object = R"({ "hard": { "latencies": [1024] } })";
+    EXPECT_EQ(anira_contract_from_json(k_not_object, std::strlen(k_not_object), &hard, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(err.message).find("hard.latencies"), std::string::npos) << err.message;
 }
 
 // The declared host-end domain per tensor is a top-level key, common to both kinds like

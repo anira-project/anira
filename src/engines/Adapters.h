@@ -1,8 +1,8 @@
-#ifndef ANIRA_BACKENDS_ADAPTERS_H
-#define ANIRA_BACKENDS_ADAPTERS_H
+#ifndef ANIRA_ENGINES_ADAPTERS_H
+#define ANIRA_ENGINES_ADAPTERS_H
 /*
  * The adapters of this build and the plans a session asks the core for. Private to
- * src/backends and the scheduler (and the tests through the src/ include directory).
+ * src/engines and the scheduler (and the tests through the src/ include directory).
  *
  * A session's plan table is built from PlanRequests (Core::create_session): one per plan, in
  * dense-index order, each naming where its loaded model comes from and the record of it.
@@ -32,7 +32,7 @@ namespace anira::capi {
 class EngineCarrier;
 }  // namespace anira::capi
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// Where a plan's loaded model comes from.
 enum class Source : uint8_t {
@@ -89,7 +89,7 @@ ANIRA_API std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine
 ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 
 /// What a fresh engine object of a built-in engine of this build answers for its providers
-/// (BuiltinEngine::providers: the default provider first, then what its runtime reports
+/// (BuiltinEngine::providers: the CPU path first, then what its runtime reports
 /// usable here, each once); the context's probe asks the core's object, which answers the
 /// same. Empty for an engine this build does not carry. The tests' oracle.
 ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine);
@@ -122,8 +122,8 @@ ANIRA_API std::shared_ptr<BuiltinEngine> make_litert_engine();
 ANIRA_API std::shared_ptr<Loaded> make_litert_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 /// The accelerators a fresh LiteRT environment registers here (its automatic registration,
 /// which loads the accelerator libraries it finds), by the hardware they support: "gpu",
-/// "npu", "webnn" as custom providers beside ANIRA_PROVIDER_DEFAULT, the CPU accelerator left
-/// out. Empty when the environment cannot be created. The environment is the query's own,
+/// "npu", "webnn" as custom providers (ANIRA_PROVIDER_CUSTOM with the name), the CPU accelerator
+/// left out. Empty when the environment cannot be created. The environment is the query's own,
 /// created with its logger at the error severity (an accelerator it cannot load is the
 /// answer, not a warning) and destroyed before the call returns; the engine object's
 /// environment is not touched, so the query runs beside an init on another thread.
@@ -160,9 +160,10 @@ ANIRA_API std::vector<PlanRequest> legacy_plan_requests(const anira::InferenceCo
 /// binds by position.
 ANIRA_API Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend backend);
 
-/// The engine of a 2.x backend; ANIRA_ENGINE_NONE for CUSTOM.
+/// The engine of a 2.x backend; ANIRA_ENGINE_CUSTOM for CUSTOM (whose id is
+/// k_v2_custom_engine), ANIRA_ENGINE_NONE for a backend this build does not carry.
 ANIRA_API anira_engine engine_of(anira::InferenceBackend backend) noexcept;
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_ADAPTERS_H
+#endif  // ANIRA_ENGINES_ADAPTERS_H

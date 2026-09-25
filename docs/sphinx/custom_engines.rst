@@ -2,7 +2,7 @@ Custom Engines
 ==============
 
 An **engine** runs the model: it takes the model tensors of a chunk in, runs one inference,
-and writes the model tensors out. anira ships five (ONNX Runtime, LibTorch, ExecuTorch, LiteRT
+and writes the model tensors out. anira ships five (ONNX Runtime, ExecuTorch, LiteRT, LibTorch
 and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own: it **creates** the engine
 once as an object under a reverse-URI id and **adds** it to pipelines. Examples: a Core ML or
 a WebGPU runtime, an engine the build does not carry, a synthetic model, a bypass for
@@ -42,7 +42,8 @@ Creating and adding an engine
     anira_custom_engine_destroy(engine);          /* the pipeline keeps its own reference */
 
     uint32_t row = 0;                                  /* the entry the engine serves */
-    anira_model_config_add_model_path_custom(cfg, "com.example.myengine", "model.bin", &row, &err);
+    anira_model_config_add_model_path(cfg, ANIRA_ENGINE_CUSTOM, "com.example.myengine", "model.bin",
+                                      &row, &err);
 
 Two calls, two jobs:
 
@@ -65,12 +66,14 @@ pipelines yet to come without keeping it alive is **detached** (``anira_custom_e
 from then on it names the engine while a pipeline, a handler or a loaded model holds it, the
 addition is ``ANIRA_ERROR_INVALID_STATE`` once the engine was released, and
 ``anira_custom_engine_destroy`` still frees it. The id is a reverse-URI name: it must
-contain a ``.``, and the prefix ``anira.`` is anira's own (``anira.v2.custom`` names the 2.x
-``CUSTOM`` backend of :doc:`migration`). Adding is legal before or after
-``anira_pipeline_add_inference``; a handler copies the pipeline at ``anira_handler_create``, so
-an engine added afterwards does not reach that handler. A model entry that names the id
-(``anira_model_config_add_model_path_custom``, ``anira_model_config_add_model_bytes_custom``;
-``"engine": "com.example.myengine"`` in a model file) is a plan of the handler like a built-in
+contain a ``.``, and the prefix ``anira.`` is anira's own, with one exception:
+``anira.v2.custom``, the id of the 2.x ``CUSTOM`` backend of :doc:`migration`, is the one id
+with that prefix a host may create an engine under (a 2.x model file's ``"CUSTOM"`` row names
+it, and like every custom id it needs an engine on the pipeline). Adding is legal before or
+after ``anira_pipeline_add_inference``; a handler copies the pipeline at
+``anira_handler_create``, so an engine added afterwards does not reach that handler. A model entry that names the id
+(``ANIRA_ENGINE_CUSTOM`` with the id, the pair rule: ``anira_model_config_add_model_path``,
+``anira_model_config_add_model_bytes``; ``"engine": "com.example.myengine"`` in a model file) is a plan of the handler like a built-in
 engine's entry; several such entries on one model configuration are several plans, which
 ``anira_handler_set_plan`` switches between, resolved by entry, never by the 2.x backend they
 map to. A candidate of ``anira_pipeline_add_inference`` names the engine on a **provider**
@@ -116,13 +119,18 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   ``anira_handler_create``.
 - ``flags``: the engine's promises, an OR of the four ``ANIRA_ENGINE_FLAG_*`` bits below;
   ``0`` promises nothing.
-- ``providers`` / ``num_providers``: the providers the engine serves beyond
-  ``ANIRA_PROVIDER_DEFAULT``, as strings, copied. The JSON spellings of ``anira_provider``
-  (``"cuda"``, ``"webgpu"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``, ``"vulkan"``) name a
-  provider of the enum; any other string is a custom provider in the engine's own vocabulary
-  (a reverse-URI name is the convention, not a rule), which a candidate names in
-  ``provider_id`` beside ``ANIRA_PROVIDER_DEFAULT`` and a model entry's pin spells under its
-  ``"provider"`` key. ``NULL`` with a count of 0 serves the default provider alone. The list is
+- ``providers`` / ``num_providers``: the providers the engine serves, as strings, copied:
+  exactly the listed ones, the CPU path (``ANIRA_PROVIDER_CPU``) only if the list has
+  ``"cpu"``. The JSON spellings of ``anira_provider`` (``"cpu"``, ``"cuda"``, ``"webgpu"``,
+  ``"vulkan"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``) name a provider of the enum; any
+  other string is a custom provider in the engine's own vocabulary (a reverse-URI name is the
+  convention, not a rule), which a candidate names as ``ANIRA_PROVIDER_CUSTOM`` with the name in
+  ``provider_id`` and a model entry's pin spells under its ``"provider"`` key; ``"default"`` and
+  ``"none"`` are no provider's name and refused at ``anira_custom_engine_create``. ``NULL``
+  with a count of 0 serves ``ANIRA_PROVIDER_CPU`` alone. Under the default candidate set a
+  neutral entry of the engine runs on the CPU path when the engine serves it, else on the
+  first listed provider, and a plan on a provider the query clears is dropped there (a named
+  candidate on it is refused). The list is
   what the engine can ever serve; which of it is usable here, now, is the ``query`` slot's
   answer (below). A candidate naming a provider the list lacks, or one the query reports
   unavailable, is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the
@@ -141,8 +149,8 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
 - ``release``: ``anira_engine_release_fn``. ``NULL``: none.
 - ``query``: ``anira_engine_query_fn``, a tail field beyond the providers list, the engine's
   own ``GetAvailableProviders``: which of ``providers`` are usable here, now, as a bitmask over
-  the list (bit *i* set: ``providers[i]``; the default provider is always served and has no
-  bit). It runs before ``init`` and any number of times, on the main thread, at
+  the list (bit *i* set: ``providers[i]``; the mask covers the list alone, and a descriptor
+  without a list serves the CPU path without a bit). It runs before ``init`` and any number of times, on the main thread, at
   ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
   ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
   lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
@@ -209,8 +217,10 @@ what it keeps and never keeps the pointers):
 - ``row``: this engine's entry in the variant's ``models[]`` list, the entry whose path or
   bytes the engine loads; ``model``: the variant, anira's own copy of the model
   configuration, read through the config getters (``anira_model_config_model_path(model,
-  row)``, ``anira_model_config_model_bytes(model, row, &bytes, &size)``, the tensor records,
-  the extensions).
+  row)``, ``anira_model_config_model_bytes(model, row, &bytes, &size)``, the tensor records
+  through ``anira_model_config_tensor_name`` / ``_tensor_layout``, the extensions through
+  ``anira_model_config_model_ext(model, row, "entry")``, the specs through
+  ``anira_model_config_input`` / ``_output`` and the ``anira_tensor_spec`` getters).
 - ``inputs`` / ``num_inputs`` and ``outputs`` / ``num_outputs``: one template per slot of
   the model's input list and output list, State tensors included, in slot order: the
   **engine side** of every tensor, the spec's dtype and the extents in the engine's order
@@ -224,7 +234,7 @@ what it keeps and never keeps the pointers):
   ``ANIRA_BINDING_ENGINE`` for every slot of the plan: the engine received the names and bound
   itself.
 - ``provider`` / ``provider_id``: the provider this load is for, a value of the enum or
-  ``ANIRA_PROVIDER_DEFAULT`` beside the custom name, in the words of the descriptor's list. A
+  ``ANIRA_PROVIDER_CUSTOM`` beside the custom name, in the words of the descriptor's list. A
   provider is part of the loaded model: two providers of one model are two loads, each its own
   ``loaded``; a load that cannot serve the one it is asked for returns
   ``ANIRA_ERROR_NOT_SUPPORTED`` (the handler checked the plan's provider against the list at
@@ -259,7 +269,7 @@ and no ``unload`` follows for that load. What the call hands back through ``out_
 **executor** is one call slot, what one ``process`` call runs on and never two at once (a
 session, an interpreter, a method), and it owns everything with run-time state; what one load
 shares between its executors is only what is immutable during a run. The built-in engines
-draw the line so (``src/backends/``, internal):
+draw the line so (``src/engines/``, internal):
 
 - ONNX Runtime: one session-options object per loaded model, shared, over the engine object's
   environment (one per process, created at the engine's init with anira's log level; the web
@@ -437,12 +447,15 @@ A bit the header does not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at
 ``anira_custom_engine_create``. The flags of the two records are anira's, not the
 engine's, and say what the handler is: ``ANIRA_PREPARE_EXCLUSIVE`` in
 ``anira_prepare_info.flags`` and ``ANIRA_ENGINE_CALL_EXCLUSIVE`` in ``anira_engine_ctx.flags``
-(above). Where a custom engine appears, the engine-provider pair is ``ANIRA_ENGINE_NONE`` with
-the id and the plan's provider beside it (``provider``, or ``provider_id`` for a custom one):
+(above). Where a custom engine appears, the engine-provider pair is ``ANIRA_ENGINE_CUSTOM`` with
+the id and the plan's provider beside it (``provider``, or ``ANIRA_PROVIDER_CUSTOM`` with
+``provider_id`` for a custom one; the pair rule of ``anira_engine`` and ``anira_provider``):
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
-``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, ``anira_backend_id`` among
+``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, both pairs whole through
+``anira_stage_engine`` and ``anira_stage_provider``, ``anira_edge_info.to_engine``
+with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
-``ANIRA_ENGINE_NONE``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
+``ANIRA_ENGINE_CUSTOM``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
 extension rows name the engine by its id.
 
 Declared state and the two buffers
@@ -532,17 +545,18 @@ times) and a **visible report**, the pipeline's capabilities:
 .. code-block:: c
 
     /* The rows a handler of this pipeline sees on this context: the context's, then one per
-       added engine and provider usable here (engine ANIRA_ENGINE_NONE, engine_id the
-       engine's id), the default provider first. Every call runs the engines' queries. */
+       added engine and provider usable here (engine ANIRA_ENGINE_CUSTOM, engine_id the
+       engine's id): the listed providers the query keeps, in list order, or the CPU path
+       alone for an engine without a list. Every call runs the engines' queries. */
     uint32_t count = 0;
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, NULL);
     anira_backend_id* rows = malloc(count * sizeof *rows);
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
 
-    /* One edge: host memory to the engine on a provider (zero-copy to the default provider and
+    /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
        XNNPACK, a host copy the engine makes itself to every other). */
     anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-    to.engine = ANIRA_ENGINE_NONE;
+    to.engine = ANIRA_ENGINE_CUSTOM;
     to.engine_id = "com.example.myengine";
     to.provider = ANIRA_PROVIDER_COREML;
     anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
@@ -551,7 +565,7 @@ times) and a **visible report**, the pipeline's capabilities:
 The rows' strings point into the pipeline's engines and the context's store: valid until the
 pipeline is destroyed and until the context's next probe. ``anira_handler_create`` asks the
 same question for every candidate's provider of the engine, so what the report lists is what a
-handler runs on. In C++ the query is ``Engine::available(const InitInfo&)`` (the base answers
+handler runs on. In C++ the query is ``Engine::query(const InitInfo&)`` (the base answers
 every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
 (:cpp:class:`anira::PipelineCapabilities`).
 
@@ -703,7 +717,7 @@ At setup:
 .. code-block:: c
 
     static gain_engine engine = { 0.5f };
-    static const char* const providers[] = { "coreml" };  /* beyond the default provider */
+    static const char* const providers[] = { "cpu", "coreml" };  /* exactly what it serves */
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.user_data = &engine;
     desc.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;       /* the promise the body keeps */
@@ -730,9 +744,9 @@ The same in C++
 place of the function pointers, split as the C lifecycle is, exactly like
 :cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, is constructed with its id
 (``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
-``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
-default one in ``providers()`` (all read once, when its C engine is
-created at its first registration), may override ``available(const InitInfo&)`` (the query,
+``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves in
+``providers()`` (empty: the CPU path alone; all read once, when its C engine is
+created at its first registration), may override ``query(const InitInfo&)`` (the query,
 the base answers every bit) and ``init(const InitInfo&)`` (the base does
 nothing), and its ``load(const EngineLoadInfo&)`` returns a
 ``std::unique_ptr<Engine::Loaded>``, the loaded model, whose ``prepare(const PrepareInfo&)``
@@ -741,9 +755,10 @@ returns a ``std::unique_ptr<Engine::Prepared>``, the handler's handle, on which
 base ``reset`` does nothing). The records are views: :cpp:class:`anira::InitInfo`
 (``log_level()``, ``num_threads()``, ``context()``), :cpp:class:`anira::EngineLoadInfo`
 (``row()``, ``model()``, the getters ``model_path(i)``, ``model_bytes(i)``,
-``model_engine_id(i)``, ``inputs()`` / ``outputs()`` as ``std::span<const Tensor>``,
-``input_names()`` / ``output_names()``, ``instances()``, ``provider()``,
-``provider_id()`` and the options ``option_keys()`` / ``option_values()``),
+``model_engine(i)`` (an :cpp:struct:`anira::EngineRef`, the pair), ``inputs()`` /
+``outputs()`` as ``std::span<const Tensor>``, ``input_names()`` / ``output_names()``,
+``instances()``, ``provider()`` (an :cpp:struct:`anira::ProviderRef`) and the options
+``option_keys()`` / ``option_values()``),
 :cpp:class:`anira::PrepareInfo`
 (``handler()``, ``report()``, ``num_entries()``, ``inputs()`` / ``outputs()``,
 ``input_names()`` / ``output_names()``, ``flags()`` and ``exclusive()``), and
@@ -789,14 +804,14 @@ times the gain:
     public:
         explicit Gain(float gain) : anira::Engine("com.example.gain"), m_gain(gain) {}
         uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
-        // The providers served beyond the default one: the enum's spellings or any name of
-        // the engine's own; the gain does the same work on every one of them.
+        // The providers served, exactly these: the enum's spellings ("cpu" for the CPU path)
+        // or any name of the engine's own; the gain does the same work on every one of them.
         std::span<const char* const> providers() const noexcept override { return k_providers; }
         // init(const anira::InitInfo&) is not overridden: nothing to build once per object.
         std::unique_ptr<Loaded> load(const anira::EngineLoadInfo& info) override;
 
     private:
-        static constexpr std::array<const char*, 1> k_providers{"coreml"};
+        static constexpr std::array<const char*, 2> k_providers{"cpu", "coreml"};
         class Shared;
         class Run;
         float m_gain;
@@ -882,7 +897,7 @@ Using an engine directly in a custom engine
 
 A custom engine may drive one of the bundled inference engines itself, for example to use an
 ONNX Runtime execution provider or session option anira's own ONNX Runtime adapter
-(``src/backends/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that
+(``src/engines/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that
 safe, and they are the same rules anira's own adapters follow.
 
 **Link the engine target.** ``anira::anira`` carries anira's headers and the ``USE_<ENGINE>``
@@ -977,6 +992,6 @@ application ships its own engine runtime").
     Subclassing :cpp:class:`anira::BackendBase` is the 2.x runtime's way of adding an engine,
     and stays with the 2.x :cpp:class:`anira::InferenceHandler` until the runtime cut-over;
     :doc:`migration` maps each of its virtuals onto the descriptor above. The engines anira
-    ships are implemented as adapters of the same descriptor shape (``src/backends/``, internal),
+    ships are implemented as adapters of the same descriptor shape (``src/engines/``, internal),
     which is where to look for how a real engine binds by name, checks the shapes it was
     handed, splits what one load shares from what one executor owns, and stages its buffers.

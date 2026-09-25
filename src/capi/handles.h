@@ -29,7 +29,7 @@ namespace anira::capi {
 
 /// The model config as the compact JSON text anira_model_config_to_json writes (json.cpp): the
 /// whole variant, every entry, spec and extension, in a canonical order. What a custom engine's
-/// loaded model is pooled by beside its record (backend::Model::m_variant), since its load may
+/// loaded model is pooled by beside its record (engine::Model::m_variant), since its load may
 /// read any of it.
 std::string model_config_json(const anira_model_config& model);
 
@@ -75,14 +75,15 @@ struct TensorBinding {
 };
 
 /// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
-/// canonical -> export tensor names, and its extensions (host "model").
+/// canonical -> export tensor names, and its extensions (host "model"). Both pairs keep the
+/// pair rule: an id if and only if the value is CUSTOM.
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
-    std::string m_engine_id;  ///< non-empty for a custom engine
+    std::string m_engine_id;  ///< non-empty for a custom engine, m_engine ANIRA_ENGINE_CUSTOM
     /// The provider the entry is pinned to (anira_model_config_set_model_provider): the enum's,
-    /// or DEFAULT with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
+    /// or CUSTOM with m_provider_id for a custom one; NONE and empty for a neutral entry,
     /// which runs on any provider of its engine.
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_NONE;
     std::string m_provider_id;
     std::string m_path;  ///< kept for to_json even after set_model_bytes
     std::shared_ptr<BytesCarrier> m_bytes;
@@ -92,7 +93,7 @@ struct ModelEntry {
     bool is_custom() const noexcept { return !m_engine_id.empty(); }
     bool has_bytes() const noexcept { return m_bytes != nullptr; }
     bool is_pinned() const noexcept {
-        return m_provider != ANIRA_PROVIDER_DEFAULT || !m_provider_id.empty();
+        return m_provider != ANIRA_PROVIDER_NONE || !m_provider_id.empty();
     }
 };
 
@@ -121,6 +122,12 @@ struct HardContract {
     /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare.
     /// Absent = ANIRA_DTYPE_F32, which is what the float entries are legal on.
     std::map<std::string, anira_dtype> m_ring_dtypes;
+    /// The declared stream latency per Streamed output by canonical name, in samples of that
+    /// output (anira_contract_hard_set_latency, the JSON key "latencies"): it replaces the
+    /// figure the scheduler computes and primes the receive ring. Absent = the computed figure.
+    /// Resolved at prepare (validate), where a name that is no Streamed output and a figure
+    /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
+    std::map<std::string, uint32_t> m_latencies;
 };
 
 /// The Async half of a contract.
@@ -190,8 +197,14 @@ struct anira_model_config {
     std::vector<anira::capi::ModelEntry> m_models;
     std::vector<anira_tensor_spec> m_inputs;
     std::vector<anira_tensor_spec> m_outputs;
+    /// The engine the handler starts on: NONE for none (plan 0), CUSTOM with the id for a
+    /// custom one (anira_model_config_set_default_engine).
     anira_engine m_default_engine = ANIRA_ENGINE_NONE;
     std::string m_default_engine_id;
+    /// The provider the handler starts on beside the default engine; NONE for none, CUSTOM
+    /// with the id for a custom one (anira_model_config_set_default_provider).
+    anira_provider m_default_provider = ANIRA_PROVIDER_NONE;
+    std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
     uint32_t m_max_instances = 1;
     std::string m_anchor;  ///< canonical name of the clock tensor; empty = the first streamed

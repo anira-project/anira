@@ -41,7 +41,7 @@ function(anira_add_test_binary TARGET)
         # second a neighbour's fopen truncated a list between its writer's exit and
         # CMake's read, and the build failed with "Syntax error: value, object or array
         # expected" (Homebrew CMake 4.4.0 on the macOS runners; test_utils,
-        # test_backends and test_scheduler each hit it). Serial discovery has no such
+        # test_engines and test_scheduler each hit it). Serial discovery has no such
         # window on any CMake version.
         gtest_discover_tests(${TARGET}
             DISCOVERY_MODE PRE_TEST
@@ -60,6 +60,24 @@ function(anira_add_test_binary TARGET)
     endif ()
 endfunction()
 
+# The partition of the test suite for the 3.x cut-over (decision 22 of the M2 plan): every TU
+# targets one API and moves once.
+#   (a) through anira/compat/v2.hpp, the 2.x source-compatible face over the C ABI:
+#       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
+#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Stages).
+#   (c) white-box over the private headers (the src include directory): test_scheduler,
+#       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
+#       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
+#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal (test_abi's
+#       internal probes and the v2_objects.h oracle arms, PR 12).
+#   (d) retired with their subject: test_PrePostProcessor (folded into test_Stage),
+#       test_JsonConfigLoader and its Errors suite (PR 10, with the 2.x loader class),
+#       test_Bridge / test_Translate (PR 10, into test_Prepare), test_HighPriorityThread (PR 12).
+#   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
+#       onto the enabled-engines entry in PR 12).
+# test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
+# test/support/extras_fixtures.h serves the TUs of (b) and (d) until they go.
+
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
@@ -69,6 +87,8 @@ anira_add_test_binary(test_utils
 	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
 	system/test_HighPriorityThread.cpp
+	test_CoreConfig.cpp
+	test_InferenceConfig.cpp
 )
 
 anira_add_test_binary(test_scheduler
@@ -82,28 +102,28 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_InferenceManager.cpp
 	scheduler/test_InferenceThread.cpp
 	scheduler/test_LatencyCalculator.cpp
+	scheduler/test_OneSidedStreamingInternals.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
 )
-# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling.
+# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
+# and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
-anira_add_test_binary(test_backends
-	backends/test_Adapter.cpp
-	backends/test_BackendBase.cpp
-	backends/test_ExecuTorchModelFunction.cpp
-	backends/test_AdapterExecuTorch.cpp
-	backends/test_AdapterLibTorch.cpp
+anira_add_test_binary(test_engines
+	engines/test_Adapter.cpp
+	engines/test_BackendBase.cpp
+	engines/test_ExecuTorchModelFunction.cpp
+	engines/test_AdapterExecuTorch.cpp
+	engines/test_AdapterLibTorch.cpp
 )
-# The engine room (src/backends/Adapter.h and the adapters) for test_Adapter.
-target_include_directories(test_backends PRIVATE "${anira_SOURCE_DIR}/src")
+# The engine room (src/engines/Adapter.h and the adapters) for test_Adapter.
+target_include_directories(test_engines PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_handler
 	contracts/test_EngineLinkage.cpp
-	test_CoreConfig.cpp
-	test_InferenceConfig.cpp
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
@@ -118,6 +138,7 @@ anira_add_test_binary(test_abi
 	abi/test_Firewall.cpp
 	abi/test_Log.cpp
 	abi/test_Handles.cpp
+	abi/test_ReadBack.cpp
 	abi/test_ExtRegistry.cpp
 	abi/test_Json.cpp
 	abi/test_JsonUpgrade.cpp

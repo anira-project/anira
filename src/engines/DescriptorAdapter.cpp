@@ -20,7 +20,7 @@
 #include "../utils/StatusError.h"
 #include "Adapter.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -262,4 +262,4 @@ void DescriptorPrepared::reset(const anira_engine_ctx& call) noexcept {
     if (desc.reset != nullptr) { desc.reset(&engine_view(call), m_prepared, desc.user_data); }
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

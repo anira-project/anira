@@ -25,8 +25,6 @@
 namespace anira::capi {
 namespace {
 
-constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-
 [[noreturn]] void refuse(anira_status status, const std::string& message) {
     throw StatusError(status, message);
 }
@@ -88,7 +86,8 @@ std::string candidates_list(const anira_backend_id* candidates, uint32_t num_can
         const anira_backend_id& id = candidates[i];
         text += engine_label(static_cast<anira_engine>(id.engine),
                              id.engine_id != nullptr ? id.engine_id : "");
-        if (id.provider != ANIRA_PROVIDER_DEFAULT || !candidate_provider_id(id).empty()) {
+        if ((id.provider != ANIRA_PROVIDER_CPU && id.provider != ANIRA_PROVIDER_NONE) ||
+            !candidate_provider_id(id).empty()) {
             text += ":" + provider_label(static_cast<anira_provider>(id.provider),
                                          candidate_provider_id(id));
         }
@@ -318,6 +317,30 @@ void check_contract(const anira_contract& contract,
                          " and converts, anira_pipeline_add_stage)");
         }
     }
+    // The declared stream latency rules: the figure replaces the computed one for a stream,
+    // which only a Streamed output has, and primes its receive ring with (figure - the model's
+    // internal latency) zeros, so it cannot be below that internal latency. The 2.x scheduler
+    // clamps such a figure up with a warning; here it is the host's error.
+    for (const auto& [name, samples] : hard->m_latencies) {
+        bool is_input = true;
+        const anira_tensor_spec* spec = find_spec(model, name, &is_input, nullptr);
+        if (spec == nullptr) {
+            config_error("contract: the latency of '" + name + "' names no tensor");
+        }
+        if (is_input) {
+            config_error("contract: the latency of '" + name +
+                         "' is set on an input tensor; a stream latency belongs to an output");
+        }
+        if (spec->m_role != ANIRA_ROLE_STREAMED) {
+            config_error("contract: the latency of '" + name + "' is set on a " +
+                         role_word(spec->m_role) + " tensor; only a Streamed output has a stream");
+        }
+        if (std::cmp_less(samples, spec->m_latency)) {
+            config_error("contract: the latency of '" + name + "' is " + std::to_string(samples) +
+                         " but the model's internal latency is " + std::to_string(spec->m_latency) +
+                         "; a stream cannot deliver before the model does");
+        }
+    }
     // The host-end domain rules: every tensor of either side, whatever its role, has one
     // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
     // domain anira allocates the ring, the model tensor, the Static store and the state buffers
@@ -488,11 +511,12 @@ void check_ratios(const anira_model_config& model, const Derived& derived) {
     check(model.m_outputs, derived.m_outputs);
 }
 
-// Whether a custom row's id is served: anira.v2.custom (the 2.x pass-through, kept through
-// this pre-release), or an engine registered on the pipeline.
+// Whether a custom row's id is served: on the C path by an engine registered on the pipeline
+// (anira.v2.custom included); on the bridge, which has no pipeline, the id anira.v2.custom
+// alone, by the 2.x pass-through, until the cut-over.
 bool serves_custom_id(const std::string& id, const EngineFacts* engines) {
-    if (id == k_v2_custom_engine) { return true; }
-    return engines != nullptr && std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
+    if (engines == nullptr) { return id == k_v2_custom_engine; }
+    return std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
 }
 
 void check_rows(const anira_model_config& model,
@@ -520,7 +544,7 @@ void check_rows(const anira_model_config& model,
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& row = model.m_models[i];
         std::vector<PlanKey> plans =
-            matching_plans(i, row, candidates, num_candidates, default_set);
+            matching_plans(i, row, candidates, num_candidates, default_set, engines);
         if (plans.empty()) { continue; }
         if (row.is_custom()) {
             if (!serves_custom_id(row.m_engine_id, engines)) {
@@ -574,6 +598,36 @@ void check_rows(const anira_model_config& model,
             config_error("default_engine '" +
                          engine_label(model.m_default_engine, model.m_default_engine_id) +
                          "' names no model entry");
+        }
+    }
+    // The default provider, what the configuration alone decides: an entry of the default
+    // engine (any entry without one) that may run on it, a neutral entry or one pinned to it.
+    // Whether a plan runs on it here is the candidates' and the context's, and falls back at
+    // prepare as the default engine's does.
+    if (model.m_default_provider != ANIRA_PROVIDER_NONE || !model.m_default_provider_id.empty()) {
+        const bool any_engine =
+            model.m_default_engine == ANIRA_ENGINE_NONE && model.m_default_engine_id.empty();
+        bool found = false;
+        for (const ModelEntry& row : model.m_models) {
+            const bool of_engine =
+                any_engine || (model.m_default_engine_id.empty()
+                                   ? (row.m_engine == model.m_default_engine && !row.is_custom())
+                                   : row.m_engine_id == model.m_default_engine_id);
+            const bool neutral = !row.is_pinned();
+            const bool pinned_to_it = row.m_provider == model.m_default_provider &&
+                                      row.m_provider_id == model.m_default_provider_id;
+            found = found || (of_engine && (neutral || pinned_to_it));
+        }
+        if (!found) {
+            config_error(
+                "default_provider '" +
+                provider_label(model.m_default_provider, model.m_default_provider_id) +
+                "' runs no model entry" +
+                (any_engine
+                     ? std::string()
+                     : " of default_engine '" +
+                           engine_label(model.m_default_engine, model.m_default_engine_id) + "'") +
+                ": each is pinned to another provider");
         }
     }
 }
@@ -669,20 +723,39 @@ bool engine_is_candidate(anira_engine engine,
     return false;
 }
 
+PlanKey home_provider(size_t row_index, const ModelEntry& row, const EngineFacts* engines) {
+    PlanKey cpu{.m_row = row_index, .m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = {}};
+    if (!row.is_custom() || engines == nullptr) { return cpu; }
+    for (size_t i = 0; i < engines->m_ids.size() && i < engines->m_providers.size(); ++i) {
+        if (engines->m_ids[i] != row.m_engine_id) { continue; }
+        const std::vector<std::string>& listed = engines->m_providers[i];
+        if (listed.empty() || std::ranges::find(listed, "cpu") != listed.end()) { return cpu; }
+        const anira_provider provider = provider_of_name(listed.front());
+        return PlanKey{
+            .m_row = row_index,
+            .m_provider = provider,
+            .m_provider_id = provider == ANIRA_PROVIDER_CUSTOM ? listed.front() : std::string()};
+    }
+    return cpu;
+}
+
 std::vector<PlanKey> matching_plans(size_t row_index,
                                     const ModelEntry& row,
                                     const anira_backend_id* candidates,
                                     uint32_t num_candidates,
-                                    bool default_set) {
+                                    bool default_set,
+                                    const EngineFacts* engines) {
     std::vector<PlanKey> plans;
     if (candidates == nullptr ||
         (default_set &&
          engine_is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates))) {
         // The bridge's rule, and the default set's for an engine it names: one plan per row,
-        // on its pin or on the default provider.
-        plans.push_back(PlanKey{.m_row = row_index,
-                                .m_provider = row.m_provider,
-                                .m_provider_id = row.m_provider_id});
+        // on its pin or on its engine's home provider (the CPU path, or a custom engine's first
+        // listed provider when it does not serve the CPU path).
+        plans.push_back(row.is_pinned() ? PlanKey{.m_row = row_index,
+                                                  .m_provider = row.m_provider,
+                                                  .m_provider_id = row.m_provider_id}
+                                        : home_provider(row_index, row, engines));
         return plans;
     }
     if (default_set) { return plans; }
@@ -721,8 +794,8 @@ std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const Engi
 
 std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
     // Every custom row is a plan on the 2.x CUSTOM backend, resolved by row in the plan
-    // table: the pass-through and a registered engine alike (check_rows refuses an id that
-    // neither is).
+    // table: a registered engine, or the bridge's pass-through of anira.v2.custom (check_rows
+    // refuses an id that neither serves).
     if (row.is_custom()) { return anira::InferenceBackend::CUSTOM; }
     switch (row.m_engine) {
 #ifdef USE_ONNXRUNTIME
@@ -760,17 +833,17 @@ std::vector<anira_engine> enabled_engines() {
 #ifdef USE_ONNXRUNTIME
     engines.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_EXECUTORCH
+    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
+#ifdef USE_LITERT
+    engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
 #ifdef USE_LIBTORCH
     engines.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
 #ifdef USE_TFLITE
     engines.push_back(ANIRA_ENGINE_TFLITE);
-#endif
-#ifdef USE_LITERT
-    engines.push_back(ANIRA_ENGINE_LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
 #endif
     return engines;
 }
@@ -827,6 +900,23 @@ anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_mod
         }
     }
     return dtypes;
+}
+
+anira::CustomLatencies latencies_of(const anira_contract& contract,
+                                    const anira_model_config& model) {
+    anira::CustomLatencies latencies;
+    latencies.m_outputs.assign(model.m_outputs.size(), -1);
+    const HardContract* hard = contract.hard();
+    if (hard == nullptr) { return latencies; }
+    for (const auto& [name, samples] : hard->m_latencies) {
+        bool is_input = true;
+        size_t index = 0;
+        if (find_spec(model, name, &is_input, &index) == nullptr || is_input) {
+            continue;  // validate ran
+        }
+        latencies.m_outputs[index] = static_cast<long>(samples);
+    }
+    return latencies;
 }
 
 HostDomains host_domains_of(const anira_contract& contract, const anira_model_config& model) {

@@ -431,7 +431,7 @@ TEST(AbiTranslate, AnEntryRowOutsideTheCandidatesIsSkippedNotRefused) {
     model.input(streamed("in"));
     model.output(streamed("out"));
     std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_NONE);  // keeps the custom row
+    candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom row
     const ContractHandle contract(explicit_hard());
     const Outcome outcome = bridge(model, contract, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
@@ -877,7 +877,7 @@ TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
     expect_contains(outcome.m_message, "' is not in this build");
 
     std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_NONE);
+    candidates.push_back(ANIRA_ENGINE_CUSTOM);
     const ContractHandle contract(explicit_hard());
     outcome = bridge(model, contract, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
@@ -1128,17 +1128,17 @@ TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
 #ifdef USE_ONNXRUNTIME
         list.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_EXECUTORCH
+        list.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
+#ifdef USE_LITERT
+        list.push_back(ANIRA_ENGINE_LITERT);
+#endif
 #ifdef USE_LIBTORCH
         list.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
 #ifdef USE_TFLITE
         list.push_back(ANIRA_ENGINE_TFLITE);
-#endif
-#ifdef USE_LITERT
-        list.push_back(ANIRA_ENGINE_LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-        list.push_back(ANIRA_ENGINE_EXECUTORCH);
 #endif
         return list;
     }();

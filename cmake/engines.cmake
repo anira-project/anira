@@ -1,5 +1,5 @@
 # ==============================================================================
-# backends.cmake — data-driven download + setup of pre-built inference engines
+# engines.cmake — data-driven download + setup of pre-built inference engines
 # ==============================================================================
 #
 # Single entry point for fetching the pre-built engine binaries anira links
@@ -22,7 +22,7 @@
 # Per call:  anira_setup_backend(<id>)        id = libtorch|onnxruntime|tflite|litert|executorch
 #
 # Every call ends by defining the engine's imported target anira::<id>
-# (aniraBackendHelpers.cmake): the file anira links, with the engine's include
+# (aniraEngineHelpers.cmake): the file anira links, with the engine's include
 # directories and definitions as usage requirements. anira links it PRIVATE; a
 # consumer that calls the engine itself links anira::<id> explicitly. The installed
 # package defines the same targets from the install prefix (install.cmake).
@@ -45,9 +45,9 @@ get_filename_component(ANIRA_BACKENDS_MODULES_DIR "${ANIRA_BACKENDS_CMAKE_DIR}/.
 
 # anira_define_backend_target() and the ExecuTorch package helpers — shared with the
 # installed package, which ships the file next to aniraConfig.cmake.
-include("${ANIRA_BACKENDS_CMAKE_DIR}/aniraBackendHelpers.cmake")
+include("${ANIRA_BACKENDS_CMAKE_DIR}/aniraEngineHelpers.cmake")
 foreach(_ab_engine onnxruntime tflite litert libtorch executorch)
-    include("${CMAKE_CURRENT_LIST_DIR}/backends/${_ab_engine}.cmake")
+    include("${CMAKE_CURRENT_LIST_DIR}/engines/${_ab_engine}.cmake")
 endforeach()
 unset(_ab_engine)
 
@@ -597,7 +597,7 @@ macro(anira_setup_backend id)
 # _anira_resolve_backend_layout() — the uniform prebuilt-archive layout: flat
 # include/ + lib/ on desktop/WASM, lib/<abi>/ on Android, one xcframework slice
 # on iOS. Sets the legacy ANIRA_<ID>_* facts and _ab_incdir/_ab_libdir for the
-# engine wiring macros (cmake/backends/<engine>.cmake). Runs inside
+# engine wiring macros (cmake/engines/<engine>.cmake). Runs inside
 # anira_setup_backend, so every _ab_* variable is in scope.
 # ------------------------------------------------------------------------------
 macro(_anira_resolve_backend_layout)
@@ -698,7 +698,7 @@ macro(_anira_define_generic_target)
 endmacro()
 
     # ---- Wire the engine into the build: each engine's wiring lives in
-    # cmake/backends/<engine>.cmake (included at the top of this file); the shared
+    # cmake/engines/<engine>.cmake (included at the top of this file); the shared
     # layout resolution and target definition are the two macros below. armv7l
     # keeps the legacy shared-engine path (no per-engine assets on that arch).
     if(_ab_id STREQUAL "libtorch")

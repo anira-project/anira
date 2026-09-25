@@ -274,6 +274,23 @@ anira_status ctx_tensor(const anira_stage_ctx* ctx,
     return ANIRA_OK;
 }
 
+// The prologue of the two pair accessors: whether a ctx may be answered. A NULL ctx and a ctx
+// without a frame are refused with no latch to record into; a NULL value out-parameter is
+// recorded. The caller has reset its out-parameters already.
+bool pair_answerable(const anira_stage_ctx* ctx,
+                     bool null_value,
+                     [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
+    const StageFrame* frame = frame_of(ctx);
+    if (frame == nullptr) { return false; }
+    if (null_value) {
+        if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
+            ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi, "%s: the stage: NULL out", entry);
+        }
+        return false;
+    }
+    return true;
+}
+
 }  // namespace
 
 // ==== the ring accessors ======================================================================
@@ -398,6 +415,35 @@ anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ctx* ctx,
                                                   anira_tensor* out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     return ctx_tensor(ctx, /*input=*/false, slot, out, __func__);
+}
+
+// The pairs of the chunk's plan: the record's value field and its id slot, which make_ctx
+// filled from the session's table (the pair rule: the id is set beside CUSTOM alone). The id
+// out-parameter may be NULL; both are reset on a refusal.
+anira_status ANIRA_CALL anira_stage_engine(const anira_stage_ctx* ctx,
+                                           anira_engine* engine,
+                                           const char** engine_id)
+    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (engine != nullptr) { *engine = ANIRA_ENGINE_FORCE32; }
+    if (engine_id != nullptr) { *engine_id = nullptr; }
+    if (!pair_answerable(ctx, engine == nullptr, __func__)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    *engine = static_cast<anira_engine>(ctx->engine);
+    if (engine_id != nullptr) { *engine_id = ctx->engine_id; }
+    return ANIRA_OK;
+}
+
+anira_status ANIRA_CALL anira_stage_provider(const anira_stage_ctx* ctx,
+                                             anira_provider* provider,
+                                             const char** provider_id)
+    ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (provider != nullptr) { *provider = ANIRA_PROVIDER_FORCE32; }
+    if (provider_id != nullptr) { *provider_id = nullptr; }
+    if (!pair_answerable(ctx, provider == nullptr, __func__)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *provider = static_cast<anira_provider>(ctx->provider);
+    if (provider_id != nullptr) { *provider_id = ctx->provider_id; }
+    return ANIRA_OK;
 }
 
 // ==== the default bodies ======================================================================
@@ -641,7 +687,15 @@ anira_stage_ctx StageProcessor::make_ctx(anira_phase phase,
     ctx.engine = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_engine)
                                      : static_cast<uint32_t>(ANIRA_ENGINE_NONE);
     ctx.provider = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_provider)
-                                       : static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
+                                       : static_cast<uint32_t>(ANIRA_PROVIDER_NONE);
+    // The pairs' names for anira_stage_engine / _provider: the session's own strings,
+    // which live as long as its table; NULL for a built-in engine and a provider of the enum.
+    if (plan < plans.size()) {
+        const std::string& engine_id = plans[plan].m_engine_id;
+        const std::string& provider_id = plans[plan].m_provider_id;
+        ctx.engine_id = engine_id.empty() ? nullptr : engine_id.c_str();
+        ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
+    }
     ctx.variant = 0;
     ctx.num_inputs = static_cast<uint32_t>(m_input_shapes.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_shapes.size());

@@ -16,7 +16,7 @@
 
 #include "Adapter.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -96,4 +96,4 @@ anira_status LegacyPrepared::process(const anira_engine_ctx& call, ChunkBuffers*
     return ANIRA_OK;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

@@ -92,8 +92,8 @@ constexpr double k_rate = 800.0;   // a hop lasts 10 ms, the explicit budget bel
 constexpr size_t k_unset = 77777;  // what a delivered count holds before its call
 
 // ---- the models --------------------------------------------------------------------------------
-// Engine-free: the one model path is the custom row, and the session's custom backend is the
-// gate, which runs BackendBase::process (tensor i of the output is tensor i of the input).
+// Engine-free: the one model path is the custom row, and its engine is the gate added to the
+// pipeline, which runs the pass-through (tensor i of the output is tensor i of the input).
 
 TensorSpec streamed(std::string_view name, int64_t channels) {
     TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
@@ -188,15 +188,21 @@ constexpr CallOptions k_wait_in_place{.m_in_place = true,
                                       .m_settle = true,
                                       .m_wait = true};
 
-/// What the session's custom backend computes behind the gate.
+/// What the custom row's engine computes behind the gate.
 enum class Model { PassThrough, ParamRamp };
+
+/// The gate engine of a Model.
+std::unique_ptr<anira_test::GateEngine> gate_of(Model model) {
+    if (model == Model::ParamRamp) { return std::make_unique<oracle::ParamRampEngine>(); }
+    return std::make_unique<anira_test::GateEngine>();
+}
 
 class HandlerRig {
 public:
     HandlerRig(const ModelConfig& model,
                anira_miss_policy policy,
-               Model backend = Model::PassThrough)
-        : m_handler(m_context, model, m_candidates) {
+               Model engine = Model::PassThrough)
+        : m_gate(gate_of(engine)), m_handler(m_context, model, m_candidates, {}, m_gate->engine()) {
         // Blocks of 1 to k_hop samples: the twin of HostConfig(k_hop, k_rate, true).
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
@@ -206,14 +212,8 @@ public:
         if (prepared != ANIRA_OK) { return; }
         anira_handler* handler = m_handler.m_handler;
         m_face = std::make_unique<anira_test::FloatFace>(handler);
-        if (backend == Model::ParamRamp) {
-            m_gate = std::make_unique<oracle::ParamRampGate>(handler->m_inference_config);
-        } else {
-            m_gate = std::make_unique<anira_test::GateBackend>(handler->m_inference_config);
-        }
         m_session = anira_test::session_of(handler);
         if (m_session == nullptr) { return; }
-        anira_test::attach_processor(handler, *m_gate);  // the gate closed
         m_gate->m_open.store(false);
         m_positions.assign(handler->m_num_inputs, 0);
 
@@ -235,9 +235,9 @@ public:
                          oracle::format_rings(*m_session));
     }
     /// The gate opens and the handler is destroyed (which drains the in-flight work) before
-    /// the gate dies: what anira_test::DestroyFirst does for a stack backend.
+    /// the gate dies: what anira_test::DestroyFirst does for a Handler on the stack.
     ~HandlerRig() {
-        if (m_gate != nullptr) { m_gate->m_open.store(true); }
+        m_gate->m_open.store(true);
         m_handler.destroy();
     }
     HandlerRig(const HandlerRig&) = delete;
@@ -664,13 +664,14 @@ private:
     anira_test::Context m_context;
     /// The custom rows only: the models name no engine.
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
-                                                .engine = ANIRA_ENGINE_NONE,
-                                                .provider = ANIRA_PROVIDER_DEFAULT,
-                                                .engine_id = nullptr}};
+                                                .engine = ANIRA_ENGINE_CUSTOM,
+                                                .provider = ANIRA_PROVIDER_CPU,
+                                                .engine_id = anira_test::k_custom}};
+    std::unique_ptr<anira_test::GateEngine> m_gate;  ///< before the handler, which dies first
     anira_test::Handler m_handler;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< built after prepare; borrows m_handler
-    std::unique_ptr<anira_test::GateBackend> m_gate;
     std::shared_ptr<anira::SessionElement> m_session;
+
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far
     size_t m_calls = 0;
     oracle::Transcript m_transcript;

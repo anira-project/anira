@@ -156,10 +156,10 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
     ->UseManualTime();
 
 anira::HostConfig configure(int model, int buffer_size) {
-    // Every engine of this build, plus ANIRA_ENGINE_NONE so the custom placeholder entry below
+    // Every engine of this build, plus ANIRA_ENGINE_CUSTOM so the custom placeholder entry below
     // survives the candidate filter.
     std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_NONE);
+    candidates.push_back(ANIRA_ENGINE_CUSTOM);
     anira::ModelConfig model_config;
     const char* contract_json = nullptr;
     if (model == 0) {

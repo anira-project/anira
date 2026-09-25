@@ -91,8 +91,8 @@ field anira_stage_ctx.num_outputs offset 20 size 4
 field anira_stage_ctx.ticket offset 24 size 4
 field anira_stage_ctx.entry offset 28 size 4
 field anira_stage_ctx.frame offset 32 size 8
-field anira_stage_ctx.reserved_ptr0 offset 40 size 8
-field anira_stage_ctx.reserved_ptr1 offset 48 size 8
+field anira_stage_ctx.engine_id offset 40 size 8
+field anira_stage_ctx.provider_id offset 48 size 8
 field anira_stage_ctx.reserved_ptr2 offset 56 size 8
 struct anira_engine_ctx size 64 align 8
 field anira_engine_ctx.instance offset 0 size 4

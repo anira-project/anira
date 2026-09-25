@@ -28,8 +28,8 @@ option(ANIRA_WITH_LSAN      "Enable LeakSanitizer (standalone)" OFF)
 option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
 
 # ==============================================================================
-# Inference engines — wiring per engine in cmake/backends/<engine>.cmake,
-# prebuilts from anira-project/backends (cmake/backends.cmake). LiteRT and
+# Inference engines — wiring per engine in cmake/engines/<engine>.cmake,
+# prebuilts from anira-project/backends (cmake/engines.cmake). LiteRT and
 # TFLite are the same runtime through different C APIs — mutually exclusive.
 # ==============================================================================
 option(ANIRA_WITH_LIBTORCH    "Build with the LibTorch engine" ON)
@@ -71,7 +71,7 @@ anira_compute_abi_version()
 # Platform axes (cmake/tanh/platform.cmake): TANH_OPERATING_SYSTEM, TANH_BINARY_FORMAT
 # (ELF | Mach-O | PE | Wasm), TANH_IOS_PLATFORM. Every OS/format decision below keys on
 # these, never on APPLE/UNIX/WIN32. tanh::Core carries the matching THL_PLATFORM_*
-# compile definitions for C++. The symbol-policy module comes with it: backends.cmake
+# compile definitions for C++. The symbol-policy module comes with it: engines.cmake
 # (below, before the library target) already needs tanh_hidden_archive_link_items to
 # wire the static engine archives.
 include(cmake/tanh/platform.cmake)
@@ -95,7 +95,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 # Detect Emscripten — must be after project() so CMAKE_CXX_COMPILER is set.
-# EMSDK_VERSION is needed by backends.cmake (WASM target selection) below.
+# EMSDK_VERSION is needed by engines.cmake (WASM target selection) below.
 if(ANIRA_BUILD_WASM)
     tanh_detect_emscripten()
     if(WASM)
@@ -115,35 +115,35 @@ include(cmake/validate-options.cmake)
 set(BACKEND_SOURCES)
 
 # Each anira_setup_backend() call defines the engine's imported target anira::<id>
-# (see cmake/backends.cmake and cmake/aniraBackendHelpers.cmake): the file
+# (see cmake/engines.cmake and cmake/aniraEngineHelpers.cmake): the file
 # anira links, carrying the engine's include directories and definitions. anira
 # links them PRIVATE below; a consumer whose own code calls an engine links the
 # matching anira::<id> explicitly and gets the same file — one engine per process.
-include(cmake/backends.cmake)
+include(cmake/engines.cmake)
 
 if(ANIRA_WITH_LIBTORCH)
     anira_setup_backend(libtorch)
-    list(APPEND BACKEND_SOURCES src/backends/LibTorchAdapter.cpp)
+    list(APPEND BACKEND_SOURCES src/engines/LibTorchAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_ONNXRUNTIME)
     anira_setup_backend(onnxruntime)
-    list(APPEND BACKEND_SOURCES src/backends/OnnxRuntimeAdapter.cpp)
+    list(APPEND BACKEND_SOURCES src/engines/OnnxRuntimeAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_TFLITE)
     anira_setup_backend(tflite)
-    list(APPEND BACKEND_SOURCES src/backends/TFLiteAdapter.cpp)
+    list(APPEND BACKEND_SOURCES src/engines/TFLiteAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_LITERT)
     anira_setup_backend(litert)
-    list(APPEND BACKEND_SOURCES src/backends/LiteRtAdapter.cpp)
+    list(APPEND BACKEND_SOURCES src/engines/LiteRtAdapter.cpp)
 endif()
 
 if(ANIRA_WITH_EXECUTORCH)
     anira_setup_backend(executorch)
-    list(APPEND BACKEND_SOURCES src/backends/ExecuTorchAdapter.cpp)
+    list(APPEND BACKEND_SOURCES src/engines/ExecuTorchAdapter.cpp)
 endif()
 
 ## ==============================================================================
@@ -279,11 +279,11 @@ target_sources(${PROJECT_NAME}
     PRIVATE
 
         # Backend
-        src/backends/BackendBase.cpp
-        src/backends/Adapter.cpp
-        src/backends/Adapters.cpp
-        src/backends/LegacyAdapter.cpp
-        src/backends/DescriptorAdapter.cpp
+        src/engines/BackendBase.cpp
+        src/engines/Adapter.cpp
+        src/engines/Adapters.cpp
+        src/engines/LegacyAdapter.cpp
+        src/engines/DescriptorAdapter.cpp
         ${BACKEND_SOURCES}
 
         # Scheduler
@@ -389,8 +389,8 @@ endif()
 target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
 # Backends link PRIVATE through their anira::<engine> targets (details per
-# engine in cmake/backends/<engine>.cmake; how each is linked in
-# cmake/aniraBackendHelpers.cmake).
+# engine in cmake/engines/<engine>.cmake; how each is linked in
+# cmake/aniraEngineHelpers.cmake).
 anira_link_backends(${PROJECT_NAME})
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)

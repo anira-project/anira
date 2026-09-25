@@ -22,7 +22,7 @@
 #include "../utils/StatusError.h"
 #include "ProcessingGuard.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 bool Model::operator==(const Model& other) const {
     return m_engine == other.m_engine && m_path == other.m_path && m_bytes == other.m_bytes &&
@@ -42,7 +42,7 @@ void BuiltinEngine::ensure_init(const anira_init_info& info) {
 }
 
 std::vector<ProviderInfo> BuiltinEngine::providers() const {
-    // The default provider first, then the runtime's, each once.
+    // The CPU path first, then the runtime's, each once.
     std::vector<ProviderInfo> listed;
     listed.push_back(ProviderInfo{});
     std::vector<ProviderInfo> reported = runtime_providers();
@@ -141,7 +141,7 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
 void ExecutorLoaded::require_initialised() const {
     if (m_engine->initialised()) { return; }
     std::string message = "engine '";
-    message += anira::capi::engine_word(m_engine->engine());
+    message += anira::capi::engine_word(m_engine->kind());
     message += "' was never initialised: init runs before load";
     throw StatusError(ANIRA_ERROR_INVALID_STATE, message);
 }
@@ -412,4 +412,4 @@ Bindings bindings_of(const std::vector<SlotBinding>& inputs,
     return bindings;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

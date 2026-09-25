@@ -10,7 +10,7 @@
  * descriptors' memory with TfLiteTensorCopyFromBuffer / CopyToBuffer per call (the
  * interpreter's tensors need TFLite's own alignment; binding anira's memory in place waits
  * for the aligned chunk storage). reset re-initialises the interpreter's variable tensors.
- * File-local over anira::backend::Model: nothing of TensorFlow Lite enters a public header.
+ * File-local over anira::engine::Model: nothing of TensorFlow Lite enters a public header.
  */
 #ifdef USE_TFLITE
 
@@ -49,7 +49,7 @@ extern "C" TFL_CAPI_EXPORT TfLiteStatus
     TfLiteInterpreterResetVariableTensors(TfLiteInterpreter* interpreter);
 // NOLINTEND(readability-identifier-naming)
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -444,17 +444,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_tflite, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_tflite, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_tflite,
                                "tflite threw a non-std exception out of the invoke");
         }
         return ANIRA_ERROR_ENGINE;
@@ -463,7 +463,7 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
 
 void Instance::reset(const anira_engine_ctx& /*ctx*/) noexcept {
     if (TfLiteInterpreterResetVariableTensors(m_interpreter) != kTfLiteOk) {
-        ANIRA_LOG_RT_ERROR(log_group::k_backend_tflite,
+        ANIRA_LOG_RT_ERROR(log_group::k_engine_tflite,
                            "TfLiteInterpreterResetVariableTensors failed; the model's variable "
                            "tensors keep their values into the new stream");
     }
@@ -489,7 +489,7 @@ public:
 
     std::string provider_reason() const override {
         return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
-               "adapter runs the default provider alone in this pre-release";
+               "adapter runs the CPU path alone in this pre-release";
     }
 
 protected:
@@ -534,6 +534,6 @@ std::shared_ptr<Loaded> make_tflite_loaded(const std::shared_ptr<BuiltinEngine>&
     return std::make_shared<TFLiteLoaded>(std::move(own));
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 #endif  // USE_TFLITE

@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "backends/Adapter.h"
+#include "engines/Adapter.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -229,18 +229,18 @@ TEST(CoreLifecycleTest, OneEngineObjectPerBuiltInEngineWhileSomethingHoldsIt) {
     Core::release_core_if_idle();
     ASSERT_FALSE(Core::has_core());
     EXPECT_EQ(Core::builtin_engine(ANIRA_ENGINE_NONE), nullptr);
-    std::vector<std::shared_ptr<anira::backend::BuiltinEngine>> objects;
+    std::vector<std::shared_ptr<anira::engine::BuiltinEngine>> objects;
     for (const anira_engine engine : {ANIRA_ENGINE_LIBTORCH,
                                       ANIRA_ENGINE_ONNXRUNTIME,
                                       ANIRA_ENGINE_TFLITE,
                                       ANIRA_ENGINE_LITERT,
                                       ANIRA_ENGINE_EXECUTORCH}) {
-        std::shared_ptr<anira::backend::BuiltinEngine> object = Core::builtin_engine(engine);
+        std::shared_ptr<anira::engine::BuiltinEngine> object = Core::builtin_engine(engine);
         if (object == nullptr) { continue; }  // not in this build
-        EXPECT_EQ(object->engine(), engine);
+        EXPECT_EQ(object->kind(), engine);
         EXPECT_FALSE(object->initialised()) << "no session loaded a model of the engine";
         EXPECT_EQ(Core::builtin_engine(engine), object) << "one object per engine while held";
-        const std::weak_ptr<anira::backend::BuiltinEngine> watch = object;
+        const std::weak_ptr<anira::engine::BuiltinEngine> watch = object;
         object.reset();
         EXPECT_TRUE(watch.expired()) << "the last holder frees the object";
         objects.push_back(Core::builtin_engine(engine));
@@ -250,8 +250,8 @@ TEST(CoreLifecycleTest, OneEngineObjectPerBuiltInEngineWhileSomethingHoldsIt) {
     EXPECT_TRUE(Core::has_core()) << "the first call made the core";
     EXPECT_TRUE(Core::release_core_if_idle()) << "the objects alone do not keep the core";
     EXPECT_FALSE(Core::has_core());
-    for (const std::shared_ptr<anira::backend::BuiltinEngine>& object : objects) {
-        EXPECT_NE(Core::builtin_engine(object->engine()), object)
+    for (const std::shared_ptr<anira::engine::BuiltinEngine>& object : objects) {
+        EXPECT_NE(Core::builtin_engine(object->kind()), object)
             << "a freed core knows none of the objects";
     }
     objects.clear();

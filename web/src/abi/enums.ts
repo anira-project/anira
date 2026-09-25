@@ -290,21 +290,24 @@ export type anira_pad_policy = (typeof anira_pad_policy)[keyof typeof anira_pad_
 export const anira_engine = {
   ANIRA_ENGINE_NONE: 0,
   ANIRA_ENGINE_ONNXRUNTIME: 1,
-  ANIRA_ENGINE_LIBTORCH: 2,
-  ANIRA_ENGINE_TFLITE: 3,
-  ANIRA_ENGINE_LITERT: 4,
-  ANIRA_ENGINE_EXECUTORCH: 5,
+  ANIRA_ENGINE_EXECUTORCH: 2,
+  ANIRA_ENGINE_LITERT: 3,
+  ANIRA_ENGINE_LIBTORCH: 4,
+  ANIRA_ENGINE_TFLITE: 5,
+  ANIRA_ENGINE_CUSTOM: 2147483646,
 } as const
 export type anira_engine = (typeof anira_engine)[keyof typeof anira_engine]
 
 export const anira_provider = {
-  ANIRA_PROVIDER_DEFAULT: 0,
-  ANIRA_PROVIDER_CUDA: 1,
-  ANIRA_PROVIDER_WEBGPU: 2,
-  ANIRA_PROVIDER_DIRECTML: 3,
-  ANIRA_PROVIDER_COREML: 4,
-  ANIRA_PROVIDER_XNNPACK: 5,
-  ANIRA_PROVIDER_VULKAN: 6,
+  ANIRA_PROVIDER_NONE: 0,
+  ANIRA_PROVIDER_CPU: 1,
+  ANIRA_PROVIDER_CUDA: 2,
+  ANIRA_PROVIDER_WEBGPU: 3,
+  ANIRA_PROVIDER_VULKAN: 4,
+  ANIRA_PROVIDER_DIRECTML: 5,
+  ANIRA_PROVIDER_COREML: 6,
+  ANIRA_PROVIDER_XNNPACK: 7,
+  ANIRA_PROVIDER_CUSTOM: 2147483646,
 } as const
 export type anira_provider = (typeof anira_provider)[keyof typeof anira_provider]
 

@@ -4,7 +4,9 @@
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -13,17 +15,21 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 
+#include "../../../extras/models/model_files.h"
 #include "module_api.h"
 
 namespace {
 
 constexpr uint32_t k_block_size = 512;
 constexpr double k_sample_rate = 48000.0;
-// The custom engine the 2.x CUSTOM backend maps to: no model file, the default processor.
+// The id of the 2.x CUSTOM backend, under which the module adds its pass-through engine; the
+// row names no model file.
 constexpr const char* k_custom_engine = "anira.v2.custom";
 constexpr const char* k_custom_path = "custom-processor";
 constexpr const char* k_missing_model = "/nonexistent/anira-unload-test.model";
+constexpr double k_wait_ms = 10000.0;
 
 struct Instance {
     anira_context_config* m_config = nullptr;
@@ -32,12 +38,46 @@ struct Instance {
     std::array<float, k_block_size> m_buffer{};
 };
 
+// The pass-through engine of the custom row: the one stream in, copied out. Its code lives in
+// this module. The cases that destroy their instance before the unload run it
+// (DefaultPolicyLeavesNoThreadBehind, ReloadAfterUnloadWorks, through unloadtest_create). The
+// case that leaks a live session into the unload (UnloadWithLiveSessionIsJoinedByHook) runs a
+// built-in engine where the build has one that runs the gain model (unloadtest_create_builtin):
+// the loader may unmap the module before libanira's unload hook joins the pool (dyld does),
+// and this function must never run after that. On a build without one the leaked case falls
+// back to this engine, which is safe only because nothing reaches the module once the leaked
+// session's queue is drained: anira_custom_engine_create copies the descriptor into the
+// engine's carrier and owns the id (src/capi/engine.cpp), the teardown slots (unload,
+// unprepare, release) are called only when set and are NULL here, process runs only for an
+// inference, and the leaked case completes every block before the unload.
+anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
+                                            void* /*prepared*/,
+                                            void* /*user_data*/) {
+    const float* in = anira_tensor_data_f32(&ctx->inputs[0]);
+    float* out = anira_tensor_data_f32(&ctx->outputs[0]);
+    if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    std::memcpy(out, in, sizeof(float) * k_block_size);
+    return ANIRA_OK;
+}
+
+// A new pass-through engine object under k_custom_engine; nullptr when the create fails.
+anira_custom_engine* make_passthrough() {
+    anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+    desc.process = passthrough_process;
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    if (anira_custom_engine_create(k_custom_engine, &desc, &engine, &err) != ANIRA_OK) {
+        return nullptr;
+    }
+    return engine;
+}
+
 // The first engine this build carries; ONNX Runtime when there is none (an engine-less leg
 // refuses the entry at create, which is the failure the throwing case wants there).
 anira_engine first_enabled_engine() {
     anira_backend_id id = ANIRA_BACKEND_ID_INIT;
     uint32_t count = 1;
-    const anira_status status = anira_enabled_backends(sizeof(anira_backend_id), &count, &id);
+    const anira_status status = anira_enabled_engines(sizeof(anira_backend_id), &count, &id);
     if ((status != ANIRA_OK && status != ANIRA_INCOMPLETE) || count == 0) {
         return ANIRA_ENGINE_ONNXRUNTIME;
     }
@@ -64,6 +104,23 @@ anira_tensor_spec* make_spec(const char* name) {
     return spec;
 }
 
+// What an instance runs: the module's pass-through on the custom row, the first enabled engine
+// at a path that does not exist (a model that never loads), or the bundled gain model on a
+// built-in engine of this build.
+enum class Kind { PassThrough, MissingModel, BuiltIn };
+
+// The bundled gain model (extras/models/model-pool/gain.model.json: one entry per built-in
+// engine, a 512-sample stream and a Static gain, the paths relative to the file); nullptr when
+// the file does not load.
+anira_model_config* make_builtin_model() {
+    anira_model_config* config = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    if (anira_model_config_from_json_file(k_gain_model_json, &config, &err) != ANIRA_OK) {
+        return nullptr;
+    }
+    return config;
+}
+
 // A model config with one entry (the custom row, or the first enabled engine at a path that
 // does not exist) and one streamed input and output; nullptr when a step fails.
 anira_model_config* make_model(bool custom) {
@@ -71,13 +128,15 @@ anira_model_config* make_model(bool custom) {
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_model_config_create(&config, &err) != ANIRA_OK) { return nullptr; }
     uint32_t index = 0;
-    anira_status status = custom ? anira_model_config_add_model_path_custom(config,
-                                                                            k_custom_engine,
-                                                                            k_custom_path,
-                                                                            &index,
-                                                                            &err)
+    anira_status status = custom ? anira_model_config_add_model_path(config,
+                                                                     ANIRA_ENGINE_CUSTOM,
+                                                                     k_custom_engine,
+                                                                     k_custom_path,
+                                                                     &index,
+                                                                     &err)
                                  : anira_model_config_add_model_path(config,
                                                                      first_enabled_engine(),
+                                                                     nullptr,
                                                                      k_missing_model,
                                                                      &index,
                                                                      &err);
@@ -104,9 +163,10 @@ void destroy_instance(Instance* instance) {
     delete instance;
 }
 
-// A context (2 pool threads, SpinBackoff, Warning) and a handler over the model; nullptr,
-// with nothing left behind, when a step fails.
-Instance* make_instance(bool custom) {
+// A context (2 pool threads, SpinBackoff, Warning) and a handler over the model of the kind;
+// nullptr, with nothing left behind, when a step fails.
+Instance* make_instance(Kind kind) {
+    const bool custom = kind == Kind::PassThrough;
     auto* instance = new Instance();
     anira_error err = ANIRA_ERROR_INIT;
     bool ok =
@@ -116,11 +176,21 @@ Instance* make_instance(bool custom) {
         anira_context_config_set_log_level(instance->m_config, ANIRA_LOG_WARNING) == ANIRA_OK &&
         anira_context_create(instance->m_config, &instance->m_context, &err) == ANIRA_OK;
     if (ok) {
-        anira_model_config* model = make_model(custom);
+        anira_model_config* model =
+            kind == Kind::BuiltIn ? make_builtin_model() : make_model(custom);
         anira_pipeline* pipeline = nullptr;
+        ok = model != nullptr && anira_pipeline_create(&pipeline, &err) == ANIRA_OK;
+        if (ok && custom) {
+            // The custom row's engine, added before the handler copies the pipeline; the
+            // pipeline holds the object, so the handle goes right away.
+            anira_custom_engine* engine = make_passthrough();
+            ok = engine != nullptr && anira_pipeline_add_engine(pipeline, engine, &err) == ANIRA_OK;
+            anira_custom_engine_destroy(engine);
+        }
         // NULL candidates: the default set (every engine this build carries plus the custom
-        // rows), under which an entry for an absent engine is skipped.
-        ok = model != nullptr && anira_pipeline_create(&pipeline, &err) == ANIRA_OK &&
+        // engines the entries name), under which an entry for an absent engine is skipped; an
+        // engine-less build has no plan for the gain model, and create refuses it.
+        ok = ok &&
              anira_pipeline_add_inference(pipeline, &model, 1, nullptr, 0, &err) == ANIRA_OK &&
              anira_handler_create(instance->m_context, pipeline, &instance->m_handler, &err) ==
                  ANIRA_OK;
@@ -152,24 +222,12 @@ anira_status prepare_instance(Instance& instance) {
     return status;
 }
 
-}  // namespace
-
-extern "C" {
-
-void* unloadtest_create(void) {
-    try {
-        return make_instance(/*custom=*/true);
-    } catch (...) { return nullptr; }
-}
-
-void unloadtest_prepare(void* instance) {
-    static_cast<void>(prepare_instance(*static_cast<Instance*>(instance)));
-}
-
-void unloadtest_process(void* instance, int num_blocks) {
-    auto* i = static_cast<Instance*>(instance);
+// num_blocks blocks through the handler, in place on slot 0. With wait, each block waits for
+// its inference (anira_handler_process_wait, 10 s at most), so the queue is drained when the
+// call returns and no pool thread is inside an engine.
+void process_blocks(Instance& instance, int num_blocks, bool wait) {
     // In place: one planar tensor over the channel pointers, handed over as input and output.
-    const std::array<float*, 1> channels{i->m_buffer.data()};
+    const std::array<float*, 1> channels{instance.m_buffer.data()};
     const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_block_size)};
     anira_tensor io{};
     anira_tensor_init_host_planar(&io,
@@ -179,8 +237,50 @@ void unloadtest_process(void* instance, int num_blocks) {
                                   2,
                                   shape.data());
     for (int block = 0; block < num_blocks; ++block) {
-        static_cast<void>(anira_handler_process(i->m_handler, &io, 0, &io, 0, nullptr));
+        if (wait) {
+            static_cast<void>(
+                anira_handler_process_wait(instance.m_handler, &io, 0, &io, 0, nullptr, k_wait_ms));
+        } else {
+            static_cast<void>(anira_handler_process(instance.m_handler, &io, 0, &io, 0, nullptr));
+        }
     }
+}
+
+}  // namespace
+
+extern "C" {
+
+void* unloadtest_create(void) {
+    try {
+        return make_instance(Kind::PassThrough);
+    } catch (...) { return nullptr; }
+}
+
+void* unloadtest_create_builtin(void) {
+    // Created and prepared here: a build whose built-in engines cannot run the gain model
+    // (none carried, or the model file of the chosen one missing) refuses one of the two.
+    Instance* instance = nullptr;
+    try {
+        instance = make_instance(Kind::BuiltIn);
+    } catch (...) { return nullptr; }
+    if (instance == nullptr) { return nullptr; }
+    if (prepare_instance(*instance) != ANIRA_OK) {
+        destroy_instance(instance);
+        return nullptr;
+    }
+    return instance;
+}
+
+void unloadtest_prepare(void* instance) {
+    static_cast<void>(prepare_instance(*static_cast<Instance*>(instance)));
+}
+
+void unloadtest_process(void* instance, int num_blocks) {
+    process_blocks(*static_cast<Instance*>(instance), num_blocks, /*wait=*/false);
+}
+
+void unloadtest_process_wait(void* instance, int num_blocks) {
+    process_blocks(*static_cast<Instance*>(instance), num_blocks, /*wait=*/true);
 }
 
 void unloadtest_destroy(void* instance) {
@@ -194,7 +294,7 @@ int unloadtest_create_throwing(void) {
     // Either way nothing may be left behind.
     Instance* instance = nullptr;
     try {
-        instance = make_instance(/*custom=*/false);
+        instance = make_instance(Kind::MissingModel);
     } catch (...) { return 1; }
     if (instance == nullptr) { return 1; }
     const anira_status status = prepare_instance(*instance);

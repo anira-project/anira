@@ -1,9 +1,9 @@
-#ifndef ANIRA_BACKENDS_ADAPTER_H
-#define ANIRA_BACKENDS_ADAPTER_H
+#ifndef ANIRA_ENGINES_ADAPTER_H
+#define ANIRA_ENGINES_ADAPTER_H
 /*
  * The engine room's interface: what every engine anira runs looks like from the scheduler,
  * built in or registered, in the shape of the C descriptor (anira/abi/engine.h) and its
- * lifecycle. Private to src/backends and the scheduler (and the tests through the src/ include
+ * lifecycle. Private to src/engines and the scheduler (and the tests through the src/ include
  * directory): nothing here enters the ABI. An adapter is what adapts an engine to this shape;
  * the files keep that word, the classes carry the lifecycle's.
  *
@@ -50,7 +50,7 @@
 #include <utility>
 #include <vector>
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// One tensor of a loaded model as its engine is handed it: the canonical name, the export's
 /// name where the entry's tensors record names the slot (empty otherwise: the slot then binds
@@ -80,11 +80,12 @@ struct TensorInfo {
 /// is the session's property (PrepareRequest), not the record's: a stateful model is loaded once
 /// for every session that runs it, with no shared slot.
 struct ANIRA_API Model {
-    anira_engine m_engine = ANIRA_ENGINE_NONE;  ///< the built-in engine; NONE with m_engine_id
-                                                ///< for a registered one, NONE alone for the
-                                                ///< 2.x custom and roundtrip adapters
-    /// A registered engine's id, else empty: what the messages name the engine by. No part of
-    /// the key: the carrier beside the record is, and the id is the carrier's own.
+    /// The built-in engine; ANIRA_ENGINE_CUSTOM with m_engine_id for a registered one and for
+    /// the 2.x CUSTOM backend (anira.v2.custom), under the pair rule.
+    anira_engine m_engine = ANIRA_ENGINE_NONE;
+    /// A custom engine's id (m_engine ANIRA_ENGINE_CUSTOM), else empty: what the messages name
+    /// the engine by. No part of the key: the carrier beside the record is, and the id is the
+    /// carrier's own.
     std::string m_engine_id;
     std::string m_path;             ///< the model file; empty for bytes
     const void* m_bytes = nullptr;  ///< the model bytes; NULL for a path
@@ -97,10 +98,10 @@ struct ANIRA_API Model {
     /// load may read the whole model config, so its loaded models are shared over an equal one
     /// only. Empty for a built-in engine, which reads the record alone.
     std::string m_variant;
-    /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_DEFAULT
-    /// beside m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
+    /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_CUSTOM
+    /// with m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
     /// candidate named, or the entry's pin). Part of the key.
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;
     /// The options the engine's runtime takes for the provider, as string pairs in the
     /// runtime's own vocabulary (the "provider_options" context extension's set for this
@@ -195,11 +196,11 @@ protected:
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
-/// ANIRA_PROVIDER_DEFAULT with a name in the runtime's own words (an ONNX Runtime execution
+/// ANIRA_PROVIDER_CUSTOM with a name in the runtime's own words (an ONNX Runtime execution
 /// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
 /// "webnn"). What the context's capabilities list per (engine, provider).
 struct ProviderInfo {
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;
 
     bool operator==(const ProviderInfo& other) const = default;
@@ -226,8 +227,10 @@ public:
     BuiltinEngine(BuiltinEngine&&) = delete;
     BuiltinEngine& operator=(BuiltinEngine&&) = delete;
 
-    /// The engine this object is.
-    anira_engine engine() const noexcept { return m_engine; }
+    /// The built-in engine this object is. (Not named engine(): a member named like its
+    /// namespace, anira::engine, mangles to a back-reference on MSVC that hides the namespace
+    /// from the export check.)
+    anira_engine kind() const noexcept { return m_engine; }
 
     /// The engine's init, once per object: the first call runs do_init with the record and
     /// remembers a success, every later call returns at once; a throw leaves the object
@@ -239,7 +242,7 @@ public:
     /// Whether init ran and succeeded: false until then, and after a throw.
     bool initialised() const noexcept { return m_initialised; }
 
-    /// The providers the engine serves here: the default provider first, then what its
+    /// The providers the engine serves here: the CPU path first, then what its
     /// runtime reports usable (runtime_providers), each once. What the context's capabilities
     /// list per (engine, provider), asked at every probe. Runs on any control thread, before
     /// or after init and any number of times, without a lock: it touches nothing init builds
@@ -252,7 +255,7 @@ protected:
     /// NOT_SUPPORTED) with the message the caller reads.
     virtual void do_init(const anira_init_info& info) { static_cast<void>(info); }
 
-    /// What the runtime reports usable here beyond the default provider, which the caller
+    /// What the runtime reports usable here beyond the CPU path, which the caller
     /// lists first: ONNX Runtime's available execution providers, LiteRT's registered
     /// accelerators, ExecuTorch's registered backends; nothing for TFLite and LibTorch in this
     /// pre-release. Empty, with a warning logged, when the runtime cannot be asked.
@@ -314,18 +317,18 @@ public:
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
 
-    /// Whether the engine serves a provider: the default provider alone unless an adapter says
+    /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
     /// engine's load decides). load refuses a record on a provider the adapter does not serve
     /// with ANIRA_ERROR_NOT_SUPPORTED, before do_load.
     virtual bool serves(anira_provider provider, std::string_view provider_id) const noexcept {
-        return provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty();
+        return provider == ANIRA_PROVIDER_CPU && provider_id.empty();
     }
     /// Why the adapter serves what it serves, for the refusal of a provider it does not: the
     /// runtime's own list where it has one, the pre-release's limit else. Named after the
     /// engine and the provider in load's ANIRA_ERROR_NOT_SUPPORTED.
     virtual std::string provider_reason() const {
-        return "this engine serves the default provider alone in this pre-release";
+        return "this engine serves the CPU path alone in this pre-release";
     }
 
     /// The record load kept.
@@ -447,8 +450,8 @@ public:
     explicit ExecutorLoaded(std::shared_ptr<BuiltinEngine> engine) noexcept
         : m_engine(std::move(engine)) {}
 
-    /// The engine object; initialised by the time load ran.
-    BuiltinEngine& engine() const noexcept { return *m_engine; }
+    /// The built-in engine object; initialised by the time load ran.
+    BuiltinEngine& builtin() const noexcept { return *m_engine; }
 
     /// The engine object's init, once per object (BuiltinEngine::ensure_init).
     void init(const anira_init_info& info) override { m_engine->ensure_init(info); }
@@ -583,6 +586,6 @@ ANIRA_API float* host_f32_packed(const anira_tensor& tensor, size_t expected) no
 /// not float32.
 ANIRA_API void require_f32(const Model& model, const char* engine);
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_ADAPTER_H
+#endif  // ANIRA_ENGINES_ADAPTER_H

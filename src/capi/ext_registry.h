@@ -56,7 +56,8 @@ struct ExtRow {
 /// kinds from any host, and only while it is a candidate.
 struct ExtConsumer {
     const char* m_name;
-    anira_engine m_engine;    ///< a built-in engine's adapter; ANIRA_ENGINE_NONE otherwise
+    anira_engine m_engine;    ///< a built-in engine's adapter; CUSTOM for a registered engine,
+                              ///< NONE for a stage
     std::string m_engine_id;  ///< a registered engine's id; empty otherwise
     std::vector<std::string> m_consumed;
 };
@@ -140,7 +141,7 @@ struct EntryPayload {
 struct ProviderOptionSet {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_NONE;
     std::string m_provider_id;
     std::vector<std::pair<std::string, std::string>> m_options;
 
@@ -174,15 +175,14 @@ struct ANIRA_API ProviderOptionsPayload {
 /// The consumed-or-fail walk of section 1b over a model config (its specs, its entries, the
 /// config itself) and, when given, a context config and a contract: every slot must be a
 /// known kind that a consumer in the candidate set reads from that host. candidates == NULL
-/// means every consumer of this build; a built-in engine names its adapter, an engine_id a
-/// custom engine's rows, {ANIRA_ENGINE_NONE, DEFAULT, NULL} the custom rows (the provider
-/// is not read); an engine adapter consumes only the entries of its own engine. `pipeline`
-/// are the consumers a pipeline declares (NULL for none): its stage
-/// (anira_stage_desc::consumed_kinds), which reads a slot wherever it sits, whatever the
-/// candidates, and its registered engines (anira_engine_desc::consumed_kinds, one consumer
-/// per engine keyed by its id), each of which reads its "model:" kinds from its own entries
-/// alone and its other kinds from any host, while it is a candidate. On failure err carries
-/// the offending name.
+/// means every consumer of this build; a built-in engine names its adapter,
+/// ANIRA_ENGINE_CUSTOM with an engine_id a custom engine's rows (the provider is not read); an
+/// engine adapter consumes only the entries of its own engine. `pipeline` are the consumers a
+/// pipeline declares (NULL for none): its stage (anira_stage_desc::consumed_kinds), which reads a
+/// slot wherever it sits, whatever the candidates, and its registered engines
+/// (anira_engine_desc::consumed_kinds, one consumer per engine keyed by its id), each of which
+/// reads its "model:" kinds from its own entries alone and its other kinds from any host, while it
+/// is a candidate. On failure err carries the offending name.
 ANIRA_API anira_status ext_check_consumed(const anira_model_config& model,
                                           const anira_context_config* config,
                                           const anira_contract* contract,

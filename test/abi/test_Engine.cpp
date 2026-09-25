@@ -42,8 +42,8 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "backends/Adapter.h"
 #include "capi/engine.h"
+#include "engines/Adapter.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -132,9 +132,9 @@ anira_engine_desc full_engine(EngineLife& life) {
 constexpr const char* k_gain_id = "org.example.gain";
 constexpr const char* k_never_opened = "never-opened.bin";
 
-/// A mono stream, [1, 1, hop] in and out, on one model entry that names `engine_id`: the
-/// engine-free custom row (anira.v2.custom) runs it as an exact pass-through; another id is
-/// what a registered engine runs.
+/// A mono stream, [1, 1, hop] in and out, on one model entry that names `engine_id`: under
+/// anira.v2.custom the pass-through a test adds (anira_test::passthrough_desc) runs it as an
+/// exact copy; another id is what a registered engine runs.
 ModelConfig stream_model(const char* engine_id = k_custom, const char* path = "custom-processor") {
     ModelConfig model;
     model.add_model_path(engine_id, path);
@@ -221,7 +221,7 @@ struct GainLoaded {
     std::string m_path;
     std::string m_engine_id;
     uint32_t m_instances = 0;
-    uint32_t m_provider = ANIRA_PROVIDER_DEFAULT;
+    uint32_t m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;
     std::vector<std::pair<std::string, std::string>> m_options;  ///< the record's provider options
     std::vector<anira_tensor> m_inputs;
@@ -394,7 +394,12 @@ anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
     // The row's facts through the config getters on the variant: the engine's own way to the
     // model, which anira never opened.
     const char* path = anira_model_config_model_path(info->model, info->row);
-    const char* id = anira_model_config_model_engine_id(info->model, info->row);
+    anira_engine kind = ANIRA_ENGINE_FORCE32;
+    const char* id = nullptr;
+    if (anira_model_config_model_engine(info->model, info->row, &kind, &id) != ANIRA_OK ||
+        kind != ANIRA_ENGINE_CUSTOM) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     loaded->m_path = path != nullptr ? path : "";
     loaded->m_engine_id = id != nullptr ? id : "";
     loaded->m_instances = info->instances;
@@ -600,7 +605,7 @@ void run_ramp(anira_handler* handler, size_t blocks, float gain = 1.0F, size_t f
 
 /// An engine this build does not carry, if there is one.
 std::optional<anira_engine> missing_engine() {
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     for (const anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
                                       ANIRA_ENGINE_LIBTORCH,
                                       ANIRA_ENGINE_TFLITE,
@@ -668,10 +673,11 @@ std::vector<anira_plan_ext> ext_rows(const anira_handler* handler, uint32_t plan
 }  // namespace
 
 // Every ANIRA_ERROR_INVALID_ARGUMENT cause of the engine's create, named in the message: the id
-// (NULL, no reverse-URI name, or anira's own, anira.v2.custom among them), a NULL desc or out,
-// a short struct_size, a flags bit the header does not define, a NULL process and a NULL kinds
-// array or entry with a count. A refused create hands out nothing and never calls release. The
-// id of a create that succeeds is the carrier's own copy.
+// (NULL, no reverse-URI name, or anira's own), a NULL desc or out, a short struct_size, a flags
+// bit the header does not define, a NULL process and a NULL kinds array or entry with a count.
+// A refused create hands out nothing and never calls release. The id of a create that succeeds
+// is the carrier's own copy; the one id with anira's prefix a host may create is
+// anira.v2.custom, the 2.x custom backend's.
 TEST(AbiEngine, CreateRefusals) {
     EngineLife life;
     const anira_engine_desc engine = full_engine(life);
@@ -690,7 +696,7 @@ TEST(AbiEngine, CreateRefusals) {
     refused(nullptr, &engine, "NULL engine_id");
     refused("gain", &engine, "'.'");
     refused("anira.gain", &engine, "anira.");
-    refused(k_custom, &engine, "anira.");
+    refused("anira.v2.custom.other", &engine, "anira.");
     refused(k_gain_id, nullptr, "NULL desc");
     {
         anira_error err = ANIRA_ERROR_INIT;
@@ -730,6 +736,14 @@ TEST(AbiEngine, CreateRefusals) {
     anira_custom_engine_destroy(handle);
     EXPECT_EQ(life.m_released, 1);
     anira_custom_engine_destroy(nullptr);  // NULL-safe
+    // The exception to the prefix: anira.v2.custom is created like any other id.
+    handle = nullptr;
+    ASSERT_EQ(anira_custom_engine_create(k_custom, &engine, &handle, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_NE(handle, nullptr);
+    EXPECT_EQ(handle->m_carrier->id(), k_custom);
+    anira_custom_engine_destroy(handle);
+    EXPECT_EQ(life.m_released, 2);
 }
 
 // Every ANIRA_ERROR_INVALID_ARGUMENT cause of the addition, named in the message: a NULL
@@ -794,7 +808,7 @@ TEST(AbiEngine, AShortDescriptorReadsAsTheDefaults) {
     EXPECT_EQ(kept.release, nullptr);
     EXPECT_EQ(kept.providers, nullptr);
     EXPECT_EQ(kept.num_providers, 0U);
-    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_CPU, "")) << "no list: the CPU path alone";
     EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CUDA, ""));
     ASSERT_EQ(carrier.consumed_kinds().size(), 1U);
     EXPECT_EQ(carrier.consumed_kinds()[0], "model:entry");
@@ -826,11 +840,12 @@ TEST(AbiEngine, TheProvidersListIsCopiedAndAnswersServes) {
     EXPECT_EQ(carrier.providers(), (std::vector<std::string>{"coreml", "com.example.npu"}));
     ASSERT_EQ(carrier.desc().num_providers, 2U);
     EXPECT_STREQ(carrier.desc().providers[1], "com.example.npu");
-    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CPU, ""))
+        << "a list serves exactly what it lists: no \"cpu\", no CPU path";
     EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_COREML, ""));
-    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_DEFAULT, "com.example.npu"));
+    EXPECT_TRUE(carrier.serves(ANIRA_PROVIDER_CUSTOM, "com.example.npu"));
     EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CUDA, ""));
-    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_DEFAULT, "com.example.other"));
+    EXPECT_FALSE(carrier.serves(ANIRA_PROVIDER_CUSTOM, "com.example.other"));
     pipe.destroy();
     EXPECT_EQ(life.m_released, 1);
 
@@ -846,6 +861,16 @@ TEST(AbiEngine, TheProvidersListIsCopiedAndAnswersServes) {
     EXPECT_EQ(anira_custom_engine_create("org.example.served", &bad, &out, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(out, nullptr);
+    // "default" and "none" are no provider's name: a list names what the engine serves.
+    for (const char* reserved : {"default", "none"}) {
+        const std::array<const char*, 1> word{reserved};
+        bad.providers = word.data();
+        EXPECT_EQ(anira_custom_engine_create("org.example.served", &bad, &out, &err),
+                  ANIRA_ERROR_INVALID_ARGUMENT)
+            << reserved;
+        EXPECT_NE(std::strstr(err.message, "is no provider's name"), nullptr) << err.message;
+        EXPECT_EQ(out, nullptr);
+    }
     EXPECT_EQ(life.m_released, 1) << "a refused create never calls release";
 }
 
@@ -919,26 +944,30 @@ TEST(AbiEngine, ADuplicateIdIsInvalidState) {
 
 // A registration is legal before and after anira_pipeline_add_inference, and a handler created
 // from the pipeline carries the same carriers; a registered engine no entry names is not a
-// plan and not an error, so the handler prepares and runs on the custom row as before. A row
-// naming a registered id is a plan: the handler creates, prepares through the engine's
-// prepare and runs its stream through the engine's process.
+// plan and not an error, so the handler prepares and runs on the custom row's pass-through
+// alone. A row naming a registered id is a plan: the handler creates, prepares through the
+// engine's prepare and runs its stream through the engine's process.
 TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     const Context context;
     Pipe pipe;
     EngineLife before;
     EngineLife after;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ASSERT_EQ(pipe.add_new_engine("org.example.before", full_engine(before)), ANIRA_OK)
         << pipe.m_err.message;
     pipe.add_inference(stream_model());
     ASSERT_EQ(pipe.add_new_engine("org.example.after", full_engine(after)), ANIRA_OK)
         << pipe.m_err.message;
-    ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
+    ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 3U);
 
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
-    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 2U);
+    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 3U);
     EXPECT_EQ(handler->m_pipeline.m_engines[0], pipe.m_pipeline->m_engines[0]);
     EXPECT_EQ(handler->m_pipeline.m_engines[1], pipe.m_pipeline->m_engines[1]);
+    EXPECT_EQ(handler->m_pipeline.m_engines[2], pipe.m_pipeline->m_engines[2]);
+
     anira_error err = ANIRA_ERROR_INIT;
     const anira::ContractHandle contract = explicit_contract();
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
@@ -992,6 +1021,8 @@ TEST(AbiEngine, ReleaseFiresOnceWithTheLastCarrier) {
                      std::to_string(order[2]));
         EngineLife life;
         Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+            << pipe.m_err.message;
         ASSERT_EQ(pipe.add_new_engine("org.example.shared", full_engine(life)), ANIRA_OK)
             << pipe.m_err.message;
         pipe.add_inference(model);
@@ -1015,18 +1046,22 @@ TEST(AbiEngine, ReleaseFiresOnceWithTheLastCarrier) {
 }
 
 // A handler copies the pipeline at create: an engine registered afterwards reaches the pipeline
-// and not the handler, and its release fires with the pipeline, the handler sharing nothing of it.
+// and not the handler (which holds the custom row's pass-through alone), and its release fires
+// with the pipeline, the handler sharing nothing of it.
 TEST(AbiEngine, RegisteredAfterCreateDoesNotReachTheHandler) {
     const Context context;
     Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     pipe.add_inference(stream_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     EngineLife life;
     ASSERT_EQ(pipe.add_new_engine("org.example.late", full_engine(life)), ANIRA_OK)
         << pipe.m_err.message;
-    EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
-    EXPECT_TRUE(handler->m_pipeline.m_engines.empty());
+    EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
+    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 1U);
+    EXPECT_EQ(handler->m_pipeline.m_engines[0]->id(), k_custom);
     pipe.destroy();
     EXPECT_EQ(life.m_released, 1) << "the handler holds no share of the late carrier";
     anira_handler_destroy(handler);
@@ -1090,10 +1125,10 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
         EXPECT_EQ(tensor->domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
         EXPECT_EQ(tensor->handle.host.ptr, nullptr) << "a template carries no memory";
     }
-    // The plan: ANIRA_ENGINE_NONE with the id.
+    // The plan: ANIRA_ENGINE_CUSTOM with the id.
     const std::vector<anira_plan_info> plans = plan_rows(handler);
     ASSERT_EQ(plans.size(), 1U);
-    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
     ASSERT_NE(plans[0].engine_id, nullptr);
     EXPECT_STREQ(plans[0].engine_id, k_gain_id);
 
@@ -1125,7 +1160,7 @@ std::vector<anira_backend_id> gain_candidates(std::initializer_list<ProviderPair
     std::vector<anira_backend_id> out;
     for (const auto& [provider, id] : providers) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
-                       .engine = ANIRA_ENGINE_NONE,
+                       .engine = ANIRA_ENGINE_CUSTOM,
                        .provider = static_cast<uint32_t>(provider),
                        .engine_id = engine_id,
                        .provider_id = id});
@@ -1133,7 +1168,7 @@ std::vector<anira_backend_id> gain_candidates(std::initializer_list<ProviderPair
     return out;
 }
 
-/// The gain engine's descriptor listing `providers` beyond the default one.
+/// The gain engine's descriptor listing `providers`: exactly what it serves.
 anira_engine_desc gain_desc_serving(GainEngine& engine, std::span<const char* const> providers) {
     anira_engine_desc desc = gain_desc(engine);
     desc.providers = providers.empty() ? nullptr : providers.data();
@@ -1146,7 +1181,7 @@ using SeenProvider = std::pair<uint32_t, std::string>;
 }  // namespace
 
 // One plan per row and candidate: a neutral row under three candidates of its engine (coreml,
-// a custom name, the default provider) is three plans in candidate order, each on its own
+// a custom name, the CPU path) is three plans in candidate order, each on its own
 // loaded model (the provider is part of the pool key: three loads with the provider in the
 // record, three prepares, one init), the report naming the provider and the custom name per
 // plan; set_plan switches between them while the stream runs, and every process call runs on
@@ -1156,13 +1191,13 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     GainEngine gain;
     gain.m_gain = 0.5F;
     Pipe pipe;
-    const std::array<const char*, 2> served{"coreml", "com.example.npu"};
+    const std::array<const char*, 3> served{"coreml", "com.example.npu", "cpu"};
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
         << pipe.m_err.message;
     pipe.add_inference(gain_model(),
                        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr},
-                                        {ANIRA_PROVIDER_DEFAULT, "com.example.npu"},
-                                        {ANIRA_PROVIDER_DEFAULT, nullptr}}));
+                                        {ANIRA_PROVIDER_CUSTOM, "com.example.npu"},
+                                        {ANIRA_PROVIDER_CPU, nullptr}}));
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     anira_error err = ANIRA_ERROR_INIT;
@@ -1173,22 +1208,22 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     EXPECT_EQ(gain.m_prepared, 3) << "one prepare per handler and loaded model";
     EXPECT_EQ(gain.m_providers_seen,
               (std::vector<SeenProvider>{{ANIRA_PROVIDER_COREML, ""},
-                                         {ANIRA_PROVIDER_DEFAULT, "com.example.npu"},
-                                         {ANIRA_PROVIDER_DEFAULT, ""}}))
+                                         {ANIRA_PROVIDER_CUSTOM, "com.example.npu"},
+                                         {ANIRA_PROVIDER_CPU, ""}}))
         << "the loads in plan order, the record naming the provider";
     const std::vector<anira_plan_info> plans = plan_rows(handler);
     ASSERT_EQ(plans.size(), 3U);
     for (const anira_plan_info& plan : plans) {
-        EXPECT_EQ(plan.engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+        EXPECT_EQ(plan.engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
         ASSERT_NE(plan.engine_id, nullptr);
         EXPECT_STREQ(plan.engine_id, k_gain_id);
     }
     EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
     EXPECT_EQ(plans[0].provider_id, nullptr);
-    EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+    EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CUSTOM));
     ASSERT_NE(plans[1].provider_id, nullptr);
     EXPECT_STREQ(plans[1].provider_id, "com.example.npu");
-    EXPECT_EQ(plans[2].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+    EXPECT_EQ(plans[2].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
     EXPECT_EQ(plans[2].provider_id, nullptr);
     EXPECT_EQ(anira_handler_get_plan(handler), 0U) << "no default engine named: plan 0";
     // Two blocks on each plan in turn: the ramp comes back times the gain on every plan, and
@@ -1210,10 +1245,130 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     EXPECT_EQ(gain.m_released, 1);
 }
 
+// The default provider picks the initial plan beside the default engine: under three
+// candidates of one engine (coreml, a custom name, the CPU path) the handler starts on
+// the first plan of the default engine on the default provider, of any engine without a default
+// engine; a default provider no plan runs on starts as without one (the first plan of the
+// default engine) and logs the default engine's warning naming the pair and the plan it starts
+// on; one no entry could run (each pinned elsewhere) is CONFIG at create; the config reads the
+// pair back.
+TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
+    anira_drain_log();
+    RecordCollector collector;
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);  // the warning's level
+    GainEngine gain;
+    const std::array<const char*, 3> served{"coreml", "com.example.npu", "cpu"};
+    const auto initial_plan = [&](const ModelConfig& model) {
+        Pipe pipe;
+        EXPECT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(model,
+                           gain_candidates({{ANIRA_PROVIDER_COREML, nullptr},
+                                            {ANIRA_PROVIDER_CUSTOM, "com.example.npu"},
+                                            {ANIRA_PROVIDER_CPU, nullptr}}));
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+        if (handler == nullptr) { return UINT32_MAX; }
+        anira_error err = ANIRA_ERROR_INIT;
+        const anira::ContractHandle contract = explicit_contract();
+        EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        const uint32_t plan = anira_handler_get_plan(handler);
+        anira_handler_destroy(handler);
+        return plan;
+    };
+
+    ModelConfig on_npu = gain_model();
+    on_npu.default_engine(std::string_view(k_gain_id)).default_provider("com.example.npu");
+    EXPECT_EQ(on_npu.default_provider().kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(on_npu.default_provider().id, "com.example.npu");
+    EXPECT_EQ(initial_plan(on_npu), 1U) << "the default engine's plan on the default provider";
+
+    ModelConfig any_engine = gain_model();
+    any_engine.default_provider("com.example.npu");
+    EXPECT_EQ(initial_plan(any_engine), 1U) << "no default engine: any engine's plan";
+
+    ModelConfig on_default = gain_model();
+    on_default.default_engine(std::string_view(k_gain_id));
+    EXPECT_EQ(initial_plan(on_default), 0U) << "no default provider: the first plan";
+    on_default.default_provider(ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(on_default.default_provider().kind, ANIRA_PROVIDER_COREML);
+    EXPECT_TRUE(on_default.default_provider().id.empty());
+    EXPECT_EQ(initial_plan(on_default), 0U) << "coreml is the first plan";
+    on_default.default_provider(ANIRA_PROVIDER_NONE);
+    EXPECT_EQ(on_default.default_provider().kind, ANIRA_PROVIDER_NONE);
+    EXPECT_EQ(initial_plan(on_default), 0U) << "NONE without a name sets none";
+
+    ModelConfig on_cuda = gain_model();
+    on_cuda.default_engine(std::string_view(k_gain_id)).default_provider(ANIRA_PROVIDER_CUDA);
+    EXPECT_EQ(initial_plan(on_cuda), 0U) << "no plan on cuda: as without a default provider";
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    const std::string asked = std::string("no plan runs default_engine '") + k_gain_id +
+                              "' on default_provider 'cuda' here; the handler starts on plan 0 (" +
+                              k_gain_id + " on coreml)";
+    EXPECT_TRUE(collector.has(asked.c_str(), "native")) << asked;
+#endif
+
+    // What the configuration alone decides is refused at create, as a default engine naming no
+    // entry is: every entry of the default engine pinned to another provider.
+    {
+        ModelConfig pinned = gain_model();
+        pinned.model_provider(0, ANIRA_PROVIDER_COREML)
+            .default_engine(std::string_view(k_gain_id))
+            .default_provider("com.example.npu");
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(pinned, gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(handler, nullptr);
+        const std::string message = pipe.m_err.message;
+        EXPECT_NE(message.find(std::string("default_provider 'com.example.npu' runs no model "
+                                           "entry of default_engine '") +
+                               k_gain_id + "': each is pinned to another provider"),
+                  std::string::npos)
+            << message;
+    }
+
+    // The C refusals of the setter, and the JSON round trip of the key.
+    EXPECT_EQ(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_CUDA, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(),
+                                                      ANIRA_PROVIDER_CUDA,
+                                                      "com.example.npu"),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a provider of the enum and a name at once";
+    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(),
+                                                      ANIRA_PROVIDER_NONE,
+                                                      "com.example.npu"),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a name beside NONE: a custom provider is ANIRA_PROVIDER_CUSTOM";
+    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(), ANIRA_PROVIDER_CUSTOM, ""),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "an empty name";
+    EXPECT_EQ(
+        anira_model_config_set_default_provider(on_cuda.native(), ANIRA_PROVIDER_CUSTOM, nullptr),
+        ANIRA_ERROR_INVALID_ARGUMENT)
+        << "CUSTOM without a name";
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) an unknown provider on purpose
+    const auto unknown_provider = static_cast<anira_provider>(0x7fff);
+    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(), unknown_provider, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "a provider this header does not name";
+    EXPECT_EQ(on_cuda.default_provider().kind, ANIRA_PROVIDER_CUDA) << "a refusal changes nothing";
+    const ModelConfig reloaded = ModelConfig::from_json(on_npu.to_json());
+    EXPECT_EQ(reloaded.default_provider().kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(reloaded.default_provider().id, "com.example.npu");
+    EXPECT_EQ(ModelConfig::from_json(on_cuda.to_json()).default_provider().kind,
+              ANIRA_PROVIDER_CUDA);
+}
+
 // A candidate naming a provider the engine's descriptor does not list is ANIRA_ERROR_NOT_SUPPORTED
 // at create, naming the entry, the engine, the provider and the list (a provider of the enum
-// and a custom name alike); the 2.x pass-through serves the default provider alone; a candidate
-// that matches no entry is not a plan and not an error, and two equal candidates are one plan.
+// and a custom name alike, the CPU path when the list lacks "cpu"); an engine whose descriptor
+// lists no provider (the pass-through) serves the CPU path alone; a candidate that matches no entry
+// is not a plan and not an error, and two equal candidates are one plan.
 TEST(AbiEngine, AProviderTheEngineDoesNotListIsNotSupportedAtCreate) {
     const Context context;
     GainEngine gain;
@@ -1236,16 +1391,20 @@ TEST(AbiEngine, AProviderTheEngineDoesNotListIsNotSupportedAtCreate) {
     };
     refused(gain_candidates({{ANIRA_PROVIDER_CUDA, nullptr}}),
             {"models[0]", k_gain_id, "'cuda'", "coreml"});
-    refused(gain_candidates({{ANIRA_PROVIDER_DEFAULT, "com.example.other"}}),
+    refused(gain_candidates({{ANIRA_PROVIDER_CUSTOM, "com.example.other"}}),
             {"models[0]", k_gain_id, "'com.example.other'", "coreml"});
-    refused(gain_candidates({{ANIRA_PROVIDER_DEFAULT, nullptr}, {ANIRA_PROVIDER_XNNPACK, nullptr}}),
+    refused(gain_candidates({{ANIRA_PROVIDER_CPU, nullptr}}),
+            {"models[0]", k_gain_id, "'cpu'", "coreml"});
+    refused(gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_XNNPACK, nullptr}}),
             {"'xnnpack'"});
     {
-        // The pass-through: the NONE entry with a provider keeps every custom row, and the
-        // anira.v2.custom row serves the default provider alone.
+        // The pass-through: the anira.v2.custom row's engine, which lists no provider, serves
+        // the CPU path alone.
         Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+            << pipe.m_err.message;
         pipe.add_inference(stream_model(),
-                           gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}, nullptr));
+                           gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}, k_custom));
         anira_handler* handler = nullptr;
         EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_NOT_SUPPORTED)
             << pipe.m_err.message;
@@ -1284,7 +1443,7 @@ TEST(AbiEngine, AProviderTheEngineDoesNotListIsNotSupportedAtCreate) {
 TEST(AbiEngine, ThePoolKeyHoldsTheProvider) {
     const Context context;
     GainEngine gain;
-    const std::array<const char*, 1> served{"coreml"};
+    const std::array<const char*, 2> served{"coreml", "cpu"};
     const anira_engine_desc desc = gain_desc_serving(gain, served);
     anira_error err = ANIRA_ERROR_INIT;
     anira_custom_engine* engine = nullptr;
@@ -1295,7 +1454,7 @@ TEST(AbiEngine, ThePoolKeyHoldsTheProvider) {
     ASSERT_EQ(on_default.add_engine(engine), ANIRA_OK) << on_default.m_err.message;
     anira_custom_engine_destroy(engine);
     on_coreml.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
-    on_default.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_DEFAULT, nullptr}}));
+    on_default.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_CPU, nullptr}}));
     anira_handler* first = nullptr;
     anira_handler* second = nullptr;
     anira_handler* third = nullptr;
@@ -1309,9 +1468,8 @@ TEST(AbiEngine, ThePoolKeyHoldsTheProvider) {
     ASSERT_EQ(anira_handler_prepare(third, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(gain.m_loaded, 2) << "another provider: another loaded model";
     EXPECT_EQ(gain.m_prepared, 3);
-    EXPECT_EQ(
-        gain.m_providers_seen,
-        (std::vector<SeenProvider>{{ANIRA_PROVIDER_COREML, ""}, {ANIRA_PROVIDER_DEFAULT, ""}}));
+    EXPECT_EQ(gain.m_providers_seen,
+              (std::vector<SeenProvider>{{ANIRA_PROVIDER_COREML, ""}, {ANIRA_PROVIDER_CPU, ""}}));
     EXPECT_EQ(gain.m_inited, 1);
     anira_handler_destroy(first);
     EXPECT_EQ(gain.m_unloaded, 0) << "the second handler still holds the coreml model";
@@ -1354,14 +1512,14 @@ TEST(AbiEngine, TheQuerySaysWhichDeclaredProvidersAreUsableHere) {
     ASSERT_EQ(on_npu.add_new_engine(k_gain_id, gain_desc_serving(gain, k_served)), ANIRA_OK)
         << on_npu.m_err.message;
     on_npu.add_inference(gain_model(),
-                         gain_candidates({{ANIRA_PROVIDER_DEFAULT, "com.example.npu"}}));
+                         gain_candidates({{ANIRA_PROVIDER_CUSTOM, "com.example.npu"}}));
     EXPECT_EQ(on_npu.create_handler(context, &handler), ANIRA_ERROR_NOT_SUPPORTED);
     EXPECT_EQ(handler, nullptr);
     EXPECT_NE(std::strstr(on_npu.m_err.message, "declares provider 'com.example.npu'"), nullptr)
         << on_npu.m_err.message;
     EXPECT_NE(std::strstr(on_npu.m_err.message, "unavailable here"), nullptr)
         << on_npu.m_err.message;
-    EXPECT_NE(std::strstr(on_npu.m_err.message, "usable here: default, coreml"), nullptr)
+    EXPECT_NE(std::strstr(on_npu.m_err.message, "usable here: coreml)"), nullptr)
         << on_npu.m_err.message;
     // A provider the descriptor does not declare at all says so, as before.
     Pipe on_cuda;
@@ -1371,9 +1529,7 @@ TEST(AbiEngine, TheQuerySaysWhichDeclaredProvidersAreUsableHere) {
     EXPECT_EQ(on_cuda.create_handler(context, &handler), ANIRA_ERROR_NOT_SUPPORTED);
     EXPECT_NE(std::strstr(on_cuda.m_err.message, "does not serve provider 'cuda'"), nullptr)
         << on_cuda.m_err.message;
-    EXPECT_NE(std::strstr(on_cuda.m_err.message,
-                          "its descriptor lists: default, coreml, "
-                          "com.example.npu"),
+    EXPECT_NE(std::strstr(on_cuda.m_err.message, "its descriptor lists: coreml, com.example.npu)"),
               nullptr)
         << on_cuda.m_err.message;
     // A refused query fails the create with its status, naming the engine and the phase.
@@ -1389,16 +1545,16 @@ TEST(AbiEngine, TheQuerySaysWhichDeclaredProvidersAreUsableHere) {
 }
 
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the
-// pipeline and provider usable here, the default provider first, then the declared providers
-// the query keeps, with the engine's id; every call runs the queries. The edges follow the
-// CPU rule: zero-copy to the default provider, a host copy the engine makes itself to a
-// device one; a provider the query cleared, an engine the pipeline does not add and a domain
-// other than the host's have no row; a built-in backend is the context's answer.
+// pipeline and provider usable here: the declared providers the query keeps, in list order,
+// or the CPU path alone for an engine without a list, with the engine's id; every call runs
+// the queries. The edges follow the CPU rule: zero-copy to the CPU path, a host copy the engine
+// makes itself to a device one; a provider the query cleared, an engine the pipeline does not add
+// and a domain other than the host's have no row; a built-in backend is the context's answer.
 TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     const Context context;
-    static constexpr std::array<const char*, 2> k_served{"coreml", "com.example.npu"};
+    static constexpr std::array<const char*, 3> k_served{"coreml", "com.example.npu", "cpu"};
     GainEngine gain;
-    gain.m_available = 0b01;
+    gain.m_available = 0b101;  // coreml and cpu yes, the npu no
     GainEngine other;
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, k_served)), ANIRA_OK)
@@ -1418,7 +1574,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                                                    &count,
                                                    nullptr),
               ANIRA_OK);
-    EXPECT_EQ(count, context_count + 3U) << "gain: default + coreml; other: default";
+    EXPECT_EQ(count, context_count + 3U) << "gain: coreml + cpu (list order); other: cpu";
     EXPECT_EQ(gain.m_queried, 1);
     EXPECT_EQ(other.m_queried, 1);
     std::vector<anira_backend_id> rows(count, ANIRA_BACKEND_ID_INIT);
@@ -1433,16 +1589,18 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     for (uint32_t i = 0; i < context_count; ++i) {
         EXPECT_EQ(rows[i].engine_id, nullptr) << "the context's rows lead";
     }
-    const anira_backend_id& gain_default = rows[context_count];
-    const anira_backend_id& gain_coreml = rows[context_count + 1];
-    const anira_backend_id& other_default = rows[context_count + 2];
-    EXPECT_EQ(gain_default.engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
-    EXPECT_EQ(gain_default.provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
-    EXPECT_STREQ(gain_default.engine_id, k_gain_id);
-    EXPECT_EQ(gain_default.provider_id, nullptr);
+    const anira_backend_id& gain_coreml = rows[context_count];
+    const anira_backend_id& gain_cpu = rows[context_count + 1];
+    const anira_backend_id& other_cpu = rows[context_count + 2];
+    EXPECT_EQ(gain_cpu.engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+    EXPECT_EQ(gain_cpu.provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+    EXPECT_STREQ(gain_cpu.engine_id, k_gain_id);
+    EXPECT_EQ(gain_cpu.provider_id, nullptr);
     EXPECT_EQ(gain_coreml.provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
     EXPECT_STREQ(gain_coreml.engine_id, k_gain_id);
-    EXPECT_STREQ(other_default.engine_id, "org.example.other");
+    EXPECT_STREQ(other_cpu.engine_id, "org.example.other");
+    EXPECT_EQ(other_cpu.provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU))
+        << "no list: the CPU path alone";
     EXPECT_EQ(gain.m_inited, 0) << "the queries ran before any init";
     // A short buffer: filled as far as it goes, ANIRA_INCOMPLETE, the count the total.
     uint32_t one = 1;
@@ -1462,7 +1620,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     // The edges of the custom rows, and what has none.
     const auto edge = [&](anira_provider provider, const char* provider_id, const char* id) {
         anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-        to.engine = ANIRA_ENGINE_NONE;
+        to.engine = ANIRA_ENGINE_CUSTOM;
         to.provider = static_cast<uint32_t>(provider);
         to.engine_id = id;
         to.provider_id = provider_id;
@@ -1474,28 +1632,52 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                                                                      &row);
         return std::pair<anira_status, anira_edge_info>{status, row};
     };
-    const auto [default_status, default_edge] = edge(ANIRA_PROVIDER_DEFAULT, nullptr, k_gain_id);
+    const auto [default_status, default_edge] = edge(ANIRA_PROVIDER_CPU, nullptr, k_gain_id);
     ASSERT_EQ(default_status, ANIRA_OK);
     EXPECT_EQ(default_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
     EXPECT_EQ(default_edge.available, 1U);
-    EXPECT_EQ(default_edge.to_engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(default_edge.to_engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+    ASSERT_NE(default_edge.to_engine_id, nullptr) << "the custom engine names itself";
+    EXPECT_STREQ(default_edge.to_engine_id, k_gain_id);
+    EXPECT_EQ(default_edge.to_provider_id, nullptr);
     const auto [coreml_status, coreml_edge] = edge(ANIRA_PROVIDER_COREML, nullptr, k_gain_id);
     ASSERT_EQ(coreml_status, ANIRA_OK);
     EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
     EXPECT_EQ(coreml_edge.rung, static_cast<uint32_t>(ANIRA_RUNG_IDENTITY));
     ASSERT_NE(coreml_edge.reason, nullptr);
     EXPECT_NE(std::strstr(coreml_edge.reason, "query"), nullptr) << coreml_edge.reason;
-    EXPECT_EQ(edge(ANIRA_PROVIDER_DEFAULT, "com.example.npu", k_gain_id).first,
+    EXPECT_STREQ(coreml_edge.to_engine_id, k_gain_id);
+    {
+        // A caller whose header ends before the tail field reads the row without it.
+        anira_backend_id to = ANIRA_BACKEND_ID_INIT;
+        to.engine = ANIRA_ENGINE_CUSTOM;
+        to.provider = ANIRA_PROVIDER_CPU;
+        to.engine_id = k_gain_id;
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        row.struct_size = static_cast<uint32_t>(offsetof(anira_edge_info, to_engine_id));
+        const char* const sentinel = "untouched";
+        row.to_engine_id = sentinel;
+        ASSERT_EQ(anira_pipeline_capabilities_edge(pipe.m_pipeline,
+                                                   context.m_context,
+                                                   ANIRA_DOMAIN_HOST,
+                                                   &to,
+                                                   &row),
+                  ANIRA_OK);
+        EXPECT_EQ(row.available, 1U);
+        EXPECT_EQ(row.to_engine_id, sentinel) << "beyond the caller's struct_size";
+    }
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CUSTOM, "com.example.npu", k_gain_id).first,
               ANIRA_ERROR_EDGE_UNREACHABLE)
         << "declared, but the query cleared it";
     EXPECT_EQ(edge(ANIRA_PROVIDER_CUDA, nullptr, k_gain_id).first, ANIRA_ERROR_EDGE_UNREACHABLE)
         << "not declared";
-    EXPECT_EQ(edge(ANIRA_PROVIDER_DEFAULT, nullptr, "org.example.absent").first,
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CPU, nullptr, "org.example.absent").first,
               ANIRA_ERROR_EDGE_UNREACHABLE)
         << "not added to the pipeline";
     {
         anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-        to.engine = ANIRA_ENGINE_NONE;
+        to.engine = ANIRA_ENGINE_CUSTOM;
+        to.provider = ANIRA_PROVIDER_CPU;
         to.engine_id = k_gain_id;
         anira_edge_info row = ANIRA_EDGE_INFO_INIT;
         EXPECT_EQ(anira_pipeline_capabilities_edge(pipe.m_pipeline,
@@ -1530,6 +1712,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                   ANIRA_OK);
         EXPECT_EQ(from_pipeline.edge_class, from_context.edge_class);
         EXPECT_EQ(from_pipeline.to_engine, from_context.to_engine);
+        EXPECT_EQ(from_pipeline.to_engine_id, nullptr) << "a built-in engine has no id";
     }
     // A refused query fails the entry with its status.
     gain.m_refuse_query = ANIRA_ERROR_DEVICE;
@@ -1539,7 +1722,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                                                    &count,
                                                    nullptr),
               ANIRA_ERROR_DEVICE);
-    EXPECT_EQ(edge(ANIRA_PROVIDER_DEFAULT, nullptr, k_gain_id).first, ANIRA_ERROR_DEVICE);
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CPU, nullptr, k_gain_id).first, ANIRA_ERROR_DEVICE);
 }
 
 // A context whose config carries a provider_options extension in JSON, for the tests of the
@@ -1578,7 +1761,7 @@ struct OptionsContext {
 /// The gain engine's descriptor serving coreml and, when asked, listing the provider_options
 /// kind.
 anira_engine_desc gain_desc_options(GainEngine& engine, bool consumes) {
-    static constexpr std::array<const char*, 1> k_served{"coreml"};
+    static constexpr std::array<const char*, 2> k_served{"coreml", "cpu"};
     static constexpr std::array<const char*, 1> k_kinds{"context:provider_options"};
     anira_engine_desc desc = gain_desc_serving(engine, k_served);
     if (consumes) {
@@ -1735,7 +1918,7 @@ TEST(AbiEngine, CandidatesAreReadAtTheCallersStride) {
     constexpr size_t k_stride = sizeof(anira_backend_id) + 16;
     std::array<unsigned char, 2 * k_stride> bytes{};
     const std::vector<anira_backend_id> ids =
-        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_DEFAULT, nullptr}});
+        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_CPU, nullptr}});
     for (size_t i = 0; i < ids.size(); ++i) {
         anira_backend_id wide = ids[i];
         wide.struct_size = static_cast<uint32_t>(k_stride);
@@ -1776,12 +1959,12 @@ TEST(AbiEngine, CandidatesAreReadAtTheCallersStride) {
 // A pinned entry runs on its provider alone: two entries of one engine are legal when their
 // pins differ; under explicit candidates the pinned entry matches the candidate naming its pin
 // and no other while the neutral entry matches every candidate of the engine; under the
-// default set the pinned entry runs on its pin and the neutral one on the default provider;
+// default set the pinned entry runs on its pin and the neutral one on the CPU path;
 // two entries with one pin, or two without one, are one entry too many.
 TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
     const Context context;
     GainEngine gain;
-    const std::array<const char*, 1> served{"coreml"};
+    const std::array<const char*, 2> served{"coreml", "cpu"};
     // models[0] pinned to coreml (an export lowered to it), models[1] neutral.
     ModelConfig model = stream_model(k_gain_id, "lowered.bin");
     model.model_provider(0, ANIRA_PROVIDER_COREML);
@@ -1793,12 +1976,12 @@ TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
             << pipe.m_err.message;
         pipe.add_inference(
             model,
-            gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_DEFAULT, nullptr}}));
+            gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_CPU, nullptr}}));
         anira_handler* handler = nullptr;
         ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
         anira_error err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
-        // The table: (0, coreml), (1, coreml), (1, default), in entry and candidate order.
+        // The table: (0, coreml), (1, coreml), (1, cpu), in entry and candidate order.
         ASSERT_EQ(handler->m_plans.size(), 3U);
         EXPECT_EQ(handler->m_plans[0].m_row, 0U);
         EXPECT_EQ(handler->m_plans[1].m_row, 1U);
@@ -1807,12 +1990,12 @@ TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
         ASSERT_EQ(plans.size(), 3U);
         EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
         EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
-        EXPECT_EQ(plans[2].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+        EXPECT_EQ(plans[2].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
         EXPECT_EQ(gain.m_loaded, 3) << "three keys: the row or the provider differs";
         EXPECT_EQ(kept_of(gain, 0).m_path, "lowered.bin");
         EXPECT_EQ(kept_of(gain, 0).m_provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
         EXPECT_EQ(kept_of(gain, 2).m_path, k_never_opened);
-        EXPECT_EQ(kept_of(gain, 2).m_provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+        EXPECT_EQ(kept_of(gain, 2).m_provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
         anira_handler_destroy(handler);
     }
     {
@@ -1830,7 +2013,7 @@ TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
         EXPECT_EQ(handler->m_plans[0].m_row, 0U);
         EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
         EXPECT_EQ(handler->m_plans[1].m_row, 1U);
-        EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+        EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
         anira_handler_destroy(handler);
     }
     {
@@ -1838,7 +2021,7 @@ TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
         Pipe pipe;
         ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
             << pipe.m_err.message;
-        pipe.add_inference(model, gain_candidates({{ANIRA_PROVIDER_DEFAULT, nullptr}}));
+        pipe.add_inference(model, gain_candidates({{ANIRA_PROVIDER_CPU, nullptr}}));
         anira_handler* handler = nullptr;
         ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
         anira_error err = ANIRA_ERROR_INIT;
@@ -1867,6 +2050,110 @@ TEST(AbiEngine, APinnedEntryRunsOnItsProviderAlone) {
         EXPECT_NE(std::strstr(pipe.m_err.message,
                               pinned ? "pinned to provider 'coreml'" : "without a provider pin"),
                   nullptr)
+            << pipe.m_err.message;
+    }
+}
+
+// Under the default set a neutral entry is one plan, on its engine's home provider: the CPU
+// path for an engine without a providers list and for one that lists "cpu", else the engine's
+// first listed provider. A plan whose provider the engine declares but its query reports
+// unusable here is dropped under the default set (with its row when no plan of the row is
+// left), and a table left empty is ANIRA_ERROR_CONFIG; a named candidate still refuses it.
+TEST(AbiEngine, UnderTheDefaultSetANeutralEntryRunsOnItsEnginesHomeProvider) {
+    const Context context;
+    const anira::ContractHandle contract = explicit_contract();
+    // The provider of the one plan of a neutral entry under the default set.
+    const auto home = [&](GainEngine& gain, std::span<const char* const> served) {
+        Pipe pipe;
+        EXPECT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model());
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+        if (handler == nullptr) { return SeenProvider{UINT32_MAX, ""}; }
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        const std::vector<anira_plan_info> plans = plan_rows(handler);
+        EXPECT_EQ(plans.size(), 1U);
+        SeenProvider seen{UINT32_MAX, ""};
+        if (!plans.empty()) {
+            seen = SeenProvider{plans[0].provider,
+                                plans[0].provider_id != nullptr ? plans[0].provider_id : ""};
+        }
+        anira_handler_destroy(handler);
+        return seen;
+    };
+    {
+        GainEngine gain;
+        EXPECT_EQ(home(gain, {}), (SeenProvider{ANIRA_PROVIDER_CPU, ""}))
+            << "no list: the CPU path";
+    }
+    {
+        GainEngine gain;
+        const std::array<const char*, 2> served{"coreml", "cpu"};
+        EXPECT_EQ(home(gain, served), (SeenProvider{ANIRA_PROVIDER_CPU, ""}))
+            << "a list with \"cpu\": the CPU path, wherever it stands in the list";
+    }
+    {
+        GainEngine gain;
+        const std::array<const char*, 2> served{"coreml", "com.example.npu"};
+        EXPECT_EQ(home(gain, served), (SeenProvider{ANIRA_PROVIDER_COREML, ""}))
+            << "a list without \"cpu\": the first listed provider";
+        GainEngine custom_first;
+        const std::array<const char*, 2> npu_first{"com.example.npu", "coreml"};
+        EXPECT_EQ(home(custom_first, npu_first),
+                  (SeenProvider{ANIRA_PROVIDER_CUSTOM, "com.example.npu"}))
+            << "a custom provider listed first carries its name";
+    }
+
+    // The first listed provider unusable here: the neutral entry's plan is dropped, the entry
+    // pinned to the usable one runs alone.
+    GainEngine gain;
+    gain.m_available = 0b10;  // coreml no, the npu yes
+    const std::array<const char*, 2> served{"coreml", "com.example.npu"};
+    {
+        ModelConfig model = stream_model(k_gain_id, "lowered.bin");
+        model.model_provider(0, "com.example.npu");
+        model.add_model_path(k_gain_id, k_never_opened);
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(model);
+        anira_handler* handler = nullptr;
+        ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        const std::vector<anira_plan_info> plans = plan_rows(handler);
+        ASSERT_EQ(plans.size(), 1U) << "the neutral entry's coreml plan is dropped";
+        EXPECT_EQ(handler->m_plans[0].m_row, 0U);
+        EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CUSTOM));
+        ASSERT_NE(plans[0].provider_id, nullptr);
+        EXPECT_STREQ(plans[0].provider_id, "com.example.npu");
+        anira_handler_destroy(handler);
+    }
+    {
+        // Nothing left: the no-plan refusal.
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model());
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_CONFIG) << pipe.m_err.message;
+        EXPECT_EQ(handler, nullptr);
+        EXPECT_NE(std::strstr(pipe.m_err.message, "runs on a candidate backend usable here"),
+                  nullptr)
+            << pipe.m_err.message;
+    }
+    {
+        // A named candidate on the unusable provider is refused, as before.
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_NOT_SUPPORTED)
+            << pipe.m_err.message;
+        EXPECT_NE(std::strstr(pipe.m_err.message, "unavailable here"), nullptr)
             << pipe.m_err.message;
     }
 }
@@ -1918,7 +2205,7 @@ TEST(AbiEngine, AnEngineNotInThisBuildIsNotSupported) {
     model.output(out);
     const std::vector<anira_backend_id> only_missing{{.struct_size = sizeof(anira_backend_id),
                                                       .engine = static_cast<uint32_t>(*missing),
-                                                      .provider = ANIRA_PROVIDER_DEFAULT,
+                                                      .provider = ANIRA_PROVIDER_CPU,
                                                       .engine_id = nullptr}};
     Pipe absent;
     absent.add_inference(model, only_missing);
@@ -1955,7 +2242,7 @@ TEST(AbiEngine, AMissingFileOnARealEngineIsModelLoadOrNoSuchFile) {
         model.output(out);
         const std::vector<anira_backend_id> only{{.struct_size = sizeof(anira_backend_id),
                                                   .engine = static_cast<uint32_t>(engine),
-                                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                                  .provider = ANIRA_PROVIDER_CPU,
                                                   .engine_id = nullptr}};
         Pipe pipe;
         pipe.add_inference(model, only);
@@ -2142,11 +2429,15 @@ TEST(AbiEngine, PreparesOfOneLoadedModelNeverOverlap) {
 TEST(AbiEngine, ASessionExclusiveHandlerHasNoSharedSlotOnAnyEngine) {
     const Context context(2);
     const anira::ContractHandle contract = explicit_contract();
-    // The bundled gain model on every engine of the build plus the engine-free custom row.
+    // The bundled gain model on every engine of the build plus the custom row on its
+    // pass-through.
     ModelConfig model = anira_test::gain_with_custom(false);
     model.state(ANIRA_MODEL_STATEFUL).max_instances(2);
     Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     pipe.add_inference(model, anira_test::custom_candidates());
+
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     anira_error err = ANIRA_ERROR_INIT;
@@ -2526,7 +2817,10 @@ TEST(AbiEngine, FlagsRoundTripThroughThePlanReport) {
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain, k_flags)), ANIRA_OK)
         << pipe.m_err.message;
-    // Two custom rows, two plans: the registered engine's and the engine-free pass-through's.
+    // Two custom rows, two plans: the flagged engine's and the pass-through's, whose descriptor
+    // carries flags 0.
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.add_model_path(k_custom, "custom-processor");
     pipe.add_inference(model);
@@ -2867,7 +3161,7 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOneLoadedModel) {
 
 // The whole variant is in the pool's key of a custom engine, since its load may read any of
 // it: one engine in two pipelines over models that differ in an entry the record does not
-// carry (a second row, the engine-free pass-through's) loads twice.
+// carry (a second row, the pass-through's, which the second pipeline adds) loads twice.
 TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
     const Context context;
     GainEngine gain;
@@ -2879,6 +3173,8 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
     Pipe second;
     ASSERT_EQ(first.add_engine(engine), ANIRA_OK) << first.m_err.message;
     ASSERT_EQ(second.add_engine(engine), ANIRA_OK) << second.m_err.message;
+    ASSERT_EQ(second.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << second.m_err.message;
     anira_custom_engine_destroy(engine);
     const ModelConfig plain = gain_model();
     ModelConfig extended = gain_model();
@@ -2908,13 +3204,15 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
 }
 
 // A registered engine received the names and bound its slots itself: every slot row of its
-// plan reads ANIRA_BINDING_ENGINE, while the engine-free pass-through's rows read
-// ANIRA_BINDING_POSITION.
+// plan reads ANIRA_BINDING_ENGINE, the anira.v2.custom row's pass-through's as well (a built-in
+// plan's POSITION and NAME rows are AbiHandler.ASlotReportsHowItsPlanBoundIt's).
 TEST(AbiEngine, ASlotReportsHowItWasBound) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.add_model_path(k_custom, "custom-processor");
     pipe.add_inference(model);
@@ -2929,7 +3227,7 @@ TEST(AbiEngine, ASlotReportsHowItWasBound) {
         EXPECT_EQ(engine_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
         const std::vector<anira_plan_slot> custom_rows = slot_rows(handler, 1, inputs);
         ASSERT_EQ(custom_rows.size(), 1U);
-        EXPECT_EQ(custom_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+        EXPECT_EQ(custom_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
     }
     anira_handler_destroy(handler);
 }
