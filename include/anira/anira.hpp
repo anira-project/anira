@@ -23,7 +23,8 @@
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
- * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file);
+ * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file;
+ * anira::v2::JsonConfigLoader of anira/compat/v2.hpp is the 2.x loader over them);
  * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>: a handle without
  * geometry, patched with hard_geometry, which hard() reads back into a Hard;
  * ContextConfig::log_sink takes the raw (anira_log_fn, void*) pair; ModelConfig::anchor takes

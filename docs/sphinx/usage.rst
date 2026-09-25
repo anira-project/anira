@@ -36,7 +36,9 @@ of section 1.5 are their file form.
        the real-time thread, with the pipeline's one *stage* as custom pre- and
        post-processing (section 2). The 3.x handler is the C handler of section 3.2; the 2.x
        :cpp:class:`anira::InferenceHandler` of sections 3 to 5 still takes the 2.x
-       configuration classes in this pre-release.
+       configuration classes in this pre-release. 2.x code that is not ported yet compiles
+       against ``anira/compat/v2.hpp`` and runs on the C handler
+       (:ref:`migration-compat`).
 
 1. Configuration
 ----------------------------------------

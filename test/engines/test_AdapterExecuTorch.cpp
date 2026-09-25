@@ -132,7 +132,7 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
 }
 
 // The provider of the record on ExecuTorch is the delegate (ExecuTorch's backend) an export
-// was lowered for: the adapter serves the default provider and every delegate registered to
+// was lowered for: the adapter serves the CPU path and every delegate registered to
 // the runtime and available (this package registers XNNPACK), the capabilities' query lists
 // the same, and a pinned entry whose method does not use the pinned delegate (the bundled gain
 // is a portable export) is a mislabeled export, refused at load naming the pin, the delegate
@@ -178,7 +178,7 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
     Model neutral = anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH);
     ASSERT_EQ(neutral.m_entry, "gain2");
     adapter->prepare(neutral);
-    EXPECT_TRUE(adapter->prepared()) << "a portable export on the default provider";
+    EXPECT_TRUE(adapter->prepared()) << "a portable export on the CPU path";
 
     Model pinned = neutral;
     pinned.m_provider = ANIRA_PROVIDER_XNNPACK;

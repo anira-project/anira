@@ -242,6 +242,7 @@ inline std::string json_number(float value) {
 /// How an idle inference thread waits for work.
 enum class WaitStrategy { SpinBackoff, Blocking };
 
+/// The strategy's word in a version-2 document ("spin_backoff", "blocking").
 inline const char* to_string(WaitStrategy wait_strategy) noexcept {
     return wait_strategy == WaitStrategy::Blocking ? "blocking" : "spin_backoff";
 }
@@ -249,6 +250,7 @@ inline const char* to_string(WaitStrategy wait_strategy) noexcept {
 /// The level of the records anira logs.
 enum class LogLevel { Debug = 0, Info = 1, Warning = 2, Error = 3 };
 
+/// The level's word in a version-2 document ("debug" ... "error").
 inline const char* to_string(LogLevel log_level) noexcept {
     switch (log_level) {
         case LogLevel::Debug: return "debug";
@@ -272,6 +274,7 @@ constexpr LogLevel default_log_level() noexcept {
 /// Who drains the real-time log queue: anira's drain thread, or the host (anira_drain_log).
 enum class LogDrain { Thread = 0, Manual = 1 };
 
+/// The drain's word in a version-2 document ("thread", "manual").
 inline const char* to_string(LogDrain log_drain) noexcept {
     switch (log_drain) {
         case LogDrain::Thread: return "thread";
@@ -420,6 +423,7 @@ struct HostConfig {
 
 // ---- the configuration -----------------------------------------------------------------------
 
+/// The shapes of one side of a model: one vector of dims per tensor, as in 2.x.
 using TensorShapeList = std::vector<std::vector<int64_t>>;
 
 /**
@@ -659,6 +663,7 @@ class JsonConfigLoader;
  */
 class InferenceConfig {
 public:
+    /// The defaults of the constructors' trailing arguments, as in 2.x.
     struct Defaults {
         static constexpr unsigned k_warm_up = 0;
         static constexpr bool k_session_exclusive_processor = false;
