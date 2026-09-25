@@ -38,16 +38,18 @@ struct Instance {
     std::array<float, k_block_size> m_buffer{};
 };
 
-// The pass-through engine of the custom row: the one stream in, copied out. Its code and its
-// descriptor live in this module, so the handler holding it must be gone before the module
-// unloads: the cases that destroy their instance before the unload run it
+// The pass-through engine of the custom row: the one stream in, copied out. Its code lives in
+// this module. The cases that destroy their instance before the unload run it
 // (DefaultPolicyLeavesNoThreadBehind, ReloadAfterUnloadWorks, through unloadtest_create). The
-// case that leaks a live session into the unload (UnloadWithLiveSessionIsJoinedByHook) must
-// not: the loader may unmap the module before libanira's unload hook joins the pool (dyld
-// does), and a pool thread still working through the leaked session's queue would then call
-// into code that is gone. A plugin that leaks a session running its own engine is a host
-// error no hook can make safe; that case runs a built-in engine instead
-// (unloadtest_create_builtin), whose code is libanira's and its runtime's.
+// case that leaks a live session into the unload (UnloadWithLiveSessionIsJoinedByHook) runs a
+// built-in engine where the build has one that runs the gain model (unloadtest_create_builtin):
+// the loader may unmap the module before libanira's unload hook joins the pool (dyld does),
+// and this function must never run after that. On a build without one the leaked case falls
+// back to this engine, which is safe only because nothing reaches the module once the leaked
+// session's queue is drained: anira_custom_engine_create copies the descriptor into the
+// engine's carrier and owns the id (src/capi/engine.cpp), the teardown slots (unload,
+// unprepare, release) are called only when set and are NULL here, process runs only for an
+// inference, and the leaked case completes every block before the unload.
 anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
                                             void* /*prepared*/,
                                             void* /*user_data*/) {
@@ -255,15 +257,18 @@ void* unloadtest_create(void) {
 }
 
 void* unloadtest_create_builtin(void) {
+    // Created and prepared here: a build whose built-in engines cannot run the gain model
+    // (none carried, or the model file of the chosen one missing) refuses one of the two.
+    Instance* instance = nullptr;
     try {
-        return make_instance(Kind::BuiltIn);
+        instance = make_instance(Kind::BuiltIn);
     } catch (...) { return nullptr; }
-}
-
-int unloadtest_num_builtin_engines(void) {
-    uint32_t count = 0;
-    const anira_status status = anira_enabled_engines(sizeof(anira_backend_id), &count, nullptr);
-    return status == ANIRA_OK ? static_cast<int>(count) : 0;
+    if (instance == nullptr) { return nullptr; }
+    if (prepare_instance(*instance) != ANIRA_OK) {
+        destroy_instance(instance);
+        return nullptr;
+    }
+    return instance;
 }
 
 void unloadtest_prepare(void* instance) {

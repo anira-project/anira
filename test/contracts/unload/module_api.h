@@ -18,12 +18,10 @@ extern "C" {
 /// nullptr if a step failed.
 ANIRA_TEST_EXPORT void* unloadtest_create(void);
 /// Creates a context and a C handler over the bundled gain model under the default candidate
-/// set, so a built-in engine of this build runs it: its code is libanira's and its runtime's,
-/// never this module's. nullptr if a step failed, and on a build without a built-in engine.
+/// set and prepares it as unloadtest_prepare does, so a built-in engine of this build runs it:
+/// its code is libanira's and its runtime's, never this module's. nullptr, with nothing left
+/// behind, if a step failed: on a build without a built-in engine that runs the model.
 ANIRA_TEST_EXPORT void* unloadtest_create_builtin(void);
-/// The built-in engines this build carries (anira_enabled_engines): 0 on an engine-less build,
-/// where unloadtest_create_builtin has nothing to run the model on.
-ANIRA_TEST_EXPORT int unloadtest_num_builtin_engines(void);
 /// anira_handler_prepare with a 512-sample / 48 kHz Hard contract — starts the pool threads.
 ANIRA_TEST_EXPORT void unloadtest_prepare(void* instance);
 /// Runs num_blocks blocks through anira_handler_process(), in place over one planar tensor.
