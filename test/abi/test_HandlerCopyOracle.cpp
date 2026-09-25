@@ -664,9 +664,9 @@ private:
     anira_test::Context m_context;
     /// The custom rows only: the models name no engine.
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
-                                                .engine = ANIRA_ENGINE_NONE,
+                                                .engine = ANIRA_ENGINE_CUSTOM,
                                                 .provider = ANIRA_PROVIDER_DEFAULT,
-                                                .engine_id = nullptr}};
+                                                .engine_id = anira_test::k_custom}};
     std::unique_ptr<anira_test::GateEngine> m_gate;  ///< before the handler, which dies first
     anira_test::Handler m_handler;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< built after prepare; borrows m_handler

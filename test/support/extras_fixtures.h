@@ -29,7 +29,7 @@ inline anira::InferenceConfig bridged_with_custom(const char* model_json,
     cfg.add_model_path("anira.v2.custom", "custom-processor");
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
     std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_NONE);  // keeps the custom entry
+    candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
     return anira::v3compat::to_inference_config(cfg, contract, candidates);
 }
 

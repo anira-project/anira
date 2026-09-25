@@ -26,6 +26,7 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "validate.h"
+#include "words.h"
 
 // ---- the translators ------------------------------------------------------------------------
 
@@ -309,16 +310,20 @@ anira_status to_inference_config(const anira_model_config* model,
                        "counterpart: a 2.x InferenceHandler feeds no state back; run the model "
                        "through a 3.x handler (anira_handler_create)",
                        state->m_name.c_str());
-    // The bridge keeps its engine list: every engine maps to the default provider (a
-    // custom engine, ANIRA_ENGINE_NONE, keeps the custom rows as before); NULL stays NULL.
+    // The bridge keeps its engine list: every engine maps to the default provider, and
+    // ANIRA_ENGINE_CUSTOM keeps the custom rows, the 2.x CUSTOM backend's
+    // (ANIRA_ENGINE_CUSTOM with k_v2_custom_engine, the one id the bridge serves); NULL stays
+    // NULL.
     std::vector<anira_backend_id> ids;
     if (candidates != nullptr) {
         ids.reserve(num_candidates);
         for (uint32_t i = 0; i < num_candidates; ++i) {
-            ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
-                                           .engine = static_cast<uint32_t>(candidates[i]),
-                                           .provider = ANIRA_PROVIDER_DEFAULT,
-                                           .engine_id = nullptr});
+            const bool custom = candidates[i] == ANIRA_ENGINE_CUSTOM;
+            ids.push_back(
+                anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                 .engine = static_cast<uint32_t>(candidates[i]),
+                                 .provider = ANIRA_PROVIDER_DEFAULT,
+                                 .engine_id = custom ? anira::capi::k_v2_custom_engine : nullptr});
         }
     }
     out = anira::capi::make_inference_config(*model,

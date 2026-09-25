@@ -155,10 +155,10 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
     const anira::engine::Loaded& loaded = *fresh;
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "XnnpackBackend"))
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "XnnpackBackend"))
         << "the registered name serves as the custom spelling";
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
-    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "NobodysBackend"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "NobodysBackend"));
     for (const anira::engine::ProviderInfo& info : listed) {
         EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
     }

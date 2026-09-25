@@ -82,9 +82,6 @@ bool valid_model_state(anira_model_state state) {
 bool valid_pad_policy(anira_pad_policy policy) {
     return policy == ANIRA_PAD_REJECT || policy == ANIRA_PAD_ZEROS;
 }
-bool custom_engine_id(const char* engine_id) {
-    return engine_id != nullptr && std::strchr(engine_id, '.') != nullptr;
-}
 bool non_empty(const char* text) {
     return text != nullptr && text[0] != '\0';
 }
@@ -682,10 +679,34 @@ anira_status add_entry(anira_model_config* config,
     return ANIRA_OK;
 }
 
+// The engine of a model entry under the pair rule: a built-in engine with a NULL id, or
+// ANIRA_ENGINE_CUSTOM with a reverse-URI id; ANIRA_ENGINE_NONE names no engine for an entry.
+anira_status check_entry_engine(const char* entry_name,
+                                anira_engine engine,
+                                const char* engine_id,
+                                anira_error* err) {
+    ANIRA_CAPI_REQUIRE_AT(entry_name,
+                          builtin_engine(engine) || engine == ANIRA_ENGINE_CUSTOM,
+                          err,
+                          ANIRA_ERROR_INVALID_ARGUMENT,
+                          "model entry: engine %d is neither a built-in engine nor "
+                          "ANIRA_ENGINE_CUSTOM",
+                          static_cast<int>(engine));
+    ANIRA_CAPI_REQUIRE_AT(entry_name,
+                          anira::capi::engine_pair_ok(engine, engine_id),
+                          err,
+                          ANIRA_ERROR_INVALID_ARGUMENT,
+                          "model entry: the engine_id is set if and only if the engine is "
+                          "ANIRA_ENGINE_CUSTOM, and a custom engine id is reverse-URI (contains "
+                          "a '.')");
+    return ANIRA_OK;
+}
+
 }  // namespace
 
 anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* config,
                                                           anira_engine engine,
+                                                          const char* engine_id,
                                                           const char* utf8_path,
                                                           uint32_t* out_index,
                                                           anira_error* err) ANIRA_NOEXCEPT try {
@@ -693,23 +714,24 @@ anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* co
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(builtin_engine(engine),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: engine %d is not a built-in engine",
-                       static_cast<int>(engine));
+    if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+        status != ANIRA_OK) {
+        return status;
+    }
     ANIRA_CAPI_REQUIRE(non_empty(utf8_path),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: NULL or empty path");
     anira::capi::ModelEntry entry;
     entry.m_engine = engine;
+    entry.m_engine_id = engine_id != nullptr ? engine_id : "";
     entry.m_path = utf8_path;
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* config,
                                                            anira_engine engine,
+                                                           const char* engine_id,
                                                            const void* bytes,
                                                            size_t size,
                                                            anira_bytes_ownership ownership,
@@ -721,11 +743,10 @@ anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* c
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(builtin_engine(engine),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: engine %d is not a built-in engine",
-                       static_cast<int>(engine));
+    if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+        status != ANIRA_OK) {
+        return status;
+    }
     ANIRA_CAPI_REQUIRE(bytes != nullptr && size > 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -737,63 +758,7 @@ anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* c
                        static_cast<int>(ownership));
     anira::capi::ModelEntry entry;
     entry.m_engine = engine;
-    entry.m_bytes = make_carrier(bytes, size, ownership, release, ctx);
-    return add_entry(config, std::move(entry), out_index, err);
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status ANIRA_CALL anira_model_config_add_model_path_engine_id(anira_model_config* config,
-                                                                    const char* engine_id,
-                                                                    const char* utf8_path,
-                                                                    uint32_t* out_index,
-                                                                    anira_error* err) ANIRA_NOEXCEPT
-    try {
-    ANIRA_CAPI_REQUIRE(config != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(custom_engine_id(engine_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a custom engine id is reverse-URI (contains a '.')");
-    ANIRA_CAPI_REQUIRE(non_empty(utf8_path),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: NULL or empty path");
-    anira::capi::ModelEntry entry;
-    entry.m_engine_id = engine_id;
-    entry.m_path = utf8_path;
-    return add_entry(config, std::move(entry), out_index, err);
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status ANIRA_CALL
-    anira_model_config_add_model_bytes_engine_id(anira_model_config* config,
-                                                 const char* engine_id,
-                                                 const void* bytes,
-                                                 size_t size,
-                                                 anira_bytes_ownership ownership,
-                                                 anira_bytes_release_fn release,
-                                                 void* ctx,
-                                                 uint32_t* out_index,
-                                                 anira_error* err) ANIRA_NOEXCEPT try {
-    ANIRA_CAPI_REQUIRE(config != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model config: NULL handle");
-    ANIRA_CAPI_REQUIRE(custom_engine_id(engine_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a custom engine id is reverse-URI (contains a '.')");
-    ANIRA_CAPI_REQUIRE(bytes != nullptr && size > 0,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: NULL bytes or zero size");
-    ANIRA_CAPI_REQUIRE(valid_bytes_ownership(ownership),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: unknown ownership %d",
-                       static_cast<int>(ownership));
-    anira::capi::ModelEntry entry;
-    entry.m_engine_id = engine_id;
+    entry.m_engine_id = engine_id != nullptr ? engine_id : "";
     entry.m_bytes = make_carrier(bytes, size, ownership, release, ctx);
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
@@ -867,15 +832,11 @@ anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: provider %d is not a provider this header names",
                        static_cast<int>(provider));
-    ANIRA_CAPI_REQUIRE(provider_id == nullptr || provider == ANIRA_PROVIDER_DEFAULT,
+    ANIRA_CAPI_REQUIRE(anira::capi::provider_pair_ok(provider, provider_id),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: a provider of the enum and a provider_id at once; a custom "
-                       "provider travels as provider_id beside ANIRA_PROVIDER_DEFAULT");
-    ANIRA_CAPI_REQUIRE(provider_id == nullptr || non_empty(provider_id),
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: an empty provider_id");
+                       "model entry: the provider_id is set if and only if the provider is "
+                       "ANIRA_PROVIDER_CUSTOM, and never empty");
     anira::capi::ModelEntry& entry = config->m_models[model_index];
     entry.m_provider = provider;
     entry.m_provider_id = provider_id != nullptr ? provider_id : "";
@@ -1013,35 +974,31 @@ anira_status ANIRA_CALL anira_model_config_add_output(anira_model_config* config
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_model_config* config,
-                                                              anira_engine engine) ANIRA_NOEXCEPT
-    try {
-    if (config == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    if (engine != ANIRA_ENGINE_NONE && !builtin_engine(engine)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
+                                                              anira_engine engine,
+                                                              const char* engine_id,
+                                                              anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(config != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "model config: NULL handle");
+    // NONE (plan 0) is a default engine's value too; every other value is an entry's.
+    if (engine != ANIRA_ENGINE_NONE || engine_id != nullptr) {
+        if (const anira_status status = check_entry_engine(__func__, engine, engine_id, err);
+            status != ANIRA_OK) {
+            return status;
+        }
     }
     config->m_default_engine = engine;
-    config->m_default_engine_id.clear();
+    config->m_default_engine_id = engine_id != nullptr ? engine_id : "";
     return ANIRA_OK;
-} catch (...) { return translate_exception(nullptr, __func__); }
-
-anira_status ANIRA_CALL anira_model_config_set_default_engine_id(anira_model_config* config,
-                                                                 const char* engine_id)
-    ANIRA_NOEXCEPT try {
-    if (config == nullptr || !custom_engine_id(engine_id)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    config->m_default_engine = ANIRA_ENGINE_NONE;
-    config->m_default_engine_id = engine_id;
-    return ANIRA_OK;
-} catch (...) { return translate_exception(nullptr, __func__); }
+} catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_model_config_set_default_provider(anira_model_config* config,
                                                                 anira_provider provider,
                                                                 const char* provider_id)
     ANIRA_NOEXCEPT try {
-    if (config == nullptr || !anira::capi::known_provider(provider)) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    // One spelling per provider, as the entry's pin: a custom name beside DEFAULT only.
-    if (provider_id != nullptr && (provider != ANIRA_PROVIDER_DEFAULT || !non_empty(provider_id))) {
+    if (config == nullptr || !anira::capi::known_provider(provider) ||
+        !anira::capi::provider_pair_ok(provider, provider_id)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     config->m_default_provider = provider;

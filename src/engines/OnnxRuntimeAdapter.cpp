@@ -127,7 +127,7 @@ std::vector<EngineTensor> side_of(const Ort::Session& session,
 
 // The registered names of ONNX Runtime's execution providers (its constants.h) that spell a
 // provider of anira's enum; every other name travels as it is, the runtime's own word, in
-// provider_id. Vulkan has no ONNX Runtime execution provider.
+// provider_id beside ANIRA_PROVIDER_CUSTOM. Vulkan has no ONNX Runtime execution provider.
 constexpr std::array<std::pair<const char*, anira_provider>, 6> k_provider_names{{
     {"CPUExecutionProvider", ANIRA_PROVIDER_DEFAULT},
     {"CUDAExecutionProvider", ANIRA_PROVIDER_CUDA},
@@ -599,6 +599,7 @@ std::vector<ProviderInfo> onnxruntime_providers() {
         throw_if_foreign_onnxruntime();
         for (const std::string& name : Ort::GetAvailableProviders()) {
             ProviderInfo info;
+            info.m_provider = ANIRA_PROVIDER_CUSTOM;
             info.m_provider_id = name;
             for (const auto& [registered, value] : k_provider_names) {
                 if (name == registered) {

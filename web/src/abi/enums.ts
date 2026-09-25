@@ -294,6 +294,7 @@ export const anira_engine = {
   ANIRA_ENGINE_TFLITE: 3,
   ANIRA_ENGINE_LITERT: 4,
   ANIRA_ENGINE_EXECUTORCH: 5,
+  ANIRA_ENGINE_CUSTOM: 6,
 } as const
 export type anira_engine = (typeof anira_engine)[keyof typeof anira_engine]
 
@@ -305,6 +306,7 @@ export const anira_provider = {
   ANIRA_PROVIDER_COREML: 4,
   ANIRA_PROVIDER_XNNPACK: 5,
   ANIRA_PROVIDER_VULKAN: 6,
+  ANIRA_PROVIDER_CUSTOM: 7,
 } as const
 export type anira_provider = (typeof anira_provider)[keyof typeof anira_provider]
 

@@ -230,9 +230,11 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
     EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 0), ANIRA_ENGINE_EXECUTORCH);
     EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 0), ANIRA_PROVIDER_COREML);
     EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 0), nullptr);
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 1), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 1), ANIRA_PROVIDER_CUSTOM);
     EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 1), "com.example.npu");
+    EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 2), ANIRA_ENGINE_CUSTOM);
     EXPECT_STREQ(anira_model_config_model_engine_id(loaded.m_config, 2), "com.example.engine");
+    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 2), ANIRA_PROVIDER_CUSTOM);
     EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 2), "fast");
     EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 3), ANIRA_PROVIDER_DEFAULT);
     EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 3), nullptr);

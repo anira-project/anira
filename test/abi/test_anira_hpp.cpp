@@ -644,9 +644,9 @@ TEST(AbiCxx, ProviderOptionsExtensionMintsASelfContainedRecord) {
                           .provider = ANIRA_PROVIDER_CUDA,
                           .provider_id = "",
                           .options = {{"device_id", "0"}}});
-    value.sets.push_back({.engine = ANIRA_ENGINE_NONE,
+    value.sets.push_back({.engine = ANIRA_ENGINE_CUSTOM,
                           .engine_id = "org.example.engine",
-                          .provider = ANIRA_PROVIDER_DEFAULT,
+                          .provider = ANIRA_PROVIDER_CUSTOM,
                           .provider_id = "fast",
                           .options = {}});
     const auto native = anira::detail::ExtTraits<anira::ext::ProviderOptions>::mint(value);
@@ -885,8 +885,9 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     EXPECT_NE(variants.m_what.find("one variant per inference stage"), std::string::npos)
         << variants.m_what;
 
-    // A candidate's provider is checked for its syntax here (a provider of the enum and a
-    // provider_id at once); whether an engine serves it is the handler's question at create.
+    // A candidate's provider is checked for its syntax here (the pair rule: a provider of the
+    // enum and a provider_id at once); whether an engine serves it is the handler's question at
+    // create.
     const Thrown provider = thrown_by([&] {
         const anira::Pipeline gpu{
             anira::stage::Inference(model,
@@ -898,7 +899,8 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     });
     EXPECT_TRUE(provider.m_thrown);
     EXPECT_EQ(provider.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_NE(provider.m_what.find("at once"), std::string::npos) << provider.m_what;
+    EXPECT_NE(provider.m_what.find("the provider_id is set if and only if"), std::string::npos)
+        << provider.m_what;
 
     EXPECT_EQ(anira::stage::Inference(model).variants().size(), 1u);
     EXPECT_TRUE(anira::stage::Inference(model).candidates().empty());
@@ -912,9 +914,9 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     anira::Pipeline pipe{
         anira::stage::Inference(model,
                                 {anira::BackendId{.struct_size = sizeof(anira::BackendId),
-                                                  .engine = ANIRA_ENGINE_NONE,
+                                                  .engine = ANIRA_ENGINE_CUSTOM,
                                                   .provider = ANIRA_PROVIDER_DEFAULT,
-                                                  .engine_id = nullptr}})};
+                                                  .engine_id = anira_test::k_custom}})};
     anira_handler* h = nullptr;
     anira_error err{};
     anira_test::add_passthrough(pipe.native());
@@ -927,7 +929,7 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     EXPECT_EQ(report.num_plans(), 1u);
     const std::vector<anira_plan_info> plans = report.plans();
     ASSERT_EQ(plans.size(), 1u);
-    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
     ASSERT_NE(plans[0].engine_id, nullptr);
     EXPECT_EQ(std::string_view(plans[0].engine_id), "anira.v2.custom");
     EXPECT_DOUBLE_EQ(plans[0].budget_ms, 5.0);
@@ -984,9 +986,9 @@ ModelConfig stage_stream_model() {
 
 anira::BackendId custom_row() {
     return anira::BackendId{.struct_size = sizeof(anira::BackendId),
-                            .engine = ANIRA_ENGINE_NONE,
+                            .engine = ANIRA_ENGINE_CUSTOM,
                             .provider = ANIRA_PROVIDER_DEFAULT,
-                            .engine_id = nullptr};
+                            .engine_id = anira_test::k_custom};
 }
 
 /// What prepare of a CountingStage does.
@@ -1044,7 +1046,7 @@ public:
         anira::RingView ring;
         anira::Tensor tensor{};
         const bool as_promised =
-            ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_NONE &&
+            ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_CUSTOM &&
             ctx.provider() == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
             ctx.num_inputs() == 1 && ctx.num_outputs() == 1 &&
             ctx.ticket() == ANIRA_TICKET_INVALID && ctx.entry() < m_counts->m_num_entries &&
@@ -2128,7 +2130,7 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     const std::shared_ptr<EnginePreparedCounts> counts = engine->last();
     EXPECT_EQ(loaded->m_row, 0U);
     EXPECT_EQ(loaded->m_model_count, 1U);
-    EXPECT_EQ(loaded->m_engine, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(loaded->m_engine, ANIRA_ENGINE_CUSTOM);
     EXPECT_EQ(loaded->m_engine_id, k_cxx_engine_id);
     EXPECT_EQ(loaded->m_path, k_cxx_never_opened)
         << "the engine reads the row; anira never opens it";
@@ -2150,13 +2152,13 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
         EXPECT_EQ(tensor->domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
         EXPECT_EQ(tensor->data_f32(), nullptr) << "a template carries no memory";
     }
-    // The plan: ANIRA_ENGINE_NONE with the id, the flags, every slot bound by the engine, the
+    // The plan: ANIRA_ENGINE_CUSTOM with the id, the flags, every slot bound by the engine, the
     // consumed extension under the engine's id.
     const anira::PlanReport report(anira_handler_plan_report(handler.m_handler));
     ASSERT_EQ(report.num_plans(), 1U);
     const std::vector<anira_plan_info> plans = report.plans();
     ASSERT_EQ(plans.size(), 1U);
-    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(plans[0].engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
     ASSERT_NE(plans[0].engine_id, nullptr);
     EXPECT_STREQ(plans[0].engine_id, k_cxx_engine_id);
     EXPECT_EQ(plans[0].engine_flags, static_cast<uint32_t>(ANIRA_ENGINE_FLAG_REALTIME_SAFE));
@@ -2473,7 +2475,7 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     ASSERT_EQ(rows.size(), context_rows.size() + 2U);
     const anira::BackendId& on_default = rows[context_rows.size()];
     const anira::BackendId& on_coreml = rows[context_rows.size() + 1];
-    EXPECT_EQ(on_default.engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(on_default.engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
     EXPECT_STREQ(on_default.engine_id, k_cxx_engine_id);
     EXPECT_EQ(on_default.provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
     EXPECT_EQ(on_coreml.provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
@@ -2483,8 +2485,8 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
               static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
     const Thrown unreachable = thrown_by([&] {
         const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
-                                      .engine = ANIRA_ENGINE_NONE,
-                                      .provider = ANIRA_PROVIDER_DEFAULT,
+                                      .engine = ANIRA_ENGINE_CUSTOM,
+                                      .provider = ANIRA_PROVIDER_CUSTOM,
                                       .engine_id = k_cxx_engine_id,
                                       .provider_id = "com.example.npu"};
         static_cast<void>(caps.edge(ANIRA_DOMAIN_HOST, on_npu));
@@ -2493,8 +2495,8 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     EXPECT_EQ(unreachable.m_status, ANIRA_ERROR_EDGE_UNREACHABLE);
 
     const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
-                                  .engine = ANIRA_ENGINE_NONE,
-                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                  .engine = ANIRA_ENGINE_CUSTOM,
+                                  .provider = ANIRA_PROVIDER_CUSTOM,
                                   .engine_id = k_cxx_engine_id,
                                   .provider_id = "com.example.npu"};
     anira::Pipeline other;
@@ -2520,13 +2522,13 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
     auto engine = std::make_shared<CountingEngine>();
     engine->m_providers = {"coreml", "com.example.npu"};
     const anira::BackendId on_coreml{.struct_size = sizeof(anira::BackendId),
-                                     .engine = ANIRA_ENGINE_NONE,
+                                     .engine = ANIRA_ENGINE_CUSTOM,
                                      .provider = ANIRA_PROVIDER_COREML,
                                      .engine_id = k_cxx_engine_id,
                                      .provider_id = nullptr};
     const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
-                                  .engine = ANIRA_ENGINE_NONE,
-                                  .provider = ANIRA_PROVIDER_DEFAULT,
+                                  .engine = ANIRA_ENGINE_CUSTOM,
+                                  .provider = ANIRA_PROVIDER_CUSTOM,
                                   .engine_id = k_cxx_engine_id,
                                   .provider_id = "com.example.npu"};
     anira::Pipeline pipe;
@@ -2540,20 +2542,20 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
     ASSERT_EQ(engine->m_loads.size(), 2U);
     EXPECT_EQ(engine->m_loads[0]->m_provider, ANIRA_PROVIDER_COREML);
     EXPECT_EQ(engine->m_loads[0]->m_provider_id, "");
-    EXPECT_EQ(engine->m_loads[1]->m_provider, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(engine->m_loads[1]->m_provider, ANIRA_PROVIDER_CUSTOM);
     EXPECT_EQ(engine->m_loads[1]->m_provider_id, "com.example.npu");
     const anira::PlanReport report(anira_handler_plan_report(handler.m_handler));
     const std::vector<anira_plan_info> plans = report.plans();
     ASSERT_EQ(plans.size(), 2U);
     EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
     EXPECT_EQ(plans[0].provider_id, nullptr);
-    EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+    EXPECT_EQ(plans[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CUSTOM));
     ASSERT_NE(plans[1].provider_id, nullptr);
     EXPECT_STREQ(plans[1].provider_id, "com.example.npu");
     handler.destroy();
 
     const anira::BackendId on_cuda{.struct_size = sizeof(anira::BackendId),
-                                   .engine = ANIRA_ENGINE_NONE,
+                                   .engine = ANIRA_ENGINE_CUSTOM,
                                    .provider = ANIRA_PROVIDER_CUDA,
                                    .engine_id = k_cxx_engine_id,
                                    .provider_id = nullptr};
@@ -2792,13 +2794,14 @@ TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
     EXPECT_EQ(engine.use_count(), 1);
 }
 
-// The enum alias is EngineKind: what a model config takes and answers for a built-in engine,
-// and what the stage context reports; the name Engine is the class.
+// The enum alias is EngineKind: what a model config takes and answers for a built-in engine
+// (ANIRA_ENGINE_CUSTOM for a custom one), and what the stage context reports; the name Engine
+// is the class.
 TEST(AbiCxx, EngineKindIsTheEnumAlias) {
     static_assert(std::is_same_v<anira::EngineKind, anira_engine>);
     ModelConfig model = engine_stream_model();
     const anira::EngineKind custom = model.model_engine(0);
-    EXPECT_EQ(custom, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(custom, ANIRA_ENGINE_CUSTOM);
     const anira::EngineKind torch = ANIRA_ENGINE_LIBTORCH;
     const uint32_t index = model.add_model_path(torch, "model.pt");
     EXPECT_EQ(model.model_engine(index), torch);

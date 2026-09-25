@@ -503,7 +503,7 @@ public:
 
     std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& info) override {
         if (info.model() == nullptr || info.row() >= info.model_count() ||
-            info.model_engine(info.row()) != ANIRA_ENGINE_NONE ||
+            info.model_engine(info.row()) != ANIRA_ENGINE_CUSTOM ||
             info.model_engine_id(info.row()).empty() || info.inputs().empty() ||
             info.inputs().size() != info.input_names().size() ||
             info.outputs().size() != info.output_names().size() ||

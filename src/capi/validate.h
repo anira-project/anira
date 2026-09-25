@@ -40,12 +40,6 @@ struct CustomLatencies;
 
 namespace anira::capi {
 
-/// The id of a 2.x custom backend: what the version-2 upgrade names every "CUSTOM" row, and the
-/// one id with anira's prefix "anira." a host may create an engine under (anira/compat/v2.hpp
-/// does). On the C path it needs an engine on the pipeline like every custom id; the bridge,
-/// which has no pipeline, serves it with the 2.x pass-through until the cut-over.
-inline constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-
 /// What the validator derives for one tensor spec.
 struct DerivedSpec {
     std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
@@ -61,7 +55,7 @@ struct DerivedSpec {
 /// the entry accepts: any for a neutral entry, its pin alone for a pinned one (models[].engine
 /// with a suffix, anira_model_config_set_model_provider); with no candidate list a row is one
 /// plan, on its pin or on ANIRA_PROVIDER_DEFAULT. The provider is the plan's, in the engine's
-/// vocabulary: a value of the enum, or ANIRA_PROVIDER_DEFAULT beside a custom name.
+/// vocabulary: a value of the enum, or ANIRA_PROVIDER_CUSTOM with a custom name.
 struct PlanKey {
     size_t m_row = 0;  ///< the models[] index
     anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
@@ -122,9 +116,9 @@ ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages,
                                                       const EngineFacts* engines);
 
 /// Whether a candidate names an engine: a built-in engine by its value, a custom engine by its
-/// id (a candidate with an engine_id keeps the custom rows of that name; {ANIRA_ENGINE_NONE,
-/// DEFAULT, NULL} keeps every custom row); NULL keeps everything (the bridge's rule). The
-/// engine rule alone, what the extension walk keys a consumer by; the provider is not read.
+/// id (ANIRA_ENGINE_CUSTOM with an engine_id keeps the custom rows of that name); NULL keeps
+/// everything (the bridge's rule). The engine rule alone, what the extension walk keys a
+/// consumer by; the provider is not read.
 ANIRA_API bool engine_is_candidate(anira_engine engine,
                                    const std::string& engine_id,
                                    const anira_backend_id* candidates,
@@ -175,8 +169,8 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
 /// pin to window_min). The candidates narrow the model entries and make the plan table
 /// (Derived::m_plans): NULL keeps every row as one plan (the bridge's rule; the handler always
-/// names its set), a built-in engine keeps its rows, {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps
-/// the custom rows, a non-NULL engine_id keeps the custom rows of that name, and a row is a
+/// names its set), a built-in engine keeps its rows, ANIRA_ENGINE_CUSTOM with an engine_id
+/// keeps the custom rows of that name, and a row is a
 /// plan once per candidate whose provider it accepts (matching_plans; under the default set,
 /// default_set, one plan per row on its pin or on the default provider). Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)

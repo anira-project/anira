@@ -111,7 +111,7 @@ constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
                                     ANIRA_ENGINE_FLAG_DYNAMIC_TIME | ANIRA_ENGINE_FLAG_STATE_ALIAS;
 /// The prefix of the engine ids anira keeps for itself: an engine created under it is refused,
-/// with one exception, anira.v2.custom (validate.h k_v2_custom_engine), the id
+/// with one exception, anira.v2.custom (words.h k_v2_custom_engine), the id
 /// anira/compat/v2.hpp creates a 2.x custom backend under.
 constexpr const char* k_anira_id_prefix = "anira.";
 // A timeout at or above this many milliseconds (about 31 years) waits without limit: the
@@ -773,11 +773,19 @@ void check_stage_flags(const anira::capi::StageCarrier* stage) {
 }
 
 // Whether a model entry is the variant's default engine (by id for a custom engine, by
-// engine otherwise; ANIRA_ENGINE_NONE without an id names none).
+// engine otherwise; ANIRA_ENGINE_NONE names none).
 bool names_default_engine(const anira_model_config& model, const anira::capi::ModelEntry& row) {
     if (!model.m_default_engine_id.empty()) { return row.m_engine_id == model.m_default_engine_id; }
     return model.m_default_engine != ANIRA_ENGINE_NONE && !row.is_custom() &&
            row.m_engine == model.m_default_engine;
+}
+
+// The candidates a pipeline hands the validator: never the bridge's NULL, which keeps every
+// row, since a pipeline always names its set; an empty set (the default set of an engine-free
+// build whose entries name no custom engine) is a list that names nothing.
+const anira_backend_id* candidates_of(const std::vector<anira_backend_id>& ids) noexcept {
+    static const anira_backend_id k_none = ANIRA_BACKEND_ID_INIT;
+    return ids.empty() ? &k_none : ids.data();
 }
 
 bool has_default_engine(const anira_model_config& model) {
@@ -789,8 +797,8 @@ bool has_default_provider(const anira_model_config& model) {
            !model.m_default_provider_id.empty();
 }
 
-// Whether a plan runs on the variant's default provider (the enum's value, or a custom name
-// beside ANIRA_PROVIDER_DEFAULT); a variant without one names none.
+// Whether a plan runs on the variant's default provider (the enum's value, or
+// ANIRA_PROVIDER_CUSTOM with a custom name); a variant without one names none.
 bool names_default_provider(const anira_model_config& model, const anira::capi::PlanKey& key) {
     return has_default_provider(model) && key.m_provider == model.m_default_provider &&
            key.m_provider_id == model.m_default_provider_id;
@@ -1098,7 +1106,7 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
 // The plan table of the report: one plan per row and provider of the validator's table, in
 // entry order and candidate order, the same order the session's table was built in from
 // plan_requests (the dense index is the position on both sides); a custom row is
-// ANIRA_ENGINE_NONE with its id, a custom provider is ANIRA_PROVIDER_DEFAULT with its name in
+// ANIRA_ENGINE_CUSTOM with its id, a custom provider is ANIRA_PROVIDER_CUSTOM with its name in
 // provider_id, and a registered engine's row reports the flags of its descriptor; the initial
 // plan is the first of the default engine's (of any engine without one) on the default
 // provider, else the first of the default engine's, else 0, selected on the fresh session
@@ -1446,7 +1454,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     anira::capi::Derived derived;
     anira::capi::validate(model,
                           &snapshot,
-                          ids.data(),
+                          candidates_of(ids),
                           num_ids,
                           derived,
                           &stages,
@@ -1808,51 +1816,72 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
                            i,
                            id.struct_size,
                            stride);
-        // The provider's syntax: a value of the enum, or a custom name beside DEFAULT, never
-        // both and never an empty name. Whether the engine serves it is anira_handler_create's
-        // question, where the context is.
-        ANIRA_CAPI_REQUIRE(anira::capi::known_provider(static_cast<anira_provider>(id.provider)),
+        // The pair's syntax, both axes under the pair rule: a built-in engine, or
+        // ANIRA_ENGINE_CUSTOM with a reverse-URI id (ANIRA_ENGINE_NONE names no engine); a
+        // provider of the enum, or ANIRA_PROVIDER_CUSTOM with a non-empty name. The ids are
+        // readable only where the caller's record has the slot. Whether the engine serves the
+        // provider is anira_handler_create's question, where the context is.
+        const auto engine = static_cast<anira_engine>(id.engine);
+        const char* const engine_id =
+            id.struct_size >= offsetof(anira_backend_id, engine_id) + sizeof(const char*)
+                ? id.engine_id
+                : nullptr;
+        ANIRA_CAPI_REQUIRE(anira::capi::known_engine(engine) || engine == ANIRA_ENGINE_CUSTOM,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "pipeline: candidates[%u].engine %u is neither a built-in engine nor "
+                           "ANIRA_ENGINE_CUSTOM",
+                           i,
+                           id.engine);
+        ANIRA_CAPI_REQUIRE(anira::capi::engine_pair_ok(engine, engine_id),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "pipeline: candidates[%u]: the engine_id is set if and only if the "
+                           "engine is ANIRA_ENGINE_CUSTOM, and a custom engine id is reverse-URI "
+                           "(contains a '.')",
+                           i);
+        const auto provider = static_cast<anira_provider>(id.provider);
+        ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
                            "pipeline: candidates[%u].provider %u is not a provider this header "
-                           "names; a custom provider travels as provider_id beside "
-                           "ANIRA_PROVIDER_DEFAULT",
+                           "names",
                            i,
                            id.provider);
         const char* const provider_id =
             id.struct_size >= sizeof(anira_backend_id) ? id.provider_id : nullptr;
-        ANIRA_CAPI_REQUIRE(provider_id == nullptr || id.provider == ANIRA_PROVIDER_DEFAULT,
+        ANIRA_CAPI_REQUIRE(anira::capi::provider_pair_ok(provider, provider_id),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "pipeline: candidates[%u] names a provider of the enum (%u) and a "
-                           "provider_id ('%s') at once; a custom provider travels as provider_id "
-                           "beside ANIRA_PROVIDER_DEFAULT",
-                           i,
-                           id.provider,
-                           provider_id);
-        ANIRA_CAPI_REQUIRE(provider_id == nullptr || provider_id[0] != '\0',
-                           err,
-                           ANIRA_ERROR_INVALID_ARGUMENT,
-                           "pipeline: candidates[%u].provider_id is empty",
+                           "pipeline: candidates[%u]: the provider_id is set if and only if the "
+                           "provider is ANIRA_PROVIDER_CUSTOM, and never empty",
                            i);
     }
 
     std::vector<anira::capi::Candidate> list;
     if (candidates == nullptr || num_candidates == 0) {
         // The default set: every engine this build carries, on the default provider, plus
-        // the NONE entry that keeps every custom row, plus the provider every pinned entry of
-        // the variant names, on that entry's engine, so that a pinned entry runs on its pin
-        // and a neutral one on the default provider. Under it an entry for an engine this
-        // build lacks is skipped, not refused (with a NULL list check_rows would refuse it),
-        // its pin included.
+        // every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), plus the
+        // provider every pinned entry of the variant names, on that entry's engine, so that a
+        // pinned entry runs on its pin and a neutral one on the default provider. Under it an
+        // entry for an engine this build lacks is skipped, not refused (with a NULL list
+        // check_rows would refuse it), its pin included.
         for (const anira_engine engine : anira::capi::enabled_engines()) {
             anira::capi::Candidate candidate;
             candidate.m_id.engine = static_cast<uint32_t>(engine);
             list.push_back(std::move(candidate));
         }
-        anira::capi::Candidate custom;
-        custom.m_id.engine = ANIRA_ENGINE_NONE;
-        list.push_back(std::move(custom));
+        for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
+            if (!row.is_custom()) { continue; }
+            const bool listed = std::ranges::any_of(list, [&row](const anira::capi::Candidate& c) {
+                return c.m_engine_id == row.m_engine_id;
+            });
+            if (listed) { continue; }
+            anira::capi::Candidate custom;
+            custom.m_id.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
+            custom.m_engine_id = row.m_engine_id;
+            list.push_back(std::move(custom));
+        }
         for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
             if (!row.is_pinned()) { continue; }
             if (!row.is_custom() && !anira::capi::backend_of(row).has_value()) { continue; }
@@ -2190,7 +2219,7 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     anira::capi::Derived derived;
     anira::capi::validate(pipeline->m_variants[0],
                           nullptr,
-                          ids.data(),
+                          candidates_of(ids),
                           static_cast<uint32_t>(ids.size()),
                           derived,
                           &stages,

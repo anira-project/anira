@@ -286,11 +286,21 @@ anira::ContractHandle contract_of(anira_miss_policy policy,
     return contract;
 }
 
+/// The id the registered accumulator runs under, and a second one for the plan switch.
+constexpr const char* k_accumulator_id = "org.example.accumulator";
+constexpr const char* k_other_accumulator_id = "org.example.accumulator.other";
+
+/// The custom engines this file's models name, each ANIRA_ENGINE_CUSTOM with its id: the
+/// pass-through's and the two accumulators'. A candidate no entry names is no plan.
 std::vector<anira_backend_id> custom_candidates() {
-    return {{.struct_size = sizeof(anira_backend_id),
-             .engine = ANIRA_ENGINE_NONE,
-             .provider = ANIRA_PROVIDER_DEFAULT,
-             .engine_id = nullptr}};
+    std::vector<anira_backend_id> out;
+    for (const char* id : {anira_test::k_custom, k_accumulator_id, k_other_accumulator_id}) {
+        out.push_back({.struct_size = sizeof(anira_backend_id),
+                       .engine = ANIRA_ENGINE_CUSTOM,
+                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .engine_id = id});
+    }
+    return out;
 }
 
 /// A handler over the custom row, with an optional stage chain, prepared, the accumulator gate
@@ -1956,10 +1966,6 @@ anira_engine_desc accumulator_desc(AccumulatorEngine& engine, uint32_t flags = 0
     desc.release = accumulator_release;
     return desc;
 }
-
-/// The id the registered accumulator runs under, and a second one for the plan switch.
-constexpr const char* k_accumulator_id = "org.example.accumulator";
-constexpr const char* k_other_accumulator_id = "org.example.accumulator.other";
 
 /// One registration for the rig: the id, the engine behind it and the flags its descriptor
 /// carries (ANIRA_ENGINE_FLAG_STATE_ALIAS for an engine that aliases the pair).

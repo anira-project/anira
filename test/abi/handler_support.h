@@ -116,8 +116,9 @@ inline std::vector<anira_engine> oracle_engines() {
     return out;
 }
 
-/// One candidate per engine of oracle_engines() plus the NONE entry that keeps the custom
-/// rows: the shape of the default set anira_pipeline_add_inference builds for a NULL list.
+/// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,
+/// ANIRA_ENGINE_CUSTOM with its id): the shape of the default set anira_pipeline_add_inference
+/// builds for a NULL list.
 inline std::vector<anira_backend_id> custom_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
@@ -127,13 +128,13 @@ inline std::vector<anira_backend_id> custom_candidates() {
                        .engine_id = nullptr});
     }
     out.push_back({.struct_size = sizeof(anira_backend_id),
-                   .engine = ANIRA_ENGINE_NONE,
+                   .engine = ANIRA_ENGINE_CUSTOM,
                    .provider = ANIRA_PROVIDER_DEFAULT,
-                   .engine_id = nullptr});
+                   .engine_id = k_custom});
     return out;
 }
 
-/// The engines of custom_candidates() without the NONE entry.
+/// The engines of custom_candidates() without the custom one.
 inline std::vector<anira_backend_id> engine_candidates() {
     std::vector<anira_backend_id> out;
     for (anira_engine engine : oracle_engines()) {
@@ -155,7 +156,7 @@ inline anira::InferenceConfig bridged_2x(const char* model_json,
     std::vector<anira_engine> candidates = oracle_engines();
     if (with_custom) {
         cfg.add_model_path(k_custom, "custom-processor");
-        candidates.push_back(ANIRA_ENGINE_NONE);  // keeps the custom entry
+        candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
     }
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
     return anira::v3compat::to_inference_config(cfg, contract, candidates);

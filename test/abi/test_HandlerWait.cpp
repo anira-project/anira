@@ -42,9 +42,9 @@ constexpr int k_thread_timeout_s = 30;
 /// The NONE entry alone: the custom row is the generator's only plan.
 std::vector<anira_backend_id> none_only() {
     return {{.struct_size = sizeof(anira_backend_id),
-             .engine = ANIRA_ENGINE_NONE,
+             .engine = ANIRA_ENGINE_CUSTOM,
              .provider = ANIRA_PROVIDER_DEFAULT,
-             .engine_id = nullptr}};
+             .engine_id = anira_test::k_custom}};
 }
 
 /// One pull through anira_handler_process_multi_wait over planar float32 tensors: the

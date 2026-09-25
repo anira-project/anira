@@ -22,6 +22,14 @@
 
 namespace anira::capi {
 
+/// The id of a 2.x custom backend, ANIRA_ENGINE_CUSTOM's name for the 2.x CUSTOM backend: what
+/// the version-2 upgrade names every "CUSTOM" row, the engine of the 2.x runtime's CUSTOM
+/// plans, and the one id with anira's prefix "anira." a host may create an engine under
+/// (anira/compat/v2.hpp does). On the C path it needs an engine on the pipeline like every
+/// custom id; the bridge, which has no pipeline, serves it with the 2.x pass-through until the
+/// cut-over.
+inline constexpr const char* k_v2_custom_engine = "anira.v2.custom";
+
 inline constexpr std::array<std::pair<const char*, anira_provider>, 7> k_provider_words{{
     {"default", ANIRA_PROVIDER_DEFAULT},
     {"cuda", ANIRA_PROVIDER_CUDA},
@@ -40,20 +48,36 @@ inline std::optional<anira_provider> provider_of_word(std::string_view word) noe
     return std::nullopt;
 }
 
-/// The word of a provider of the enum; "unknown" for a value the enum does not name.
+/// The word of a provider of the enum; "custom" for ANIRA_PROVIDER_CUSTOM (whose name is its
+/// provider_id, never this word), "unknown" for a value the enum does not name.
 inline constexpr const char* provider_word(anira_provider provider) noexcept {
     for (const auto& [name, value] : k_provider_words) {
         if (value == provider) { return name; }
     }
-    return "unknown";
+    return provider == ANIRA_PROVIDER_CUSTOM ? "custom" : "unknown";
 }
 
-/// Whether a value is one the enum names.
+/// Whether a value is one the enum names, ANIRA_PROVIDER_CUSTOM included.
 inline bool known_provider(anira_provider provider) noexcept {
+    if (provider == ANIRA_PROVIDER_CUSTOM) { return true; }
     for (const auto& [name, value] : k_provider_words) {
         if (value == provider) { return true; }
     }
     return false;
+}
+
+/// The pair rule of anira_provider: a name if and only if the provider is
+/// ANIRA_PROVIDER_CUSTOM, and never an empty one. The value itself is known_provider's question.
+inline bool provider_pair_ok(anira_provider provider, const char* provider_id) noexcept {
+    if (provider != ANIRA_PROVIDER_CUSTOM) { return provider_id == nullptr; }
+    return provider_id != nullptr && provider_id[0] != '\0';
+}
+
+/// The provider a word names where the word is the whole of it (a model entry's "provider"
+/// key, an entry of a descriptor's providers list, a provider option set's key): the enum's
+/// value for one of its words, ANIRA_PROVIDER_CUSTOM for any other, the word then its name.
+inline anira_provider provider_of_name(std::string_view word) noexcept {
+    return provider_of_word(word).value_or(ANIRA_PROVIDER_CUSTOM);
 }
 
 /// The name of a provider in a message: a custom provider's own name where there is one, the
@@ -81,12 +105,13 @@ inline std::optional<anira_engine> engine_of_word(std::string_view word) noexcep
     return std::nullopt;
 }
 
-/// The word of a built-in engine; "none" for ANIRA_ENGINE_NONE and any other value.
+/// The word of a built-in engine; "custom" for ANIRA_ENGINE_CUSTOM (whose name is its
+/// engine_id, never this word), "none" for ANIRA_ENGINE_NONE and any other value.
 inline constexpr const char* engine_word(anira_engine engine) noexcept {
     for (const auto& [name, value] : k_engine_words) {
         if (value == engine) { return name; }
     }
-    return "none";
+    return engine == ANIRA_ENGINE_CUSTOM ? "custom" : "none";
 }
 
 /// Whether a value is an engine the enum names (ANIRA_ENGINE_NONE names none).
@@ -95,6 +120,14 @@ inline bool known_engine(anira_engine engine) noexcept {
         if (value == engine) { return true; }
     }
     return false;
+}
+
+/// The pair rule of anira_engine: an id if and only if the engine is ANIRA_ENGINE_CUSTOM, a
+/// reverse-URI one (it contains a '.'); a built-in engine and ANIRA_ENGINE_NONE take none.
+/// Whether NONE is legal is the caller's question, the value known_engine's.
+inline bool engine_pair_ok(anira_engine engine, const char* engine_id) noexcept {
+    if (engine != ANIRA_ENGINE_CUSTOM) { return engine_id == nullptr; }
+    return engine_id != nullptr && std::string_view(engine_id).find('.') != std::string_view::npos;
 }
 
 /// The name of an engine in a message: a custom engine's id where there is one, the enum's

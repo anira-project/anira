@@ -100,13 +100,15 @@ anira_model_config* make_model(bool custom) {
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_model_config_create(&config, &err) != ANIRA_OK) { return nullptr; }
     uint32_t index = 0;
-    anira_status status = custom ? anira_model_config_add_model_path_engine_id(config,
-                                                                               k_custom_engine,
-                                                                               k_custom_path,
-                                                                               &index,
-                                                                               &err)
+    anira_status status = custom ? anira_model_config_add_model_path(config,
+                                                                     ANIRA_ENGINE_CUSTOM,
+                                                                     k_custom_engine,
+                                                                     k_custom_path,
+                                                                     &index,
+                                                                     &err)
                                  : anira_model_config_add_model_path(config,
                                                                      first_enabled_engine(),
+                                                                     nullptr,
                                                                      k_missing_model,
                                                                      &index,
                                                                      &err);

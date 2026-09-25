@@ -327,13 +327,13 @@ ANIRA_API size_t ANIRA_CALL anira_ring_pop_windows(anira_ring* ring,
 typedef struct anira_stage_ctx {
     uint32_t phase;  /**< anira_phase: the phase this call runs in. */
     /**
-     * anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom
-     * engine.
+     * anira_engine of the plan the chunk was submitted under; ANIRA_ENGINE_CUSTOM for a custom
+     * engine, whose id anira_stage_engine_id reads.
      */
     uint32_t engine;
     /**
-     * anira_provider of that plan; ANIRA_PROVIDER_DEFAULT for a custom provider, which the plan
-     * report names (anira_plan_info.provider_id).
+     * anira_provider of that plan; ANIRA_PROVIDER_CUSTOM for a custom provider, whose name
+     * anira_stage_provider_id reads.
      */
     uint32_t provider;
     uint32_t variant;  /**< The variant of that plan; 0 in this pre-release. */
@@ -540,7 +540,7 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ct
 /**
  * @brief Fills out with the custom engine id of the plan the chunk was submitted under, the id
  * anira_plan_info.engine_id carries for that plan: the reverse-URI id of a custom engine
- * (anira_stage_ctx.engine is ANIRA_ENGINE_NONE beside it), NULL for a built-in engine
+ * (anira_stage_ctx.engine is ANIRA_ENGINE_CUSTOM beside it), NULL for a built-in engine
  * (the engine field names it). The same answer in every phase of a chunk. The string is
  * anira's, valid for the duration of the callback.
  * @param ctx The context the phase callback received.
@@ -558,7 +558,7 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_engine_id(const anira_stage_ctx* c
 /**
  * @brief The provider twin of anira_stage_engine_id: the custom provider name of the plan the
  * chunk was submitted under (anira_plan_info.provider_id; anira_stage_ctx.provider is
- * ANIRA_PROVIDER_DEFAULT beside it), NULL for a provider of the enum (the provider field
+ * ANIRA_PROVIDER_CUSTOM beside it), NULL for a provider of the enum (the provider field
  * names it).
  * @param ctx The context the phase callback received.
  * @param out Receives the name; NULL for a provider of the enum and whenever the status is not

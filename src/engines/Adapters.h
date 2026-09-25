@@ -122,8 +122,8 @@ ANIRA_API std::shared_ptr<BuiltinEngine> make_litert_engine();
 ANIRA_API std::shared_ptr<Loaded> make_litert_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 /// The accelerators a fresh LiteRT environment registers here (its automatic registration,
 /// which loads the accelerator libraries it finds), by the hardware they support: "gpu",
-/// "npu", "webnn" as custom providers beside ANIRA_PROVIDER_DEFAULT, the CPU accelerator left
-/// out. Empty when the environment cannot be created. The environment is the query's own,
+/// "npu", "webnn" as custom providers (ANIRA_PROVIDER_CUSTOM with the name), the CPU accelerator
+/// left out. Empty when the environment cannot be created. The environment is the query's own,
 /// created with its logger at the error severity (an accelerator it cannot load is the
 /// answer, not a warning) and destroyed before the call returns; the engine object's
 /// environment is not touched, so the query runs beside an init on another thread.
@@ -160,7 +160,8 @@ ANIRA_API std::vector<PlanRequest> legacy_plan_requests(const anira::InferenceCo
 /// binds by position.
 ANIRA_API Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend backend);
 
-/// The engine of a 2.x backend; ANIRA_ENGINE_NONE for CUSTOM.
+/// The engine of a 2.x backend; ANIRA_ENGINE_CUSTOM for CUSTOM (whose id is
+/// k_v2_custom_engine), ANIRA_ENGINE_NONE for a backend this build does not carry.
 ANIRA_API anira_engine engine_of(anira::InferenceBackend backend) noexcept;
 
 }  // namespace anira::engine

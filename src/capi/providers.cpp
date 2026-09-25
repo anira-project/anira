@@ -13,7 +13,6 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -34,12 +33,12 @@ anira::engine::ProviderInfo default_provider() {
 }
 
 // A declared provider of a custom engine's list: a word of the enum by its value, any other
-// word a custom provider by its name.
+// word a custom provider by its name (ANIRA_PROVIDER_CUSTOM).
 anira::engine::ProviderInfo declared_provider(const std::string& word) {
-    if (const std::optional<anira_provider> known = provider_of_word(word)) {
-        return anira::engine::ProviderInfo{.m_provider = *known, .m_provider_id = ""};
-    }
-    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = word};
+    const anira_provider provider = provider_of_name(word);
+    return anira::engine::ProviderInfo{
+        .m_provider = provider,
+        .m_provider_id = provider == ANIRA_PROVIDER_CUSTOM ? word : std::string()};
 }
 
 bool same(const anira::engine::ProviderInfo& info,
@@ -200,14 +199,14 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
                 }
             }
             anira_backend_id id = ANIRA_BACKEND_ID_INIT;
-            id.engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+            id.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             id.provider = static_cast<uint32_t>(info.m_provider);
             id.engine_id = engine->id().c_str();
             id.provider_id = provider_id;
             rows.m_backends.push_back(id);
             anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
             edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
-            edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+            edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             edge.to_provider = static_cast<uint32_t>(info.m_provider);
             edge.to_provider_id = provider_id;
             edge.to_engine_id = engine->id().c_str();

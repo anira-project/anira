@@ -286,9 +286,9 @@ TEST(AbiPrepare, LatencyRulesAreConfigAtPrepare) {
 
     const ModelConfig model = two_stream_outputs_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
-                                              .engine = ANIRA_ENGINE_NONE,
+                                              .engine = ANIRA_ENGINE_CUSTOM,
                                               .provider = ANIRA_PROVIDER_DEFAULT,
-                                              .engine_id = nullptr}};
+                                              .engine_id = anira_test::k_custom}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(with_latency("aux_out", 100), &err), ANIRA_ERROR_CONFIG);
@@ -397,9 +397,9 @@ TEST(AbiPrepare, BypassIsRefusedOnAGenerator) {
     const Context context;
     const ModelConfig model = generator_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
-                                              .engine = ANIRA_ENGINE_NONE,
+                                              .engine = ANIRA_ENGINE_CUSTOM,
                                               .provider = ANIRA_PROVIDER_DEFAULT,
-                                              .engine_id = nullptr}};
+                                              .engine_id = anira_test::k_custom}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(explicit_contract(2048, k_rate, ANIRA_MISS_BYPASS, 0.0, 10.0), &err),
@@ -952,15 +952,49 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
                                 .provider_id = "com.example.npu"};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &both, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "at once");
+    expect_contains(err.message, "the provider_id is set if and only if");
     const anira_backend_id empty_id{.struct_size = sizeof(anira_backend_id),
                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                    .provider = ANIRA_PROVIDER_CUSTOM,
                                     .engine_id = nullptr,
                                     .provider_id = ""};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &empty_id, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "provider_id is empty");
+    expect_contains(err.message, "never empty");
+    // The pair rule on both axes: a name beside DEFAULT, CUSTOM without an id, NONE (which names
+    // no engine) and an id beside a built-in engine are refused here.
+    const anira_backend_id named_default{.struct_size = sizeof(anira_backend_id),
+                                         .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                         .provider = ANIRA_PROVIDER_DEFAULT,
+                                         .engine_id = nullptr,
+                                         .provider_id = "com.example.npu"};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &named_default, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the provider_id is set if and only if");
+    const anira_backend_id nameless{.struct_size = sizeof(anira_backend_id),
+                                    .engine = ANIRA_ENGINE_CUSTOM,
+                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                    .engine_id = nullptr,
+                                    .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &nameless, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the engine_id is set if and only if");
+    const anira_backend_id no_engine{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_NONE,
+                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .engine_id = nullptr,
+                                     .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &no_engine, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "neither a built-in engine nor ANIRA_ENGINE_CUSTOM");
+    const anira_backend_id builtin_id{.struct_size = sizeof(anira_backend_id),
+                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                      .provider = ANIRA_PROVIDER_DEFAULT,
+                                      .engine_id = "com.example.engine",
+                                      .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &builtin_id, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "the engine_id is set if and only if");
     if (const std::vector<anira_engine> engines = anira_test::oracle_engines(); !engines.empty()) {
         // Well formed, and a provider this context's capabilities do not list for the engine
         // (no CUDA on the CI legs): refused at create, naming the entry, the engine and the

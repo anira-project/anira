@@ -94,7 +94,7 @@ TEST(AbiBridge, CandidatesNarrowTheEntries) {
     model.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
     model.input(streamed("in"));
     model.output(streamed("out"));
-    const std::array<anira::EngineKind, 1> custom_only{ANIRA_ENGINE_NONE};
+    const std::array<anira::EngineKind, 1> custom_only{ANIRA_ENGINE_CUSTOM};
     const anira::InferenceConfig cfg =
         anira::v3compat::to_inference_config(model, explicit_hard(), custom_only);
     EXPECT_EQ(cfg.m_model_data.size(), 1U);

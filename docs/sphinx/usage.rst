@@ -225,7 +225,9 @@ is part of the build is decided at prepare, not here, so one config serves every
   :cpp:class:`anira::Engine` of :doc:`custom_engines`) and added to the pipeline gets its
   entries through the string
   overloads: ``add_model_path("de.tu-berlin.coreml", path)``, ``add_model_bytes(id, bytes)``
-  and ``default_engine("de.tu-berlin.coreml")``. anira never opens such an entry's path: the
+  and ``default_engine("de.tu-berlin.coreml")`` (in C the pair, ``ANIRA_ENGINE_CUSTOM`` with
+  the id: ``anira_model_config_add_model_path(cfg, ANIRA_ENGINE_CUSTOM, "de.tu-berlin.coreml",
+  path, &i, &err)``, where a built-in engine passes ``NULL`` for the id). anira never opens such an entry's path: the
   engine's ``load`` does, and binds the tensors itself from the names the record carries
   (the plan report says ``ANIRA_BINDING_ENGINE`` for its slots). An entry whose id no
   registration on the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at
@@ -237,14 +239,20 @@ is part of the build is decided at prepare, not here, so one config serves every
   ``anira_provider`` (``ANIRA_PROVIDER_CUDA``, ``COREML``, ``XNNPACK``, ...) or, for one the
   enum does not name, a string in the engine's own vocabulary (``provider_id``: an ONNX
   Runtime execution provider by its registered name, a LiteRT accelerator by its hardware,
-  ``"gpu"`` or ``"npu"``, a custom engine's by its descriptor's list). Which providers an
+  ``"gpu"`` or ``"npu"``, a custom engine's by its descriptor's list). Both axes follow one
+  **pair rule** wherever the pair travels (a model entry, the defaults, a candidate, the plan
+  report, the capability rows, a provider option set, the stage context): the id is set if and
+  only if the value is ``ANIRA_ENGINE_CUSTOM`` / ``ANIRA_PROVIDER_CUSTOM``; a built-in value
+  takes none, and ``ANIRA_ENGINE_NONE`` and ``ANIRA_PROVIDER_DEFAULT`` never do (a setter
+  refuses any other combination with ``ANIRA_ERROR_INVALID_ARGUMENT``). Which providers an
   engine serves here is the context's to say (``anira_capabilities_backends``, section 3.1);
   which one a plan runs on is the candidate's (section 3.2). An entry is **neutral** by
   default and runs on any provider of its engine, the candidate deciding; an entry whose file
   is built for one (an ExecuTorch export lowered for a provider (an ExecuTorch delegate), an
   ONNX Runtime ``.ort`` compiled for an execution provider) is **pinned** to it:
-  ``model_provider(i, ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, ANIRA_PROVIDER_DEFAULT,
-  "com.example.npu")`` (``anira_model_config_set_model_provider``; read back with
+  ``model_provider(i, ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, "com.example.npu")``
+  (``anira_model_config_set_model_provider``, with ``ANIRA_PROVIDER_CUSTOM`` beside the name in
+  C; read back with
   ``model_provider(i)`` / ``model_provider_id(i)``, in C ``anira_model_config_model_provider``
   and ``anira_model_config_model_provider_id``), in a model file the entry's ``"provider"``
   key beside its ``"engine"``, ``"xnnpack"`` or ``"com.example.npu"``. A pinned entry runs on
@@ -252,9 +260,9 @@ is part of the build is decided at prepare, not here, so one config serves every
   provider); an ExecuTorch entry pinned to a provider its method does not use is a mislabeled
   export, refused at prepare.
 - **The starting plan.** ``default_engine(engine)`` (or ``default_engine(id)`` for a custom
-  engine; ``anira_model_config_set_default_engine`` / ``_set_default_engine_id``) names the
-  engine the handler starts on, ``default_provider(provider)`` (or ``default_provider(
-  ANIRA_PROVIDER_DEFAULT, "com.example.npu")``; ``anira_model_config_set_default_provider``)
+  engine; ``anira_model_config_set_default_engine``, which takes the pair) names the engine
+  the handler starts on, ``default_provider(provider)`` (or ``default_provider(
+  "com.example.npu")``; ``anira_model_config_set_default_provider``)
   the provider beside it: the handler starts on the first plan in plan-table order of the
   default engine (of any engine without one) on the default provider, and on the first plan of
   the default engine when no default provider is set. One rule holds for both defaults. What
@@ -293,8 +301,9 @@ extent}``; ``{ANIRA_AXIS_ANY, 0}`` for a hole and at or beyond ``ndim()``), ``wi
 ``state_source()``. A view is valid until the config is mutated, moved or destroyed, and
 ``TensorSpec::view()`` is the same view over a spec being built. The scalars are
 ``default_engine()`` / ``default_engine_id()`` (``ANIRA_ENGINE_NONE`` and an empty id for plan
-0), ``default_provider()`` / ``default_provider_id()`` (``ANIRA_PROVIDER_DEFAULT`` and an empty
-name for none), ``model_provider(i)`` / ``model_provider_id(i)`` (an entry's pin), ``state()``, ``max_instances()`` and ``anchor()`` (empty for the default); the tensor
+0, ``ANIRA_ENGINE_CUSTOM`` beside a custom default's id), ``default_provider()`` /
+``default_provider_id()`` (``ANIRA_PROVIDER_DEFAULT`` and an empty name for none,
+``ANIRA_PROVIDER_CUSTOM`` beside a custom name), ``model_provider(i)`` / ``model_provider_id(i)`` (an entry's pin), ``state()``, ``max_instances()`` and ``anchor()`` (empty for the default); the tensor
 records of an entry are ``tensor_name(i, canonical)`` (empty where the entry binds
 positionally) and ``tensor_layout(i, canonical)`` (empty for the spec's order), and its entry
 point is ``model_ext<anira::ext::Entry>(i)`` (``std::nullopt`` without one). The indexed
@@ -609,7 +618,7 @@ do not want the message. The handles are opaque and single-owner: every ``*_crea
     uint32_t i = 0;
     if (ANIRA_FAILED(anira_model_config_create(&cfg, &err)) ||
         ANIRA_FAILED(anira_model_config_add_model_path(
-            cfg, ANIRA_ENGINE_ONNXRUNTIME, "model.onnx", &i, &err)) ||
+            cfg, ANIRA_ENGINE_ONNXRUNTIME, NULL, "model.onnx", &i, &err)) ||
         ANIRA_FAILED(anira_tensor_spec_create(
             "audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED, &in, &err))) {
         fprintf(stderr, "%s: %s\n", anira_status_string(err.status), err.message);
@@ -1090,7 +1099,7 @@ The context configuration of section 1.4 (an ``anira::ContextConfig``, or the co
     for (const anira_edge_info& edge : caps.edges()) { /* from_domain -> (to_engine, to_provider) */ }
     anira::num_inference_threads();                  // the core's pool size: 0 before the first handler
 
-The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_engines`` (``anira::enabled_engines()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here: one row per compiled-in engine and provider its runtime reports usable on this machine, the default provider first (ONNX Runtime's available execution providers, the enum's value where one fits and the runtime's registered name in ``provider_id`` else; LiteRT's registered accelerators by their hardware, ``"gpu"``, ``"npu"``, where the LiteRT library exports its accelerator query (every package but the Windows DLL, where LiteRT lists the default provider alone); ExecuTorch's registered backends, ``XnnpackBackend`` as ``ANIRA_PROVIDER_XNNPACK``; LibTorch and TFLite on ``ANIRA_PROVIDER_DEFAULT`` alone in this pre-release), and one host edge per backend row (zero-copy to a CPU provider, a host copy the engine makes for itself to a device one; ``anira_capabilities_edge`` finds a custom provider by its name). A handler admits a built-in engine's provider exactly when its context lists it. In this pre-release every context is Host-only in its domains (the host domain alone), and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. **Provider options.** The options an engine's runtime takes for a provider travel on the context config as the ``provider_options`` extension, one set per backend with its keys in the runtime's vocabulary: ``config.ext(anira::ext::ProviderOptions{...})`` (``anira_context_config_set_ext`` with an ``anira_ext_provider_options``; in a context file ``"provider_options": {"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}``, the pair as two keys, as a model entry spells it). Each set is checked against the backend it names: its engine must read the kind (the ONNX Runtime adapter, which hands the options to the execution provider at load, CUDA's V2 options and the generic entry's map alike; a custom engine whose descriptor lists ``"context:provider_options"``, which receives them in its load record, :doc:`custom_engines`), else the set is refused as unconsumed naming the backend, at ``anira_context_create`` for a built-in engine and at ``anira_handler_create`` for a custom engine of the pipeline; and its provider must be one the engine serves here (the context's capabilities, a custom engine's list), else ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, so a misspelled provider word is refused rather than ignored. A set for a backend no plan of a handler runs on is not an error. At prepare the set of every plan's backend joins the loaded model's record (so two contexts with different options for one backend load twice), where its engine reads it. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
+The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_engines`` (``anira::enabled_engines()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here: one row per compiled-in engine and provider its runtime reports usable on this machine, the default provider first (ONNX Runtime's available execution providers, the enum's value where one fits and ``ANIRA_PROVIDER_CUSTOM`` with the runtime's registered name in ``provider_id`` else; LiteRT's registered accelerators by their hardware, ``"gpu"``, ``"npu"``, where the LiteRT library exports its accelerator query (every package but the Windows DLL, where LiteRT lists the default provider alone); ExecuTorch's registered backends, ``XnnpackBackend`` as ``ANIRA_PROVIDER_XNNPACK``; LibTorch and TFLite on ``ANIRA_PROVIDER_DEFAULT`` alone in this pre-release), and one host edge per backend row (zero-copy to a CPU provider, a host copy the engine makes for itself to a device one; ``anira_capabilities_edge`` finds a custom provider by its name). A handler admits a built-in engine's provider exactly when its context lists it. In this pre-release every context is Host-only in its domains (the host domain alone), and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. **Provider options.** The options an engine's runtime takes for a provider travel on the context config as the ``provider_options`` extension, one set per backend with its keys in the runtime's vocabulary: ``config.ext(anira::ext::ProviderOptions{...})`` (``anira_context_config_set_ext`` with an ``anira_ext_provider_options``; in a context file ``"provider_options": {"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}``, the pair as two keys, as a model entry spells it). Each set is checked against the backend it names: its engine must read the kind (the ONNX Runtime adapter, which hands the options to the execution provider at load, CUDA's V2 options and the generic entry's map alike; a custom engine whose descriptor lists ``"context:provider_options"``, which receives them in its load record, :doc:`custom_engines`), else the set is refused as unconsumed naming the backend, at ``anira_context_create`` for a built-in engine and at ``anira_handler_create`` for a custom engine of the pipeline; and its provider must be one the engine serves here (the context's capabilities, a custom engine's list), else ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, so a misspelled provider word is refused rather than ignored. A set for a backend no plan of a handler runs on is not an error. At prepare the set of every plan's backend joins the loaded model's record (so two contexts with different options for one backend load twice), where its engine reads it. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions.
 
 **A pipeline's capabilities.** A custom engine belongs to a pipeline, not to the context, so its
 rows are the pipeline's: ``anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, out)`` lists the context's rows and then, for every custom engine added to the pipeline, one row per provider usable here (the default provider first, then each declared provider the engine's ``query`` slot reports usable; every call runs the queries), and ``anira_pipeline_capabilities_edge(pipe, context, from, &to, &out)`` answers for a custom backend as ``anira_capabilities_edge`` does for a built-in one (in C++ ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``). See :doc:`custom_engines`, "What a custom engine can serve here".
@@ -1220,7 +1229,7 @@ the id) and the engine's ``flags`` (``ANIRA_ENGINE_FLAG_*``, reported in
 addition does not reach it. A model entry that names the id is a plan like a built-in
 engine's, one per candidate that names the engine and a provider the entry accepts (a neutral
 entry any, a pinned entry its pin alone: ``onnxruntime:coreml`` and ``onnxruntime`` among the
-candidates make two plans of one neutral entry, in candidate order), ``ANIRA_ENGINE_NONE``
+candidates make two plans of one neutral entry, in candidate order), ``ANIRA_ENGINE_CUSTOM``
 with the id wherever the engine-provider pair travels and the plan's provider beside it, its
 slots bound by the engine itself (``ANIRA_BINDING_ENGINE``); an engine no entry names is not
 a plan and not an error; an entry whose id no engine of the pipeline serves is

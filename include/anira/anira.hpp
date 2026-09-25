@@ -139,8 +139,8 @@ namespace anira {
 // ---- aliases -------------------------------------------------------------------------------
 
 using DType = anira_dtype;
-/// The built-in engines of anira_engine (ANIRA_ENGINE_NONE with an id for a registered one);
-/// the class of a custom engine is anira::Engine.
+/// The engines of anira_engine (ANIRA_ENGINE_CUSTOM with an id for a registered one, the pair
+/// rule); the class of a custom engine is anira::Engine.
 using EngineKind = anira_engine;
 using Provider = anira_provider;
 using Domain = anira_domain;
@@ -229,10 +229,10 @@ struct Entry {
 /// backend no plan runs on is not an error. The options are part of the loaded model.
 struct ProviderOptions {
     struct Set {
-        EngineKind engine = ANIRA_ENGINE_NONE;  ///< ANIRA_ENGINE_NONE with engine_id for a custom
-                                                ///< engine
+        EngineKind engine = ANIRA_ENGINE_NONE;  ///< ANIRA_ENGINE_CUSTOM with engine_id for a
+                                                ///< custom engine
         std::string engine_id;
-        Provider provider = ANIRA_PROVIDER_DEFAULT;  ///< ANIRA_PROVIDER_DEFAULT beside provider_id
+        Provider provider = ANIRA_PROVIDER_DEFAULT;  ///< ANIRA_PROVIDER_CUSTOM with provider_id
         std::string provider_id;
         std::vector<std::pair<std::string, std::string>> options;
     };
@@ -1276,21 +1276,24 @@ public:
         uint32_t index = 0;
         detail::check(anira_model_config_add_model_path(m_config,
                                                         engine,
+                                                        nullptr,
                                                         detail::utf8(path).c_str(),
                                                         &index,
                                                         &err),
                       err);
         return index;
     }
-    /// A file for a custom engine registered under a reverse-URI name.
+    /// A file for a custom engine registered under a reverse-URI name (ANIRA_ENGINE_CUSTOM with
+    /// the id).
     uint32_t add_model_path(std::string_view engine_id, const std::filesystem::path& path) {
         anira_error err{};
         uint32_t index = 0;
-        detail::check(anira_model_config_add_model_path_engine_id(m_config,
-                                                                  std::string(engine_id).c_str(),
-                                                                  detail::utf8(path).c_str(),
-                                                                  &index,
-                                                                  &err),
+        detail::check(anira_model_config_add_model_path(m_config,
+                                                        ANIRA_ENGINE_CUSTOM,
+                                                        std::string(engine_id).c_str(),
+                                                        detail::utf8(path).c_str(),
+                                                        &index,
+                                                        &err),
                       err);
         return index;
     }
@@ -1306,6 +1309,7 @@ public:
         uint32_t index = 0;
         detail::check(anira_model_config_add_model_bytes(m_config,
                                                          engine,
+                                                         nullptr,
                                                          bytes.data(),
                                                          bytes.size(),
                                                          ownership,
@@ -1323,15 +1327,16 @@ public:
                              void* ctx = nullptr) {
         anira_error err{};
         uint32_t index = 0;
-        detail::check(anira_model_config_add_model_bytes_engine_id(m_config,
-                                                                   std::string(engine_id).c_str(),
-                                                                   bytes.data(),
-                                                                   bytes.size(),
-                                                                   ownership,
-                                                                   release,
-                                                                   ctx,
-                                                                   &index,
-                                                                   &err),
+        detail::check(anira_model_config_add_model_bytes(m_config,
+                                                         ANIRA_ENGINE_CUSTOM,
+                                                         std::string(engine_id).c_str(),
+                                                         bytes.data(),
+                                                         bytes.size(),
+                                                         ownership,
+                                                         release,
+                                                         ctx,
+                                                         &index,
+                                                         &err),
                       err);
         return index;
     }
@@ -1354,6 +1359,8 @@ public:
         return *this;
     }
     uint32_t model_count() const noexcept { return anira_model_config_model_count(m_config); }
+    /// The entry's engine; ANIRA_ENGINE_CUSTOM for a custom one (model_engine_id names it),
+    /// ANIRA_ENGINE_NONE for an index out of range.
     EngineKind model_engine(uint32_t index) const noexcept {
         return anira_model_config_model_engine(m_config, index);
     }
@@ -1363,8 +1370,9 @@ public:
         const char* id = anira_model_config_model_engine_id(m_config, index);
         return id != nullptr ? std::string_view(id) : std::string_view();
     }
-    /// The provider the entry is pinned to; ANIRA_PROVIDER_DEFAULT for an entry without a pin,
-    /// for a custom pin (model_provider_id names it) and for an index out of range.
+    /// The provider the entry is pinned to; ANIRA_PROVIDER_CUSTOM for a custom pin
+    /// (model_provider_id names it), ANIRA_PROVIDER_DEFAULT for an entry without a pin and for
+    /// an index out of range.
     anira_provider model_provider(uint32_t index) const noexcept {
         return anira_model_config_model_provider(m_config, index);
     }
@@ -1397,20 +1405,25 @@ public:
     }
     /// Pins the entry to the provider its file is built for (an ExecuTorch export lowered for
     /// a provider (an ExecuTorch delegate), an ONNX Runtime .ort compiled for an execution
-    /// provider): a provider of the enum, or a custom name in the engine's own vocabulary with
-    /// ANIRA_PROVIDER_DEFAULT beside it. Only a candidate naming that provider runs a pinned
-    /// entry; an entry without a pin runs on any provider of its engine, the candidate
-    /// deciding. Two entries of one engine may coexist when their pins differ. DEFAULT with an
-    /// empty name unpins.
-    ModelConfig& model_provider(uint32_t index,
-                                anira_provider provider,
-                                std::string_view provider_id = {}) {
+    /// provider): a provider of the enum here, a custom name through the string overload.
+    /// Only a candidate naming that provider runs a pinned entry; an entry without a pin runs
+    /// on any provider of its engine, the candidate deciding. Two entries of one engine may
+    /// coexist when their pins differ. ANIRA_PROVIDER_DEFAULT unpins.
+    ModelConfig& model_provider(uint32_t index, Provider provider) {
         anira_error err{};
-        const std::string id(provider_id);
+        detail::check(
+            anira_model_config_set_model_provider(m_config, index, provider, nullptr, &err),
+            err);
+        return *this;
+    }
+    /// Pins the entry to a custom provider, by its name in the engine's own vocabulary
+    /// (ANIRA_PROVIDER_CUSTOM with the name).
+    ModelConfig& model_provider(uint32_t index, std::string_view provider_id) {
+        anira_error err{};
         detail::check(anira_model_config_set_model_provider(m_config,
                                                             index,
-                                                            provider,
-                                                            id.empty() ? nullptr : id.c_str(),
+                                                            ANIRA_PROVIDER_CUSTOM,
+                                                            std::string(provider_id).c_str(),
                                                             &err),
                       err);
         return *this;
@@ -1482,7 +1495,8 @@ public:
         }
         return SpecView(spec);
     }
-    /// The built-in default engine; ANIRA_ENGINE_NONE for plan 0 or a custom default.
+    /// The default engine; ANIRA_ENGINE_CUSTOM for a custom one (default_engine_id names it),
+    /// ANIRA_ENGINE_NONE for plan 0.
     EngineKind default_engine() const noexcept {
         return anira_model_config_default_engine(m_config);
     }
@@ -1491,7 +1505,8 @@ public:
         const char* id = anira_model_config_default_engine_id(m_config);
         return id != nullptr ? std::string_view(id) : std::string_view();
     }
-    /// The default provider of the enum; ANIRA_PROVIDER_DEFAULT for none or a custom one.
+    /// The default provider; ANIRA_PROVIDER_CUSTOM for a custom one (default_provider_id names
+    /// it), ANIRA_PROVIDER_DEFAULT for none.
     anira_provider default_provider() const noexcept {
         return anira_model_config_default_provider(m_config);
     }
@@ -1558,29 +1573,40 @@ public:
                       "anira_model_config_add_output");
         return *this;
     }
+    /// The engine the handler starts on (anira_model_config_set_default_engine): a built-in
+    /// engine, or ANIRA_ENGINE_NONE for plan 0.
     ModelConfig& default_engine(EngineKind engine) {
-        detail::check(anira_model_config_set_default_engine(m_config, engine),
-                      "anira_model_config_set_default_engine");
+        anira_error err{};
+        detail::check(anira_model_config_set_default_engine(m_config, engine, nullptr, &err), err);
         return *this;
     }
+    /// A custom engine the handler starts on, by its id (ANIRA_ENGINE_CUSTOM with the id).
     ModelConfig& default_engine(std::string_view engine_id) {
-        detail::check(
-            anira_model_config_set_default_engine_id(m_config, std::string(engine_id).c_str()),
-            "anira_model_config_set_default_engine_id");
+        anira_error err{};
+        detail::check(anira_model_config_set_default_engine(m_config,
+                                                            ANIRA_ENGINE_CUSTOM,
+                                                            std::string(engine_id).c_str(),
+                                                            &err),
+                      err);
         return *this;
     }
     /// The provider the handler starts on beside the default engine: the first plan of the
     /// default engine (of any engine without one) on this provider. The default engine's rule
     /// holds: ANIRA_ERROR_CONFIG at create when no entry could run on it (each pinned to another
     /// provider); a plan table without such a plan starts as without it, with one Warning at
-    /// prepare (anira_model_config_set_default_provider). A provider of the enum, or a
-    /// custom name in the engine's own vocabulary with ANIRA_PROVIDER_DEFAULT beside it;
-    /// DEFAULT with an empty name sets none.
-    ModelConfig& default_provider(anira_provider provider, std::string_view provider_id = {}) {
-        const std::string id(provider_id);
+    /// prepare (anira_model_config_set_default_provider). A provider of the enum here, a
+    /// custom name through the string overload; ANIRA_PROVIDER_DEFAULT sets none.
+    ModelConfig& default_provider(Provider provider) {
+        detail::check(anira_model_config_set_default_provider(m_config, provider, nullptr),
+                      "anira_model_config_set_default_provider");
+        return *this;
+    }
+    /// A custom provider the handler starts on, by its name in the engine's own vocabulary
+    /// (ANIRA_PROVIDER_CUSTOM with the name).
+    ModelConfig& default_provider(std::string_view provider_id) {
         detail::check(anira_model_config_set_default_provider(m_config,
-                                                              provider,
-                                                              id.empty() ? nullptr : id.c_str()),
+                                                              ANIRA_PROVIDER_CUSTOM,
+                                                              std::string(provider_id).c_str()),
                       "anira_model_config_set_default_provider");
         return *this;
     }
@@ -2171,7 +2197,8 @@ public:
 
     /// The phase this call runs in.
     anira_phase phase() const noexcept { return static_cast<anira_phase>(m_ctx->phase); }
-    /// The engine of the plan the chunk was submitted under; ANIRA_ENGINE_NONE for a custom one.
+    /// The engine of the plan the chunk was submitted under; ANIRA_ENGINE_CUSTOM for a custom
+    /// one (engine_id() names it).
     EngineKind engine() const noexcept { return static_cast<EngineKind>(m_ctx->engine); }
     /// The provider of that plan.
     Provider provider() const noexcept { return static_cast<Provider>(m_ctx->provider); }
@@ -2653,8 +2680,8 @@ public:
     const anira_model_config* model() const noexcept { return m_info->model; }
     /// anira_model_config_model_count: the entries of the variant.
     uint32_t model_count() const noexcept { return anira_model_config_model_count(m_info->model); }
-    /// anira_model_config_model_engine: an entry's built-in engine; ANIRA_ENGINE_NONE for a
-    /// custom entry (the row itself) or an index out of range.
+    /// anira_model_config_model_engine: an entry's engine; ANIRA_ENGINE_CUSTOM for a custom
+    /// entry (the row itself), ANIRA_ENGINE_NONE for an index out of range.
     EngineKind model_engine(uint32_t index) const noexcept {
         return anira_model_config_model_engine(m_info->model, index);
     }
@@ -2714,7 +2741,7 @@ public:
     /// State pair, whose handlers are exclusive (PrepareInfo::exclusive at their prepare) and
     /// run on what their Prepared builds, never on a shared slot.
     uint32_t instances() const noexcept { return m_info->instances; }
-    /// The provider this load is for: a provider of the enum, or ANIRA_PROVIDER_DEFAULT beside
+    /// The provider this load is for: a provider of the enum, or ANIRA_PROVIDER_CUSTOM beside
     /// provider_id() for a custom one. A provider is part of the loaded model: two providers of
     /// one model are two loads, each its own Loaded. What a load cannot serve it refuses with
     /// ANIRA_ERROR_NOT_SUPPORTED (the handler checked the plan's provider against providers()
@@ -2816,7 +2843,7 @@ struct EngineTrampolines;
  * stage::Inference::engine, which Pipeline::add registers before it adds the stage), and name
  * the id on a model entry
  * (ModelConfig::add_model_path(id, path)): that entry is then a plan like a built-in engine's,
- * ANIRA_ENGINE_NONE with the id wherever the engine-provider pair travels. It is
+ * ANIRA_ENGINE_CUSTOM with the id wherever the engine-provider pair travels. It is
  * anira_engine_desc with virtual functions in place of the function pointers, and the
  * semantics are those of anira/abi/engine.h, whose lifecycle it follows, the stage's lifecycle
  * with one level more and the same words (Stage, Stage::Prepared). The object is the engine's
@@ -3279,7 +3306,8 @@ namespace stage {
 /**
  * @brief The inference stage of a Pipeline: the model configuration(s) it may run, the
  * candidate backends (empty = the default set: every engine this build carries on
- * ANIRA_PROVIDER_DEFAULT, every custom entry (ANIRA_ENGINE_NONE), and every provider a model
+ * ANIRA_PROVIDER_DEFAULT, every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its
+ * id), and every provider a model
  * entry of the variant is pinned to, on that entry's engine, so that a pinned entry runs on its
  * pin and a neutral one on the default provider) and the custom engines it brings along
  * (engine(impl): Pipeline::add registers each one on the pipeline through
@@ -3360,7 +3388,7 @@ public:
     PipelineCapabilities(const anira_pipeline* pipeline, const anira_context* context) noexcept
         : m_pipeline(pipeline), m_context(context) {}
 
-    /// The context's backends, then the custom engines' rows (ANIRA_ENGINE_NONE with the
+    /// The context's backends, then the custom engines' rows (ANIRA_ENGINE_CUSTOM with the
     /// engine's id). @throws Error with a query's status when an engine's query() throws.
     std::vector<BackendId> backends() const {
         return detail::enumerate<BackendId>(

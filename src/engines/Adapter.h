@@ -80,11 +80,12 @@ struct TensorInfo {
 /// is the session's property (PrepareRequest), not the record's: a stateful model is loaded once
 /// for every session that runs it, with no shared slot.
 struct ANIRA_API Model {
-    anira_engine m_engine = ANIRA_ENGINE_NONE;  ///< the built-in engine; NONE with m_engine_id
-                                                ///< for a registered one, NONE alone for the
-                                                ///< 2.x custom and roundtrip adapters
-    /// A registered engine's id, else empty: what the messages name the engine by. No part of
-    /// the key: the carrier beside the record is, and the id is the carrier's own.
+    /// The built-in engine; ANIRA_ENGINE_CUSTOM with m_engine_id for a registered one and for
+    /// the 2.x CUSTOM backend (anira.v2.custom), under the pair rule.
+    anira_engine m_engine = ANIRA_ENGINE_NONE;
+    /// A custom engine's id (m_engine ANIRA_ENGINE_CUSTOM), else empty: what the messages name
+    /// the engine by. No part of the key: the carrier beside the record is, and the id is the
+    /// carrier's own.
     std::string m_engine_id;
     std::string m_path;             ///< the model file; empty for bytes
     const void* m_bytes = nullptr;  ///< the model bytes; NULL for a path
@@ -97,8 +98,8 @@ struct ANIRA_API Model {
     /// load may read the whole model config, so its loaded models are shared over an equal one
     /// only. Empty for a built-in engine, which reads the record alone.
     std::string m_variant;
-    /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_DEFAULT
-    /// beside m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
+    /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_CUSTOM
+    /// with m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
     /// candidate named, or the entry's pin). Part of the key.
     anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
     std::string m_provider_id;
@@ -195,7 +196,7 @@ protected:
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
-/// ANIRA_PROVIDER_DEFAULT with a name in the runtime's own words (an ONNX Runtime execution
+/// ANIRA_PROVIDER_CUSTOM with a name in the runtime's own words (an ONNX Runtime execution
 /// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
 /// "webnn"). What the context's capabilities list per (engine, provider).
 struct ProviderInfo {

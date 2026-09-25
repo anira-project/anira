@@ -19,10 +19,10 @@
  * and every handler created from them share it, and the engines of one pipeline have distinct
  * ids. The id is unique per pipeline, not per process: two engine objects may carry one id in
  * two pipelines (two instances of a plugin, each with its own engine). A model entry names the
- * engine by its id (anira_model_config_add_model_path_engine_id,
- * anira_model_config_add_model_bytes_engine_id) and a candidate of anira_pipeline_add_inference
- * with engine_id set selects it; wherever the engine-provider pair travels a custom engine is
- * ANIRA_ENGINE_NONE with its id (anira_backend_id, anira_plan_info; a stage reads it with
+ * engine as ANIRA_ENGINE_CUSTOM with its id (anira_model_config_add_model_path,
+ * anira_model_config_add_model_bytes) and a candidate of anira_pipeline_add_inference with the
+ * same pair selects it; wherever the engine-provider pair travels a custom engine is
+ * ANIRA_ENGINE_CUSTOM with its id (anira_backend_id, anira_plan_info; a stage reads it with
  * anira_stage_engine_id). An added engine no entry names is not a plan and not an error; an
  * entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
  * anira_handler_create. Which of an engine's declared providers are usable here is its query's
@@ -146,7 +146,7 @@ typedef struct anira_engine_load_info {
      */
     uint32_t instances;
     /**
-     * anira_provider: the provider this load is for, ANIRA_PROVIDER_DEFAULT beside a
+     * anira_provider: the provider this load is for, ANIRA_PROVIDER_CUSTOM beside a
      * provider_id. A provider is part of the loaded model: two providers of one model load
      * twice; a load that cannot serve the one it is asked for returns
      * ANIRA_ERROR_NOT_SUPPORTED.
@@ -154,8 +154,8 @@ typedef struct anira_engine_load_info {
     uint32_t provider;
     /**
      * NULL for a provider the enum names; the name of a custom provider in the engine's
-     * vocabulary (an entry of the descriptor's providers list), valid until the callback
-     * returns.
+     * vocabulary (provider ANIRA_PROVIDER_CUSTOM; an entry of the descriptor's providers list),
+     * valid until the callback returns.
      */
     const char* provider_id;
     /**
@@ -506,10 +506,11 @@ typedef struct anira_engine_desc {
      * The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, as strings, copied; NULL
      * with a count of 0 serves DEFAULT alone. The enum's JSON spellings name a provider of the
      * enum ("cuda", "webgpu", "directml", "coreml", "xnnpack", "vulkan"); any other string is a
-     * custom provider in the engine's own vocabulary (a reverse-URI name is the convention, not
-     * a rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at
-     * anira_handler_create; load may still refuse one it cannot serve at run time. A tail
-     * field: a caller whose header ends before it serves DEFAULT alone.
+     * custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM with that name
+     * wherever the pair travels (a reverse-URI name is the convention, not a rule). A candidate
+     * naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create;
+     * load may still refuse one it cannot serve at run time. A tail field: a caller whose
+     * header ends before it serves DEFAULT alone.
      */
     const char* const* providers;
     uint32_t num_providers;  /**< The length of providers. */

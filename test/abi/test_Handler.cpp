@@ -112,7 +112,7 @@ anira::InferenceBackend backend_of(const anira_plan_info& info) {
 #endif
         default: break;
     }
-    EXPECT_EQ(info.engine, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(info.engine, ANIRA_ENGINE_CUSTOM);
     EXPECT_NE(info.engine_id, nullptr);
     if (info.engine_id != nullptr) { EXPECT_STREQ(info.engine_id, k_custom); }
     return anira::InferenceBackend::CUSTOM;
@@ -984,7 +984,7 @@ TEST(AbiHandler, ASlotReportsHowItsPlanBoundIt) {
         SCOPED_TRACE("plan " + std::to_string(plan));
         const std::array<anira_plan_slot, 2> inputs = slots_of(plan, true);
         const std::array<anira_plan_slot, 2> outputs = slots_of(plan, false);
-        if (plans[plan].engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE)) {
+        if (plans[plan].engine == static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM)) {
             custom_seen = true;
             for (const anira_plan_slot& row : inputs) {
                 EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
@@ -1088,9 +1088,9 @@ TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
     const Context context;
     const anira::ModelConfig model = anira_test::generator_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
-                                              .engine = ANIRA_ENGINE_NONE,
+                                              .engine = ANIRA_ENGINE_CUSTOM,
                                               .provider = ANIRA_PROVIDER_DEFAULT,
-                                              .engine_id = nullptr}};
+                                              .engine_id = anira_test::k_custom}};
     anira_test::SleepingParamFillEngine generator;
     Handler handler(context, model, none, {}, generator.engine());
     const DestroyFirst destroy_first(handler, &generator);

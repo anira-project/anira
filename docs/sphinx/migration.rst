@@ -91,7 +91,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        id and registered with ``anira::Pipeline::register_engine(impl)`` or
        ``anira::stage::Inference(cfg).engine(impl)``)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
-       (``anira_model_config_add_model_path_engine_id``).
+       (``anira_model_config_add_model_path`` with ``ANIRA_ENGINE_CUSTOM`` and the id).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
      - ``cfg.add_model_bytes(engine, bytes, ownership, release, ctx)`` with a
        ``std::span<const std::byte>`` (``anira_model_config_add_model_bytes``);
@@ -343,7 +343,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        ``Pipeline::register_engine(impl)`` or brought along by
        ``stage::Inference(cfg).engine(impl)``; a model entry names the id
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
-       ``ANIRA_ENGINE_NONE`` with the id, selected with ``anira_handler_set_plan``.
+       ``ANIRA_ENGINE_CUSTOM`` with the id, selected with ``anira_handler_set_plan``.
    * - ``X(anira::InferenceConfig& config)`` and the members sized from it
      - Two levels. The loaded model: ``load(info, user_data, &loaded)`` receives an
        ``anira_engine_load_info`` (the record an earlier pre-release called
@@ -404,7 +404,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        (``Engine::Loaded`` is deleted there); ``release(user_data)`` once, with the last
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
-     - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
+     - ``ANIRA_ENGINE_CUSTOM`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
        a stage reads it with ``anira_stage_engine_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
        C handler runs it like every added id, on the engine added under it (the one id with
        the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
@@ -510,8 +510,8 @@ differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERRO
 **Candidates.** The candidate list narrows which entries reach the ``InferenceConfig``. With
 none (the default), every entry is one, and an entry naming an engine this build does not
 carry is refused; ``anira::v3compat::enabled_engines()`` is the list that lets one model
-config serve every build, and ``ANIRA_ENGINE_NONE`` in the list keeps the custom-engine
-entries. The consumed-or-fail walk over the extensions runs over the entries that survive, so
+config serve every build, and ``ANIRA_ENGINE_CUSTOM`` in the list keeps the custom-engine
+entries (the 2.x ``CUSTOM`` backend's, ``anira.v2.custom``). The consumed-or-fail walk over the extensions runs over the entries that survive, so
 an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
 is not a candidate. The bridge's candidates name engines on the default provider: a model
 entry pinned to a provider (``"provider": "xnnpack"`` beside its ``"engine"``, :doc:`usage`

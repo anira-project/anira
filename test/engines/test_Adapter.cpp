@@ -577,6 +577,7 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     b.m_provider = ANIRA_PROVIDER_CUDA;
     EXPECT_NE(a, b) << "the provider is";
     b = gain_model(2);
+    b.m_provider = ANIRA_PROVIDER_CUSTOM;
     b.m_provider_id = "QNNExecutionProvider";
     EXPECT_NE(a, b) << "a custom provider is";
     b = gain_model(2);
@@ -613,7 +614,8 @@ TEST(Adapter, LegacyPlanRequestsOfACustomOnlyConfigMatchTheDefaultTable) {
         EXPECT_TRUE(without[i].m_model.m_inputs.at(0).m_export_name.empty());
     }
     EXPECT_EQ(without[0].m_model.m_path, "placeholder");
-    EXPECT_EQ(without[0].m_model.m_engine, ANIRA_ENGINE_NONE);
+    EXPECT_EQ(without[0].m_model.m_engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(without[0].m_model.m_engine_id, "anira.v2.custom") << "the pair rule";
 
     RecordingBackend custom(config);
     const std::vector<PlanRequest> with = anira::engine::legacy_plan_requests(config, &custom);
@@ -1084,7 +1086,8 @@ TEST(Adapter, LoadReportsPositionForEverySlotUntilTheEngineSaysOtherwise) {
 TEST(Adapter, MakeBuiltInEngineAndLoadedAnswerTheEnginesOfTheBuild) {
     EXPECT_EQ(anira::engine::make_builtin_engine(ANIRA_ENGINE_NONE), nullptr);
     EXPECT_EQ(anira::engine::make_builtin_loaded(nullptr), nullptr);
-    EXPECT_EQ(anira::engine::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_NONE);
+    EXPECT_EQ(anira::engine::engine_of(anira::InferenceBackend::CUSTOM), ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(anira::engine::make_builtin_engine(ANIRA_ENGINE_CUSTOM), nullptr);
     for (const anira::InferenceBackend backend : every_backend()) {
         if (backend == anira::InferenceBackend::CUSTOM) { continue; }
         const anira_engine engine = anira::engine::engine_of(backend);
@@ -1255,7 +1258,7 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
     const Loaded& loaded = adapter->loaded();
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_VULKAN, ""));
-    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "com.example.nobody"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "com.example.nobody"));
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::onnxruntime_providers();
     for (const anira::engine::ProviderInfo& info : listed) {
         EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
@@ -1268,6 +1271,7 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
         << loaded.provider_reason();
 
     Model nobody = onnx_gain_model();
+    nobody.m_provider = ANIRA_PROVIDER_CUSTOM;
     nobody.m_provider_id = "com.example.nobody";
     const anira::StatusError refused =
         status_error_of([&nobody] { builtin_rig(ANIRA_ENGINE_ONNXRUNTIME)->prepare(nobody); });
@@ -1699,9 +1703,9 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     ASSERT_NE(adapter, nullptr);
     const Loaded& loaded = adapter->loaded();
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "gpu"));
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "npu"));
-    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "tpu"));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "gpu"));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "npu"));
+    EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "tpu"));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
     EXPECT_NE(loaded.provider_reason().find("'gpu'"), std::string::npos)
@@ -1724,6 +1728,7 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
         Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
         gpu.m_outputs[0].m_export_name = "output_0";
         gpu.m_outputs[1].m_export_name = "output_1";
+        gpu.m_provider = ANIRA_PROVIDER_CUSTOM;
         gpu.m_provider_id = "gpu";
         const anira::StatusError no_gpu =
             status_error_of([&gpu] { builtin_rig(ANIRA_ENGINE_LITERT)->prepare(gpu); });

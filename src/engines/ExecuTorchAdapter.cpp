@@ -26,6 +26,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <exception>
 #include <memory>
@@ -59,6 +60,7 @@
 #include "executorch/runtime/core/evalue.h"
 #include "executorch/runtime/core/exec_aten/exec_aten.h"
 #include "executorch/runtime/core/result.h"
+#include "executorch/runtime/core/span.h"
 #include "executorch/runtime/core/tag.h"
 #include "executorch/runtime/executor/method_meta.h"
 #include "executorch/runtime/executor/program.h"
@@ -142,7 +144,7 @@ executorch::runtime::BackendOption xnnpack_option(const char* key,
     executorch::runtime::BackendOption option{};
     // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay) the key is a C array
     std::snprintf(option.key, sizeof(option.key), "%s", key);
-    option.value = std::move(value);
+    option.value = value;
     return option;
 }
 
@@ -688,6 +690,7 @@ std::vector<ProviderInfo> executorch_providers() {
     std::vector<ProviderInfo> providers;
     for (const std::string& name : registered_backends()) {
         ProviderInfo info;
+        info.m_provider = ANIRA_PROVIDER_CUSTOM;
         info.m_provider_id = name;
         for (const auto& [registered, value] : k_provider_names) {
             if (name == registered) {

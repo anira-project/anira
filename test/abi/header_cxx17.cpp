@@ -268,9 +268,14 @@ static_assert(noexcept(anira_model_config_default_provider_id(nullptr)));
 static_assert(noexcept(anira_stage_engine_id(nullptr, nullptr)));
 static_assert(noexcept(anira_stage_provider_id(nullptr, nullptr)));
 static_assert(noexcept(anira_enabled_engines(0, nullptr, nullptr)));
-static_assert(noexcept(anira_model_config_set_default_engine_id(nullptr, nullptr)));
 static_assert(noexcept(
-    anira_model_config_add_model_path_engine_id(nullptr, nullptr, nullptr, nullptr, nullptr)));
+    anira_model_config_set_default_engine(nullptr, ANIRA_ENGINE_CUSTOM, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_add_model_path(nullptr,
+                                                         ANIRA_ENGINE_CUSTOM,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr,
+                                                         nullptr)));
 static_assert(
     std::is_same_v<decltype(anira_model_config_default_provider_id(nullptr)), const char*>);
 static_assert(

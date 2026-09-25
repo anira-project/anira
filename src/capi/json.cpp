@@ -34,7 +34,6 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
-#include "validate.h"
 #include "words.h"
 
 using anira::capi::k_v2_custom_engine;  // the id of every version-2 "CUSTOM" row
@@ -393,7 +392,7 @@ void set_engine_from_json(const Json& node,
                       R"(" is neither a built-in engine (onnxruntime, libtorch, tflite, litert, )"
                       "executorch) nor a reverse-URI custom engine id");
     }
-    engine = ANIRA_ENGINE_NONE;
+    engine = ANIRA_ENGINE_CUSTOM;
     engine_id = word;
 }
 
@@ -416,20 +415,15 @@ void set_entry_engine_from_json(const Json& node,
 // and default_provider, the provider the handler starts on
 // (anira_model_config_set_default_provider): the enum's spelling ("coreml"; "default" spells
 // none, as no key does) or a custom provider's name in the engine's vocabulary
-// ("com.example.npu").
+// ("com.example.npu"), ANIRA_PROVIDER_CUSTOM with the name.
 void set_provider_from_json(const Json& node,
                             const std::string& path,
                             anira_provider& provider,
                             std::string& provider_id) {
     const std::string word = require_string(node, path);
     if (word.empty()) { fail_json(path, "must not be empty"); }
-    provider = ANIRA_PROVIDER_DEFAULT;
-    provider_id.clear();
-    if (const std::optional<anira_provider> known = anira::capi::provider_of_word(word)) {
-        provider = *known;
-        return;
-    }
-    provider_id = word;
+    provider = anira::capi::provider_of_name(word);
+    provider_id = provider == ANIRA_PROVIDER_CUSTOM ? word : std::string();
 }
 
 // models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
@@ -1077,6 +1071,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
                     if (ekey == "inference_backend") {
                         const std::string word = require_string(evalue, ekey_path);
                         if (word == "CUSTOM") {
+                            entry.m_engine = ANIRA_ENGINE_CUSTOM;
                             entry.m_engine_id = k_v2_custom_engine;
                         } else {
                             entry.m_engine = vocabulary(evalue, ekey_path, k_engines_v2);
@@ -1126,6 +1121,7 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
                     require_string(*backend, backend_path) == "UNIVERSAL") {
                     shape_entry.m_universal = true;
                 } else if (require_string(*backend, backend_path) == "CUSTOM") {
+                    shape_entry.m_engine = ANIRA_ENGINE_CUSTOM;
                     shape_entry.m_engine_id = k_v2_custom_engine;
                 } else {
                     shape_entry.m_engine = vocabulary(*backend, backend_path, k_engines_v2);
@@ -1375,11 +1371,12 @@ Json model_to_json(const anira_model_config& cfg) {
         Json object = Json::object();
         object["engine"] = entry.is_custom() ? entry.m_engine_id
                                              : word_of(entry.m_engine, anira::capi::k_engine_words);
-        // The pin under its own key; a neutral entry has none.
-        if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
-            object["provider"] = anira::capi::provider_word(entry.m_provider);
-        } else if (!entry.m_provider_id.empty()) {
+        // The pin under its own key: the enum's word, a custom provider's name; a neutral
+        // entry has none.
+        if (entry.m_provider == ANIRA_PROVIDER_CUSTOM) {
             object["provider"] = entry.m_provider_id;
+        } else if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
+            object["provider"] = anira::capi::provider_word(entry.m_provider);
         }
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
         write_tensor_records(object, entry);
@@ -1392,10 +1389,10 @@ Json model_to_json(const anira_model_config& cfg) {
     } else if (cfg.m_default_engine != ANIRA_ENGINE_NONE) {
         root["default_engine"] = word_of(cfg.m_default_engine, anira::capi::k_engine_words);
     }
-    if (cfg.m_default_provider != ANIRA_PROVIDER_DEFAULT) {
-        root["default_provider"] = anira::capi::provider_word(cfg.m_default_provider);
-    } else if (!cfg.m_default_provider_id.empty()) {
+    if (cfg.m_default_provider == ANIRA_PROVIDER_CUSTOM) {
         root["default_provider"] = cfg.m_default_provider_id;
+    } else if (cfg.m_default_provider != ANIRA_PROVIDER_DEFAULT) {
+        root["default_provider"] = anira::capi::provider_word(cfg.m_default_provider);
     }
     root["state"] = word_of(cfg.m_state, k_states);
     root["max_instances"] = cfg.m_max_instances;

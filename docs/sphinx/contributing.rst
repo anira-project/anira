@@ -280,7 +280,9 @@ travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
 (``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
 ``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` and ``to_engine_id`` on
 ``anira_edge_info``), a
-value of the enum or ``ANIRA_PROVIDER_DEFAULT`` beside a name in the engine's own vocabulary,
+value of the enum or ``ANIRA_PROVIDER_CUSTOM`` beside a name in the engine's own vocabulary
+(the pair rule: an id if and only if the value is ``ANIRA_ENGINE_CUSTOM`` /
+``ANIRA_PROVIDER_CUSTOM``),
 and the JSON spellings of both enums live in one place, ``src/capi/words.h``, which the JSON
 reader and writer, the messages, the carriers and the adapters share. The 64-bit rule has a closed allowlist
 of six names: ``anira_now_ns`` and the factories ``anira_tensor_init_vulkan``,

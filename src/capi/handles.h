@@ -75,12 +75,13 @@ struct TensorBinding {
 };
 
 /// One models[] entry: a built-in engine or a custom engine id, a path or bytes, the
-/// canonical -> export tensor names, and its extensions (host "model").
+/// canonical -> export tensor names, and its extensions (host "model"). Both pairs keep the
+/// pair rule: an id if and only if the value is CUSTOM.
 struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
-    std::string m_engine_id;  ///< non-empty for a custom engine
+    std::string m_engine_id;  ///< non-empty for a custom engine, m_engine ANIRA_ENGINE_CUSTOM
     /// The provider the entry is pinned to (anira_model_config_set_model_provider): the enum's,
-    /// or DEFAULT with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
+    /// or CUSTOM with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
     /// which runs on any provider of its engine.
     anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
     std::string m_provider_id;
@@ -196,10 +197,12 @@ struct anira_model_config {
     std::vector<anira::capi::ModelEntry> m_models;
     std::vector<anira_tensor_spec> m_inputs;
     std::vector<anira_tensor_spec> m_outputs;
+    /// The engine the handler starts on: NONE for none (plan 0), CUSTOM with the id for a
+    /// custom one (anira_model_config_set_default_engine).
     anira_engine m_default_engine = ANIRA_ENGINE_NONE;
     std::string m_default_engine_id;
-    /// The provider the handler starts on beside the default engine; DEFAULT with an empty id
-    /// sets none (anira_model_config_set_default_provider).
+    /// The provider the handler starts on beside the default engine; DEFAULT for none, CUSTOM
+    /// with the id for a custom one (anira_model_config_set_default_provider).
     anira_provider m_default_provider = ANIRA_PROVIDER_DEFAULT;
     std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;

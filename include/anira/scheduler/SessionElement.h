@@ -326,8 +326,8 @@ public:
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
         /// The backend a stage context reports for the chunk: a built-in engine, or
-        /// ANIRA_ENGINE_NONE with m_engine_id for a custom one, on a provider of the enum, or
-        /// ANIRA_PROVIDER_DEFAULT with m_provider_id for a custom one.
+        /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
+        /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
         anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
         std::string m_engine_id;

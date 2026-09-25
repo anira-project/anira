@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/words.h"
 #include "Adapter.h"
 
 namespace anira::engine {
@@ -112,7 +113,7 @@ anira_engine engine_of(anira::InferenceBackend backend) noexcept {
 #ifdef USE_EXECUTORCH
         case anira::InferenceBackend::EXECUTORCH: return ANIRA_ENGINE_EXECUTORCH;
 #endif
-        case anira::InferenceBackend::CUSTOM:
+        case anira::InferenceBackend::CUSTOM: return ANIRA_ENGINE_CUSTOM;
         default: return ANIRA_ENGINE_NONE;
     }
 }
@@ -120,6 +121,10 @@ anira_engine engine_of(anira::InferenceBackend backend) noexcept {
 Model model_of(const anira::InferenceConfig& config, anira::InferenceBackend backend) {
     Model model;
     model.m_engine = engine_of(backend);
+    // The 2.x CUSTOM backend is the custom engine of its id, under the pair rule.
+    if (model.m_engine == ANIRA_ENGINE_CUSTOM) {
+        model.m_engine_id = anira::capi::k_v2_custom_engine;
+    }
     if (const anira::ModelData* row = config.get_model_data(backend)) {
         if (row->m_is_binary) {
             model.m_bytes = row->m_data;

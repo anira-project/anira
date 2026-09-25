@@ -199,11 +199,11 @@ typedef struct anira_plan_info {
      */
     uint32_t variant;
     /**
-     * anira_engine; ANIRA_ENGINE_NONE for a custom engine, which engine_id names.
+     * anira_engine; ANIRA_ENGINE_CUSTOM for a custom engine, which engine_id names.
      */
     uint32_t engine;
     /**
-     * anira_provider of the plan; ANIRA_PROVIDER_DEFAULT beside a provider_id.
+     * anira_provider of the plan; ANIRA_PROVIDER_CUSTOM beside a provider_id.
      */
     uint32_t provider;
     /**
@@ -269,28 +269,30 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * @param num_variants The number of variants; 1 in this pre-release.
  * @param candidates The candidate backends, copied, or NULL (with num_candidates 0) for the
  *        default set: every engine this build carries on ANIRA_PROVIDER_DEFAULT,
- *        every custom entry (ANIRA_ENGINE_NONE), and every provider a model entry of
- *        the variant is pinned to, on that entry's engine, so that a pinned entry
- *        runs on its pin and a neutral one on the default provider. Under the
- *        default set a model entry for an engine this build lacks is skipped, not
- *        refused; name it as a candidate to have it checked. A candidate whose
- *        engine_id is set names a custom engine; ANIRA_ENGINE_NONE with a NULL
- *        engine_id keeps every custom entry. A candidate's provider (provider, or
- *        provider_id for a custom one beside ANIRA_PROVIDER_DEFAULT) is what its
+ *        every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), and
+ *        every provider a model entry of the variant is pinned to, on that entry's
+ *        engine, so that a pinned entry runs on its pin and a neutral one on the
+ *        default provider. Under the default set a model entry for an engine this
+ *        build lacks is skipped, not refused; name it as a candidate to have it
+ *        checked. A candidate names a built-in engine by its value or a custom
+ *        engine as ANIRA_ENGINE_CUSTOM with its id; ANIRA_ENGINE_NONE names no
+ *        engine. A candidate's provider (a value of the enum, or
+ *        ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one) is what its
  *        plans run on: a model entry without a pin runs on it, a pinned entry on its
  *        pin alone (a candidate naming another provider skips it); its syntax is
- *        checked here (a value of the enum, never both a provider and a provider_id,
- *        never an empty provider_id), whether the engine serves it at
- *        anira_handler_create.
+ *        checked here (a known value on both axes and the pair rule of anira_engine
+ *        and anira_provider), whether the engine serves it at anira_handler_create.
  * @param num_candidates The number of candidates; 0 with a NULL list.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant
  *         list, a NULL entry in it, a NULL candidates with num_candidates above 0, a candidate
  *         whose struct_size is below the record's head or unlike the first candidate's (the
- *         array's one stride), or a candidate whose provider is no value of anira_provider,
- *         carries a provider of the enum and a provider_id at once, or an empty provider_id;
- *         ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more
- *         than one variant.
+ *         array's one stride), or a candidate whose engine is neither a built-in engine nor
+ *         ANIRA_ENGINE_CUSTOM, whose provider is no value of anira_provider, or whose pair
+ *         breaks the pair rule of anira_engine and anira_provider (an id beside a value other
+ *         than CUSTOM, CUSTOM without an id, an empty provider_id, a custom engine id without a
+ *         '.'); ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for
+ *         more than one variant.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -435,7 +437,7 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_engine(anira_pipeline* pipe
  * engine added to the pipeline, in the order they were added, one row per provider
  * usable here: the default provider first, then each provider of the descriptor's list
  * whose query bit is set (anira_engine_query_fn; every listed provider for an engine
- * without a query), engine ANIRA_ENGINE_NONE with the engine's id in engine_id. Every
+ * without a query), engine ANIRA_ENGINE_CUSTOM with the engine's id in engine_id. Every
  * call runs the custom engines' queries; the built-in rows are refreshed by
  * anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a
  * custom provider's provider_id) and into the context's store (a built-in engine's
@@ -473,7 +475,8 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * @param context The context whose edge registry answers for a built-in engine.
  * @param from The tensor's domain.
  * @param to The backend; read within its struct_size. A custom engine by its engine_id (engine
- *        ANIRA_ENGINE_NONE), a custom provider by its provider_id.
+ *        ANIRA_ENGINE_CUSTOM), a custom provider by its provider_id (provider
+ *        ANIRA_PROVIDER_CUSTOM).
  * @param out Receives the row, read and written within its struct_size (set it before the
  *        call).
  * @return ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row

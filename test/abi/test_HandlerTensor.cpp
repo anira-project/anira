@@ -253,9 +253,9 @@ private:
     anira_test::Context m_context;
     /// The custom rows only: the models name no engine.
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
-                                                .engine = ANIRA_ENGINE_NONE,
+                                                .engine = ANIRA_ENGINE_CUSTOM,
                                                 .provider = ANIRA_PROVIDER_DEFAULT,
-                                                .engine_id = nullptr}};
+                                                .engine_id = anira_test::k_custom}};
     anira_test::GateEngine m_gate;  // before the handler, which dies first
     anira_test::Handler m_handler;
     std::shared_ptr<anira::SessionElement> m_session;
@@ -748,9 +748,9 @@ TEST(AbiHandlerTensor, UnpreparedEntriesRecordNotPrepared) {
     RecordCollector collector;
     const ModelConfig model = pass_through(2);
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
-                                                    .engine = ANIRA_ENGINE_NONE,
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
                                                     .provider = ANIRA_PROVIDER_DEFAULT,
-                                                    .engine_id = nullptr}};
+                                                    .engine_id = anira_test::k_custom}};
     const anira_test::Handler handler(context, model, candidates);
     anira_handler* h = handler.m_handler;
     ASSERT_NE(h, nullptr);
@@ -1084,9 +1084,9 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
     RecordCollector collector;
     const ModelConfig model = multi_model();
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
-                                                    .engine = ANIRA_ENGINE_NONE,
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
                                                     .provider = ANIRA_PROVIDER_DEFAULT,
-                                                    .engine_id = nullptr}};
+                                                    .engine_id = anira_test::k_custom}};
     anira_test::Handler handler(context, model, candidates);
     const anira::ContractHandle contract =
         anira_test::explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
@@ -1624,9 +1624,9 @@ TEST(AbiHandlerTensor, TheCallbackPolicyNeedsItsFunctionAtPrepare) {
     const anira_test::Context context;
     const ModelConfig model = pass_through(2);
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
-                                                    .engine = ANIRA_ENGINE_NONE,
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
                                                     .provider = ANIRA_PROVIDER_DEFAULT,
-                                                    .engine_id = nullptr}};
+                                                    .engine_id = anira_test::k_custom}};
     anira_test::Handler handler(context, model, candidates);
     // A parsed contract names the policy; a file cannot carry the function.
     anira::ContractHandle contract = anira::ContractHandle::from_json(

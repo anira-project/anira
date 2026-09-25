@@ -69,28 +69,34 @@ typedef struct anira_ext_entry {
  * struct_size first, read within it; copied by the set call, which refuses a malformed
  * set with ANIRA_ERROR_INVALID_ARGUMENT naming it: a struct_size below the fixed head or
  * unlike the first record's (an array has one stride), an engine or a provider value
- * this header does not name, no provider (the default provider takes no options), a
- * provider of the enum beside a provider_id, an empty provider_id, or a count of options
+ * this header does not name, a pair against the pair rule of anira_engine and
+ * anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty
+ * id), no provider (the default provider takes no options), or a count of options
  * without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet.
  */
 typedef struct anira_provider_option_set {
     uint32_t struct_size;  /**< sizeof(anira_provider_option_set) of the caller's header. */
     /**
-     * anira_engine of the backend; ANIRA_ENGINE_NONE with an engine_id for a custom engine,
+     * anira_engine of the backend; ANIRA_ENGINE_CUSTOM with an engine_id for a custom engine,
      * which receives the set in its load record (anira_engine_load_info.option_keys) when its
      * descriptor lists "context:provider_options".
      */
     uint32_t engine;
     /**
-     * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a provider_id, never alone:
-     * the default provider takes no options, and a set for it is refused.
+     * anira_provider of the backend; ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one;
+     * never ANIRA_PROVIDER_DEFAULT: the default provider takes no options, and a set for it is
+     * refused.
      */
     uint32_t provider;
     uint32_t num_options;  /**< The number of key/value pairs. */
-    const char* engine_id;  /**< NULL for a built-in engine; the id of a custom engine, copied. */
     /**
-     * NULL for a provider the enum names; a custom provider's name in the engine's vocabulary,
-     * copied.
+     * The id of a custom engine (engine ANIRA_ENGINE_CUSTOM), copied; NULL for a built-in
+     * engine.
+     */
+    const char* engine_id;
+    /**
+     * A custom provider's name in the engine's vocabulary (provider ANIRA_PROVIDER_CUSTOM),
+     * copied; NULL for a provider the enum names.
      */
     const char* provider_id;
     const char* const* keys;  /**< num_options option names, NUL-terminated, copied. */
@@ -1044,31 +1050,42 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_create(anira_model_config**
                                                             anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Appends a model entry that loads from a file. Whether the engine is in this build is
- * decided at anira_handler_create (an entry of an engine the build lacks is skipped when
- * the candidates leave it out, refused when they name it), so a config can name every
- * engine a deployment might have.
+ * @brief Appends a model entry that loads from a file, for the engine the pair names (the pair
+ * rule of anira_engine). Whether a built-in engine is in this build is decided at
+ * anira_handler_create (an entry of an engine the build lacks is skipped when the
+ * candidates leave it out, refused when they name it), so a config can name every engine
+ * a deployment might have. A custom engine is named by the id anira_custom_engine_create
+ * gave it; the entry and the engine's addition to the pipeline
+ * (anira_pipeline_add_engine) may come in either order, and an id no engine of the
+ * pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
  * @param config The config.
- * @param engine A built-in engine (not NONE).
+ * @param engine A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE).
+ * @param engine_id The custom engine's reverse-URI id (must contain a '.'), copied, beside
+ *        ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine.
  * @param utf8_path Model file path, UTF-8, copied.
  * @param out_index Receives the model index, or NULL.
  * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine,
- *         or a NULL or empty path.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a
+ *         pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM
+ *         without an id or with an id without a '.'), or a NULL or empty path.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* config,
                                                                     anira_engine engine,
+                                                                    const char* engine_id,
                                                                     const char* utf8_path,
                                                                     uint32_t* out_index,
                                                                     anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Appends a model entry that loads from memory.
+ * @brief Appends a model entry that loads from memory, for the engine the pair names (as
+ * anira_model_config_add_model_path).
  * @param config The config.
- * @param engine A built-in engine (not NONE).
+ * @param engine A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE).
+ * @param engine_id The custom engine's reverse-URI id, copied, beside ANIRA_ENGINE_CUSTOM; NULL
+ *        beside a built-in engine.
  * @param bytes The model bytes.
  * @param size Their size; > 0.
  * @param ownership COPY, or BORROW (the plugin default for embedded blobs).
@@ -1076,14 +1093,15 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_
  * @param ctx Passed to release.
  * @param out_index Receives the model index, or NULL.
  * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine or
- *         ownership, NULL bytes or a zero size.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a
+ *         pair against the pair rule, an unknown ownership, NULL bytes or a zero size.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* config,
                                                                      anira_engine engine,
+                                                                     const char* engine_id,
                                                                      const void* bytes,
                                                                      size_t size,
                                                                      anira_bytes_ownership ownership,
@@ -1091,55 +1109,6 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model
                                                                      void* ctx,
                                                                      uint32_t* out_index,
                                                                      anira_error* err) ANIRA_NOEXCEPT;
-
-/**
- * @brief Appends a model entry for a custom engine, named by its reverse-URI id (the one
- * anira_custom_engine_create gave it; the entry and the engine's addition to the
- * pipeline, anira_pipeline_add_engine, may come in either order). An id no engine of the
- * pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id.
- * @param config The config.
- * @param engine_id A registered custom engine's name, reverse-URI (must contain a '.').
- * @param utf8_path Model file path, UTF-8, copied.
- * @param out_index Receives the model index, or NULL.
- * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', or a NULL or empty
- *         path.
- * @par Thread contract
- * [main-thread]
- * @since ABI 0.2
- */
-ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_path_engine_id(anira_model_config* config,
-                                                                              const char* engine_id,
-                                                                              const char* utf8_path,
-                                                                              uint32_t* out_index,
-                                                                              anira_error* err) ANIRA_NOEXCEPT;
-
-/**
- * @brief The bytes twin of anira_model_config_add_model_path_engine_id.
- * @param config The config.
- * @param engine_id A registered custom engine's name, reverse-URI.
- * @param bytes The model bytes.
- * @param size Their size; > 0.
- * @param ownership COPY or BORROW.
- * @param release Optional release callback for BORROW.
- * @param ctx Passed to release.
- * @param out_index Receives the model index, or NULL.
- * @param err Nullable.
- * @return As anira_model_config_add_model_bytes, plus ANIRA_ERROR_INVALID_ARGUMENT for an id
- *         without a '.'.
- * @par Thread contract
- * [main-thread]
- * @since ABI 0.2
- */
-ANIRA_API anira_status ANIRA_CALL anira_model_config_add_model_bytes_engine_id(anira_model_config* config,
-                                                                               const char* engine_id,
-                                                                               const void* bytes,
-                                                                               size_t size,
-                                                                               anira_bytes_ownership ownership,
-                                                                               anira_bytes_release_fn release,
-                                                                               void* ctx,
-                                                                               uint32_t* out_index,
-                                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Replaces an entry's source with bytes, e.g. to patch a path entry a JSON file
@@ -1183,7 +1152,9 @@ ANIRA_API uint32_t ANIRA_CALL anira_model_config_model_count(const anira_model_c
  * @brief The entry's engine.
  * @param config The config.
  * @param model_index An entry.
- * @return The engine; ANIRA_ENGINE_NONE for a custom entry or an index out of range.
+ * @return The engine; ANIRA_ENGINE_CUSTOM for a custom entry
+ *         (anira_model_config_model_engine_id names it), ANIRA_ENGINE_NONE for an index out of
+ *         range.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1214,15 +1185,17 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_model_engine_id(const anira_
  * neutral entry.
  * @param config The config.
  * @param model_index An entry.
- * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT with a provider_id for a
- *        custom one; DEFAULT with a NULL provider_id unpins the entry.
+ * @param provider A provider of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a
+ *        custom one; ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) unpins the
+ *        entry.
  * @param provider_id A custom provider's name in the engine's vocabulary (the runtime's own
  *        name for a built-in engine, an entry of a custom engine's providers list),
- *        copied; NULL for a provider of the enum.
+ *        copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an index out of range,
- *         an unknown provider value, both a provider of the enum and a provider_id, or an empty
- *         provider_id.
+ *         an unknown provider value, or a pair against the pair rule of anira_provider (a
+ *         provider_id beside a provider other than ANIRA_PROVIDER_CUSTOM, CUSTOM without a
+ *         provider_id or with an empty one).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -1237,9 +1210,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_mo
  * @brief The provider the entry is pinned to.
  * @param config The config.
  * @param model_index An entry.
- * @return The provider; ANIRA_PROVIDER_DEFAULT for a neutral entry, for an entry pinned to a
- *         custom provider (anira_model_config_model_provider_id names it) and for an index out
- *         of range.
+ * @return The provider; ANIRA_PROVIDER_CUSTOM for an entry pinned to a custom provider
+ *         (anira_model_config_model_provider_id names it), ANIRA_PROVIDER_DEFAULT for a neutral
+ *         entry and for an index out of range.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -1417,41 +1390,36 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_output(anira_model_conf
                                                                 const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
- * @brief The engine the handler starts on: its first plan in plan-table order, on the default
- * provider when one is set (anira_model_config_set_default_provider), so an engine with
- * several plans (one entry under several providers, or several entries) starts on the
- * pinned provider. One rule for both defaults (this one and
- * anira_model_config_set_default_provider): what the configuration alone decides is
- * checked at anira_handler_create and at prepare, ANIRA_ERROR_CONFIG for a default
- * engine that names no model entry ("default_engine 'x' names no model entry") and for a
- * default provider no entry of the default engine could run (every one pinned to another
- * provider); whether a plan runs the default here is the candidates' and the context's,
- * and when none does the handler starts on the default engine's first plan, else on plan
- * 0, with one Warning at anira_handler_prepare naming what was asked and the plan it
- * starts on; never a refusal. anira_handler_get_plan says which plan runs.
+ * @brief The engine the handler starts on, the pair of anira_engine's pair rule: its first plan
+ * in plan-table order, on the default provider when one is set
+ * (anira_model_config_set_default_provider), so an engine with several plans (one entry
+ * under several providers, or several entries) starts on the pinned provider. One rule
+ * for both defaults (this one and anira_model_config_set_default_provider): what the
+ * configuration alone decides is checked at anira_handler_create and at prepare,
+ * ANIRA_ERROR_CONFIG for a default engine that names no model entry ("default_engine 'x'
+ * names no model entry") and for a default provider no entry of the default engine could
+ * run (every one pinned to another provider); whether a plan runs the default here is
+ * the candidates' and the context's, and when none does the handler starts on the
+ * default engine's first plan, else on plan 0, with one Warning at anira_handler_prepare
+ * naming what was asked and the plan it starts on; never a refusal.
+ * anira_handler_get_plan says which plan runs.
  * @param config The config.
- * @param engine A built-in engine, or ANIRA_ENGINE_NONE = plan 0, the first plan of the table
- *        (default).
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown engine.
+ * @param engine A built-in engine, ANIRA_ENGINE_CUSTOM for a custom engine, or
+ *        ANIRA_ENGINE_NONE = plan 0, the first plan of the table (default).
+ * @param engine_id The custom engine's reverse-URI id, copied, beside ANIRA_ENGINE_CUSTOM; NULL
+ *        beside a built-in engine and NONE.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an unknown engine or a
+ *         pair against the pair rule (an id beside a built-in engine or NONE,
+ *         ANIRA_ENGINE_CUSTOM without an id or with an id without a '.').
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_model_config* config,
-                                                                        anira_engine engine) ANIRA_NOEXCEPT;
-
-/**
- * @brief The custom twin of anira_model_config_set_default_engine: the engine named by its id.
- * An engine with several plans starts as anira_model_config_set_default_engine says.
- * @param config The config.
- * @param engine_id A registered custom engine's name, reverse-URI.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.'.
- * @par Thread contract
- * [main-thread]
- * @since ABI 0.2
- */
-ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine_id(anira_model_config* config,
-                                                                           const char* engine_id) ANIRA_NOEXCEPT;
+                                                                        anira_engine engine,
+                                                                        const char* engine_id,
+                                                                        anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief The provider the handler starts on, beside the default engine: the handler starts on
@@ -1466,13 +1434,14 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine_id(anira
  * usable here) the handler starts as without it, with the one Warning at
  * anira_handler_prepare.
  * @param config The config.
- * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT beside a provider_id;
- *        DEFAULT with a NULL provider_id sets none (default).
- * @param provider_id NULL, or a custom provider's name in the engine's own vocabulary
- *        (anira_provider), copied; only beside ANIRA_PROVIDER_DEFAULT.
+ * @param provider A provider of the enum, or ANIRA_PROVIDER_CUSTOM beside a provider_id;
+ *        ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) sets none (default).
+ * @param provider_id A custom provider's name in the engine's own vocabulary (anira_provider),
+ *        copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, a provider this header
- *         does not name, a provider of the enum and a provider_id at once, or an empty
- *         provider_id.
+ *         does not name, or a pair against the pair rule of anira_provider (a provider_id
+ *         beside a provider other than ANIRA_PROVIDER_CUSTOM, CUSTOM without a provider_id or
+ *         with an empty one).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -1966,10 +1935,11 @@ ANIRA_API const anira_tensor_spec* ANIRA_CALL anira_model_config_output(const an
                                                                         uint32_t index) ANIRA_NOEXCEPT;
 
 /**
- * @brief The built-in engine anira_model_config_set_default_engine stored.
+ * @brief The engine anira_model_config_set_default_engine stored.
  * @param config The config.
- * @return The engine; ANIRA_ENGINE_NONE for the default (plan 0), for a custom default
- *         (anira_model_config_default_engine_id names it) and for NULL.
+ * @return The engine; ANIRA_ENGINE_CUSTOM for a custom default
+ *         (anira_model_config_default_engine_id names it), ANIRA_ENGINE_NONE for the default
+ *         (plan 0) and for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -1978,7 +1948,8 @@ ANIRA_API anira_engine ANIRA_CALL anira_model_config_default_engine(const anira_
                                                                     ANIRA_NOEXCEPT;
 
 /**
- * @brief The custom engine anira_model_config_set_default_engine_id stored.
+ * @brief The custom engine's id anira_model_config_set_default_engine stored beside
+ * ANIRA_ENGINE_CUSTOM.
  * @param config The config.
  * @return Object-owned; NULL for a built-in default, for no default and for NULL.
  * @par Thread contract
@@ -1989,10 +1960,11 @@ ANIRA_API const char* ANIRA_CALL anira_model_config_default_engine_id(const anir
                                                                       ANIRA_NOEXCEPT;
 
 /**
- * @brief The provider of the enum anira_model_config_set_default_provider stored.
+ * @brief The provider anira_model_config_set_default_provider stored.
  * @param config The config.
- * @return The provider; ANIRA_PROVIDER_DEFAULT for none, for a custom default provider
- *         (anira_model_config_default_provider_id names it) and for NULL.
+ * @return The provider; ANIRA_PROVIDER_CUSTOM for a custom default provider
+ *         (anira_model_config_default_provider_id names it), ANIRA_PROVIDER_DEFAULT for none
+ *         and for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2001,7 +1973,8 @@ ANIRA_API anira_provider ANIRA_CALL anira_model_config_default_provider(const an
                                                                         ANIRA_NOEXCEPT;
 
 /**
- * @brief The custom provider anira_model_config_set_default_provider stored.
+ * @brief The custom provider's name anira_model_config_set_default_provider stored beside
+ * ANIRA_PROVIDER_CUSTOM.
  * @param config The config.
  * @return Object-owned; NULL for a provider of the enum, for none and for NULL.
  * @par Thread contract

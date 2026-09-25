@@ -128,11 +128,11 @@ void* provider_options_clone(const anira_ext_header* header) {
     return payload;
 }
 
-// The C record of the kind, before it is cloned: every set names an engine (a value of the
-// enum, or ANIRA_ENGINE_NONE with a custom engine's reverse-URI id) and a provider (a value of
-// the enum, or a custom name beside ANIRA_PROVIDER_DEFAULT; never the default provider alone,
-// which takes no options), its options come with both arrays and no NULL entry, and every
-// record has the array's one stride. A fault is ANIRA_ERROR_INVALID_ARGUMENT naming the set,
+// The C record of the kind, before it is cloned: every set names an engine (a built-in value,
+// or ANIRA_ENGINE_CUSTOM with a custom engine's reverse-URI id) and a provider (a value of the
+// enum, or ANIRA_PROVIDER_CUSTOM with a custom name; never the default provider, which takes
+// no options), both under the pair rule, its options come with both arrays and no NULL entry, and
+// every record has the array's one stride. A fault is ANIRA_ERROR_INVALID_ARGUMENT naming the set,
 // where the JSON form refuses the same at parse: nothing is dropped or ignored on the quiet.
 anira_status provider_options_check(const anira_ext_header* header, anira_error* err) {
     anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
@@ -168,53 +168,36 @@ anira_status provider_options_check(const anira_ext_header* header, anira_error*
                     given,
                     stride < sizeof(anira_provider_option_set) ? stride
                                                                : sizeof(anira_provider_option_set));
-        const bool custom = set.engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE);
-        ANIRA_CAPI_REQUIRE(custom || known_engine(static_cast<anira_engine>(set.engine)),
+        const auto engine = static_cast<anira_engine>(set.engine);
+        ANIRA_CAPI_REQUIRE(engine == ANIRA_ENGINE_CUSTOM || known_engine(engine),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "provider_options: sets[%u].engine %u is not an engine this header "
-                           "names",
+                           "provider_options: sets[%u].engine %u is neither a built-in engine "
+                           "nor ANIRA_ENGINE_CUSTOM",
                            i,
                            set.engine);
-        ANIRA_CAPI_REQUIRE(
-            !custom || (set.engine_id != nullptr && std::strchr(set.engine_id, '.') != nullptr),
-            err,
-            ANIRA_ERROR_INVALID_ARGUMENT,
-            "provider_options: sets[%u] names no engine (ANIRA_ENGINE_NONE needs a "
-            "custom engine's reverse-URI engine_id)",
-            i);
-        ANIRA_CAPI_REQUIRE(custom || set.engine_id == nullptr,
+        ANIRA_CAPI_REQUIRE(engine_pair_ok(engine, set.engine_id),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "provider_options: sets[%u] names a built-in engine (%u) and an "
-                           "engine_id ('%s') at once",
-                           i,
-                           set.engine,
-                           set.engine_id);
-        ANIRA_CAPI_REQUIRE(known_provider(static_cast<anira_provider>(set.provider)),
+                           "provider_options: sets[%u]: the engine_id is set if and only if the "
+                           "engine is ANIRA_ENGINE_CUSTOM, and a custom engine id is reverse-URI "
+                           "(contains a '.')",
+                           i);
+        const auto provider = static_cast<anira_provider>(set.provider);
+        ANIRA_CAPI_REQUIRE(known_provider(provider),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
                            "provider_options: sets[%u].provider %u is not a provider this header "
-                           "names; a custom provider travels as provider_id beside "
-                           "ANIRA_PROVIDER_DEFAULT",
+                           "names",
                            i,
                            set.provider);
-        ANIRA_CAPI_REQUIRE(set.provider_id == nullptr ||
-                               set.provider == static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT),
+        ANIRA_CAPI_REQUIRE(provider_pair_ok(provider, set.provider_id),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "provider_options: sets[%u] names a provider of the enum (%u) and a "
-                           "provider_id ('%s') at once",
-                           i,
-                           set.provider,
-                           set.provider_id);
-        ANIRA_CAPI_REQUIRE(set.provider_id == nullptr || set.provider_id[0] != '\0',
-                           err,
-                           ANIRA_ERROR_INVALID_ARGUMENT,
-                           "provider_options: sets[%u].provider_id is empty",
+                           "provider_options: sets[%u]: the provider_id is set if and only if "
+                           "the provider is ANIRA_PROVIDER_CUSTOM, and never empty",
                            i);
-        ANIRA_CAPI_REQUIRE(set.provider != static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT) ||
-                               set.provider_id != nullptr,
+        ANIRA_CAPI_REQUIRE(provider != ANIRA_PROVIDER_DEFAULT,
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
                            "provider_options: sets[%u] names no provider; the default provider "
@@ -262,7 +245,7 @@ bool parse_set_backend(const nlohmann::json& node,
         set.m_engine_id.clear();
     } else if (engine_given.find('.') != std::string::npos &&
                engine_given.find(':') == std::string::npos) {
-        set.m_engine = ANIRA_ENGINE_NONE;
+        set.m_engine = ANIRA_ENGINE_CUSTOM;
         set.m_engine_id = engine_given;
     } else {
         error = at + ".engine: '" + engine_given +
@@ -278,20 +261,16 @@ bool parse_set_backend(const nlohmann::json& node,
         return false;
     }
     const std::string provider_given = provider->get<std::string>();
-    set.m_provider = ANIRA_PROVIDER_DEFAULT;
-    set.m_provider_id.clear();
-    if (const std::optional<anira_provider> known = provider_of_word(provider_given)) {
-        if (*known == ANIRA_PROVIDER_DEFAULT) {
-            error = at + ".provider: the default provider takes no options";
-            return false;
-        }
-        set.m_provider = *known;
-    } else if (provider_given.empty()) {
+    if (provider_given.empty()) {
         error = at + ".provider: must not be empty";
         return false;
-    } else {
-        set.m_provider_id = provider_given;
     }
+    set.m_provider = provider_of_name(provider_given);
+    if (set.m_provider == ANIRA_PROVIDER_DEFAULT) {
+        error = at + ".provider: the default provider takes no options";
+        return false;
+    }
+    set.m_provider_id = set.m_provider == ANIRA_PROVIDER_CUSTOM ? provider_given : std::string();
     return true;
 }
 
@@ -694,9 +673,9 @@ anira_status ExtBag::set_json(const char* kind, std::string_view utf8, anira_err
 namespace {
 
 // The validator's candidate rule (validate.h engine_is_candidate) for a consumer: NULL =
-// every engine; an entry with an engine_id keeps the custom engine of that name; a built-in
-// engine keeps its rows; {ANIRA_ENGINE_NONE, DEFAULT, NULL} keeps every custom engine. The
-// provider is not read for a consumer: an engine reads its extensions on every provider.
+// every engine; ANIRA_ENGINE_CUSTOM with an engine_id keeps the custom engine of that name; a
+// built-in engine keeps its rows. The provider is not read for a consumer: an engine reads its
+// extensions on every provider.
 bool candidate(anira_engine engine,
                const std::string& engine_id,
                const anira_backend_id* candidates,
@@ -738,7 +717,7 @@ std::vector<const char*> pipeline_consumers_of(std::string_view host,
     const std::string wanted = std::string(host) + ":" + std::string(kind);
     for (const ExtConsumer& consumer : *pipeline) {
         if (!consumer.m_engine_id.empty()) {
-            if (!candidate(ANIRA_ENGINE_NONE, consumer.m_engine_id, candidates, num_candidates)) {
+            if (!candidate(ANIRA_ENGINE_CUSTOM, consumer.m_engine_id, candidates, num_candidates)) {
                 continue;
             }
             if (host == "model" && entry_engine_id != consumer.m_engine_id) { continue; }
