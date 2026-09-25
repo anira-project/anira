@@ -313,9 +313,9 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
 // (b) a runtime mid-inference that takes the loader lock: dlclose holds glibc's dl_load_lock
 //     while the hook joins, and LibTorch's first inference on a thread registers its
 //     thread_local destructors through __cxa_thread_atexit, which takes that lock. The join
-//     then never returns, because the other pool thread spins in
-//     engine::Loaded::claim_and_run for the instance the blocked thread holds, without
-//     backoff and without looking at the stop flag.
+//     then never returns: the blocked thread never leaves its inference. (The other pool
+//     thread, waiting in engine::Loaded::claim_and_run for the instance the blocked one
+//     holds, gives up once told to stop; it no longer holds up the join on its own.)
 // Both are library findings, outside this test. The engine is a built-in one running the
 // bundled gain model where the build has one, else the module's pass-through, which the
 // drained queue keeps out of reach once the module is gone (see passthrough_process).

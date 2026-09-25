@@ -112,11 +112,23 @@ public:
     bool start();
 
     /**
+     * @brief Asks run_loop() to return, without waiting for it: should_exit() is true from
+     * here on.
+     *
+     * A pool asks every thread first and joins them after (stop()), so a thread waiting for
+     * a free instance of a loaded model gives up while another thread of the pool is still
+     * inside an inference: the wait sees should_exit() and fails its chunk (zeros, and
+     * ANIRA_ERROR_ENGINE on the session's latch) instead of holding up the join.
+     */
+    void request_stop();
+
+    /**
      * @brief Stops the thread: asks run_loop() to return and, natively, joins it.
      */
     void stop();
 
-    /// True once stop() was called; run_loop() polls this.
+    /// True once request_stop() or stop() was called; run_loop() and the wait for a free
+    /// instance of a loaded model poll this.
     bool should_exit() const;
 
     /// True from start() until run_loop() has returned (native) / until stop() (web).
@@ -199,6 +211,9 @@ private:
      * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's prepared
      * handle on it: exactly one plan runs per call, the one of @p plan, the index the chunk
      * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
+     * A shared session's call waits for a free instance of the loaded model with backoff
+     * (src/utils/Backoff.h) and gives up, failing the chunk with ANIRA_ERROR_INVALID_STATE,
+     * once should_exit() is true.
      * On a session-exclusive session the chunk's dispatch stamp is compared with the
      * plan's engine generation: a difference is the plan's first inference of a new stream
      * (after prepare, after a reset), so the adapter resets its engine's own state right

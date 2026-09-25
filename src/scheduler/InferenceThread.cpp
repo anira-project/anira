@@ -10,16 +10,15 @@
 
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <thread>
 #include <utility>
 #include <vector>
 
 #include "../capi/words.h"
 #include "../engines/Adapter.h"
+#include "../utils/Backoff.h"
 
 namespace anira {
 
@@ -53,6 +52,10 @@ bool InferenceThread::start() {
     return m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
 }
 
+void InferenceThread::request_stop() {
+    m_thread.request_stop();
+}
+
 void InferenceThread::stop() {
     m_thread.request_stop();
     m_thread.join();
@@ -74,6 +77,10 @@ bool InferenceThread::start() {
     if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
     s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
     return true;
+}
+
+void InferenceThread::request_stop() {
+    m_should_exit.store(true, std::memory_order::release);
 }
 
 void InferenceThread::stop() {
@@ -146,10 +153,11 @@ void InferenceThread::run_loop() {
     }
 #endif
     while (!should_exit()) {
-        constexpr std::array<int, 2> k_iterations = {4, 32};
-        // The times for the exponential backoff. The first loop is insteadly trying to acquire the
-        // atomic counter. The second loop is waiting for approximately 100ns. Beyond that, the
-        // thread will yield and sleep for 100us.
+        constexpr std::array<int, 2> k_iterations = {detail::Backoff::k_immediate,
+                                                     detail::Backoff::k_paused};
+        // The times for the exponential backoff. The first retries try to dequeue at once, the
+        // next ones wait approximately 100ns each. Beyond that, the thread yields and sleeps
+        // for 100us.
         //
         // Last resort: nothing below may throw (a failed inference is handled inside
         // process_dequeued_inference), but an exception that still reaches the loop must not
@@ -197,44 +205,12 @@ void InferenceThread::run_loop_blocking() {
 #endif
 
 void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
-    for (int i = 0; i < iterations[0]; i++) {
-        if (should_exit()) { return; }
+    // The schedule is the shared one of src/utils/Backoff.h (the engine room's claim loop
+    // waits with it too): immediate retries, paused ones, then a yield and a sleep per retry.
+    detail::Backoff backoff(iterations[0], iterations[1]);
+    while (!should_exit()) {
         if (execute()) { return; }
-    }
-    for (int i = 0; i < iterations[1]; i++) {
-        if (should_exit()) { return; }
-        if (execute()) { return; }
-#if defined(__x86_64__) || defined(_M_X64) || defined(_M_AMD64)
-        _mm_pause();
-        _mm_pause();
-#elif __aarch64__
-        // ISB instruction is better than WFE
-        // https://stackoverflow.com/questions/70810121/why-does-hintspin-loop-use-isb-on-aarch64
-        // Still on linux it maxes out the CPU, so we need to sleep for a while in the next phase
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-        asm volatile("isb sy");
-#elif __arm__
-        asm volatile("yield");
-        asm volatile("yield");
-        asm volatile("yield");
-        asm volatile("yield");
-#endif
-    }
-    while (true) {
-        // The sleep_for function is important - without it, the thread will consume 100% of the
-        // CPU. This also applies when we use the ISB or WFE instruction. Also on linux we will get
-        // missing samples, because the thread gets suspended by the OS for a certain period once in
-        // a while?!?
-        if (should_exit()) { return; }
-        if (execute()) { return; }
-        std::this_thread::yield();
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
+        backoff.pause();
     }
 }
 
@@ -388,10 +364,22 @@ void InferenceThread::do_inference(
             } else {
                 // The engine failed the chunk: zeros at its stream position, no
                 // after_inference (the rule of a failed hook), ENGINE on the latch with the
-                // status the adapter returned.
+                // status the adapter returned. A thread told to stop while it waited for a free
+                // instance fails the chunk the same way (the claim loop gave up with
+                // ANIRA_ERROR_INVALID_STATE); the log says so, since no engine ran.
                 for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
                 thread_safe_struct->m_completed_as_zeros = true;
-                if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+                if (status == ANIRA_ERROR_INVALID_STATE && should_exit()) {
+                    if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
+                        ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
+                                           "%s failed in session %d: the inference thread was "
+                                           "stopped before an instance of plan %u was free; "
+                                           "delivering zeros",
+                                           capi::phase_word(ANIRA_PHASE_INFERENCE),
+                                           session->m_session_id,
+                                           plan);
+                    }
+                } else if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                     ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                        "%s failed in session %d: the engine of plan %u "
                                        "returned %d (%s); delivering zeros",
@@ -497,7 +485,15 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     engine::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
                                  .m_outputs = &chunk.m_tensor_output_data};
     if (slot.m_prepared == nullptr) { return ANIRA_ERROR_INTERNAL; }
-    return slot.m_prepared->run(ctx, &buffers, reset_first);
+    // This thread's stop flag, for the claim loop of a shared call: a thread told to stop
+    // gives up waiting for a free instance instead of holding up the join of its pool.
+    const engine::StopSignal stop{
+        .m_stopping =
+            [](const void* thread) noexcept {
+                return static_cast<const InferenceThread*>(thread)->should_exit();
+            },
+        .m_context = this};
+    return slot.m_prepared->run(ctx, &buffers, reset_first, stop);
 }
 
 }  // namespace anira

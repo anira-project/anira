@@ -214,6 +214,15 @@ bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions
     });
 }
 
+// Stops the threads of `pool` from index `first` on and joins them. Every one is told first,
+// then joined (the destructors join): a thread that waits for a free instance of a loaded
+// model gives up once told (engine::Loaded::claim_and_run), so a join never waits on it while
+// another thread of the pool holds the instance inside an engine.
+void stop_and_join(std::vector<std::unique_ptr<InferenceThread>>& pool, size_t first = 0) {
+    for (size_t i = first; i < pool.size(); ++i) { pool[i]->request_stop(); }
+    pool.erase(pool.begin() + static_cast<ptrdiff_t>(first), pool.end());
+}
+
 }  // namespace
 
 Core::State& Core::get_state() {
@@ -566,14 +575,7 @@ void Core::resize_pool_locked(State& state, unsigned int new_num_threads) {
                                                   state.m_core_config.m_wait));
         }
     } else if (new_num_threads < current_num_threads) {
-        for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
-            state.m_thread_pool[i]->stop();
-            while (state.m_thread_pool[i]->is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
-            }
-            state.m_thread_pool.pop_back();
-            if (i == 0) { break; }
-        }
+        stop_and_join(state.m_thread_pool, new_num_threads);
     }
 }
 
@@ -597,7 +599,7 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
     // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
-    if (state.m_sessions.empty()) { state.m_thread_pool.clear(); }
+    if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
 }
 
 std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
@@ -882,7 +884,7 @@ void Core::shutdown() {
                             "The inference threads are stopped; the sessions' memory is leaked.",
                             state.m_sessions.size());
         }
-        state.m_thread_pool.clear();
+        stop_and_join(state.m_thread_pool);
         log_drain_to_stop = take_log_drain_locked(state);
     }
     // Outside the lifecycle lock, for the reasons given in release_session().

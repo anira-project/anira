@@ -291,8 +291,11 @@ is part of the build is decided at prepare, not here, so one config serves every
 - **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
   parallel instances of a stateless model (default 1): the shared call slots of its loaded
   model, one inference at a time on each, claimed by the calls of every handler that runs the
-  model. A stateful model has none; each of its handlers runs on what its own prepare built
-  (section 3.2).
+  model. A call that finds every slot busy waits on its inference thread with the backoff of
+  ``ANIRA_WAIT_SPIN_BACKOFF`` (a few spins, then a yield and a 100 µs sleep per retry), and
+  gives up when the pool stops: its chunk delivers zeros and records ``ANIRA_ERROR_ENGINE``,
+  so a stop never waits for a thread that waits for a slot. A stateful model has none; each
+  of its handlers runs on what its own prepare built (section 3.2).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
   Hard contract's block range and rate are counted in its Time-axis elements, and every other
   streamed tensor's time ratio is stated against it. The default (an empty name) is the first

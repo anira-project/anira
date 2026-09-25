@@ -10,6 +10,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
@@ -17,12 +18,14 @@
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
+#include <anira/scheduler/InferenceThread.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -1080,6 +1083,95 @@ TEST(AbiHandler, HandlerDestroyJoinsThePoolWithTheLastSession) {
         EXPECT_EQ(anira_shutdown(), ANIRA_ERROR_INVALID_STATE) << "the context still lives";
     }
     EXPECT_EQ(anira_shutdown(), ANIRA_OK) << "nothing lives";
+}
+
+namespace {
+
+/// A gate engine that counts the inferences that reached its process, ahead of the gate.
+class CountingGate final : public anira_test::GateEngine {
+public:
+    anira_status process(const anira_engine_ctx& ctx) noexcept override {
+        m_entered.fetch_add(1);
+        return GateEngine::process(ctx);
+    }
+
+    std::atomic<int> m_entered{0};
+};
+
+/// Polls `done` every millisecond until it holds or `timeout` ran out; whether it held.
+template <typename Done>
+bool wait_until(Done&& done, std::chrono::milliseconds timeout) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+}  // namespace
+
+// A pool stop does not wait for a thread that waits for a busy instance. One instance, two
+// threads: the gate holds the first inference inside the engine and the second thread waits
+// in the claim loop for the instance. Core::shutdown (the library-unload hook's backstop, the
+// one pool stop a live handler allows) tells every thread first: the waiting one gives up at
+// once (its chunk fails: zeros, ANIRA_ERROR_ENGINE on the latch, one log record), and the stop
+// returns as soon as the holder's inference does. The handler is destroyed cleanly after.
+TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
+    const Context context(2);
+    anira::ModelConfig model = gain_with_custom();
+    model.max_instances(1);
+    const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
+                                                    .provider = ANIRA_PROVIDER_CPU,
+                                                    .engine_id = k_custom}};
+    CountingGate gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    anira_handler* h = handler.m_handler;
+    ASSERT_EQ(anira_num_inference_threads(), 2U);
+    anira_drain_log();
+    RecordCollector collector;
+
+    // Two blocks, two inferences: the first holds the instance behind the closed gate, the
+    // second's thread waits for it.
+    gate.m_open.store(false);
+    for (size_t k = 1; k <= 2; ++k) {
+        const std::vector<float> in = ramp(k);
+        const std::array<const float*, 1> in_ch{in.data()};
+        const anira_tensor pushed = anira_test::planar_f32(in_ch.data(), 1, k_block);
+        ASSERT_EQ(anira_handler_push_data(h, &pushed, 0), ANIRA_OK);
+    }
+    ASSERT_TRUE(
+        wait_until([&gate]() { return gate.m_entered.load() == 1; }, std::chrono::seconds(5)));
+    // The idle thread polls the queue every 100 us at most: after 200 ms it waits in the claim.
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(gate.m_entered.load(), 1) << "one instance, one inference inside the engine";
+
+    std::atomic<bool> stopped{false};
+    std::thread stopper([&stopped]() {
+        anira::Core::shutdown();
+        stopped.store(true);
+    });
+    // The loop count, a wait-free read: the pool's size is read under the lifecycle lock,
+    // which the stop holds while it joins.
+    EXPECT_TRUE(wait_until([]() { return anira::InferenceThread::get_num_loop_active() == 1U; },
+                           std::chrono::seconds(2)))
+        << "the waiting thread did not leave at the stop";
+    EXPECT_EQ(gate.m_calls.load(), 0) << "the holder is still inside the engine";
+    EXPECT_FALSE(stopped.load()) << "the stop joins the holder, whose inference still runs";
+
+    gate.m_open.store(true);
+    stopper.join();
+    EXPECT_EQ(anira_num_inference_threads(), 0U);
+    EXPECT_EQ(gate.m_calls.load(), 1) << "the waiter's chunk never reached the engine";
+    EXPECT_EQ(gate.m_entered.load(), 1);
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_ENGINE) << "the given-up chunk failed";
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_EQ(anira_test::count_records(collector, "stopped before an instance", "rt"), 1U);
+#endif
 }
 
 TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {

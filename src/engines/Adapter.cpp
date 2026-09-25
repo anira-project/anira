@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../utils/Backoff.h"
 #include "../utils/StatusError.h"
 #include "ProcessingGuard.h"
 
@@ -97,7 +98,8 @@ std::unique_ptr<Prepared> Loaded::prepare(const PrepareRequest& request) {
 
 anira_status Loaded::claim_and_run(Prepared& prepared,
                                    anira_engine_ctx& call,
-                                   ChunkBuffers* chunk) noexcept {
+                                   ChunkBuffers* chunk,
+                                   StopSignal stop) noexcept {
     if (!claims_instances()) {
         call.instance = 0;
         return prepared.process(call, chunk);
@@ -105,8 +107,12 @@ anira_status Loaded::claim_and_run(Prepared& prepared,
     // A shared call on a model without a shared slot (loaded for exclusive sessions alone) is
     // anira's own bug: the chunk fails rather than running on nothing.
     if (m_num_instances == 0) { return ANIRA_ERROR_INVALID_STATE; }
-    // The spin-and-claim loop of the 2.x processors: the first slot whose busy flag was clear
-    // runs this call, and the flag is released on every path out of it.
+    // The claim loop of the 2.x processors: the first slot whose busy flag was clear runs this
+    // call, and the flag is released on every path out of it. Between two passes over busy
+    // slots the thread backs off like its loop waiting for work (it is an inference thread,
+    // never the audio thread), and a thread told to stop gives up: the slots may be held by a
+    // thread blocked inside an engine, and the pool's join must not wait for this one too.
+    detail::Backoff backoff;
     while (true) {
         for (uint32_t i = 0; i < m_num_instances; ++i) {
             if (m_busy[i].exchange(true)) { continue; }
@@ -114,6 +120,8 @@ anira_status Loaded::claim_and_run(Prepared& prepared,
             call.instance = i;
             return prepared.process(call, chunk);
         }
+        if (stop.stopping()) { return ANIRA_ERROR_INVALID_STATE; }
+        backoff.pause();
     }
 }
 
@@ -121,7 +129,8 @@ anira_status Loaded::claim_and_run(Prepared& prepared,
 
 anira_status Prepared::run(const anira_engine_ctx& ctx,
                            ChunkBuffers* chunk,
-                           bool reset_first) noexcept {
+                           bool reset_first,
+                           StopSignal stop) noexcept {
     if (!m_loaded->m_loaded) { return ANIRA_ERROR_INVALID_STATE; }
     anira_engine_ctx call = ctx;
     call.loaded = m_loaded->engine_loaded();
@@ -133,7 +142,7 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
         if (reset_first) { reset(call); }
         return process(call, chunk);
     }
-    return m_loaded->claim_and_run(*this, call, chunk);
+    return m_loaded->claim_and_run(*this, call, chunk, stop);
 }
 
 // ---- ExecutorLoaded -------------------------------------------------------------------------
