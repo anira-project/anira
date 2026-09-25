@@ -310,7 +310,7 @@ anira_status to_inference_config(const anira_model_config* model,
                        "counterpart: a 2.x InferenceHandler feeds no state back; run the model "
                        "through a 3.x handler (anira_handler_create)",
                        state->m_name.c_str());
-    // The bridge keeps its engine list: every engine maps to the default provider, and
+    // The bridge keeps its engine list: every engine maps to the CPU path, and
     // ANIRA_ENGINE_CUSTOM keeps the custom rows, the 2.x CUSTOM backend's
     // (ANIRA_ENGINE_CUSTOM with k_v2_custom_engine, the one id the bridge serves); NULL stays
     // NULL.
@@ -322,7 +322,7 @@ anira_status to_inference_config(const anira_model_config* model,
             ids.push_back(
                 anira_backend_id{.struct_size = sizeof(anira_backend_id),
                                  .engine = static_cast<uint32_t>(candidates[i]),
-                                 .provider = ANIRA_PROVIDER_DEFAULT,
+                                 .provider = ANIRA_PROVIDER_CPU,
                                  .engine_id = custom ? anira::capi::k_v2_custom_engine : nullptr});
         }
     }

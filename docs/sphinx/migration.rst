@@ -513,11 +513,11 @@ carry is refused; ``anira::v3compat::enabled_engines()`` is the list that lets o
 config serve every build, and ``ANIRA_ENGINE_CUSTOM`` in the list keeps the custom-engine
 entries (the 2.x ``CUSTOM`` backend's, ``anira.v2.custom``). The consumed-or-fail walk over the extensions runs over the entries that survive, so
 an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
-is not a candidate. The bridge's candidates name engines on the default provider: a model
+is not a candidate. The bridge's candidates name engines on the CPU path: a model
 entry pinned to a provider (``"provider": "xnnpack"`` beside its ``"engine"``, :doc:`usage`
 section 1.2) is
 no candidate under an explicit engine list, and under none its pin is not applied, since the
-2.x runtime runs every model on the default provider; providers, pins and provider options
+2.x runtime runs every model on the CPU path; providers, pins and provider options
 are the C handler's (:doc:`usage` sections 3.1 and 3.2).
 
 **Lifetime.** A path entry is copied into the ``InferenceConfig``; a bytes entry is borrowed

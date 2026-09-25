@@ -130,10 +130,11 @@ void* provider_options_clone(const anira_ext_header* header) {
 
 // The C record of the kind, before it is cloned: every set names an engine (a built-in value,
 // or ANIRA_ENGINE_CUSTOM with a custom engine's reverse-URI id) and a provider (a value of the
-// enum, or ANIRA_PROVIDER_CUSTOM with a custom name; never the default provider, which takes
-// no options), both under the pair rule, its options come with both arrays and no NULL entry, and
-// every record has the array's one stride. A fault is ANIRA_ERROR_INVALID_ARGUMENT naming the set,
-// where the JSON form refuses the same at parse: nothing is dropped or ignored on the quiet.
+// enum, or ANIRA_PROVIDER_CUSTOM with a custom name; never ANIRA_PROVIDER_NONE, which names
+// none, nor the CPU path, which takes no options), both under the pair rule, its options come with
+// both arrays and no NULL entry, and every record has the array's one stride. A fault is
+// ANIRA_ERROR_INVALID_ARGUMENT naming the set, where the JSON form refuses the same at parse:
+// nothing is dropped or ignored on the quiet.
 anira_status provider_options_check(const anira_ext_header* header, anira_error* err) {
     anira_ext_provider_options record = ANIRA_EXT_PROVIDER_OPTIONS_INIT;
     const size_t readable = header->struct_size < sizeof(anira_ext_provider_options)
@@ -184,6 +185,11 @@ anira_status provider_options_check(const anira_ext_header* header, anira_error*
                            "(contains a '.')",
                            i);
         const auto provider = static_cast<anira_provider>(set.provider);
+        ANIRA_CAPI_REQUIRE(provider != ANIRA_PROVIDER_NONE,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "provider_options: sets[%u] names no provider (ANIRA_PROVIDER_NONE)",
+                           i);
         ANIRA_CAPI_REQUIRE(known_provider(provider),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
@@ -197,11 +203,10 @@ anira_status provider_options_check(const anira_ext_header* header, anira_error*
                            "provider_options: sets[%u]: the provider_id is set if and only if "
                            "the provider is ANIRA_PROVIDER_CUSTOM, and never empty",
                            i);
-        ANIRA_CAPI_REQUIRE(provider != ANIRA_PROVIDER_DEFAULT,
+        ANIRA_CAPI_REQUIRE(provider != ANIRA_PROVIDER_CPU,
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "provider_options: sets[%u] names no provider; the default provider "
-                           "takes no options",
+                           "provider_options: sets[%u] names the CPU path, which takes no options",
                            i);
         ANIRA_CAPI_REQUIRE(set.num_options == 0 || (set.keys != nullptr && set.values != nullptr),
                            err,
@@ -228,8 +233,8 @@ void provider_options_destroy(void* payload) {
 
 // A set's backend, spelled as JSON spells every pair: its "engine" (a built-in engine's word
 // or a custom engine's reverse-URI id) and its "provider" (the enum's spelling or a custom
-// provider's name in the engine's vocabulary; never the default provider, which takes no
-// options). `at` names the set in an error.
+// provider's name in the engine's vocabulary; never "cpu", the CPU path, which takes no
+// options, nor the reserved "none" and "default"). `at` names the set in an error.
 bool parse_set_backend(const nlohmann::json& node,
                        const std::string& at,
                        ProviderOptionSet& set,
@@ -265,9 +270,13 @@ bool parse_set_backend(const nlohmann::json& node,
         error = at + ".provider: must not be empty";
         return false;
     }
+    if (reserved_provider_word(provider_given)) {
+        error = at + ".provider: '" + provider_given + "' " + k_reserved_provider_reason;
+        return false;
+    }
     set.m_provider = provider_of_name(provider_given);
-    if (set.m_provider == ANIRA_PROVIDER_DEFAULT) {
-        error = at + ".provider: the default provider takes no options";
+    if (set.m_provider == ANIRA_PROVIDER_CPU) {
+        error = at + ".provider: the CPU path takes no options";
         return false;
     }
     set.m_provider_id = set.m_provider == ANIRA_PROVIDER_CUSTOM ? provider_given : std::string();
@@ -427,13 +436,13 @@ const std::vector<ExtConsumer>& ext_consumers() {
          .m_engine = ANIRA_ENGINE_ONNXRUNTIME,
          .m_consumed = {"context:provider_options"}},
 #endif
-#ifdef USE_LIBTORCH
-        {.m_name = "libtorch", .m_engine = ANIRA_ENGINE_LIBTORCH, .m_consumed = {"model:entry"}},
-#endif
 #ifdef USE_EXECUTORCH
         {.m_name = "executorch",
          .m_engine = ANIRA_ENGINE_EXECUTORCH,
          .m_consumed = {"model:entry"}},
+#endif
+#ifdef USE_LIBTORCH
+        {.m_name = "libtorch", .m_engine = ANIRA_ENGINE_LIBTORCH, .m_consumed = {"model:entry"}},
 #endif
     };
     return k_consumers;

@@ -86,7 +86,8 @@ std::string candidates_list(const anira_backend_id* candidates, uint32_t num_can
         const anira_backend_id& id = candidates[i];
         text += engine_label(static_cast<anira_engine>(id.engine),
                              id.engine_id != nullptr ? id.engine_id : "");
-        if (id.provider != ANIRA_PROVIDER_DEFAULT || !candidate_provider_id(id).empty()) {
+        if ((id.provider != ANIRA_PROVIDER_CPU && id.provider != ANIRA_PROVIDER_NONE) ||
+            !candidate_provider_id(id).empty()) {
             text += ":" + provider_label(static_cast<anira_provider>(id.provider),
                                          candidate_provider_id(id));
         }
@@ -543,7 +544,7 @@ void check_rows(const anira_model_config& model,
     for (size_t i = 0; i < model.m_models.size(); ++i) {
         const ModelEntry& row = model.m_models[i];
         std::vector<PlanKey> plans =
-            matching_plans(i, row, candidates, num_candidates, default_set);
+            matching_plans(i, row, candidates, num_candidates, default_set, engines);
         if (plans.empty()) { continue; }
         if (row.is_custom()) {
             if (!serves_custom_id(row.m_engine_id, engines)) {
@@ -603,8 +604,7 @@ void check_rows(const anira_model_config& model,
     // engine (any entry without one) that may run on it, a neutral entry or one pinned to it.
     // Whether a plan runs on it here is the candidates' and the context's, and falls back at
     // prepare as the default engine's does.
-    if (model.m_default_provider != ANIRA_PROVIDER_DEFAULT ||
-        !model.m_default_provider_id.empty()) {
+    if (model.m_default_provider != ANIRA_PROVIDER_NONE || !model.m_default_provider_id.empty()) {
         const bool any_engine =
             model.m_default_engine == ANIRA_ENGINE_NONE && model.m_default_engine_id.empty();
         bool found = false;
@@ -613,8 +613,7 @@ void check_rows(const anira_model_config& model,
                 any_engine || (model.m_default_engine_id.empty()
                                    ? (row.m_engine == model.m_default_engine && !row.is_custom())
                                    : row.m_engine_id == model.m_default_engine_id);
-            const bool neutral =
-                row.m_provider == ANIRA_PROVIDER_DEFAULT && row.m_provider_id.empty();
+            const bool neutral = !row.is_pinned();
             const bool pinned_to_it = row.m_provider == model.m_default_provider &&
                                       row.m_provider_id == model.m_default_provider_id;
             found = found || (of_engine && (neutral || pinned_to_it));
@@ -724,20 +723,39 @@ bool engine_is_candidate(anira_engine engine,
     return false;
 }
 
+PlanKey home_provider(size_t row_index, const ModelEntry& row, const EngineFacts* engines) {
+    PlanKey cpu{.m_row = row_index, .m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = {}};
+    if (!row.is_custom() || engines == nullptr) { return cpu; }
+    for (size_t i = 0; i < engines->m_ids.size() && i < engines->m_providers.size(); ++i) {
+        if (engines->m_ids[i] != row.m_engine_id) { continue; }
+        const std::vector<std::string>& listed = engines->m_providers[i];
+        if (listed.empty() || std::ranges::find(listed, "cpu") != listed.end()) { return cpu; }
+        const anira_provider provider = provider_of_name(listed.front());
+        return PlanKey{
+            .m_row = row_index,
+            .m_provider = provider,
+            .m_provider_id = provider == ANIRA_PROVIDER_CUSTOM ? listed.front() : std::string()};
+    }
+    return cpu;
+}
+
 std::vector<PlanKey> matching_plans(size_t row_index,
                                     const ModelEntry& row,
                                     const anira_backend_id* candidates,
                                     uint32_t num_candidates,
-                                    bool default_set) {
+                                    bool default_set,
+                                    const EngineFacts* engines) {
     std::vector<PlanKey> plans;
     if (candidates == nullptr ||
         (default_set &&
          engine_is_candidate(row.m_engine, row.m_engine_id, candidates, num_candidates))) {
         // The bridge's rule, and the default set's for an engine it names: one plan per row,
-        // on its pin or on the default provider.
-        plans.push_back(PlanKey{.m_row = row_index,
-                                .m_provider = row.m_provider,
-                                .m_provider_id = row.m_provider_id});
+        // on its pin or on its engine's home provider (the CPU path, or a custom engine's first
+        // listed provider when it does not serve the CPU path).
+        plans.push_back(row.is_pinned() ? PlanKey{.m_row = row_index,
+                                                  .m_provider = row.m_provider,
+                                                  .m_provider_id = row.m_provider_id}
+                                        : home_provider(row_index, row, engines));
         return plans;
     }
     if (default_set) { return plans; }
@@ -815,17 +833,17 @@ std::vector<anira_engine> enabled_engines() {
 #ifdef USE_ONNXRUNTIME
     engines.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_EXECUTORCH
+    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
+#ifdef USE_LITERT
+    engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
 #ifdef USE_LIBTORCH
     engines.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
 #ifdef USE_TFLITE
     engines.push_back(ANIRA_ENGINE_TFLITE);
-#endif
-#ifdef USE_LITERT
-    engines.push_back(ANIRA_ENGINE_LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
 #endif
     return engines;
 }

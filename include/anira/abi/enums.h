@@ -610,15 +610,17 @@ typedef enum anira_pad_policy {
 #define ANIRA_TICKET_INVALID 0u
 
 /**
- * @brief Inference engine, one of the two independent backend axes. Values 7 and up are
- * reserved for later anira engines. The pair rule, wherever an engine is named (a model
- * entry, the default engine, anira_backend_id, anira_plan_info, anira_edge_info,
- * anira_provider_option_set, anira_stage_ctx): the engine_id is non-NULL if and only if
- * the engine is ANIRA_ENGINE_CUSTOM. A built-in engine is its value with a NULL id; a
- * custom engine (anira_custom_engine_create, added to a pipeline with
- * anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its reverse-URI id (a stage
- * reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no engine and takes no id.
- * A setter refuses any other combination with ANIRA_ERROR_INVALID_ARGUMENT.
+ * @brief Inference engine, one of the two independent backend axes. Values after
+ * ANIRA_ENGINE_TFLITE and below ANIRA_ENGINE_CUSTOM are reserved for later built-in
+ * engines, which are appended after TFLITE and never renumber CUSTOM. The pair rule,
+ * wherever an engine is named (a model entry, the default engine, anira_backend_id,
+ * anira_plan_info, anira_edge_info, anira_provider_option_set, anira_stage_ctx): the
+ * engine_id is non-NULL if and only if the engine is ANIRA_ENGINE_CUSTOM. A built-in
+ * engine is its value with a NULL id; a custom engine (anira_custom_engine_create, added
+ * to a pipeline with anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its
+ * reverse-URI id (a stage reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no
+ * engine and takes no id. A setter refuses any other combination with
+ * ANIRA_ERROR_INVALID_ARGUMENT.
  */
 typedef enum anira_engine {
     /**
@@ -626,51 +628,67 @@ typedef enum anira_engine {
      */
     ANIRA_ENGINE_NONE = 0,
     ANIRA_ENGINE_ONNXRUNTIME = 1,  /**< ONNX Runtime (v2 ONNX, JSON "onnxruntime"). */
-    ANIRA_ENGINE_LIBTORCH = 2,  /**< LibTorch (JSON "libtorch"). */
-    ANIRA_ENGINE_TFLITE = 3,  /**< TensorFlow Lite, legacy C API (JSON "tflite"). */
-    ANIRA_ENGINE_LITERT = 4,  /**< LiteRT (JSON "litert"). */
-    ANIRA_ENGINE_EXECUTORCH = 5,  /**< ExecuTorch (JSON "executorch"). */
+    ANIRA_ENGINE_EXECUTORCH = 2,  /**< ExecuTorch (JSON "executorch"). */
+    ANIRA_ENGINE_LITERT = 3,  /**< LiteRT (JSON "litert"). */
+    ANIRA_ENGINE_LIBTORCH = 4,  /**< LibTorch (JSON "libtorch"). */
+    ANIRA_ENGINE_TFLITE = 5,  /**< TensorFlow Lite, legacy C API (JSON "tflite"). */
     /**
      * A custom engine, named by the engine_id beside it (JSON: the id itself,
      * "com.example.engine").
      */
-    ANIRA_ENGINE_CUSTOM = 6,
+    ANIRA_ENGINE_CUSTOM = 0x7ffffffe,
     ANIRA_ENGINE_FORCE32 = 0x7fffffff
 } anira_engine;
 
 /**
  * @brief Execution provider, the other backend axis; a provider name means the same thing
- * across engines. The pair rule, wherever a provider is named (the pin of a model entry,
- * the default provider, anira_backend_id, anira_plan_info, anira_edge_info,
+ * across engines. Values after ANIRA_PROVIDER_XNNPACK and below ANIRA_PROVIDER_CUSTOM
+ * are reserved for later providers, which are appended after XNNPACK and never renumber
+ * CUSTOM. The pair rule, wherever a provider is named (the pin of a model entry, the
+ * default provider, anira_backend_id, anira_plan_info, anira_edge_info,
  * anira_provider_option_set, anira_engine_load_info, anira_stage_ctx): the provider_id
  * is non-NULL if and only if the provider is ANIRA_PROVIDER_CUSTOM. A provider of the
  * enum is its value with a NULL id; a provider the enum does not name is
  * ANIRA_PROVIDER_CUSTOM with its non-empty name in the engine's own vocabulary: the
  * runtime's name for a built-in engine (what the context's capabilities report), an
  * entry of the descriptor's providers list for a custom engine. A setter refuses any
- * other combination, ANIRA_PROVIDER_DEFAULT beside a name included, with
- * ANIRA_ERROR_INVALID_ARGUMENT. A provider is part of the loaded model: two providers of
- * one model load twice (anira/abi/engine.h).
+ * other combination, ANIRA_PROVIDER_NONE beside a name included, with
+ * ANIRA_ERROR_INVALID_ARGUMENT. ANIRA_PROVIDER_NONE names no provider and takes no id:
+ * it unpins a model entry and clears the default provider, and is refused wherever a
+ * provider must be real (a candidate, a provider option set) with
+ * ANIRA_ERROR_INVALID_ARGUMENT, as ANIRA_ENGINE_NONE is refused as an entry's engine.
+ * ANIRA_PROVIDER_CPU is the engine's plain CPU path. A provider is part of the loaded
+ * model: two providers of one model load twice (anira/abi/engine.h).
  */
 typedef enum anira_provider {
     /**
-     * The engine's own CPU path (JSON: a model entry without a "provider" key).
+     * No provider, nothing chosen: the zero value, what an _INIT record and a zeroed record
+     * hold. A neutral model entry (JSON: no "provider" key) and a model config without a
+     * default provider (JSON: no "default_provider" key); refused as the provider of a
+     * candidate and of a provider option set.
      */
-    ANIRA_PROVIDER_DEFAULT = 0,
+    ANIRA_PROVIDER_NONE = 0,
+    /**
+     * The engine's plain CPU path, no delegate or execution provider (JSON "cpu"): ONNX
+     * Runtime's CPUExecutionProvider, LibTorch, ExecuTorch without a delegate, TFLite, LiteRT's
+     * "cpu" accelerator. Every built-in engine serves it (its first capability row). XNNPACK is
+     * a provider of its own, a delegate that also computes on the CPU.
+     */
+    ANIRA_PROVIDER_CPU = 1,
     /**
      * CUDA (JSON "cuda", the value of a model entry's "provider" key).
      */
-    ANIRA_PROVIDER_CUDA = 1,
-    ANIRA_PROVIDER_WEBGPU = 2,  /**< WebGPU (JSON "webgpu"). */
-    ANIRA_PROVIDER_DIRECTML = 3,  /**< DirectML (JSON "directml"). */
-    ANIRA_PROVIDER_COREML = 4,  /**< Core ML (JSON "coreml"). */
-    ANIRA_PROVIDER_XNNPACK = 5,  /**< XNNPACK (JSON "xnnpack"). */
-    ANIRA_PROVIDER_VULKAN = 6,  /**< Vulkan (JSON "vulkan"). */
+    ANIRA_PROVIDER_CUDA = 2,
+    ANIRA_PROVIDER_WEBGPU = 3,  /**< WebGPU (JSON "webgpu"). */
+    ANIRA_PROVIDER_VULKAN = 4,  /**< Vulkan (JSON "vulkan"). */
+    ANIRA_PROVIDER_DIRECTML = 5,  /**< DirectML (JSON "directml"). */
+    ANIRA_PROVIDER_COREML = 6,  /**< Core ML (JSON "coreml"). */
+    ANIRA_PROVIDER_XNNPACK = 7,  /**< XNNPACK (JSON "xnnpack"). */
     /**
      * A provider the enum does not name, named by the provider_id beside it in the engine's own
      * vocabulary (JSON: the name itself, "com.example.npu").
      */
-    ANIRA_PROVIDER_CUSTOM = 7,
+    ANIRA_PROVIDER_CUSTOM = 0x7ffffffe,
     ANIRA_PROVIDER_FORCE32 = 0x7fffffff
 } anira_provider;
 

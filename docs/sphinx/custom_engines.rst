@@ -2,7 +2,7 @@ Custom Engines
 ==============
 
 An **engine** runs the model: it takes the model tensors of a chunk in, runs one inference,
-and writes the model tensors out. anira ships five (ONNX Runtime, LibTorch, ExecuTorch, LiteRT
+and writes the model tensors out. anira ships five (ONNX Runtime, ExecuTorch, LiteRT, LibTorch
 and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own: it **creates** the engine
 once as an object under a reverse-URI id and **adds** it to pipelines. Examples: a Core ML or
 a WebGPU runtime, an engine the build does not carry, a synthetic model, a bypass for
@@ -119,13 +119,18 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   ``anira_handler_create``.
 - ``flags``: the engine's promises, an OR of the four ``ANIRA_ENGINE_FLAG_*`` bits below;
   ``0`` promises nothing.
-- ``providers`` / ``num_providers``: the providers the engine serves beyond
-  ``ANIRA_PROVIDER_DEFAULT``, as strings, copied. The JSON spellings of ``anira_provider``
-  (``"cuda"``, ``"webgpu"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``, ``"vulkan"``) name a
-  provider of the enum; any other string is a custom provider in the engine's own vocabulary
-  (a reverse-URI name is the convention, not a rule), which a candidate names as
-  ``ANIRA_PROVIDER_CUSTOM`` with the name in ``provider_id`` and a model entry's pin spells under its
-  ``"provider"`` key. ``NULL`` with a count of 0 serves the default provider alone. The list is
+- ``providers`` / ``num_providers``: the providers the engine serves, as strings, copied:
+  exactly the listed ones, the CPU path (``ANIRA_PROVIDER_CPU``) only if the list has
+  ``"cpu"``. The JSON spellings of ``anira_provider`` (``"cpu"``, ``"cuda"``, ``"webgpu"``,
+  ``"vulkan"``, ``"directml"``, ``"coreml"``, ``"xnnpack"``) name a provider of the enum; any
+  other string is a custom provider in the engine's own vocabulary (a reverse-URI name is the
+  convention, not a rule), which a candidate names as ``ANIRA_PROVIDER_CUSTOM`` with the name in
+  ``provider_id`` and a model entry's pin spells under its ``"provider"`` key; ``"default"`` and
+  ``"none"`` are no provider's name and refused at ``anira_custom_engine_create``. ``NULL``
+  with a count of 0 serves ``ANIRA_PROVIDER_CPU`` alone. Under the default candidate set a
+  neutral entry of the engine runs on the CPU path when the engine serves it, else on the
+  first listed provider, and a plan on a provider the query clears is dropped there (a named
+  candidate on it is refused). The list is
   what the engine can ever serve; which of it is usable here, now, is the ``query`` slot's
   answer (below). A candidate naming a provider the list lacks, or one the query reports
   unavailable, is ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the
@@ -144,8 +149,8 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
 - ``release``: ``anira_engine_release_fn``. ``NULL``: none.
 - ``query``: ``anira_engine_query_fn``, a tail field beyond the providers list, the engine's
   own ``GetAvailableProviders``: which of ``providers`` are usable here, now, as a bitmask over
-  the list (bit *i* set: ``providers[i]``; the default provider is always served and has no
-  bit). It runs before ``init`` and any number of times, on the main thread, at
+  the list (bit *i* set: ``providers[i]``; the mask covers the list alone, and a descriptor
+  without a list serves the CPU path without a bit). It runs before ``init`` and any number of times, on the main thread, at
   ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
   ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
   lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
@@ -541,13 +546,14 @@ times) and a **visible report**, the pipeline's capabilities:
 
     /* The rows a handler of this pipeline sees on this context: the context's, then one per
        added engine and provider usable here (engine ANIRA_ENGINE_CUSTOM, engine_id the
-       engine's id), the default provider first. Every call runs the engines' queries. */
+       engine's id): the listed providers the query keeps, in list order, or the CPU path
+       alone for an engine without a list. Every call runs the engines' queries. */
     uint32_t count = 0;
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, NULL);
     anira_backend_id* rows = malloc(count * sizeof *rows);
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
 
-    /* One edge: host memory to the engine on a provider (zero-copy to the default provider and
+    /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
        XNNPACK, a host copy the engine makes itself to every other). */
     anira_backend_id to = ANIRA_BACKEND_ID_INIT;
     to.engine = ANIRA_ENGINE_CUSTOM;
@@ -711,7 +717,7 @@ At setup:
 .. code-block:: c
 
     static gain_engine engine = { 0.5f };
-    static const char* const providers[] = { "coreml" };  /* beyond the default provider */
+    static const char* const providers[] = { "cpu", "coreml" };  /* exactly what it serves */
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.user_data = &engine;
     desc.flags = ANIRA_ENGINE_FLAG_REALTIME_SAFE;       /* the promise the body keeps */
@@ -738,8 +744,8 @@ The same in C++
 place of the function pointers, split as the C lifecycle is, exactly like
 :cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, is constructed with its id
 (``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
-``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
-default one in ``providers()`` (all read once, when its C engine is
+``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves in
+``providers()`` (empty: the CPU path alone; all read once, when its C engine is
 created at its first registration), may override ``query(const InitInfo&)`` (the query,
 the base answers every bit) and ``init(const InitInfo&)`` (the base does
 nothing), and its ``load(const EngineLoadInfo&)`` returns a
@@ -798,14 +804,14 @@ times the gain:
     public:
         explicit Gain(float gain) : anira::Engine("com.example.gain"), m_gain(gain) {}
         uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
-        // The providers served beyond the default one: the enum's spellings or any name of
-        // the engine's own; the gain does the same work on every one of them.
+        // The providers served, exactly these: the enum's spellings ("cpu" for the CPU path)
+        // or any name of the engine's own; the gain does the same work on every one of them.
         std::span<const char* const> providers() const noexcept override { return k_providers; }
         // init(const anira::InitInfo&) is not overridden: nothing to build once per object.
         std::unique_ptr<Loaded> load(const anira::EngineLoadInfo& info) override;
 
     private:
-        static constexpr std::array<const char*, 1> k_providers{"coreml"};
+        static constexpr std::array<const char*, 2> k_providers{"cpu", "coreml"};
         class Shared;
         class Run;
         float m_gain;

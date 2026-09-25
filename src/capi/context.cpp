@@ -75,9 +75,9 @@ bool cpu_provider(const anira::engine::ProviderInfo& provider) noexcept {
 }
 
 // The Host-only capability report of this pre-release: every compiled-in engine on the
-// providers its runtime reports usable here (the default provider first; ONNX Runtime's
-// available execution providers, LiteRT's registered accelerators; the other engines the
-// default provider alone), the host domain, the registered extension kinds, and one edge from
+// providers its runtime reports usable here (the CPU path first; ONNX Runtime's available
+// execution providers, LiteRT's registered accelerators; the other engines the CPU path
+// alone), the host domain, the registered extension kinds, and one edge from
 // host memory to each backend row: zero-copy to a CPU provider, a copy the engine makes for
 // itself to a device one. The runtimes are asked at every probe; nothing is cached.
 void probe(anira_capabilities& capabilities) {
@@ -303,6 +303,7 @@ anira_status ANIRA_CALL anira_enabled_engines(uint32_t element_size,
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         anira_backend_id id = ANIRA_BACKEND_ID_INIT;
         id.engine = static_cast<uint32_t>(engine);
+        id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
         backends.push_back(id);
     }
     return anira::capi::enumerate_records(backends, element_size, count, out);

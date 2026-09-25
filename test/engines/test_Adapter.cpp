@@ -1256,7 +1256,7 @@ TEST(AdapterOnnxRuntime, TheProviderIsServedWhenTheRuntimeListsIt) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
     ASSERT_NE(adapter, nullptr);
     const Loaded& loaded = adapter->loaded();
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CPU, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_VULKAN, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "com.example.nobody"));
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::onnxruntime_providers();
@@ -1702,7 +1702,7 @@ TEST(AdapterLiteRt, AnAcceleratorIsNamedByItsHardware) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     const Loaded& loaded = adapter->loaded();
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CPU, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "gpu"));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "npu"));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "tpu"));

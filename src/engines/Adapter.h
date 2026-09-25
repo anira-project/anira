@@ -101,7 +101,7 @@ struct ANIRA_API Model {
     /// The provider the loaded model runs on: a provider of the enum, or ANIRA_PROVIDER_CUSTOM
     /// with m_provider_id for a custom one, in the engine's own vocabulary (what the plan's
     /// candidate named, or the entry's pin). Part of the key.
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;
     /// The options the engine's runtime takes for the provider, as string pairs in the
     /// runtime's own vocabulary (the "provider_options" context extension's set for this
@@ -200,7 +200,7 @@ protected:
 /// provider by its registered name, a LiteRT accelerator by its hardware: "gpu", "npu",
 /// "webnn"). What the context's capabilities list per (engine, provider).
 struct ProviderInfo {
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;
 
     bool operator==(const ProviderInfo& other) const = default;
@@ -242,7 +242,7 @@ public:
     /// Whether init ran and succeeded: false until then, and after a throw.
     bool initialised() const noexcept { return m_initialised; }
 
-    /// The providers the engine serves here: the default provider first, then what its
+    /// The providers the engine serves here: the CPU path first, then what its
     /// runtime reports usable (runtime_providers), each once. What the context's capabilities
     /// list per (engine, provider), asked at every probe. Runs on any control thread, before
     /// or after init and any number of times, without a lock: it touches nothing init builds
@@ -255,7 +255,7 @@ protected:
     /// NOT_SUPPORTED) with the message the caller reads.
     virtual void do_init(const anira_init_info& info) { static_cast<void>(info); }
 
-    /// What the runtime reports usable here beyond the default provider, which the caller
+    /// What the runtime reports usable here beyond the CPU path, which the caller
     /// lists first: ONNX Runtime's available execution providers, LiteRT's registered
     /// accelerators, ExecuTorch's registered backends; nothing for TFLite and LibTorch in this
     /// pre-release. Empty, with a warning logged, when the runtime cannot be asked.
@@ -317,18 +317,18 @@ public:
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
 
-    /// Whether the engine serves a provider: the default provider alone unless an adapter says
+    /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
     /// engine's load decides). load refuses a record on a provider the adapter does not serve
     /// with ANIRA_ERROR_NOT_SUPPORTED, before do_load.
     virtual bool serves(anira_provider provider, std::string_view provider_id) const noexcept {
-        return provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty();
+        return provider == ANIRA_PROVIDER_CPU && provider_id.empty();
     }
     /// Why the adapter serves what it serves, for the refusal of a provider it does not: the
     /// runtime's own list where it has one, the pre-release's limit else. Named after the
     /// engine and the provider in load's ANIRA_ERROR_NOT_SUPPORTED.
     virtual std::string provider_reason() const {
-        return "this engine serves the default provider alone in this pre-release";
+        return "this engine serves the CPU path alone in this pre-release";
     }
 
     /// The record load kept.

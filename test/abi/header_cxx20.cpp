@@ -633,9 +633,9 @@ int anira_header_cxx20_probe() {
             model.default_engine().kind == ANIRA_ENGINE_NONE && model.default_engine().id.empty()
                 ? 1
                 : 0;
-        checks += model.default_provider().kind == ANIRA_PROVIDER_DEFAULT &&
+        checks += model.default_provider().kind == ANIRA_PROVIDER_NONE &&
                           model.default_provider().id.empty() &&
-                          model.model_provider(0).kind == ANIRA_PROVIDER_DEFAULT &&
+                          model.model_provider(0).kind == ANIRA_PROVIDER_NONE &&
                           model.model_provider(0).id.empty()
                       ? 1
                       : 0;

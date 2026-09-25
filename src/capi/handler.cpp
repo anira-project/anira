@@ -793,8 +793,7 @@ bool has_default_engine(const anira_model_config& model) {
 }
 
 bool has_default_provider(const anira_model_config& model) {
-    return model.m_default_provider != ANIRA_PROVIDER_DEFAULT ||
-           !model.m_default_provider_id.empty();
+    return model.m_default_provider != ANIRA_PROVIDER_NONE || !model.m_default_provider_id.empty();
 }
 
 // Whether a plan runs on the variant's default provider (the enum's value, or
@@ -940,28 +939,74 @@ void check_option_sets(const anira_context& context, const anira_pipeline& pipel
     }
 }
 
+// Whether a custom row's engine declares no providers list: it serves the CPU path alone,
+// whatever its query answers.
+bool listless_engine(const anira_pipeline& pipeline, const anira::capi::ModelEntry& row) {
+    return std::ranges::any_of(pipeline.m_engines, [&row](const auto& engine) {
+        return engine->id() == row.m_engine_id && engine->providers().empty();
+    });
+}
+
 // Whether every plan of the table runs on a provider its engine serves here, through the one
 // path of providers.h: a built-in engine's provider must be in the context's capabilities
 // (what its runtime reported at the last probe), a registered engine's in its descriptor's
 // list and reported usable by its query (run now, before its init); an engine without a list
-// serves the default provider alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
+// serves ANIRA_PROVIDER_CPU alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
 // the provider and what is served (a declared provider the query cleared says so); a query
 // that fails fails the create with its status; the engine's load may still refuse a provider
-// at run time (a device lost between create and prepare).
+// at run time (a device lost between create and prepare). Under the default set a plan on a
+// provider its engine declares but cannot use here is dropped from the table instead (with
+// its row when no plan of the row is left), and a table left empty is ANIRA_ERROR_CONFIG.
 void check_providers(const anira_context& context,
                      const anira_pipeline& pipeline,
-                     const anira::capi::Derived& derived) {
+                     anira::capi::Derived& derived) {
     const anira_model_config& model = pipeline.m_variants[0];
-    for (const anira::capi::PlanKey& key : derived.m_plans) {
-        if (key.m_provider == ANIRA_PROVIDER_DEFAULT && key.m_provider_id.empty()) { continue; }
+    std::vector<anira::capi::PlanKey> kept;
+    kept.reserve(derived.m_plans.size());
+    for (anira::capi::PlanKey& key : derived.m_plans) {
         const anira::capi::ModelEntry& row = model.m_models[key.m_row];
+        // Every built-in engine serves the CPU path (its first capability row), and so does a
+        // custom engine whose descriptor lists no provider, without a bit its query could clear
+        // (its query need not run); one with a list serves it only when it lists "cpu".
+        if (key.m_provider == ANIRA_PROVIDER_CPU && key.m_provider_id.empty() &&
+            (!row.is_custom() || listless_engine(pipeline, row))) {
+            kept.push_back(std::move(key));
+            continue;
+        }
         const anira::capi::ServedProviders served =
             anira::capi::served_providers(context, pipeline, row);
-        if (served.serves(key.m_provider, key.m_provider_id)) { continue; }
+        if (served.serves(key.m_provider, key.m_provider_id)) {
+            kept.push_back(std::move(key));
+            continue;
+        }
+        // Under the default set a plan on a provider its engine cannot use here is dropped,
+        // as an entry for an engine this build lacks is skipped: a built-in engine's provider
+        // its context's capabilities lack, a custom engine's declared provider its query
+        // cleared. A provider a custom engine does not declare at all is refused as under
+        // named candidates.
+        if (pipeline.m_default_set &&
+            (!row.is_custom() || served.declares(key.m_provider, key.m_provider_id))) {
+            continue;
+        }
         throw StatusError(
             ANIRA_ERROR_NOT_SUPPORTED,
             "handler: models[" + std::to_string(key.m_row) +
                 "]: " + anira::capi::unserved_message(served, key.m_provider, key.m_provider_id));
+    }
+    const bool dropped = kept.size() != derived.m_plans.size();
+    derived.m_plans = std::move(kept);
+    if (!dropped) { return; }
+    std::erase_if(derived.m_rows, [&derived](size_t row) {
+        return std::ranges::none_of(derived.m_plans, [row](const anira::capi::PlanKey& key) {
+            return key.m_row == row;
+        });
+    });
+    if (derived.m_plans.empty()) {
+        throw StatusError(ANIRA_ERROR_CONFIG,
+                          "handler: none of the " + std::to_string(model.m_models.size()) +
+                              " model entries runs on a candidate backend usable here (the "
+                              "default candidate set drops a plan whose provider its engine "
+                              "cannot use here)");
     }
 }
 
@@ -1255,7 +1300,9 @@ void build_report(anira_handler& handler,
 
         anira_backend_id candidate = ANIRA_BACKEND_ID_INIT;
         candidate.engine = plan.m_info.engine;
+        candidate.provider = plan.m_info.provider;
         candidate.engine_id = plan.m_info.engine_id;
+        candidate.provider_id = plan.m_info.provider_id;
         const std::vector<anira::capi::ExtPlanRow> rows =
             anira::capi::ext_consumed_rows(model, &snapshot, &candidate, 1, &consumers);
         std::vector<anira_plan_ext> exts;
@@ -1841,6 +1888,12 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
                            "(contains a '.')",
                            i);
         const auto provider = static_cast<anira_provider>(id.provider);
+        ANIRA_CAPI_REQUIRE(provider != ANIRA_PROVIDER_NONE,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "pipeline: candidates[%u] names no provider (ANIRA_PROVIDER_NONE); the "
+                           "CPU path is ANIRA_PROVIDER_CPU",
+                           i);
         ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
@@ -1860,15 +1913,16 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
 
     std::vector<anira::capi::Candidate> list;
     if (candidates == nullptr || num_candidates == 0) {
-        // The default set: every engine this build carries, on the default provider, plus
-        // every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), plus the
-        // provider every pinned entry of the variant names, on that entry's engine, so that a
-        // pinned entry runs on its pin and a neutral one on the default provider. Under it an
-        // entry for an engine this build lacks is skipped, not refused (with a NULL list
-        // check_rows would refuse it), its pin included.
+        // The default set: every engine this build carries, on the CPU path, plus every
+        // custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), plus the provider
+        // every pinned entry of the variant names, on that entry's engine, so that a pinned
+        // entry runs on its pin and a neutral one on the CPU path. Under it an entry for an
+        // engine this build lacks is skipped, not refused (with a NULL list check_rows would
+        // refuse it), its pin included.
         for (const anira_engine engine : anira::capi::enabled_engines()) {
             anira::capi::Candidate candidate;
             candidate.m_id.engine = static_cast<uint32_t>(engine);
+            candidate.m_id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
             list.push_back(std::move(candidate));
         }
         for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
@@ -1879,6 +1933,7 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
             if (listed) { continue; }
             anira::capi::Candidate custom;
             custom.m_id.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
+            custom.m_id.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
             custom.m_engine_id = row.m_engine_id;
             list.push_back(std::move(custom));
         }
@@ -2068,6 +2123,13 @@ anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
                            ANIRA_ERROR_INVALID_ARGUMENT,
                            "engine: the engine's providers[%u] is NULL or empty",
                            i);
+        ANIRA_CAPI_REQUIRE(!anira::capi::reserved_provider_word(value.providers[i]),
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "engine: the engine's providers[%u] '%s' %s",
+                           i,
+                           value.providers[i],
+                           anira::capi::k_reserved_provider_reason);
     }
     // The carrier copies the id, the kinds and the providers.
     *out = new anira_custom_engine{

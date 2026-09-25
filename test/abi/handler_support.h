@@ -124,12 +124,12 @@ inline std::vector<anira_backend_id> custom_candidates() {
     for (anira_engine engine : oracle_engines()) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
                        .engine = static_cast<uint32_t>(engine),
-                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .provider = ANIRA_PROVIDER_CPU,
                        .engine_id = nullptr});
     }
     out.push_back({.struct_size = sizeof(anira_backend_id),
                    .engine = ANIRA_ENGINE_CUSTOM,
-                   .provider = ANIRA_PROVIDER_DEFAULT,
+                   .provider = ANIRA_PROVIDER_CPU,
                    .engine_id = k_custom});
     return out;
 }
@@ -140,7 +140,7 @@ inline std::vector<anira_backend_id> engine_candidates() {
     for (anira_engine engine : oracle_engines()) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
                        .engine = static_cast<uint32_t>(engine),
-                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .provider = ANIRA_PROVIDER_CPU,
                        .engine_id = nullptr});
     }
     return out;

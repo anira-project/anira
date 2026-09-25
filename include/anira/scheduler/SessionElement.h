@@ -329,7 +329,7 @@ public:
         /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
         /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
-        anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+        anira_provider m_provider = ANIRA_PROVIDER_CPU;
         std::string m_engine_id;
         std::string m_provider_id;
         /// The 2.x backend the plan runs on: what set_backend selects by and get_backend

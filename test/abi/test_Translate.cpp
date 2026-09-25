@@ -1128,17 +1128,17 @@ TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
 #ifdef USE_ONNXRUNTIME
         list.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_EXECUTORCH
+        list.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
+#ifdef USE_LITERT
+        list.push_back(ANIRA_ENGINE_LITERT);
+#endif
 #ifdef USE_LIBTORCH
         list.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
 #ifdef USE_TFLITE
         list.push_back(ANIRA_ENGINE_TFLITE);
-#endif
-#ifdef USE_LITERT
-        list.push_back(ANIRA_ENGINE_LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-        list.push_back(ANIRA_ENGINE_EXECUTORCH);
 #endif
         return list;
     }();

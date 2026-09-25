@@ -387,10 +387,11 @@ void set_engine_from_json(const Json& node,
         }
     }
     if (word.find('.') == std::string::npos) {
-        fail_json(path,
-                  R"(")" + word +
-                      R"(" is neither a built-in engine (onnxruntime, libtorch, tflite, litert, )"
-                      "executorch) nor a reverse-URI custom engine id");
+        fail_json(
+            path,
+            R"(")" + word +
+                R"(" is neither a built-in engine (onnxruntime, executorch, litert, libtorch, )"
+                "tflite) nor a reverse-URI custom engine id");
     }
     engine = ANIRA_ENGINE_CUSTOM;
     engine_id = word;
@@ -413,15 +414,18 @@ void set_entry_engine_from_json(const Json& node,
 
 // models[].provider, the provider the entry is pinned to (anira_model_config_set_model_provider),
 // and default_provider, the provider the handler starts on
-// (anira_model_config_set_default_provider): the enum's spelling ("coreml"; "default" spells
-// none, as no key does) or a custom provider's name in the engine's vocabulary
-// ("com.example.npu"), ANIRA_PROVIDER_CUSTOM with the name.
+// (anira_model_config_set_default_provider): the enum's spelling ("coreml", "cpu") or a custom
+// provider's name in the engine's vocabulary ("com.example.npu"), ANIRA_PROVIDER_CUSTOM with
+// the name. No key spells none (ANIRA_PROVIDER_NONE); "none" and "default" are refused.
 void set_provider_from_json(const Json& node,
                             const std::string& path,
                             anira_provider& provider,
                             std::string& provider_id) {
     const std::string word = require_string(node, path);
     if (word.empty()) { fail_json(path, "must not be empty"); }
+    if (anira::capi::reserved_provider_word(word)) {
+        fail_json(path, R"(")" + word + R"(" )" + anira::capi::k_reserved_provider_reason);
+    }
     provider = anira::capi::provider_of_name(word);
     provider_id = provider == ANIRA_PROVIDER_CUSTOM ? word : std::string();
 }
@@ -1375,7 +1379,7 @@ Json model_to_json(const anira_model_config& cfg) {
         // entry has none.
         if (entry.m_provider == ANIRA_PROVIDER_CUSTOM) {
             object["provider"] = entry.m_provider_id;
-        } else if (entry.m_provider != ANIRA_PROVIDER_DEFAULT) {
+        } else if (entry.m_provider != ANIRA_PROVIDER_NONE) {
             object["provider"] = anira::capi::provider_word(entry.m_provider);
         }
         if (!entry.m_path.empty()) { object["path"] = entry.m_path; }
@@ -1391,7 +1395,7 @@ Json model_to_json(const anira_model_config& cfg) {
     }
     if (cfg.m_default_provider == ANIRA_PROVIDER_CUSTOM) {
         root["default_provider"] = cfg.m_default_provider_id;
-    } else if (cfg.m_default_provider != ANIRA_PROVIDER_DEFAULT) {
+    } else if (cfg.m_default_provider != ANIRA_PROVIDER_NONE) {
         root["default_provider"] = anira::capi::provider_word(cfg.m_default_provider);
     }
     root["state"] = word_of(cfg.m_state, k_states);

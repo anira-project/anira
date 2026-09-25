@@ -162,7 +162,7 @@ struct EngineRef {
 /// provider's name beside ANIRA_PROVIDER_CUSTOM, empty for every other value. What every
 /// provider getter returns; the view is owned by what it was read from.
 struct ProviderRef {
-    Provider kind = ANIRA_PROVIDER_DEFAULT;
+    Provider kind = ANIRA_PROVIDER_NONE;
     std::string_view id;
 };
 // NOLINTEND(readability-identifier-naming)
@@ -189,7 +189,7 @@ EngineRef engine_ref(Read read) noexcept {
 }
 template <class Read>
 ProviderRef provider_ref(Read read) noexcept {
-    anira_provider provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider provider = ANIRA_PROVIDER_NONE;
     const char* id = nullptr;
     if (failed(read(&provider, &id))) { return ProviderRef{}; }
     return ProviderRef{.kind = provider,
@@ -269,7 +269,7 @@ struct ProviderOptions {
         EngineKind engine = ANIRA_ENGINE_NONE;  ///< ANIRA_ENGINE_CUSTOM with engine_id for a
                                                 ///< custom engine
         std::string engine_id;
-        Provider provider = ANIRA_PROVIDER_DEFAULT;  ///< ANIRA_PROVIDER_CUSTOM with provider_id
+        Provider provider = ANIRA_PROVIDER_NONE;  ///< ANIRA_PROVIDER_CUSTOM with provider_id
         std::string provider_id;
         std::vector<std::pair<std::string, std::string>> options;
     };
@@ -1405,7 +1405,7 @@ public:
         });
     }
     /// The provider the entry is pinned to as the pair (anira_model_config_model_provider):
-    /// ANIRA_PROVIDER_CUSTOM with the name for a custom pin, ANIRA_PROVIDER_DEFAULT for an entry
+    /// ANIRA_PROVIDER_CUSTOM with the name for a custom pin, ANIRA_PROVIDER_NONE for an entry
     /// without a pin and for an index out of range. The name is owned by the config.
     ProviderRef model_provider(uint32_t index) const noexcept {
         return detail::provider_ref([&](anira_provider* provider, const char** id) {
@@ -1437,7 +1437,8 @@ public:
     /// provider): a provider of the enum here, a custom name through the string overload.
     /// Only a candidate naming that provider runs a pinned entry; an entry without a pin runs
     /// on any provider of its engine, the candidate deciding. Two entries of one engine may
-    /// coexist when their pins differ. ANIRA_PROVIDER_DEFAULT unpins.
+    /// coexist when their pins differ. ANIRA_PROVIDER_NONE unpins; ANIRA_PROVIDER_CPU pins to
+    /// the CPU path.
     ModelConfig& model_provider(uint32_t index, Provider provider) {
         anira_error err{};
         detail::check(
@@ -1532,7 +1533,7 @@ public:
         });
     }
     /// The default provider as the pair (anira_model_config_default_provider):
-    /// ANIRA_PROVIDER_DEFAULT for none, ANIRA_PROVIDER_CUSTOM with the name for a custom one.
+    /// ANIRA_PROVIDER_NONE for none, ANIRA_PROVIDER_CUSTOM with the name for a custom one.
     ProviderRef default_provider() const noexcept {
         return detail::provider_ref([&](anira_provider* provider, const char** id) {
             return anira_model_config_default_provider(m_config, provider, id);
@@ -1618,7 +1619,7 @@ public:
     /// holds: ANIRA_ERROR_CONFIG at create when no entry could run on it (each pinned to another
     /// provider); a plan table without such a plan starts as without it, with one Warning at
     /// prepare (anira_model_config_set_default_provider). A provider of the enum here, a
-    /// custom name through the string overload; ANIRA_PROVIDER_DEFAULT sets none.
+    /// custom name through the string overload; ANIRA_PROVIDER_NONE sets none.
     ModelConfig& default_provider(Provider provider) {
         detail::check(anira_model_config_set_default_provider(m_config, provider, nullptr),
                       "anira_model_config_set_default_provider");
@@ -1991,7 +1992,7 @@ private:
     anira_context* m_context = nullptr;
 };
 
-/// What this build compiled in, without a context: one row per engine on the default provider
+/// What this build compiled in, without a context: one row per engine on ANIRA_PROVIDER_CPU
 /// (anira_enabled_engines).
 inline std::vector<BackendId> enabled_engines() {
     return detail::enumerate<BackendId>(
@@ -3017,18 +3018,20 @@ public:
     /// walk for the entries of this engine, keyed by its id. Read once, when the engine is
     /// registered; the strings are copied.
     virtual std::span<const char* const> consumed_kinds() const noexcept { return {}; }
-    /// The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, written into
-    /// anira_engine_desc::providers at registration: the JSON spellings of anira_provider
-    /// ("cuda", "webgpu", "directml", "coreml", "xnnpack", "vulkan") name a provider of the
-    /// enum, any other string a custom provider in the engine's own vocabulary (the name a
-    /// candidate's provider_id and a model entry's pin spell). Empty (the default) serves the
-    /// default provider alone; a candidate naming a provider the list lacks is
+    /// The providers the engine serves, written into anira_engine_desc::providers at
+    /// registration: exactly the listed ones (ANIRA_PROVIDER_CPU only if the list has "cpu").
+    /// The JSON spellings of anira_provider ("cpu", "cuda", "webgpu", "vulkan", "directml",
+    /// "coreml", "xnnpack") name a provider of the enum, any other string a custom provider in
+    /// the engine's own vocabulary (the name a candidate's provider_id and a model entry's pin
+    /// spell); "none" and "default" are refused. Empty (the default) serves ANIRA_PROVIDER_CPU
+    /// alone; a candidate naming a provider the engine does not serve is
     /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. Read once, when the engine is
     /// registered; the strings are copied. A provider is part of the loaded model: two
     /// providers of one model are two loads (EngineLoadInfo::provider, provider_id).
     virtual std::span<const char* const> providers() const noexcept { return {}; }
     /// Which of providers() are usable here, now, as a bitmask over the list (bit i set:
-    /// providers()[i]; the default provider is always served and has no bit): the engine's
+    /// providers()[i]; the mask covers the list alone, and an empty list serves the CPU path
+    /// without a bit): the engine's
     /// own GetAvailableProviders, a device present, a library loaded. Called before init and
     /// any number of times, on the main thread ([main-thread]; it may log, must not call an
     /// entry that takes the core's lifecycle lock): at anira_handler_create, where every
@@ -3322,10 +3325,11 @@ namespace stage {
 /**
  * @brief The inference stage of a Pipeline: the model configuration(s) it may run, the
  * candidate backends (empty = the default set: every engine this build carries on
- * ANIRA_PROVIDER_DEFAULT, every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its
- * id), and every provider a model
- * entry of the variant is pinned to, on that entry's engine, so that a pinned entry runs on its
- * pin and a neutral one on the default provider) and the custom engines it brings along
+ * ANIRA_PROVIDER_CPU, every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), and
+ * every provider a model entry of the variant is pinned to, on that entry's engine, so that a
+ * pinned entry runs on its pin and a neutral one on its engine's home provider: the CPU path,
+ * or a custom engine's first listed provider when it does not serve the CPU path; a plan its
+ * engine cannot use here is dropped) and the custom engines it brings along
  * (engine(impl): Pipeline::add registers each one on the pipeline through
  * Pipeline::register_engine before it adds the stage). Holds pointers into the ModelConfigs, which
  * must outlive the Pipeline's construction; the pipeline copies them
@@ -3393,11 +3397,12 @@ private:
 /**
  * @brief The backends and edges a handler of one Pipeline sees on one Context: the context's
  * probed rows (Capabilities) and then one row per custom engine registered on the pipeline
- * and provider it serves here, the default provider first, then every declared provider its
- * Engine::query reports usable (anira_pipeline_capabilities_backends /
- * anira_pipeline_capabilities_edge). Every call runs the engines' queries; the built-in rows
- * are the context's last probe's. The strings of the rows point into the pipeline's engines
- * and the context's store: valid while the Pipeline lives and until the context's next probe.
+ * and provider it serves here: ANIRA_PROVIDER_CPU alone for an engine without a providers
+ * list, else every declared provider its Engine::query reports usable
+ * (anira_pipeline_capabilities_backends / anira_pipeline_capabilities_edge). Every call runs the
+ * engines' queries; the built-in rows are the context's last probe's. The strings of the rows point
+ * into the pipeline's engines and the context's store: valid while the Pipeline lives and until the
+ * context's next probe.
  */
 class PipelineCapabilities {
 public:

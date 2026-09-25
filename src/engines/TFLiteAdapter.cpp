@@ -489,7 +489,7 @@ public:
 
     std::string provider_reason() const override {
         return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
-               "adapter runs the default provider alone in this pre-release";
+               "adapter runs the CPU path alone in this pre-release";
     }
 
 protected:

@@ -254,7 +254,7 @@ private:
     /// The custom rows only: the models name no engine.
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
                                                 .engine = ANIRA_ENGINE_CUSTOM,
-                                                .provider = ANIRA_PROVIDER_DEFAULT,
+                                                .provider = ANIRA_PROVIDER_CPU,
                                                 .engine_id = anira_test::k_custom}};
     anira_test::GateEngine m_gate;  // before the handler, which dies first
     anira_test::Handler m_handler;
@@ -749,7 +749,7 @@ TEST(AbiHandlerTensor, UnpreparedEntriesRecordNotPrepared) {
     const ModelConfig model = pass_through(2);
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
                                                     .engine = ANIRA_ENGINE_CUSTOM,
-                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .provider = ANIRA_PROVIDER_CPU,
                                                     .engine_id = anira_test::k_custom}};
     const anira_test::Handler handler(context, model, candidates);
     anira_handler* h = handler.m_handler;
@@ -1085,7 +1085,7 @@ TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
     const ModelConfig model = multi_model();
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
                                                     .engine = ANIRA_ENGINE_CUSTOM,
-                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .provider = ANIRA_PROVIDER_CPU,
                                                     .engine_id = anira_test::k_custom}};
     anira_test::Handler handler(context, model, candidates);
     const anira::ContractHandle contract =
@@ -1625,7 +1625,7 @@ TEST(AbiHandlerTensor, TheCallbackPolicyNeedsItsFunctionAtPrepare) {
     const ModelConfig model = pass_through(2);
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
                                                     .engine = ANIRA_ENGINE_CUSTOM,
-                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .provider = ANIRA_PROVIDER_CPU,
                                                     .engine_id = anira_test::k_custom}};
     anira_test::Handler handler(context, model, candidates);
     // A parsed contract names the policy; a file cannot carry the function.

@@ -246,7 +246,7 @@ int anira_header_c_probe(void) {
         uint32_t count = 0;
         checks +=
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
-        checks += backend.provider == ANIRA_PROVIDER_DEFAULT && backend.provider_id == NULL ? 1 : 0;
+        checks += backend.provider == ANIRA_PROVIDER_NONE && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
         checks += edge.reason == NULL && edge.to_provider_id == NULL ? 1 : 0;
         checks += edge.to_engine_id == NULL ? 1 : 0;
@@ -555,8 +555,7 @@ int anira_header_c_probe(void) {
                           load_info.model == NULL && load_info.instances == 0u
                       ? 1
                       : 0;
-        checks +=
-            load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == NULL ? 1 : 0;
+        checks += load_info.provider == ANIRA_PROVIDER_CPU && load_info.provider_id == NULL ? 1 : 0;
         checks += load_info.option_keys == NULL && load_info.option_values == NULL &&
                           load_info.num_options == 0u
                       ? 1

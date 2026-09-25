@@ -1245,7 +1245,7 @@ TEST(AbiStage, CtxPerPhase) {
         EXPECT_EQ(probe.m_engine_status.at(phase), ANIRA_OK);
         EXPECT_EQ(probe.m_provider_status.at(phase), ANIRA_OK);
         EXPECT_EQ(probe.m_engines.at(phase), ANIRA_ENGINE_CUSTOM);
-        EXPECT_EQ(probe.m_providers.at(phase), ANIRA_PROVIDER_DEFAULT);
+        EXPECT_EQ(probe.m_providers.at(phase), ANIRA_PROVIDER_CPU);
         ASSERT_NE(info.engine_id, nullptr) << "the handler starts on the custom row";
         ASSERT_NE(probe.m_engine_ids.at(phase), nullptr);
         EXPECT_STREQ(probe.m_engine_ids.at(phase), info.engine_id);
@@ -2719,7 +2719,7 @@ namespace {
 std::array<anira_backend_id, 1> one_engine(anira_engine engine) {
     return {anira_backend_id{.struct_size = sizeof(anira_backend_id),
                              .engine = static_cast<uint32_t>(engine),
-                             .provider = ANIRA_PROVIDER_DEFAULT,
+                             .provider = ANIRA_PROVIDER_CPU,
                              .engine_id = nullptr}};
 }
 

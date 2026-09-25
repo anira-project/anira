@@ -216,16 +216,17 @@ TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
         ANIRA_ERROR_JSON);
 }
 
-// The "provider" key beside "engine" pins the entry: the enum's spelling to its value, any
-// other word to a custom provider's name, "default" to a neutral entry, as no key does; to_json
-// writes the key back, so the pin survives a round trip and two entries of one engine may
+// The "provider" key beside "engine" pins the entry: the enum's spelling to its value ("cpu"
+// to the CPU path), any other word to a custom provider's name, no key to a neutral entry
+// (ANIRA_PROVIDER_NONE), "default" and "none" refused as no provider's name; to_json writes the
+// key back, so the pin survives a round trip and two entries of one engine may
 // differ in it alone. The pair is two keys: a ':' in the engine word is refused naming the key.
 TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
     const Loaded loaded(R"({"models": [
         {"engine": "executorch", "provider": "coreml", "path": "net.coreml.pte"},
         {"engine": "executorch", "provider": "com.example.npu", "path": "net.npu.pte"},
         {"engine": "com.example.engine", "provider": "fast", "path": "net.bin"},
-        {"engine": "onnxruntime", "provider": "default", "path": "net.onnx"},
+        {"engine": "onnxruntime", "provider": "cpu", "path": "net.onnx"},
         {"engine": "libtorch", "path": "net.pt"}]})");
     ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
     const anira_model_config* config = loaded.m_config;
@@ -240,16 +241,17 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
     EXPECT_EQ(anira_test::model_provider(config, 2),
               (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "fast"}));
     EXPECT_EQ(anira_test::model_provider(config, 3),
-              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
-        << "\"default\" spells a neutral entry";
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CPU, ""}))
+        << "\"cpu\" pins the entry to the CPU path";
     EXPECT_EQ(anira_test::model_provider(config, 4),
-              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}));
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}));
     const std::string text = model_text(loaded.m_config);
     EXPECT_NE(text.find("\"engine\": \"executorch\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"coreml\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"com.example.npu\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"fast\""), std::string::npos) << text;
-    EXPECT_EQ(text.find("\"provider\": \"default\""), std::string::npos)
+    EXPECT_NE(text.find("\"provider\": \"cpu\""), std::string::npos) << text;
+    EXPECT_EQ(text.find("\"provider\": \"none\""), std::string::npos)
         << "a neutral entry carries no provider key:\n"
         << text;
     const Loaded again(text.c_str());
@@ -263,6 +265,13 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
                          "models[0].provider"),
               ANIRA_ERROR_JSON)
         << "an empty provider";
+    for (const char* reserved : {"default", "none"}) {
+        const std::string json =
+            std::string(R"({"models": [{"engine": "executorch", "provider": ")") + reserved +
+            R"(", "path": "x"}]})";
+        EXPECT_EQ(load_fails(json.c_str(), "is no provider's name"), ANIRA_ERROR_JSON)
+            << reserved << ": no provider's name (no key is a neutral entry, \"cpu\" the CPU path)";
+    }
     EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "provider": "coreml", "path": "x"}]})",
                          "models[0].engine"),
               ANIRA_ERROR_JSON)

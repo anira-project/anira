@@ -131,17 +131,17 @@ std::vector<anira_engine> compiled_engines() {
 #ifdef USE_ONNXRUNTIME
     engines.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_EXECUTORCH
+    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
+#ifdef USE_LITERT
+    engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
 #ifdef USE_LIBTORCH
     engines.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
 #ifdef USE_TFLITE
     engines.push_back(ANIRA_ENGINE_TFLITE);
-#endif
-#ifdef USE_LITERT
-    engines.push_back(ANIRA_ENGINE_LITERT);
-#endif
-#ifdef USE_EXECUTORCH
-    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
 #endif
     return engines;
 }
@@ -577,7 +577,7 @@ TEST(AbiContext, EnabledBackendsAreTheCompiledSet) {
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_EQ(rows[i].struct_size, sizeof(anira_backend_id));
         EXPECT_EQ(rows[i].engine, static_cast<uint32_t>(expected[i]));
-        EXPECT_EQ(rows[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT));
+        EXPECT_EQ(rows[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
         EXPECT_EQ(rows[i].engine_id, nullptr);
     }
     if (expected.size() > 1) {
@@ -624,9 +624,9 @@ bool names(const anira_backend_id& row, const anira::engine::ProviderInfo& provi
 }  // namespace
 
 // The capabilities of a context: one backend row per compiled-in engine and provider its
-// runtime reports usable here (the default provider first, then the runtime's list, the
-// adapters' own query being the oracle), a custom provider carried by its name beside
-// ANIRA_PROVIDER_DEFAULT; the host domain; the registered extension kinds; one host edge per
+// runtime reports usable here (the CPU path first, then the runtime's list, the adapters' own
+// query being the oracle), a custom provider carried by its name beside ANIRA_PROVIDER_CUSTOM;
+// the host domain; the registered extension kinds; one host edge per
 // backend row, zero-copy to a CPU provider and a host copy to a device one, found by engine
 // and provider (a custom one by its name); a probe asks the runtimes again and answers the
 // same. The enumeration convention throughout: the count, a short buffer, the caller's stride.
@@ -654,8 +654,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         const std::vector<anira_backend_id> rows = rows_of(backends, engine);
         ASSERT_EQ(rows.size(), oracle.size()) << "one row per provider the runtime reports";
         ASSERT_FALSE(rows.empty());
-        EXPECT_EQ(rows[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT))
-            << "the default provider first";
+        EXPECT_EQ(rows[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU))
+            << "the CPU path first";
         EXPECT_EQ(rows[0].provider_id, nullptr);
         for (size_t i = 0; i < rows.size(); ++i) {
             EXPECT_EQ(rows[i].struct_size, sizeof(anira_backend_id));
@@ -717,7 +717,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(edges[i].available, 1U);
         EXPECT_NE(edges[i].reason, nullptr);
         const bool cpu = backends[i].provider_id == nullptr &&
-                         (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT) ||
+                         (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_CPU) ||
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
         EXPECT_EQ(edges[i].edge_class,
                   static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY));
@@ -731,6 +731,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     anira_edge_info row = ANIRA_EDGE_INFO_INIT;
     if (!expected.empty()) {
         to.engine = static_cast<uint32_t>(expected[0]);
+        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
         EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row), ANIRA_OK);
         EXPECT_EQ(row.to_engine, static_cast<uint32_t>(expected[0]));
         EXPECT_EQ(row.available, 1U);
@@ -752,7 +753,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
                   ANIRA_ERROR_EDGE_UNREACHABLE)
             << "no built-in engine serves Vulkan in this pre-release";
-        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
+        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
     }
     for (const anira_backend_id& backend : backends) {
         if (backend.provider_id == nullptr) { continue; }

@@ -533,8 +533,7 @@ TEST(AbiHandler, SetPlanSwitchesLikeSetInferenceBackend) {
 
         for (size_t i = 0; i < info.size(); ++i) {
             EXPECT_EQ(info[i].variant, 0U) << "plan " << i;
-            EXPECT_EQ(info[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT))
-                << "plan " << i;
+            EXPECT_EQ(info[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU)) << "plan " << i;
             EXPECT_DOUBLE_EQ(info[i].budget_ms, 5.0) << "plan " << i;
             if (i + 1 < info.size()) {
                 EXPECT_EQ(info[i].engine_id, nullptr) << "plan " << i;
@@ -1089,7 +1088,7 @@ TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
     const anira::ModelConfig model = anira_test::generator_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
                                               .engine = ANIRA_ENGINE_CUSTOM,
-                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .provider = ANIRA_PROVIDER_CPU,
                                               .engine_id = anira_test::k_custom}};
     anira_test::SleepingParamFillEngine generator;
     Handler handler(context, model, none, {}, generator.engine());

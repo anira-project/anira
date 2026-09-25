@@ -35,13 +35,13 @@ inline anira::InferenceConfig inference_config_of(const char* model_json,
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         candidates.push_back({.struct_size = sizeof(anira_backend_id),
                               .engine = static_cast<uint32_t>(engine),
-                              .provider = ANIRA_PROVIDER_DEFAULT,
+                              .provider = ANIRA_PROVIDER_CPU,
                               .engine_id = nullptr});
     }
     if (with_custom) {
         candidates.push_back({.struct_size = sizeof(anira_backend_id),
                               .engine = ANIRA_ENGINE_CUSTOM,
-                              .provider = ANIRA_PROVIDER_DEFAULT,
+                              .provider = ANIRA_PROVIDER_CPU,
                               .engine_id = anira::capi::k_v2_custom_engine});
     }
     return anira::capi::make_inference_config(*model.native(),

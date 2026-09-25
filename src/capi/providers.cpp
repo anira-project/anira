@@ -28,8 +28,8 @@ namespace anira::capi {
 
 namespace {
 
-anira::engine::ProviderInfo default_provider() {
-    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = ""};
+anira::engine::ProviderInfo cpu_path() {
+    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = ""};
 }
 
 // A declared provider of a custom engine's list: a word of the enum by its value, any other
@@ -47,7 +47,7 @@ bool same(const anira::engine::ProviderInfo& info,
     return info.m_provider == provider && info.m_provider_id == provider_id;
 }
 
-// "default, coreml, com.example.npu"; "none" for an empty list.
+// "cpu, coreml, com.example.npu"; "none" for an empty list.
 std::string provider_list(const std::vector<anira::engine::ProviderInfo>& providers) {
     std::string text;
     for (const anira::engine::ProviderInfo& info : providers) {
@@ -61,7 +61,7 @@ std::string provider_list(const std::vector<anira::engine::ProviderInfo>& provid
 
 bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept {
     return provider_id.empty() &&
-           (provider == ANIRA_PROVIDER_DEFAULT || provider == ANIRA_PROVIDER_XNNPACK);
+           (provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK);
 }
 
 anira_init_info query_info(const anira_context& context) {
@@ -108,7 +108,10 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
     ServedProviders served;
     served.m_kind = ServedProviders::Kind::Custom;
     served.m_label = engine.id();
-    served.m_declared.push_back(default_provider());
+    // A descriptor without a list serves the CPU path alone; one with a list exactly what it
+    // lists, the CPU path only when it lists "cpu".
+    const bool listless = engine.providers().empty();
+    if (listless) { served.m_declared.push_back(cpu_path()); }
     for (const std::string& word : engine.providers()) {
         served.m_declared.push_back(declared_provider(word));
     }
@@ -126,10 +129,10 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
         message += ")";
         throw StatusError(status, message);
     }
-    served.m_available.push_back(default_provider());
+    if (listless) { served.m_available.push_back(cpu_path()); }
     for (size_t i = 0; i < engine.providers().size() && i < 64; ++i) {
         if ((available & (uint64_t{1} << i)) != 0) {
-            served.m_available.push_back(served.m_declared[i + 1]);
+            served.m_available.push_back(served.m_declared[i]);
         }
     }
     return served;

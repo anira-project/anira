@@ -287,7 +287,7 @@ TEST(AbiPrepare, LatencyRulesAreConfigAtPrepare) {
     const ModelConfig model = two_stream_outputs_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
                                               .engine = ANIRA_ENGINE_CUSTOM,
-                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .provider = ANIRA_PROVIDER_CPU,
                                               .engine_id = anira_test::k_custom}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
@@ -398,7 +398,7 @@ TEST(AbiPrepare, BypassIsRefusedOnAGenerator) {
     const ModelConfig model = generator_model();
     const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
                                               .engine = ANIRA_ENGINE_CUSTOM,
-                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .provider = ANIRA_PROVIDER_CPU,
                                               .engine_id = anira_test::k_custom}};
     Handler handler(context, model, none);
     anira_error err = ANIRA_ERROR_INIT;
@@ -846,7 +846,7 @@ TEST(AbiPrepare, ZeroPlansIsConfigAtCreate) {
     model.output(streamed("out"));
     const std::vector<anira_backend_id> only_onnx{{.struct_size = sizeof(anira_backend_id),
                                                    .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                                   .provider = ANIRA_PROVIDER_DEFAULT,
+                                                   .provider = ANIRA_PROVIDER_CPU,
                                                    .engine_id = nullptr}};
     const CreateOutcome outcome = try_create(context, model, only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
@@ -901,7 +901,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         }
         const std::vector<anira_backend_id> missing_only{{.struct_size = sizeof(anira_backend_id),
                                                           .engine = static_cast<uint32_t>(*missing),
-                                                          .provider = ANIRA_PROVIDER_DEFAULT,
+                                                          .provider = ANIRA_PROVIDER_CPU,
                                                           .engine_id = nullptr}};
         CreateOutcome outcome = try_create(context, with_custom, missing_only);
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
@@ -961,19 +961,27 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &empty_id, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "never empty");
-    // The pair rule on both axes: a name beside DEFAULT, CUSTOM without an id, NONE (which names
-    // no engine) and an id beside a built-in engine are refused here.
-    const anira_backend_id named_default{.struct_size = sizeof(anira_backend_id),
-                                         .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                         .provider = ANIRA_PROVIDER_DEFAULT,
-                                         .engine_id = nullptr,
-                                         .provider_id = "com.example.npu"};
-    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &named_default, 1, &err),
+    // The pair rule on both axes: a name beside CPU, CUSTOM without an id, NONE (which names
+    // no engine, and no provider) and an id beside a built-in engine are refused here.
+    const anira_backend_id named_cpu{.struct_size = sizeof(anira_backend_id),
+                                     .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                     .provider = ANIRA_PROVIDER_CPU,
+                                     .engine_id = nullptr,
+                                     .provider_id = "com.example.npu"};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &named_cpu, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "the provider_id is set if and only if");
+    const anira_backend_id no_provider{.struct_size = sizeof(anira_backend_id),
+                                       .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                       .provider = ANIRA_PROVIDER_NONE,
+                                       .engine_id = nullptr,
+                                       .provider_id = nullptr};
+    EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &no_provider, 1, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    expect_contains(err.message, "names no provider (ANIRA_PROVIDER_NONE)");
     const anira_backend_id nameless{.struct_size = sizeof(anira_backend_id),
                                     .engine = ANIRA_ENGINE_CUSTOM,
-                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                    .provider = ANIRA_PROVIDER_CPU,
                                     .engine_id = nullptr,
                                     .provider_id = nullptr};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &nameless, 1, &err),
@@ -981,7 +989,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     expect_contains(err.message, "the engine_id is set if and only if");
     const anira_backend_id no_engine{.struct_size = sizeof(anira_backend_id),
                                      .engine = ANIRA_ENGINE_NONE,
-                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .provider = ANIRA_PROVIDER_CPU,
                                      .engine_id = nullptr,
                                      .provider_id = nullptr};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &no_engine, 1, &err),
@@ -989,7 +997,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     expect_contains(err.message, "neither a built-in engine nor ANIRA_ENGINE_CUSTOM");
     const anira_backend_id builtin_id{.struct_size = sizeof(anira_backend_id),
                                       .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                      .provider = ANIRA_PROVIDER_DEFAULT,
+                                      .provider = ANIRA_PROVIDER_CPU,
                                       .engine_id = "com.example.engine",
                                       .provider_id = nullptr};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &builtin_id, 1, &err),
@@ -1011,7 +1019,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
     }
     const anira_backend_id short_row{.struct_size = 4,
                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .provider = ANIRA_PROVIDER_CPU,
                                      .engine_id = nullptr};
     EXPECT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, &short_row, 1, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
@@ -1148,7 +1156,7 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
     const std::string custom = "plan " + std::to_string(anira_handler_get_plan(h)) +
                                ": variant 0, engine " + k_custom +
-                               ", provider default, budget 5.000 ms";
+                               ", provider cpu, budget 5.000 ms";
     EXPECT_EQ(count_records(collector, custom.c_str(), "native"), 1U);
 #endif
 

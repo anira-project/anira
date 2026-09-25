@@ -190,7 +190,7 @@ private:
     anira_test::Context m_context;
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
                                                 .engine = ANIRA_ENGINE_CUSTOM,
-                                                .provider = ANIRA_PROVIDER_DEFAULT,
+                                                .provider = ANIRA_PROVIDER_CPU,
                                                 .engine_id = anira_test::k_custom}};
     anira_test::GateEngine m_gate;  // before the handler, which dies first
     anira_test::Handler m_handler;
@@ -254,7 +254,7 @@ TEST(AbiHandlerStatic, ABufferSpecUnderAHardContractIsRefusedAtPrepare) {
     const anira_test::Context context;
     const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
                                                     .engine = ANIRA_ENGINE_CUSTOM,
-                                                    .provider = ANIRA_PROVIDER_DEFAULT,
+                                                    .provider = ANIRA_PROVIDER_CPU,
                                                     .engine_id = anira_test::k_custom}};
     anira_test::Handler handler(context, buffer_model(), candidates);
     anira_handler* h = handler.m_handler;

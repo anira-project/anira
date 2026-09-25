@@ -687,7 +687,7 @@ anira_stage_ctx StageProcessor::make_ctx(anira_phase phase,
     ctx.engine = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_engine)
                                      : static_cast<uint32_t>(ANIRA_ENGINE_NONE);
     ctx.provider = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_provider)
-                                       : static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
+                                       : static_cast<uint32_t>(ANIRA_PROVIDER_NONE);
     // The pairs' names for anira_stage_engine / _provider: the session's own strings,
     // which live as long as its table; NULL for a built-in engine and a provider of the enum.
     if (plan < plans.size()) {

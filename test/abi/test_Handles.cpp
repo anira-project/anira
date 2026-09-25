@@ -202,7 +202,7 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
                                                 &m.m_err),
               ANIRA_OK);
     EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
-              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}))
         << "neutral until pinned";
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
@@ -223,13 +223,13 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
         << "a custom provider is CUSTOM with its name";
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
-                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    ANIRA_PROVIDER_NONE,
                                                     nullptr,
                                                     &m.m_err),
               ANIRA_OK)
         << "unpinned again";
     EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
-              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}));
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}));
     // The refusals.
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     1,
@@ -248,7 +248,7 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
         << "both at once";
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
-                                                    ANIRA_PROVIDER_DEFAULT,
+                                                    ANIRA_PROVIDER_NONE,
                                                     "com.example.npu",
                                                     &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT)
@@ -275,7 +275,7 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
         anira_model_config_set_model_provider(nullptr, 0, ANIRA_PROVIDER_CUDA, nullptr, &m.m_err),
         ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
-              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_NONE, ""}))
         << "a refused call leaves the entry as it was";
     EXPECT_EQ(anira_test::model_provider(nullptr, 0).status, ANIRA_ERROR_INVALID_ARGUMENT);
 }

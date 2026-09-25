@@ -89,7 +89,7 @@ ANIRA_API std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine
 ANIRA_API std::shared_ptr<Loaded> make_builtin_loaded(const std::shared_ptr<BuiltinEngine>& engine);
 
 /// What a fresh engine object of a built-in engine of this build answers for its providers
-/// (BuiltinEngine::providers: the default provider first, then what its runtime reports
+/// (BuiltinEngine::providers: the CPU path first, then what its runtime reports
 /// usable here, each once); the context's probe asks the core's object, which answers the
 /// same. Empty for an engine this build does not carry. The tests' oracle.
 ANIRA_API std::vector<ProviderInfo> builtin_providers(anira_engine engine);

@@ -38,7 +38,7 @@ bool valid_axis_tag(anira_axis_tag tag) {
     return tag >= ANIRA_AXIS_BATCH && tag <= ANIRA_AXIS_ANY;
 }
 bool builtin_engine(anira_engine engine) {
-    return engine >= ANIRA_ENGINE_ONNXRUNTIME && engine <= ANIRA_ENGINE_EXECUTORCH;
+    return anira::capi::known_engine(engine);
 }
 bool valid_bytes_ownership(anira_bytes_ownership ownership) {
     return ownership == ANIRA_BYTES_COPY || ownership == ANIRA_BYTES_BORROW;
@@ -832,7 +832,8 @@ anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_model_config
                        "model entry: index %u is out of range (%zu entries)",
                        model_index,
                        config->m_models.size());
-    ANIRA_CAPI_REQUIRE(anira::capi::known_provider(provider),
+    // ANIRA_PROVIDER_NONE unpins the entry.
+    ANIRA_CAPI_REQUIRE(provider == ANIRA_PROVIDER_NONE || anira::capi::known_provider(provider),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "model entry: provider %d is not a provider this header names",
@@ -1001,7 +1002,9 @@ anira_status ANIRA_CALL anira_model_config_set_default_provider(anira_model_conf
                                                                 anira_provider provider,
                                                                 const char* provider_id)
     ANIRA_NOEXCEPT try {
-    if (config == nullptr || !anira::capi::known_provider(provider) ||
+    // ANIRA_PROVIDER_NONE clears the default provider.
+    if (config == nullptr ||
+        (provider != ANIRA_PROVIDER_NONE && !anira::capi::known_provider(provider)) ||
         !anira::capi::provider_pair_ok(provider, provider_id)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }

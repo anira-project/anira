@@ -416,8 +416,12 @@ typedef void (ANIRA_CALL* anira_engine_release_fn)(void* user_data);
  *        context asks for, the context asking); valid until the callback returns.
  * @param user_data The descriptor's user_data.
  * @param out_available Receives a bitmask over the descriptor's providers list: bit i set means
- *        providers[i] is usable here, now. The default provider is always served
- *        and has no bit; a bit beyond num_providers is ignored.
+ *        providers[i] is usable here, now; a bit beyond num_providers is ignored.
+ *        The mask covers the listed providers alone: ANIRA_PROVIDER_CPU is served
+ *        without a bit only by a descriptor without a list, and is a listed
+ *        provider like any other in a list that names it. Under the default
+ *        candidate set a plan on a provider whose bit is clear is dropped; a
+ *        named candidate on it is refused.
  * @par Thread contract
  * [main-thread]
  */
@@ -503,14 +507,18 @@ typedef struct anira_engine_desc {
      */
     anira_engine_release_fn release;
     /**
-     * The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, as strings, copied; NULL
-     * with a count of 0 serves DEFAULT alone. The enum's JSON spellings name a provider of the
-     * enum ("cuda", "webgpu", "directml", "coreml", "xnnpack", "vulkan"); any other string is a
-     * custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM with that name
-     * wherever the pair travels (a reverse-URI name is the convention, not a rule). A candidate
-     * naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create;
-     * load may still refuse one it cannot serve at run time. A tail field: a caller whose
-     * header ends before it serves DEFAULT alone.
+     * The providers the engine serves, as strings, copied: exactly the listed ones
+     * (ANIRA_PROVIDER_CPU only if the list has "cpu"); NULL with a count of 0 serves
+     * ANIRA_PROVIDER_CPU alone. The enum's JSON spellings name a provider of the enum ("cpu",
+     * "cuda", "webgpu", "vulkan", "directml", "coreml", "xnnpack"); the words "default" and
+     * "none" are refused (ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create); any
+     * other string is a custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM
+     * with that name wherever the pair travels (a reverse-URI name is the convention, not a
+     * rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at
+     * anira_handler_create; load may still refuse one it cannot serve at run time. Under the
+     * default candidate set a neutral entry of the engine runs on the CPU path when the engine
+     * serves it, else on the first listed provider. A tail field: a caller whose header ends
+     * before it serves ANIRA_PROVIDER_CPU alone.
      */
     const char* const* providers;
     uint32_t num_providers;  /**< The length of providers. */

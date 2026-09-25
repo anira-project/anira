@@ -463,7 +463,7 @@ public:
 
     std::string provider_reason() const override {
         return "a LibTorch device needs the device-domain edges of a later pre-release (a "
-               ".to(device) per call allocates), so the adapter runs the default provider "
+               ".to(device) per call allocates), so the adapter runs the CPU path "
                "alone";
     }
 

@@ -129,7 +129,7 @@ std::vector<EngineTensor> side_of(const Ort::Session& session,
 // provider of anira's enum; every other name travels as it is, the runtime's own word, in
 // provider_id beside ANIRA_PROVIDER_CUSTOM. Vulkan has no ONNX Runtime execution provider.
 constexpr std::array<std::pair<const char*, anira_provider>, 6> k_provider_names{{
-    {"CPUExecutionProvider", ANIRA_PROVIDER_DEFAULT},
+    {"CPUExecutionProvider", ANIRA_PROVIDER_CPU},
     {"CUDAExecutionProvider", ANIRA_PROVIDER_CUDA},
     {"DmlExecutionProvider", ANIRA_PROVIDER_DIRECTML},
     {"CoreMLExecutionProvider", ANIRA_PROVIDER_COREML},
@@ -139,11 +139,11 @@ constexpr std::array<std::pair<const char*, anira_provider>, 6> k_provider_names
 
 // The registered name of the record's provider: the table's for a provider of the enum, the
 // provider_id itself (a registered name the capabilities listed) for a custom one; empty for
-// the default provider and for Vulkan.
+// the CPU path and for Vulkan.
 std::string registered_name(anira_provider provider, std::string_view provider_id) {
     if (!provider_id.empty()) { return std::string(provider_id); }
     for (const auto& [name, value] : k_provider_names) {
-        if (value == provider && value != ANIRA_PROVIDER_DEFAULT) { return name; }
+        if (value == provider && value != ANIRA_PROVIDER_CPU) { return name; }
     }
     return "";
 }
@@ -154,7 +154,7 @@ std::string registered_name(anira_provider provider, std::string_view provider_i
 // A provider the runtime refuses (not in this build, no device) is ANIRA_ERROR_NOT_SUPPORTED
 // with the runtime's text.
 void append_provider(Ort::SessionOptions& options, const Model& model) {
-    if (model.m_provider == ANIRA_PROVIDER_DEFAULT && model.m_provider_id.empty()) { return; }
+    if (model.m_provider == ANIRA_PROVIDER_CPU && model.m_provider_id.empty()) { return; }
     const std::string label = anira::capi::provider_label(model.m_provider, model.m_provider_id);
     const std::string name = registered_name(model.m_provider, model.m_provider_id);
     if (name.empty()) {
@@ -508,11 +508,11 @@ public:
     explicit OnnxRuntimeLoaded(std::shared_ptr<OnnxRuntimeEngine> engine)
         : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
 
-    /// The default provider always; a provider of the enum or a registered name when the
+    /// The CPU path always; a provider of the enum or a registered name when the
     /// runtime lists it among its available execution providers (the engine object's list;
     /// never Vulkan, which ONNX Runtime has no provider for).
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept override {
-        if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
+        if (provider == ANIRA_PROVIDER_CPU && provider_id.empty()) { return true; }
         if (provider == ANIRA_PROVIDER_VULKAN) { return false; }
         try {
             for (const ProviderInfo& info : m_engine->providers()) {
@@ -532,8 +532,8 @@ public:
         std::string listed;
         try {
             for (const ProviderInfo& info : m_engine->providers()) {
-                if (info.m_provider == ANIRA_PROVIDER_DEFAULT && info.m_provider_id.empty()) {
-                    continue;  // the default provider, listed first
+                if (info.m_provider == ANIRA_PROVIDER_CPU && info.m_provider_id.empty()) {
+                    continue;  // the CPU path, listed first
                 }
                 if (!listed.empty()) { listed += ", "; }
                 listed += anira::capi::provider_label(info.m_provider, info.m_provider_id);
@@ -608,15 +608,15 @@ std::vector<ProviderInfo> onnxruntime_providers() {
                     break;
                 }
             }
-            if (info.m_provider == ANIRA_PROVIDER_DEFAULT && info.m_provider_id.empty()) {
-                continue;  // the CPU provider: the default provider, listed by the caller
+            if (info.m_provider == ANIRA_PROVIDER_CPU && info.m_provider_id.empty()) {
+                continue;  // the CPU provider: ANIRA_PROVIDER_CPU, listed by the caller
             }
             providers.push_back(std::move(info));
         }
     } catch (const std::exception& error) {
         ANIRA_LOG_WARNING(anira::log_group::k_engine_onnx,
                           "onnxruntime: the runtime could not be asked for its execution "
-                          "providers (%s); the capabilities list the default provider alone",
+                          "providers (%s); the capabilities list the CPU path alone",
                           error.what());
         providers.clear();
     }

@@ -141,7 +141,7 @@ struct EntryPayload {
 struct ProviderOptionSet {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_NONE;
     std::string m_provider_id;
     std::vector<std::pair<std::string, std::string>> m_options;
 

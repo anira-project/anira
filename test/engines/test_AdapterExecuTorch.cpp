@@ -153,7 +153,7 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
         anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
     ASSERT_NE(fresh, nullptr);
     const anira::engine::Loaded& loaded = *fresh;
-    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
+    EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CPU, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_CUSTOM, "XnnpackBackend"))
         << "the registered name serves as the custom spelling";

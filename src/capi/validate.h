@@ -54,11 +54,11 @@ struct DerivedSpec {
 /// once per candidate that names its engine (a built-in one, or the custom id) and a provider
 /// the entry accepts: any for a neutral entry, its pin alone for a pinned one (models[].engine
 /// with a suffix, anira_model_config_set_model_provider); with no candidate list a row is one
-/// plan, on its pin or on ANIRA_PROVIDER_DEFAULT. The provider is the plan's, in the engine's
+/// plan, on its pin or on ANIRA_PROVIDER_CPU. The provider is the plan's, in the engine's
 /// vocabulary: a value of the enum, or ANIRA_PROVIDER_CUSTOM with a custom name.
 struct PlanKey {
     size_t m_row = 0;  ///< the models[] index
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_CPU;
     std::string m_provider_id;  ///< a custom provider's name; empty for one the enum names
 
     bool operator==(const PlanKey& other) const = default;
@@ -107,6 +107,10 @@ struct EngineFacts {
     /// "model:" kinds from its own entries and its other kinds from any host, while it is a
     /// candidate. Empty otherwise.
     std::vector<ExtConsumer> m_consumers;
+    /// The providers list of each engine, beside m_ids (the descriptor's words, empty for an
+    /// engine without a list): where a neutral entry of the engine runs under the default set
+    /// (home_provider).
+    std::vector<std::vector<std::string>> m_providers;
 };
 
 /// The consumers a pipeline declares, in one vector: the stage's, then one per registered
@@ -126,16 +130,25 @@ ANIRA_API bool engine_is_candidate(anira_engine engine,
 
 /// The plans of one model entry under the candidates (PlanKey): one per candidate naming its
 /// engine whose provider the entry accepts, in candidate order, an equal provider once; with
-/// a NULL list one plan, on the entry's pin or on ANIRA_PROVIDER_DEFAULT. Under the default
+/// a NULL list one plan, on the entry's pin or on ANIRA_PROVIDER_CPU. Under the default
 /// set (default_set: the list anira_pipeline_add_inference built for a NULL one, every engine
-/// on the default provider and every pin) an entry whose engine is named is one plan too, on
-/// its pin or on ANIRA_PROVIDER_DEFAULT, whatever else the list names. Empty for an entry no
-/// candidate runs.
+/// on the CPU path and every pin) an entry whose engine is named is one plan too, on
+/// its pin or on its engine's home provider (home_provider: the CPU path for a built-in
+/// engine and for a custom engine that serves it, else the custom engine's first listed
+/// provider), whatever else the list names. Empty for an entry no candidate runs.
 ANIRA_API std::vector<PlanKey> matching_plans(size_t row_index,
                                               const ModelEntry& row,
                                               const anira_backend_id* candidates,
                                               uint32_t num_candidates,
-                                              bool default_set = false);
+                                              bool default_set = false,
+                                              const EngineFacts* engines = nullptr);
+
+/// Where a neutral entry runs under the default set: ANIRA_PROVIDER_CPU for a built-in engine
+/// and for a custom engine that serves it (no providers list, or "cpu" in it), else the
+/// custom engine's first listed provider. `engines` NULL, or an id it lacks: the CPU path.
+ANIRA_API PlanKey home_provider(size_t row_index,
+                                const ModelEntry& row,
+                                const EngineFacts* engines);
 
 /// Whether a model entry is a plan of the candidates (matching_plans is not empty): what the
 /// extension walk keys an entry by.
@@ -172,7 +185,7 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// names its set), a built-in engine keeps its rows, ANIRA_ENGINE_CUSTOM with an engine_id
 /// keeps the custom rows of that name, and a row is a
 /// plan once per candidate whose provider it accepts (matching_plans; under the default set,
-/// default_set, one plan per row on its pin or on the default provider). Throws StatusError with
+/// default_set, one plan per row on its pin or on the CPU path). Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
 /// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
 /// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule

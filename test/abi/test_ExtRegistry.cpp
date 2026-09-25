@@ -109,7 +109,7 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
     EXPECT_EQ(
         payload->find(ANIRA_ENGINE_CUSTOM, "org.example.engine", ANIRA_PROVIDER_CUSTOM, "fast"),
         &payload->m_sets[2]);
-    EXPECT_EQ(payload->find(ANIRA_ENGINE_ONNXRUNTIME, "", ANIRA_PROVIDER_DEFAULT, ""), nullptr);
+    EXPECT_EQ(payload->find(ANIRA_ENGINE_ONNXRUNTIME, "", ANIRA_PROVIDER_CPU, ""), nullptr);
     EXPECT_EQ(payload->find(ANIRA_ENGINE_LIBTORCH, "", ANIRA_PROVIDER_CUDA, ""), nullptr);
     // A copy of the bag re-clones through the payload's own C view.
     const ExtBag copy = bag;  // NOLINT(performance-unnecessary-copy-initialization) the copy is the
@@ -158,15 +158,21 @@ TEST(AbiExtRegistry, ProviderOptionsRoundTripInCAndJson) {
                               &err),
               ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "sets[0].engine"), nullptr) << err.message;
-    // A set names its provider, and never the default one, which takes no options.
+    // A set names its provider, never "cpu" (the CPU path takes no options) and never a
+    // reserved word ("default", "none").
     EXPECT_EQ(parsed.set_json("provider_options", R"({"sets": [{"engine": "onnxruntime"}]})", &err),
               ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "sets[0].provider"), nullptr) << err.message;
     EXPECT_EQ(parsed.set_json("provider_options",
-                              R"({"sets": [{"engine": "onnxruntime", "provider": "default"}]})",
+                              R"({"sets": [{"engine": "onnxruntime", "provider": "cpu"}]})",
                               &err),
               ANIRA_ERROR_JSON);
     EXPECT_NE(std::strstr(err.message, "takes no options"), nullptr) << err.message;
+    EXPECT_EQ(parsed.set_json("provider_options",
+                              R"({"sets": [{"engine": "onnxruntime", "provider": "default"}]})",
+                              &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "'default' is no provider's name"), nullptr) << err.message;
     EXPECT_EQ(
         parsed.set_json(
             "provider_options",
@@ -236,7 +242,9 @@ TEST(AbiExtRegistry, ProviderOptionSetsAreReadAtTheCallersStrideAndCheckedAtSet)
     bad.struct_size = sizeof(anira_provider_option_set) + 8;
     refused(bad, "one stride");
     bad.struct_size = sizeof(anira_provider_option_set);
-    bad.provider = ANIRA_PROVIDER_DEFAULT;
+    bad.provider = ANIRA_PROVIDER_NONE;
+    refused(bad, "names no provider");
+    bad.provider = ANIRA_PROVIDER_CPU;
     refused(bad, "takes no options");
     bad.provider = ANIRA_PROVIDER_CUDA;
     bad.provider_id = "cuda";
@@ -409,14 +417,14 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     model.m_models.push_back(libtorch);
     const anira_backend_id only_onnx{.struct_size = sizeof(anira_backend_id),
                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .provider = ANIRA_PROVIDER_CPU,
                                      .engine_id = nullptr};
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err),
               ANIRA_OK)
         << "a LibTorch entry that is not a candidate is not walked";
     const anira_backend_id only_libtorch{.struct_size = sizeof(anira_backend_id),
                                          .engine = ANIRA_ENGINE_LIBTORCH,
-                                         .provider = ANIRA_PROVIDER_DEFAULT,
+                                         .provider = ANIRA_PROVIDER_CPU,
                                          .engine_id = nullptr};
 #ifdef USE_LIBTORCH
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err), ANIRA_OK)
@@ -498,7 +506,7 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     // and its own consumer alone.
     const anira_backend_id only_second{.struct_size = sizeof(anira_backend_id),
                                        .engine = ANIRA_ENGINE_CUSTOM,
-                                       .provider = ANIRA_PROVIDER_DEFAULT,
+                                       .provider = ANIRA_PROVIDER_CPU,
                                        .engine_id = "org.example.second"};
     const std::vector<anira::capi::ExtPlanRow> rows =
         anira::capi::ext_consumed_rows(model, nullptr, &only_second, 1, &pipeline);
@@ -510,7 +518,7 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     // under the second's candidate, and under a built-in candidate no custom entry is.
     const anira_backend_id only_onnx{.struct_size = sizeof(anira_backend_id),
                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                     .provider = ANIRA_PROVIDER_DEFAULT,
+                                     .provider = ANIRA_PROVIDER_CPU,
                                      .engine_id = nullptr};
     EXPECT_TRUE(anira::capi::ext_consumed_rows(model, nullptr, &only_onnx, 1, &pipeline).empty());
 

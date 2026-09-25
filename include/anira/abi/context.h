@@ -20,10 +20,11 @@
  * while any handler in this copy exists; anira_shutdown is refused while a context or a handler
  * lives. In this pre-release every context is Host-only (the host domain alone): the probe
  * reports the compiled-in engines on the providers their runtimes report usable here (every
- * engine on ANIRA_PROVIDER_DEFAULT; ONNX Runtime's available execution providers, the enum's
- * value where one fits and ANIRA_PROVIDER_CUSTOM with the runtime's own name in provider_id
- * else; LiteRT's registered accelerators by hardware, "gpu", "npu", "webnn"), and one host edge
- * per backend row; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
+ * engine on ANIRA_PROVIDER_CPU, its first row; ONNX Runtime's available execution providers,
+ * the enum's value where one fits and ANIRA_PROVIDER_CUSTOM with the runtime's own name in
+ * provider_id else; LiteRT's registered accelerators by hardware, "gpu", "npu", "webnn"), and
+ * one host edge per backend row; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at
+ * create.
  */
 
 #include <stddef.h>
@@ -72,9 +73,9 @@ typedef struct anira_backend_id {
     const char* provider_id;
 } anira_backend_id;
 /**
- * @brief No engine on the default provider.
+ * @brief No engine on no provider: both axes unset, as a zeroed record.
  */
-#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, NULL)
+#define ANIRA_BACKEND_ID_INIT ANIRA_INIT(anira_backend_id, sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, NULL)
 
 /**
  * @brief One row of the edge registry: whether a tensor in domain from_domain can reach the
@@ -123,7 +124,7 @@ typedef struct anira_edge_info {
 /**
  * @brief No edge.
  */
-#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL)
+#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL)
 
 /**
  * @brief Creates a context over this copy's core: reconciles the config into the core (see the
@@ -291,7 +292,7 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabiliti
 
 /**
  * @brief What this build compiled in, without a context: every engine with an adapter, on
- * ANIRA_PROVIDER_DEFAULT, in anira_engine order. Whether a backend is usable here is
+ * ANIRA_PROVIDER_CPU, in anira_engine order. Whether a backend is usable here is
  * anira_capabilities_backends on a probed context.
  * @param element_size sizeof(anira_backend_id) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of backends.

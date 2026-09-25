@@ -71,8 +71,9 @@ typedef struct anira_ext_entry {
  * unlike the first record's (an array has one stride), an engine or a provider value
  * this header does not name, a pair against the pair rule of anira_engine and
  * anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty
- * id), no provider (the default provider takes no options), or a count of options
- * without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet.
+ * id), no provider (ANIRA_PROVIDER_NONE) or the CPU path (ANIRA_PROVIDER_CPU, which
+ * takes no options), or a count of options without both arrays or with a NULL entry.
+ * Nothing is dropped or ignored on the quiet.
  */
 typedef struct anira_provider_option_set {
     uint32_t struct_size;  /**< sizeof(anira_provider_option_set) of the caller's header. */
@@ -84,8 +85,8 @@ typedef struct anira_provider_option_set {
     uint32_t engine;
     /**
      * anira_provider of the backend; ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one;
-     * never ANIRA_PROVIDER_DEFAULT: the default provider takes no options, and a set for it is
-     * refused.
+     * never ANIRA_PROVIDER_NONE, which names no provider, nor ANIRA_PROVIDER_CPU, the CPU path,
+     * which takes no options: a set for either is refused.
      */
     uint32_t provider;
     uint32_t num_options;  /**< The number of key/value pairs. */
@@ -105,7 +106,7 @@ typedef struct anira_provider_option_set {
 /**
  * @brief No backend and no options.
  */
-#define ANIRA_PROVIDER_OPTION_SET_INIT ANIRA_INIT(anira_provider_option_set, sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, 0u, NULL, NULL, NULL, NULL)
+#define ANIRA_PROVIDER_OPTION_SET_INIT ANIRA_INIT(anira_provider_option_set, sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, 0u, NULL, NULL, NULL, NULL)
 
 /**
  * @brief Extension "provider_options", version 1, on the context config: the options an
@@ -129,7 +130,7 @@ typedef struct anira_provider_option_set {
  * not reconcile the two in this pre-release. JSON: {"version": 1, "sets": [{"engine":
  * "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}: the pair as its
  * two keys, as a model entry spells them (a built-in engine's word or a custom engine's
- * id; the enum's spelling or a custom provider's name, never the default provider, which
+ * id; the enum's spelling or a custom provider's name, never "cpu", the CPU path, which
  * takes no options), every option value a string.
  */
 typedef struct anira_ext_provider_options {
@@ -1175,14 +1176,14 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_engine(const anira_mo
  * execution provider), so only a candidate naming that provider runs it, and a candidate
  * naming it picks this entry. An entry without a pin is neutral: it runs on any provider
  * of its engine, the candidate deciding. Two entries of one engine may coexist when
- * their pins differ. JSON: the entry's "provider" key beside its "engine", "coreml" (the
- * enum's spellings) or "com.example.npu" (a custom name); "default" or no key is a
- * neutral entry.
+ * their pins differ. JSON: the entry's "provider" key beside its "engine", "coreml" or
+ * "cpu" (the enum's spellings) or "com.example.npu" (a custom name); no key is a neutral
+ * entry, and the words "default" and "none" are refused.
  * @param config The config.
  * @param model_index An entry.
  * @param provider A provider of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a
- *        custom one; ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) unpins the
- *        entry.
+ *        custom one; ANIRA_PROVIDER_NONE (with a NULL provider_id) unpins the entry;
+ *        ANIRA_PROVIDER_CPU pins it to the CPU path.
  * @param provider_id A custom provider's name in the engine's vocabulary (the runtime's own
  *        name for a built-in engine, an entry of a custom engine's providers list),
  *        copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum.
@@ -1208,7 +1209,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_model_provider(anira_mo
  * back NULL unless the value is CUSTOM (the pair rule).
  * @param config The config.
  * @param model_index An entry.
- * @param provider Receives the provider the entry is pinned to; ANIRA_PROVIDER_DEFAULT for a
+ * @param provider Receives the provider the entry is pinned to; ANIRA_PROVIDER_NONE for a
  *        neutral entry, ANIRA_PROVIDER_CUSTOM for a custom pin.
  * @param provider_id Receives the custom provider's name (object-owned, valid until the config
  *        is mutated or destroyed), NULL for a provider of the enum and for none; or
@@ -1426,7 +1427,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_mo
  * anira_handler_prepare.
  * @param config The config.
  * @param provider A provider of the enum, or ANIRA_PROVIDER_CUSTOM beside a provider_id;
- *        ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) sets none (default).
+ *        ANIRA_PROVIDER_NONE (with a NULL provider_id) sets none (default).
  * @param provider_id A custom provider's name in the engine's own vocabulary (anira_provider),
  *        copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, a provider this header
@@ -1950,7 +1951,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_default_engine(const anira_
  * be NULL when the caller wants the value alone, and the id comes back NULL unless the
  * value is CUSTOM (the pair rule).
  * @param config The config.
- * @param provider Receives the default provider; ANIRA_PROVIDER_DEFAULT for none,
+ * @param provider Receives the default provider; ANIRA_PROVIDER_NONE for none,
  *        ANIRA_PROVIDER_CUSTOM for a custom one.
  * @param provider_id Receives the custom default provider's name (object-owned, valid until the
  *        config is mutated or destroyed), NULL else; or NULL.

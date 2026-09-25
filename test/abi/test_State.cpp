@@ -297,7 +297,7 @@ std::vector<anira_backend_id> custom_candidates() {
     for (const char* id : {anira_test::k_custom, k_accumulator_id, k_other_accumulator_id}) {
         out.push_back({.struct_size = sizeof(anira_backend_id),
                        .engine = ANIRA_ENGINE_CUSTOM,
-                       .provider = ANIRA_PROVIDER_DEFAULT,
+                       .provider = ANIRA_PROVIDER_CPU,
                        .engine_id = id});
     }
     return out;
@@ -2530,7 +2530,7 @@ public:
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
                                         .engine = static_cast<uint32_t>(engine),
-                                        .provider = ANIRA_PROVIDER_DEFAULT,
+                                        .provider = ANIRA_PROVIDER_CPU,
                                         .engine_id = nullptr}}
         , m_stages(std::move(stages))
         , m_handler(m_context, m_model, m_candidates, m_stages)
@@ -2800,7 +2800,7 @@ private:
     std::array<anira_backend_id, 1> m_candidates{
         anira_backend_id{.struct_size = sizeof(anira_backend_id),
                          .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                         .provider = ANIRA_PROVIDER_DEFAULT,
+                         .provider = ANIRA_PROVIDER_CPU,
                          .engine_id = nullptr}};
     anira_test::Handler m_handler;
 };

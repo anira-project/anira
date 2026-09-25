@@ -81,9 +81,9 @@ struct ModelEntry {
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     std::string m_engine_id;  ///< non-empty for a custom engine, m_engine ANIRA_ENGINE_CUSTOM
     /// The provider the entry is pinned to (anira_model_config_set_model_provider): the enum's,
-    /// or CUSTOM with m_provider_id for a custom one; DEFAULT and empty for a neutral entry,
+    /// or CUSTOM with m_provider_id for a custom one; NONE and empty for a neutral entry,
     /// which runs on any provider of its engine.
-    anira_provider m_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_provider = ANIRA_PROVIDER_NONE;
     std::string m_provider_id;
     std::string m_path;  ///< kept for to_json even after set_model_bytes
     std::shared_ptr<BytesCarrier> m_bytes;
@@ -93,7 +93,7 @@ struct ModelEntry {
     bool is_custom() const noexcept { return !m_engine_id.empty(); }
     bool has_bytes() const noexcept { return m_bytes != nullptr; }
     bool is_pinned() const noexcept {
-        return m_provider != ANIRA_PROVIDER_DEFAULT || !m_provider_id.empty();
+        return m_provider != ANIRA_PROVIDER_NONE || !m_provider_id.empty();
     }
 };
 
@@ -201,9 +201,9 @@ struct anira_model_config {
     /// custom one (anira_model_config_set_default_engine).
     anira_engine m_default_engine = ANIRA_ENGINE_NONE;
     std::string m_default_engine_id;
-    /// The provider the handler starts on beside the default engine; DEFAULT for none, CUSTOM
+    /// The provider the handler starts on beside the default engine; NONE for none, CUSTOM
     /// with the id for a custom one (anira_model_config_set_default_provider).
-    anira_provider m_default_provider = ANIRA_PROVIDER_DEFAULT;
+    anira_provider m_default_provider = ANIRA_PROVIDER_NONE;
     std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
     uint32_t m_max_instances = 1;

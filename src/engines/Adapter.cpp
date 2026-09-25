@@ -42,7 +42,7 @@ void BuiltinEngine::ensure_init(const anira_init_info& info) {
 }
 
 std::vector<ProviderInfo> BuiltinEngine::providers() const {
-    // The default provider first, then the runtime's, each once.
+    // The CPU path first, then the runtime's, each once.
     std::vector<ProviderInfo> listed;
     listed.push_back(ProviderInfo{});
     std::vector<ProviderInfo> reported = runtime_providers();

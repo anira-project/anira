@@ -44,7 +44,7 @@ EngineCarrier::EngineCarrier(std::string id, const anira_engine_desc& desc)
 }
 
 bool EngineCarrier::serves(anira_provider provider, std::string_view provider_id) const noexcept {
-    if (provider == ANIRA_PROVIDER_DEFAULT && provider_id.empty()) { return true; }
+    if (m_providers.empty()) { return provider == ANIRA_PROVIDER_CPU && provider_id.empty(); }
     for (const std::string& word : m_providers) {
         if (provider_of_name(word) != provider) { continue; }
         if (provider != ANIRA_PROVIDER_CUSTOM || word == provider_id) { return true; }
@@ -94,6 +94,7 @@ EngineFacts engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>
     EngineFacts facts;
     for (const std::shared_ptr<const EngineCarrier>& engine : engines) {
         facts.m_ids.push_back(engine->id());
+        facts.m_providers.push_back(engine->providers());
         if (engine->consumed_kinds().empty()) { continue; }
         facts.m_consumers.push_back(ExtConsumer{.m_name = engine->id().c_str(),
                                                 .m_engine = ANIRA_ENGINE_CUSTOM,

@@ -173,7 +173,7 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
     checks += load_info.struct_size == sizeof(anira_engine_load_info) && load_info.instances == 0U
                   ? 1
                   : 0;
-    checks += load_info.provider == ANIRA_PROVIDER_DEFAULT && load_info.provider_id == nullptr &&
+    checks += load_info.provider == ANIRA_PROVIDER_CPU && load_info.provider_id == nullptr &&
                       engine.providers == nullptr && engine.num_providers == 0U &&
                       engine.query == nullptr
                   ? 1
@@ -263,7 +263,7 @@ static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
 // getters and the stage's two pair accessors (a status, the value and the nullable id), the
 // renamed enumeration and the pair setters.
 static_assert(
-    noexcept(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_DEFAULT, nullptr)));
+    noexcept(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_NONE, nullptr)));
 static_assert(noexcept(anira_model_config_default_provider(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_model_config_default_engine(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_model_config_model_engine(nullptr, 0, nullptr, nullptr)));

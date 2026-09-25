@@ -702,29 +702,30 @@ headers:
       - kind: enum
         name: anira_engine
         terminator: ANIRA_ENGINE_FORCE32
-        doc: "Inference engine, one of the two independent backend axes. Values 7 and up are reserved for later anira engines. The pair rule, wherever an engine is named (a model entry, the default engine, anira_backend_id, anira_plan_info, anira_edge_info, anira_provider_option_set, anira_stage_ctx): the engine_id is non-NULL if and only if the engine is ANIRA_ENGINE_CUSTOM. A built-in engine is its value with a NULL id; a custom engine (anira_custom_engine_create, added to a pipeline with anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its reverse-URI id (a stage reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no engine and takes no id. A setter refuses any other combination with ANIRA_ERROR_INVALID_ARGUMENT."
+        doc: "Inference engine, one of the two independent backend axes. Values after ANIRA_ENGINE_TFLITE and below ANIRA_ENGINE_CUSTOM are reserved for later built-in engines, which are appended after TFLITE and never renumber CUSTOM. The pair rule, wherever an engine is named (a model entry, the default engine, anira_backend_id, anira_plan_info, anira_edge_info, anira_provider_option_set, anira_stage_ctx): the engine_id is non-NULL if and only if the engine is ANIRA_ENGINE_CUSTOM. A built-in engine is its value with a NULL id; a custom engine (anira_custom_engine_create, added to a pipeline with anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its reverse-URI id (a stage reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no engine and takes no id. A setter refuses any other combination with ANIRA_ERROR_INVALID_ARGUMENT."
         values:
           - {name: ANIRA_ENGINE_NONE, value: 0, doc: "No engine; as a default engine it means plan 0 (the first plan of the table)."}
           - {name: ANIRA_ENGINE_ONNXRUNTIME, value: 1, doc: "ONNX Runtime (v2 ONNX, JSON \"onnxruntime\")."}
-          - {name: ANIRA_ENGINE_LIBTORCH, value: 2, doc: "LibTorch (JSON \"libtorch\")."}
-          - {name: ANIRA_ENGINE_TFLITE, value: 3, doc: "TensorFlow Lite, legacy C API (JSON \"tflite\")."}
-          - {name: ANIRA_ENGINE_LITERT, value: 4, doc: "LiteRT (JSON \"litert\")."}
-          - {name: ANIRA_ENGINE_EXECUTORCH, value: 5, doc: "ExecuTorch (JSON \"executorch\")."}
-          - {name: ANIRA_ENGINE_CUSTOM, value: 6, doc: "A custom engine, named by the engine_id beside it (JSON: the id itself, \"com.example.engine\")."}
+          - {name: ANIRA_ENGINE_EXECUTORCH, value: 2, doc: "ExecuTorch (JSON \"executorch\")."}
+          - {name: ANIRA_ENGINE_LITERT, value: 3, doc: "LiteRT (JSON \"litert\")."}
+          - {name: ANIRA_ENGINE_LIBTORCH, value: 4, doc: "LibTorch (JSON \"libtorch\")."}
+          - {name: ANIRA_ENGINE_TFLITE, value: 5, doc: "TensorFlow Lite, legacy C API (JSON \"tflite\")."}
+          - {name: ANIRA_ENGINE_CUSTOM, value: "0x7ffffffe", doc: "A custom engine, named by the engine_id beside it (JSON: the id itself, \"com.example.engine\")."}
           - {name: ANIRA_ENGINE_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_provider
         terminator: ANIRA_PROVIDER_FORCE32
-        doc: "Execution provider, the other backend axis; a provider name means the same thing across engines. The pair rule, wherever a provider is named (the pin of a model entry, the default provider, anira_backend_id, anira_plan_info, anira_edge_info, anira_provider_option_set, anira_engine_load_info, anira_stage_ctx): the provider_id is non-NULL if and only if the provider is ANIRA_PROVIDER_CUSTOM. A provider of the enum is its value with a NULL id; a provider the enum does not name is ANIRA_PROVIDER_CUSTOM with its non-empty name in the engine's own vocabulary: the runtime's name for a built-in engine (what the context's capabilities report), an entry of the descriptor's providers list for a custom engine. A setter refuses any other combination, ANIRA_PROVIDER_DEFAULT beside a name included, with ANIRA_ERROR_INVALID_ARGUMENT. A provider is part of the loaded model: two providers of one model load twice (anira/abi/engine.h)."
+        doc: "Execution provider, the other backend axis; a provider name means the same thing across engines. Values after ANIRA_PROVIDER_XNNPACK and below ANIRA_PROVIDER_CUSTOM are reserved for later providers, which are appended after XNNPACK and never renumber CUSTOM. The pair rule, wherever a provider is named (the pin of a model entry, the default provider, anira_backend_id, anira_plan_info, anira_edge_info, anira_provider_option_set, anira_engine_load_info, anira_stage_ctx): the provider_id is non-NULL if and only if the provider is ANIRA_PROVIDER_CUSTOM. A provider of the enum is its value with a NULL id; a provider the enum does not name is ANIRA_PROVIDER_CUSTOM with its non-empty name in the engine's own vocabulary: the runtime's name for a built-in engine (what the context's capabilities report), an entry of the descriptor's providers list for a custom engine. A setter refuses any other combination, ANIRA_PROVIDER_NONE beside a name included, with ANIRA_ERROR_INVALID_ARGUMENT. ANIRA_PROVIDER_NONE names no provider and takes no id: it unpins a model entry and clears the default provider, and is refused wherever a provider must be real (a candidate, a provider option set) with ANIRA_ERROR_INVALID_ARGUMENT, as ANIRA_ENGINE_NONE is refused as an entry's engine. ANIRA_PROVIDER_CPU is the engine's plain CPU path. A provider is part of the loaded model: two providers of one model load twice (anira/abi/engine.h)."
         values:
-          - {name: ANIRA_PROVIDER_DEFAULT, value: 0, doc: "The engine's own CPU path (JSON: a model entry without a \"provider\" key)."}
-          - {name: ANIRA_PROVIDER_CUDA, value: 1, doc: "CUDA (JSON \"cuda\", the value of a model entry's \"provider\" key)."}
-          - {name: ANIRA_PROVIDER_WEBGPU, value: 2, doc: "WebGPU (JSON \"webgpu\")."}
-          - {name: ANIRA_PROVIDER_DIRECTML, value: 3, doc: "DirectML (JSON \"directml\")."}
-          - {name: ANIRA_PROVIDER_COREML, value: 4, doc: "Core ML (JSON \"coreml\")."}
-          - {name: ANIRA_PROVIDER_XNNPACK, value: 5, doc: "XNNPACK (JSON \"xnnpack\")."}
-          - {name: ANIRA_PROVIDER_VULKAN, value: 6, doc: "Vulkan (JSON \"vulkan\")."}
-          - {name: ANIRA_PROVIDER_CUSTOM, value: 7, doc: "A provider the enum does not name, named by the provider_id beside it in the engine's own vocabulary (JSON: the name itself, \"com.example.npu\")."}
+          - {name: ANIRA_PROVIDER_NONE, value: 0, doc: "No provider, nothing chosen: the zero value, what an _INIT record and a zeroed record hold. A neutral model entry (JSON: no \"provider\" key) and a model config without a default provider (JSON: no \"default_provider\" key); refused as the provider of a candidate and of a provider option set."}
+          - {name: ANIRA_PROVIDER_CPU, value: 1, doc: "The engine's plain CPU path, no delegate or execution provider (JSON \"cpu\"): ONNX Runtime's CPUExecutionProvider, LibTorch, ExecuTorch without a delegate, TFLite, LiteRT's \"cpu\" accelerator. Every built-in engine serves it (its first capability row). XNNPACK is a provider of its own, a delegate that also computes on the CPU."}
+          - {name: ANIRA_PROVIDER_CUDA, value: 2, doc: "CUDA (JSON \"cuda\", the value of a model entry's \"provider\" key)."}
+          - {name: ANIRA_PROVIDER_WEBGPU, value: 3, doc: "WebGPU (JSON \"webgpu\")."}
+          - {name: ANIRA_PROVIDER_VULKAN, value: 4, doc: "Vulkan (JSON \"vulkan\")."}
+          - {name: ANIRA_PROVIDER_DIRECTML, value: 5, doc: "DirectML (JSON \"directml\")."}
+          - {name: ANIRA_PROVIDER_COREML, value: 6, doc: "Core ML (JSON \"coreml\")."}
+          - {name: ANIRA_PROVIDER_XNNPACK, value: 7, doc: "XNNPACK (JSON \"xnnpack\")."}
+          - {name: ANIRA_PROVIDER_CUSTOM, value: "0x7ffffffe", doc: "A provider the enum does not name, named by the provider_id beside it in the engine's own vocabulary (JSON: the name itself, \"com.example.npu\")."}
           - {name: ANIRA_PROVIDER_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_phase
@@ -1323,11 +1324,11 @@ headers:
       - kind: struct
         name: anira_provider_option_set
         tier: 2
-        doc: "One set of anira_ext_provider_options: a backend (an engine on a provider, the two-axis id as anira_backend_id spells it) and the options its runtime takes for the provider, as string pairs in the runtime's own vocabulary (ONNX Runtime's execution provider option keys: device_id for CUDA, backend_path for QNN, ...), kept in key order (two sets with the same pairs are one set, whatever their order). Tier 2, struct_size first, read within it; copied by the set call, which refuses a malformed set with ANIRA_ERROR_INVALID_ARGUMENT naming it: a struct_size below the fixed head or unlike the first record's (an array has one stride), an engine or a provider value this header does not name, a pair against the pair rule of anira_engine and anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty id), no provider (the default provider takes no options), or a count of options without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet."
+        doc: "One set of anira_ext_provider_options: a backend (an engine on a provider, the two-axis id as anira_backend_id spells it) and the options its runtime takes for the provider, as string pairs in the runtime's own vocabulary (ONNX Runtime's execution provider option keys: device_id for CUDA, backend_path for QNN, ...), kept in key order (two sets with the same pairs are one set, whatever their order). Tier 2, struct_size first, read within it; copied by the set call, which refuses a malformed set with ANIRA_ERROR_INVALID_ARGUMENT naming it: a struct_size below the fixed head or unlike the first record's (an array has one stride), an engine or a provider value this header does not name, a pair against the pair rule of anira_engine and anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty id), no provider (ANIRA_PROVIDER_NONE) or the CPU path (ANIRA_PROVIDER_CPU, which takes no options), or a count of options without both arrays or with a NULL entry. Nothing is dropped or ignored on the quiet."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_provider_option_set) of the caller's header."}
           - {name: engine, type: uint32_t, doc: "anira_engine of the backend; ANIRA_ENGINE_CUSTOM with an engine_id for a custom engine, which receives the set in its load record (anira_engine_load_info.option_keys) when its descriptor lists \"context:provider_options\"."}
-          - {name: provider, type: uint32_t, doc: "anira_provider of the backend; ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one; never ANIRA_PROVIDER_DEFAULT: the default provider takes no options, and a set for it is refused."}
+          - {name: provider, type: uint32_t, doc: "anira_provider of the backend; ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one; never ANIRA_PROVIDER_NONE, which names no provider, nor ANIRA_PROVIDER_CPU, the CPU path, which takes no options: a set for either is refused."}
           - {name: num_options, type: uint32_t, doc: "The number of key/value pairs."}
           - {name: engine_id, type: const char*, doc: "The id of a custom engine (engine ANIRA_ENGINE_CUSTOM), copied; NULL for a built-in engine."}
           - {name: provider_id, type: const char*, doc: "A custom provider's name in the engine's vocabulary (provider ANIRA_PROVIDER_CUSTOM), copied; NULL for a provider the enum names."}
@@ -1335,12 +1336,12 @@ headers:
           - {name: values, type: const char* const*, doc: "num_options option values, NUL-terminated, copied."}
         init:
           name: ANIRA_PROVIDER_OPTION_SET_INIT
-          value: "sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, 0u, NULL, NULL, NULL, NULL"
+          value: "sizeof(anira_provider_option_set), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, 0u, NULL, NULL, NULL, NULL"
           doc: "No backend and no options."
       - kind: struct
         name: anira_ext_provider_options
         tier: 2
-        doc: "Extension \"provider_options\", version 1, on the context config: the options an engine's runtime takes for a provider, one set per backend (anira_provider_option_set). Each set is checked against the backend it names. Its engine must consume the kind: the ONNX Runtime adapter, which reads the set of the plan's backend at load into the execution provider's options (CUDA's own entry and the generic one alike), or a custom engine whose descriptor lists \"context:provider_options\", which receives the set in its load record; a set for another engine is ANIRA_ERROR_EXTENSION_UNCONSUMED naming the backend, at anira_context_create for a built-in engine (no adapter of the build reads the kind for it) and at anira_handler_create for a custom engine of the pipeline. Its provider must be one the engine serves here, the context's capabilities for a built-in engine and the descriptor's list for a custom one, else ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, so a misspelled provider word is refused and never silently ignored. A set for a custom engine no pipeline of the handler adds, or for a backend no plan runs on, is not an error. The options are part of the loaded model where its engine reads them: two contexts with different options for one backend load twice. A device block of the context (anira_cuda_desc.device and its siblings) and a provider option that selects a device (\"device_id\" for CUDA) name the same device: anira does not reconcile the two in this pre-release. JSON: {\"version\": 1, \"sets\": [{\"engine\": \"onnxruntime\", \"provider\": \"cuda\", \"options\": {\"device_id\": \"0\"}}]}: the pair as its two keys, as a model entry spells them (a built-in engine's word or a custom engine's id; the enum's spelling or a custom provider's name, never the default provider, which takes no options), every option value a string."
+        doc: "Extension \"provider_options\", version 1, on the context config: the options an engine's runtime takes for a provider, one set per backend (anira_provider_option_set). Each set is checked against the backend it names. Its engine must consume the kind: the ONNX Runtime adapter, which reads the set of the plan's backend at load into the execution provider's options (CUDA's own entry and the generic one alike), or a custom engine whose descriptor lists \"context:provider_options\", which receives the set in its load record; a set for another engine is ANIRA_ERROR_EXTENSION_UNCONSUMED naming the backend, at anira_context_create for a built-in engine (no adapter of the build reads the kind for it) and at anira_handler_create for a custom engine of the pipeline. Its provider must be one the engine serves here, the context's capabilities for a built-in engine and the descriptor's list for a custom one, else ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, so a misspelled provider word is refused and never silently ignored. A set for a custom engine no pipeline of the handler adds, or for a backend no plan runs on, is not an error. The options are part of the loaded model where its engine reads them: two contexts with different options for one backend load twice. A device block of the context (anira_cuda_desc.device and its siblings) and a provider option that selects a device (\"device_id\" for CUDA) name the same device: anira does not reconcile the two in this pre-release. JSON: {\"version\": 1, \"sets\": [{\"engine\": \"onnxruntime\", \"provider\": \"cuda\", \"options\": {\"device_id\": \"0\"}}]}: the pair as its two keys, as a model entry spells them (a built-in engine's word or a custom engine's id; the enum's spelling or a custom provider's name, never \"cpu\", the CPU path, which takes no options), every option value a string."
         fields:
           - {name: header, type: anira_ext_header, doc: "{sizeof(anira_ext_provider_options), 1, \"provider_options\"}."}
           - {name: sets, type: const anira_provider_option_set*, doc: "num_sets records at the stride of the first record's struct_size (an array has one), each read within it; copied. NULL with a count of 0 for none."}
@@ -2079,13 +2080,13 @@ headers:
         params:
           - {type: anira_model_config*, name: config, doc: "The config."}
           - {type: uint32_t, name: model_index, doc: "An entry."}
-          - {type: anira_provider, name: provider, doc: "A provider of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one; ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) unpins the entry."}
+          - {type: anira_provider, name: provider, doc: "A provider of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one; ANIRA_PROVIDER_NONE (with a NULL provider_id) unpins the entry; ANIRA_PROVIDER_CPU pins it to the CPU path."}
           - {type: const char*, name: provider_id, doc: "A custom provider's name in the engine's vocabulary (the runtime's own name for a built-in engine, an entry of a custom engine's providers list), copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered for a provider (an ExecuTorch delegate), an ONNX Runtime .ort compiled for an execution provider), so only a candidate naming that provider runs it, and a candidate naming it picks this entry. An entry without a pin is neutral: it runs on any provider of its engine, the candidate deciding. Two entries of one engine may coexist when their pins differ. JSON: the entry's \"provider\" key beside its \"engine\", \"coreml\" (the enum's spellings) or \"com.example.npu\" (a custom name); \"default\" or no key is a neutral entry."
+        doc: "Pins the entry to a provider: its file is built for one (an ExecuTorch export lowered for a provider (an ExecuTorch delegate), an ONNX Runtime .ort compiled for an execution provider), so only a candidate naming that provider runs it, and a candidate naming it picks this entry. An entry without a pin is neutral: it runs on any provider of its engine, the candidate deciding. Two entries of one engine may coexist when their pins differ. JSON: the entry's \"provider\" key beside its \"engine\", \"coreml\" or \"cpu\" (the enum's spellings) or \"com.example.npu\" (a custom name); no key is a neutral entry, and the words \"default\" and \"none\" are refused."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config, an index out of range, an unknown provider value, or a pair against the pair rule of anira_provider (a provider_id beside a provider other than ANIRA_PROVIDER_CUSTOM, CUSTOM without a provider_id or with an empty one)."
       - kind: function
         name: anira_model_config_model_provider
@@ -2093,7 +2094,7 @@ headers:
         params:
           - {type: const anira_model_config*, name: config, doc: "The config."}
           - {type: uint32_t, name: model_index, doc: "An entry."}
-          - {type: anira_provider*, name: provider, doc: "Receives the provider the entry is pinned to; ANIRA_PROVIDER_DEFAULT for a neutral entry, ANIRA_PROVIDER_CUSTOM for a custom pin."}
+          - {type: anira_provider*, name: provider, doc: "Receives the provider the entry is pinned to; ANIRA_PROVIDER_NONE for a neutral entry, ANIRA_PROVIDER_CUSTOM for a custom pin."}
           - {type: const char**, name: provider_id, doc: "Receives the custom provider's name (object-owned, valid until the config is mutated or destroyed), NULL for a provider of the enum and for none; or NULL."}
         thread: main-thread
         status: promised
@@ -2219,7 +2220,7 @@ headers:
         returns: anira_status
         params:
           - {type: anira_model_config*, name: config, doc: "The config."}
-          - {type: anira_provider, name: provider, doc: "A provider of the enum, or ANIRA_PROVIDER_CUSTOM beside a provider_id; ANIRA_PROVIDER_DEFAULT (with a NULL provider_id) sets none (default)."}
+          - {type: anira_provider, name: provider, doc: "A provider of the enum, or ANIRA_PROVIDER_CUSTOM beside a provider_id; ANIRA_PROVIDER_NONE (with a NULL provider_id) sets none (default)."}
           - {type: const char*, name: provider_id, doc: "A custom provider's name in the engine's own vocabulary (anira_provider), copied, beside ANIRA_PROVIDER_CUSTOM; NULL beside a provider of the enum."}
         thread: main-thread
         status: promised
@@ -2626,7 +2627,7 @@ headers:
         returns: anira_status
         params:
           - {type: const anira_model_config*, name: config, doc: "The config."}
-          - {type: anira_provider*, name: provider, doc: "Receives the default provider; ANIRA_PROVIDER_DEFAULT for none, ANIRA_PROVIDER_CUSTOM for a custom one."}
+          - {type: anira_provider*, name: provider, doc: "Receives the default provider; ANIRA_PROVIDER_NONE for none, ANIRA_PROVIDER_CUSTOM for a custom one."}
           - {type: const char**, name: provider_id, doc: "Receives the custom default provider's name (object-owned, valid until the config is mutated or destroyed), NULL else; or NULL."}
         thread: main-thread
         status: promised
@@ -2868,7 +2869,8 @@ headers:
       handler in this copy exists; anira_shutdown is refused while a context or a handler
       lives. In this pre-release every context is Host-only (the host domain alone): the probe
       reports the compiled-in engines on the providers their runtimes report usable here (every
-      engine on ANIRA_PROVIDER_DEFAULT; ONNX Runtime's available execution providers, the enum's
+      engine on ANIRA_PROVIDER_CPU, its first row; ONNX Runtime's available execution providers,
+      the enum's
       value where one fits and ANIRA_PROVIDER_CUSTOM with the runtime's own name in provider_id
       else; LiteRT's registered
       accelerators by hardware, "gpu", "npu", "webnn"), and one host edge per backend row; a
@@ -2888,8 +2890,8 @@ headers:
           - {name: provider_id, type: const char*, doc: "The name of a custom provider in the engine's vocabulary (provider ANIRA_PROVIDER_CUSTOM); NULL for a provider the enum names. A tail field: a caller whose header ends before it names the enum's providers alone (it reads a custom provider's row as ANIRA_PROVIDER_CUSTOM without the name, and a candidate of CUSTOM from it is refused). Static storage of the library when anira wrote it; the caller's, valid for the call, when the caller did."}
         init:
           name: ANIRA_BACKEND_ID_INIT
-          value: "sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, NULL"
-          doc: "No engine on the default provider."
+          value: "sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, NULL"
+          doc: "No engine on no provider: both axes unset, as a zeroed record."
       - kind: struct
         name: anira_edge_info
         tier: 2
@@ -2908,7 +2910,7 @@ headers:
           - {name: to_engine_id, type: const char*, doc: "NULL for a built-in engine; the id of a custom engine of the pipeline (to_engine ANIRA_ENGINE_CUSTOM; anira_pipeline_capabilities_edge), the engine's own string, valid while the pipeline holds the engine. A tail field: a caller whose header ends before it reads the rows without it."}
         init:
           name: ANIRA_EDGE_INFO_INIT
-          value: "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL"
+          value: "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL"
           doc: "No edge."
       - kind: function
         name: anira_context_create
@@ -3026,7 +3028,7 @@ headers:
         thread: thread-safe
         status: promised
         since: "0.2"
-        doc: "What this build compiled in, without a context: every engine with an adapter, on ANIRA_PROVIDER_DEFAULT, in anira_engine order. Whether a backend is usable here is anira_capabilities_backends on a probed context."
+        doc: "What this build compiled in, without a context: every engine with an adapter, on ANIRA_PROVIDER_CPU, in anira_engine order. Whether a backend is usable here is anira_capabilities_backends on a probed context."
         return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL count or an element_size below the struct_size slot."
       - kind: function
         name: anira_context_byte_image_bytes
@@ -4020,7 +4022,7 @@ headers:
         params:
           - {type: const anira_init_info*, name: info, doc: "The facts of the core in effect at the call (the log level, the thread count the context asks for, the context asking); valid until the callback returns."}
           - {type: void*, name: user_data, doc: "The descriptor's user_data."}
-          - {type: uint64_t*, name: out_available, doc: "Receives a bitmask over the descriptor's providers list: bit i set means providers[i] is usable here, now. The default provider is always served and has no bit; a bit beyond num_providers is ignored."}
+          - {type: uint64_t*, name: out_available, doc: "Receives a bitmask over the descriptor's providers list: bit i set means providers[i] is usable here, now; a bit beyond num_providers is ignored. The mask covers the listed providers alone: ANIRA_PROVIDER_CPU is served without a bit only by a descriptor without a list, and is a listed provider like any other in a list that names it. Under the default candidate set a plan on a provider whose bit is clear is dropped; a named candidate on it is refused."}
         thread: main-thread
         doc: "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
       - kind: struct
@@ -4044,7 +4046,7 @@ headers:
           - {name: unload, type: anira_engine_unload_fn, doc: "ANIRA_PHASE_UNLOAD: once per successful load, when the last handler holding the loaded model is re-prepared or destroyed, after every unprepare of it. NULL: none."}
           - {name: init, type: anira_engine_init_fn, doc: "ANIRA_PHASE_INIT: once per engine object, at the first anira_handler_prepare that reaches it, before its first load. NULL: none."}
           - {name: release, type: anira_engine_release_fn, doc: "ANIRA_PHASE_RELEASE: once, when the last reference to the engine object dies, after every unload. NULL: none."}
-          - {name: providers, type: const char* const*, doc: "The providers the engine serves beyond ANIRA_PROVIDER_DEFAULT, as strings, copied; NULL with a count of 0 serves DEFAULT alone. The enum's JSON spellings name a provider of the enum (\"cuda\", \"webgpu\", \"directml\", \"coreml\", \"xnnpack\", \"vulkan\"); any other string is a custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM with that name wherever the pair travels (a reverse-URI name is the convention, not a rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create; load may still refuse one it cannot serve at run time. A tail field: a caller whose header ends before it serves DEFAULT alone."}
+          - {name: providers, type: const char* const*, doc: "The providers the engine serves, as strings, copied: exactly the listed ones (ANIRA_PROVIDER_CPU only if the list has \"cpu\"); NULL with a count of 0 serves ANIRA_PROVIDER_CPU alone. The enum's JSON spellings name a provider of the enum (\"cpu\", \"cuda\", \"webgpu\", \"vulkan\", \"directml\", \"coreml\", \"xnnpack\"); the words \"default\" and \"none\" are refused (ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create); any other string is a custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM with that name wherever the pair travels (a reverse-URI name is the convention, not a rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create; load may still refuse one it cannot serve at run time. Under the default candidate set a neutral entry of the engine runs on the CPU path when the engine serves it, else on the first listed provider. A tail field: a caller whose header ends before it serves ANIRA_PROVIDER_CPU alone."}
           - {name: num_providers, type: uint32_t, doc: "The length of providers."}
           - {name: reserved, type: uint32_t, doc: "0."}
           - {name: query, type: anira_engine_query_fn, doc: "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; at anira_handler_create and at anira_pipeline_capabilities_backends / _edge, before init and any number of times. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."}
@@ -4160,7 +4162,7 @@ headers:
           - {name: index, type: uint32_t, doc: "The row's index within the plan's extension list."}
           - {name: host, type: const char*, doc: "The host of the slot: \"tensor_spec 'name'\", \"model [i]\", \"model_config\" or \"contract\"."}
           - {name: kind, type: const char*, doc: "The extension kind (its registered reverse-URI name)."}
-          - {name: consumer, type: const char*, doc: "Who consumes it: \"stage\" for the pipeline's stage, else the engine's word for a built-in engine's adapter (\"onnxruntime\", \"libtorch\", \"executorch\") or the id of a custom engine."}
+          - {name: consumer, type: const char*, doc: "Who consumes it: \"stage\" for the pipeline's stage, else the engine's word for a built-in engine's adapter (\"onnxruntime\", \"executorch\", \"libtorch\") or the id of a custom engine."}
         init:
           name: ANIRA_PLAN_EXT_INIT
           value: "sizeof(anira_plan_ext), 0u, NULL, NULL, NULL"
@@ -4183,7 +4185,7 @@ headers:
           - {name: provider_id, type: const char*, doc: "NULL for a provider the enum names; the name of the plan's custom provider (anira_provider), valid while the report is. A tail field: a caller whose header ends before it gets its rows without it."}
         init:
           name: ANIRA_PLAN_INFO_INIT
-          value: "sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, NULL, 0.0, 0u, 0u, NULL"
+          value: "sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL"
           doc: "No plan."
 
       # ---- the pipeline ------------------------------------------------------
@@ -4207,14 +4209,14 @@ headers:
           - {type: anira_pipeline*, name: pipeline, doc: "The pipeline."}
           - {type: const anira_model_config* const*, name: variants, doc: "The model configurations the stage may run, copied; exactly one in this pre-release."}
           - {type: uint32_t, name: num_variants, doc: "The number of variants; 1 in this pre-release."}
-          - {type: const anira_backend_id*, name: candidates, doc: "The candidate backends, copied, or NULL (with num_candidates 0) for the default set: every engine this build carries on ANIRA_PROVIDER_DEFAULT, every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), and every provider a model entry of the variant is pinned to, on that entry's engine, so that a pinned entry runs on its pin and a neutral one on the default provider. Under the default set a model entry for an engine this build lacks is skipped, not refused; name it as a candidate to have it checked. A candidate names a built-in engine by its value or a custom engine as ANIRA_ENGINE_CUSTOM with its id; ANIRA_ENGINE_NONE names no engine. A candidate's provider (a value of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one) is what its plans run on: a model entry without a pin runs on it, a pinned entry on its pin alone (a candidate naming another provider skips it); its syntax is checked here (a known value on both axes and the pair rule of anira_engine and anira_provider), whether the engine serves it at anira_handler_create."}
+          - {type: const anira_backend_id*, name: candidates, doc: "The candidate backends, copied, or NULL (with num_candidates 0) for the default set: every engine this build carries on ANIRA_PROVIDER_CPU, every custom engine an entry names (ANIRA_ENGINE_CUSTOM with its id), and every provider a model entry of the variant is pinned to, on that entry's engine. Under it every entry is one plan: a pinned entry on its pin, a neutral one on its engine's home provider, ANIRA_PROVIDER_CPU for a built-in engine and for a custom engine that serves it (no providers list, or \"cpu\" in it), else the custom engine's first listed provider. Under the default set a model entry for an engine this build lacks is skipped, not refused, and a plan whose provider its engine cannot use here (a built-in engine's provider the context's capabilities lack, a custom engine's declared provider its query cleared) is dropped at anira_handler_create and anira_handler_prepare, with its entry when no plan of the entry is left; a variant left with no plan is ANIRA_ERROR_CONFIG. Name a candidate to have it checked: a named candidate the engine cannot serve here is refused. A candidate names a built-in engine by its value or a custom engine as ANIRA_ENGINE_CUSTOM with its id; ANIRA_ENGINE_NONE names no engine. A candidate's provider (a value of the enum, or ANIRA_PROVIDER_CUSTOM with a provider_id for a custom one; never ANIRA_PROVIDER_NONE) is what its plans run on: a model entry without a pin runs on it, a pinned entry on its pin alone (a candidate naming another provider skips it); its syntax is checked here (a known value on both axes and the pair rule of anira_engine and anira_provider), whether the engine serves it at anira_handler_create."}
           - {type: uint32_t, name: num_candidates, doc: "The number of candidates; 0 with a NULL list."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
         doc: "Adds the inference stage: the variants and the candidate backends. One plan is compiled per model entry and candidate that names its engine and a provider it accepts (anira_handler_prepare; the plan table is in entry order and, within an entry, candidate order, an equal provider once), so one entry under two providers of its engine is two plans, which anira_handler_set_plan switches between; a candidate without an entry is not a plan and not an error; a pipeline whose candidates match no entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure of the variant (axes, roles, windows, layouts, the engines of the named candidates against this build, the extensions on the model and its specs) is checked at anira_handler_create; the contract rules at prepare. A custom engine is part of this stage and never a stage of its own: it is one more implementation a candidate's engine_id resolves to, added to the pipeline with anira_pipeline_add_engine (before or after this call), and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create: every custom id, anira.v2.custom included, needs an engine on the pipeline."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant list, a NULL entry in it, a NULL candidates with num_candidates above 0, a candidate whose struct_size is below the record's head or unlike the first candidate's (the array's one stride), or a candidate whose engine is neither a built-in engine nor ANIRA_ENGINE_CUSTOM, whose provider is no value of anira_provider, or whose pair breaks the pair rule of anira_engine and anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty provider_id, a custom engine id without a '.'); ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more than one variant."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, a NULL or empty variant list, a NULL entry in it, a NULL candidates with num_candidates above 0, a candidate whose struct_size is below the record's head or unlike the first candidate's (the array's one stride), or a candidate whose engine is neither a built-in engine nor ANIRA_ENGINE_CUSTOM, whose provider is ANIRA_PROVIDER_NONE or no value of anira_provider, or whose pair breaks the pair rule of anira_engine and anira_provider (an id beside a value other than CUSTOM, CUSTOM without an id, an empty provider_id, a custom engine id without a '.'); ANIRA_ERROR_CONFIG for a second inference stage; ANIRA_ERROR_NOT_SUPPORTED for more than one variant."
 
       - kind: function
         name: anira_pipeline_add_stage
@@ -4288,7 +4290,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The backends usable here for a handler of this pipeline on this context: the context's rows first (anira_capabilities_backends: the built-in engines on the providers their runtimes report, as the last anira_context_probe left them), then, for every custom engine added to the pipeline, in the order they were added, one row per provider usable here: the default provider first, then each provider of the descriptor's list whose query bit is set (anira_engine_query_fn; every listed provider for an engine without a query), engine ANIRA_ENGINE_CUSTOM with the engine's id in engine_id. Every call runs the custom engines' queries; the built-in rows are refreshed by anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a custom provider's provider_id) and into the context's store (a built-in engine's provider_id): valid until the pipeline is destroyed and until the context's next probe. Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element."
+        doc: "The backends usable here for a handler of this pipeline on this context: the context's rows first (anira_capabilities_backends: the built-in engines on the providers their runtimes report, as the last anira_context_probe left them), then, for every custom engine added to the pipeline, in the order they were added, one row per provider usable here: ANIRA_PROVIDER_CPU alone for a descriptor without a providers list, else each provider of the list whose query bit is set (anira_engine_query_fn; every listed provider for an engine without a query), engine ANIRA_ENGINE_CUSTOM with the engine's id in engine_id. Every call runs the custom engines' queries; the built-in rows are refreshed by anira_context_probe alone. The strings point into the pipeline's engines (engine_id, a custom provider's provider_id) and into the context's store (a built-in engine's provider_id): valid until the pipeline is destroyed and until the context's next probe. Stride-explicit enumeration: min(element_size, the library's record size) bytes are written per element."
         return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline, context or count or an element_size below the struct_size slot, or the status a custom engine's query returned when it failed."
       - kind: function
         name: anira_pipeline_capabilities_edge
@@ -4302,7 +4304,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to the default provider and to XNNPACK, the CPU providers host memory reaches without a copy, a host copy the engine makes for itself to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's."
+        doc: "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a copy, a host copy the engine makes for itself to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's."
         return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row for the pair (out untouched: a custom engine the pipeline does not add, a provider it does not declare or its query cleared, a domain other than the host's); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields; or the status a custom engine's query returned when it failed."
       - kind: function
         name: anira_pipeline_destroy
@@ -4327,7 +4329,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Creates a handler over a context from a pipeline, copying everything: the three handles may be destroyed when the call returns. Validates the variant's structure, walks the extensions on the model and its specs, checks the named candidates against this build (a named candidate whose engine is not in the build is ANIRA_ERROR_NOT_SUPPORTED, and so is an entry whose custom id no engine of the pipeline serves; under the default candidate set an entry for an absent engine is skipped, and a variant left with no entry is ANIRA_ERROR_CONFIG) and checks every plan's provider against what its engine serves: a built-in engine's against this context's capabilities (anira_capabilities_backends, what its runtime reports), a custom engine's against its descriptor's providers list (a descriptor without one serves the default provider alone); a provider the engine does not serve is ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and the served list (the engine's load may still refuse one at prepare, a device missing at run time). Models are loaded at anira_handler_prepare in this pre-release, so a file that will not load is reported there. The handler is unprepared until prepare succeeds: every Hard entry returns 0 with ANIRA_ERROR_NOT_PREPARED in anira_handler_rt_error. The handler counts as a user of the core until destroy."
+        doc: "Creates a handler over a context from a pipeline, copying everything: the three handles may be destroyed when the call returns. Validates the variant's structure, walks the extensions on the model and its specs, checks the named candidates against this build (a named candidate whose engine is not in the build is ANIRA_ERROR_NOT_SUPPORTED, and so is an entry whose custom id no engine of the pipeline serves; under the default candidate set an entry for an absent engine is skipped, and a variant left with no entry is ANIRA_ERROR_CONFIG) and checks every plan's provider against what its engine serves: a built-in engine's against this context's capabilities (anira_capabilities_backends, what its runtime reports), a custom engine's against its descriptor's providers list (a descriptor without one serves ANIRA_PROVIDER_CPU alone); a provider the engine does not serve is ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and the served list (the engine's load may still refuse one at prepare, a device missing at run time). Models are loaded at anira_handler_prepare in this pre-release, so a file that will not load is reported there. The handler is unprepared until prepare succeeds: every Hard entry returns 0 with ANIRA_ERROR_NOT_PREPARED in anira_handler_rt_error. The handler counts as a user of the core until destroy."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL context, pipeline or out; ANIRA_ERROR_CONFIG for a pipeline without an inference stage, a variant that breaks a structural rule or one no candidate matches (the message names the tensor or entry); ANIRA_ERROR_NOT_SUPPORTED for what anira's runtime cannot do in this pre-release, a candidate's engine this build lacks or a plan's provider its engine does not serve among it; ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the model or a spec that this build does not know or nothing consumes."
 
       - kind: function
