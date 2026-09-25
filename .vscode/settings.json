@@ -1,0 +1,16 @@
+{
+    // --- CTest parallelism (CMake Tools) ---
+    // Without this, the Test Explorer spawns ONE ctest process per test and runs
+    // them sequentially in alphabetical order, ignoring any preset job count.
+    // anira registers one CTest entry per gtest case (gtest_discover_tests), so
+    // that is ~200+ sequential ctest invocations for a single "run all".
+    "cmake.ctest.allowParallelJobs": true,
+    // 0 = fall back to cmake.parallelJobs, which itself defaults to the CPU count.
+    // Set an explicit number here if the timing-sensitive scheduler/latency tests
+    // start flaking under full load.
+    "cmake.ctest.parallelJobs": 0
+    // Not set on purpose:
+    //   cmake.parallelJobs — with the Ninja generator CMake Tools passes no -j at
+    //   all, so ninja uses its own default (nproc + 2). Builds already saturate.
+    //   Setting this to 1 would DISABLE build parallelism.
+}

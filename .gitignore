@@ -12,7 +12,8 @@ modules/executorch*
 # directory elsewhere with a symlink, which must never be committed.
 /modules
 cmake-build*
-.vscode
+.vscode/*
+!.vscode/settings.json
 logs/
 results/
 venv/
