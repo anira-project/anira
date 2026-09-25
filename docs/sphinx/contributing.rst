@@ -119,6 +119,12 @@ CI runs both tools at LLVM 20 (``lint.yml``'s ``clang-format`` job, ``clang_tidy
     ~/.local/llvm20/bin/pip install "clang-tidy==20.*" "clang-format==20.*"
     export PATH="$HOME/.local/llvm20/bin:$PATH"
 
+The wheels match the major, not the patch release: PyPI's only LLVM 20 clang-tidy is 20.1.0,
+while CI installs Ubuntu's ``clang-tidy-20`` (20.1.8 at the time of writing). The static
+analyzer checks can differ between the two (20.1.0 reports a NULL dereference path that 20.1.8
+does not), so a finding the wheel alone reports is worth a look but is not a CI failure; CI's
+run is the one that gates.
+
 **clang-format.** Check mode over the tracked sources (a superset of the queue job's ``src/ include/ test/ examples/``):
 
 .. code-block:: bash
