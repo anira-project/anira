@@ -62,8 +62,12 @@ Run tests to verify your setup:
 A test-enabled configure fetches the example-model fixtures into
 ``extras/models/``, pinned to fixed commits by the ``ANIRA_MODELS_<NAME>_REF``
 variables in ``extras/fetch-models.cmake`` (override with
-``-DANIRA_MODELS_<NAME>_REF=<sha>``). An existing subdirectory is never
-touched — delete it to refetch at the pin.
+``-DANIRA_MODELS_<NAME>_REF=<sha>``). Each fetched subdirectory carries a
+stamp (``.anira-pin``) naming the commit it was fetched at; a configure
+refetches a subdirectory whose stamp is missing or names another commit, so a
+bumped pin reaches an existing checkout too. The trees are snapshots: anything
+written into one is replaced at the next pin bump. The RAVE model is checked
+against its pinned SHA256 the same way.
 
 Coding Guidelines
 -----------------
