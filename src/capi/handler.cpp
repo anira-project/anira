@@ -110,8 +110,9 @@ constexpr uint32_t k_stage_flags =
 constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
                                     ANIRA_ENGINE_FLAG_DYNAMIC_TIME | ANIRA_ENGINE_FLAG_STATE_ALIAS;
-/// The prefix of the engine ids anira keeps for itself (anira.v2.custom among them): a
-/// registration under it is refused.
+/// The prefix of the engine ids anira keeps for itself: an engine created under it is refused,
+/// with one exception, anira.v2.custom (validate.h k_v2_custom_engine), the id
+/// anira/compat/v2.hpp creates a 2.x custom backend under.
 constexpr const char* k_anira_id_prefix = "anira.";
 // A timeout at or above this many milliseconds (about 31 years) waits without limit: the
 // double -> int64 nanosecond conversion and now() + budget would overflow.
@@ -791,8 +792,8 @@ anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_
     return *backend;
 }
 
-// The engine of the pipeline a custom row names by its id, or null for the anira.v2.custom
-// row (validate refused every other id no engine of the pipeline has).
+// The engine of the pipeline a custom row names by its id, or null for a built-in row
+// (validate refused a custom id no engine of the pipeline has, anira.v2.custom included).
 std::shared_ptr<const anira::capi::EngineCarrier> registered_engine(
     const anira_pipeline& pipeline,
     const anira::capi::ModelEntry& row) {
@@ -830,7 +831,7 @@ bool consumes_provider_options(const anira_pipeline& pipeline, const anira::capi
             registered_engine(pipeline, row)) {
         return consumes_provider_options(*engine);
     }
-    if (row.is_custom()) { return false; }  // the 2.x pass-through reads no extension
+    if (row.is_custom()) { return false; }  // validate refused a custom id without an engine
     for (const anira::capi::ExtConsumer& consumer : anira::capi::ext_consumers()) {
         if (consumer.m_engine != row.m_engine) { continue; }
         if (std::ranges::find(consumer.m_consumed, k_provider_options_kind) !=
@@ -886,7 +887,7 @@ void check_option_sets(const anira_context& context, const anira_pipeline& pipel
 // Whether every plan of the table runs on a provider its engine serves here, through the one
 // path of providers.h: a built-in engine's provider must be in the context's capabilities
 // (what its runtime reported at the last probe), a registered engine's in its descriptor's
-// list and reported usable by its query (run now, before its init), and the 2.x pass-through
+// list and reported usable by its query (run now, before its init); an engine without a list
 // serves the default provider alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
 // the provider and what is served (a declared provider the query cleared says so); a query
 // that fails fails the create with its status; the engine's load may still refuse a provider
@@ -979,9 +980,8 @@ anira::backend::Model model_of_row(const anira_model_config& model,
 // registered engine's plan brings a DescriptorLoaded over its carrier, the row and the variant
 // (pooled by the record and the carrier, whether the handler is exclusive or not: exclusivity
 // is the prepared handle's, not the model's), with the handler's context for the engine's
-// init; the anira.v2.custom row asks for the roundtrip, the C path having no caller's backend
-// (the test rigs replace that plan's loaded model on the control thread before the first
-// block).
+// init. Every custom row has a registered engine by then, anira.v2.custom included (validate
+// refused one without); the engine-free roundtrip is the 2.x class's alone.
 std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& handler,
                                                        const anira::capi::Derived& derived,
                                                        const anira::InferenceConfig& config) {
@@ -1034,10 +1034,13 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
                 std::make_shared<anira::backend::DescriptorLoaded>(engine,
                                                                    static_cast<uint32_t>(row_index),
                                                                    variant);
+        } else if (row.is_custom()) {
+            // validate refused a custom id no engine of the pipeline has.
+            throw StatusError(ANIRA_ERROR_INTERNAL,
+                              "handler: model entry " + std::to_string(row_index) + " (custom '" +
+                                  row.m_engine_id + "') passed validate without an engine");
         } else {
-            request.m_source = request.m_legacy_backend == anira::InferenceBackend::CUSTOM
-                                   ? anira::backend::Source::Roundtrip
-                                   : anira::backend::Source::BuiltIn;
+            request.m_source = anira::backend::Source::BuiltIn;
         }
         requests.push_back(std::move(request));
     }
@@ -1901,7 +1904,8 @@ anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "engine: NULL engine_id");
-    // The engine's name for its whole life: a reverse-URI id that is not one of anira's own.
+    // The engine's name for its whole life: a reverse-URI id that is not one of anira's own,
+    // anira.v2.custom excepted.
     ANIRA_CAPI_REQUIRE(std::strchr(engine_id, '.') != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -1909,12 +1913,15 @@ anira_status ANIRA_CALL anira_custom_engine_create(const char* engine_id,
                        "'.')",
                        engine_id);
     ANIRA_CAPI_REQUIRE(
-        std::strncmp(engine_id, k_anira_id_prefix, std::strlen(k_anira_id_prefix)) != 0,
+        std::strncmp(engine_id, k_anira_id_prefix, std::strlen(k_anira_id_prefix)) != 0 ||
+            std::strcmp(engine_id, anira::capi::k_v2_custom_engine) == 0,
         err,
         ANIRA_ERROR_INVALID_ARGUMENT,
-        "engine: the engine id '%s' carries the prefix \"%s\", which is anira's own",
+        "engine: the engine id '%s' carries the prefix \"%s\", which is anira's own (the one "
+        "exception is \"%s\", a 2.x custom backend's id)",
         engine_id,
-        k_anira_id_prefix);
+        k_anira_id_prefix,
+        anira::capi::k_v2_custom_engine);
     ANIRA_CAPI_REQUIRE(desc != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "engine: NULL desc");
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "engine: NULL out");
     ANIRA_CAPI_REQUIRE(desc->struct_size >= k_engine_desc_head,

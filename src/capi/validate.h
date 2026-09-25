@@ -40,6 +40,12 @@ struct CustomLatencies;
 
 namespace anira::capi {
 
+/// The id of a 2.x custom backend: what the version-2 upgrade names every "CUSTOM" row, and the
+/// one id with anira's prefix "anira." a host may create an engine under (anira/compat/v2.hpp
+/// does). On the C path it needs an engine on the pipeline like every custom id; the bridge,
+/// which has no pipeline, serves it with the 2.x pass-through until the cut-over.
+inline constexpr const char* k_v2_custom_engine = "anira.v2.custom";
+
 /// What the validator derives for one tensor spec.
 struct DerivedSpec {
     std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
@@ -94,12 +100,12 @@ struct StageFacts {
 };
 
 /// What a pipeline's custom engines mean to the validator (engine_facts() of engine.h
-/// builds it from the pipeline's engines; NULL is a pipeline without one, the bridge's case:
-/// anira.v2.custom is the one custom id then).
+/// builds it from the pipeline's engines; NULL is the bridge's case, which has no pipeline:
+/// anira.v2.custom is the one custom id then, served by the 2.x pass-through).
 struct EngineFacts {
     /// The ids of the pipeline's engines: a custom row naming one is a plan on the 2.x CUSTOM
-    /// backend, resolved by row like every plan; a custom row naming neither anira.v2.custom nor
-    /// one of these is refused at create.
+    /// backend, resolved by row like every plan; a custom row naming none of them,
+    /// anira.v2.custom included, is refused at create.
     std::vector<std::string> m_ids;
     /// One consumer per registered engine that declares consumed kinds, keyed by its id
     /// (m_engine_id; m_name is the id too, pointing into the carrier, which outlives the
@@ -144,7 +150,8 @@ ANIRA_API bool row_is_candidate(const ModelEntry& row,
                                 uint32_t num_candidates);
 
 /// The 2.x backend a model row maps to: CUSTOM for every custom row (whether its id is served
-/// is check_rows' question: anira.v2.custom, or an engine registered on the pipeline), the
+/// is check_rows' question: an engine registered on the pipeline, or anira.v2.custom on the
+/// bridge), the
 /// engine's own backend for a built-in engine of this build, nullopt for an engine this build
 /// does not carry.
 ANIRA_API std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept;
@@ -178,9 +185,9 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// relaxes for a side whose phase the stage fills, and the stage's consumed kinds join the
 /// extension walk. `engines` are the pipeline's registered engines (NULL: none, the bridge's
 /// case): a custom row naming one of their ids is a plan, and their consumed kinds join the
-/// walk; a custom row naming neither anira.v2.custom nor a registered id is
-/// ANIRA_ERROR_NOT_SUPPORTED. A registered row's path is never opened here: the engine's
-/// prepare decides.
+/// walk; a custom row naming no registered id is ANIRA_ERROR_NOT_SUPPORTED, anira.v2.custom
+/// included (without engines, the bridge, that id alone is served). A registered row's path is
+/// never opened here: the engine's prepare decides.
 ANIRA_API void validate(const anira_model_config& model,
                         const anira_contract* contract,
                         const anira_backend_id* candidates,

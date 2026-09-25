@@ -11,9 +11,10 @@
 // policies, and every refusal with its status, its latched record and the fixed check order.
 // A descriptor is compared byte for byte around every call: anira never writes one.
 //
-// Determinism as in test_HandlerCopyOracle.cpp: the session's backend is a GateBackend that is
-// closed during every nonblocking call; settle() opens it until every submitted inference is
-// collected. A starved block is a call without the settle. No sleeps, no wall clock.
+// Determinism as in test_HandlerCopyOracle.cpp: the custom row's engine is a GateEngine added to
+// the pipeline, closed during every nonblocking call; settle() opens it until every submitted
+// inference is collected. A starved block is a call without the settle. No sleeps, no wall
+// clock.
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
@@ -63,8 +64,8 @@ constexpr size_t k_unset = 77777;  // what a delivered count holds before its ca
 constexpr float k_untouched = -7.0F;  // what host memory holds before a call writes it
 
 // ---- the models --------------------------------------------------------------------------------
-// Engine-free: the one model path is the custom row, and the session's custom backend is the
-// gate, which runs BackendBase::process (tensor i of the output is tensor i of the input).
+// Engine-free: the one model path is the custom row, and its engine is the gate added to the
+// pipeline, which runs the pass-through (tensor i of the output is tensor i of the input).
 
 TensorSpec streamed(std::string_view name, int64_t channels) {
     TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
@@ -212,7 +213,7 @@ public:
                  uint32_t threads = 2,
                  anira_miss_fn miss_fn = nullptr,
                  void* miss_user_data = nullptr)
-        : m_context(threads), m_handler(m_context, model, m_candidates) {
+        : m_context(threads), m_handler(m_context, model, m_candidates, {}, m_gate.engine()) {
         // Blocks of 1 to k_hop samples.
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
@@ -221,16 +222,14 @@ public:
         const anira_status prepared = m_handler.prepare(contract);
         EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
         if (prepared != ANIRA_OK) { return; }
-        m_gate = std::make_unique<anira_test::GateBackend>(get()->m_inference_config);
         m_session = anira_test::session_of(get());
         if (m_session == nullptr) { return; }
-        anira_test::attach_processor(get(), *m_gate);  // the gate closed
-        m_gate->m_open.store(false);
+        m_gate.m_open.store(false);
     }
     /// The gate opens and the handler is destroyed (which drains the in-flight work) before
-    /// the gate dies: what anira_test::DestroyFirst does for a stack backend.
+    /// the gate dies: what anira_test::DestroyFirst does for a Handler on the stack.
     ~Rig() {
-        if (m_gate != nullptr) { m_gate->m_open.store(true); }
+        m_gate.m_open.store(true);
         m_handler.destroy();
     }
     Rig(const Rig&) = delete;
@@ -245,10 +244,10 @@ public:
 
     /// Opens the gate until every submitted inference is collected.
     void settle() {
-        oracle::settle(*m_gate, *m_session, [this] { anira_test::available(get()); });
+        oracle::settle(m_gate, *m_session, [this] { anira_test::available(get()); });
     }
     /// A _wait twin waits for its own block, so the gate is open while it runs.
-    void open_gate(bool open) { m_gate->m_open.store(open); }
+    void open_gate(bool open) { m_gate.m_open.store(open); }
 
 private:
     anira_test::Context m_context;
@@ -257,8 +256,8 @@ private:
                                                 .engine = ANIRA_ENGINE_NONE,
                                                 .provider = ANIRA_PROVIDER_DEFAULT,
                                                 .engine_id = nullptr}};
+    anira_test::GateEngine m_gate;  // before the handler, which dies first
     anira_test::Handler m_handler;
-    std::unique_ptr<anira_test::GateBackend> m_gate;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 

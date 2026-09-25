@@ -730,9 +730,9 @@ typedef enum anira_phase {
  * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
  * allocate nothing, lock nothing and block on nothing (its reset runs on the same thread
  * and is covered by the same promise). Required by anira_handler_prepare for a filled
- * pre_process or post_process under a Hard contract, where the two phases run on the
- * driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not required under an
- * Async contract.
+ * pre_process, post_process or reset under a Hard contract, where the three phases run
+ * on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not required
+ * under an Async contract.
  */
 #define ANIRA_STAGE_FLAG_REALTIME_PRE_POST 1u
 

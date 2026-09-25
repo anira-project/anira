@@ -44,7 +44,6 @@ using anira::ContractHandle;
 using anira::Hard;
 using anira::ModelConfig;
 using anira::TensorSpec;
-using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::count_records;
 using anira_test::custom_candidates;
@@ -54,7 +53,7 @@ using anira_test::expect_same_block;
 using anira_test::explicit_contract;
 using anira_test::find_record;
 using anira_test::gain_with_custom;
-using anira_test::GateBackend;
+using anira_test::GateEngine;
 using anira_test::generator_model;
 using anira_test::Handler;
 using anira_test::k_block;
@@ -600,7 +599,9 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG);
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
     anira::ContractHandle contract = explicit_contract(k_block, k_rate, policy);
     if (policy == ANIRA_MISS_CALLBACK) { contract.hard_miss_fn(&fill_backup, nullptr); }
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
@@ -608,9 +609,6 @@ void run_miss_sequence(anira_miss_policy policy, Form form, bool static_out) {
     ASSERT_EQ(anira_handler_get_latency(h, 0), k_block) << "one block of priming";
     anira_drain_log();
     RecordCollector collector;
-    GateBackend gate(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
-    const DestroyFirst destroy_first(handler, &gate);
     std::vector<float> out;
     float gain_out = -1.0F;
 
@@ -735,13 +733,12 @@ TEST(AbiPrepare, TensorsBuiltOnceSurviveAMiss) {
     const Context context;
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
-    Handler handler(context, model, candidates);
+    GateEngine gate;
+    Handler handler(context, model, candidates, {}, gate.engine());
+    const DestroyFirst destroy_first(handler, &gate);
     ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS)), ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    GateBackend gate(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, gate));
-    const DestroyFirst destroy_first(handler, &gate);
 
     std::vector<float> in(k_block, 0.0F);
     std::vector<float> out(k_block, -1.0F);
@@ -874,6 +871,18 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
         const CreateOutcome outcome = try_create(context, other, {});
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
         expect_contains(outcome.m_message, "is not added to this pipeline");
+    }
+    {
+        // anira.v2.custom is no exception: without an engine on the pipeline its row is refused
+        // like any other custom id's.
+        ModelConfig bare;
+        bare.add_model_path(k_custom, "model.custom");
+        bare.input(streamed("in"));
+        bare.output(streamed("out"));
+        const CreateOutcome outcome = try_create(context, bare, {});
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message,
+                        "custom engine 'anira.v2.custom' is not added to this pipeline");
     }
     const std::optional<anira_engine> missing = missing_engine();
     if (missing.has_value()) {
@@ -1158,6 +1167,7 @@ TEST(AbiPrepare, TheContextOutlivesItsDestroyWhileAHandlerLives) {
     const std::vector<anira_backend_id> candidates = custom_candidates();
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline,
                                            variants.data(),

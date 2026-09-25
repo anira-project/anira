@@ -1,7 +1,7 @@
 // Declared state passing (ANIRA_ROLE_STATE, anira_tensor_spec_set_state_source), engine-free.
 //
 // The model is the engine-free twin of example-models' StatefulAccumulatorNetwork, a custom-row
-// backend that is a pure function of its inputs:
+// engine that is a pure function of its inputs:
 //
 //     processed       = data + state_in[..., 0]
 //     state_out[...,0] = state_in[..., 0] + sum(data)       per channel, over the window
@@ -17,7 +17,7 @@
 // same oracle.
 //
 // One slot space: a slot is the tensor's position in the model config's list of its side, the
-// one number the host's entries, a stage, the backend, the latency vector and the plan report's
+// one number the host's entries, a stage, the engine, the latency vector and the plan report's
 // rows use. The role decides which entries take it: no Hard entry carries a State tensor.
 
 #include <anira/InferenceConfig.h>
@@ -32,9 +32,7 @@
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -48,7 +46,6 @@
 #include <memory>
 #include <mutex>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -179,53 +176,65 @@ std::vector<Element> state_values(const anira_handler* handler, size_t slot) {
     return values;
 }
 
-// ---- the backend
+// ---- the gate engine
 // -----------------------------------------------------------------------------------
 
-/// StatefulAccumulatorNetwork, engine-free. It holds no state of its own between two calls.
-/// It can hold an inference (the gate), fail one (the throw), and it records the order and the
-/// overlap of its calls: the first sample of `data` is the block's index in the tests that ask.
-class AccumulatorBackend : public anira::BackendBase {
-public:
-    AccumulatorBackend(anira::InferenceConfig& config, Positions positions)
-        : anira::BackendBase(config), m_positions(positions) {}
-    ~AccumulatorBackend() override { m_open.store(true); }
-    AccumulatorBackend(const AccumulatorBackend&) = delete;
-    AccumulatorBackend& operator=(const AccumulatorBackend&) = delete;
-    AccumulatorBackend(AccumulatorBackend&&) = delete;
-    AccumulatorBackend& operator=(AccumulatorBackend&&) = delete;
+/// The accumulator over one call's memory, the state in `State`.
+template <typename State>
+void accumulate(const State* state_in,
+                const float* data,
+                float* processed,
+                State* state_out,
+                size_t hop) {
+    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
+        const State carry = state_in[channel * k_state_width];
+        State sum = 0;
+        for (size_t i = 0; i < hop; ++i) {
+            const float sample = data[(channel * hop) + i];
+            processed[(channel * hop) + i] = sample + static_cast<float>(carry);
+            sum += static_cast<State>(sample);
+        }
+        state_out[channel * k_state_width] = carry + sum;
+        state_out[(channel * k_state_width) + 1] = state_in[(channel * k_state_width) + 1] + 1;
+    }
+}
 
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
+/// StatefulAccumulatorNetwork, engine-free: a gate engine on the custom row, over the kernel of
+/// the registered AccumulatorEngine below. It holds no state of its own between two calls. It
+/// can hold an inference (the gate), fail one (m_fail_next, once: no capture, no count), and it
+/// records the order and the overlap of its calls: the first sample of `data` is the block's
+/// index in the tests that ask. Its slots are the tensors' positions (Positions).
+class AccumulatorGate : public anira_test::GateEngine {
+public:
+    explicit AccumulatorGate(Positions positions) : m_positions(positions) {}
+
+    anira_status process(const anira_engine_ctx& ctx) noexcept override {
         const int inside = m_inside.fetch_add(1) + 1;
         int widest = m_widest.load();
         while (inside > widest && !m_widest.compare_exchange_weak(widest, inside)) {}
-        while (!m_open.load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+        wait_open();
         if (m_sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(m_sleep_us)); }
-        if (m_throw.exchange(false)) {
+        const anira_status failed = failure();
+        if (failed != ANIRA_OK) {
             m_inside.fetch_sub(1);
-            throw std::runtime_error("test backend: inference failed");
+            return failed;
         }
-        const float* state_in = input[m_positions.m_state_in].get_read_pointer(0);
-        const float* data = input[m_positions.m_data].get_read_pointer(0);
-        float* processed = output[m_positions.m_processed].get_write_pointer(0);
-        float* state_out = output[m_positions.m_state_out].get_write_pointer(0);
-        for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
-            const float carry = state_in[channel * k_state_width];
-            float sum = 0.0F;
-            for (size_t i = 0; i < k_hop; ++i) {
-                const float sample = data[(channel * k_hop) + i];
-                processed[(channel * k_hop) + i] = sample + carry;
-                sum += sample;
-            }
-            state_out[channel * k_state_width] = carry + sum;
-            state_out[(channel * k_state_width) + 1] = state_in[(channel * k_state_width) + 1] + 1;
+        const float* state_in = anira_tensor_data_f32(&ctx.inputs[m_positions.m_state_in]);
+        const float* data = anira_tensor_data_f32(&ctx.inputs[m_positions.m_data]);
+        float* processed = anira_tensor_data_f32(&ctx.outputs[m_positions.m_processed]);
+        float* state_out = anira_tensor_data_f32(&ctx.outputs[m_positions.m_state_out]);
+        if (state_in == nullptr || data == nullptr || processed == nullptr ||
+            state_out == nullptr) {
+            m_inside.fetch_sub(1);
+            return ANIRA_ERROR_INVALID_ARGUMENT;
         }
+        accumulate(state_in, data, processed, state_out, k_hop);
         if (m_positions.m_values_in != k_none) {
-            const float* values_in = input[m_positions.m_values_in].get_read_pointer(0);
-            float* values_out = output[m_positions.m_values_out].get_write_pointer(0);
-            for (size_t i = 0; i < 3; ++i) { values_out[i] = values_in[i] + 0.5F; }
+            const float* values_in = anira_tensor_data_f32(&ctx.inputs[m_positions.m_values_in]);
+            float* values_out = anira_tensor_data_f32(&ctx.outputs[m_positions.m_values_out]);
+            if (values_in != nullptr && values_out != nullptr) {
+                for (size_t i = 0; i < 3; ++i) { values_out[i] = values_in[i] + 0.5F; }
+            }
         }
         {
             const std::scoped_lock<std::mutex> lock(m_mutex);
@@ -233,6 +242,18 @@ public:
         }
         m_calls.fetch_add(1);
         m_inside.fetch_sub(1);
+        return ANIRA_OK;
+    }
+
+    /// What a new session starts from: the gate open, no call seen, no failure queued.
+    void clear() {
+        m_open.store(true);
+        m_calls.store(0);
+        m_widest.store(0);
+        m_fail_next.store(ANIRA_OK);
+        m_sleep_us = 0;
+        const std::scoped_lock<std::mutex> lock(m_mutex);
+        m_order.clear();
     }
 
     std::vector<float> order() {
@@ -243,9 +264,6 @@ public:
     /// How many calls are inside process() right now: a held inference is one.
     int inside() const noexcept { return m_inside.load(); }
 
-    std::atomic<bool> m_open{true};
-    std::atomic<bool> m_throw{false};  ///< fails the next inference, once
-    std::atomic<int> m_calls{0};
     std::atomic<int> m_widest{0};  ///< the most calls that were inside process() at once
     int m_sleep_us = 0;            ///< set before the first block
 
@@ -275,9 +293,9 @@ std::vector<anira_backend_id> custom_candidates() {
              .engine_id = nullptr}};
 }
 
-/// A handler over the custom row, with an optional stage chain, prepared, the accumulator
-/// attached. Input slot `data_slot()` and output slot `processed_slot()` are the two streams:
-/// the tensors' positions in the model's lists.
+/// A handler over the custom row, with an optional stage chain, prepared, the accumulator gate
+/// added to its pipeline. Input slot `data_slot()` and output slot `processed_slot()` are the
+/// two streams: the tensors' positions in the model's lists.
 class Rig {
 public:
     explicit Rig(const ModelConfig& model,
@@ -289,12 +307,14 @@ public:
                  void* miss_user_data = nullptr,
                  anira_log_level level = ANIRA_LOG_ERROR)
         : m_context(4, ANIRA_WAIT_SPIN_BACKOFF, level)
+        , m_gate(positions)
         , m_positions(positions)
         , m_policy(policy)
         , m_block_max(block_max)
         , m_miss_fn(miss_fn)
         , m_miss_user_data(miss_user_data) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
+        anira_test::add_engine(m_pipeline, m_gate.engine());
         const std::array<const anira_model_config*, 1> variants{model.native()};
         const std::vector<anira_backend_id> candidates = custom_candidates();
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
@@ -315,8 +335,8 @@ public:
         if (m_handler != nullptr) { prepare(); }
     }
     ~Rig() {
-        if (m_backend != nullptr) { m_backend->m_open.store(true); }
-        anira_handler_destroy(m_handler);  // drains the in-flight work before the backend dies
+        m_gate.m_open.store(true);
+        anira_handler_destroy(m_handler);  // drains the in-flight work before the gate dies
         anira_pipeline_destroy(m_pipeline);
     }
     Rig(const Rig&) = delete;
@@ -324,24 +344,23 @@ public:
     Rig(Rig&&) = delete;
     Rig& operator=(Rig&&) = delete;
 
+    /// Prepares (again), the gate open for the previous session's in-flight work, and clears the
+    /// gate: the new session's calls count from zero.
     void prepare() {
-        if (m_backend != nullptr) { m_backend->m_open.store(true); }
+        m_gate.m_open.store(true);
         const anira::ContractHandle contract =
             contract_of(m_policy, m_block_max, m_miss_fn, m_miss_user_data);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
-        // The previous session is gone: its backend may die now.
-        m_backend =
-            std::make_unique<AccumulatorBackend>(m_handler->m_inference_config, m_positions);
+        m_gate.clear();
         m_session = anira_test::session_of(m_handler);
         ASSERT_NE(m_session, nullptr);
-        anira_test::attach_processor(m_handler, *m_backend);
     }
 
-    bool ready() const { return m_session != nullptr && m_backend != nullptr; }
+    bool ready() const { return m_session != nullptr; }
     anira_handler* get() const { return m_handler; }
-    AccumulatorBackend& backend() { return *m_backend; }
+    AccumulatorGate& gate() { return m_gate; }
     anira::SessionElement& session() { return *m_session; }
     uint32_t data_slot() const { return static_cast<uint32_t>(m_positions.m_data); }
     uint32_t processed_slot() const { return static_cast<uint32_t>(m_positions.m_processed); }
@@ -366,6 +385,8 @@ public:
 
 private:
     Context m_context;
+    AccumulatorGate m_gate;  ///< its engine outlives the handler and the pipeline, which die in
+                             ///< ~Rig
     Positions m_positions;
     anira_miss_policy m_policy;
     uint32_t m_block_max;
@@ -374,7 +395,6 @@ private:
     anira_pipeline* m_pipeline = nullptr;
     anira_handler* m_handler = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
-    std::unique_ptr<AccumulatorBackend> m_backend;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 
@@ -990,7 +1010,7 @@ TEST(AbiState, StateFeedsBack) {
     expect_closed_form(streams, latency);
 
     // White-box: the port of the State input holds what the last inference left.
-    const int calls = rig.backend().m_calls.load();
+    const int calls = rig.gate().m_calls.load();
     ASSERT_GT(calls, 10);
     const std::vector<float> state = state_values(rig.get(), k_accumulator.m_state_in);
     ASSERT_EQ(state.size(), static_cast<size_t>(k_channels) * k_state_width);
@@ -1074,20 +1094,20 @@ TEST(AbiState, AResetAcrossAnInferenceInFlightNeverSeedsTheNewStream) {
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, first));
 
     // One more block of the old stream, held inside the engine call: fed, not yet captured.
-    const int before = rig.backend().m_calls.load();
-    rig.backend().m_open.store(false);
+    const int before = rig.gate().m_calls.load();
+    rig.gate().m_open.store(false);
     std::array<float, static_cast<size_t>(k_channels) * k_hop> held{};
     held.fill(1000.0F);
     const anira_tensor held_tensor = whole_f32(held.data(), {k_channels, k_hop});
     ASSERT_EQ(anira_handler_push_data(h, &held_tensor, rig.data_slot()), ANIRA_OK);
     const auto start = std::chrono::steady_clock::now();
-    while (rig.backend().inside() == 0) {
+    while (rig.gate().inside() == 0) {
         ASSERT_LT(std::chrono::steady_clock::now(), start + std::chrono::seconds(10));
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
     anira_handler_reset(h);
-    rig.backend().m_open.store(true);
-    while (rig.backend().m_calls.load() == before) {
+    rig.gate().m_open.store(true);
+    while (rig.gate().m_calls.load() == before) {
         ASSERT_LT(std::chrono::steady_clock::now(), start + std::chrono::seconds(10));
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
@@ -1142,16 +1162,17 @@ TEST(AbiState, FailedInferenceKeepsState) {
     Rig rig(accumulator_model());
     ASSERT_TRUE(rig.ready());
     const size_t latency = anira_handler_get_latency(rig.get(), 0);
-    constexpr size_t k_failed = 3;  // the inference of hop 3 throws
+    constexpr size_t k_failed = 3;  // the inference of hop 3 fails
+
     Streams streams;
     size_t position = 0;
     for (size_t k = 0; k < 7; ++k) {
-        if (k == k_failed) { rig.backend().m_throw.store(true); }
+        if (k == k_failed) { rig.gate().m_fail_next.store(ANIRA_ERROR_ENGINE); }
         const std::vector<size_t> one = hops(1);
         ASSERT_NO_FATAL_FAILURE(drive(rig, one, position, streams));
     }
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_ERROR_ENGINE);
-    EXPECT_EQ(rig.backend().m_calls.load(), 6) << "six inferences captured, one failed";
+    EXPECT_EQ(rig.gate().m_calls.load(), 6) << "six inferences captured, one failed";
     for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
         float carry = 0.0F;
         for (size_t hop = 0; hop < 7; ++hop) {
@@ -1185,7 +1206,7 @@ TEST(AbiState, StatePairForcesStateful) {
     Rig rig(model, k_accumulator, {}, ANIRA_MISS_ZEROS, 4 * k_hop);
     ASSERT_TRUE(rig.ready());
     EXPECT_TRUE(rig.get()->m_inference_config.m_session_exclusive_processor);
-    rig.backend().m_sleep_us = 300;
+    rig.gate().m_sleep_us = 300;
 
     // Host blocks of four hops: four inferences per call, on a pool of four threads.
     const size_t latency = anira_handler_get_latency(rig.get(), 0);
@@ -1194,8 +1215,8 @@ TEST(AbiState, StatePairForcesStateful) {
     Streams streams;
     ASSERT_NO_FATAL_FAILURE(drive(rig, sizes, position, streams));
     expect_closed_form(streams, latency);
-    EXPECT_EQ(rig.backend().m_widest.load(), 1) << "two inferences of the session overlapped";
-    EXPECT_EQ(rig.backend().m_calls.load(), 24);
+    EXPECT_EQ(rig.gate().m_widest.load(), 1) << "two inferences of the session overlapped";
+    EXPECT_EQ(rig.gate().m_calls.load(), 24);
 }
 
 // ---- a stage
@@ -1483,7 +1504,7 @@ TEST(AbiState, MissFunctionReceivesTheCallersArrays) {
     Rig rig(wide_model(), k_wide, {}, ANIRA_MISS_CALLBACK, k_hop, &record_miss, &log);
     ASSERT_TRUE(rig.ready());
     anira_handler* h = rig.get();
-    rig.backend().m_open.store(false);  // every inference is held: the ring starves
+    rig.gate().m_open.store(false);  // every inference is held: the ring starves
 
     // A multi form, until a block misses (the latency's zeros are delivered first). Slot order:
     // inputs {values_in, state_in, data}, outputs {state_out, processed_data, values_out}.
@@ -1549,7 +1570,7 @@ TEST(AbiState, MissFunctionReceivesTheCallersArrays) {
                                    whole_f32(static_cast<float*>(nullptr), {1, 0})};
     EXPECT_EQ(anira_handler_pop_data_multi(h, none.data(), 3, nullptr), ANIRA_OK);
     EXPECT_EQ(log.m_calls, 3U);
-    rig.backend().m_open.store(true);
+    rig.gate().m_open.store(true);
 }
 
 // ---- validation
@@ -1562,6 +1583,7 @@ anira_status create_status(const ModelConfig& model, std::string& message) {
     anira_pipeline* pipeline = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK);
+    anira_test::add_passthrough(pipeline);
     const std::array<const anira_model_config*, 1> variants{model.native()};
     const std::vector<anira_backend_id> candidates = custom_candidates();
     EXPECT_EQ(anira_pipeline_add_inference(pipeline,
@@ -1801,7 +1823,8 @@ TEST(AbiState, TheSetterRefusals) {
 // ------------------------------------------------------------------------
 
 /// The accumulator as a registered C engine over the descriptors (anira/abi/engine.h): the
-/// function of AccumulatorBackend, its slots found by the canonical names of its load record
+/// function of AccumulatorGate, its slots found by the canonical names of its load record
+
 /// (so the specs may stand in any order) and read back through ctx->loaded, the state in the
 /// spec's dtype (float32, or int32), the stream float32. Its prepare hands back nothing (a
 /// NULL prepared is legal: the engine keeps nothing per handler), and it keeps nothing between
@@ -1871,26 +1894,6 @@ anira_status ANIRA_CALL accumulator_prepare(const anira_prepare_info* info,
     }
     *out_prepared = nullptr;  // nothing per handler: process finds its slots in ctx->loaded
     return ANIRA_OK;
-}
-
-/// The accumulator over one call's memory, the state in `State`.
-template <typename State>
-void accumulate(const State* state_in,
-                const float* data,
-                float* processed,
-                State* state_out,
-                size_t hop) {
-    for (size_t channel = 0; channel < static_cast<size_t>(k_channels); ++channel) {
-        const State carry = state_in[channel * k_state_width];
-        State sum = 0;
-        for (size_t i = 0; i < hop; ++i) {
-            const float sample = data[(channel * hop) + i];
-            processed[(channel * hop) + i] = sample + static_cast<float>(carry);
-            sum += static_cast<State>(sample);
-        }
-        state_out[channel * k_state_width] = carry + sum;
-        state_out[(channel * k_state_width) + 1] = state_in[(channel * k_state_width) + 1] + 1;
-    }
 }
 
 anira_status ANIRA_CALL accumulator_process(const anira_engine_ctx* ctx,

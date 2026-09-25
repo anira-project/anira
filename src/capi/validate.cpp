@@ -25,8 +25,6 @@
 namespace anira::capi {
 namespace {
 
-constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-
 [[noreturn]] void refuse(anira_status status, const std::string& message) {
     throw StatusError(status, message);
 }
@@ -512,11 +510,12 @@ void check_ratios(const anira_model_config& model, const Derived& derived) {
     check(model.m_outputs, derived.m_outputs);
 }
 
-// Whether a custom row's id is served: anira.v2.custom (the 2.x pass-through, kept through
-// this pre-release), or an engine registered on the pipeline.
+// Whether a custom row's id is served: on the C path by an engine registered on the pipeline
+// (anira.v2.custom included); on the bridge, which has no pipeline, the id anira.v2.custom
+// alone, by the 2.x pass-through, until the cut-over.
 bool serves_custom_id(const std::string& id, const EngineFacts* engines) {
-    if (id == k_v2_custom_engine) { return true; }
-    return engines != nullptr && std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
+    if (engines == nullptr) { return id == k_v2_custom_engine; }
+    return std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
 }
 
 void check_rows(const anira_model_config& model,
@@ -745,8 +744,8 @@ std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const Engi
 
 std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
     // Every custom row is a plan on the 2.x CUSTOM backend, resolved by row in the plan
-    // table: the pass-through and a registered engine alike (check_rows refuses an id that
-    // neither is).
+    // table: a registered engine, or the bridge's pass-through of anira.v2.custom (check_rows
+    // refuses an id that neither serves).
     if (row.is_custom()) { return anira::InferenceBackend::CUSTOM; }
     switch (row.m_engine) {
 #ifdef USE_ONNXRUNTIME

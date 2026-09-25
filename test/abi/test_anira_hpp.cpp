@@ -917,6 +917,7 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
                                                   .engine_id = nullptr}})};
     anira_handler* h = nullptr;
     anira_error err{};
+    anira_test::add_passthrough(pipe.native());
     ASSERT_EQ(anira_handler_create(context.m_context, pipe.native(), &h, &err), ANIRA_OK)
         << err.message;
     ASSERT_EQ(anira_handler_prepare(h, anira_test::explicit_contract().native(), &err), ANIRA_OK)
@@ -971,8 +972,8 @@ namespace {
 
 constexpr size_t k_hop = anira_test::k_block;
 
-/// A mono stream through the engine-free custom row, one hop in and one hop out: BackendBase's
-/// process is an exact pass-through, so the output stream is the input behind the latency.
+/// A mono stream through the custom row, one hop in and one hop out: the pass-through engine a
+/// test adds for the row is an exact copy, so the output stream is the input behind the latency.
 ModelConfig stage_stream_model() {
     ModelConfig model;
     model.add_model_path(anira_test::k_custom, "custom-processor");
@@ -1264,6 +1265,7 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
 
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
+    anira_test::add_passthrough(pipe->native());
     pipe->inference(model, {custom_row()});
     {
         const anira::stage::Custom custom(stage);
@@ -1330,8 +1332,9 @@ TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
     const ModelConfig model = stage_stream_model();
     auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
     stage->m_scale = 2.0F;
-    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                               anira::stage::Custom(stage)};
+    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                         anira::stage::Custom(stage)};
+    anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
@@ -1350,8 +1353,9 @@ TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
 
     // A stage of no phase at all is one of prepare and release: both defaults keep running.
     auto silent = std::make_shared<CountingStage>(0U);
-    const anira::Pipeline quiet{anira::stage::Inference(model, {custom_row()}),
-                                anira::stage::Custom(silent)};
+    anira::Pipeline quiet{anira::stage::Inference(model, {custom_row()}),
+                          anira::stage::Custom(silent)};
+    anira_test::add_passthrough(quiet.native());
     CHandler plain(context, quiet);
     ASSERT_EQ(plain.m_status, ANIRA_OK) << plain.m_err.message;
     ASSERT_EQ(plain.prepare(anira_test::explicit_contract()), ANIRA_OK) << plain.m_err.message;
@@ -1406,8 +1410,9 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
     anira_test::RecordCollector collector;
     const ModelConfig model = stage_stream_model();
     auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
-    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                               anira::stage::Custom(stage)};
+    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                         anira::stage::Custom(stage)};
+    anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = anira_test::explicit_contract();
@@ -1495,8 +1500,9 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
     auto stage = std::make_shared<CountingStage>(anira::Stage::k_pre_process);
     stage->m_flags = 0;
     {
-        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                                   anira::stage::Custom(stage)};
+        anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                             anira::stage::Custom(stage)};
+        anira_test::add_passthrough(pipe.native());
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_CONFIG);
@@ -1520,8 +1526,9 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
     }
     stage->m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;  // read again by the next add
     {
-        const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                                   anira::stage::Custom(stage)};
+        anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                             anira::stage::Custom(stage)};
+        anira_test::add_passthrough(pipe.native());
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
@@ -1547,6 +1554,7 @@ TEST(AbiCxx, APreparedPerHandlerOwnsItsScratchAndDiesWithItsPrepare) {
     auto stage = std::make_shared<CountingStage>(anira::Stage::k_all_phases);
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
+    anira_test::add_passthrough(pipe->native());
     pipe->inference(model, {custom_row()});
     pipe->add(anira::stage::Custom(stage));
     CHandler first(context, *pipe);
@@ -1723,8 +1731,9 @@ TEST(AbiCxx, AnInt16RingThroughAConvertingStage) {
         anira_test::explicit_contract(anira_test::k_block, anira_test::k_rate, ANIRA_MISS_ZEROS);
     contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
 
-    const anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                               anira::stage::Custom(std::make_shared<Int16InputStage>())};
+    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
+                         anira::stage::Custom(std::make_shared<Int16InputStage>())};
+    anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;

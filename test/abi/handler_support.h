@@ -1,9 +1,10 @@
 // The shared fixtures of the anira/abi/handler.h tests (test_Handler, test_HandlerWait,
 // test_Prepare, test_RtError and the AbiCxx pipeline cases): a context and a handler with
-// their lifetimes, the bundled gain model with the engine-free custom row, the hand-built
-// generator and channel-mismatch models, the contracts, the block data, the waits, the test
-// backends a session runs through its custom-processor pointer, and the guard that destroys
-// the handler before such a backend dies.
+// their lifetimes, the bundled gain model with the custom row, the hand-built generator and
+// channel-mismatch models, the contracts, the block data, the waits, the engines a custom row
+// runs on (the pass-through every Handler adds under anira.v2.custom, the gate engines of the
+// C rigs), the 2.x GateBackend the oracles' 2.x arms still take, and the guard that destroys
+// the handler before a gate engine's rig dies.
 #ifndef ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
@@ -12,9 +13,13 @@
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
 #include <anira/abi/stage.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/Core.h>
@@ -33,14 +38,12 @@
 #include <memory>
 #include <mutex>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "backends/LegacyAdapter.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -79,9 +82,9 @@ struct Context {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-/// The bundled gain model plus the engine-free custom row (BackendBase::process: an exact
-/// pass-through on this model, since both slots agree in channels and sample counts). With
-/// default_custom the handler starts on the custom plan.
+/// The bundled gain model plus the custom row, which a Handler runs on its pass-through (an
+/// exact copy on this model, since both slots agree in element count). With default_custom the
+/// handler starts on the custom plan.
 inline anira::ModelConfig gain_with_custom(bool default_custom = true) {
     anira::ModelConfig model = anira::ModelConfig::from_file(k_gain_model_json);
     model.add_model_path(k_custom, "custom-processor");
@@ -90,7 +93,7 @@ inline anira::ModelConfig gain_with_custom(bool default_custom = true) {
 }
 
 /// The stereo twin of gain_with_custom(): the bundled stereo gain model ([batch 1, channel 2,
-/// time 512] and the static gain) plus the engine-free custom row. Two channels are what tells
+/// time 512] and the static gain) plus the custom row. Two channels are what tells
 /// an interleaved block from a planar one; the mono model cannot.
 inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
     anira::ModelConfig model = anira::ModelConfig::from_file(k_stereo_gain_model_json);
@@ -158,7 +161,7 @@ inline anira::InferenceConfig bridged_2x(const char* model_json,
     return anira::v3compat::to_inference_config(cfg, contract, candidates);
 }
 
-/// The bundled CNN without a custom row (BackendBase would zero its 15380 -> 2048 output).
+/// The bundled CNN without a custom row (the pass-through would zero its 15380 -> 2048 output).
 inline anira::ModelConfig cnn_model() {
     return anira::ModelConfig::from_file(k_cnn_model_json);
 }
@@ -226,15 +229,215 @@ inline anira::ContractHandle file_contract(const char* contract_json,
     return contract;
 }
 
+// ---- engines -----------------------------------------------------------------------------------
+
+/// The elements of a tensor: the product of its extents (rank 0 is one element).
+inline size_t elements_of(const anira_tensor& tensor) noexcept {
+    size_t count = 1;
+    for (uint32_t axis = 0; axis < tensor.ndim; ++axis) {
+        count *= static_cast<size_t>(tensor.shape[axis]);
+    }
+    return count;
+}
+
+/// The C twin of the 2.x pass-through (BackendBase::process, src/backends/BackendBase.cpp):
+/// output i is a copy of input i when both carry the same element count and dtype, zeros
+/// otherwise; every output beyond the input count is zeros; State and Static slots pair by
+/// index like every other slot. ANIRA_ERROR_INVALID_ARGUMENT for a tensor that is no packed
+/// host tensor (anira_tensor_data answers NULL), which no C handler hands an engine.
+inline anira_status passthrough(const anira_engine_ctx& ctx) noexcept {
+    for (uint32_t slot = 0; slot < ctx.num_outputs; ++slot) {
+        const anira_tensor& out = ctx.outputs[slot];
+        void* target = anira_tensor_data(&out, out.dtype);
+        if (target == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const size_t bytes =
+            elements_of(out) * ANIRA_DTYPE_BITS(out.dtype) * ANIRA_DTYPE_LANES(out.dtype) / 8;
+        const anira_tensor* in = slot < ctx.num_inputs ? &ctx.inputs[slot] : nullptr;
+        if (in != nullptr && in->dtype == out.dtype && elements_of(*in) == elements_of(out)) {
+            const void* source = anira_tensor_data(in, in->dtype);
+            if (source == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+            std::memmove(target, source, bytes);
+        } else {
+            std::memset(target, 0, bytes);
+        }
+    }
+    return ANIRA_OK;
+}
+
+/// The process slot of the pass-through engine: passthrough() over the call's tensors.
+inline anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
+                                                   void* /*prepared*/,
+                                                   void* /*user_data*/) noexcept {
+    return passthrough(*ctx);
+}
+
+/// The pass-through engine: of the nine slots it fills process alone. load and prepare are
+/// NULL, so loaded and prepared are NULL in every call and a shared and an exclusive call run
+/// the same body; no init, reset, unprepare, unload or release; no providers (the default
+/// provider alone); flags 0.
+inline anira_engine_desc passthrough_desc() noexcept {
+    anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+    desc.process = passthrough_process;
+    return desc;
+}
+
+/// A new pass-through engine object under `id` (anira.v2.custom by default); the caller owns
+/// the handle (anira_custom_engine_destroy).
+inline anira_custom_engine* make_passthrough(const char* id = k_custom) {
+    const anira_engine_desc desc = passthrough_desc();
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_custom_engine_create(id, &desc, &engine, &err), ANIRA_OK) << err.message;
+    return engine;
+}
+
+/// Adds an engine to a pipeline under the id it was created with, before the handler exists
+/// (a handler copies the pipeline at create).
+inline void add_engine(anira_pipeline* pipeline, const anira_custom_engine* engine) {
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_pipeline_add_engine(pipeline, engine, &err), ANIRA_OK) << err.message;
+}
+
+/// Adds a pass-through engine object of its own to a pipeline under anira.v2.custom and drops
+/// the handle: the pipeline and the handlers created from it hold the object. One object per
+/// pipeline, as the engine-free roundtrip it replaces was one per session and never pooled: two
+/// pipelines that shared one object would share one loaded model per equal variant (the object
+/// is the pool's identity). Its loaded model is NULL (no load), and each handler gets its own
+/// prepared handle (NULL).
+inline void add_passthrough(anira_pipeline* pipeline) {
+    anira_custom_engine* engine = make_passthrough();
+    add_engine(pipeline, engine);
+    anira_custom_engine_destroy(engine);
+}
+
+/// A C engine object over a virtual body, created under anira.v2.custom on the first engine()
+/// (user_data = this; process alone of the nine slots) and owned by the rig: its own pooling
+/// identity. process waits while the gate is closed, then fails (m_fail_next once, m_fail while
+/// set: the status returned, ANIRA_ERROR_ENGINE for m_fail, plus one "test backend: inference
+/// failed" record through anira_log_rt, what the legacy room did for a 2.x throw) or runs
+/// run(), then counts. Declared BEFORE the Handler that adds it, so the handler, and every
+/// inference thread inside process, is gone before the object dies; a DestroyFirst declared
+/// after the Handler opens the gate before the handler's destroy drains the in-flight work.
+/// A closed gate holds one inference thread per shared slot of the loaded model inside process
+/// and parks the others in the claim of a slot; a test that needs N calls inside process at
+/// once sets max_instances(N).
+class GateEngine {
+public:
+    GateEngine() = default;
+    virtual ~GateEngine() {
+        m_open.store(true);
+        anira_custom_engine_destroy(m_engine);
+    }
+    GateEngine(const GateEngine&) = delete;
+    GateEngine& operator=(const GateEngine&) = delete;
+    GateEngine(GateEngine&&) = delete;
+    GateEngine& operator=(GateEngine&&) = delete;
+
+    anira_engine_desc desc() noexcept {
+        anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+        desc.user_data = this;
+        desc.flags = m_flags;
+        desc.process = process_slot;
+        return desc;
+    }
+
+    /// The engine object, created from desc() under anira.v2.custom on the first call.
+    anira_custom_engine* engine() {
+        if (m_engine == nullptr) {
+            const anira_engine_desc engine_desc = desc();
+            anira_error err = ANIRA_ERROR_INIT;
+            EXPECT_EQ(anira_custom_engine_create(k_custom, &engine_desc, &m_engine, &err), ANIRA_OK)
+                << err.message;
+        }
+        return m_engine;
+    }
+
+    /// One inference: the gate, the failure or run(), the count.
+    virtual anira_status process(const anira_engine_ctx& ctx) noexcept {
+        wait_open();
+        anira_status status = failure();
+        if (status == ANIRA_OK) { status = run(ctx); }
+        m_calls.fetch_add(1);
+        return status;
+    }
+
+    /// The body of an inference that does not fail: the pass-through.
+    virtual anira_status run(const anira_engine_ctx& ctx) noexcept { return passthrough(ctx); }
+
+    std::atomic<bool> m_open{true};
+    std::atomic<int> m_calls{0};
+    std::atomic<bool> m_fail{false};                  ///< every inference fails while set
+    std::atomic<anira_status> m_fail_next{ANIRA_OK};  ///< the next inference fails with it, once
+    uint32_t m_flags = 0;                             ///< the descriptor's, set before engine()
+
+protected:
+    void wait_open() const noexcept {
+        while (!m_open.load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+    }
+
+    /// The status this inference fails with (ANIRA_OK: it does not), logged once per failure.
+    anira_status failure() noexcept {
+        anira_status status = m_fail_next.exchange(ANIRA_OK);
+        if (status == ANIRA_OK && m_fail.load()) { status = ANIRA_ERROR_ENGINE; }
+        if (status != ANIRA_OK) {
+            anira_log_rt(ANIRA_LOG_ERROR,
+                         "anira.test",
+                         "test backend: inference failed",
+                         status,
+                         0);
+        }
+        return status;
+    }
+
+private:
+    static anira_status ANIRA_CALL process_slot(const anira_engine_ctx* ctx,
+                                                void* /*prepared*/,
+                                                void* user_data) noexcept {
+        return static_cast<GateEngine*>(user_data)->process(*ctx);
+    }
+
+    anira_custom_engine* m_engine = nullptr;
+};
+
+/// The port of test_OneSidedStreaming's ParamFillGeneratorBackend: sleeps m_first_sleep_us on
+/// its first call and m_sleep_us afterwards, then fills every element of output 0 with element
+/// 0 of input 0.
+class SleepingParamFillEngine : public GateEngine {
+public:
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const int sleep_us =
+            m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
+        if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
+        const float* param = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (param == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const float value = param[0];
+        for (size_t i = 0; i < elements_of(ctx.outputs[0]); ++i) { out[i] = value; }
+        return ANIRA_OK;
+    }
+
+    std::atomic<int> m_started{0};
+    int m_sleep_us = 0;
+    int m_first_sleep_us = 0;
+};
+
 /// A pipeline with one inference stage, the stages of `stages` (at most one in this
 /// pre-release) and the handler over it. An empty span means NULL candidates: the default set
-/// (every engine of this build plus the custom entries).
+/// (every engine of this build plus the custom entries). Before the inference stage the
+/// pipeline gets the engine a custom row runs on: `custom` (a GateEngine's engine(), declared
+/// before this Handler), else a pass-through object of its own (add_passthrough).
 struct Handler {
     Handler(const Context& context,
             const anira::ModelConfig& model,
             std::span<const anira_backend_id> candidates = {},
-            std::span<const anira_stage_desc> stages = {}) {
+            std::span<const anira_stage_desc> stages = {},
+            const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
+        if (custom != nullptr) {
+            add_engine(m_pipeline, custom);
+        } else {
+            add_passthrough(m_pipeline);
+        }
         const anira_model_config* variants[] = {model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
                                                variants,
@@ -365,33 +568,6 @@ inline std::shared_ptr<anira::SessionElement> session_of(const anira_handler* ha
     return found;
 }
 
-/// Control thread, after prepare and before the first block: the loaded model of the custom
-/// row's plan (the roundtrip the C path asked the core for) and the session's handle over it
-/// are replaced by a legacy loaded model over `backend`, loaded with the record of the plan it
-/// replaces, and a handle of the session's exclusivity. The inference thread reads the plan
-/// table per inference, so the replacement lands while no chunk exists, the discipline of the
-/// raw pointer write it succeeds. The backend must outlive the handler (an inference thread
-/// may be inside its process() until the handler's destroy has drained the in-flight work),
-/// and a stack backend built from h->m_inference_config is declared after the handler: declare
-/// a DestroyFirst right after the attach.
-inline void attach_processor(const anira_handler* handler, anira::BackendBase& backend) {
-    const std::shared_ptr<anira::SessionElement> session = session_of(handler);
-    ASSERT_NE(session, nullptr);
-    for (anira::SessionElement::PlanSlot& slot : session->m_plans) {
-        if (slot.m_engine_id != k_custom) { continue; }
-        ASSERT_NE(slot.m_loaded, nullptr);
-        auto loaded = std::make_shared<anira::backend::LegacyLoaded>(backend);
-        loaded->load(slot.m_loaded->model());
-        slot.m_prepared.reset();
-        slot.m_loaded = loaded;
-        slot.m_prepared = loaded->prepare(anira::backend::PrepareRequest{
-            .m_exclusive = handler->m_inference_config.m_session_exclusive_processor,
-            .m_info = nullptr});
-        return;
-    }
-    FAIL() << "the handler has no plan on the custom row";
-}
-
 /// Lowers the drain summary's interval for the test's lifetime.
 struct SummaryInterval {
     explicit SummaryInterval(uint32_t ms) { anira::detail::set_rt_summary_interval_ms(ms); }
@@ -426,11 +602,12 @@ inline RecordCollector::Record find_record(RecordCollector& collector,
     return {};
 }
 
-// ---- backends ----------------------------------------------------------------------------------
+// ---- the 2.x gate ------------------------------------------------------------------------------
 
-/// Holds every submitted inference on its inference thread while the gate is closed: the
-/// driver's next block finds the output ring starved. Opens itself on destruction so a stuck
-/// inference cannot hang the session release anira_handler_destroy runs.
+/// The 2.x twin of GateEngine for the 2.x arms of the oracles (copy_oracle.h, the 2.x rigs of
+/// test_CopyPathOracle and test_TensorStems): holds every submitted inference on its inference
+/// thread while the gate is closed, so the driver's next block finds the output ring starved.
+/// Opens itself on destruction so a stuck inference cannot hang the session release.
 class GateBackend : public anira::BackendBase {
 public:
     explicit GateBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
@@ -450,54 +627,11 @@ public:
     std::atomic<int> m_calls{0};
 };
 
-/// Throws from every inference while m_throw is set, else the pass-through.
-class ThrowingBackend : public anira::BackendBase {
-public:
-    explicit ThrowingBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        if (m_throw.load()) { throw std::runtime_error("test backend: inference failed"); }
-        anira::BackendBase::process(input, output, std::move(session));
-    }
-
-    std::atomic<bool> m_throw{true};
-};
-
-/// The port of test_OneSidedStreaming's ParamFillGeneratorBackend: sleeps m_first_sleep_us on
-/// its first call and m_sleep_us afterwards, then fills every output sample with parameter 0.
-class SleepingParamFillBackend : public anira::BackendBase {
-public:
-    explicit SleepingParamFillBackend(anira::InferenceConfig& config)
-        : anira::BackendBase(config) {}
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
-        const int sleep_us =
-            m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
-        if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
-        const float value = input[0].get_sample(0, 0);
-        for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
-            float* write_ptr = output[0].get_write_pointer(ch);
-            for (size_t s = 0; s < output[0].get_num_samples(); ++s) { write_ptr[s] = value; }
-        }
-        m_calls.fetch_add(1);
-    }
-
-    std::atomic<int> m_calls{0};
-    std::atomic<int> m_started{0};
-    int m_sleep_us = 0;
-    int m_first_sleep_us = 0;
-};
-
-/// Declared right after a stack backend attach_processor() handed to the session, so at scope
-/// exit it runs before the backend's destructor: it opens a held gate so the in-flight
-/// inference can finish, then destroys the handler, which drains the in-flight work and joins
-/// the pool. No inference thread is inside the backend's process() when the backend dies.
+/// Declared right after the Handler a gate engine runs in, so at scope exit it runs first: it
+/// opens the held gate so the in-flight inference can finish, then destroys the handler, which
+/// drains the in-flight work and joins the pool.
 struct DestroyFirst {
-    explicit DestroyFirst(Handler& handler, GateBackend* gate = nullptr)
+    explicit DestroyFirst(Handler& handler, GateEngine* gate = nullptr)
         : m_handler(handler), m_gate(gate) {}
     ~DestroyFirst() {
         if (m_gate != nullptr) { m_gate->m_open.store(true); }
@@ -505,9 +639,11 @@ struct DestroyFirst {
     }
     DestroyFirst(const DestroyFirst&) = delete;
     DestroyFirst& operator=(const DestroyFirst&) = delete;
+    DestroyFirst(DestroyFirst&&) = delete;
+    DestroyFirst& operator=(DestroyFirst&&) = delete;
 
     Handler& m_handler;
-    GateBackend* m_gate = nullptr;
+    GateEngine* m_gate = nullptr;
 };
 
 }  // namespace anira_test

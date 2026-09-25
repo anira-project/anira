@@ -34,8 +34,10 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "layout.h"
+#include "validate.h"
 #include "words.h"
 
+using anira::capi::k_v2_custom_engine;  // the id of every version-2 "CUSTOM" row
 using anira::capi::StatusError;
 using anira::capi::translate_exception;
 
@@ -141,7 +143,6 @@ const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"LITERT", ANIRA_ENGINE_LITERT},
     {"EXECUTORCH", ANIRA_ENGINE_EXECUTORCH},
 }};
-constexpr const char* k_v2_custom_engine = "anira.v2.custom";
 const std::array<std::pair<const char*, anira_dtype>, 10> k_dtypes{{
     {"float32", ANIRA_DTYPE_F32},
     {"float64", ANIRA_DTYPE_F64},

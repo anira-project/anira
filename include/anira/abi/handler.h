@@ -261,9 +261,8 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * of its own: it is one more implementation a candidate's engine_id resolves to, added
  * to the pipeline with anira_pipeline_add_engine (before or after this call), and its
  * call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose id no
- * engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create
- * (anira.v2.custom, the 2.x CUSTOM backend of the bridge, needs no registration in this
- * pre-release).
+ * engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create:
+ * every custom id, anira.v2.custom included, needs an engine on the pipeline.
  * @param pipeline The pipeline.
  * @param variants The model configurations the stage may run, copied; exactly one in this
  *        pre-release.
@@ -351,21 +350,23 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
  * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
  *        by (anira_model_config_add_model_path_custom), which
  *        anira_backend_id.engine_id, the plan report and every message about the
- *        engine carry; it must contain a '.', and the prefix "anira." is anira's own.
- *        The id belongs to the engine, in every pipeline it is added to, and is
- *        unique per pipeline (anira_pipeline_add_engine), not per process: two engine
- *        objects may carry one id in two pipelines.
+ *        engine carry; it must contain a '.', and the prefix "anira." is anira's own,
+ *        with one exception: "anira.v2.custom", the id anira/compat/v2.hpp creates a
+ *        2.x custom backend under, legal like any other id (a 2.x model file's
+ *        "CUSTOM" row names it). The id belongs to the engine, in every pipeline it
+ *        is added to, and is unique per pipeline (anira_pipeline_add_engine), not per
+ *        process: two engine objects may carry one id in two pipelines.
  * @param desc The engine; min(struct_size, sizeof(anira_engine_desc)) bytes are copied, with
  *        the consumed kinds, so the record and its strings may die when the call returns.
  *        The slots a shorter struct_size does not cover read as in ANIRA_ENGINE_DESC_INIT.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL engine_id, desc or out, an id
- *         without a '.' or with the prefix "anira.", a struct_size below the three leading
- *         slots {struct_size, abi_version, user_data}, a flags bit this header does not define,
- *         a NULL process, a NULL consumed_kinds (or a NULL entry in it) with a count above 0,
- *         or a NULL providers (or a NULL or empty entry in it) with a count above 0;
- *         ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+ *         without a '.' or with the prefix "anira." ("anira.v2.custom" excepted), a struct_size
+ *         below the three leading slots {struct_size, abi_version, user_data}, a flags bit this
+ *         header does not define, a NULL process, a NULL consumed_kinds (or a NULL entry in it)
+ *         with a count above 0, or a NULL providers (or a NULL or empty entry in it) with a
+ *         count above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
  *         (anira_check_abi).
  * @par Thread contract
  * [main-thread]
@@ -512,8 +513,8 @@ ANIRA_API void ANIRA_CALL anira_pipeline_destroy(anira_pipeline* pipeline) ANIRA
  * skipped, and a variant left with no entry is ANIRA_ERROR_CONFIG) and checks every
  * plan's provider against what its engine serves: a built-in engine's against this
  * context's capabilities (anira_capabilities_backends, what its runtime reports), a
- * custom engine's against its descriptor's providers list, the 2.x pass-through serving
- * the default provider alone; a provider the engine does not serve is
+ * custom engine's against its descriptor's providers list (a descriptor without one
+ * serves the default provider alone); a provider the engine does not serve is
  * ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and the served
  * list (the engine's load may still refuse one at prepare, a device missing at run
  * time). Models are loaded at anira_handler_prepare in this pre-release, so a file that
@@ -586,9 +587,9 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
  * that names no Streamed tensor, or one that differs from its spec's dtype while the
  * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
- * field), and a stage whose filled pre_process or post_process carries no
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those two
- * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * field), and a stage whose filled pre_process, post_process or reset carries no
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
+ * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.

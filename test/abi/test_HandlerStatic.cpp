@@ -2,7 +2,7 @@
 // anira_handler_get_static_output, the Static elements of the _multi forms and the handler's
 // store behind them (src/capi/port.h). A Static tensor has one description everywhere:
 // the whole tensor in the spec's shape and dtype. Every case is engine-free: the one model path
-// is the custom row, the session's custom backend is a gate that runs BackendBase::process
+// is the custom row, whose engine is a gate added to the pipeline that runs the pass-through
 // (tensor i of the output is tensor i of the input), so what goes in as a Static input comes
 // back as the Static output of the inference that saw it.
 //
@@ -20,7 +20,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -29,11 +28,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -132,53 +129,51 @@ StaticValues values_of(float first) {
 
 // ---- the rig -----------------------------------------------------------------------------------
 
-/// A handler over static_model() with a custom backend attached; the gate variant is closed
-/// until settle() opens it. create() alone leaves the handler unprepared.
-template <typename Backend>
-class Rig {
+/// A handler over static_model() whose custom row runs on a gate engine added to its pipeline,
+/// the gate closed until settle() opens it. prepare_now false leaves the handler unprepared.
+class GateRig {
 public:
-    explicit Rig(anira_miss_policy policy = ANIRA_MISS_ZEROS,
-                 anira_miss_fn miss_fn = nullptr,
-                 void* miss_user_data = nullptr,
-                 bool prepare_now = true)
-        : m_handler(m_context, static_model(), m_candidates)
+    explicit GateRig(anira_miss_policy policy = ANIRA_MISS_ZEROS,
+                     anira_miss_fn miss_fn = nullptr,
+                     void* miss_user_data = nullptr,
+                     bool prepare_now = true)
+        : m_handler(m_context, static_model(), m_candidates, {}, m_gate.engine())
         , m_policy(policy)
         , m_miss_fn(miss_fn)
         , m_miss_user_data(miss_user_data) {
         if (prepare_now) { prepare(); }
     }
-    ~Rig() {
-        if (m_backend != nullptr) { release(*m_backend); }
-        m_handler.destroy();  // drains the in-flight work before the backend dies
+    ~GateRig() {
+        m_gate.m_open.store(true);
+        m_handler.destroy();  // drains the in-flight work before the gate dies
     }
-    Rig(const Rig&) = delete;
-    Rig& operator=(const Rig&) = delete;
-    Rig(Rig&&) = delete;
-    Rig& operator=(Rig&&) = delete;
+    GateRig(const GateRig&) = delete;
+    GateRig& operator=(const GateRig&) = delete;
+    GateRig(GateRig&&) = delete;
+    GateRig& operator=(GateRig&&) = delete;
 
+    /// Prepares (again), the gate open for the previous session's in-flight work, and closes the
+    /// gate on the new session.
     void prepare() {
-        if (m_backend != nullptr) { release(*m_backend); }
+        m_gate.m_open.store(true);
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, m_policy, 0.0, 1.0);
         contract.hard_geometry(1, k_hop, k_rate);
         contract.hard_miss_fn(m_miss_fn, m_miss_user_data);
         const anira_status prepared = m_handler.prepare(contract);
         ASSERT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
-        // The previous session is gone: its backend may die now.
-        m_backend = std::make_unique<Backend>(get()->m_inference_config);
         m_session = anira_test::session_of(get());
         ASSERT_NE(m_session, nullptr);
-        anira_test::attach_processor(get(), *m_backend);
-        hold(*m_backend);
+        m_gate.m_open.store(false);
     }
 
     bool ready() const { return m_session != nullptr; }
     anira_handler* get() const { return m_handler.m_handler; }
-    Backend& backend() { return *m_backend; }
+    anira_test::GateEngine& gate() { return m_gate; }
 
     /// Opens the gate until every submitted inference is collected.
     void settle() {
-        oracle::settle(*m_backend, *m_session, [this] { anira_test::available(get()); });
+        oracle::settle(m_gate, *m_session, [this] { anira_test::available(get()); });
     }
 
     /// One block of the stream through the single form; the delivered status.
@@ -192,38 +187,18 @@ public:
     }
 
 private:
-    static void hold(anira_test::GateBackend& gate) { gate.m_open.store(false); }
-    static void release(anira_test::GateBackend& gate) { gate.m_open.store(true); }
-
     anira_test::Context m_context;
     std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
                                                 .engine = ANIRA_ENGINE_NONE,
                                                 .provider = ANIRA_PROVIDER_DEFAULT,
                                                 .engine_id = nullptr}};
+    anira_test::GateEngine m_gate;  // before the handler, which dies first
     anira_test::Handler m_handler;
     anira_miss_policy m_policy;
     anira_miss_fn m_miss_fn;
     void* m_miss_user_data;
-    std::unique_ptr<Backend> m_backend;
     std::shared_ptr<anira::SessionElement> m_session;
 };
-
-/// A gate that throws while m_throw is set: the inference fails and the chunk delivers zeros.
-class ThrowingGate : public anira_test::GateBackend {
-public:
-    using anira_test::GateBackend::GateBackend;
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        if (m_throw.load()) { throw std::runtime_error("test backend: inference failed"); }
-        anira_test::GateBackend::process(input, output, std::move(session));
-    }
-
-    std::atomic<bool> m_throw{false};
-};
-
-using GateRig = Rig<anira_test::GateBackend>;
 
 /// set_static_input(1) of `values`, one streamed block, settle: the model has produced them.
 void run_through(GateRig& rig, const StaticValues& values) {
@@ -756,7 +731,7 @@ TEST(AbiHandlerStatic, TheMissFunctionFindsTheStoredValueAndHasTheLastWord) {
 // ---- a chunk completed as zeros ----------------------------------------------------------------
 
 TEST(AbiHandlerStatic, AChunkCompletedAsZerosDoesNotOverwriteTheStore) {
-    Rig<ThrowingGate> rig;
+    GateRig rig;
     ASSERT_TRUE(rig.ready());
     const auto block_with = [&](const StaticValues& values) {
         const anira_tensor tensor = whole_f32(values.data(), k_static_shape);
@@ -766,12 +741,13 @@ TEST(AbiHandlerStatic, AChunkCompletedAsZerosDoesNotOverwriteTheStore) {
     };
     ASSERT_NO_FATAL_FAILURE(block_with(values_of(130.0F)));
     EXPECT_EQ(stored_output(rig.get()), values_of(130.0F));
-    // The engine throws: the chunk delivers zeros on its stream, and captures nothing.
-    rig.backend().m_throw.store(true);
+    // The engine fails: the chunk delivers zeros on its stream, and captures nothing.
+    rig.gate().m_fail.store(true);
     ASSERT_NO_FATAL_FAILURE(block_with(values_of(140.0F)));
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_ERROR_ENGINE);
     EXPECT_EQ(stored_output(rig.get()), values_of(130.0F)) << "what the model produced last";
-    rig.backend().m_throw.store(false);
+    rig.gate().m_fail.store(false);
+
     ASSERT_NO_FATAL_FAILURE(block_with(values_of(150.0F)));
     EXPECT_EQ(stored_output(rig.get()), values_of(150.0F));
 }

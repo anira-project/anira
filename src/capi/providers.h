@@ -4,10 +4,10 @@
  * What a backend's engine serves here, answered one way for every kind of engine: a built-in
  * engine by the context's probed rows (its runtime was asked at the last anira_context_probe),
  * a custom engine by its descriptor's declared list filtered through its query slot (asked
- * now), the 2.x pass-through by the default provider alone. anira_handler_create asks it for
- * every plan's provider and every provider_options set (handler.cpp check_providers,
- * check_option_sets), and the pipeline's capabilities entries build a custom engine's rows and
- * edges from it (custom_rows). Private to src/capi.
+ * now; a descriptor without a list serves the default provider alone). anira_handler_create
+ * asks it for every plan's provider and every provider_options set (handler.cpp
+ * check_providers, check_option_sets), and the pipeline's capabilities entries build a custom
+ * engine's rows and edges from it (custom_rows). Private to src/capi.
  */
 #include <anira/abi/context.h>
 #include <anira/abi/engine.h>
@@ -41,14 +41,14 @@ ANIRA_API anira_init_info query_info(const anira_context& context);
 
 /// What one engine serves here.
 struct ANIRA_API ServedProviders {
-    enum class Kind : uint8_t { BuiltIn, Custom, Passthrough };
-    Kind m_kind = Kind::Passthrough;
+    enum class Kind : uint8_t { BuiltIn, Custom };
+    Kind m_kind = Kind::BuiltIn;
     std::string m_label;  ///< the engine's word, or a custom engine's id, for a message
     /// Usable here, the default provider first: a built-in engine's probed rows, a custom
-    /// engine's declared list through its query, the pass-through's default provider.
+    /// engine's declared list through its query.
     std::vector<anira::backend::ProviderInfo> m_available;
-    /// A custom engine's declared list, the default provider first; a built-in engine's and
-    /// the pass-through's equal m_available.
+    /// A custom engine's declared list, the default provider first; a built-in engine's equals
+    /// m_available.
     std::vector<anira::backend::ProviderInfo> m_declared;
 
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept;
@@ -65,8 +65,9 @@ ANIRA_API ServedProviders served_by_custom(const anira_context& context,
                                            const EngineCarrier& engine);
 
 /// What the engine of a model entry serves: a registered engine of the pipeline through
-/// served_by_custom, the anira.v2.custom row the default provider alone, a built-in engine
-/// through served_by_builtin. Throws as served_by_custom does.
+/// served_by_custom, a built-in engine through served_by_builtin. Throws as served_by_custom
+/// does, and ANIRA_ERROR_INTERNAL for a custom row no engine of the pipeline has (validate
+/// refused it first).
 ANIRA_API ServedProviders served_providers(const anira_context& context,
                                            const anira_pipeline& pipeline,
                                            const ModelEntry& row);

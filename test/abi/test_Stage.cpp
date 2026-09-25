@@ -14,6 +14,7 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/build_info.h>
 #include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -70,8 +71,9 @@ constexpr size_t k_hop = anira_test::k_block;
 
 // ---- models ------------------------------------------------------------------------------------
 
-/// A mono stream through the engine-free custom row: [1, 1, window] in, of which `overlap` are
-/// history, and one hop out. Without an overlap BackendBase::process is an exact pass-through.
+/// A mono stream through the custom row: [1, 1, window] in, of which `overlap` are history, and
+/// one hop out. Without an overlap the pass-through engine a handler adds for the row is an
+/// exact copy.
 ModelConfig stream_model(int64_t window = static_cast<int64_t>(k_hop), int64_t overlap = 0) {
     ModelConfig model;
     model.add_model_path(k_custom, "custom-processor");
@@ -95,13 +97,21 @@ anira::ContractHandle zeros_contract(uint32_t block = static_cast<uint32_t>(k_ho
 // ---- a pipeline with stages --------------------------------------------------------------------
 
 /// anira_test::Handler's twin with a stage: the descriptors (at most one) go in before the
-/// handler is created, and the pipeline can be destroyed ahead of the handler.
+/// handler is created, and the pipeline can be destroyed ahead of the handler. The custom row's
+/// engine is `custom` (a gate engine declared before this handler), else a pass-through of its
+/// own.
 struct StagedHandler {
     StagedHandler(const Context& context,
                   const ModelConfig& model,
                   const std::vector<anira_stage_desc>& stages,
-                  std::span<const anira_backend_id> candidates = {}) {
+                  std::span<const anira_backend_id> candidates = {},
+                  const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
+        if (custom != nullptr) {
+            anira_test::add_engine(m_pipeline, custom);
+        } else {
+            anira_test::add_passthrough(m_pipeline);
+        }
         const std::array<const anira_model_config*, 1> variants{model.native()};
         EXPECT_EQ(anira_pipeline_add_inference(m_pipeline,
                                                variants.data(),
@@ -381,10 +391,10 @@ void ANIRA_CALL on_release(void* user_data) {
     ++static_cast<Lifetime*>(user_data)->m_released;
 }
 
-// ---- a backend whose output needs the window's history -----------------------------------------
+// ---- a model whose output needs the window's history -------------------------------------------
 
 /// out[n] = in[n] + in[n + overlap] over a [1, 1, 2 * hop] window: wrong in every sample when
-/// the head of the window is not the ring's history.
+/// the head of the window is not the ring's history. The 2.x backend, for the 2.x handler.
 class WindowSumBackend : public anira::BackendBase {
 public:
     explicit WindowSumBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
@@ -396,6 +406,19 @@ public:
         const float* in = input[0].get_read_pointer(0);
         float* out = output[0].get_write_pointer(0);
         for (size_t n = 0; n < hop; ++n) { out[n] = in[n] + in[n + hop]; }
+    }
+};
+
+/// WindowSumBackend's model as the custom row's engine, for the C handler.
+class WindowSumEngine : public anira_test::GateEngine {
+public:
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const size_t hop = anira_test::elements_of(ctx.outputs[0]);
+        for (size_t n = 0; n < hop; ++n) { out[n] = in[n] + in[n + hop]; }
+        return ANIRA_OK;
     }
 };
 
@@ -637,6 +660,7 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const ModelConfig model = stream_model();
     const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
@@ -730,6 +754,7 @@ TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const ModelConfig model = stream_model();
     const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
@@ -765,6 +790,7 @@ TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
     // Never prepared: released, never initialised.
     Lifetime idle;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
               ANIRA_OK)
         << err.message;
@@ -865,6 +891,7 @@ TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const ModelConfig model = stream_model();
     const std::array<const anira_model_config*, 1> variants{model.native()};
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
@@ -2322,19 +2349,19 @@ anira_status ANIRA_CALL scratch_phase(const anira_stage_ctx* ctx,
 
 // The entry is below anira_handler_num_entries, which the stage's prepare reads (0 while
 // unprepared); it is the same in all four phases of a chunk and distinct across the chunks in
-// flight at once. A gated backend holds the inferences, so several chunks are in flight
+// flight at once. A gate engine holds the inferences, so several chunks are in flight
 // together; a chunk formed after they completed reuses one of their entries.
 TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
     const Context context(4);
     EntryLog log;
-    std::unique_ptr<anira_test::GateBackend> gate;  // outlives the handler: declared first
+    anira_test::GateEngine gate;  // outlives the handler: declared first
     anira_stage_desc stage = promising_stage(&log);
     stage.prepare = log_entry_prepare;
     stage.pre_process = log_entry;
     stage.post_process = log_entry;
     stage.before_inference = log_entry;
     stage.after_inference = log_entry;
-    StagedHandler handler(context, stream_model(), {stage});
+    StagedHandler handler(context, stream_model(), {stage}, {}, gate.engine());
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(anira_handler_num_entries(handler.m_handler), 0U) << "unprepared";
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
@@ -2344,9 +2371,7 @@ TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
     EXPECT_EQ(log.m_num_entries, num_entries) << "the stage's prepare read the count";
     EXPECT_EQ(anira_handler_num_entries(nullptr), 0U);
 
-    gate = std::make_unique<anira_test::GateBackend>(h->m_inference_config);
-    anira_test::attach_processor(h, *gate);
-    gate->m_open.store(false);
+    gate.m_open.store(false);
     // One block per chunk while nothing completes: every chunk in flight has its own entry.
     // The call is ANIRA_OK while the latency's zeros last and ANIRA_MISSED after (the policy
     // fills zeros), a success either way.
@@ -2368,7 +2393,7 @@ TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
     }
     // The gate opens: every chunk completes, and the collection (post_process, on this thread)
     // runs as the available count is read.
-    gate->m_open.store(true);
+    gate.m_open.store(true);
     const auto start = std::chrono::steady_clock::now();
     while (log.m_calls.at(ANIRA_PHASE_POST_PROCESS).load() < in_flight) {
         anira_test::available(h);  // collects the completed chunks
@@ -2448,11 +2473,10 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
     const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
     const anira::ContractHandle contract = zeros_contract();
 
-    Handler c(context, model);
+    WindowSumEngine c_engine;
+    Handler c(context, model, {}, {}, c_engine.engine());
+    const anira_test::DestroyFirst c_guard(c, &c_engine);
     ASSERT_EQ(c.prepare(contract), ANIRA_OK) << c.m_err.message;
-    WindowSumBackend c_backend(c.m_handler->m_inference_config);
-    anira_test::attach_processor(c.m_handler, c_backend);
-    const anira_test::DestroyFirst c_guard(c);
 
     anira::InferenceConfig config_2x = anira::v3compat::to_inference_config(model, contract);
     anira::PrePostProcessor pp(config_2x);

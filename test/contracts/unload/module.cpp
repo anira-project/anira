@@ -4,6 +4,7 @@
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
@@ -13,6 +14,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 
 #include "module_api.h"
 
@@ -20,7 +22,8 @@ namespace {
 
 constexpr uint32_t k_block_size = 512;
 constexpr double k_sample_rate = 48000.0;
-// The custom engine the 2.x CUSTOM backend maps to: no model file, the default processor.
+// The id of the 2.x CUSTOM backend, under which the module adds its pass-through engine; the
+// row names no model file.
 constexpr const char* k_custom_engine = "anira.v2.custom";
 constexpr const char* k_custom_path = "custom-processor";
 constexpr const char* k_missing_model = "/nonexistent/anira-unload-test.model";
@@ -31,6 +34,31 @@ struct Instance {
     anira_handler* m_handler = nullptr;
     std::array<float, k_block_size> m_buffer{};
 };
+
+// The pass-through engine of the custom row: the one stream in, copied out. Its code lives in
+// this module, so the handler holding it must be gone before the module unloads, which every
+// case's destroy guarantees.
+anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
+                                            void* /*prepared*/,
+                                            void* /*user_data*/) {
+    const float* in = anira_tensor_data_f32(&ctx->inputs[0]);
+    float* out = anira_tensor_data_f32(&ctx->outputs[0]);
+    if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    std::memcpy(out, in, sizeof(float) * k_block_size);
+    return ANIRA_OK;
+}
+
+// A new pass-through engine object under k_custom_engine; nullptr when the create fails.
+anira_custom_engine* make_passthrough() {
+    anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+    desc.process = passthrough_process;
+    anira_custom_engine* engine = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    if (anira_custom_engine_create(k_custom_engine, &desc, &engine, &err) != ANIRA_OK) {
+        return nullptr;
+    }
+    return engine;
+}
 
 // The first engine this build carries; ONNX Runtime when there is none (an engine-less leg
 // refuses the entry at create, which is the failure the throwing case wants there).
@@ -118,9 +146,17 @@ Instance* make_instance(bool custom) {
     if (ok) {
         anira_model_config* model = make_model(custom);
         anira_pipeline* pipeline = nullptr;
+        ok = model != nullptr && anira_pipeline_create(&pipeline, &err) == ANIRA_OK;
+        if (ok && custom) {
+            // The custom row's engine, added before the handler copies the pipeline; the
+            // pipeline holds the object, so the handle goes right away.
+            anira_custom_engine* engine = make_passthrough();
+            ok = engine != nullptr && anira_pipeline_add_engine(pipeline, engine, &err) == ANIRA_OK;
+            anira_custom_engine_destroy(engine);
+        }
         // NULL candidates: the default set (every engine this build carries plus the custom
         // rows), under which an entry for an absent engine is skipped.
-        ok = model != nullptr && anira_pipeline_create(&pipeline, &err) == ANIRA_OK &&
+        ok = ok &&
              anira_pipeline_add_inference(pipeline, &model, 1, nullptr, 0, &err) == ANIRA_OK &&
              anira_handler_create(instance->m_context, pipeline, &instance->m_handler, &err) ==
                  ANIRA_OK;

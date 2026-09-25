@@ -132,9 +132,9 @@ anira_engine_desc full_engine(EngineLife& life) {
 constexpr const char* k_gain_id = "org.example.gain";
 constexpr const char* k_never_opened = "never-opened.bin";
 
-/// A mono stream, [1, 1, hop] in and out, on one model entry that names `engine_id`: the
-/// engine-free custom row (anira.v2.custom) runs it as an exact pass-through; another id is
-/// what a registered engine runs.
+/// A mono stream, [1, 1, hop] in and out, on one model entry that names `engine_id`: under
+/// anira.v2.custom the pass-through a test adds (anira_test::passthrough_desc) runs it as an
+/// exact copy; another id is what a registered engine runs.
 ModelConfig stream_model(const char* engine_id = k_custom, const char* path = "custom-processor") {
     ModelConfig model;
     model.add_model_path(engine_id, path);
@@ -668,10 +668,11 @@ std::vector<anira_plan_ext> ext_rows(const anira_handler* handler, uint32_t plan
 }  // namespace
 
 // Every ANIRA_ERROR_INVALID_ARGUMENT cause of the engine's create, named in the message: the id
-// (NULL, no reverse-URI name, or anira's own, anira.v2.custom among them), a NULL desc or out,
-// a short struct_size, a flags bit the header does not define, a NULL process and a NULL kinds
-// array or entry with a count. A refused create hands out nothing and never calls release. The
-// id of a create that succeeds is the carrier's own copy.
+// (NULL, no reverse-URI name, or anira's own), a NULL desc or out, a short struct_size, a flags
+// bit the header does not define, a NULL process and a NULL kinds array or entry with a count.
+// A refused create hands out nothing and never calls release. The id of a create that succeeds
+// is the carrier's own copy; the one id with anira's prefix a host may create is
+// anira.v2.custom, the 2.x custom backend's.
 TEST(AbiEngine, CreateRefusals) {
     EngineLife life;
     const anira_engine_desc engine = full_engine(life);
@@ -690,7 +691,7 @@ TEST(AbiEngine, CreateRefusals) {
     refused(nullptr, &engine, "NULL engine_id");
     refused("gain", &engine, "'.'");
     refused("anira.gain", &engine, "anira.");
-    refused(k_custom, &engine, "anira.");
+    refused("anira.v2.custom.other", &engine, "anira.");
     refused(k_gain_id, nullptr, "NULL desc");
     {
         anira_error err = ANIRA_ERROR_INIT;
@@ -730,6 +731,14 @@ TEST(AbiEngine, CreateRefusals) {
     anira_custom_engine_destroy(handle);
     EXPECT_EQ(life.m_released, 1);
     anira_custom_engine_destroy(nullptr);  // NULL-safe
+    // The exception to the prefix: anira.v2.custom is created like any other id.
+    handle = nullptr;
+    ASSERT_EQ(anira_custom_engine_create(k_custom, &engine, &handle, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_NE(handle, nullptr);
+    EXPECT_EQ(handle->m_carrier->id(), k_custom);
+    anira_custom_engine_destroy(handle);
+    EXPECT_EQ(life.m_released, 2);
 }
 
 // Every ANIRA_ERROR_INVALID_ARGUMENT cause of the addition, named in the message: a NULL
@@ -919,26 +928,30 @@ TEST(AbiEngine, ADuplicateIdIsInvalidState) {
 
 // A registration is legal before and after anira_pipeline_add_inference, and a handler created
 // from the pipeline carries the same carriers; a registered engine no entry names is not a
-// plan and not an error, so the handler prepares and runs on the custom row as before. A row
-// naming a registered id is a plan: the handler creates, prepares through the engine's
-// prepare and runs its stream through the engine's process.
+// plan and not an error, so the handler prepares and runs on the custom row's pass-through
+// alone. A row naming a registered id is a plan: the handler creates, prepares through the
+// engine's prepare and runs its stream through the engine's process.
 TEST(AbiEngine, LegalBeforeAndAfterAddInference) {
     const Context context;
     Pipe pipe;
     EngineLife before;
     EngineLife after;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ASSERT_EQ(pipe.add_new_engine("org.example.before", full_engine(before)), ANIRA_OK)
         << pipe.m_err.message;
     pipe.add_inference(stream_model());
     ASSERT_EQ(pipe.add_new_engine("org.example.after", full_engine(after)), ANIRA_OK)
         << pipe.m_err.message;
-    ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
+    ASSERT_EQ(pipe.m_pipeline->m_engines.size(), 3U);
 
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
-    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 2U);
+    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 3U);
     EXPECT_EQ(handler->m_pipeline.m_engines[0], pipe.m_pipeline->m_engines[0]);
     EXPECT_EQ(handler->m_pipeline.m_engines[1], pipe.m_pipeline->m_engines[1]);
+    EXPECT_EQ(handler->m_pipeline.m_engines[2], pipe.m_pipeline->m_engines[2]);
+
     anira_error err = ANIRA_ERROR_INIT;
     const anira::ContractHandle contract = explicit_contract();
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
@@ -992,6 +1005,8 @@ TEST(AbiEngine, ReleaseFiresOnceWithTheLastCarrier) {
                      std::to_string(order[2]));
         EngineLife life;
         Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+            << pipe.m_err.message;
         ASSERT_EQ(pipe.add_new_engine("org.example.shared", full_engine(life)), ANIRA_OK)
             << pipe.m_err.message;
         pipe.add_inference(model);
@@ -1015,18 +1030,22 @@ TEST(AbiEngine, ReleaseFiresOnceWithTheLastCarrier) {
 }
 
 // A handler copies the pipeline at create: an engine registered afterwards reaches the pipeline
-// and not the handler, and its release fires with the pipeline, the handler sharing nothing of it.
+// and not the handler (which holds the custom row's pass-through alone), and its release fires
+// with the pipeline, the handler sharing nothing of it.
 TEST(AbiEngine, RegisteredAfterCreateDoesNotReachTheHandler) {
     const Context context;
     Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     pipe.add_inference(stream_model());
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     EngineLife life;
     ASSERT_EQ(pipe.add_new_engine("org.example.late", full_engine(life)), ANIRA_OK)
         << pipe.m_err.message;
-    EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 1U);
-    EXPECT_TRUE(handler->m_pipeline.m_engines.empty());
+    EXPECT_EQ(pipe.m_pipeline->m_engines.size(), 2U);
+    ASSERT_EQ(handler->m_pipeline.m_engines.size(), 1U);
+    EXPECT_EQ(handler->m_pipeline.m_engines[0]->id(), k_custom);
     pipe.destroy();
     EXPECT_EQ(life.m_released, 1) << "the handler holds no share of the late carrier";
     anira_handler_destroy(handler);
@@ -1212,8 +1231,9 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
 
 // A candidate naming a provider the engine's descriptor does not list is ANIRA_ERROR_NOT_SUPPORTED
 // at create, naming the entry, the engine, the provider and the list (a provider of the enum
-// and a custom name alike); the 2.x pass-through serves the default provider alone; a candidate
-// that matches no entry is not a plan and not an error, and two equal candidates are one plan.
+// and a custom name alike); an engine whose descriptor lists no provider (the pass-through)
+// serves the default provider alone; a candidate that matches no entry is not a plan and not an
+// error, and two equal candidates are one plan.
 TEST(AbiEngine, AProviderTheEngineDoesNotListIsNotSupportedAtCreate) {
     const Context context;
     GainEngine gain;
@@ -1242,9 +1262,13 @@ TEST(AbiEngine, AProviderTheEngineDoesNotListIsNotSupportedAtCreate) {
             {"'xnnpack'"});
     {
         // The pass-through: the NONE entry with a provider keeps every custom row, and the
-        // anira.v2.custom row serves the default provider alone.
+        // anira.v2.custom row's engine, which lists no provider, serves the default provider
+        // alone.
         Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+            << pipe.m_err.message;
         pipe.add_inference(stream_model(),
+
                            gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}, nullptr));
         anira_handler* handler = nullptr;
         EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_NOT_SUPPORTED)
@@ -2142,11 +2166,15 @@ TEST(AbiEngine, PreparesOfOneLoadedModelNeverOverlap) {
 TEST(AbiEngine, ASessionExclusiveHandlerHasNoSharedSlotOnAnyEngine) {
     const Context context(2);
     const anira::ContractHandle contract = explicit_contract();
-    // The bundled gain model on every engine of the build plus the engine-free custom row.
+    // The bundled gain model on every engine of the build plus the custom row on its
+    // pass-through.
     ModelConfig model = anira_test::gain_with_custom(false);
     model.state(ANIRA_MODEL_STATEFUL).max_instances(2);
     Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     pipe.add_inference(model, anira_test::custom_candidates());
+
     anira_handler* handler = nullptr;
     ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
     anira_error err = ANIRA_ERROR_INIT;
@@ -2526,7 +2554,10 @@ TEST(AbiEngine, FlagsRoundTripThroughThePlanReport) {
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain, k_flags)), ANIRA_OK)
         << pipe.m_err.message;
-    // Two custom rows, two plans: the registered engine's and the engine-free pass-through's.
+    // Two custom rows, two plans: the flagged engine's and the pass-through's, whose descriptor
+    // carries flags 0.
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.add_model_path(k_custom, "custom-processor");
     pipe.add_inference(model);
@@ -2867,7 +2898,7 @@ TEST(AbiEngine, OneEngineInTwoPipelinesSharesOneLoadedModel) {
 
 // The whole variant is in the pool's key of a custom engine, since its load may read any of
 // it: one engine in two pipelines over models that differ in an entry the record does not
-// carry (a second row, the engine-free pass-through's) loads twice.
+// carry (a second row, the pass-through's, which the second pipeline adds) loads twice.
 TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
     const Context context;
     GainEngine gain;
@@ -2879,6 +2910,8 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
     Pipe second;
     ASSERT_EQ(first.add_engine(engine), ANIRA_OK) << first.m_err.message;
     ASSERT_EQ(second.add_engine(engine), ANIRA_OK) << second.m_err.message;
+    ASSERT_EQ(second.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << second.m_err.message;
     anira_custom_engine_destroy(engine);
     const ModelConfig plain = gain_model();
     ModelConfig extended = gain_model();
@@ -2908,13 +2941,15 @@ TEST(AbiEngine, OneEngineOverTwoVariantsLoadsTwice) {
 }
 
 // A registered engine received the names and bound its slots itself: every slot row of its
-// plan reads ANIRA_BINDING_ENGINE, while the engine-free pass-through's rows read
-// ANIRA_BINDING_POSITION.
+// plan reads ANIRA_BINDING_ENGINE, the anira.v2.custom row's pass-through's as well (a built-in
+// plan's POSITION and NAME rows are AbiHandler.ASlotReportsHowItsPlanBoundIt's).
 TEST(AbiEngine, ASlotReportsHowItWasBound) {
     const Context context;
     GainEngine gain;
     Pipe pipe;
     ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain)), ANIRA_OK) << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_custom, anira_test::passthrough_desc()), ANIRA_OK)
+        << pipe.m_err.message;
     ModelConfig model = gain_model();
     model.add_model_path(k_custom, "custom-processor");
     pipe.add_inference(model);
@@ -2929,7 +2964,7 @@ TEST(AbiEngine, ASlotReportsHowItWasBound) {
         EXPECT_EQ(engine_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
         const std::vector<anira_plan_slot> custom_rows = slot_rows(handler, 1, inputs);
         ASSERT_EQ(custom_rows.size(), 1U);
-        EXPECT_EQ(custom_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+        EXPECT_EQ(custom_rows[0].binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
     }
     anira_handler_destroy(handler);
 }

@@ -404,8 +404,11 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
      - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_stage_ctx``,
-       ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend on
-       the C handler until the cut-over.
+       ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
+       C handler runs it like every added id, on the engine added under it (the one id with
+       the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
+       adds it for a 2.x custom backend); the bridge keeps serving it without an engine until
+       the cut-over.
 
 .. _migration-bridge:
 
@@ -495,8 +498,10 @@ saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABL
 fixture does); a spec dtype other than float32; a layout that moves an axis of extent above 1
 (a transpose; a view over unit axes is fine); a dynamic Time extent on a Buffer tensor; an
 engine this build does not carry (see the candidates below); a custom engine other than
-``anira.v2.custom`` (the C handler runs a custom engine registered on its pipeline and
-refuses an unregistered id at ``anira_handler_create``, :doc:`custom_backends`). Every other
+``anira.v2.custom``, which the bridge serves with the 2.x pass-through (the C handler runs a
+custom engine added to its pipeline, ``anira.v2.custom`` included, and refuses an id without
+one at ``anira_handler_create``, :doc:`custom_backends`). Every other
+
 rule of section 1.1 that a configuration breaks is
 ``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that
 differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERROR_CONFIG``.

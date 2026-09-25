@@ -1,6 +1,7 @@
 // anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the still-public 2.x
 // anira::InferenceHandler as the in-binary oracle. Both handlers drive the same bundled model
-// (gain on the engine-free custom plan on every leg; the CNN where an engine is present) block
+// (gain on the custom plan's pass-through engine on every leg; the CNN where an engine is
+// present) block
 // by block, each waiting for its own inference, so no block is ever missed and the outputs are
 // compared bit for bit.
 #include <anira/CoreConfig.h>
@@ -43,7 +44,6 @@
 
 namespace {
 
-using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::custom_candidates;
 using anira_test::DestroyFirst;
@@ -356,6 +356,7 @@ TEST(AbiHandler, NullArgumentsAreRefused) {
 
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+    anira_test::add_passthrough(pipeline);
     const anira::ModelConfig model = gain_with_custom();
     const std::array<const anira_model_config*, 1> variants{model.native()};
     EXPECT_EQ(anira_pipeline_add_inference(nullptr, variants.data(), 1, nullptr, 0, &err),
@@ -935,8 +936,9 @@ TEST(AbiHandler, PlanReportRows) {
     }
 }
 
-// Every slot row tells how its plan bound the slot: the custom plan's 2.x backend binds by
-// position; the ONNX Runtime plan of the gain model binds audio_in and both outputs by position
+// Every slot row tells how its plan bound the slot: the custom plan's registered engine (the
+// pass-through) binds every slot itself; the ONNX Runtime plan of the gain model binds
+// audio_in and both outputs by position
 // (the graph names them data, processed_data and peak) and the gain input by its canonical
 // name, which the graph has.
 TEST(AbiHandler, ASlotReportsHowItsPlanBoundIt) {
@@ -973,10 +975,10 @@ TEST(AbiHandler, ASlotReportsHowItsPlanBoundIt) {
         if (plans[plan].engine == static_cast<uint32_t>(ANIRA_ENGINE_NONE)) {
             custom_seen = true;
             for (const anira_plan_slot& row : inputs) {
-                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
             }
             for (const anira_plan_slot& row : outputs) {
-                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_POSITION));
+                EXPECT_EQ(row.binding, static_cast<uint32_t>(ANIRA_BINDING_ENGINE));
             }
         }
 #ifdef USE_ONNXRUNTIME
@@ -1012,6 +1014,7 @@ TEST(AbiHandler, ConfigsAreCopiedAndDestroyableRightAfterCreate) {
         const std::vector<anira_backend_id> candidates = custom_candidates();
         anira_pipeline* pipeline = nullptr;
         ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
+        anira_test::add_passthrough(pipeline);
         const std::array<const anira_model_config*, 1> variants{model.native()};
         ASSERT_EQ(anira_pipeline_add_inference(pipeline,
                                                variants.data(),
@@ -1076,14 +1079,13 @@ TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
                                               .engine = ANIRA_ENGINE_NONE,
                                               .provider = ANIRA_PROVIDER_DEFAULT,
                                               .engine_id = nullptr}};
-    Handler handler(context, model, none);
+    anira_test::SleepingParamFillEngine generator;
+    Handler handler(context, model, none, {}, generator.engine());
+    const DestroyFirst destroy_first(handler, &generator);
     ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 10.0)),
               ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    anira_test::SleepingParamFillBackend backend(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
     EXPECT_EQ(anira_handler_get_latency(h, 0), k_hop) << "a generator counts from its first pull";
 
     // Setting a generator's Static input submits nothing: the pulls drive the inferences.
@@ -1091,7 +1093,7 @@ TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
     const anira_tensor param = anira_test::whole_f32(params.data(), {1, 4});  // the spec's shape
     EXPECT_EQ(anira_handler_set_static_input(h, 0, &param), ANIRA_OK);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
-    EXPECT_EQ(backend.m_calls.load(), 0);
+    EXPECT_EQ(generator.m_calls.load(), 0);
 
     // A pull delivers the priming block first, then the parameter's fill.
     for (int call = 0; call < 2; ++call) {
@@ -1111,8 +1113,8 @@ TEST(AbiHandler, GeneratorSetsItsStaticInputAndPopPulls) {
 
     // A generator has no slot the single push form takes: input 0 is Static, and the single
     // form of a Static slot is anira_handler_set_static_input.
-    const int calls = backend.m_calls.load();
+    const int calls = generator.m_calls.load();
     EXPECT_EQ(anira_handler_push_data(h, &param, 0), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(backend.m_calls.load(), calls) << "a refused call submits nothing";
+    EXPECT_EQ(generator.m_calls.load(), calls) << "a refused call submits nothing";
 }

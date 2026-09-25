@@ -65,10 +65,12 @@ pipelines yet to come without keeping it alive is **detached** (``anira_custom_e
 from then on it names the engine while a pipeline, a handler or a loaded model holds it, the
 addition is ``ANIRA_ERROR_INVALID_STATE`` once the engine was released, and
 ``anira_custom_engine_destroy`` still frees it. The id is a reverse-URI name: it must
-contain a ``.``, and the prefix ``anira.`` is anira's own (``anira.v2.custom`` names the 2.x
-``CUSTOM`` backend of :doc:`migration`). Adding is legal before or after
-``anira_pipeline_add_inference``; a handler copies the pipeline at ``anira_handler_create``, so
-an engine added afterwards does not reach that handler. A model entry that names the id
+contain a ``.``, and the prefix ``anira.`` is anira's own, with one exception:
+``anira.v2.custom``, the id of the 2.x ``CUSTOM`` backend of :doc:`migration`, is the one id
+with that prefix a host may create an engine under (a 2.x model file's ``"CUSTOM"`` row names
+it, and like every custom id it needs an engine on the pipeline). Adding is legal before or
+after ``anira_pipeline_add_inference``; a handler copies the pipeline at
+``anira_handler_create``, so an engine added afterwards does not reach that handler. A model entry that names the id
 (``anira_model_config_add_model_path_custom``, ``anira_model_config_add_model_bytes_custom``;
 ``"engine": "com.example.myengine"`` in a model file) is a plan of the handler like a built-in
 engine's entry; several such entries on one model configuration are several plans, which

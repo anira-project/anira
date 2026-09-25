@@ -29,8 +29,6 @@ namespace anira::capi {
 
 namespace {
 
-constexpr const char* k_v2_custom_engine = "anira.v2.custom";
-
 anira::backend::ProviderInfo default_provider() {
     return anira::backend::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = ""};
 }
@@ -146,15 +144,10 @@ ServedProviders served_providers(const anira_context& context,
         for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
             if (engine->id() == row.m_engine_id) { return served_by_custom(context, *engine); }
         }
-        // The 2.x pass-through (validate refused every other unknown id): the default
-        // provider alone.
-        ServedProviders served;
-        served.m_kind = ServedProviders::Kind::Passthrough;
-        served.m_label =
-            row.m_engine_id.empty() ? std::string(k_v2_custom_engine) : row.m_engine_id;
-        served.m_available.push_back(default_provider());
-        served.m_declared = served.m_available;
-        return served;
+        // validate refused a custom id no engine of the pipeline has.
+        throw StatusError(
+            ANIRA_ERROR_INTERNAL,
+            "providers: custom engine '" + row.m_engine_id + "' passed validate without an engine");
     }
     return served_by_builtin(context, row.m_engine);
 }
@@ -181,13 +174,6 @@ std::string unserved_message(const ServedProviders& served,
                 message += provider_list(served.m_declared);
                 message += ")";
             }
-            return message;
-        case ServedProviders::Kind::Passthrough:
-            message += "engine '";
-            message += served.m_label;
-            message += "' serves the default provider alone; asked for '";
-            message += wanted;
-            message += "'";
             return message;
         case ServedProviders::Kind::BuiltIn: break;
     }

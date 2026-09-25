@@ -14,9 +14,10 @@
 // (format_value), so a golden transcript is a literal a reviewer can read, and a difference
 // names the call and the run it happened in.
 //
-// Determinism. The session's backend is a GateBackend (test/abi/handler_support.h) that a
-// scenario keeps closed while it calls the library: an inference submitted by a call is held
-// on its inference thread, so no call ever sees a result of its own submissions, whatever
+// Determinism. The session's model is a gate (test/abi/handler_support.h: a GateBackend on the
+// 2.x session, a GateEngine added to the C handler's pipeline) that a scenario keeps closed
+// while it calls the library: an inference submitted by a call is held on its inference
+// thread, so no call ever sees a result of its own submissions, whatever
 // the machine load or the sanitizer. Between two calls settle() opens the gate, collects
 // until the session has no submitted inference left (the driver-thread list
 // SessionElement::m_time_stamps is empty) and closes the gate again: the next call finds
@@ -33,6 +34,9 @@
 // finite budget or timeout makes the block a matter of the wall clock and is not recorded.
 
 #include <anira/InferenceConfig.h>
+#include <anira/abi/engine.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/RingBuffer.h>
@@ -291,10 +295,11 @@ inline void expect_golden(const char* name, std::string_view golden, const Trans
     }
 }
 
-/// The clocked gate (see the file comment). collect() runs one non-waiting collection of the
-/// session, which is what get_available_samples does on both faces.
-template <typename Collect>
-void settle(GateBackend& gate, const anira::SessionElement& session, Collect&& collect) {
+/// The clocked gate (see the file comment), a GateBackend or a GateEngine. collect() runs one
+/// non-waiting collection of the session, which is what get_available_samples does on both
+/// faces.
+template <typename Gate, typename Collect>
+void settle(Gate& gate, const anira::SessionElement& session, Collect&& collect) {
     gate.m_open.store(true);
     const auto start = std::chrono::steady_clock::now();
     while (true) {
@@ -348,6 +353,24 @@ public:
         for (size_t i = 0; i < output[0].get_num_samples(); ++i) {
             output[0].set_sample(0, i, input[0].get_sample(0, 0) + static_cast<float>(i));
         }
+    }
+};
+
+/// The C twin of ParamRampGate for the C handler's rigs (FanOutGate has none: no C scenario
+/// fans out): a GateEngine whose run() is the pass-through, then sample i of output 0 is
+/// element 0 of input 0 plus i.
+class ParamRampEngine : public GateEngine {
+public:
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const anira_status status = passthrough(ctx);
+        if (status != ANIRA_OK) { return status; }
+        const float* param = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (param == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        for (size_t i = 0; i < elements_of(ctx.outputs[0]); ++i) {
+            out[i] = param[0] + static_cast<float>(i);
+        }
+        return ANIRA_OK;
     }
 };
 

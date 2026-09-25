@@ -1,4 +1,4 @@
-// anira/abi/handler.h: the _wait twins over a generator on the engine-free custom row.
+// anira/abi/handler.h: the _wait twins over a generator engine on the custom row.
 // ANIRA_WAIT_CONTRACT reproduces the 2.x blocking_ratio deadline, ANIRA_WAIT_FOREVER makes the
 // generator deterministic, an explicit timeout is a miss and not a refusal, and a twin without
 // an active inference thread refuses with ANIRA_ERROR_INVALID_STATE after running its
@@ -27,7 +27,6 @@
 
 namespace {
 
-using anira_test::attach_processor;
 using anira_test::Context;
 using anira_test::DestroyFirst;
 using anira_test::explicit_contract;
@@ -35,7 +34,7 @@ using anira_test::generator_model;
 using anira_test::Handler;
 using anira_test::k_rate;
 using anira_test::RecordCollector;
-using anira_test::SleepingParamFillBackend;
+using anira_test::SleepingParamFillEngine;
 
 constexpr size_t k_hop = 2048;
 constexpr int k_thread_timeout_s = 30;
@@ -82,7 +81,7 @@ Pull pull(anira_handler* handler, float param, std::vector<float>& out, double t
 }
 
 /// The port of test_OneSidedStreaming's drive_blocking_generator: a generator with
-/// wait_ratio 1 pulled through ANIRA_WAIT_CONTRACT for `blocks` host blocks by a backend
+/// wait_ratio 1 pulled through ANIRA_WAIT_CONTRACT for `blocks` host blocks by an engine
 /// that sleeps `sleep_us` per inference (`first_sleep_us` for its very first one). A starved
 /// pull is tolerated as long as the twin demonstrably waited for the reference stream's
 /// deadline; the block is then pulled again with its full demand. The delivered samples are
@@ -94,7 +93,11 @@ void drive_contract_wait(int first_sleep_us,
                          int& starved) {
     const Context context;
     const std::vector<anira_backend_id> none = none_only();
-    Handler handler(context, generator_model(), none);
+    SleepingParamFillEngine generator;
+    generator.m_first_sleep_us = first_sleep_us;
+    generator.m_sleep_us = sleep_us;
+    Handler handler(context, generator_model(), none, {}, generator.engine());
+    const DestroyFirst destroy_first(handler, &generator);
     ASSERT_EQ(handler.prepare(explicit_contract(static_cast<uint32_t>(host_block),
                                                 k_rate,
                                                 ANIRA_MISS_ZEROS,
@@ -103,11 +106,6 @@ void drive_contract_wait(int first_sleep_us,
               ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    SleepingParamFillBackend backend(h->m_inference_config);
-    backend.m_first_sleep_us = first_sleep_us;
-    backend.m_sleep_us = sleep_us;
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
     const size_t latency = anira_handler_get_latency(h, 0);
 
     const size_t n = host_block;
@@ -165,7 +163,7 @@ class AbiHandlerWaitRatio : public ::testing::TestWithParam<double> {};
 }  // namespace
 
 TEST(AbiHandlerWait, ContractReproducesTheBlockingRatioDeadline) {
-    // The backend sleeps 1 ms per inference: far shorter than the 85 ms deadline of a
+    // The engine sleeps 1 ms per inference: far shorter than the 85 ms deadline of a
     // 4096-sample block, so every pull is expected to succeed; a loaded runner may still
     // starve one, which drive_contract_wait tolerates.
     int starved = 0;
@@ -194,16 +192,15 @@ TEST(AbiHandlerWait, StarvedContractWaitIsRetriedWithFullDemand) {
 TEST_P(AbiHandlerWaitRatio, ForeverIsTheDeterministicGenerator) {
     const Context context;
     const std::vector<anira_backend_id> none = none_only();
-    Handler handler(context, generator_model(), none);
+    SleepingParamFillEngine generator;
+    generator.m_first_sleep_us = 50000;
+    generator.m_sleep_us = 5000;
+    Handler handler(context, generator_model(), none, {}, generator.engine());
+    const DestroyFirst destroy_first(handler, &generator);
     ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, GetParam(), 10.0)),
               ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    SleepingParamFillBackend backend(h->m_inference_config);
-    backend.m_first_sleep_us = 50000;
-    backend.m_sleep_us = 5000;
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
     const size_t latency = anira_handler_get_latency(h, 0);
 
     const auto start = std::chrono::steady_clock::now();
@@ -219,7 +216,7 @@ TEST_P(AbiHandlerWaitRatio, ForeverIsTheDeterministicGenerator) {
             ASSERT_EQ(out[s], expected) << "block " << block << ", sample " << s;
         }
     }
-    EXPECT_EQ(backend.m_calls.load(), 10);
+    EXPECT_EQ(generator.m_calls.load(), 10);
     EXPECT_GE(std::chrono::steady_clock::now() - start, std::chrono::milliseconds(50));
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
 }
@@ -239,17 +236,16 @@ TEST(AbiHandlerWait, TheTensorTwinsMissAtTheDeadlineAndDeliverWithoutLimit) {
     anira_tensor_init_host(&param_tensor, params.data(), ANIRA_DTYPE_F32, 2, param_shape.data());
     anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, out_shape.data());
 
-    Handler handler(context, generator_model(), none);
+    SleepingParamFillEngine generator;
+    generator.m_first_sleep_us = 1000000;
+    generator.m_sleep_us = 1000000;
+    Handler handler(context, generator_model(), none, {}, generator.engine());
+    const DestroyFirst destroy_first(handler, &generator);
     ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 10.0)),
               ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     // Every inference stalls for 1 s, far beyond the 20 ms deadlines and the 500 ms bounds.
-    SleepingParamFillBackend backend(h->m_inference_config);
-    backend.m_first_sleep_us = 1000000;
-    backend.m_sleep_us = 1000000;
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
 
     // The first pull delivers the priming zeros; the second finds the ring starved.
     size_t delivered = 7;
@@ -300,7 +296,11 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
     const std::vector<anira_backend_id> none = none_only();
     std::vector<float> out(k_hop);
     {
-        Handler handler(context, generator_model(), none);
+        SleepingParamFillEngine generator;
+        generator.m_first_sleep_us = 1000000;
+        generator.m_sleep_us = 1000000;
+        Handler handler(context, generator_model(), none, {}, generator.engine());
+        const DestroyFirst destroy_first(handler, &generator);
         ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 10.0)),
                   ANIRA_OK)
             << handler.m_err.message;
@@ -308,11 +308,6 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         // Every inference stalls for 1 s: far beyond the deadlines and the 500 ms bounds
         // below, so a loaded runner cannot let an inference land inside a wait that is
         // expected to miss.
-        SleepingParamFillBackend backend(h->m_inference_config);
-        backend.m_first_sleep_us = 1000000;
-        backend.m_sleep_us = 1000000;
-        ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-        const DestroyFirst destroy_first(handler);
 
         // The first pull delivers the priming zeros; the second finds the ring starved.
         const Pull first = pull(h, 1.0F, out, 20.0);
@@ -356,16 +351,15 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
     {
         // ANIRA_WAIT_CONTRACT on the pop twin is wait_ratio x block_max / rate: about the
         // block's duration on a stalled block.
-        Handler handler(context, generator_model(), none);
+        SleepingParamFillEngine generator;
+        generator.m_first_sleep_us = 1000000;
+        generator.m_sleep_us = 1000000;
+        Handler handler(context, generator_model(), none, {}, generator.engine());
+        const DestroyFirst destroy_first(handler, &generator);
         ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 1.0, 10.0)),
                   ANIRA_OK)
             << handler.m_err.message;
         anira_handler* h = handler.m_handler;
-        SleepingParamFillBackend backend(h->m_inference_config);
-        backend.m_first_sleep_us = 1000000;
-        backend.m_sleep_us = 1000000;
-        ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-        const DestroyFirst destroy_first(handler);
         const std::array<float*, 1> out_ch{out.data()};
         const anira_tensor popped = anira_test::planar_f32(out_ch.data(), 1, k_hop);
         size_t delivered = 0;
@@ -391,14 +385,13 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     const Context context(0);
     EXPECT_EQ(anira_num_inference_threads(), 0U);
     const std::vector<anira_backend_id> none = none_only();
-    Handler handler(context, generator_model(), none);
+    SleepingParamFillEngine generator;
+    Handler handler(context, generator_model(), none, {}, generator.engine());
+    const DestroyFirst destroy_first(handler, &generator);
     ASSERT_EQ(handler.prepare(explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, GetParam(), 10.0)),
               ANIRA_OK)
         << handler.m_err.message;
     anira_handler* h = handler.m_handler;
-    SleepingParamFillBackend backend(h->m_inference_config);
-    ASSERT_NO_FATAL_FAILURE(attach_processor(h, backend));
-    const DestroyFirst destroy_first(handler);
     anira_drain_log();
     RecordCollector collector;
     std::vector<float> out(k_hop);

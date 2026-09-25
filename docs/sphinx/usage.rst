@@ -229,8 +229,10 @@ is part of the build is decided at prepare, not here, so one config serves every
   engine's ``load`` does, and binds the tensors itself from the names the record carries
   (the plan report says ``ANIRA_BINDING_ENGINE`` for its slots). An entry whose id no
   registration on the pipeline serves is ``ANIRA_ERROR_NOT_SUPPORTED`` at
-  ``anira_handler_create``, naming the id; ``anira.v2.custom``, the 2.x ``CUSTOM`` backend,
-  is the one id that needs no registration.
+  ``anira_handler_create``, naming the id: every custom id needs an engine on the pipeline.
+  ``anira.v2.custom``, the id of the 2.x ``CUSTOM`` backend, is no exception; it is the one
+  id with the prefix ``anira.`` an engine may be created under, the id ``anira/compat/v2.hpp``
+  creates a 2.x custom backend under.
 - **Providers.** A provider is the engine's twin in the two-axis backend id: a value of
   ``anira_provider`` (``ANIRA_PROVIDER_CUDA``, ``COREML``, ``XNNPACK``, ...) or, for one the
   enum does not name, a string in the engine's own vocabulary (``provider_id``: an ONNX
@@ -1198,11 +1200,11 @@ with the id wherever the engine-provider pair travels and the plan's provider be
 slots bound by the engine itself (``ANIRA_BINDING_ENGINE``); an engine no entry names is not
 a plan and not an error; an entry whose id no engine of the pipeline serves is
 ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, naming the id (``anira.v2.custom``,
-the 2.x ``CUSTOM`` backend, needs no engine). The create refuses with
+the 2.x ``CUSTOM`` backend, included). The create refuses with
 ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` ``engine_id``, descriptor or ``out``, an id without
-a ``'.'`` or with the prefix ``anira.``, a ``struct_size`` below the three leading slots, a
-flags bit the header does not define, a ``NULL`` ``process`` or a ``NULL`` ``consumed_kinds``
-or ``providers`` with a count, and with ``ANIRA_ERROR_ABI_VERSION`` what ``anira_check_abi``
+a ``'.'`` or with the prefix ``anira.`` (``anira.v2.custom`` excepted), a ``struct_size`` below
+the three leading slots, a flags bit the header does not define, a ``NULL`` ``process`` or a
+``NULL`` ``consumed_kinds`` or ``providers`` with a count, and with ``ANIRA_ERROR_ABI_VERSION`` what ``anira_check_abi``
 refuses; the addition refuses with ``ANIRA_ERROR_INVALID_ARGUMENT`` a ``NULL`` pipeline or
 engine, and with ``ANIRA_ERROR_INVALID_STATE`` an id the pipeline already has; neither
 refusal leaves a reference behind. The pool rule: two
@@ -1835,10 +1837,7 @@ Whether the engine itself copies is its adapter's, as for every slot:
      - its own
      - its own
      - its own
-   * - the 2.x ``BackendBase`` behind ``anira.v2.custom``
-     - memcpy into the 2.x buffer
-     - memcpy out of it
-     - 2
+
 
 The two buffers take the spec's dtype: a registered engine binds what its ``load`` accepts
 (an ``int32`` pair runs), while every built-in adapter of this pre-release refuses a model
