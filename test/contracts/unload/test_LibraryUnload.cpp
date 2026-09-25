@@ -6,7 +6,10 @@
 // test/unload/module_api.h.
 
 #include <chrono>
+#include <csignal>
+#include <cstdlib>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -20,8 +23,6 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-
-#include <cstdlib>  // std::_Exit
 #else
 #include <dlfcn.h>
 #include <sys/wait.h>  // IWYU pragma: keep (WIFSIGNALED)
@@ -111,7 +112,13 @@ bool is_mapped(const char* path) {
 #endif
 }
 
+// module_api.h's engines of unloadtest_create_engine.
+constexpr int k_engine_stalling = 1;
+constexpr int k_engine_loader_lock = 2;
+constexpr int k_engine_slow = 3;
+
 using CreateFn = void* (*)();
+using CreateEngineFn = void* (*)(int, int);
 using PrepareFn = void (*)(void*);
 using ProcessFn = void (*)(void*, int);
 using DestroyFn = void (*)(void*);
@@ -122,6 +129,8 @@ using VoidFn = void (*)();
 struct Api {
     CreateFn m_create = nullptr;
     CreateFn m_create_builtin = nullptr;
+    CreateEngineFn m_create_engine = nullptr;
+    IntFn m_engine_entered = nullptr;
     PrepareFn m_prepare = nullptr;
     ProcessFn m_process = nullptr;
     ProcessFn m_process_wait = nullptr;
@@ -155,6 +164,8 @@ public:
 #endif
         return resolve(m_api.m_create, "unloadtest_create") &&
                resolve(m_api.m_create_builtin, "unloadtest_create_builtin") &&
+               resolve(m_api.m_create_engine, "unloadtest_create_engine") &&
+               resolve(m_api.m_engine_entered, "unloadtest_engine_entered") &&
                resolve(m_api.m_prepare, "unloadtest_prepare") &&
                resolve(m_api.m_process, "unloadtest_process") &&
                resolve(m_api.m_process_wait, "unloadtest_process_wait") &&
@@ -270,6 +281,44 @@ protected:
     void SetUp() override { pin_backend_runtimes(); }
 };
 
+// Waits until `expected` inferences of the module's engines reached their process.
+bool wait_for_entered(const Api& api, int expected) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (api.m_engine_entered() < expected) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+#if !defined(_WIN32)
+// A death-test child that hangs reads as a hang, not as ctest's 120 s timeout: after `limit`
+// the child says so and exits with 5.
+void start_watchdog(std::chrono::seconds limit) {
+    std::thread([limit] {
+        std::this_thread::sleep_for(limit);
+        constexpr std::string_view k_message =
+            "watchdog: the child hung (deadlock at unload or exit)\n";
+        static_cast<void>(write(2, k_message.data(), k_message.size()));
+        _exit(5);
+    }).detach();
+}
+#endif
+
+// The message the unload hook writes before it aborts.
+constexpr const char* k_abort_message =
+    "anira: the library is being unloaded while an inference is still running \\(1 in flight\\)";
+
+// Where the hook's abort can be observed: a POSIX loader that really unloads the module
+// (the hook runs at dlclose). Windows has no such hook (the CRT runs a static destructor from
+// DllMain, which may not wait for a thread), and on Apple the order of an image's atexit
+// handlers and its terminators at dlclose is not verified.
+#if defined(_WIN32) || defined(__APPLE__)
+constexpr bool k_hook_aborts = false;
+#else
+constexpr bool k_hook_aborts = true;
+#endif
+
 }  // namespace
 
 // The default lifecycle: once the last handler is destroyed no anira thread exists, so
@@ -304,21 +353,16 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
 // the pool (POSIX). On Windows there is no hook that may join; the plugin's module-exit
 // entry point calls shutdown() instead, which is mirrored here.
 //
-// The premise: the hook needs the pool idle. The session stays alive and registered and the
-// pool threads live, but every block is completed before the unload, so no inference is in
-// flight when the hook joins. The hook cannot survive either of these:
-// (a) a module-owned engine running after its module was unmapped: the loader may unmap the
-//     module before libanira's hook runs (dyld does), so a pool thread still inside the
-//     module's code crashes (the macOS-universal-shared segfault);
-// (b) a runtime mid-inference that takes the loader lock: dlclose holds glibc's dl_load_lock
-//     while the hook joins, and LibTorch's first inference on a thread registers its
-//     thread_local destructors through __cxa_thread_atexit, which takes that lock. The join
-//     then never returns: the blocked thread never leaves its inference. (The other pool
-//     thread, waiting in engine::Loaded::claim_and_run for the instance the blocked one
-//     holds, gives up once told to stop; it no longer holds up the join on its own.)
-// Both are library findings, outside this test. The engine is a built-in one running the
-// bundled gain model where the build has one, else the module's pass-through, which the
-// drained queue keeps out of reach once the module is gone (see passthrough_process).
+// The premise: the pool is idle. The session stays alive and registered and the pool threads
+// live, but every block is completed before the unload, so no inference is in flight when the
+// hook joins. With one in flight the hook waits a bounded time for it and aborts with a
+// message when it is still running (the death tests below: a runtime mid-inference that takes
+// the loader lock, which dlclose holds, never finishes there). A module-owned engine running
+// after its module was unmapped is outside this test: the loader may unmap the module before
+// libanira's hook runs (dyld does), so a pool thread still inside the module's code crashes
+// (the macOS-universal-shared segfault). The engine is a built-in one running the bundled gain
+// model where the build has one, else the module's pass-through, which the drained queue keeps
+// out of reach once the module is gone (see passthrough_process).
 TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     Module module;
     ASSERT_TRUE(module.load()) << module.error();
@@ -420,6 +464,171 @@ TEST(LibraryUnloadDeathTest, LeakedThreadCrashesOnUnload) {
             // NOLINTNEXTLINE(misc-include-cleaner) — WIFSIGNALED comes from <sys/wait.h>
             return WIFSIGNALED(status);
         },
+        "");
+#endif
+}
+
+// A host that unloads while an inference is still running, one that never ends on its own: the
+// unload hook stops the pool, waits its bounded time for the inference, then writes the rule to
+// stderr and aborts, instead of joining a thread that never returns.
+TEST(LibraryUnloadDeathTest, AnInferenceStillRunningAtUnloadAborts) {
+    pin_backend_runtimes();
+    if (!k_hook_aborts) { GTEST_SKIP() << "no unload hook that waits on this platform"; }
+    if (!pinned_by_loader().empty()) {
+        GTEST_SKIP() << "the loader never unloads " << pinned_by_loader();
+    }
+#if !defined(_WIN32)
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_engine(k_engine_stalling, 0);
+            if (instance == nullptr) { _exit(3); }
+            module.api().m_process(instance, 1);
+            if (!wait_for_entered(module.api(), 1)) { _exit(4); }
+            module.unload();
+            _exit(0);  // the unload returned: the hook did not abort
+        },
+        ::testing::KilledBySignal(SIGABRT),
+        k_abort_message);
+#endif
+}
+
+// The finding of the investigation, deterministically: an inference that needs the loader lock
+// while dlclose holds it (LibTorch's first inference on a thread does, through
+// __cxa_thread_atexit) can never finish, so the hook's join used to hang for good. It aborts
+// now, after the bounded wait. glibc only: the engine takes dl_load_lock through dlopen.
+TEST(LibraryUnloadDeathTest, AnInferenceWaitingForTheLoaderLockAtUnloadAborts) {
+    pin_backend_runtimes();
+#if !defined(__linux__)
+    GTEST_SKIP() << "the engine takes glibc's dl_load_lock";
+#else
+    if (!pinned_by_loader().empty()) {
+        GTEST_SKIP() << "the loader never unloads " << pinned_by_loader();
+    }
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_engine(k_engine_loader_lock, 0);
+            if (instance == nullptr) { _exit(3); }
+            module.api().m_process(instance, 1);
+            if (!wait_for_entered(module.api(), 1)) { _exit(4); }
+            module.unload();
+            _exit(0);
+        },
+        ::testing::KilledBySignal(SIGABRT),
+        k_abort_message);
+#endif
+}
+
+// The case the investigation reproduced: a built-in engine with blocks in flight at the unload
+// (LibTorch first where the build has it, whose first inference on a thread may wait for the
+// loader lock). Whether an inference is still running when the hook looks depends on the
+// runtime and the timing, so the child either unloads cleanly or aborts with the message; it
+// never hangs.
+TEST(LibraryUnloadDeathTest, ABuiltInInferenceInFlightAtUnloadNeverHangs) {
+    pin_backend_runtimes();
+    if (!k_hook_aborts) { GTEST_SKIP() << "no unload hook that waits on this platform"; }
+    if (!pinned_by_loader().empty()) {
+        GTEST_SKIP() << "the loader never unloads " << pinned_by_loader();
+    }
+#if !defined(_WIN32)
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_builtin();
+            if (instance == nullptr) { _exit(0); }  // no built-in engine: nothing to prove
+            module.api().m_process(instance, 10);
+            module.unload();
+            _exit(0);
+        },
+        [](int status) {
+            // NOLINTBEGIN(misc-include-cleaner) — the macros come from <sys/wait.h>
+            return (WIFEXITED(status) && WEXITSTATUS(status) == 0) ||
+                   (WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+            // NOLINTEND(misc-include-cleaner)
+        },
+        "");
+#endif
+}
+
+// An inference in flight at the unload that finishes within the hook's bounded wait: the hook
+// waits for it and joins the pool as it always did, and the unload is real.
+TEST_F(LibraryUnload, AnInferenceThatFinishesWithinTheWaitUnloadsCleanly) {
+    if (!k_hook_aborts) {
+        GTEST_SKIP() << "the module's engine may run after the module was unmapped there";
+    }
+    Module module;
+    ASSERT_TRUE(module.load()) << module.error();
+    const Api& api = module.api();
+    void* instance = api.m_create_engine(k_engine_slow, 300);
+    ASSERT_NE(instance, nullptr);
+    api.m_process(instance, 1);
+    ASSERT_TRUE(wait_for_entered(api, 1));
+    const auto start = std::chrono::steady_clock::now();
+    module.unload();
+    const auto took = std::chrono::steady_clock::now() - start;
+    RecordProperty(
+        "unload_ms",
+        std::to_string(std::chrono::duration_cast<std::chrono::milliseconds>(took).count()));
+    expect_unmapped();
+    grace_period();
+}
+
+// A program that exits (returns from main, calls exit) while an inference runs: the hook runs
+// then too (_dl_fini), but at exit it joins the pool without a bound, as it always did, since no
+// loader lock is held there. An inference longer than the unload's bounded wait finishes and
+// the process exits with its own status.
+TEST(LibraryUnloadDeathTest, ExitWithASlowInferenceInFlightExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no unload hook that joins on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_engine(k_engine_slow, 3000);
+            if (instance == nullptr) { _exit(3); }
+            module.api().m_process(instance, 1);
+            if (!wait_for_entered(module.api(), 1)) { _exit(4); }
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+#endif
+}
+
+// The same with a built-in engine mid-inference (LibTorch's first inference on the pool
+// threads where the build has it): at exit its registration under the loader lock goes
+// through, and the process exits normally.
+TEST(LibraryUnloadDeathTest, ExitWithABuiltInInferenceInFlightExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no unload hook that joins on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_builtin();
+            if (instance == nullptr) { std::exit(0); }  // no built-in engine: nothing to prove
+            module.api().m_process(instance, 10);
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0),
         "");
 #endif
 }

@@ -561,7 +561,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_create(anira_context* context,
  * counting as a user of the core, drops the handler's reference on its context and its
  * share of the stage and engine carriers (the release function of a stage or an engine
  * fires here when this handler held the last one). The driver thread must have stopped
- * calling the Hard entries.
+ * calling the Hard entries. A plugin must destroy its handlers, then its contexts,
+ * before its host unloads it (its instance teardown or module-exit entry point), and
+ * never from its own static destructors or DllMain, which run inside the unload under
+ * the loader lock.
  * @param handler The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]

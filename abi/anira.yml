@@ -2932,7 +2932,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Drops the user's reference: flushes the real-time log queue when this was the last user of the core, unregisters the context's log sink and waits for its in-flight calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the caller whatever the internal count (a handler that added a reference keeps the memory alive). Joins nothing. A destroy issued from inside the context's own sink is refused with one Error record and nothing happens."
+        doc: "Drops the user's reference: flushes the real-time log queue when this was the last user of the core, unregisters the context's log sink and waits for its in-flight calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the caller whatever the internal count (a handler that added a reference keeps the memory alive). Joins nothing. A destroy issued from inside the context's own sink is refused with one Error record and nothing happens. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock."
       - kind: function
         name: anira_context_probe
         returns: anira_status
@@ -3086,7 +3086,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions."
+        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock. On ELF and Mach-O the library-unload hook is the backstop for a host that unloads with a handler alive: it joins an idle pool; with an inference in flight it tells the threads to stop, waits up to two seconds for the inferences, and when one is still running (it can never finish while the unload holds the loader lock) writes 'anira: the library is being unloaded while an inference is still running (N in flight); ...' to stderr and aborts instead of hanging. At process exit it waits without a bound. Windows has no such hook: destroy the handlers and call this from the module-exit entry point."
         return_doc: "ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a handler lives."
       - kind: function
         name: anira_release_core_if_idle
@@ -3095,7 +3095,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Frees the core when nothing uses it: no context, no handler, no pool thread, no user-driven inference thread and, on WebAssembly, no inference loop still running. Never blocks; the unload hook's call."
+        doc: "Frees the core when nothing uses it: no context, no handler, no pool thread, no user-driven inference thread and, on WebAssembly, no inference loop still running. Never blocks; the unload hook's call, after it stopped the pool (see anira_shutdown for an unload with an inference in flight)."
         return_doc: "Nonzero when the core was freed."
       - kind: function
         name: anira_has_core
@@ -4341,7 +4341,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), then calls the stage's unprepare for this handler when its prepare succeeded (no phase call runs afterwards), frees the plan report, stops counting as a user of the core, drops the handler's reference on its context and its share of the stage and engine carriers (the release function of a stage or an engine fires here when this handler held the last one). The driver thread must have stopped calling the Hard entries."
+        doc: "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), then calls the stage's unprepare for this handler when its prepare succeeded (no phase call runs afterwards), frees the plan report, stops counting as a user of the core, drops the handler's reference on its context and its share of the stage and engine carriers (the release function of a stage or an engine fires here when this handler held the last one). The driver thread must have stopped calling the Hard entries. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock."
 
       - kind: function
         name: anira_handler_prepare

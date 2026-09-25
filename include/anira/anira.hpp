@@ -1951,6 +1951,12 @@ private:
  * @brief An anira_context with its lifetime: a refcounted handle over this copy's core,
  * created from a ContextConfig (section 4). Two contexts in one copy are two views of one
  * core with two log sinks.
+ *
+ * A plugin destroys its handlers, then its contexts, before its host unloads it (its instance
+ * teardown or module-exit entry point), and never from its own static destructors, which run
+ * inside the unload under the loader lock. On ELF and Mach-O a library unloaded with an
+ * inference still running aborts with a message on stderr after a bounded wait (see
+ * anira_shutdown and the usage guide's section on teardown).
  */
 class Context {
 public:
@@ -2021,7 +2027,9 @@ inline uint32_t num_inference_threads() noexcept {
     return anira_num_inference_threads();
 }
 
-/// anira_shutdown: effective only when no Context and no handler exist in this copy.
+/// anira_shutdown: effective only when no Context and no handler exist in this copy, so a
+/// plugin's module-exit entry point destroys its handlers and contexts first (never its static
+/// destructors: they run inside the unload).
 inline anira_status shutdown() noexcept {
     return anira_shutdown();
 }

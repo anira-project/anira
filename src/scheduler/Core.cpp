@@ -15,11 +15,14 @@
 #include <tanh/core/Logger.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -28,6 +31,10 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <unistd.h>
+#endif
 
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "../engines/Adapter.h"
@@ -156,20 +163,116 @@ namespace {
 std::atomic<void*> s_state{nullptr};
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+// Whether the process is exiting: set by an exit handler, registered once when the core is
+// first put to work (the pool starts, a user-managed thread is made). A handler registered
+// after main started runs before the loader's own exit pass (_dl_fini on glibc), which runs
+// the unload hook, so the hook tells an exit from a dlclose by it. At a dlclose the handler
+// runs after the hook (the image's __cxa_finalize comes last in its fini pass), too late to
+// matter. A core first put to work before main (a static constructor) registers the handler
+// before the loader's and is not told: its hook takes every exit for an unload.
+std::atomic<bool> s_process_exiting{false};
+std::atomic<bool> s_exit_watched{false};
+
+void mark_process_exiting() {
+    s_process_exiting.store(true, std::memory_order_release);
+}
+
+void watch_process_exit() {
+    if (s_exit_watched.exchange(true, std::memory_order_acq_rel)) { return; }
+    // A failed registration leaves exits unrecognised: they are treated as unloads.
+    static_cast<void>(std::atexit(mark_process_exiting));
+}
+
+// How long the unload hook waits for the inferences in flight before it gives up on them.
+constexpr std::chrono::milliseconds k_unload_wait_for_inferences{2000};
+
+// The unload hook's wait: until no inference is in flight (InferenceThread::
+// get_num_in_flight(), an atomic the inference threads keep), polling every millisecond, which
+// touches nothing the loader lock guards. When one is still running at the bound it never
+// will be while the hook holds the unload: a thread waiting for the loader lock that the
+// dlclose holds, or an engine that does not return. Joining it would hang the host for good,
+// returning would unmap the code under it, so the hook writes the rule to stderr (not through
+// anira's log queue or sinks, which may be gone or be what is stuck) and aborts.
+void wait_for_inferences_or_abort() {
+    const auto deadline = std::chrono::steady_clock::now() + k_unload_wait_for_inferences;
+    unsigned int in_flight = InferenceThread::get_num_in_flight();
+    while (in_flight > 0) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::array<char, 384> message{};
+            const int length = std::snprintf(
+                message.data(),
+                message.size(),
+                "anira: the library is being unloaded while an inference is still running "
+                "(%u in flight); destroy every anira handler, or call anira_shutdown(), before "
+                "unloading. Aborting instead of hanging.\n",
+                in_flight);
+            if (length > 0) {
+                const auto size = std::min(static_cast<size_t>(length), message.size() - 1);
+                static_cast<void>(::write(STDERR_FILENO, message.data(), size));
+            }
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        in_flight = InferenceThread::get_num_in_flight();
+    }
+}
+#endif
+
+}  // namespace
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+namespace detail {
+
+/// The body of the library-unload hook below; Core's friend, since it tells the pool's
+/// threads to stop without joining them.
+struct UnloadHook {
+    static void run();
+};
+
+void UnloadHook::run() {
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing != nullptr && !s_process_exiting.load(std::memory_order_acquire)) {
+        // An unload: every pool thread is told to stop first, so no new inference starts and a
+        // thread waiting for a free instance gives up; then the inferences in flight get the
+        // bounded wait. At exit no loader lock is held, so the join below waits for them
+        // whatever they take, as it always did.
+        Core::State& state = *static_cast<Core::State*>(existing);
+        {
+            const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+            for (const std::unique_ptr<InferenceThread>& thread : state.m_thread_pool) {
+                thread->request_stop();
+            }
+        }
+        wait_for_inferences_or_abort();
+    }
+    Core::shutdown();
+    Core::release_core_if_idle();
+}
+
+}  // namespace detail
+#endif
+
+namespace {
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 // Library-unload hook (ELF and Mach-O). Runs from the DSO's fini pass on dlclose (and at
 // process exit), before the C++ static destructors of this DSO — for a shared libanira as
 // well as for a plugin embedding a static anira. It lives in this translation unit so a
 // static library always links it in (Core.cpp is referenced by every user).
 //
-// shutdown() is a backstop: with the default lifecycle no pool thread exists once the
-// last session was released, so it only ever joins something when a host unloads the
-// library with a live instance. Joining here is safe because the pool threads never take
-// the loader lock: they block in nanosleep/futex or run anira code that was bound at load
-// time (RTLD_NOW, no lazy binding, no global-dynamic TLS). release_core_if_idle() then
-// returns the core's memory unless something is left.
+// shutdown() is a backstop: with the default lifecycle no pool thread exists once the last
+// session was released, so it only ever joins something when a host unloads the library with
+// a live handler (or the process exits with one). At a dlclose the unloading thread holds the
+// loader lock (glibc's dl_load_lock) for the whole close, and the pool threads are not free of
+// it: anira's own code was bound at load time, but a runtime may take it mid-inference
+// (LibTorch's first inference on a thread registers its thread_local destructors through
+// __cxa_thread_atexit, which takes dl_load_lock; a lazy dlopen does too), and so may a custom
+// engine. Such a thread cannot finish while the hook runs, so the hook waits a bounded time for
+// the inferences in flight and aborts with a message when one is still running
+// (UnloadHook::run). An idle pool is joined as before. release_core_if_idle() then returns the
+// core's memory unless something is left.
 __attribute__((destructor)) void anira_library_unload_hook() {
-    anira::Core::shutdown();
-    anira::Core::release_core_if_idle();
+    detail::UnloadHook::run();
 }
 #elif defined(_WIN32)
 // Windows has no equivalent that may join threads: the CRT runs this destructor from
@@ -178,6 +281,10 @@ __attribute__((destructor)) void anira_library_unload_hook() {
 // So this only frees an idle core — it never blocks (try_lock) and never joins. Plugins
 // that want the shutdown() backstop call it from their module-exit entry point (CLAP
 // deinit, VST3 ExitDll), which the host invokes before FreeLibrary and outside the lock.
+// The POSIX hook's check for inferences in flight is not done here either: the destructor
+// also runs at process exit after ExitProcess has ended every other thread, mid-inference
+// or not, so the in-flight count would be stale there, and a static destructor cannot tell
+// the two (DllMain's lpReserved is not visible to it).
 struct UnloadGuard {
     ~UnloadGuard() { anira::Core::release_core_if_idle(); }
 };
@@ -1387,6 +1494,10 @@ void Core::post_process(
 }
 
 void Core::start_thread_pool_locked(State& state) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    // Before a thread can run an inference, so the unload hook can tell an exit (see there).
+    if (!state.m_thread_pool.empty()) { watch_process_exit(); }
+#endif
     for (const auto& i : state.m_thread_pool) {
         if (!i->is_running() && !i->start()) {
             // Waiting for is_running() below would never return: say it instead.
@@ -1537,6 +1648,9 @@ InferenceQueue& Core::get_static_inference_queue() {
 
 std::unique_ptr<InferenceThread> Core::make_inference_thread() {
     State& state = get_state();
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    watch_process_exit();  // as for the pool (start_thread_pool_locked)
+#endif
     anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
     {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);

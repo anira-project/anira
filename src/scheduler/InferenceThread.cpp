@@ -28,6 +28,9 @@ namespace {
 // every WASM instance sees the same value. Deliberately not an inline static class member
 // — see InferenceThread.h. Natively this is also the active count.
 std::atomic<unsigned int> s_num_loop_active{0};
+// Process-wide count of inferences in flight: a thread holds one from the dequeue of a job
+// to its end (process_dequeued_inference), idle threads none. The unload hook waits on it.
+std::atomic<unsigned int> s_num_in_flight{0};
 #ifdef __EMSCRIPTEN__
 // The active count on WebAssembly: threads between start() and stop(), maintained on the
 // main instance, since the Worker enters run_loop() asynchronously (see
@@ -105,6 +108,10 @@ unsigned int InferenceThread::get_num_active_threads() {
 #else
     return s_num_loop_active.load(std::memory_order::acquire);
 #endif
+}
+
+unsigned int InferenceThread::get_num_in_flight() noexcept {
+    return s_num_in_flight.load(std::memory_order::acquire);
 }
 
 unsigned int InferenceThread::get_num_loop_active() {
@@ -234,6 +241,17 @@ void InferenceThread::process_dequeued_inference() {
     // The count was taken at the enqueue, so a laggard (a thread that dequeued the job before
     // the drain looked and was preempted here) is waited for like any other worker; and the
     // job's session and struct never linger in m_inference_data past the job.
+    // In flight until every exit below, a throw included (declared first: it ends last, after
+    // the job's references were dropped).
+    s_num_in_flight.fetch_add(1, std::memory_order::acq_rel);
+    struct InFlight {
+        InFlight() = default;
+        ~InFlight() { s_num_in_flight.fetch_sub(1, std::memory_order::acq_rel); }
+        InFlight(const InFlight&) = delete;
+        InFlight& operator=(const InFlight&) = delete;
+        InFlight(InFlight&&) = delete;
+        InFlight& operator=(InFlight&&) = delete;
+    } const in_flight;
     InferenceData job = std::move(m_inference_data);
     const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
     struct JobGuard {

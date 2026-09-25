@@ -169,6 +169,20 @@ public:
     static unsigned int get_num_loop_active();
 
     /**
+     * @brief Number of inferences in flight in the process right now.
+     *
+     * An inference is in flight from the moment a thread dequeued its job until the job is
+     * done: its hooks, the wait for a free instance of the loaded model and the engine call,
+     * or the skip of a stale or uninitialised job. Idle threads waiting for work count
+     * nothing. Every thread that runs jobs keeps it (the pool and user-created threads, and
+     * a host driving execute() itself): two atomic updates per job, none on the audio
+     * thread. The library-unload hook waits on it (Core::shutdown()'s backstop at
+     * dlclose); the counter has static storage duration like the thread counters.
+     * Wait-free.
+     */
+    static unsigned int get_num_in_flight() noexcept;
+
+    /**
      * @brief True while at least one thread is inside run_loop(), on every platform.
      *
      * The relaxed read of the same count get_num_loop_active() reports (the auto-managed

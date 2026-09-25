@@ -2010,6 +2010,8 @@ public:
                      const ContextConfig& context_config = ContextConfig())
         : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
     /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
+    /// A plugin destroys its handlers before its host unloads it, never from its own static
+    /// destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
     /// The backend the next block runs on; before prepare the request is kept and applied at

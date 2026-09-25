@@ -530,7 +530,8 @@ leniency, resolves relative paths against the document's directory and keeps row
 this build lacks; the ``ContextConfig`` thread count defaults to ``k_threads_auto``, and a
 document without a log level reads Warning; the engine code of ``PassthroughEngine`` and every
 2.x custom engine is the host's, so a handler must be destroyed before the module that holds it
-unloads.
+unloads, and never from that module's static destructors (:ref:`usage-teardown`: a library
+unloaded with an inference still running aborts with a message on Linux and macOS).
 
 .. _migration-compat-config:
 
@@ -646,7 +647,7 @@ What differs from 2.x:
 - **The engine code is the host's.** The header is compiled into the host, so the
   ``PassthroughEngine`` and every 2.x custom engine run code of the module that includes it,
   where 2.x ran its pass-through inside libanira: destroy the handler before that module
-  unloads.
+  unloads, never from its static destructors (:ref:`usage-teardown`).
 
 ``anira::v2::InferenceHandler`` is the 2.x handler over the C handler of
 ``anira/abi/handler.h``: its constructors take the processor, the configuration and a
