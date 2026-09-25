@@ -69,7 +69,7 @@ std::shared_ptr<BuiltinEngine> make_builtin_engine(anira_engine engine) {
 
 std::shared_ptr<Loaded> make_builtin_loaded(const std::shared_ptr<BuiltinEngine>& engine) {
     if (engine == nullptr) { return nullptr; }
-    switch (engine->engine()) {
+    switch (engine->kind()) {
 #ifdef USE_LIBTORCH
         case ANIRA_ENGINE_LIBTORCH: return make_libtorch_loaded(engine);
 #endif

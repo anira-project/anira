@@ -141,7 +141,7 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
 void ExecutorLoaded::require_initialised() const {
     if (m_engine->initialised()) { return; }
     std::string message = "engine '";
-    message += anira::capi::engine_word(m_engine->engine());
+    message += anira::capi::engine_word(m_engine->kind());
     message += "' was never initialised: init runs before load";
     throw StatusError(ANIRA_ERROR_INVALID_STATE, message);
 }

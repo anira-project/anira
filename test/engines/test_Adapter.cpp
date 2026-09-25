@@ -1091,12 +1091,12 @@ TEST(Adapter, MakeBuiltInEngineAndLoadedAnswerTheEnginesOfTheBuild) {
         ASSERT_NE(engine, ANIRA_ENGINE_NONE);
         const std::shared_ptr<BuiltinEngine> object = anira::engine::make_builtin_engine(engine);
         ASSERT_NE(object, nullptr) << "engine " << static_cast<int>(engine);
-        EXPECT_EQ(object->engine(), engine);
+        EXPECT_EQ(object->kind(), engine);
         EXPECT_FALSE(object->initialised());
         const std::shared_ptr<Loaded> loaded = anira::engine::make_builtin_loaded(object);
         ASSERT_NE(loaded, nullptr) << "engine " << static_cast<int>(engine);
         EXPECT_FALSE(loaded->loaded());
-        EXPECT_EQ(&dynamic_cast<ExecutorLoaded&>(*loaded).engine(), object.get())
+        EXPECT_EQ(&dynamic_cast<ExecutorLoaded&>(*loaded).builtin(), object.get())
             << "the loaded model holds the object it was made over";
         // The query needs no init and lists the default provider first.
         const std::vector<anira::engine::ProviderInfo> providers = object->providers();
@@ -1125,7 +1125,7 @@ TEST(Adapter, ALoadedModelInitialisesItsEngineObjectOnceAndLoadsAfterItAlone) {
     const auto engine = std::make_shared<RecordingEngine>();
     RecordingLoaded first(engine);
     RecordingLoaded second(engine);
-    EXPECT_EQ(&first.engine(), engine.get());
+    EXPECT_EQ(&first.builtin(), engine.get());
     EXPECT_FALSE(engine->initialised());
     try {
         first.load(gain_model());

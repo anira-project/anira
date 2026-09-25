@@ -226,8 +226,10 @@ public:
     BuiltinEngine(BuiltinEngine&&) = delete;
     BuiltinEngine& operator=(BuiltinEngine&&) = delete;
 
-    /// The engine this object is.
-    anira_engine engine() const noexcept { return m_engine; }
+    /// The built-in engine this object is. (Not named engine(): a member named like its
+    /// namespace, anira::engine, mangles to a back-reference on MSVC that hides the namespace
+    /// from the export check.)
+    anira_engine kind() const noexcept { return m_engine; }
 
     /// The engine's init, once per object: the first call runs do_init with the record and
     /// remembers a success, every later call returns at once; a throw leaves the object
@@ -447,8 +449,8 @@ public:
     explicit ExecutorLoaded(std::shared_ptr<BuiltinEngine> engine) noexcept
         : m_engine(std::move(engine)) {}
 
-    /// The engine object; initialised by the time load ran.
-    BuiltinEngine& engine() const noexcept { return *m_engine; }
+    /// The built-in engine object; initialised by the time load ran.
+    BuiltinEngine& builtin() const noexcept { return *m_engine; }
 
     /// The engine object's init, once per object (BuiltinEngine::ensure_init).
     void init(const anira_init_info& info) override { m_engine->ensure_init(info); }

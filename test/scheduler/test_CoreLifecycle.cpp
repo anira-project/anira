@@ -237,7 +237,7 @@ TEST(CoreLifecycleTest, OneEngineObjectPerBuiltInEngineWhileSomethingHoldsIt) {
                                       ANIRA_ENGINE_EXECUTORCH}) {
         std::shared_ptr<anira::engine::BuiltinEngine> object = Core::builtin_engine(engine);
         if (object == nullptr) { continue; }  // not in this build
-        EXPECT_EQ(object->engine(), engine);
+        EXPECT_EQ(object->kind(), engine);
         EXPECT_FALSE(object->initialised()) << "no session loaded a model of the engine";
         EXPECT_EQ(Core::builtin_engine(engine), object) << "one object per engine while held";
         const std::weak_ptr<anira::engine::BuiltinEngine> watch = object;
@@ -251,7 +251,7 @@ TEST(CoreLifecycleTest, OneEngineObjectPerBuiltInEngineWhileSomethingHoldsIt) {
     EXPECT_TRUE(Core::release_core_if_idle()) << "the objects alone do not keep the core";
     EXPECT_FALSE(Core::has_core());
     for (const std::shared_ptr<anira::engine::BuiltinEngine>& object : objects) {
-        EXPECT_NE(Core::builtin_engine(object->engine()), object)
+        EXPECT_NE(Core::builtin_engine(object->kind()), object)
             << "a freed core knows none of the objects";
     }
     objects.clear();
