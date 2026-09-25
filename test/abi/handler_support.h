@@ -274,8 +274,8 @@ inline anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
 
 /// The pass-through engine: of the nine slots it fills process alone. load and prepare are
 /// NULL, so loaded and prepared are NULL in every call and a shared and an exclusive call run
-/// the same body; no init, reset, unprepare, unload or release; no providers (the default
-/// provider alone); flags 0.
+/// the same body; no init, reset, unprepare, unload or release; no providers list
+/// (ANIRA_PROVIDER_CPU alone); flags 0.
 inline anira_engine_desc passthrough_desc() noexcept {
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.process = passthrough_process;

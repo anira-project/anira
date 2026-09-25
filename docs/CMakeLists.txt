@@ -68,6 +68,17 @@ add_custom_target(breathe-apidocs
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_loaded.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1ext_1_1_provider_options_1_1_set.rst
+    # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessorStage::Prepared, the
+    # private Loaded and Prepared of PassthroughEngine (EXTRACT_PRIVATE lists them), the
+    # Defaults of anira::v2::InferenceConfig (as the 2.x one's above), and the three aggregates
+    # of anira::SpecView (Axis, Window, TimeRatio).
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_stage_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_loaded.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1v2_1_1_inference_config_1_1_defaults.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_axis.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_window.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_time_ratio.rst
     # Add :allow-dot-graphs: directive to all class and struct files.
     # Using perl -i for portability (BSD sed on macOS uses different -i syntax than GNU sed).
     COMMAND bash -c "find ${SPHINX_SOURCE_DIR}/api/class -name '*.rst' -exec perl -i -pe 's{^(\\.\\.\\s+doxygenclass::.*\\n)}{$1    :allow-dot-graphs:\\n}' {} +"
