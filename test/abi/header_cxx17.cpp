@@ -238,6 +238,29 @@ static_assert(noexcept(
     anira_pipeline_capabilities_edge(nullptr, nullptr, ANIRA_DOMAIN_HOST, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
+// The read-back of anira/abi/config.h: one pin per shape (a string, a count, an enum, a spec
+// pointer and an extension record out of a value getter; a status getter over an enum and an
+// int64_t, a string, a function pointer and a void*, and a Tier-2 record), and the axis
+// getter's signature.
+static_assert(noexcept(anira_tensor_spec_name(nullptr)));
+static_assert(noexcept(anira_tensor_spec_ndim(nullptr)));
+static_assert(noexcept(anira_tensor_spec_role(nullptr)));
+static_assert(noexcept(anira_model_config_input(nullptr, 0)));
+static_assert(noexcept(anira_model_config_model_ext(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_tensor_spec_axis(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_tensor_layout(nullptr, 0, nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_hard_ring_dtype(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_hard_miss_fn(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_contract_edge_cost(nullptr)));
+static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
+static_assert(
+    std::is_same_v<decltype(anira_model_config_input(nullptr, 0)), const anira_tensor_spec*>);
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_tensor_spec_axis),
+                                    const anira_tensor_spec*,
+                                    uint32_t,
+                                    anira_axis_tag*,
+                                    int64_t*>);
 // The callback typedef carries no real-time attribute: a plain function converts to it.
 static_assert(std::is_same_v<decltype(anira_stage_ctx::entry), uint32_t>);
 static_assert(std::is_same_v<decltype(anira_stage_desc::flags), uint32_t>);

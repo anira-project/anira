@@ -16,7 +16,9 @@
  * the first: a known kind at a registered version is deep-copied during the call, a known kind
  * at an unregistered version is ANIRA_ERROR_EXTENSION_VERSION, an unknown kind is stored and
  * fails prepare by name (ANIRA_ERROR_EXTENSION_UNKNOWN). Strings in are UTF-8, NUL-terminated
- * and copied; strings out are owned by the handle and valid until it is destroyed or mutated.
+ * and copied; strings, spec pointers and extension records out are owned by the handle and
+ * valid until it is destroyed or mutated (a config's next add_input or add_output moves its
+ * specs). The read-back entries at the end answer what the setters and the loaders stored.
  */
 
 #include <stddef.h>
@@ -1732,6 +1734,451 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_from_json(const char* utf8,
                                                            size_t len,
                                                            anira_contract** out,
                                                            anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The canonical name the spec was created with.
+ * @param spec The spec.
+ * @return Object-owned; NULL for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_tensor_spec_name(const anira_tensor_spec* spec)
+                                                        ANIRA_NOEXCEPT;
+
+/**
+ * @brief The element type the spec was created with: the model's.
+ * @param spec The spec.
+ * @return The dtype; 0, which is no dtype, for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_dtype ANIRA_CALL anira_tensor_spec_dtype(const anira_tensor_spec* spec)
+                                                         ANIRA_NOEXCEPT;
+
+/**
+ * @brief The role the spec was created with.
+ * @param spec The spec.
+ * @return The role; ANIRA_ROLE_FORCE32, which is no role, for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_role ANIRA_CALL anira_tensor_spec_role(const anira_tensor_spec* spec)
+                                                       ANIRA_NOEXCEPT;
+
+/**
+ * @brief The rank: one more than the highest axis anira_tensor_spec_set_axis set. An axis below
+ * it that was never set is a hole, which anira_tensor_spec_axis reads as
+ * {ANIRA_AXIS_ANY, 0}.
+ * @param spec The spec.
+ * @return The rank; 0 for a spec without axes and for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_tensor_spec_ndim(const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
+
+/**
+ * @brief One axis as anira_tensor_spec_set_axis stored it. A hole below the rank reads
+ * {ANIRA_AXIS_ANY, 0}, the value of an axis never set.
+ * @param spec The spec.
+ * @param i The axis, below anira_tensor_spec_ndim.
+ * @param tag Receives the axis tag.
+ * @param extent Receives the extent, ANIRA_DYNAMIC where it was set so.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec, a NULL out-parameter or an
+ *         axis at or beyond the rank.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_axis(const anira_tensor_spec* spec,
+                                                         uint32_t i,
+                                                         anira_axis_tag* tag,
+                                                         int64_t* extent) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every
+ * role.
+ * @param spec The spec.
+ * @param window_min Receives the smallest legal Time extent.
+ * @param window_max Receives the largest, or ANIRA_UNBOUNDED.
+ * @param overlap Receives the overlap of consecutive windows.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a NULL out-parameter.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_window(const anira_tensor_spec* spec,
+                                                           int64_t* window_min,
+                                                           int64_t* window_max,
+                                                           int64_t* overlap) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The time ratio as anira_tensor_spec_set_time_ratio stored it.
+ * @param spec The spec.
+ * @param num Receives the numerator.
+ * @param den Receives the denominator; (0, 0) = derive.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a NULL out-parameter.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_time_ratio(const anira_tensor_spec* spec,
+                                                               int64_t* num,
+                                                               int64_t* den) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The model-internal latency anira_tensor_spec_set_latency stored.
+ * @param spec The spec.
+ * @return The latency in elements; 0 for a spec without one and for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API int64_t ANIRA_CALL anira_tensor_spec_latency(const anira_tensor_spec* spec)
+                                                       ANIRA_NOEXCEPT;
+
+/**
+ * @brief The canonical name of the State output a State input is fed from
+ * (anira_tensor_spec_set_state_source).
+ * @param spec The spec.
+ * @return Object-owned; NULL for a spec without one and for a NULL spec.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_tensor_spec_state_source(const anira_tensor_spec* spec)
+                                                                ANIRA_NOEXCEPT;
+
+/**
+ * @brief The number of input specs, State specs included.
+ * @param config The config.
+ * @return The count; 0 for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_model_config_num_inputs(const anira_model_config* config)
+                                                            ANIRA_NOEXCEPT;
+
+/**
+ * @brief The number of output specs, State specs included.
+ * @param config The config.
+ * @return The count; 0 for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_model_config_num_outputs(const anira_model_config* config)
+                                                             ANIRA_NOEXCEPT;
+
+/**
+ * @brief The config's own copy of an input spec (anira_model_config_add_input copied it), for
+ * the anira_tensor_spec getters only: never a spec to set or to destroy. Valid until the
+ * config's next anira_model_config_add_input or anira_model_config_add_output, which
+ * moves its specs, or its destruction.
+ * @param config The config.
+ * @param index The slot: the spec's position in the input list.
+ * @return Object-owned; NULL for a NULL config or an index out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const anira_tensor_spec* ANIRA_CALL anira_model_config_input(const anira_model_config* config,
+                                                                       uint32_t index) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The output twin of anira_model_config_input, with the same lifetime.
+ * @param config The config.
+ * @param index The slot: the spec's position in the output list.
+ * @return Object-owned; NULL for a NULL config or an index out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const anira_tensor_spec* ANIRA_CALL anira_model_config_output(const anira_model_config* config,
+                                                                        uint32_t index) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The built-in engine anira_model_config_set_default_engine stored.
+ * @param config The config.
+ * @return The engine; ANIRA_ENGINE_NONE for the default (plan 0), for a custom default
+ *         (anira_model_config_default_engine_id names it) and for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_engine ANIRA_CALL anira_model_config_default_engine(const anira_model_config* config)
+                                                                    ANIRA_NOEXCEPT;
+
+/**
+ * @brief The custom engine anira_model_config_set_default_engine_custom stored.
+ * @param config The config.
+ * @return Object-owned; NULL for a built-in default, for no default and for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_model_config_default_engine_id(const anira_model_config* config)
+                                                                      ANIRA_NOEXCEPT;
+
+/**
+ * @brief The state as anira_model_config_set_state stored it; a config with a declared State
+ * pair runs as ANIRA_MODEL_STATEFUL whatever it reads.
+ * @param config The config.
+ * @return The state; ANIRA_MODEL_STATE_FORCE32, which is no state, for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_model_state ANIRA_CALL anira_model_config_state(const anira_model_config* config)
+                                                                ANIRA_NOEXCEPT;
+
+/**
+ * @brief The instance limit anira_model_config_set_max_instances stored.
+ * @param config The config.
+ * @return The limit, at least 1; 0 for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_model_config_max_instances(const anira_model_config* config)
+                                                               ANIRA_NOEXCEPT;
+
+/**
+ * @brief The anchor's canonical name as anira_model_config_set_anchor wrote it, unresolved:
+ * whether it names a streamed tensor is prepare's question.
+ * @param config The config.
+ * @return Object-owned; NULL for the default anchor and for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_model_config_anchor(const anira_model_config* config)
+                                                           ANIRA_NOEXCEPT;
+
+/**
+ * @brief The export's name of the tensor in the entry's tensor record
+ * (anira_model_config_set_tensor_name, the JSON file's models[].tensors).
+ * @param config The config.
+ * @param model_index An entry.
+ * @param canonical The tensor's canonical name.
+ * @return Object-owned; NULL when the entry binds the tensor positionally, and for a NULL
+ *         config or canonical or an index out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const char* ANIRA_CALL anira_model_config_tensor_name(const anira_model_config* config,
+                                                                uint32_t model_index,
+                                                                const char* canonical) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The axis order of the tensor in the entry's tensor record, with the count protocol of
+ * anira_handler_get_latencies.
+ * @param config The config.
+ * @param model_index An entry.
+ * @param canonical The tensor's canonical name.
+ * @param count In: the capacity of axes; out: the length of the layout, 0 when the entry holds
+ *        the tensor in the spec's order.
+ * @param axes Receives the layout as anira_model_config_set_tensor_layout stored it (per
+ *        position of the file, a spec axis or ANIRA_AXIS_INSERT); or NULL to ask for the
+ *        length.
+ * @return ANIRA_OK, count 0 for a tensor without a layout; ANIRA_INCOMPLETE when axes is too
+ *         short (count holds the length, the first capacity entries are written);
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or count, an index out of range, or a
+ *         NULL or empty canonical.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_model_config_tensor_layout(const anira_model_config* config,
+                                                                   uint32_t model_index,
+                                                                   const char* canonical,
+                                                                   uint32_t* count,
+                                                                   uint32_t* axes) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The typed record of a known extension kind on one entry (host "model"), set as a
+ * struct or as JSON alike: the header of the kind's payload, read within
+ * header->struct_size (for "entry", ((const anira_ext_entry*)header)->name). The record
+ * and its strings are object-owned, valid until the entry's next set of that kind or the
+ * config's destruction.
+ * @param config The config.
+ * @param model_index An entry.
+ * @param kind The extension kind, e.g. "entry".
+ * @return Object-owned; NULL for a kind the entry does not carry, for a kind this build does
+ *         not register (stored for prepare to name), and for a NULL config or kind or an index
+ *         out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const anira_model_config* config,
+                                                                          uint32_t model_index,
+                                                                          const char* kind) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The geometry as anira_contract_create_hard or anira_contract_hard_set_geometry stored
+ * it; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
+ * @param contract A Hard contract.
+ * @param block_min Receives the smallest block.
+ * @param block_max Receives the largest block.
+ * @param rate Receives the rate.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a NULL out-parameter.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
+                                                               uint32_t* block_min,
+                                                               uint32_t* block_max,
+                                                               double* rate) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The budget as anira_contract_hard_set_budget stored it.
+ * @param contract A Hard contract.
+ * @param kind Receives the budget kind.
+ * @param explicit_ms Receives the explicit budget in milliseconds; 0 unless the kind is
+ *        ANIRA_BUDGET_EXPLICIT.
+ * @return As anira_contract_hard_geometry.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_budget(const anira_contract* contract,
+                                                             anira_budget_kind* kind,
+                                                             double* explicit_ms) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The warmup as anira_contract_hard_set_warmup stored it.
+ * @param contract A Hard contract.
+ * @param mode Receives the warmup mode.
+ * @param iterations Receives the iterations; 0 unless the mode is ANIRA_WARMUP_FIXED.
+ * @return As anira_contract_hard_geometry.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_warmup(const anira_contract* contract,
+                                                             anira_warmup_mode* mode,
+                                                             uint32_t* iterations) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The miss policy as anira_contract_hard_set_on_miss stored it.
+ * @param contract A Hard contract.
+ * @param policy Receives the miss policy.
+ * @return As anira_contract_hard_geometry.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_on_miss(const anira_contract* contract,
+                                                              anira_miss_policy* policy) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The pair anira_contract_hard_set_miss_fn stored, whatever the policy; a contract file
+ * carries none.
+ * @param contract A Hard contract.
+ * @param fn Receives the backup function; NULL when none is set.
+ * @param user_data Receives its user_data; NULL when no function is set.
+ * @return As anira_contract_hard_geometry.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_miss_fn(const anira_contract* contract,
+                                                              anira_miss_fn* fn,
+                                                              void** user_data) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The wait ratio as anira_contract_hard_set_wait_ratio stored it.
+ * @param contract A Hard contract.
+ * @param ratio Receives the wait ratio.
+ * @return As anira_contract_hard_geometry.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_wait_ratio(const anira_contract* contract,
+                                                                 double* ratio) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
+ * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+ * @param contract A Hard contract.
+ * @return The count; 0 on an Async contract and for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_contract_hard_num_ring_dtypes(const anira_contract* contract)
+                                                                  ANIRA_NOEXCEPT;
+
+/**
+ * @brief One ring dtype the contract names, enumerated by index in bytewise order of the
+ * canonical names: what lists what was set, which a lookup by name could not (it would
+ * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+ * @param contract A Hard contract.
+ * @param index Below anira_contract_hard_num_ring_dtypes.
+ * @param canonical Receives the tensor's canonical name (object-owned).
+ * @param dtype Receives its ring dtype.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index
+ *         out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_ring_dtype(const anira_contract* contract,
+                                                                 uint32_t index,
+                                                                 const char** canonical,
+                                                                 anira_dtype* dtype) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The edge cost policy anira_contract_set_edge_cost stored.
+ * @param contract Either contract kind.
+ * @return The policy; ANIRA_EDGE_COST_PERMISSIVE, the default, for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_edge_cost ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
+                                                              ANIRA_NOEXCEPT;
+
+/**
+ * @brief The pool size and the wait strategy as anira_context_config_set_threads (or a context
+ * file) stored them.
+ * @param config The config.
+ * @param num_threads Receives the pool size; ANIRA_THREADS_AUTO when never set.
+ * @param wait Receives the wait strategy.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or a NULL out-parameter.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_context_config_threads(const anira_context_config* config,
+                                                               uint32_t* num_threads,
+                                                               anira_wait_strategy* wait) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Every log field the config stores, in the record anira_context_config_set_log takes:
+ * the sink and its user_data, the level, the drain mode and interval, the queue capacity
+ * (clamped as the setters clamp it) and the flags.
+ * @param config The config.
+ * @param out Receives the log settings, written within its struct_size (set it before the
+ *        call), which it keeps; abi_version receives this build's ANIRA_ABI_VERSION.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the
+ *         three leading slots (struct_size, abi_version, user_data).
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_context_config_log(const anira_context_config* config,
+                                                           anira_log_desc* out) ANIRA_NOEXCEPT;
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

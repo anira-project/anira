@@ -558,6 +558,17 @@ do not want the message. The handles are opaque and single-owner: every ``*_crea
     anira_tensor_spec_destroy(in);
     /* ... anira_model_config_destroy(cfg) when done */
 
+Every handle answers back what its setters and loaders stored, a file-loaded one alike, through
+getters named after the field (``anira_tensor_spec_axis``, ``anira_model_config_input`` /
+``_output`` / ``_tensor_layout`` / ``_model_ext``, ``anira_contract_hard_budget`` /
+``_ring_dtype``, ``anira_context_config_threads`` / ``_log``) in two shapes: a count, a pointer
+or an enum comes back as the return value, with a no-value answer (0, ``NULL``,
+``ANIRA_ENGINE_NONE``, a ``_FORCE32`` constant) for a ``NULL`` handle; anything else comes back
+through out-parameters behind an ``anira_status``, written on success only, the Hard family
+answering ``ANIRA_ERROR_WRONG_CONTRACT`` on an Async contract. What comes back is the handle's:
+a spec pointer out of ``anira_model_config_input`` is read through the spec getters and lives
+until the config's next ``add_input`` or ``add_output``.
+
 The JSON files of section 1.5 are the same three loaders: ``anira_model_config_from_json`` /
 ``anira_model_config_from_json_file``, ``anira_context_config_from_json`` and
 ``anira_contract_from_json``, with ``anira_model_config_to_json`` /

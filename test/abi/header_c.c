@@ -278,6 +278,62 @@ int anira_header_c_probe(void) {
         }
     }
     {
+        /* The read-back of anira/abi/config.h from C11: one call per shape behind the
+           never-true branch. A value getter answers a pointer, a count or an enum; a status
+           getter fills enum, int64_t, double, string, function-pointer and void* out-parameters
+           and a Tier-2 record within its struct_size. */
+        const anira_tensor_spec* spec = NULL;
+        const anira_ext_header* ext = NULL;
+        const char* canonical = NULL;
+        anira_axis_tag tag = ANIRA_AXIS_ANY;
+        int64_t extent = 0;
+        uint32_t count = 0u;
+        uint32_t axes[ANIRA_MAX_RANK];
+        double ms = 0.0;
+        anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
+        anira_dtype dtype = 0u;
+        anira_miss_fn miss = NULL;
+        void* miss_user_data = NULL;
+        anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
+        anira_log_desc log = ANIRA_LOG_DESC_INIT;
+        axes[0] = 0u;
+        if (checks < 0) { /* never true: the object is never linked */
+            spec = anira_model_config_input(NULL, 0u);
+            checks += anira_tensor_spec_name(spec) == NULL ? 1 : 0;
+            checks += anira_tensor_spec_role(spec) == ANIRA_ROLE_FORCE32 ? 1 : 0;
+            checks += anira_tensor_spec_ndim(spec) == 0u ? 1 : 0;
+            checks +=
+                anira_tensor_spec_axis(spec, 0u, &tag, &extent) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
+                                                                                                : 0;
+            checks += anira_tensor_spec_latency(spec) == 0 ? 1 : 0;
+            checks += anira_model_config_num_outputs(NULL) == 0u ? 1 : 0;
+            checks += anira_model_config_state(NULL) == ANIRA_MODEL_STATE_FORCE32 ? 1 : 0;
+            checks += anira_model_config_tensor_layout(NULL, 0u, "audio_in", &count, axes) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            ext = anira_model_config_model_ext(NULL, 0u, "entry");
+            checks += ext == NULL ? 1 : 0;
+            checks += anira_contract_hard_budget(NULL, &budget, &ms) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_hard_miss_fn(NULL, &miss, &miss_user_data) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_hard_ring_dtype(NULL, 0u, &canonical, &dtype) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_COST_PERMISSIVE ? 1 : 0;
+            checks +=
+                anira_context_config_threads(NULL, &count, &wait) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
+            checks += anira_context_config_log(NULL, &log) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+        }
+    }
+    {
         /* anira/abi/tensor.h from C11: the three frozen sizes, a record zeroed and filled by
            hand (both names of an ANIRA_PTR slot), and behind the never-true branch the host
            factory, the planar factory over a float*[2] WITHOUT a cast (the channel pointers of

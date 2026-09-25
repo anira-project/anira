@@ -209,8 +209,10 @@ what it keeps and never keeps the pointers):
 - ``row``: this engine's entry in the variant's ``models[]`` list, the entry whose path or
   bytes the engine loads; ``model``: the variant, anira's own copy of the model
   configuration, read through the config getters (``anira_model_config_model_path(model,
-  row)``, ``anira_model_config_model_bytes(model, row, &bytes, &size)``, the tensor records,
-  the extensions).
+  row)``, ``anira_model_config_model_bytes(model, row, &bytes, &size)``, the tensor records
+  through ``anira_model_config_tensor_name`` / ``_tensor_layout``, the extensions through
+  ``anira_model_config_model_ext(model, row, "entry")``, the specs through
+  ``anira_model_config_input`` / ``_output`` and the ``anira_tensor_spec`` getters).
 - ``inputs`` / ``num_inputs`` and ``outputs`` / ``num_outputs``: one template per slot of
   the model's input list and output list, State tensors included, in slot order: the
   **engine side** of every tensor, the spec's dtype and the extents in the engine's order

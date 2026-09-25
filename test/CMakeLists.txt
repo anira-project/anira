@@ -118,6 +118,7 @@ anira_add_test_binary(test_abi
 	abi/test_Firewall.cpp
 	abi/test_Log.cpp
 	abi/test_Handles.cpp
+	abi/test_ReadBack.cpp
 	abi/test_ExtRegistry.cpp
 	abi/test_Json.cpp
 	abi/test_JsonUpgrade.cpp
