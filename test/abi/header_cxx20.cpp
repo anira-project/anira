@@ -14,9 +14,12 @@
 #include <cstdint>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -30,6 +33,8 @@ template anira::ContractHandle& anira::ContractHandle::ext<anira::ext::Entry>(
 template anira::ModelConfig& anira::ModelConfig::model_ext<anira::ext::Entry>(
     uint32_t,
     const anira::ext::Entry&);
+template std::optional<anira::ext::Entry> anira::ModelConfig::model_ext<anira::ext::Entry>(
+    uint32_t) const;
 template anira::ModelConfig& anira::ModelConfig::ext<anira::ext::Entry>(const anira::ext::Entry&);
 template anira::ContextConfig& anira::ContextConfig::ext<anira::ext::Entry>(
     const anira::ext::Entry&);
@@ -285,6 +290,41 @@ static_assert(std::is_same_v<anira::Contract, std::variant<anira::Hard, anira::A
 // aggregate and on the handle's setter.
 static_assert(std::is_same_v<decltype(anira::Hard::miss_fn), anira_miss_fn>);
 static_assert(std::is_same_v<decltype(anira::Hard::miss_user_data), void*>);
+// The read-back of anira/abi/config.h: SpecView is a trivially copyable view, every read of it
+// noexcept; the ModelConfig counts and scalars are noexcept, the indexed reads hand out a
+// SpecView; hard() fills the aggregate, whose two maps are keyed by canonical name.
+static_assert(std::is_trivially_copyable_v<anira::SpecView>);
+static_assert(noexcept(std::declval<const anira::SpecView&>().name()) &&
+              noexcept(std::declval<const anira::SpecView&>().dtype()) &&
+              noexcept(std::declval<const anira::SpecView&>().role()) &&
+              noexcept(std::declval<const anira::SpecView&>().ndim()) &&
+              noexcept(std::declval<const anira::SpecView&>().axis(0)) &&
+              noexcept(std::declval<const anira::SpecView&>().window()) &&
+              noexcept(std::declval<const anira::SpecView&>().time_ratio()) &&
+              noexcept(std::declval<const anira::SpecView&>().latency()) &&
+              noexcept(std::declval<const anira::SpecView&>().state_source()) &&
+              noexcept(std::declval<const anira::SpecView&>().native()));
+static_assert(noexcept(std::declval<const anira::TensorSpec&>().view()));
+static_assert(noexcept(std::declval<const anira::ModelConfig&>().input_count()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().output_count()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_engine()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_engine_id()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().state()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().max_instances()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().anchor()));
+static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>().input_spec(0)),
+                             anira::SpecView>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>()
+                                          .tensor_layout(0, std::string_view())),
+                             std::vector<uint32_t>>);
+static_assert(
+    std::is_same_v<decltype(std::declval<const anira::ContractHandle&>().hard()), anira::Hard>);
+static_assert(
+    std::is_same_v<decltype(anira::Hard::ring_dtypes), std::map<std::string, anira::DType>>);
+static_assert(std::is_same_v<decltype(anira::Hard::latencies), std::map<std::string, uint32_t>>);
+static_assert(
+    std::is_same_v<decltype(&anira::ContractHandle::hard_latency),
+                   anira::ContractHandle& (anira::ContractHandle::*)(std::string_view, uint32_t)>);
 static_assert(
     std::is_same_v<decltype(&anira::ContractHandle::hard_miss_fn),
                    anira::ContractHandle& (anira::ContractHandle::*)(anira_miss_fn, void*)>);
@@ -525,6 +565,11 @@ int anira_header_cxx20_probe();  // NOLINT(misc-use-internal-linkage)
 int anira_header_cxx20_probe() {
     // The aggregates as a consumer spells them; the defaults stand for what is not named.
     const anira::Hard hard{.block_min = 64, .block_max = 2048, .rate = 48000.0};
+    // The two maps in their place between wait_ratio and edge_cost.
+    const anira::Hard typed{.wait_ratio = 0.5,
+                            .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
+                            .latencies = {{"audio_out", 4096}},
+                            .edge_cost = ANIRA_EDGE_COST_STRICT};
     const anira::Async async{.deadline = std::chrono::milliseconds(20), .on_late = ANIRA_LATE_DROP};
     const anira::Contract contract = hard;
     const anira::JobOptions options{.head_trim = {0, 0}, .tail_flush = false};
@@ -551,6 +596,30 @@ int anira_header_cxx20_probe() {
         const anira::ContractHandle minted(contract);
         checks += model.upgraded() || context.upgraded() || loaded.upgraded() ? 1 : 0;
         checks += minted.native() != nullptr ? 1 : 0;
+        // The read-back: a spec's view, every getter of the config, a Hard handle read back.
+        const anira::SpecView built = spec.view();
+        const anira::SpecView first_in = model.input_spec(0);
+        const anira::SpecView first_out = model.output_spec(0);
+        checks += built.name().size() + first_in.state_source().size() > 0 ? 1 : 0;
+        checks +=
+            first_in.dtype() == ANIRA_DTYPE_F32 && first_out.role() == ANIRA_ROLE_STREAMED ? 1 : 0;
+        checks += first_in.ndim() + first_in.axis(0).extent + first_in.window().overlap +
+                              first_in.time_ratio().den + first_out.latency() >
+                          0
+                      ? 1
+                      : 0;
+        checks += first_in.native() != nullptr && first_in.axis(0).tag == ANIRA_AXIS_ANY ? 1 : 0;
+        checks += model.input_count() + model.output_count() + model.max_instances() > 0 ? 1 : 0;
+        checks += model.default_engine() == ANIRA_ENGINE_NONE && model.default_engine_id().empty()
+                      ? 1
+                      : 0;
+        checks += model.state() == ANIRA_MODEL_STATELESS && model.anchor().empty() ? 1 : 0;
+        checks += model.tensor_name(0, "x").empty() && model.tensor_layout(0, "x").empty() ? 1 : 0;
+        checks += model.model_ext<anira::ext::Entry>(0).has_value() ? 1 : 0;
+        loaded.hard_latency("x", 4096).hard_ring_dtype("x", ANIRA_DTYPE_I16);
+        const anira::Hard read = loaded.hard();
+        checks +=
+            read.ring_dtypes.size() + read.latencies.size() + typed.ring_dtypes.size() > 0 ? 1 : 0;
         anira::Context running(context);
         const anira::Capabilities capabilities = running.capabilities();
         const std::vector<anira::BackendId> backends = capabilities.backends();

@@ -118,8 +118,8 @@ A streamed spec also carries its **window**, ``window(window_min, window_max, ov
 many elements along the Time axis one inference consumes (``window_min`` and ``window_max``,
 equal for a fixed window, ``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of
 them are **overlap**, the elements kept from the previous window. The advance per inference,
-the hop, is the window minus the context. A receptive-field model whose export takes 15380
-samples and yields 2048 fresh ones is a window of 15380 with a context of 13332.
+the hop, is the window minus the overlap. A receptive-field model whose export takes 15380
+samples and yields 2048 fresh ones is a window of 15380 with an overlap of 13332.
 
 .. code-block:: cpp
 
@@ -264,6 +264,23 @@ is part of the build is decided at prepare, not here, so one config serves every
   host's stream is another tensor: a decoder that turns latent frames into audio anchors on
   its audio output, because the plugin's block size is audio.
 
+**Reading a configuration back.** A config answers what its setters and loaders stored, a
+file-loaded one alike, so a model file can be inspected before it is run.
+``input_count()`` / ``output_count()`` count the specs (State specs included), and
+``input_spec(i)`` / ``output_spec(i)`` hand out an ``anira::SpecView`` of the config's own copy
+of spec ``i``: ``name()``, ``dtype()``, ``role()``, ``ndim()``, ``axis(k)`` (``{tag,
+extent}``; ``{ANIRA_AXIS_ANY, 0}`` for a hole and at or beyond ``ndim()``), ``window()``
+(``{min, max, overlap}``), ``time_ratio()`` (``{num, den}``), ``latency()`` and
+``state_source()``. A view is valid until the config is mutated, moved or destroyed, and
+``TensorSpec::view()`` is the same view over a spec being built. The scalars are
+``default_engine()`` / ``default_engine_id()`` (``ANIRA_ENGINE_NONE`` and an empty id for plan
+0), ``state()``, ``max_instances()`` and ``anchor()`` (empty for the default); the tensor
+records of an entry are ``tensor_name(i, canonical)`` (empty where the entry binds
+positionally) and ``tensor_layout(i, canonical)`` (empty for the spec's order), and its entry
+point is ``model_ext<anira::ext::Entry>(i)`` (``std::nullopt`` without one). The indexed
+reads throw ``anira::Error`` with ``ANIRA_ERROR_INVALID_ARGUMENT`` out of range, like
+``model_path(i)``; the counts and scalars are ``noexcept``.
+
 Extensions (``ext(value)`` / ``ext_json(kind, text)``, the same pair on every handle) attach
 a typed record by kind and version; ``anira_registered_ext_kinds`` lists what a build
 understands, and a kind nobody consumes fails prepare by name, so a typo never turns into a
@@ -288,6 +305,13 @@ an ``anira::ContractHandle``.
         .on_miss = ANIRA_MISS_BYPASS,
     };
     anira::ContractHandle contract(hard);
+
+``contract.hard()`` reads a Hard handle back into the aggregate, a loaded or a legacy one
+alike: every field, ``ring_dtypes`` and ``latencies`` included, with ``budget_value`` rounded
+to the nanosecond (the handle stores milliseconds as a double; ``std::chrono::round``, so 42.66
+ms reads back as 42660000 ns), so a contract file can be inspected, changed as an aggregate and
+minted again. On an Async handle it throws ``anira::Error`` with
+``ANIRA_ERROR_WRONG_CONTRACT``.
 
 - **Geometry.** ``block_min == block_max`` is a fixed-block host; ``block_min = 1`` allows every
   smaller block up to the maximum, which may raise the latency anira has to reserve. A
@@ -357,8 +381,9 @@ an ``anira::ContractHandle``.
   ``blocking_ratio`` one-to-one, and it selects at prepare the completion primitive the
   handler waits on (the semaphore above ``0``, a 1 ms poll otherwise), so the latency figure
   (:doc:`latency`) includes the wait credit whether or not the host calls the ``_wait`` entry.
-- **Ring dtype.** ``contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16)``
-  (``anira_contract_hard_set_ring_dtype``) names the element type of the host's samples for
+- **Ring dtype.** ``anira::Hard{.ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}}}`` on the
+  aggregate, or ``contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16)`` on a handle, the
+  patch path for a loaded file (``anira_contract_hard_set_ring_dtype``), names the element type of the host's samples for
   one tensor, by the tensor's canonical name: the ring holds exactly that type, and the Hard
   entries (section 3.2; they take the ``anira_tensor`` of section 3.3) carry it across the
   ABI as is. Per tensor, so an
@@ -369,8 +394,10 @@ an ``anira::ContractHandle``.
   ``post_process`` for an output; section 2) and so takes the conversion on itself: the ring
   then holds the host's element type, the model tensor the spec's, and the stage moves
   between the two.
-- **Stream latency.** ``anira_contract_hard_set_latency(contract, "audio_out", 4096)``
-  (``"latencies": {"audio_out": 4096}`` in the contract file) declares the stream latency of
+- **Stream latency.** ``anira::Hard{.latencies = {{"audio_out", 4096}}}`` on the aggregate,
+  ``contract.hard_latency("audio_out", 4096)`` on a handle
+  (``anira_contract_hard_set_latency``; ``"latencies": {"audio_out": 4096}`` in the contract
+  file) declares the stream latency of
   one output, by canonical name, in samples of that output: what
   ``anira_handler_get_latency`` reports for the slot and what its receive ring is primed
   with, *replacing* the figure anira computes (:doc:`latency`). A host that needs one figure

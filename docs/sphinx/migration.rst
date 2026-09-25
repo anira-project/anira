@@ -115,11 +115,19 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - The extent of the tensor's ``ANIRA_AXIS_CHANNEL`` axis.
    * - ``anira::ProcessingSpec::preprocess_input_size`` / ``postprocess_output_size`` (the hop)
      - ``spec.window(window_min, window_max, overlap)`` (``anira_tensor_spec_set_window``):
-       the window is the per-channel element count of the tensor, the context is the window
+       the window is the per-channel element count of the tensor, the overlap is the window
        minus the 2.x size (the samples kept from the previous window). A size of ``0``
        (non-streamable) is ``ANIRA_ROLE_STATIC``.
    * - ``anira::ProcessingSpec::internal_model_latency``
      - ``spec.latency(elements)`` on the output spec (``anira_tensor_spec_set_latency``).
+   * - ``anira::InferenceConfig::get_tensor_input_shape()`` / ``get_tensor_output_shape()``
+       and the size and channel getters (``get_preprocess_input_size()``, ...)
+     - ``cfg.input_spec(i)`` / ``cfg.output_spec(i)``, an ``anira::SpecView`` of the config's
+       own copy of the spec (``axis(k)``, ``window()``, ``latency()``, ...;
+       ``anira_model_config_input`` and the ``anira_tensor_spec`` getters), and
+       ``cfg.tensor_layout(i, canonical)`` for the order a backend's export holds the axes in
+       (``anira_model_config_tensor_layout``): the 2.x per-backend shape is the spec's
+       extents permuted by that entry's layout.
    * - ``anira::InferenceConfig::max_inference_time``
      - ``anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT, .budget_value =
        std::chrono::microseconds(...)}`` (``anira_contract_hard_set_budget(contract,
@@ -469,6 +477,13 @@ decoder with ``samplesPerBlock / 2048.f``).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
+   * - ``Hard.ring_dtypes``
+     - No 2.x counterpart: every 2.x stream was float32, so the bridge takes a ring dtype equal
+       to the spec's (float32) and nothing else.
+   * - ``Hard.latencies`` (the declared stream latency)
+     - No ``InferenceConfig`` counterpart: the 2.x handler takes the figure as the
+       ``custom_latency`` argument of its ``prepare`` overloads, which the bridge does not
+       call; pass it there.
    * - ``ContextConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
        log level, drain, interval and queue capacity
      - ``CoreConfig`` and its ``LogConfig``. The log sink, the log flags and the device
@@ -507,7 +522,7 @@ reference only; passing a temporary does not compile.
 
 **Windows.** A flexible window (``window_min < window_max``) is pinned when
 ``to_inference_config`` runs: one host block per inference (``block_max`` scaled by the
-tensor's time ratio, plus the context), clamped to the window range; without a geometry on the
+tensor's time ratio, plus the overlap), clamped to the window range; without a geometry on the
 contract, the smallest window. When a spec's window is flexible, set the geometry before the
 call, or build the ``InferenceConfig`` at prepare. With fixed windows, which every bundled
 fixture uses, the order does not matter.
@@ -636,7 +651,9 @@ from its ``context_config`` block. Bridged, they are the 2.x objects the file de
 fixed key order. Both take ``(buf, cap, out_len)`` and return ``ANIRA_ERROR_BUFFER_TOO_SMALL``
 with the required length in ``out_len``, so call once with a NULL buffer to size it. The
 contract has no writer; write the ``{"hard": ...}`` file by hand from the values the legacy
-contract carries (section 1.5 of the :doc:`usage` guide shows the format).
+contract carries, which ``ContractHandle::hard()`` reads back into an ``anira::Hard`` (the
+``anira_contract_hard_*`` getters in C; section 1.5 of the :doc:`usage` guide shows the
+format).
 
 .. code-block:: c
 

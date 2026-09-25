@@ -1,7 +1,9 @@
 // The read-back of anira/abi/config.h: every getter against the setter or the loader that
 // stored its answer, through the public entries only. The value getters answer a no-value
 // constant for NULL; the status getters write their out-parameters on success only, after
-// the checks in the order NULL handle, NULL out-parameter, contract kind, index.
+// the checks in the order NULL handle, NULL out-parameter, contract kind, index. The suite
+// AbiReadBackCxx reads the same through anira.hpp (SpecView, the ModelConfig getters,
+// ContractHandle::hard()).
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
@@ -10,11 +12,17 @@
 #include <anira/abi/version.h>
 #include <gtest/gtest.h>
 
+#include <anira/anira.hpp>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
+#include <map>
+#include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "fixtures.h"
@@ -876,4 +884,229 @@ TEST(AbiReadBack, ALoadedContextFileAnswersTheSame) {
     EXPECT_EQ(wait, ANIRA_WAIT_BLOCKING);
     EXPECT_EQ(anira_context_config_log(upgraded.m_config, &desc), ANIRA_OK);
     EXPECT_EQ(desc.level, static_cast<uint32_t>(ANIRA_LOG_ERROR));
+}
+
+// ============================================================================================
+// anira.hpp: SpecView, the ModelConfig getters, ContractHandle::hard()
+// ============================================================================================
+
+namespace {
+
+// A backup function of ANIRA_MISS_CALLBACK for the aggregate; never called here.
+anira_status ANIRA_CALL fill_miss(anira_handler* /*handler*/,
+                                  const anira_tensor* /*inputs*/,
+                                  uint32_t /*num_inputs*/,
+                                  const anira_tensor* /*outputs*/,
+                                  uint32_t /*num_outputs*/,
+                                  void* /*user_data*/) ANIRA_NONBLOCKING {
+    return ANIRA_OK;
+}
+
+anira_status status_of(const std::function<void()>& call) {
+    try {
+        call();
+    } catch (const anira::Error& e) { return e.status; }
+    return ANIRA_OK;
+}
+
+}  // namespace
+
+TEST(AbiReadBackCxx, SpecViewOverATensorSpecBeingBuilt) {
+    anira::TensorSpec spec("audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    const anira::SpecView view = spec.view();
+    EXPECT_EQ(view.name(), "audio_out");
+    EXPECT_EQ(view.dtype(), ANIRA_DTYPE_F32);
+    EXPECT_EQ(view.role(), ANIRA_ROLE_STREAMED);
+    EXPECT_EQ(view.ndim(), 0u);
+    // The view reads the spec as it is now: later setters are seen through the same view.
+    spec.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(2, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
+        .window(2048, ANIRA_UNBOUNDED, 1024)
+        .time_ratio(1, 2)
+        .latency(512);
+    EXPECT_EQ(view.ndim(), 3u);
+    EXPECT_EQ(view.axis(0).tag, ANIRA_AXIS_BATCH);
+    EXPECT_EQ(view.axis(0).extent, 1);
+    EXPECT_EQ(view.axis(1).tag, ANIRA_AXIS_ANY) << "a hole";
+    EXPECT_EQ(view.axis(1).extent, 0);
+    EXPECT_EQ(view.axis(2).extent, ANIRA_DYNAMIC);
+    EXPECT_EQ(view.axis(3).tag, ANIRA_AXIS_ANY) << "at ndim: the extent of no axis";
+    EXPECT_EQ(view.axis(3).extent, 0);
+    EXPECT_EQ(view.window().min, 2048);
+    EXPECT_EQ(view.window().max, ANIRA_UNBOUNDED);
+    EXPECT_EQ(view.window().overlap, 1024);
+    EXPECT_EQ(view.time_ratio().num, 1);
+    EXPECT_EQ(view.time_ratio().den, 2);
+    EXPECT_EQ(view.latency(), 512);
+    EXPECT_TRUE(view.state_source().empty());
+    EXPECT_EQ(view.native(), spec.native());
+
+    anira::TensorSpec state("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    state.state_source("state_out");
+    EXPECT_EQ(state.view().state_source(), "state_out");
+    // A view over nothing answers the no-value reads.
+    const anira::SpecView none(nullptr);
+    EXPECT_TRUE(none.name().empty());
+    EXPECT_EQ(none.role(), ANIRA_ROLE_FORCE32);
+    EXPECT_EQ(none.axis(0).extent, 0);
+    EXPECT_EQ(none.window().max, 0);
+}
+
+TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
+    const anira::ModelConfig model = anira::ModelConfig::from_json(anira_test::k_model_v3);
+    ASSERT_EQ(model.input_count(), 2u);
+    ASSERT_EQ(model.output_count(), 1u);
+    const anira::SpecView audio_in = model.input_spec(0);
+    EXPECT_EQ(audio_in.name(), "audio_in");
+    EXPECT_EQ(audio_in.axis(1).tag, ANIRA_AXIS_CHANNEL);
+    EXPECT_EQ(audio_in.axis(1).extent, 2);
+    EXPECT_EQ(audio_in.axis(2).extent, ANIRA_DYNAMIC);
+    EXPECT_EQ(audio_in.window().max, 8192);
+    EXPECT_EQ(model.input_spec(1).role(), ANIRA_ROLE_STATIC);
+    const anira::SpecView mask_out = model.output_spec(0);
+    EXPECT_EQ(mask_out.latency(), 512);
+    EXPECT_EQ(mask_out.time_ratio().num, 1);
+    EXPECT_EQ(mask_out.time_ratio().den, 2);
+    EXPECT_EQ(status_of([&] { (void)model.input_spec(2); }), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { (void)model.output_spec(1); }), ANIRA_ERROR_INVALID_ARGUMENT);
+
+    EXPECT_EQ(model.default_engine(), ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_TRUE(model.default_engine_id().empty());
+    EXPECT_EQ(model.state(), ANIRA_MODEL_STATELESS);
+    EXPECT_EQ(model.max_instances(), 4u);
+    EXPECT_EQ(model.anchor(), "mask_out");
+    EXPECT_EQ(model.tensor_name(0, "audio_in"), "input_0");
+    EXPECT_EQ(model.tensor_name(1, "audio_in"), "x");
+    EXPECT_TRUE(model.tensor_name(1, "gain").empty()) << "positional";
+    EXPECT_EQ(model.tensor_layout(1, "gain"), (std::vector<uint32_t>{0, ANIRA_AXIS_INSERT}));
+    EXPECT_TRUE(model.tensor_layout(0, "audio_in").empty()) << "the spec's order";
+    const std::optional<anira::ext::Entry> entry = model.model_ext<anira::ext::Entry>(1);
+    ASSERT_TRUE(entry.has_value());
+    EXPECT_EQ(entry->name, "forward_streaming");
+    EXPECT_FALSE(model.model_ext<anira::ext::Entry>(0).has_value());
+    EXPECT_EQ(status_of([&] { (void)model.tensor_name(3, "audio_in"); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { (void)model.tensor_layout(3, "audio_in"); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { (void)model.model_ext<anira::ext::Entry>(3); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+
+    // A config built in code answers the same; a custom default and a set entry point.
+    anira::ModelConfig built;
+    built.add_model_path("org.example.engine", "model.bin");
+    built.default_engine("org.example.engine")
+        .state(ANIRA_MODEL_STATEFUL)
+        .model_ext(0, anira::ext::Entry{.name = "decode"});
+    EXPECT_EQ(built.default_engine(), ANIRA_ENGINE_NONE);
+    EXPECT_EQ(built.default_engine_id(), "org.example.engine");
+    EXPECT_EQ(built.state(), ANIRA_MODEL_STATEFUL);
+    EXPECT_EQ(built.max_instances(), 1u);
+    EXPECT_TRUE(built.anchor().empty()) << "the default";
+    EXPECT_EQ(built.model_ext<anira::ext::Entry>(0)->name, "decode");
+    EXPECT_EQ(built.input_count(), 0u);
+}
+
+TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
+    int user = 0;
+    const anira::Hard hard{
+        .block_min = 64,
+        .block_max = 2048,
+        .rate = 44100.0,
+        .budget = ANIRA_BUDGET_EXPLICIT,
+        .budget_value = std::chrono::microseconds{2500},
+        .warmup = ANIRA_WARMUP_FIXED,
+        .warmup_iterations = 7,
+        .on_miss = ANIRA_MISS_CALLBACK,
+        .miss_fn = &fill_miss,
+        .miss_user_data = &user,
+        .wait_ratio = 0.5,
+        .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}, {"mask_out", ANIRA_DTYPE_F32}},
+        .latencies = {{"mask_out", 4096}},
+        .edge_cost = ANIRA_EDGE_COST_STRICT,
+    };
+    const anira::Hard back = anira::ContractHandle(hard).hard();
+    EXPECT_EQ(back.block_min, hard.block_min);
+    EXPECT_EQ(back.block_max, hard.block_max);
+    EXPECT_EQ(back.rate, hard.rate);
+    EXPECT_EQ(back.budget, hard.budget);
+    EXPECT_EQ(back.budget_value, hard.budget_value);
+    EXPECT_EQ(back.warmup, hard.warmup);
+    EXPECT_EQ(back.warmup_iterations, hard.warmup_iterations);
+    EXPECT_EQ(back.on_miss, hard.on_miss);
+    EXPECT_EQ(back.miss_fn, hard.miss_fn);
+    EXPECT_EQ(back.miss_user_data, hard.miss_user_data);
+    EXPECT_EQ(back.wait_ratio, hard.wait_ratio);
+    EXPECT_EQ(back.ring_dtypes, hard.ring_dtypes);
+    EXPECT_EQ(back.latencies, hard.latencies);
+    EXPECT_EQ(back.edge_cost, hard.edge_cost);
+
+    // The handle setters patch what hard() reads, a loaded contract's included.
+    anira::ContractHandle loaded = anira::ContractHandle::from_json(anira_test::k_contract_hard_v3);
+    loaded.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16).hard_latency("mask_out", 1024);
+    const anira::Hard patched = loaded.hard();
+    EXPECT_EQ(patched.block_min, 512u);
+    EXPECT_EQ(patched.rate, 48000.0);
+    EXPECT_EQ(patched.budget, ANIRA_BUDGET_MEASURED);
+    EXPECT_EQ(patched.ring_dtypes,
+              (std::map<std::string, anira::DType>{{"audio_in", ANIRA_DTYPE_I16}}));
+    EXPECT_EQ(patched.latencies, (std::map<std::string, uint32_t>{{"mask_out", 1024}}));
+    EXPECT_EQ(status_of([&] { loaded.hard_latency("mask_out", 0x80000000U); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { loaded.hard_latency("", 1024); }), ANIRA_ERROR_INVALID_ARGUMENT);
+}
+
+// The handle stores the budget as double milliseconds. Reading it back through a duration_cast
+// truncates whenever the product of the double and 1e6 falls just below the integer; round
+// makes every value of this list exact, and the list holds values a cast would not.
+TEST(AbiReadBackCxx, TheBudgetRoundTripsToTheNanosecond) {
+    using std::chrono::nanoseconds;
+    const std::array<nanoseconds, 6> values{nanoseconds{42660000},
+                                            nanoseconds{4100000},
+                                            nanoseconds{8200000},
+                                            nanoseconds{16400000},
+                                            nanoseconds{33300000},
+                                            nanoseconds{1000001}};
+    int truncated = 0;
+    for (const nanoseconds value : values) {
+        const anira::ContractHandle handle(anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT,
+                                                       .budget_value = value,
+                                                       .warmup = ANIRA_WARMUP_NONE});
+        EXPECT_EQ(handle.hard().budget_value, value) << value.count() << " ns";
+        anira_budget_kind kind = ANIRA_BUDGET_MEASURED;
+        double ms = 0.0;
+        ASSERT_EQ(anira_contract_hard_budget(handle.native(), &kind, &ms), ANIRA_OK);
+        const auto cast =
+            std::chrono::duration_cast<nanoseconds>(std::chrono::duration<double, std::milli>(ms));
+        truncated += cast != value ? 1 : 0;
+    }
+    EXPECT_GT(truncated, 0) << "the list proves the rounding only if a cast would miss a value";
+}
+
+TEST(AbiReadBackCxx, HardOfAFileAsyncAndEmptyHandle) {
+    static constexpr const char* k_typed = R"({ "hard": {
+        "block_min": 256, "block_max": 1024, "rate": 44100,
+        "budget": {"ms": 42.66}, "warmup": {"fixed": 3}, "on_miss": "zeros",
+        "ring_dtypes": {"audio_in": "int16"}, "latencies": {"audio_out": 2048}
+    } })";
+    const anira::Hard typed = anira::ContractHandle::from_json(k_typed).hard();
+    EXPECT_EQ(typed.block_min, 256u);
+    EXPECT_EQ(typed.block_max, 1024u);
+    EXPECT_EQ(typed.budget_value, std::chrono::microseconds{42660}) << "42.66 ms, rounded";
+    EXPECT_EQ(typed.warmup_iterations, 3u);
+    EXPECT_EQ(typed.on_miss, ANIRA_MISS_ZEROS);
+    EXPECT_EQ(typed.ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
+    EXPECT_EQ(typed.latencies.at("audio_out"), 2048u);
+    // Re-minted, the aggregate is the same contract.
+    const anira::Hard again = anira::ContractHandle(typed).hard();
+    EXPECT_EQ(again.budget_value, typed.budget_value);
+    EXPECT_EQ(again.ring_dtypes, typed.ring_dtypes);
+    EXPECT_EQ(again.latencies, typed.latencies);
+
+    const anira::ContractHandle async_contract(anira::Async{});
+    EXPECT_EQ(status_of([&] { (void)async_contract.hard(); }), ANIRA_ERROR_WRONG_CONTRACT);
+    anira::ContractHandle moved(anira::Hard{});
+    const anira::ContractHandle taker(std::move(moved));
+    // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move): the empty handle
+    EXPECT_EQ(status_of([&] { (void)moved.hard(); }), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_FALSE(taker.empty());
 }

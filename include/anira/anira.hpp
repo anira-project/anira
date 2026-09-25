@@ -9,9 +9,10 @@
  * can be included beside <anira/anira.h>.
  *
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
- * contract configuration, job options), the Context over the core, the pipeline half of
- * section 6 (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages and the
- * custom engines of section 7 (Stage, Stage::Prepared, StageContext and RingView over
+ * contract configuration, job options) with their read-back (SpecView, the ModelConfig
+ * getters, ContractHandle::hard()), the Context over the core, the pipeline half of section 6
+ * (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages and the custom
+ * engines of section 7 (Stage, Stage::Prepared, StageContext and RingView over
  * anira/abi/stage.h; Engine, Engine::Loaded, Engine::Prepared, EngineLoadInfo and
  * EngineContext over anira/abi/engine.h, registered through Pipeline::register_engine or
  * stage::Inference::engine; InitInfo and PrepareInfo, the records both share, over
@@ -23,14 +24,15 @@
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
  * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file);
- * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>, since a handle
- * cannot be read back into a Hard aggregate; ContextConfig::log_sink takes the raw
- * (anira_log_fn, void*) pair; ModelConfig::anchor takes the tensor's canonical name;
+ * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>: a handle without
+ * geometry, patched with hard_geometry, which hard() reads back into a Hard;
+ * ContextConfig::log_sink takes the raw (anira_log_fn, void*) pair; ModelConfig::anchor takes
+ * the tensor's canonical name;
  * ContractHandle, JobOptionsHandle and the upgraded() queries are additions; set_model_bytes
  * chains (the document's returns void); add_model_bytes and set_model_bytes carry the
  * (release, ctx) pair of the C entry and have custom-engine twins; JobOptions has no
  * on_complete yet (it arrives with Ticket); a contract file loads into a ContractHandle,
- * patched with hard_geometry and the other setters, not into an anira::Contract aggregate;
+ * patched with hard_geometry and the other setters, which hard() reads back into a Hard;
  * Tensor has data(DType) beside data_f32, and from_host_planar / plane<T> for planar host
  * memory (typed by the element, which the document does not have); from_metal, from_iosurface,
  * from_ahardwarebuffer and from_d3d12 are not declared and there is no anira_all.hpp (the draft
@@ -109,6 +111,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -116,6 +119,7 @@
 #include <initializer_list>
 #include <ios>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <new>
@@ -245,7 +249,10 @@ namespace detail {
  * @brief Maps an extension value type onto its C record. A specialisation provides
  * `using Native = anira_ext_<kind>;` and `static Native mint(const Ext&)`, where the record's
  * first member is its anira_ext_header. The minted record must outlive the C call it feeds;
- * set_ext copies, so a temporary suffices there.
+ * set_ext copies, so a temporary suffices there. A kind that is read back
+ * (ModelConfig::model_ext<Ext>(index)) also provides `static constexpr const char* k_kind`,
+ * the kind's id, and `static Ext read(const anira_ext_header*)`, the value copied out of the typed
+ * record a getter hands out (read within its struct_size; no pointer into it is kept).
  */
 template <class Ext>
 struct ExtTraits;
@@ -253,11 +260,17 @@ struct ExtTraits;
 template <>
 struct ExtTraits<ext::Entry> {
     using Native = anira_ext_entry;
+    static constexpr const char* k_kind = "entry";
 
     static Native mint(const ext::Entry& entry) {
         Native native = ANIRA_EXT_ENTRY_INIT;
         native.name = entry.name.c_str();
         return native;
+    }
+    static ext::Entry read(const anira_ext_header* header) {
+        Native native = ANIRA_EXT_ENTRY_INIT;
+        std::memcpy(&native, header, std::min<std::size_t>(header->struct_size, sizeof(Native)));
+        return ext::Entry{.name = native.name != nullptr ? native.name : ""};
     }
 };
 
@@ -667,6 +680,73 @@ static_assert(sizeof(Tensor) == sizeof(anira_tensor) && std::is_trivially_copyab
 // ---- tensor spec (section 2) ---------------------------------------------------------------
 
 /**
+ * @brief A read-only view of a tensor spec over the anira_tensor_spec getters: what
+ * ModelConfig::input_spec / output_spec hand out (the config's own copy, valid until the config
+ * is mutated, moved or destroyed) and what TensorSpec::view() answers over a spec being built.
+ * Every read is noexcept; an axis at or beyond ndim() reads {ANIRA_AXIS_ANY, 0}, an extent no
+ * set axis has (the rule of Tensor::extent). Trivially copyable.
+ */
+class SpecView {
+public:
+    // NOLINTBEGIN(readability-identifier-naming) the aggregates spell the setters' parameters
+    struct Axis {
+        AxisTag tag = ANIRA_AXIS_ANY;
+        int64_t extent = 0;  ///< ANIRA_DYNAMIC where it was set so
+    };
+    struct Window {
+        int64_t min = 0;
+        int64_t max = 0;  ///< ANIRA_UNBOUNDED where it was set so
+        int64_t overlap = 0;
+    };
+    struct TimeRatio {
+        int64_t num = 0;  ///< (0, 0) = derive
+        int64_t den = 0;
+    };
+    // NOLINTEND(readability-identifier-naming)
+
+    explicit SpecView(const anira_tensor_spec* spec) noexcept : m_spec(spec) {}
+
+    /// The canonical name, owned by the spec.
+    std::string_view name() const noexcept {
+        const char* text = anira_tensor_spec_name(m_spec);
+        return text != nullptr ? std::string_view(text) : std::string_view();
+    }
+    DType dtype() const noexcept { return anira_tensor_spec_dtype(m_spec); }
+    Role role() const noexcept { return anira_tensor_spec_role(m_spec); }
+    /// One more than the highest axis set; a hole below it reads {ANIRA_AXIS_ANY, 0}.
+    uint32_t ndim() const noexcept { return anira_tensor_spec_ndim(m_spec); }
+    Axis axis(uint32_t i) const noexcept {
+        Axis out;
+        if (anira_tensor_spec_axis(m_spec, i, &out.tag, &out.extent) != ANIRA_OK) { return {}; }
+        return out;
+    }
+    /// 0, 0, 0 until TensorSpec::window ran.
+    Window window() const noexcept {
+        Window out;
+        if (anira_tensor_spec_window(m_spec, &out.min, &out.max, &out.overlap) != ANIRA_OK) {
+            return {};
+        }
+        return out;
+    }
+    TimeRatio time_ratio() const noexcept {
+        TimeRatio out;
+        if (anira_tensor_spec_time_ratio(m_spec, &out.num, &out.den) != ANIRA_OK) { return {}; }
+        return out;
+    }
+    /// The model's internal latency along the Time axis.
+    int64_t latency() const noexcept { return anira_tensor_spec_latency(m_spec); }
+    /// A State input's source, the canonical name of its State output; empty without one.
+    std::string_view state_source() const noexcept {
+        const char* text = anira_tensor_spec_state_source(m_spec);
+        return text != nullptr ? std::string_view(text) : std::string_view();
+    }
+    const anira_tensor_spec* native() const noexcept { return m_spec; }
+
+private:
+    const anira_tensor_spec* m_spec = nullptr;
+};
+
+/**
  * @brief One input or output of the model: your canonical name, the data type, the role, the
  * tagged axes in the model's memory order, and, for a streamed tensor, the window and overlap
  * it is consumed with. Move-only; copied into a ModelConfig by input()/output().
@@ -700,7 +780,7 @@ public:
                       "anira_tensor_spec_set_axis");
         return *this;
     }
-    /// Streamed only: elements along the Time axis per inference and the context kept.
+    /// Streamed only: elements along the Time axis per inference and the overlap kept.
     TensorSpec& window(int64_t window_min, int64_t window_max, int64_t overlap) {
         detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, overlap),
                       "anira_tensor_spec_set_window");
@@ -749,6 +829,10 @@ public:
         return *this;
     }
 
+    /// What the spec holds so far, through the one read path of SpecView; valid while this
+    /// object lives.
+    SpecView view() const noexcept { return SpecView(m_spec); }
+
     const anira_tensor_spec* native() const noexcept { return m_spec; }
     anira_tensor_spec* native() noexcept { return m_spec; }
 
@@ -777,6 +861,13 @@ struct Hard {
     anira_miss_fn miss_fn = nullptr;
     void* miss_user_data = nullptr;
     double wait_ratio = 0;  ///< v2 blocking_ratio
+    /// The ring dtype per Streamed tensor by canonical name (anira_contract_hard_set_ring_dtype;
+    /// ANIRA_DTYPE_F32 for every tensor not named): the element type of the host's samples.
+    std::map<std::string, DType> ring_dtypes{};
+    /// The declared stream latency per Streamed output by canonical name, in samples of that
+    /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
+    /// receive ring; every output not named keeps the computed one.
+    std::map<std::string, uint32_t> latencies{};
     anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
 };
 
@@ -828,6 +919,14 @@ inline anira_contract* mint(const Hard& hard) {
               "anira_contract_hard_set_miss_fn");
         check(anira_contract_hard_set_wait_ratio(contract, hard.wait_ratio),
               "anira_contract_hard_set_wait_ratio");
+        for (const auto& [name, dtype] : hard.ring_dtypes) {
+            check(anira_contract_hard_set_ring_dtype(contract, name.c_str(), dtype),
+                  "anira_contract_hard_set_ring_dtype");
+        }
+        for (const auto& [name, samples] : hard.latencies) {
+            check(anira_contract_hard_set_latency(contract, name.c_str(), samples),
+                  "anira_contract_hard_set_latency");
+        }
         check(anira_contract_set_edge_cost(contract, hard.edge_cost),
               "anira_contract_set_edge_cost");
     } catch (...) {
@@ -946,6 +1045,18 @@ public:
                       "anira_contract_hard_set_ring_dtype");
         return *this;
     }
+    /// The declared stream latency of one output under this Hard contract, by canonical name,
+    /// in samples of that output (anira_contract_hard_set_latency): what the handler reports
+    /// for the slot and primes its receive ring with, replacing the computed figure. A name
+    /// that is no Streamed output, or a figure below the model's internal latency, is
+    /// ANIRA_ERROR_CONFIG at anira_handler_prepare. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
+    /// for an empty name or a figure above INT32_MAX.
+    ContractHandle& hard_latency(std::string_view canonical, uint32_t samples) {
+        const std::string name(canonical);
+        detail::check(anira_contract_hard_set_latency(m_contract, name.c_str(), samples),
+                      "anira_contract_hard_set_latency");
+        return *this;
+    }
     /// The per-inference budget: MEASURED, or EXPLICIT with the value.
     template <class Rep, class Period>
     ContractHandle& hard_budget(anira_budget_kind kind_value,
@@ -1039,6 +1150,53 @@ public:
     /// Whether this contract came out of a 2.x document (from_json, or a
     /// ModelConfig::take_legacy_contract).
     bool upgraded() const noexcept { return m_upgraded; }
+
+    /// The Hard aggregate this handle holds, a loaded or legacy one alike: every field the
+    /// read-back of anira/abi/config.h answers, ring_dtypes and latencies from their
+    /// enumerations, and budget_value rounded to the nanosecond (the handle stores double
+    /// milliseconds; std::chrono::round, so 42.66 ms reads 42660000 ns). Minting the result
+    /// gives an equal contract. @throws Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle,
+    /// Error{ANIRA_ERROR_INVALID_ARGUMENT} on an empty one.
+    Hard hard() const {
+        if (m_contract == nullptr) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_contract_hard_geometry");
+        }
+        Hard out;
+        detail::check(
+            anira_contract_hard_geometry(m_contract, &out.block_min, &out.block_max, &out.rate),
+            "anira_contract_hard_geometry");
+        double budget_ms = 0.0;
+        detail::check(anira_contract_hard_budget(m_contract, &out.budget, &budget_ms),
+                      "anira_contract_hard_budget");
+        out.budget_value = std::chrono::round<std::chrono::nanoseconds>(
+            std::chrono::duration<double, std::milli>(budget_ms));
+        detail::check(anira_contract_hard_warmup(m_contract, &out.warmup, &out.warmup_iterations),
+                      "anira_contract_hard_warmup");
+        detail::check(anira_contract_hard_on_miss(m_contract, &out.on_miss),
+                      "anira_contract_hard_on_miss");
+        detail::check(anira_contract_hard_miss_fn(m_contract, &out.miss_fn, &out.miss_user_data),
+                      "anira_contract_hard_miss_fn");
+        detail::check(anira_contract_hard_wait_ratio(m_contract, &out.wait_ratio),
+                      "anira_contract_hard_wait_ratio");
+        const uint32_t num_ring_dtypes = anira_contract_hard_num_ring_dtypes(m_contract);
+        for (uint32_t i = 0; i < num_ring_dtypes; ++i) {
+            const char* name = nullptr;
+            DType dtype = 0;
+            detail::check(anira_contract_hard_ring_dtype(m_contract, i, &name, &dtype),
+                          "anira_contract_hard_ring_dtype");
+            out.ring_dtypes.emplace(name, dtype);
+        }
+        const uint32_t num_latencies = anira_contract_hard_num_latencies(m_contract);
+        for (uint32_t i = 0; i < num_latencies; ++i) {
+            const char* name = nullptr;
+            uint32_t samples = 0;
+            detail::check(anira_contract_hard_latency(m_contract, i, &name, &samples),
+                          "anira_contract_hard_latency");
+            out.latencies.emplace(name, samples);
+        }
+        out.edge_cost = anira_contract_edge_cost(m_contract);
+        return out;
+    }
 
     const anira_contract* native() const noexcept { return m_contract; }
     anira_contract* native() noexcept { return m_contract; }
@@ -1291,6 +1449,83 @@ public:
 
     // -- tensors, selection, state, anchor --
 
+    // -- the read-back --
+
+    /// The number of input specs, State specs included.
+    uint32_t input_count() const noexcept { return anira_model_config_num_inputs(m_config); }
+    uint32_t output_count() const noexcept { return anira_model_config_num_outputs(m_config); }
+    /// The config's own copy of input spec i, valid until the config is mutated, moved or
+    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} out of range.
+    SpecView input_spec(uint32_t i) const {
+        const anira_tensor_spec* spec = anira_model_config_input(m_config, i);
+        if (spec == nullptr) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_model_config_input");
+        }
+        return SpecView(spec);
+    }
+    SpecView output_spec(uint32_t i) const {
+        const anira_tensor_spec* spec = anira_model_config_output(m_config, i);
+        if (spec == nullptr) {
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_model_config_output");
+        }
+        return SpecView(spec);
+    }
+    /// The built-in default engine; ANIRA_ENGINE_NONE for plan 0 or a custom default.
+    EngineKind default_engine() const noexcept {
+        return anira_model_config_default_engine(m_config);
+    }
+    /// The custom default engine's id; empty for a built-in default or none.
+    std::string_view default_engine_id() const noexcept {
+        const char* id = anira_model_config_default_engine_id(m_config);
+        return id != nullptr ? std::string_view(id) : std::string_view();
+    }
+    /// As set; a model with a declared State pair runs as ANIRA_MODEL_STATEFUL anyway.
+    anira_model_state state() const noexcept { return anira_model_config_state(m_config); }
+    uint32_t max_instances() const noexcept { return anira_model_config_max_instances(m_config); }
+    /// The anchor's canonical name as set; empty for the default.
+    std::string_view anchor() const noexcept {
+        const char* name = anira_model_config_anchor(m_config);
+        return name != nullptr ? std::string_view(name) : std::string_view();
+    }
+    /// What entry `index` calls the tensor; empty when it binds the tensor positionally.
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index out of range.
+    std::string_view tensor_name(uint32_t index, std::string_view canonical) const {
+        check_entry(index, "anira_model_config_tensor_name");
+        const char* name =
+            anira_model_config_tensor_name(m_config, index, std::string(canonical).c_str());
+        return name != nullptr ? std::string_view(name) : std::string_view();
+    }
+    /// The axis order entry `index` holds the tensor in; empty for the spec's order.
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index out of range or an empty name.
+    std::vector<uint32_t> tensor_layout(uint32_t index, std::string_view canonical) const {
+        const std::string name(canonical);
+        uint32_t count = 0;
+        detail::check(
+            anira_model_config_tensor_layout(m_config, index, name.c_str(), &count, nullptr),
+            "anira_model_config_tensor_layout");
+        std::vector<uint32_t> axes(count);
+        if (count > 0) {
+            detail::check(anira_model_config_tensor_layout(m_config,
+                                                           index,
+                                                           name.c_str(),
+                                                           &count,
+                                                           axes.data()),
+                          "anira_model_config_tensor_layout");
+        }
+        return axes;
+    }
+    /// The extension of kind Ext on entry `index`, copied out (ext::Entry: the entry point);
+    /// nullopt when the entry carries none. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an
+    /// index out of range.
+    template <class Ext>
+    std::optional<Ext> model_ext(uint32_t index) const {
+        check_entry(index, "anira_model_config_model_ext");
+        const anira_ext_header* header =
+            anira_model_config_model_ext(m_config, index, detail::ExtTraits<Ext>::k_kind);
+        if (header == nullptr) { return std::nullopt; }
+        return detail::ExtTraits<Ext>::read(header);
+    }
+
     /// Appends an input spec (copied; the spec may be destroyed afterwards).
     ModelConfig& input(const TensorSpec& spec) {
         detail::check(anira_model_config_add_input(m_config, spec.native()),
@@ -1376,6 +1611,10 @@ public:
 private:
     ModelConfig(anira_model_config* config, bool upgraded) noexcept
         : m_config(config), m_upgraded(upgraded) {}
+
+    void check_entry(uint32_t index, const char* entry) const {
+        if (index >= model_count()) { throw Error(ANIRA_ERROR_INVALID_ARGUMENT, entry); }
+    }
 
     anira_model_config* m_config = nullptr;
     bool m_upgraded = false;

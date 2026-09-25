@@ -379,40 +379,45 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
         .warmup_iterations = 3,
         .on_miss = ANIRA_MISS_ZEROS,
         .wait_ratio = 0.25,
+        .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
+        .latencies = {{"audio_out", 1024}},
         .edge_cost = ANIRA_EDGE_COST_STRICT,
     };
     ContractHandle handle(hard);
     EXPECT_EQ(handle.kind(), ANIRA_CONTRACT_HARD);
     EXPECT_FALSE(handle.upgraded());
-    const anira::capi::HardContract* fields = handle.native()->hard();
-    ASSERT_NE(fields, nullptr);
-    EXPECT_EQ(fields->m_block_min, 256u);
-    EXPECT_EQ(fields->m_block_max, 512u);
-    EXPECT_DOUBLE_EQ(fields->m_rate, 44100.0);
-    EXPECT_EQ(fields->m_budget, ANIRA_BUDGET_EXPLICIT);
-    EXPECT_DOUBLE_EQ(fields->m_budget_ms, 42.66) << "42 ms 660 us as milliseconds";
-    EXPECT_EQ(fields->m_warmup, ANIRA_WARMUP_FIXED);
-    EXPECT_EQ(fields->m_warmup_iterations, 3u);
-    EXPECT_EQ(fields->m_on_miss, ANIRA_MISS_ZEROS);
-    EXPECT_DOUBLE_EQ(fields->m_wait_ratio, 0.25);
-    EXPECT_EQ(handle.native()->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    const anira::Hard minted = handle.hard();
+    EXPECT_EQ(minted.block_min, 256u);
+    EXPECT_EQ(minted.block_max, 512u);
+    EXPECT_DOUBLE_EQ(minted.rate, 44100.0);
+    EXPECT_EQ(minted.budget, ANIRA_BUDGET_EXPLICIT);
+    EXPECT_EQ(minted.budget_value, std::chrono::microseconds{42660}) << "42 ms 660 us";
+    EXPECT_EQ(minted.warmup, ANIRA_WARMUP_FIXED);
+    EXPECT_EQ(minted.warmup_iterations, 3u);
+    EXPECT_EQ(minted.on_miss, ANIRA_MISS_ZEROS);
+    EXPECT_DOUBLE_EQ(minted.wait_ratio, 0.25);
+    EXPECT_EQ(minted.ring_dtypes, hard.ring_dtypes);
+    EXPECT_EQ(minted.latencies, hard.latencies);
+    EXPECT_EQ(minted.edge_cost, ANIRA_EDGE_COST_STRICT);
 
     handle.hard_geometry(1, 512, 48000.0);
-    const anira::capi::HardContract* patched = handle.native()->hard();
-    ASSERT_NE(patched, nullptr);
-    EXPECT_EQ(patched->m_block_min, 1u);
-    EXPECT_EQ(patched->m_block_max, 512u);
-    EXPECT_DOUBLE_EQ(patched->m_rate, 48000.0);
-    EXPECT_DOUBLE_EQ(patched->m_budget_ms, 42.66) << "the geometry patch leaves the rest";
+    const anira::Hard patched = handle.hard();
+    EXPECT_EQ(patched.block_min, 1u);
+    EXPECT_EQ(patched.block_max, 512u);
+    EXPECT_DOUBLE_EQ(patched.rate, 48000.0);
+    EXPECT_EQ(patched.budget_value, std::chrono::microseconds{42660})
+        << "the geometry patch leaves the rest";
+    EXPECT_EQ(patched.ring_dtypes, hard.ring_dtypes);
 
     const ContractHandle defaults{anira::Hard{}};
-    const anira::capi::HardContract* zero = defaults.native()->hard();
-    ASSERT_NE(zero, nullptr);
-    EXPECT_EQ(zero->m_budget, ANIRA_BUDGET_MEASURED);
-    EXPECT_EQ(zero->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
-    EXPECT_EQ(zero->m_on_miss, ANIRA_MISS_BYPASS);
-    EXPECT_DOUBLE_EQ(zero->m_wait_ratio, 0.0);
-    EXPECT_EQ(defaults.native()->m_edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
+    const anira::Hard zero = defaults.hard();
+    EXPECT_EQ(zero.budget, ANIRA_BUDGET_MEASURED);
+    EXPECT_EQ(zero.warmup, ANIRA_WARMUP_UNTIL_STABLE);
+    EXPECT_EQ(zero.on_miss, ANIRA_MISS_BYPASS);
+    EXPECT_DOUBLE_EQ(zero.wait_ratio, 0.0);
+    EXPECT_TRUE(zero.ring_dtypes.empty());
+    EXPECT_TRUE(zero.latencies.empty());
+    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
 }
 
 TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
