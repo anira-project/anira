@@ -6,6 +6,8 @@
 // enumerators reach a consumer through it, so the include-cleaner check is off for the file.
 // NOLINTBEGIN(misc-include-cleaner)
 #include <anira/compat/v2.hpp>
+#include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -147,6 +149,42 @@ std::size_t nonblocking_probe(anira_ring* ring,
     return checks;
 }
 
+/// The members of the handler that never wait carry the attribute and are checked the same way;
+/// the process, push and pop forms carry none (a blocking ratio or set_non_realtime makes them
+/// wait), so they are not called here.
+std::size_t nonblocking_handler_probe(v2::InferenceHandler& handler) noexcept ANIRA_NONBLOCKING {
+    handler.set_inference_backend(v2::CUSTOM);
+    std::size_t checks = handler.get_inference_backend() == v2::CUSTOM ? 1 : 0;
+    checks += handler.get_latency(0) + handler.get_available_samples(0, 0);
+    handler.set_non_realtime(false);
+    handler.reset();
+    checks += handler.rt_error() == ANIRA_OK && handler.native() != nullptr ? 1 : 0;
+    return checks;
+}
+
+// The handler: non-copyable, non-movable, the 2.x constructors, the 2.x signatures.
+static_assert(!std::is_copy_constructible_v<v2::InferenceHandler>);
+static_assert(!std::is_move_constructible_v<v2::InferenceHandler>);
+static_assert(!std::is_default_constructible_v<v2::InferenceHandler>);
+static_assert(std::is_constructible_v<v2::InferenceHandler,
+                                      v2::PrePostProcessor&,
+                                      v2::InferenceConfig&,
+                                      const v2::ContextConfig&>);
+static_assert(std::is_constructible_v<v2::InferenceHandler,
+                                      v2::PrePostProcessor&,
+                                      v2::InferenceConfig&,
+                                      anira::Engine&,
+                                      const v2::ContextConfig&>);
+static_assert(std::is_same_v<decltype(std::declval<v2::InferenceHandler&>().process(
+                                 std::declval<const float* const* const*>(),
+                                 std::declval<size_t*>(),
+                                 std::declval<float* const* const*>(),
+                                 std::declval<size_t*>())),
+                             size_t*>);
+static_assert(noexcept(std::declval<v2::InferenceHandler&>().process(std::declval<float* const*>(),
+                                                                     std::size_t{0})));
+static_assert(noexcept(std::declval<v2::InferenceHandler&>().reset()));
+
 }  // namespace
 
 int anira_header_compat_probe();  // NOLINT(misc-use-internal-linkage)
@@ -234,6 +272,36 @@ int anira_header_compat_probe() {
         checks += v2::Context::release_core_if_idle() && v2::Context::has_core() ? 1 : 0;
         checks +=
             static_cast<int>(v2::Context::get_num_inference_threads() + v2::Context::drain_log());
+
+        v2::InferenceHandler handler(processor, mutable_config, v2::ContextConfig(2));
+        v2::PassthroughEngine custom;
+        const v2::InferenceHandler custom_handler(processor, mutable_config, custom);
+        handler.prepare(v2::HostConfig(512.F, 48000.F));
+        handler.prepare(v2::HostConfig(512.F, 48000.F), 1024U, 0);
+        handler.prepare(v2::HostConfig(512.F, 48000.F), std::vector<unsigned>{1024U});
+        checks += static_cast<int>(nonblocking_handler_probe(handler));
+        std::vector<float> block(512);
+        std::array<float*, 1> channels{block.data()};
+        std::array<const float*, 1> const_channels{block.data()};
+        std::array<const float* const*, 1> ins{const_channels.data()};
+        std::array<float* const*, 1> outs{channels.data()};
+        std::array<size_t, 1> num_in{512};
+        std::array<size_t, 1> num_out{512};
+        checks += static_cast<int>(handler.process(channels.data(), 512));
+        checks +=
+            static_cast<int>(handler.process(const_channels.data(), 512, channels.data(), 512, 0));
+        checks += static_cast<int>(
+            handler.process(ins.data(), num_in.data(), outs.data(), num_out.data())[0]);
+        handler.push_data(const_channels.data(), 512);
+        handler.push_data(ins.data(), num_in.data());
+        checks += static_cast<int>(handler.pop_data(channels.data(), 512));
+        const auto deadline = std::chrono::steady_clock::now();
+        checks += static_cast<int>(handler.pop_data(channels.data(), 512, deadline, 0));
+        checks += static_cast<int>(handler.pop_data(outs.data(), num_out.data())[0]);
+        checks += static_cast<int>(handler.pop_data(outs.data(), num_out.data(), deadline)[0]);
+        checks += static_cast<int>(handler.get_latency_vector().size() + handler.drain_log() +
+                                   v2::InferenceHandler::get_num_inference_threads());
+        checks += custom_handler.get_inference_backend() == v2::CUSTOM ? 1 : 0;
     }
     return checks;
 }

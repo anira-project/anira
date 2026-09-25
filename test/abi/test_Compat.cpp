@@ -15,8 +15,10 @@
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/lifecycle.h>
+#include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/utils/Buffer.h>
@@ -31,10 +33,12 @@
 #include <anira/compat/v2.hpp>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -42,6 +46,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1359,4 +1364,1180 @@ TEST(AbiCompat, AThrowingProcessorFailsItsChunk) {
     run_blocks(4);
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_CONFIG);
     pp.m_throw_error.store(false);
+}
+
+// ---- the handler: the differential oracle against the live 2.x handler (suite AbiCompat) ----
+
+namespace {
+
+/// The shim side's context: what anira_test::Context and oracle_core_config() set, so the users
+/// of the one core reconcile without a mismatch.
+v2::ContextConfig shim_context_config(unsigned threads = 2) {
+    v2::ContextConfig config(threads, v2::WaitStrategy::SpinBackoff, v2::LogLevel::Error);
+    config.m_log.m_drain = v2::LogDrain::Manual;
+    return config;
+}
+
+/// Waits until the output ring of slot 0 holds `expected` samples; fails after k_wait_s.
+template <class Handler>
+void wait_ring(const Handler& handler, size_t expected) {
+    const auto start = std::chrono::steady_clock::now();
+    while (handler.get_available_samples(0) != expected) {
+        if (std::chrono::steady_clock::now() > start + std::chrono::seconds(anira_test::k_wait_s)) {
+            FAIL() << "timeout while waiting for " << expected << " available samples (have "
+                   << handler.get_available_samples(0) << ")";
+        }
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+}
+
+/// Polls a condition for up to four seconds.
+bool eventually(const std::function<bool()>& condition) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (condition()) { return true; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return condition();
+}
+
+/// The call form both sides are driven through.
+enum class Form { InPlace, Separate, Multi, PushPop, PushPopMulti };
+
+constexpr std::array<Form, 5> k_forms{Form::InPlace,
+                                      Form::Separate,
+                                      Form::Multi,
+                                      Form::PushPop,
+                                      Form::PushPopMulti};
+
+/// One block of a gain-shaped handler (a stream and a Static value in, a stream and a Static
+/// value out) through `form`; the same code drives the 2.x class and the shim, whose members
+/// have the same signatures. `out` receives the stream, `static_out` the Static output of the
+/// multi forms (untouched by the others). Returns the delivered count of slot 0.
+template <class Handler>
+size_t run_gain_block(Handler& handler,
+                      Form form,
+                      size_t k,
+                      float gain,
+                      std::vector<float>& out,
+                      float& static_out) {
+    const size_t block = anira_test::k_block;
+    const std::vector<float> in = anira_test::ramp(k, block);
+    out.assign(block, -1.F);
+    const size_t prev = handler.get_available_samples(0);
+    const std::array<const float*, 1> in_ch{in.data()};
+    const std::array<float*, 1> out_ch{out.data()};
+    const std::array<const float*, 1> gain_ch{&gain};
+    const std::array<float*, 1> static_ch{&static_out};
+    const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
+    const std::array<float* const*, 2> outs{out_ch.data(), static_ch.data()};
+    std::array<size_t, 2> num_in{block, 1};
+    std::array<size_t, 2> num_out{block, 1};
+    size_t delivered = 0;
+    switch (form) {
+        case Form::InPlace: {
+            out = in;
+            const std::array<float*, 1> io{out.data()};
+            delivered = handler.process(io.data(), block);
+            wait_ring(handler, prev);
+            break;
+        }
+        case Form::Separate:
+            delivered = handler.process(in_ch.data(), block, out_ch.data(), block);
+            wait_ring(handler, prev);
+            break;
+        case Form::Multi:
+            delivered = handler.process(ins.data(), num_in.data(), outs.data(), num_out.data())[0];
+            wait_ring(handler, prev);
+            break;
+        case Form::PushPop:
+            handler.push_data(in_ch.data(), block);
+            wait_ring(handler, prev + block);
+            delivered = handler.pop_data(out_ch.data(), block);
+            break;
+        case Form::PushPopMulti:
+            handler.push_data(ins.data(), num_in.data());
+            wait_ring(handler, prev + block);
+            delivered = handler.pop_data(outs.data(), num_out.data())[0];
+            break;
+    }
+    return delivered;
+}
+
+/// The gain oracle's rows: every engine of oracle_engines() (LiteRT is left out, as in
+/// test_Handler: its gain export lists the outputs in another order, which a configuration
+/// without tensor names binds wrongly on both sides) and the CUSTOM row.
+Arguments oracle_gain_arguments() {
+    Arguments args = gain_arguments();
+    std::erase_if(args.m_rows, [](const Row& row) { return row.m_backend == v2::LITERT; });
+    std::erase_if(args.m_shapes, [](const Shapes& row) { return row.m_backend == v2::LITERT; });
+    args.m_warm_up = 0;
+    return args;
+}
+
+/// The gain shape with the CUSTOM row alone.
+Arguments gain_custom_arguments(float blocking_ratio = 0.F) {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder"}};
+    args.m_shapes = {{{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}}};
+    args.m_in_channels = {1, 1};
+    args.m_out_channels = {1, 1};
+    args.m_in_sizes = {512, 0};
+    args.m_out_sizes = {512, 0};
+    args.m_blocking_ratio = blocking_ratio;
+    return args;
+}
+
+/// One stream in, two out (test_InferenceHandlerApi's two-output model), with the given
+/// internal latency per output.
+Arguments two_output_arguments(size_t latency = 0) {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder"}};
+    args.m_shapes = {{{{1, 1, 512}}, {{1, 1, 512}, {1, 1, 512}}}};
+    args.m_in_channels = {1};
+    args.m_out_channels = {1, 1};
+    args.m_in_sizes = {512};
+    args.m_out_sizes = {512, 512};
+    args.m_latencies = {latency, latency};
+    args.m_max_inference_time = 10.F;
+    return args;
+}
+
+/// A generator: four Static parameters in, a 2048-sample stream out.
+Arguments generator_arguments() {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder"}};
+    args.m_shapes = {{{{1, 4}}, {{1, 2048}}}};
+    args.m_in_channels = {1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {0};
+    args.m_out_sizes = {2048};
+    args.m_max_inference_time = 10.F;
+    return args;
+}
+
+/// An analyser: a 2048-sample stream and a Static parameter in, a Static scalar out.
+Arguments analyser_arguments() {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder"}};
+    args.m_shapes = {{{{1, 2048}, {1, 1}}, {{1, 1}}}};
+    args.m_in_channels = {1, 1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {2048, 0};
+    args.m_out_sizes = {0};
+    args.m_max_inference_time = 10.F;
+    return args;
+}
+
+// ---- kernels: one arithmetic for the 2.x BackendBase and the anira::Engine ------------------
+
+/// The model ends of one inference as float pointers, however they came.
+struct Io {
+    static constexpr size_t k_max = 4;
+    std::array<const float*, k_max> m_in{};
+    std::array<size_t, k_max> m_in_size{};
+    std::array<float*, k_max> m_out{};
+    std::array<size_t, k_max> m_out_size{};
+    size_t m_num_in = 0;
+    size_t m_num_out = 0;
+};
+
+Io io_of(const anira::EngineContext& ctx) noexcept {
+    Io io;
+    io.m_num_in = std::min(ctx.inputs().size(), Io::k_max);
+    io.m_num_out = std::min(ctx.outputs().size(), Io::k_max);
+    for (size_t i = 0; i < io.m_num_in; ++i) {
+        io.m_in[i] = ctx.inputs()[i].data_f32();
+        io.m_in_size[i] = ctx.inputs()[i].num_elements();
+    }
+    for (size_t i = 0; i < io.m_num_out; ++i) {
+        io.m_out[i] = ctx.outputs()[i].data_f32();
+        io.m_out_size[i] = ctx.outputs()[i].num_elements();
+    }
+    return io;
+}
+
+Io io_of(std::vector<anira::BufferF>& input, std::vector<anira::BufferF>& output) {
+    Io io;
+    io.m_num_in = std::min(input.size(), Io::k_max);
+    io.m_num_out = std::min(output.size(), Io::k_max);
+    for (size_t i = 0; i < io.m_num_in; ++i) {
+        io.m_in[i] = input[i].get_read_pointer(0);
+        io.m_in_size[i] = input[i].get_num_samples();
+    }
+    for (size_t i = 0; i < io.m_num_out; ++i) {
+        io.m_out[i] = output[i].get_write_pointer(0);
+        io.m_out_size[i] = output[i].get_num_samples();
+    }
+    return io;
+}
+
+/// The gain model's arithmetic: the stream times the Static gain, the gain mirrored.
+struct GainKernel {
+    void operator()(const Io& io) const noexcept {
+        const float gain = io.m_in[1][0];
+        for (size_t i = 0; i < io.m_out_size[0]; ++i) { io.m_out[0][i] = io.m_in[0][i] * gain; }
+        io.m_out[1][0] = gain;
+    }
+};
+
+/// GainKernel behind a gate both sides share: the inference waits while the gate is closed.
+struct GateKernel {
+    std::atomic<bool>* m_open = nullptr;
+    void operator()(const Io& io) const noexcept {
+        while (!m_open->load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
+        GainKernel{}(io);
+    }
+};
+
+/// The generator: every output sample the value of parameter 0.
+struct ParamFillKernel {
+    void operator()(const Io& io) const noexcept {
+        for (size_t i = 0; i < io.m_out_size[0]; ++i) { io.m_out[0][i] = io.m_in[0][0]; }
+    }
+};
+
+/// The analyser: the mean of the window plus the parameter.
+struct MeanPlusParamKernel {
+    void operator()(const Io& io) const noexcept {
+        double sum = 0.0;
+        for (size_t i = 0; i < io.m_in_size[0]; ++i) { sum += static_cast<double>(io.m_in[0][i]); }
+        const float mean = io.m_in_size[0] > 0
+                               ? static_cast<float>(sum / static_cast<double>(io.m_in_size[0]))
+                               : 0.F;
+        io.m_out[0][0] = mean + io.m_in[1][0];
+    }
+};
+
+/// The 2.x side: a BackendBase over a kernel.
+template <class Kernel>
+class KernelBackend : public anira::BackendBase {
+public:
+    KernelBackend(anira::InferenceConfig& config, Kernel kernel)
+        : anira::BackendBase(config), m_kernel(kernel) {}
+    void process(std::vector<anira::BufferF>& input,
+                 std::vector<anira::BufferF>& output,
+                 std::shared_ptr<anira::SessionElement> /*session*/) override {
+        m_kernel(io_of(input, output));
+        m_calls.fetch_add(1);
+    }
+
+    Kernel m_kernel;
+    std::atomic<int> m_calls{0};
+};
+
+/// The shim side: an anira::Engine under anira.v2.custom over a kernel, counting its levels.
+template <class Kernel>
+class KernelEngine : public anira::Engine {
+public:
+    explicit KernelEngine(Kernel kernel = {})
+        : anira::Engine(v2::k_custom_engine_id), m_kernel(kernel) {}
+
+    std::span<const char* const> providers() const noexcept override { return m_providers; }
+    std::uint64_t query(const anira::InitInfo& /*info*/) const override { return m_query; }
+    void init(const anira::InitInfo& /*info*/) override { m_inits.fetch_add(1); }
+    std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& /*info*/) override {
+        m_loads.fetch_add(1);
+        return std::make_unique<Loaded>(*this);
+    }
+    void release() noexcept override { m_releases.fetch_add(1); }
+
+    Kernel m_kernel;
+    std::vector<const char*> m_providers;
+    std::uint64_t m_query = ~std::uint64_t{0};
+    std::atomic<int> m_inits{0};
+    std::atomic<int> m_loads{0};
+    std::atomic<int> m_prepares{0};
+    std::atomic<int> m_releases{0};
+    std::atomic<int> m_calls{0};
+
+private:
+    class Prepared : public anira::Engine::Prepared {
+    public:
+        explicit Prepared(KernelEngine& owner) : m_owner(owner) {}
+        anira_status process(anira::EngineContext& ctx) noexcept override {
+            m_owner.m_kernel(io_of(ctx));
+            m_owner.m_calls.fetch_add(1);
+            return ANIRA_OK;
+        }
+
+    private:
+        KernelEngine& m_owner;
+    };
+    class Loaded : public anira::Engine::Loaded {
+    public:
+        explicit Loaded(KernelEngine& owner) : m_owner(owner) {}
+        std::unique_ptr<anira::Engine::Prepared> prepare(
+            const anira::PrepareInfo& /*info*/) override {
+            m_owner.m_prepares.fetch_add(1);
+            return std::make_unique<Prepared>(m_owner);
+        }
+
+    private:
+        KernelEngine& m_owner;
+    };
+};
+
+/// A 2.x handler and a shim handler over the same arguments, the CUSTOM row on the default
+/// pass-through on both sides (the 2.x roundtrip, the PassthroughEngine) and the built-in rows
+/// on their engines.
+struct Pair {
+    explicit Pair(const Arguments& args)
+        : m_old(make_old(args))
+        , m_old_pp(m_old)
+        , m_old_handler(m_old_pp, m_old, oracle_core_config())
+        , m_shim(make_shim(args))
+        , m_pp(m_shim)
+        , m_handler(m_pp, m_shim, shim_context_config()) {}
+
+    void prepare(const anira::HostConfig& old_host, const v2::HostConfig& host) {
+        m_old_handler.prepare(old_host);
+        m_handler.prepare(host);
+    }
+    void prepare(size_t block = anira_test::k_block) {
+        prepare(
+            anira::HostConfig(static_cast<float>(block), static_cast<float>(anira_test::k_rate)),
+            v2::HostConfig(static_cast<float>(block), static_cast<float>(anira_test::k_rate)));
+    }
+    void set_gain(float gain) {
+        m_old_pp.set_input(gain, 1, 0);
+        m_pp.set_input(gain, 1, 0);
+    }
+
+    anira::InferenceConfig m_old;
+    anira::PrePostProcessor m_old_pp;
+    anira::InferenceHandler m_old_handler;
+    v2::InferenceConfig m_shim;
+    v2::PrePostProcessor m_pp;
+    v2::InferenceHandler m_handler;
+};
+
+/// The same over a kernel: a KernelBackend on the 2.x side, a KernelEngine on the shim side.
+template <class Kernel>
+struct KernelPair {
+    KernelPair(const Arguments& args, Kernel kernel)
+        : m_old(make_old(args))
+        , m_old_pp(m_old)
+        , m_backend(m_old, kernel)
+        , m_old_handler(m_old_pp, m_old, m_backend, oracle_core_config())
+        , m_shim(make_shim(args))
+        , m_pp(m_shim)
+        , m_engine(kernel)
+        , m_handler(m_pp, m_shim, m_engine, shim_context_config()) {}
+
+    void prepare(size_t block = anira_test::k_block) {
+        m_old_handler.prepare(
+            anira::HostConfig(static_cast<float>(block), static_cast<float>(anira_test::k_rate)));
+        m_handler.prepare(
+            v2::HostConfig(static_cast<float>(block), static_cast<float>(anira_test::k_rate)));
+    }
+
+    anira::InferenceConfig m_old;
+    anira::PrePostProcessor m_old_pp;
+    KernelBackend<Kernel> m_backend;
+    anira::InferenceHandler m_old_handler;
+    v2::InferenceConfig m_shim;
+    v2::PrePostProcessor m_pp;
+    KernelEngine<Kernel> m_engine;
+    v2::InferenceHandler m_handler;
+};
+
+/// The backends both sides of the gain oracle run: the oracle engines and CUSTOM, as pairs.
+std::vector<std::pair<anira::InferenceBackend, v2::InferenceBackend>> oracle_backends() {
+    std::vector<std::pair<anira::InferenceBackend, v2::InferenceBackend>> out;
+    for (const anira_engine engine : anira_test::oracle_engines()) {
+        const v2::InferenceBackend backend =
+            v2::to_backend(anira::EngineRef{.kind = engine, .id = {}});
+        out.emplace_back(required_old_backend(backend), backend);
+    }
+    out.emplace_back(anira::InferenceBackend::CUSTOM, v2::CUSTOM);
+    return out;
+}
+
+class AbiCompatForm : public ::testing::TestWithParam<Form> {};
+
+}  // namespace
+
+// Case 1: every plan, every form, 20 blocks: the counts and the samples equal the 2.x class's.
+TEST_P(AbiCompatForm, GainMatchesOnEveryPlan) {
+    Pair pair(oracle_gain_arguments());
+    pair.prepare();
+    pair.set_gain(0.5F);
+    size_t k = 1;
+    for (const auto& [old_backend_value, backend] : oracle_backends()) {
+        SCOPED_TRACE(static_cast<uint32_t>(backend));
+        pair.m_old_handler.set_inference_backend(old_backend_value);
+        pair.m_handler.set_inference_backend(backend);
+        EXPECT_EQ(pair.m_handler.get_inference_backend(), backend);
+        for (size_t i = 0; i < 20; ++i, ++k) {
+            std::vector<float> c;
+            std::vector<float> v;
+            float c_static = -1.F;
+            float v_static = -1.F;
+            const size_t n_c = run_gain_block(pair.m_handler, GetParam(), k, 0.5F, c, c_static);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            const size_t n_v = run_gain_block(pair.m_old_handler, GetParam(), k, 0.5F, v, v_static);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            EXPECT_EQ(n_c, n_v) << "block " << k;
+            EXPECT_EQ(n_c, anira_test::k_block) << "block " << k;
+            anira_test::expect_same_block(c, v, k);
+            EXPECT_EQ(c_static, v_static) << "block " << k;
+        }
+    }
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
+}
+
+INSTANTIATE_TEST_SUITE_P(Forms,
+                         AbiCompatForm,
+                         ::testing::ValuesIn(k_forms),
+                         [](const ::testing::TestParamInfo<Form>& info) {
+                             switch (info.param) {
+                                 case Form::InPlace: return std::string("InPlace");
+                                 case Form::Separate: return std::string("Separate");
+                                 case Form::Multi: return std::string("Multi");
+                                 case Form::PushPop: return std::string("PushPop");
+                                 case Form::PushPopMulti: return std::string("PushPopMulti");
+                             }
+                             return std::string("Unknown");
+                         });
+
+// Case 2: a switch of backend before every block, on both sides: the same backend reads back
+// (compared by name) and the same samples come out.
+TEST(AbiCompat, SetInferenceBackendSwitchesLikeTheOracle) {
+    Pair pair(oracle_gain_arguments());
+    pair.prepare();
+    pair.set_gain(1.F);
+    EXPECT_TRUE(same_backend(pair.m_old_handler.get_inference_backend(),
+                             pair.m_handler.get_inference_backend()))
+        << "the 2.x initial rule";
+    const auto backends = oracle_backends();
+    for (size_t k = 1; k <= 24; ++k) {
+        const auto& [old_backend_value, backend] = backends[k % backends.size()];
+        pair.m_old_handler.set_inference_backend(old_backend_value);
+        pair.m_handler.set_inference_backend(backend);
+        EXPECT_TRUE(same_backend(pair.m_old_handler.get_inference_backend(),
+                                 pair.m_handler.get_inference_backend()))
+            << "block " << k;
+        std::vector<float> c;
+        std::vector<float> v;
+        float c_static = -1.F;
+        float v_static = -1.F;
+        const size_t n_c = run_gain_block(pair.m_handler, Form::InPlace, k, 1.F, c, c_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        const size_t n_v = run_gain_block(pair.m_old_handler, Form::InPlace, k, 1.F, v, v_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        EXPECT_EQ(n_c, n_v);
+        anira_test::expect_same_block(c, v, k);
+    }
+}
+
+// Case 5: a custom kernel as a 2.x BackendBase and as an anira::Engine under anira.v2.custom,
+// driven through the multi form with the gain changing through the Static count: the same
+// streams, the same Static outputs, the same counts.
+TEST(AbiCompat, ACustomEngineMatchesACustomBackend) {
+    KernelPair<GainKernel> pair(gain_custom_arguments(), GainKernel{});
+    pair.prepare();
+    EXPECT_EQ(pair.m_handler.get_inference_backend(), v2::CUSTOM);
+    for (size_t k = 1; k <= 20; ++k) {
+        const float gain = 0.25F * static_cast<float>(k % 5);
+        std::vector<float> c;
+        std::vector<float> v;
+        float c_static = -1.F;
+        float v_static = -1.F;
+        const size_t n_c = run_gain_block(pair.m_handler, Form::Multi, k, gain, c, c_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        const size_t n_v = run_gain_block(pair.m_old_handler, Form::Multi, k, gain, v, v_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        EXPECT_EQ(n_c, n_v);
+        anira_test::expect_same_block(c, v, k);
+        EXPECT_EQ(c_static, v_static) << "block " << k;
+    }
+    EXPECT_GT(pair.m_engine.m_calls.load(), 0);
+    EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
+}
+
+// Case 6: the Static values travel through the processor's atomics on both sides: set with
+// set_input, read with get_output after every block, and through the multi form's value count.
+TEST(AbiCompat, StaticInputsAndOutputsAgree) {
+    KernelPair<GainKernel> pair(gain_custom_arguments(), GainKernel{});
+    pair.prepare();
+    EXPECT_EQ(pair.m_pp.get_output(1, 0), 0.F) << "zero until an inference is collected";
+    for (size_t k = 1; k <= 12; ++k) {
+        const auto gain = static_cast<float>(k);
+        pair.m_pp.set_input(gain, 1, 0);
+        pair.m_old_pp.set_input(gain, 1, 0);
+        std::vector<float> c;
+        std::vector<float> v;
+        float unused = 0.F;
+        run_gain_block(pair.m_handler, Form::InPlace, k, gain, c, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        run_gain_block(pair.m_old_handler, Form::InPlace, k, gain, v, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        anira_test::expect_same_block(c, v, k);
+        EXPECT_EQ(pair.m_pp.get_output(1, 0), pair.m_old_pp.get_output(1, 0)) << "block " << k;
+    }
+    EXPECT_NE(pair.m_pp.get_output(1, 0), 0.F);
+}
+
+// Case 7: a starved block on both sides (the gate both kernels share held closed): the stream
+// count is 0, the Static request is zeroed and reports 0, the processor's atomics keep the
+// last collected value.
+TEST(AbiCompat, AMissedBlockZeroesTheStaticRequest) {
+    std::atomic<bool> open{true};
+    KernelPair<GateKernel> pair(gain_custom_arguments(), GateKernel{.m_open = &open});
+    struct OpenAtExit {
+        std::atomic<bool>& m_open;
+        ~OpenAtExit() { m_open.store(true); }
+    };
+    const OpenAtExit open_at_exit{open};
+    pair.prepare();
+    const auto starve = [&open](auto& handler, auto& pp, const char* side) {
+        SCOPED_TRACE(side);
+        open.store(true);
+        for (size_t k = 1; k <= 4; ++k) {
+            std::vector<float> out;
+            float static_out = -1.F;
+            run_gain_block(handler, Form::Multi, k, 2.F, out, static_out);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        }
+        const float held = pp.get_output(1, 0);
+        EXPECT_EQ(held, 2.F);
+        open.store(false);
+        bool missed = false;
+        for (size_t k = 5; k <= 16 && !missed; ++k) {
+            const std::vector<float> in = anira_test::ramp(k);
+            std::vector<float> out(anira_test::k_block, -1.F);
+            const float gain = 3.F;
+            float static_out = -1.F;
+            const std::array<const float*, 1> in_ch{in.data()};
+            const std::array<float*, 1> out_ch{out.data()};
+            const std::array<const float*, 1> gain_ch{&gain};
+            const std::array<float*, 1> static_ch{&static_out};
+            const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
+            const std::array<float* const*, 2> outs{out_ch.data(), static_ch.data()};
+            std::array<size_t, 2> num_in{anira_test::k_block, 1};
+            std::array<size_t, 2> num_out{anira_test::k_block, 1};
+            handler.process(ins.data(), num_in.data(), outs.data(), num_out.data());
+            if (num_out[0] == 0) {
+                missed = true;
+                EXPECT_EQ(num_out[1], 0U) << "a missed block reports 0 for the Static slot";
+                EXPECT_EQ(static_out, 0.F) << "the Static request is zeroed";
+                EXPECT_EQ(pp.get_output(1, 0), held) << "the atomics keep the last value";
+            }
+        }
+        EXPECT_TRUE(missed) << "a closed gate starves a block within twelve";
+        open.store(true);
+    };
+    starve(pair.m_old_handler, pair.m_old_pp, "2.x");
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    starve(pair.m_handler, pair.m_pp, "shim");
+}
+
+// Case 8: the samples waiting in the output ring agree after prepare, after every block and
+// after reset.
+TEST(AbiCompat, AvailableSamplesAgree) {
+    Pair pair(gain_custom_arguments());
+    pair.prepare();
+    pair.set_gain(1.F);
+    EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_old_handler.get_available_samples(0));
+    EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_handler.get_latency(0));
+    for (size_t k = 1; k <= 6; ++k) {
+        std::vector<float> out;
+        float unused = 0.F;
+        run_gain_block(pair.m_handler, Form::InPlace, k, 1.F, out, unused);
+        run_gain_block(pair.m_old_handler, Form::InPlace, k, 1.F, out, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        EXPECT_EQ(pair.m_handler.get_available_samples(0),
+                  pair.m_old_handler.get_available_samples(0))
+            << "block " << k;
+    }
+    pair.m_handler.reset();
+    pair.m_old_handler.reset();
+    EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_old_handler.get_available_samples(0));
+    EXPECT_EQ(pair.m_handler.get_available_samples(1), 0U) << "a Static output has no ring";
+    EXPECT_EQ(pair.m_handler.get_available_samples(9), 0U) << "out of range";
+}
+
+// Case 9: the latency figures agree under blocking ratio 0 and 1: per index and as the vector,
+// index-aligned, 0 for the Static output.
+TEST(AbiCompat, LatencyFiguresAgree) {
+    for (const float ratio : {0.F, 1.F}) {
+        SCOPED_TRACE(ratio);
+        Pair pair(gain_custom_arguments(ratio));
+        pair.prepare();
+        const std::vector<unsigned> c = pair.m_handler.get_latency_vector();
+        const std::vector<unsigned> v = pair.m_old_handler.get_latency_vector();
+        EXPECT_EQ(c, v);
+        ASSERT_EQ(c.size(), 2U);
+        EXPECT_EQ(pair.m_handler.get_latency(0), c[0]);
+        EXPECT_EQ(pair.m_handler.get_latency(1), 0U);
+        EXPECT_EQ(c[1], 0U);
+        EXPECT_EQ(pair.m_handler.get_latency(7), 0U) << "out of range";
+    }
+}
+
+// Case 10: reset restarts the stream on both sides alike.
+TEST(AbiCompat, ResetReSeedsTheStreamOnBothSides) {
+    Pair pair(gain_custom_arguments());
+    pair.prepare();
+    pair.set_gain(1.F);
+    for (size_t round = 0; round < 2; ++round) {
+        for (size_t k = 1; k <= 5; ++k) {
+            std::vector<float> c;
+            std::vector<float> v;
+            float unused = 0.F;
+            run_gain_block(pair.m_handler, Form::Separate, k, 1.F, c, unused);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            run_gain_block(pair.m_old_handler, Form::Separate, k, 1.F, v, unused);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            anira_test::expect_same_block(c, v, (round * 10) + k);
+        }
+        pair.m_handler.reset();
+        pair.m_old_handler.reset();
+    }
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
+}
+
+// Case 11: set_non_realtime makes the generator deterministic on both sides: 40 blocks, no
+// wait between them, equal samples.
+TEST(AbiCompat, NonRealtimeIsDeterministic) {
+    KernelPair<ParamFillKernel> pair(generator_arguments(), ParamFillKernel{});
+    pair.prepare();
+    pair.m_handler.set_non_realtime(true);
+    pair.m_old_handler.set_non_realtime(true);
+    for (size_t k = 0; k < 40; ++k) {
+        const std::array<float, 4> params{1.F + static_cast<float>(k), 0.F, 0.F, 0.F};
+        const auto pull = [&params](auto& handler) {
+            std::vector<float> out(anira_test::k_block, -1.F);
+            const std::array<const float*, 1> param_ch{params.data()};
+            const std::array<float*, 1> out_ch{out.data()};
+            const std::array<const float* const*, 1> ins{param_ch.data()};
+            const std::array<float* const*, 1> outs{out_ch.data()};
+            std::array<size_t, 1> num_in{4};
+            std::array<size_t, 1> num_out{anira_test::k_block};
+            const size_t delivered =
+                handler.process(ins.data(), num_in.data(), outs.data(), num_out.data())[0];
+            EXPECT_EQ(delivered, anira_test::k_block);
+            return out;
+        };
+        const std::vector<float> c = pull(pair.m_handler);
+        const std::vector<float> v = pull(pair.m_old_handler);
+        anira_test::expect_same_block(c, v, k);
+    }
+    EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
+}
+
+// Case 12: the deadline pop returns by its deadline, under ratio 0 (the shim polls, 2.x neither
+// waited nor collected) and ratio 1 (a semaphore on both sides, the same count).
+TEST(AbiCompat, PopDataWithDeadlineReturnsByTheDeadline) {
+    for (const float ratio : {0.F, 1.F}) {
+        SCOPED_TRACE(ratio);
+        Pair pair(gain_custom_arguments(ratio));
+        pair.prepare();
+        std::vector<float> out(anira_test::k_block, -1.F);
+        const std::array<float*, 1> out_ch{out.data()};
+        const auto started = std::chrono::steady_clock::now();
+        const size_t c = pair.m_handler.pop_data(out_ch.data(),
+                                                 anira_test::k_block,
+                                                 started + std::chrono::milliseconds(50));
+        EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(2));
+        EXPECT_LE(c, anira_test::k_block);
+        if (ratio > 0.F) {
+            const size_t v = pair.m_old_handler.pop_data(
+                out_ch.data(),
+                anira_test::k_block,
+                std::chrono::steady_clock::now() + std::chrono::milliseconds(50));
+            EXPECT_EQ(c, v);
+        }
+    }
+}
+
+// Case 13: a push-only analyser updates its Static output: the processor's atomics hold the
+// latest collected value, polled through push_data(nullptr, 0), which collects.
+TEST(AbiCompat, PushOnlyAnalyserUpdatesGetOutput) {
+    KernelPair<MeanPlusParamKernel> pair(analyser_arguments(), MeanPlusParamKernel{});
+    pair.prepare();
+    pair.m_pp.set_input(2.F, 1, 0);
+    pair.m_old_pp.set_input(2.F, 1, 0);
+    const std::vector<float> audio(anira_test::k_block, 3.F);
+    const std::array<const float*, 1> audio_ch{audio.data()};
+    for (size_t block = 0; block < 2048 / anira_test::k_block; ++block) {
+        pair.m_handler.push_data(audio_ch.data(), anira_test::k_block, 0);
+        pair.m_old_handler.push_data(audio_ch.data(), anira_test::k_block, 0);
+    }
+    EXPECT_TRUE(eventually([&pair] {
+        pair.m_handler.push_data(nullptr, 0, 0);
+        return pair.m_pp.get_output(0, 0) == 5.F;
+    })) << "mean 3 plus parameter 2";
+    EXPECT_TRUE(eventually([&pair] {
+        pair.m_old_handler.push_data(nullptr, 0, 0);
+        return pair.m_old_pp.get_output(0, 0) == 5.F;
+    }));
+    EXPECT_EQ(pair.m_engine.m_calls.load(), 1);
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
+}
+
+// Case 16: the two custom-latency prepare forms: the declared figures replace the computed ones
+// on both sides, the receive ring is primed with them (zeros first), a request below the
+// model's internal latency is raised to it (with the Warning on the shim's side), an index out
+// of range throws on both (std::invalid_argument there, anira::Error here), a non-streamable
+// index throws on the shim, and a plain prepare returns to the computed figures.
+TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
+    Pair pair(two_output_arguments());
+    const anira::HostConfig old_host(512.F, static_cast<float>(anira_test::k_rate));
+    const v2::HostConfig host(512.F, static_cast<float>(anira_test::k_rate));
+    const auto run_two_outputs = [&pair](size_t blocks) {
+        for (size_t k = 1; k <= blocks; ++k) {
+            const std::vector<float> in = anira_test::ramp(k);
+            const auto drive =
+                [&in](auto& handler, std::vector<float>& out0, std::vector<float>& out1) {
+                    out0.assign(anira_test::k_block, -1.F);
+                    out1.assign(anira_test::k_block, -1.F);
+                    const std::array<const float*, 1> in_ch{in.data()};
+                    const std::array<float*, 1> out0_ch{out0.data()};
+                    const std::array<float*, 1> out1_ch{out1.data()};
+                    const std::array<const float* const*, 1> ins{in_ch.data()};
+                    const std::array<float* const*, 2> outs{out0_ch.data(), out1_ch.data()};
+                    std::array<size_t, 1> num_in{anira_test::k_block};
+                    std::array<size_t, 2> num_out{anira_test::k_block, anira_test::k_block};
+                    const size_t prev = handler.get_available_samples(0);
+                    handler.process(ins.data(), num_in.data(), outs.data(), num_out.data());
+                    wait_ring(handler, prev);
+                };
+            std::vector<float> c0;
+            std::vector<float> c1;
+            std::vector<float> v0;
+            std::vector<float> v1;
+            drive(pair.m_handler, c0, c1);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            drive(pair.m_old_handler, v0, v1);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            anira_test::expect_same_block(c0, v0, k);
+            anira_test::expect_same_block(c1, v1, k);
+            if (k <= 2) { anira_test::expect_all(c1, 0.F, "the primed latency of output 1"); }
+        }
+    };
+
+    pair.m_old_handler.prepare(old_host, 1024, 1);
+    pair.m_handler.prepare(host, 1024, 1);
+    EXPECT_EQ(pair.m_handler.get_latency(1), 1024U);
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector());
+    run_two_outputs(6);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+
+    pair.m_old_handler.prepare(old_host, std::vector<unsigned>{512, 1024});
+    pair.m_handler.prepare(host, std::vector<unsigned>{512, 1024});
+    EXPECT_EQ(pair.m_handler.get_latency(0), 512U);
+    EXPECT_EQ(pair.m_handler.get_latency(1), 1024U);
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector());
+    run_two_outputs(6);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+
+    pair.m_old_handler.prepare(old_host);
+    pair.m_handler.prepare(host);
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector())
+        << "a plain prepare returns to the computed figures";
+    EXPECT_NE(pair.m_handler.get_latency(1), 1024U);
+
+    EXPECT_THROW(pair.m_old_handler.prepare(old_host, 128U, 5), std::invalid_argument);
+    EXPECT_EQ(status_of([&] { pair.m_handler.prepare(host, 128U, 5); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { pair.m_handler.prepare(host, std::vector<unsigned>{1, 2, 3}); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+
+    // Below the model's internal latency: raised to it on both sides.
+    Pair floor_pair(two_output_arguments(256));
+    // After the contexts exist: each reconciles the level of this copy of anira at its create.
+    const WarningLevel level;
+    anira_test::RecordCollector collector;
+    floor_pair.m_old_handler.prepare(old_host, 100U, 0);
+    floor_pair.m_handler.prepare(host, 100U, 0);
+    EXPECT_EQ(floor_pair.m_handler.get_latency(0), 256U);
+    EXPECT_EQ(floor_pair.m_handler.get_latency_vector(),
+              floor_pair.m_old_handler.get_latency_vector());
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("is below the internal model latency 256; clamping", "native"));
+#endif
+
+    // A non-streamable output has no stream latency.
+    Pair gain(gain_custom_arguments());
+    EXPECT_EQ(status_of([&] { gain.m_handler.prepare(host, 100U, 1); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([&] { gain.m_handler.prepare(host, std::vector<unsigned>{0, 5}); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    gain.m_handler.prepare(host, std::vector<unsigned>{600, 0});
+    EXPECT_EQ(gain.m_handler.get_latency(0), 600U);
+}
+
+// Case 17: a block size that is not a whole number of samples, or none, and a rate of 0 are
+// refused (2.x scaled a fractional block to the other streams).
+TEST(AbiCompat, AFractionalHostConfigIsRefused) {
+    const Arguments args = gain_custom_arguments();
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.5F, 48000.F)); }),
+              ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(0.F, 48000.F)); }),
+              ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 0.F)); }), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F)); }), ANIRA_OK);
+}
+
+// Case 18: a reference tensor that is out of range or not streamable is refused.
+TEST(AbiCompat, AnUnstreamableReferenceIsRefused) {
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F, false, 1, true)); }),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "input 1 is the Static gain";
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F, false, 1, false)); }),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "output 1 is Static";
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F, false, 5, true)); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_THROW(handler.prepare(v2::HostConfig(512.F, 48000.F, false, 5, true)),
+                 std::runtime_error)
+        << "a catch of the standard base still sees it";
+}
+
+// Case 19: another reference tensor rebuilds the C handler on the private model config; the
+// caller's config is untouched and the stream still matches 2.x prepared the same way.
+TEST(AbiCompat, ReAnchoringRebuildsTheHandler) {
+    Pair pair(gain_custom_arguments());
+    pair.prepare();
+    const anira_handler* first = pair.m_handler.native();
+    pair.prepare(anira::HostConfig(512.F, static_cast<float>(anira_test::k_rate), false, 0, false),
+                 v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate), false, 0, false));
+    EXPECT_NE(pair.m_handler.native(), first) << "a new C handler";
+    EXPECT_TRUE(pair.m_shim.model_config().anchor().empty()) << "the caller's config is untouched";
+    pair.set_gain(1.F);
+    for (size_t k = 1; k <= 8; ++k) {
+        std::vector<float> c;
+        std::vector<float> v;
+        float unused = 0.F;
+        run_gain_block(pair.m_handler, Form::InPlace, k, 1.F, c, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        run_gain_block(pair.m_old_handler, Form::InPlace, k, 1.F, v, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        anira_test::expect_same_block(c, v, k);
+    }
+}
+
+// Case 20: a backend of the build without a row keeps the selection and logs once through the
+// real-time queue; rt_error() is untouched.
+TEST(AbiCompat, SetBackendWithoutAPlanKeepsTheSelection) {
+    const Arguments args = oracle_gain_arguments();
+    // An engine of the build without a row where there is one, else any engine without a row
+    // (an engine-free build).
+    std::optional<v2::InferenceBackend> missing;
+    for (const bool of_the_build : {true, false}) {
+        for (const v2::InferenceBackend backend : k_backends) {
+            const bool has_row = std::ranges::any_of(args.m_rows, [backend](const Row& row) {
+                return row.m_backend == backend;
+            });
+            if (backend == v2::CUSTOM || has_row || (of_the_build && !v2::is_available(backend))) {
+                continue;
+            }
+            missing = backend;
+            break;
+        }
+        if (missing.has_value()) { break; }
+    }
+    if (!missing.has_value()) { FAIL() << "the gain rows leave LiteRT out at least"; }
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    anira_drain_log();
+    anira_test::RecordCollector collector;
+    const v2::InferenceBackend before = handler.get_inference_backend();
+    handler.set_inference_backend(*missing);
+    EXPECT_EQ(handler.get_inference_backend(), before) << "the selection is unchanged";
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("set_inference_backend: no plan runs on this backend", "rt"));
+#endif
+}
+
+// Case 21: without an inference loop a waiting form runs the nonblocking stem, returns its
+// count and leaves ANIRA_ERROR_INVALID_STATE in rt_error(); nothing is thrown.
+TEST(AbiCompat, NoLoopReturnsTheStemCount) {
+    const Arguments args = generator_arguments();
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    KernelEngine<ParamFillKernel> engine;
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config(0));
+    handler.prepare(v2::HostConfig(2048.F, static_cast<float>(anira_test::k_rate)));
+    EXPECT_EQ(v2::InferenceHandler::get_num_inference_threads(), 0U);
+    handler.set_non_realtime(true);
+    const size_t priming = handler.get_latency(0) > 0 ? 2048 : 0;
+    std::vector<float> out(2048, -1.F);
+    const std::array<float, 4> params{1.F, 0.F, 0.F, 0.F};
+    const std::array<const float*, 1> param_ch{params.data()};
+    const std::array<float*, 1> out_ch{out.data()};
+    const std::array<const float* const*, 1> ins{param_ch.data()};
+    const std::array<float* const*, 1> outs{out_ch.data()};
+    std::array<size_t, 1> num_in{4};
+    std::array<size_t, 1> num_out{2048};
+    const auto started = std::chrono::steady_clock::now();
+    const size_t delivered =
+        handler.process(ins.data(), num_in.data(), outs.data(), num_out.data())[0];
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::milliseconds(500))
+        << "refused, not waited for";
+    EXPECT_EQ(delivered, priming) << "the stem's count";
+    EXPECT_EQ(handler.rt_error(), ANIRA_ERROR_INVALID_STATE);
+}
+
+// Case 22: nothing loads at construction; a model that does not load fails prepare.
+TEST(AbiCompat, AModelThatDoesNotLoadFailsAtPrepare) {
+    const std::vector<anira_engine> engines = anira_test::oracle_engines();
+    if (engines.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const v2::InferenceBackend backend =
+        v2::to_backend(anira::EngineRef{.kind = engines.front(), .id = {}});
+    Arguments args = gain_custom_arguments();
+    args.m_rows = {{backend, "/no/such/anira/model.file"}};
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    std::optional<v2::InferenceHandler> handler;
+    ASSERT_NO_THROW(handler.emplace(pp, config, shim_context_config()));
+    if (!handler.has_value()) { FAIL() << "the constructor threw"; }
+    const anira_status status =
+        status_of([&] { handler->prepare(v2::HostConfig(512.F, 48000.F)); });
+    EXPECT_TRUE(status == ANIRA_ERROR_NO_SUCH_FILE || status == ANIRA_ERROR_MODEL_LOAD)
+        << anira_status_string(status);
+    // Unprepared: every real-time form returns 0 and records ANIRA_ERROR_NOT_PREPARED.
+    std::vector<float> block(512, 0.F);
+    const std::array<float*, 1> channels{block.data()};
+    EXPECT_EQ(handler->process(channels.data(), 512), 0U);
+    EXPECT_EQ(handler->rt_error(), ANIRA_ERROR_NOT_PREPARED);
+}
+
+namespace {
+
+/// Case 23's routes: every form that never waits on a handler without a blocking ratio, with
+/// the non-realtime flag off, and the members that never wait, called from a nonblocking
+/// function. The forms carry no attribute (a waiting route may reach them), so the
+/// compile-time analysis is silenced here; under ANIRA_WITH_RTSAN the runtime check stands: an
+/// allocation, a lock or a syscall inside this extent aborts the test.
+struct Buffers {
+    std::vector<float> m_in = std::vector<float>(anira_test::k_block, 0.25F);
+    std::vector<float> m_out = std::vector<float>(anira_test::k_block, 0.F);
+    float m_gain = 1.F;
+    float m_static = 0.F;
+};
+
+#if defined(__clang__) && __clang_major__ >= 20
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wfunction-effects"
+#endif
+size_t drive_nonblocking(v2::InferenceHandler& handler,
+                         v2::PrePostProcessor& pp,
+                         Buffers& buffers) noexcept ANIRA_NONBLOCKING {
+    size_t delivered = 0;
+    const std::array<const float*, 1> in_ch{buffers.m_in.data()};
+    const std::array<float*, 1> out_ch{buffers.m_out.data()};
+    const std::array<const float*, 1> gain_ch{&buffers.m_gain};
+    const std::array<float*, 1> static_ch{&buffers.m_static};
+    const std::array<const float* const*, 2> ins{in_ch.data(), gain_ch.data()};
+    const std::array<float* const*, 2> outs{out_ch.data(), static_ch.data()};
+    std::array<size_t, 2> num_in{anira_test::k_block, 1};
+    std::array<size_t, 2> num_out{anira_test::k_block, 1};
+    delivered += handler.process(out_ch.data(), anira_test::k_block);
+    delivered +=
+        handler.process(in_ch.data(), anira_test::k_block, out_ch.data(), anira_test::k_block);
+    delivered += handler.process(ins.data(), num_in.data(), outs.data(), num_out.data())[0];
+    handler.push_data(in_ch.data(), anira_test::k_block);
+    handler.push_data(ins.data(), num_in.data());
+    delivered += handler.pop_data(out_ch.data(), anira_test::k_block);
+    delivered += handler.pop_data(outs.data(), num_out.data())[0];
+    delivered += handler.get_available_samples(0);
+    delivered += handler.get_latency(0);
+    handler.set_inference_backend(v2::CUSTOM);
+    delivered += handler.get_inference_backend() == v2::CUSTOM ? 1 : 0;
+    handler.reset();
+    delivered += handler.rt_error() == ANIRA_OK ? 1 : 0;
+    pp.set_input(2.F, 1, 0);
+    delivered += pp.get_output(1, 0) >= 0.F ? 1 : 0;
+    return delivered;
+}
+#if defined(__clang__) && __clang_major__ >= 20
+#pragma clang diagnostic pop
+#endif
+
+}  // namespace
+
+// Case 23: the routes that never wait run inside a nonblocking extent (the RTSan proof on the
+// RTSan leg; elsewhere they run and are checked for their results).
+TEST(AbiCompat, NonblockingRoutesUnderRtsan) {
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    Buffers buffers;
+    for (size_t round = 0; round < 4; ++round) {
+        EXPECT_GT(drive_nonblocking(handler, pp, buffers), 0U);
+    }
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+}
+
+// Case 24: the 2.x statics forward to the core entries.
+TEST(AbiCompat, ContextStaticsForward) {
+    {
+        v2::InferenceConfig config = make_shim(gain_custom_arguments());
+        v2::PrePostProcessor pp(config);
+        v2::InferenceHandler handler(pp, config, shim_context_config());
+        handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+        EXPECT_TRUE(v2::Context::has_core());
+        EXPECT_EQ(v2::Context::get_num_inference_threads(), 2U);
+        EXPECT_EQ(v2::InferenceHandler::get_num_inference_threads(), 2U);
+        EXPECT_EQ(v2::Context::shutdown(), ANIRA_ERROR_INVALID_STATE)
+            << "refused while a handler lives";
+        EXPECT_FALSE(v2::Context::release_core_if_idle());
+        static_cast<void>(v2::Context::drain_log());
+        static_cast<void>(handler.drain_log());
+    }
+    EXPECT_EQ(v2::Context::shutdown(), ANIRA_OK);
+}
+
+// Case 25: the caller's engine outlives the handlers: two living handlers on one Engine& with
+// equal configurations share one C engine (one init, one load, two prepares); once both are
+// gone its release runs once and the object lives on; a third handler gets a fresh C engine and
+// a second init.
+TEST(AbiCompat, TheEngineOutlivesTheHandler) {
+    KernelEngine<GainKernel> engine;
+    const Arguments args = gain_custom_arguments();
+    {
+        v2::InferenceConfig first_config = make_shim(args);
+        v2::InferenceConfig second_config = make_shim(args);
+        v2::PrePostProcessor first_pp(first_config);
+        v2::PrePostProcessor second_pp(second_config);
+        v2::InferenceHandler first(first_pp, first_config, engine, shim_context_config());
+        v2::InferenceHandler second(second_pp, second_config, engine, shim_context_config());
+        first.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+        second.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+        EXPECT_EQ(engine.m_inits.load(), 1);
+        EXPECT_EQ(engine.m_loads.load(), 1) << "equal configurations load once";
+        EXPECT_EQ(engine.m_prepares.load(), 2);
+        EXPECT_EQ(engine.m_releases.load(), 0);
+    }
+    EXPECT_EQ(engine.m_releases.load(), 1);
+    {
+        v2::InferenceConfig config = make_shim(args);
+        v2::PrePostProcessor pp(config);
+        v2::InferenceHandler third(pp, config, engine, shim_context_config());
+        third.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+        EXPECT_EQ(engine.m_inits.load(), 2) << "a fresh C engine";
+    }
+    EXPECT_EQ(engine.m_releases.load(), 2);
+
+    // An engine of another id, and a configuration without a CUSTOM row, are refused.
+    class Other : public anira::Engine {
+    public:
+        Other() : anira::Engine("org.example.other") {}
+        std::unique_ptr<anira::Engine::Loaded> load(
+            const anira::EngineLoadInfo& /*info*/) override {
+            return nullptr;
+        }
+    };
+    Other other;
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    EXPECT_EQ(status_of([&] { const v2::InferenceHandler refused(pp, config, other); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    Arguments built_in = oracle_gain_arguments();
+    std::erase_if(built_in.m_rows, [](const Row& row) { return row.m_backend == v2::CUSTOM; });
+    if (!built_in.m_rows.empty()) {
+        v2::InferenceConfig no_custom = make_shim(built_in);
+        v2::PrePostProcessor no_custom_pp(no_custom);
+        EXPECT_EQ(
+            status_of([&] { const v2::InferenceHandler refused(no_custom_pp, no_custom, engine); }),
+            ANIRA_ERROR_CONFIG);
+    }
+}
+
+// Case 28: a prepare with the settings of the last one resets the stream and loads nothing;
+// another geometry loads again; another reference tensor rebuilds the handler and loads again.
+TEST(AbiCompat, AnUnchangedPrepareResetsWithoutReloading) {
+    KernelEngine<GainKernel> engine;
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+    const v2::HostConfig host(512.F, static_cast<float>(anira_test::k_rate));
+    handler.prepare(host);
+    EXPECT_EQ(engine.m_loads.load(), 1);
+    pp.set_input(1.F, 1, 0);
+    for (size_t k = 1; k <= 3; ++k) {
+        std::vector<float> out;
+        float unused = 0.F;
+        run_gain_block(handler, Form::InPlace, k, 1.F, out, unused);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    }
+    const anira_handler* native = handler.native();
+    handler.prepare(host);
+    EXPECT_EQ(engine.m_loads.load(), 1) << "unchanged: nothing loads";
+    EXPECT_EQ(handler.native(), native);
+    EXPECT_EQ(handler.get_available_samples(0), handler.get_latency(0)) << "the stream restarts";
+
+    handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
+    EXPECT_EQ(engine.m_loads.load(), 2) << "another geometry loads again";
+    EXPECT_EQ(handler.native(), native);
+
+    handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate), false, 0, false));
+    EXPECT_EQ(engine.m_loads.load(), 3) << "another anchor rebuilds and loads again";
+    EXPECT_NE(handler.native(), native);
+    EXPECT_EQ(engine.m_inits.load(), 1) << "one C engine throughout";
+    EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+}
+
+// Case 29: a custom engine off the CPU path runs on its first listed provider: one custom plan
+// on that provider, CUSTOM to the host, the output of the 2.x twin.
+TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
+    const Arguments args = gain_custom_arguments();
+    anira::InferenceConfig old = make_old(args);
+    anira::PrePostProcessor old_pp(old);
+    KernelBackend<GainKernel> backend(old, GainKernel{});
+    anira::InferenceHandler old_handler(old_pp, old, backend, oracle_core_config());
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    KernelEngine<GainKernel> engine;
+    engine.m_providers = {"com.example.npu"};
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+    old_handler.prepare(anira::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const std::vector<anira_plan_info> plans = plans_of(handler.native());
+    ASSERT_EQ(plans.size(), 1U);
+    EXPECT_EQ(plans[0].engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(plans[0].provider, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_STREQ(plans[0].provider_id, "com.example.npu");
+    EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+    for (size_t k = 1; k <= 8; ++k) {
+        std::vector<float> c;
+        std::vector<float> v;
+        float c_static = -1.F;
+        float v_static = -1.F;
+        run_gain_block(handler, Form::Multi, k, 0.5F, c, c_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        run_gain_block(old_handler, Form::Multi, k, 0.5F, v, v_static);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+        anira_test::expect_same_block(c, v, k);
+        EXPECT_EQ(c_static, v_static);
+    }
+}
+
+// Case 30: the same engine whose query clears its one provider leaves the CUSTOM row without a
+// plan; as the only row, that is ANIRA_ERROR_CONFIG at construction.
+TEST(AbiCompat, ACustomEngineWithoutAUsableProviderIsConfig) {
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    KernelEngine<GainKernel> engine;
+    engine.m_providers = {"com.example.npu"};
+    engine.m_query = 0;
+    EXPECT_EQ(status_of([&] {
+                  const v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+              }),
+              ANIRA_ERROR_CONFIG);
 }

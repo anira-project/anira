@@ -17,7 +17,7 @@
  * HostConfig and the log enums) and the processor half of the runtime (RingBuffer and BufferF as
  * views, PrePostProcessor, LegacyProcessorStage, which runs a 2.x processor as the stage of a
  * 3.x pipeline, PassthroughEngine, the 2.x base backend as an anira::Engine, and the static
- * Context). The InferenceHandler follows.
+ * Context) and the InferenceHandler over the C handler of anira/abi/handler.h.
  *
  * Deprecated from the start: every entity of namespace anira::v2 is removed one minor release
  * after 3.0.0; there is no [[deprecated]] attribute until then.
@@ -55,6 +55,7 @@
 #include <iterator>
 #include <limits>
 #include <locale>
+#include <map>
 #include <memory>
 #include <optional>
 #include <ostream>
@@ -1950,6 +1951,715 @@ struct Context {
     static unsigned get_num_inference_threads() noexcept { return anira_num_inference_threads(); }
     /// anira_drain_log: delivers the queued real-time records to the sinks.
     static size_t drain_log() noexcept { return anira_drain_log(); }
+};
+
+/**
+ * @brief The 2.x InferenceHandler over the C handler of anira/abi/handler.h: a context (from the
+ * ContextConfig), a pipeline built from a private copy of the configuration's model config, the
+ * custom engine and a LegacyProcessorStage over the processor, and one anira_handler created from
+ * them. The processor and the configuration are the caller's and outlive the handler, as in 2.x.
+ *
+ * What differs from 2.x: nothing loads at construction (a model that does not load fails
+ * prepare); a prepare with the settings of the last one only resets the stream, one with another
+ * geometry loads the models again, one with another reference tensor rebuilds the C handler; the
+ * single forms carry their one slot per side and nothing else (2.x resent what the last call
+ * left in the other slots); push_data never waits, pop_data with a deadline polls on a handler
+ * without a blocking ratio, and set_non_realtime is never refused (a wait without an inference
+ * loop fails the call instead, which rt_error() reports); set_inference_backend of a backend
+ * without a plan keeps the selection and logs; get_num_inference_threads is the pool size, 0 until
+ * the first prepare in the process; every failure is an anira::Error.
+ *
+ * Real time: reset, get_latency, get_available_samples, set_inference_backend,
+ * get_inference_backend and rt_error never wait and carry ANIRA_NONBLOCKING; the process, push and
+ * pop forms are noexcept but carry no attribute, since a blocking ratio or set_non_realtime makes
+ * them wait for the inference (the 2.x declarations claimed the attribute and waited anyway).
+ * Without either, on the thread that drives the handler, they allocate nothing and wait for
+ * nothing.
+ */
+class InferenceHandler {
+public:
+    InferenceHandler() = delete;
+    InferenceHandler(const InferenceHandler&) = delete;
+    InferenceHandler& operator=(const InferenceHandler&) = delete;
+    InferenceHandler(InferenceHandler&&) = delete;
+    InferenceHandler& operator=(InferenceHandler&&) = delete;
+
+    /// A CUSTOM row runs a PassthroughEngine (the 2.x base backend). Loads no model.
+    /// @throws Error with the status of the context, the pipeline or anira_handler_create
+    /// (ANIRA_ERROR_CONFIG for a configuration whose every entry names an engine this build
+    /// lacks).
+    InferenceHandler(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     const ContextConfig& context_config = ContextConfig())
+        : InferenceHandler(pp_processor, inference_config, nullptr, context_config) {}
+    /// The CUSTOM row runs the caller's engine, which carries k_custom_engine_id (the id the
+    /// CUSTOM row names; a 2.x custom backend is an anira::Engine constructed with it) and
+    /// outlives the handler, as 2.x required of a BackendBase. Its providers() decide where the
+    /// plan runs: the CPU path without a list, else its first listed provider.
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an engine of another id,
+    /// Error{ANIRA_ERROR_CONFIG} for a configuration without a CUSTOM row, and as the other
+    /// constructor.
+    InferenceHandler(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     anira::Engine& custom_engine,
+                     const ContextConfig& context_config = ContextConfig())
+        : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
+    /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
+    ~InferenceHandler() { anira_handler_destroy(m_handler); }
+
+    /// The backend the next block runs on; before prepare the request is kept and applied at
+    /// prepare. A backend without a plan keeps the selection and logs once through the real-time
+    /// queue (group anira.compat); rt_error() is untouched. Any thread.
+    void set_inference_backend(InferenceBackend inference_backend) noexcept ANIRA_NONBLOCKING {
+        m_requested.store(static_cast<uint32_t>(inference_backend), std::memory_order_relaxed);
+        if (m_prepared.load(std::memory_order_acquire)) { select(inference_backend); }
+    }
+    /// The backend of the selected plan; before prepare the request, else the 2.x initial rule
+    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM).
+    InferenceBackend get_inference_backend() const noexcept ANIRA_NONBLOCKING {
+        if (m_prepared.load(std::memory_order_acquire)) {
+            const uint32_t plan = anira_handler_get_plan(m_handler);
+            if (plan < m_plan_backend.size()) { return m_plan_backend[plan]; }
+        }
+        const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+        return requested != k_no_request ? static_cast<InferenceBackend>(requested)
+                                         : m_initial_backend;
+    }
+
+    /// Prepares for the host's stream: the configuration's legacy contract with the host
+    /// geometry (m_buffer_size whole, block_min 1 when smaller blocks come), the reference
+    /// tensor as the model's anchor. The settings of the last successful prepare only reset the
+    /// stream (the models stay loaded); another geometry prepares again and loads the models
+    /// again; another reference tensor rebuilds the C handler. The selected backend is applied
+    /// again. @throws Error: ANIRA_ERROR_CONFIG for a fractional or non-positive block size or
+    /// rate, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
+    /// else the status of anira_handler_prepare (a model that does not load, a rule of the
+    /// configuration); the handler is then unprepared.
+    void prepare(HostConfig new_audio_config) { prepare_with(new_audio_config, {}); }
+    /// prepare() with the stream latency of one output declared (the 2.x custom latency): what
+    /// get_latency reports for it and what its receive ring is primed with, in place of the
+    /// computed figure; raised to the model's internal latency with a Warning when below it.
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index out of range or an output that
+    /// is not streamable, and as prepare().
+    void prepare(HostConfig new_audio_config, unsigned custom_latency, size_t tensor_index = 0) {
+        const uint32_t count = m_model.output_count();
+        if (tensor_index >= count) {
+            detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                         "anira::v2::InferenceHandler::prepare: custom latency tensor index " +
+                             std::to_string(tensor_index) + " is out of range (the model has " +
+                             std::to_string(count) + " output tensors)");
+        }
+        std::map<std::string, uint32_t> latencies;
+        declare_latency(latencies, static_cast<uint32_t>(tensor_index), custom_latency);
+        prepare_with(new_audio_config, latencies);
+    }
+    /// prepare() with a stream latency per output; a non-streamable output carries 0.
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for a vector of another size or a figure on a
+    /// non-streamable output, and as prepare().
+    void prepare(HostConfig new_audio_config, std::vector<unsigned> custom_latency) {
+        const uint32_t count = m_model.output_count();
+        if (custom_latency.size() != count) {
+            detail::fail(
+                ANIRA_ERROR_INVALID_ARGUMENT,
+                "anira::v2::InferenceHandler::prepare: " + std::to_string(custom_latency.size()) +
+                    " custom latencies for a model with " + std::to_string(count) +
+                    " output tensors");
+        }
+        std::map<std::string, uint32_t> latencies;
+        for (uint32_t i = 0; i < count; ++i) {
+            if (m_model.output_spec(i).role() != ANIRA_ROLE_STREAMED) {
+                if (custom_latency[i] != 0) {
+                    detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                                 "anira::v2::InferenceHandler::prepare: output tensor " +
+                                     std::to_string(i) +
+                                     " is not streamable; its custom latency must be 0");
+                }
+                continue;
+            }
+            declare_latency(latencies, i, custom_latency[i]);
+        }
+        prepare_with(new_audio_config, latencies);
+    }
+
+    /// In place: the block of slot tensor_index is pushed and replaced by the output.
+    size_t process(float* const* data, size_t num_samples, size_t tensor_index = 0) noexcept {
+        return process(data, num_samples, data, num_samples, tensor_index);
+    }
+    /// One block of input slot tensor_index in, one of output slot tensor_index out; no other
+    /// slot is carried. A non-streamable input slot takes min(num_input_samples, its size)
+    /// values into the processor; a non-streamable output slot is read back likewise.
+    size_t process(const float* const* input_data,
+                   size_t num_input_samples,
+                   float* const* output_data,
+                   size_t num_output_samples,
+                   size_t tensor_index = 0) noexcept {
+        carry_one(tensor_index, input_data, num_input_samples, output_data, num_output_samples);
+        process(m_single_in.data(),
+                m_single_in_counts.data(),
+                m_single_out.data(),
+                m_single_out_counts.data());
+        return tensor_index < m_single_out_counts.size() ? m_single_out_counts[tensor_index] : 0;
+    }
+    /// Every slot at once: data[slot][channel][sample] with one count per slot (0 leaves the
+    /// slot out). The delivered counts are written into num_output_samples, which is returned;
+    /// num_input_samples is not written.
+    size_t* process(const float* const* const* input_data,
+                    size_t* num_input_samples,
+                    float* const* const* output_data,
+                    size_t* num_output_samples) noexcept {
+        take_inputs(input_data, num_input_samples);
+        present_outputs(output_data, num_output_samples);
+        anira_status status = ANIRA_OK;
+        bool waited = false;
+        if (m_non_realtime.load(std::memory_order_relaxed)) {
+            waited = true;
+            status = anira_handler_process_multi_wait(m_handler,
+                                                      m_inputs.data(),
+                                                      num_slots(m_inputs),
+                                                      m_outputs.data(),
+                                                      num_slots(m_outputs),
+                                                      m_delivered.data(),
+                                                      ANIRA_WAIT_FOREVER);
+        } else if (m_blocking) {
+            waited = true;
+            status = anira_handler_process_multi_wait(m_handler,
+                                                      m_inputs.data(),
+                                                      num_slots(m_inputs),
+                                                      m_outputs.data(),
+                                                      num_slots(m_outputs),
+                                                      m_delivered.data(),
+                                                      ANIRA_WAIT_CONTRACT);
+        } else {
+            status = anira_handler_process_multi(m_handler,
+                                                 m_inputs.data(),
+                                                 num_slots(m_inputs),
+                                                 m_outputs.data(),
+                                                 num_slots(m_outputs),
+                                                 m_delivered.data());
+        }
+        give_outputs(output_data, num_output_samples, status, waited);
+        return num_output_samples;
+    }
+
+    /// One block of input slot tensor_index; no other slot is carried. Never waits.
+    void push_data(const float* const* input_data,
+                   size_t num_input_samples,
+                   size_t tensor_index = 0) noexcept {
+        carry_one(tensor_index, input_data, num_input_samples, nullptr, 0);
+        push_data(m_single_in.data(), m_single_in_counts.data());
+    }
+    /// Every input slot at once. Never waits (2.x waited under set_non_realtime).
+    void push_data(const float* const* const* input_data, size_t* num_input_samples) noexcept {
+        take_inputs(input_data, num_input_samples);
+        anira_handler_push_data_multi(m_handler, m_inputs.data(), num_slots(m_inputs));
+    }
+
+    /// One block of output slot tensor_index; no other slot is carried.
+    size_t pop_data(float* const* output_data,
+                    size_t num_output_samples,
+                    size_t tensor_index = 0) noexcept {
+        carry_one(tensor_index, nullptr, 0, output_data, num_output_samples);
+        pop_data(m_single_out.data(), m_single_out_counts.data());
+        return tensor_index < m_single_out_counts.size() ? m_single_out_counts[tensor_index] : 0;
+    }
+    /// pop_data() that waits for the block's inference until wait_until (polling on a handler
+    /// without a blocking ratio, where 2.x neither waited nor collected); under
+    /// set_non_realtime without limit, as in 2.x.
+    size_t pop_data(float* const* output_data,
+                    size_t num_output_samples,
+                    std::chrono::steady_clock::time_point wait_until,
+                    size_t tensor_index = 0) noexcept {
+        carry_one(tensor_index, nullptr, 0, output_data, num_output_samples);
+        pop_data(m_single_out.data(), m_single_out_counts.data(), wait_until);
+        return tensor_index < m_single_out_counts.size() ? m_single_out_counts[tensor_index] : 0;
+    }
+    /// Every output slot at once; the counts are written into num_output_samples.
+    size_t* pop_data(float* const* const* output_data, size_t* num_output_samples) noexcept {
+        present_outputs(output_data, num_output_samples);
+        anira_status status = ANIRA_OK;
+        const bool waited = m_non_realtime.load(std::memory_order_relaxed);
+        if (waited) {
+            status = anira_handler_pop_data_multi_wait(m_handler,
+                                                       m_outputs.data(),
+                                                       num_slots(m_outputs),
+                                                       m_delivered.data(),
+                                                       ANIRA_WAIT_FOREVER);
+        } else {
+            status = anira_handler_pop_data_multi(m_handler,
+                                                  m_outputs.data(),
+                                                  num_slots(m_outputs),
+                                                  m_delivered.data());
+        }
+        give_outputs(output_data, num_output_samples, status, waited);
+        return num_output_samples;
+    }
+    /// The deadline form of the multi pop.
+    size_t* pop_data(float* const* const* output_data,
+                     size_t* num_output_samples,
+                     std::chrono::steady_clock::time_point wait_until) noexcept {
+        present_outputs(output_data, num_output_samples);
+        double timeout_ms = ANIRA_WAIT_FOREVER;
+        if (!m_non_realtime.load(std::memory_order_relaxed)) {
+            const auto remaining = wait_until - std::chrono::steady_clock::now();
+            timeout_ms =
+                std::max(0.0, std::chrono::duration<double, std::milli>(remaining).count());
+        }
+        const anira_status status = anira_handler_pop_data_multi_wait(m_handler,
+                                                                      m_outputs.data(),
+                                                                      num_slots(m_outputs),
+                                                                      m_delivered.data(),
+                                                                      timeout_ms);
+        give_outputs(output_data, num_output_samples, status, true);
+        return num_output_samples;
+    }
+
+    /// The latency of output slot tensor_index in samples: the declared figure of a custom
+    /// latency, else the computed one; 0 out of range and for a non-streamable output.
+    unsigned get_latency(size_t tensor_index = 0) const noexcept ANIRA_NONBLOCKING {
+        return anira_handler_get_latency(m_handler, static_cast<uint32_t>(tensor_index));
+    }
+    /// Every output's latency, index-aligned. Allocates: main thread.
+    std::vector<unsigned> get_latency_vector() const {
+        uint32_t count = m_model.output_count();
+        std::vector<uint32_t> figures(count);
+        if (count > 0) { anira_handler_get_latencies(m_handler, &count, figures.data()); }
+        return {figures.begin(), figures.end()};
+    }
+    /// Collects the completed inferences and reports the samples waiting in one channel of the
+    /// output ring of tensor_index; 0 out of range.
+    size_t get_available_samples(size_t tensor_index,
+                                 size_t channel = 0) const noexcept ANIRA_NONBLOCKING {
+        size_t available = 0;
+        anira_handler_get_available_samples(m_handler,
+                                            static_cast<uint32_t>(tensor_index),
+                                            static_cast<uint32_t>(channel),
+                                            &available);
+        return available;
+    }
+    /// Whether the process and pop forms wait without limit for their inference (an offline
+    /// render). Never refused: without an inference loop each such call fails instead
+    /// (ANIRA_ERROR_INVALID_STATE in rt_error(), the counts of the nonblocking stem returned).
+    void set_non_realtime(bool is_non_realtime) noexcept ANIRA_NONBLOCKING {
+        m_non_realtime.store(is_non_realtime, std::memory_order_relaxed);
+    }
+    /// anira_drain_log: delivers the queued real-time records to the sinks.
+    size_t drain_log() noexcept { return anira_drain_log(); }
+    /// The size of the core's inference thread pool: 0 until the first handler is prepared.
+    static unsigned get_num_inference_threads() noexcept { return anira_num_inference_threads(); }
+    /// Restarts the stream: the rings, the declared state and rt_error() (anira_handler_reset).
+    void reset() noexcept ANIRA_NONBLOCKING { anira_handler_reset(m_handler); }
+
+    /// The C handler, for a host that mixes in a 3.x entry; valid until the next prepare that
+    /// changes the reference tensor, or the destruction.
+    anira_handler* native() const noexcept ANIRA_NONBLOCKING { return m_handler; }
+    /// The last real-time failure (anira_handler_rt_error).
+    anira_status rt_error() const noexcept ANIRA_NONBLOCKING {
+        return anira_handler_rt_error(m_handler);
+    }
+
+private:
+    static constexpr uint32_t k_no_request = 0xFFFFFFFFU;
+
+    InferenceHandler(PrePostProcessor& pp_processor,
+                     InferenceConfig& inference_config,
+                     anira::Engine* custom_engine,
+                     const ContextConfig& context_config)
+        : m_context(context_config.to_context_config())
+        , m_config(inference_config)
+        , m_pp(pp_processor)
+        , m_model(inference_config.model_config_copy())
+        , m_stage(std::make_shared<LegacyProcessorStage>(pp_processor))
+        , m_blocking(inference_config.m_blocking_ratio > 0.F) {
+        bool has_custom_row = false;
+        for (uint32_t e = 0; e < m_model.model_count(); ++e) {
+            has_custom_row = has_custom_row || names(m_model.model_engine(e), CUSTOM);
+        }
+        if (custom_engine != nullptr) {
+            if (custom_engine->id() != k_custom_engine_id) {
+                detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                             "anira::v2::InferenceHandler: the custom engine's id is '" +
+                                 custom_engine->id() + "', the CUSTOM row names '" +
+                                 k_custom_engine_id +
+                                 "': construct the engine with anira::v2::k_custom_engine_id");
+            }
+            if (!has_custom_row) {
+                detail::fail(ANIRA_ERROR_CONFIG,
+                             "anira::v2::InferenceHandler: a custom engine for a configuration "
+                             "without a CUSTOM row; add ModelData(..., CUSTOM)");
+            }
+            // The caller keeps the engine alive past the handler, as 2.x required of its
+            // BackendBase: the pointer the pipeline holds deletes nothing.
+            m_engine = std::shared_ptr<anira::Engine>(custom_engine, [](anira::Engine*) {});
+        } else if (has_custom_row) {
+            m_engine = std::make_shared<PassthroughEngine>();
+        }
+        m_caller_engine = custom_engine != nullptr;
+        m_initial_backend = initial_backend(m_caller_engine);
+        build_face(m_config.get_preprocess_input_channels(),
+                   m_config.get_tensor_input_size(),
+                   true,
+                   m_inputs,
+                   m_input_planes,
+                   m_input_roles,
+                   m_input_sizes);
+        build_face(m_config.get_postprocess_output_channels(),
+                   m_config.get_tensor_output_size(),
+                   false,
+                   m_outputs,
+                   m_output_planes,
+                   m_output_roles,
+                   m_output_sizes);
+        m_delivered.assign(m_outputs.size(), 0);
+        m_single_in.assign(m_inputs.size(), nullptr);
+        m_single_in_counts.assign(m_inputs.size(), 0);
+        m_single_out.assign(m_outputs.size(), nullptr);
+        m_single_out_counts.assign(m_outputs.size(), 0);
+        m_handler = build_handler();
+    }
+
+    /// The 2.x initial rule over the configuration: CUSTOM with a caller's engine, else the
+    /// first entry this build runs, else CUSTOM. Allocates (is_available): the constructor.
+    InferenceBackend initial_backend(bool caller_engine) const {
+        if (caller_engine) { return CUSTOM; }
+        for (uint32_t e = 0; e < m_model.model_count(); ++e) {
+            const InferenceBackend backend = to_backend(m_model.model_engine(e));
+            if (backend != CUSTOM && is_available(backend)) { return backend; }
+        }
+        return CUSTOM;
+    }
+
+    /// One tensor per slot: a planar float32 {channels, 0} over the handler's own plane array
+    /// for a Streamed slot, the empty {1, 0} for a Static or State slot, which never changes.
+    void build_face(const std::vector<size_t>& channels,
+                    const std::vector<size_t>& sizes,
+                    bool inputs,
+                    std::vector<anira_tensor>& tensors,
+                    std::vector<std::vector<void*>>& planes,
+                    std::vector<anira_role>& roles,
+                    std::vector<size_t>& static_sizes) const {
+        const uint32_t count = inputs ? m_model.input_count() : m_model.output_count();
+        tensors.assign(count, anira_tensor{});
+        planes.clear();
+        planes.reserve(count);
+        roles.clear();
+        static_sizes.clear();
+        for (uint32_t slot = 0; slot < count; ++slot) {
+            const anira_role role =
+                inputs ? m_model.input_spec(slot).role() : m_model.output_spec(slot).role();
+            roles.push_back(role);
+            static_sizes.push_back(role == ANIRA_ROLE_STATIC && slot < sizes.size() ? sizes[slot]
+                                                                                    : 0);
+            const size_t num_channels =
+                role == ANIRA_ROLE_STREAMED && slot < channels.size() ? channels[slot] : 1;
+            planes.emplace_back(num_channels, nullptr);
+            const std::array<int64_t, 2> shape{static_cast<int64_t>(num_channels), 0};
+            anira_tensor_init_host_planar(&tensors[slot],
+                                          static_cast<const void*>(planes.back().data()),
+                                          static_cast<uint32_t>(num_channels),
+                                          ANIRA_DTYPE_F32,
+                                          2,
+                                          shape.data());
+            if (inputs) { tensors[slot].flags |= static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY); }
+        }
+    }
+
+    /// The C handler of the private model config: the pipeline (the engine, the inference stage
+    /// under the default candidate set, the stage) is dropped once the handler holds its copy.
+    anira_handler* build_handler() {
+        anira::Pipeline pipeline;
+        if (m_engine != nullptr) { pipeline.register_engine(m_engine); }
+        pipeline.inference(m_model);
+        pipeline.add(anira::stage::Custom(m_stage));
+        anira_error err = ANIRA_ERROR_INIT;
+        anira_handler* handler = nullptr;
+        anira::detail::check(
+            anira_handler_create(m_context.native(), pipeline.native(), &handler, &err),
+            err);
+        return handler;
+    }
+
+    /// The canonical name of the reference tensor; empty for the default (the first Streamed
+    /// input, else the first Streamed output: the 2.x rule).
+    std::string anchor_of(const HostConfig& host) const {
+        if (host.m_tensor_index == HostConfig::k_first_streamable) { return {}; }
+        const std::string side = host.m_tensor_is_input ? "input" : "output";
+        const uint32_t count =
+            host.m_tensor_is_input ? m_model.input_count() : m_model.output_count();
+        if (host.m_tensor_index >= count) {
+            detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                         "HostConfig: reference tensor " + side + "[" +
+                             std::to_string(host.m_tensor_index) +
+                             "] is out of range (the model has " + std::to_string(count) + " " +
+                             side + " tensors).");
+        }
+        const auto index = static_cast<uint32_t>(host.m_tensor_index);
+        const anira::SpecView spec =
+            host.m_tensor_is_input ? m_model.input_spec(index) : m_model.output_spec(index);
+        if (spec.role() != ANIRA_ROLE_STREAMED) {
+            detail::fail(
+                ANIRA_ERROR_INVALID_ARGUMENT,
+                "HostConfig: reference tensor " + side + "[" + std::to_string(host.m_tensor_index) +
+                    "] is not streamable (its " +
+                    (host.m_tensor_is_input ? "preprocess_input_size" : "postprocess_output_size") +
+                    " is 0).");
+        }
+        return std::string(spec.name());
+    }
+
+    /// The declared latency of one Streamed output, raised to the model's internal latency with
+    /// the 2.x Warning.
+    void declare_latency(std::map<std::string, uint32_t>& latencies,
+                         uint32_t index,
+                         unsigned requested) const {
+        const anira::SpecView spec = m_model.output_spec(index);
+        if (spec.role() != ANIRA_ROLE_STREAMED) {
+            detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                         "anira::v2::InferenceHandler::prepare: output tensor " +
+                             std::to_string(index) +
+                             " is not streamable; it has no stream latency to declare");
+        }
+        const auto floor = static_cast<unsigned>(std::max<int64_t>(spec.latency(), 0));
+        if (requested < floor) {
+            detail::warn("custom latency " + std::to_string(requested) + " for tensor " +
+                         std::to_string(index) + " is below the internal model latency " +
+                         std::to_string(floor) + "; clamping");
+        }
+        latencies[std::string(spec.name())] = std::max(requested, floor);
+    }
+
+    void prepare_with(const HostConfig& host, const std::map<std::string, uint32_t>& latencies) {
+        const float block = host.m_buffer_size;
+        if (!(block > 0.F) || std::floor(block) != block || !std::isfinite(block)) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "HostConfig: m_buffer_size " + detail::json_number(block) +
+                             " is not a whole number of samples above 0; a host whose block is "
+                             "measured on another stream anchors on that stream instead "
+                             "(m_tensor_index, m_tensor_is_input) and passes its own block");
+        }
+        if (!(host.m_sample_rate > 0.F) || !std::isfinite(host.m_sample_rate)) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "HostConfig: m_sample_rate " + detail::json_number(host.m_sample_rate) +
+                             " is not above 0");
+        }
+        const std::string wanted = anchor_of(host);
+        if (m_prepared.load(std::memory_order_acquire) && wanted == m_anchor &&
+            m_last_host.has_value() && *m_last_host == host && latencies == m_last_latencies) {
+            anira_handler_reset(m_handler);
+            return;
+        }
+        if (wanted != m_anchor) {
+            // A new handler first, while the old one still holds the engine's C engine (one
+            // C engine, one init), then the old one goes.
+            m_model.anchor(wanted);
+            anira_handler* rebuilt = nullptr;
+            try {
+                rebuilt = build_handler();
+            } catch (...) {
+                m_model.anchor(m_anchor);
+                throw;
+            }
+            m_prepared.store(false, std::memory_order_release);
+            anira_handler_destroy(m_handler);
+            m_handler = rebuilt;
+            m_anchor = wanted;
+        }
+        anira::Hard hard = m_config.hard();
+        const auto frames = static_cast<uint32_t>(block);
+        hard.block_min = host.m_allow_smaller_buffers ? 1 : frames;
+        hard.block_max = frames;
+        hard.rate = host.m_sample_rate;
+        hard.latencies = latencies;
+        const anira::ContractHandle contract(hard);
+        m_prepared.store(false, std::memory_order_release);
+        m_last_host.reset();
+        anira_error err = ANIRA_ERROR_INIT;
+        anira::detail::check(anira_handler_prepare(m_handler, contract.native(), &err), err);
+
+        const anira_plan_report* report = anira_handler_plan_report(m_handler);
+        uint32_t count = anira_plan_report_num_plans(report);
+        std::vector<anira_plan_info> rows(count);
+        if (count > 0) {
+            anira::detail::check(
+                anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows.data()),
+                "anira_plan_report_plans");
+        }
+        m_plan_backend.clear();
+        for (uint32_t i = 0; i < count; ++i) {
+            m_plan_backend.push_back(to_backend(anira::EngineRef{
+                .kind = static_cast<anira_engine>(rows[i].engine),
+                .id = rows[i].engine_id != nullptr ? std::string_view(rows[i].engine_id)
+                                                   : std::string_view()}));
+        }
+        const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+        if (requested != k_no_request) {
+            select(static_cast<InferenceBackend>(requested));
+        } else {
+            anira_handler_set_plan(m_handler, initial_plan());
+        }
+        m_last_host = host;
+        m_last_latencies = latencies;
+        m_prepared.store(true, std::memory_order_release);
+    }
+
+    /// The 2.x initial selection over the plan table: the custom plan for a caller's engine, else
+    /// the first built-in plan, else the custom plan, else plan 0.
+    uint32_t initial_plan() const noexcept {
+        std::optional<uint32_t> custom;
+        std::optional<uint32_t> built_in;
+        for (uint32_t i = 0; i < m_plan_backend.size(); ++i) {
+            if (m_plan_backend[i] == CUSTOM) {
+                if (!custom.has_value()) { custom = i; }
+            } else if (!built_in.has_value()) {
+                built_in = i;
+            }
+        }
+        if (custom.has_value() && m_caller_engine) { return *custom; }
+        if (built_in.has_value()) { return *built_in; }
+        return custom.value_or(0);
+    }
+
+    /// The first plan of the backend; none keeps the selection and logs once.
+    void select(InferenceBackend backend) noexcept ANIRA_NONBLOCKING {
+        for (uint32_t i = 0; i < m_plan_backend.size(); ++i) {
+            if (m_plan_backend[i] == backend) {
+                anira_handler_set_plan(m_handler, i);
+                return;
+            }
+        }
+        anira_log_rt(ANIRA_LOG_ERROR,
+                     "anira.compat",
+                     "set_inference_backend: no plan runs on this backend; the selection is "
+                     "unchanged",
+                     static_cast<int32_t>(to_engine(backend).kind),
+                     0);
+    }
+
+    static uint32_t num_slots(const std::vector<anira_tensor>& tensors) noexcept ANIRA_NONBLOCKING {
+        return static_cast<uint32_t>(tensors.size());
+    }
+
+    /// shape[1] and, for a count above 0, the caller's channel pointers; a count of 0 leaves the
+    /// slot out and its pointers unread.
+    static void present(anira_tensor& tensor,
+                        std::vector<void*>& planes,
+                        const float* const* channels,
+                        size_t count) noexcept ANIRA_NONBLOCKING {
+        tensor.shape[1] = static_cast<int64_t>(count);
+        for (size_t channel = 0; channel < planes.size(); ++channel) {
+            // A plane is a void*: nothing writes through an input's (read-only), and an
+            // output's channels came in without the const.
+            planes[channel] = count > 0 ? const_cast<float*>(channels[channel]) : nullptr;
+        }
+    }
+
+    /// The single forms: one slot per side carried, every other slot empty.
+    void carry_one(size_t slot,
+                   const float* const* input_data,
+                   size_t num_input_samples,
+                   float* const* output_data,
+                   size_t num_output_samples) noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < m_single_in.size(); ++i) {
+            m_single_in[i] = i == slot ? input_data : nullptr;
+            m_single_in_counts[i] = i == slot ? num_input_samples : 0;
+        }
+        for (size_t i = 0; i < m_single_out.size(); ++i) {
+            m_single_out[i] = i == slot ? output_data : nullptr;
+            m_single_out_counts[i] = i == slot ? num_output_samples : 0;
+        }
+    }
+
+    /// The input half of a call: a Streamed slot presented, a Static slot's values into the
+    /// processor (at most its size), a State slot never carried.
+    void take_inputs(const float* const* const* input_data,
+                     const size_t* num_input_samples) noexcept ANIRA_NONBLOCKING {
+        for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
+            const size_t count = num_input_samples[slot];
+            if (m_input_roles[slot] == ANIRA_ROLE_STREAMED) {
+                present(m_inputs[slot],
+                        m_input_planes[slot],
+                        count > 0 ? input_data[slot] : nullptr,
+                        count);
+            } else if (m_input_roles[slot] == ANIRA_ROLE_STATIC && count > 0) {
+                const float* values = input_data[slot][0];
+                const size_t num_values = std::min(count, m_input_sizes[slot]);
+                for (size_t j = 0; j < num_values; ++j) { m_pp.set_input(values[j], slot, j); }
+            }
+        }
+    }
+
+    /// The output half, before the call: the Streamed requests presented.
+    void present_outputs(float* const* const* output_data,
+                         const size_t* num_output_samples) noexcept ANIRA_NONBLOCKING {
+        for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
+            if (m_output_roles[slot] != ANIRA_ROLE_STREAMED) { continue; }
+            const size_t count = num_output_samples[slot];
+            present(m_outputs[slot],
+                    m_output_planes[slot],
+                    count > 0 ? output_data[slot] : nullptr,
+                    count);
+        }
+    }
+
+    /// The output half, after the call: a Streamed slot's delivered count; a requested Static
+    /// slot's values from the processor (at most its size, the count clamped) on a delivered
+    /// block, the request zeroed and 0 on a missed one, untouched and 0 on a failure.
+    void give_outputs(float* const* const* output_data,
+                      size_t* num_output_samples,
+                      anira_status status,
+                      bool waited) noexcept ANIRA_NONBLOCKING {
+        // A wait without an inference loop ran the nonblocking stem: its block stands.
+        const bool delivered =
+            status == ANIRA_OK || (waited && status == ANIRA_ERROR_INVALID_STATE);
+        for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
+            if (m_output_roles[slot] == ANIRA_ROLE_STREAMED) {
+                num_output_samples[slot] = m_delivered[slot];
+                continue;
+            }
+            const size_t request = num_output_samples[slot];
+            num_output_samples[slot] = 0;
+            if (m_output_roles[slot] != ANIRA_ROLE_STATIC || request == 0) { continue; }
+            float* values = output_data[slot][0];
+            if (delivered) {
+                const size_t num_values = std::min(request, m_output_sizes[slot]);
+                for (size_t j = 0; j < num_values; ++j) { values[j] = m_pp.get_output(slot, j); }
+                num_output_samples[slot] = num_values;
+            } else if (status == ANIRA_MISSED) {
+                for (size_t j = 0; j < request; ++j) { values[j] = 0.F; }
+            }
+        }
+    }
+
+    anira::Context m_context;
+    InferenceConfig& m_config;
+    PrePostProcessor& m_pp;
+    anira::ModelConfig m_model;  ///< the private copy: the anchor is set here, never on m_config
+    std::shared_ptr<anira::Engine> m_engine;
+    std::shared_ptr<LegacyProcessorStage> m_stage;
+    anira_handler* m_handler = nullptr;
+    std::string m_anchor;  ///< the anchor the current C handler was created with; "" = default
+    std::optional<HostConfig> m_last_host;
+    std::map<std::string, uint32_t> m_last_latencies;
+    std::atomic<bool> m_prepared{false};
+    std::atomic<bool> m_non_realtime{false};
+    std::atomic<uint32_t> m_requested{k_no_request};
+    bool m_blocking = false;       ///< the configuration's blocking_ratio is above 0
+    bool m_caller_engine = false;  ///< the CUSTOM row runs the caller's engine
+    InferenceBackend m_initial_backend = CUSTOM;
+    std::vector<InferenceBackend> m_plan_backend;  ///< per plan of the last report
+    // The float face, sized at construction: one tensor per slot over the planes.
+    std::vector<anira_tensor> m_inputs;
+    std::vector<anira_tensor> m_outputs;
+    std::vector<std::vector<void*>> m_input_planes;
+    std::vector<std::vector<void*>> m_output_planes;
+    std::vector<anira_role> m_input_roles;
+    std::vector<anira_role> m_output_roles;
+    std::vector<size_t> m_input_sizes;   ///< the element count of a Static input, else 0
+    std::vector<size_t> m_output_sizes;  ///< the element count of a Static output, else 0
+    std::vector<size_t> m_delivered;
+    std::vector<const float* const*> m_single_in;
+    std::vector<size_t> m_single_in_counts;
+    std::vector<float* const*> m_single_out;
+    std::vector<size_t> m_single_out_counts;
 };
 
 }  // namespace anira::v2

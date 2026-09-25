@@ -56,8 +56,8 @@ Where the 2.x API stands in this pre-release
   the root of the model tree at run time, is the one definition left.
 - **Schedule.** The 2.x configuration classes have deprecated twins over the 3.x handles in
   ``anira/compat/v2.hpp`` (``namespace anira::v2``; :ref:`migration-compat-config`), with the
-  2.x processor and its views beside them; the header gains the handler before the cut-over and
-  is removed one minor release after 3.0.0; the 2.x ``ContextConfig`` is there as
+  2.x processor, its views and the 2.x ``InferenceHandler`` over the C handler beside them; the
+  header is removed one minor release after 3.0.0; the 2.x ``ContextConfig`` is there as
   ``anira::v2::ContextConfig`` (``anira::CoreConfig`` is this pre-release's spelling). The 2.x
   JSON document is read by the 3.x loaders for as long as the 3.x line lives
   (:ref:`migration-json`).
@@ -288,6 +288,64 @@ What differs from 2.x:
   ``PassthroughEngine`` and every 2.x custom engine run code of the module that includes it,
   where 2.x ran its pass-through inside libanira: destroy the handler before that module
   unloads.
+
+``anira::v2::InferenceHandler`` is the 2.x handler over the C handler of
+``anira/abi/handler.h``: its constructors take the processor, the configuration and a
+``ContextConfig`` (the custom form an :cpp:class:`anira::Engine` in place of the
+``BackendBase``), build a context, a pipeline of a private copy of the configuration's model
+config (the custom engine, the inference stage under the default candidate set, a
+``LegacyProcessorStage`` over the processor) and one ``anira_handler``; ``prepare`` mints the
+legacy contract with the host geometry, the ``process``, ``push_data`` and ``pop_data`` forms
+present the caller's channel pointers as planar float tensors and route the non-streamable
+values through the processor's atomics, and the rest forwards to the entry of the same name. A
+2.x host compiles unchanged:
+
+.. code-block:: cpp
+
+    using namespace anira::v2;
+    PrePostProcessor pp(config);
+    InferenceHandler handler(pp, config, ContextConfig(2));
+    handler.prepare(HostConfig(512, 48000));
+    handler.process(channels, 512);
+
+What differs from 2.x:
+
+- **A custom backend** is an :cpp:class:`anira::Engine` constructed with
+  ``anira::v2::k_custom_engine_id`` and passed as ``anira::Engine&`` (another id is
+  ``ANIRA_ERROR_INVALID_ARGUMENT``; a configuration without a ``CUSTOM`` row is
+  ``ANIRA_ERROR_CONFIG``); its ``providers()`` decide where the plan runs (none: the CPU path; a
+  list without ``"cpu"``: its first provider; nothing usable: ``ANIRA_ERROR_CONFIG`` at
+  construction). The caller keeps it alive past the handler, as 2.x required of a
+  ``BackendBase``; two handlers on one engine and equal configurations load once. A
+  configuration whose every row names an engine this build lacks is ``ANIRA_ERROR_CONFIG`` at
+  construction.
+- **Loading** happens at ``prepare``, not at construction: a model that does not load fails
+  ``prepare`` (``ANIRA_ERROR_NO_SUCH_FILE``, ``ANIRA_ERROR_MODEL_LOAD``). A ``prepare`` with the
+  settings of the last one only resets the stream; another geometry prepares again and loads the
+  models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
+  the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size`` is
+  ``ANIRA_ERROR_CONFIG``: anchor on the stream the block is measured on instead.
+- **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
+  contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
+  Warning as in 2.x; an index out of range, or a figure on a non-streamable output, is
+  ``ANIRA_ERROR_INVALID_ARGUMENT`` (2.x threw ``std::invalid_argument`` or asserted).
+- **The single forms** carry their one slot per side and nothing else; 2.x resent what the last
+  call had left in the other slots.
+- **Waits:** ``push_data`` never waits (2.x waited under ``set_non_realtime``); ``pop_data`` with
+  a deadline polls on a handler without a blocking ratio (2.x neither waited nor collected);
+  ``set_non_realtime(true)`` is never refused, and without an inference loop each waiting call
+  returns what the nonblocking stem delivered and leaves ``ANIRA_ERROR_INVALID_STATE`` in
+  ``rt_error()``.
+- **set_inference_backend** of a backend without a plan keeps the selection and logs one record
+  of the group ``anira.compat``; before ``prepare`` the request is kept and applied then.
+- **get_num_inference_threads()** is the pool size, 0 until the first ``prepare`` in the
+  process; ``drain_log()`` drains the process's queue.
+- **The real-time attribute:** ``reset``, ``get_latency``, ``get_available_samples``,
+  ``set_inference_backend``, ``get_inference_backend`` and ``rt_error`` carry
+  ``ANIRA_NONBLOCKING``; the ``process``, ``push_data`` and ``pop_data`` forms do not (a blocking
+  ratio or ``set_non_realtime`` makes them wait), where the 2.x declarations claimed it and
+  waited anyway. ``native()`` and ``rt_error()`` are additions for a host that mixes in a 3.x
+  entry.
 
 .. _migration-runtime:
 
