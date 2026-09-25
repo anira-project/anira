@@ -334,7 +334,7 @@ void check_contract(const anira_contract& contract,
             config_error("contract: the latency of '" + name + "' is set on a " +
                          role_word(spec->m_role) + " tensor; only a Streamed output has a stream");
         }
-        if (static_cast<int64_t>(samples) < spec->m_latency) {
+        if (std::cmp_less(samples, spec->m_latency)) {
             config_error("contract: the latency of '" + name + "' is " + std::to_string(samples) +
                          " but the model's internal latency is " + std::to_string(spec->m_latency) +
                          "; a stream cannot deliver before the model does");

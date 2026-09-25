@@ -6,6 +6,7 @@
 // ContractHandle::hard()).
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -21,6 +22,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <ratio>
 #include <string>
 #include <utility>
 #include <vector>
@@ -1004,7 +1006,7 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_TRUE(model.tensor_layout(0, "audio_in").empty()) << "the spec's order";
     const std::optional<anira::ext::Entry> entry = model.model_ext<anira::ext::Entry>(1);
     ASSERT_TRUE(entry.has_value());
-    EXPECT_EQ(entry->name, "forward_streaming");
+    EXPECT_EQ(entry.value_or(anira::ext::Entry{}).name, "forward_streaming");
     EXPECT_FALSE(model.model_ext<anira::ext::Entry>(0).has_value());
     EXPECT_EQ(status_of([&] { (void)model.tensor_name(3, "audio_in"); }),
               ANIRA_ERROR_INVALID_ARGUMENT);
@@ -1024,7 +1026,9 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_EQ(built.state(), ANIRA_MODEL_STATEFUL);
     EXPECT_EQ(built.max_instances(), 1u);
     EXPECT_TRUE(built.anchor().empty()) << "the default";
-    EXPECT_EQ(built.model_ext<anira::ext::Entry>(0)->name, "decode");
+    const std::optional<anira::ext::Entry> built_entry = built.model_ext<anira::ext::Entry>(0);
+    ASSERT_TRUE(built_entry.has_value());
+    EXPECT_EQ(built_entry.value_or(anira::ext::Entry{}).name, "decode");
     EXPECT_EQ(built.input_count(), 0u);
     // The pin getters beside the engine getters: none, a custom name, one of the enum.
     EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_DEFAULT);

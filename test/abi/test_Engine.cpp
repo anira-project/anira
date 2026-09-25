@@ -1299,9 +1299,9 @@ TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
     EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(), ANIRA_PROVIDER_DEFAULT, ""),
               ANIRA_ERROR_INVALID_ARGUMENT)
         << "an empty name";
-    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(),
-                                                      static_cast<anira_provider>(0x7fff),
-                                                      nullptr),
+    // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) an unknown provider on purpose
+    const auto unknown_provider = static_cast<anira_provider>(0x7fff);
+    EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(), unknown_provider, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT)
         << "a provider this header does not name";
     EXPECT_EQ(on_cuda.default_provider(), ANIRA_PROVIDER_CUDA) << "a refusal changes nothing";

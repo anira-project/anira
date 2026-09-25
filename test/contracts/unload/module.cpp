@@ -6,6 +6,7 @@
 #include <anira/abi/core.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>

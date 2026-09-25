@@ -1585,7 +1585,7 @@ TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
 TEST(AbiStage, TheIdAccessorsAnswerThePairsNames) {
     const Context context;  // the real-time log queue is the core's
     anira_drain_log();
-    RecordCollector collector;
+    const RecordCollector collector;
     anira::RtLatch latch;
     anira::RingBuffer ring;
     ASSERT_TRUE(ring.initialize_with_positions(1, 16, ANIRA_DTYPE_F32));
