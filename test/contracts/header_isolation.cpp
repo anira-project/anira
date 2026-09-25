@@ -2,7 +2,7 @@
 // (plus those of its public dependencies) and nothing else on the include path: no
 // engine include directory. It fails to compile as soon as a public header includes
 // an engine header again — the engine state belongs in each engine adapter's own
-// translation unit under src/backends (see the note on anira::BackendBase). Deliberately
+// translation unit under src/engines (see the note on anira::BackendBase). Deliberately
 // the umbrella header, so that every public header is covered.
 #include <anira/anira.h>  // NOLINT(misc-include-cleaner)
 

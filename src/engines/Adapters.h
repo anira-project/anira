@@ -1,8 +1,8 @@
-#ifndef ANIRA_BACKENDS_ADAPTERS_H
-#define ANIRA_BACKENDS_ADAPTERS_H
+#ifndef ANIRA_ENGINES_ADAPTERS_H
+#define ANIRA_ENGINES_ADAPTERS_H
 /*
  * The adapters of this build and the plans a session asks the core for. Private to
- * src/backends and the scheduler (and the tests through the src/ include directory).
+ * src/engines and the scheduler (and the tests through the src/ include directory).
  *
  * A session's plan table is built from PlanRequests (Core::create_session): one per plan, in
  * dense-index order, each naming where its loaded model comes from and the record of it.
@@ -32,7 +32,7 @@ namespace anira::capi {
 class EngineCarrier;
 }  // namespace anira::capi
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// Where a plan's loaded model comes from.
 enum class Source : uint8_t {
@@ -163,6 +163,6 @@ ANIRA_API Model model_of(const anira::InferenceConfig& config, anira::InferenceB
 /// The engine of a 2.x backend; ANIRA_ENGINE_NONE for CUSTOM.
 ANIRA_API anira_engine engine_of(anira::InferenceBackend backend) noexcept;
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_ADAPTERS_H
+#endif  // ANIRA_ENGINES_ADAPTERS_H

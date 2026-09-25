@@ -26,11 +26,11 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
+#include "../engines/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
 
 namespace anira {
 
-// The plan slot's special members live here, where backend::Loaded and backend::Prepared are
+// The plan slot's special members live here, where engine::Loaded and engine::Prepared are
 // complete (the public header forward-declares them).
 SessionElement::PlanSlot::PlanSlot() = default;
 SessionElement::PlanSlot::~PlanSlot() = default;

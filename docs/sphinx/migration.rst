@@ -35,7 +35,7 @@ Where the 2.x API stands in this pre-release
   3.x form is the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`),
   which runs on the C handler. A custom :cpp:class:`anira::BackendBase` stays with the 2.x
   handler likewise; its 3.x form is a *registered engine* (``anira_engine_desc``,
-  :cpp:class:`anira::Engine`; :doc:`custom_backends`), which runs on the C handler like a
+  :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs on the C handler like a
   built-in one. :ref:`migration-runtime` maps both onto their 3.x forms.
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
@@ -325,7 +325,7 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
        (:doc:`custom_preprocessing`).
 
 What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
-descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_backends`):
+descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_engines`):
 
 .. list-table::
    :header-rows: 1
@@ -500,7 +500,7 @@ fixture does); a spec dtype other than float32; a layout that moves an axis of e
 engine this build does not carry (see the candidates below); a custom engine other than
 ``anira.v2.custom``, which the bridge serves with the 2.x pass-through (the C handler runs a
 custom engine added to its pipeline, ``anira.v2.custom`` included, and refuses an id without
-one at ``anira_handler_create``, :doc:`custom_backends`). Every other
+one at ``anira_handler_create``, :doc:`custom_engines`). Every other
 
 rule of section 1.1 that a configuration breaks is
 ``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that

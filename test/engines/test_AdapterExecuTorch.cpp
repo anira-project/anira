@@ -25,9 +25,9 @@
 #include <utility>
 #include <vector>
 
-#include "backend_test_support.h"
-#include "backends/Adapter.h"
-#include "backends/Adapters.h"
+#include "engine_test_support.h"
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
 #include "gtest/gtest.h"
 #include "utils/StatusError.h"
 
@@ -35,7 +35,7 @@ namespace {
 
 constexpr size_t k_size = 64;
 
-using anira::backend::Model;
+using anira::engine::Model;
 using anira_test::context_of;
 using anira_test::descriptors_of;
 using anira_test::filled_buffers;
@@ -57,9 +57,9 @@ std::string gain_model_path() {
 /// exclusive when the record has no shared slot (a session-exclusive configuration).
 class Rig {
 public:
-    explicit Rig(std::shared_ptr<anira::backend::Loaded> loaded) : m_loaded(std::move(loaded)) {}
+    explicit Rig(std::shared_ptr<anira::engine::Loaded> loaded) : m_loaded(std::move(loaded)) {}
 
-    void prepare(const anira::backend::Model& model) {
+    void prepare(const anira::engine::Model& model) {
         m_prepared.reset();
         // The engine object's init, as the core runs it before a load: the level in effect.
         anira_init_info info = ANIRA_INIT_INFO_INIT;
@@ -67,26 +67,26 @@ public:
         m_loaded->init(info);
         m_loaded->load(model);
         m_prepared =
-            m_loaded->prepare(anira::backend::PrepareRequest{.m_exclusive = model.m_instances == 0,
-                                                             .m_info = nullptr});
+            m_loaded->prepare(anira::engine::PrepareRequest{.m_exclusive = model.m_instances == 0,
+                                                            .m_info = nullptr});
     }
     bool prepared() const noexcept { return m_loaded->loaded() && m_prepared != nullptr; }
-    const anira::backend::Model& model() const noexcept { return m_loaded->model(); }
-    const anira::backend::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
+    const anira::engine::Model& model() const noexcept { return m_loaded->model(); }
+    const anira::engine::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
     anira_status run(const anira_engine_ctx& ctx,
-                     anira::backend::ChunkBuffers* chunk,
+                     anira::engine::ChunkBuffers* chunk,
                      bool reset_first) noexcept {
         return m_prepared->run(ctx, chunk, reset_first);
     }
 
 private:
-    std::shared_ptr<anira::backend::Loaded> m_loaded;
-    std::unique_ptr<anira::backend::Prepared> m_prepared;
+    std::shared_ptr<anira::engine::Loaded> m_loaded;
+    std::unique_ptr<anira::engine::Prepared> m_prepared;
 };
 
 std::shared_ptr<Rig> executorch_adapter() {
-    std::shared_ptr<anira::backend::Loaded> loaded = anira::backend::make_builtin_loaded(
-        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
+    std::shared_ptr<anira::engine::Loaded> loaded = anira::engine::make_builtin_loaded(
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
     EXPECT_NE(loaded, nullptr);
     return std::make_shared<Rig>(std::move(loaded));
 }
@@ -112,7 +112,7 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
     ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::EXECUTORCH));
-    const Model model = anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    const Model model = anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH);
     ASSERT_NE(model.m_bytes, nullptr);
     ASSERT_EQ(model.m_entry, "gain2");
 
@@ -141,25 +141,25 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
     // The package registers the XNNPACK backend (the adapter loads every method with its
     // options): the query lists it as the enum's provider, and the adapter serves every
     // provider the query lists.
-    const std::vector<anira::backend::ProviderInfo> listed = anira::backend::executorch_providers();
+    const std::vector<anira::engine::ProviderInfo> listed = anira::engine::executorch_providers();
     const bool lists_xnnpack =
-        std::ranges::any_of(listed, [](const anira::backend::ProviderInfo& p) {
+        std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
             return p.m_provider == ANIRA_PROVIDER_XNNPACK && p.m_provider_id.empty();
         });
     EXPECT_TRUE(lists_xnnpack);
 
     const std::shared_ptr<Rig> adapter = executorch_adapter();
-    const std::shared_ptr<anira::backend::Loaded> fresh = anira::backend::make_builtin_loaded(
-        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
+    const std::shared_ptr<anira::engine::Loaded> fresh = anira::engine::make_builtin_loaded(
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH));
     ASSERT_NE(fresh, nullptr);
-    const anira::backend::Loaded& loaded = *fresh;
+    const anira::engine::Loaded& loaded = *fresh;
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_XNNPACK, ""));
     EXPECT_TRUE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "XnnpackBackend"))
         << "the registered name serves as the custom spelling";
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_CUDA, ""));
     EXPECT_FALSE(loaded.serves(ANIRA_PROVIDER_DEFAULT, "NobodysBackend"));
-    for (const anira::backend::ProviderInfo& info : listed) {
+    for (const anira::engine::ProviderInfo& info : listed) {
         EXPECT_TRUE(loaded.serves(info.m_provider, info.m_provider_id)) << info.m_provider_id;
     }
     EXPECT_NE(loaded.provider_reason().find("XnnpackBackend"), std::string::npos)
@@ -175,7 +175,7 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
         5.0F,
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
-    Model neutral = anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    Model neutral = anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH);
     ASSERT_EQ(neutral.m_entry, "gain2");
     adapter->prepare(neutral);
     EXPECT_TRUE(adapter->prepared()) << "a portable export on the default provider";
@@ -218,7 +218,7 @@ TEST(AdapterExecuTorch, UnloadableModelThrowsRuntimeError) {
         /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = executorch_adapter();
     EXPECT_THROW(
-        adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH)),
+        adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH)),
         std::runtime_error);
     EXPECT_FALSE(adapter->prepared());
 }
@@ -237,7 +237,7 @@ TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
         /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = executorch_adapter();
     try {
-        adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::EXECUTORCH));
+        adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH));
         FAIL() << "a missing method loaded";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
@@ -260,15 +260,14 @@ TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
     };
     const std::shared_ptr<Rig> adapter = executorch_adapter();
     adapter->prepare(
-        anira::backend::model_of(config_of({1, 1, 512}), anira::InferenceBackend::EXECUTORCH));
+        anira::engine::model_of(config_of({1, 1, 512}), anira::InferenceBackend::EXECUTORCH));
     EXPECT_TRUE(adapter->prepared());
     EXPECT_EQ(adapter->bindings().m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
 
     try {
         executorch_adapter()->prepare(
-            anira::backend::model_of(config_of({1, 1, 70000}),
-                                     anira::InferenceBackend::EXECUTORCH));
+            anira::engine::model_of(config_of({1, 1, 70000}), anira::InferenceBackend::EXECUTORCH));
         FAIL() << "a block above the planned bound bound";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
@@ -279,7 +278,7 @@ TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
     }
     try {
         executorch_adapter()->prepare(
-            anira::backend::model_of(config_of({1, 512}), anira::InferenceBackend::EXECUTORCH));
+            anira::engine::model_of(config_of({1, 512}), anira::InferenceBackend::EXECUTORCH));
         FAIL() << "a block of another rank bound";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
@@ -293,8 +292,8 @@ TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
 // registered backend, so a release that spells the option keys otherwise is caught at init,
 // not by the mutexes.
 TEST(AdapterExecuTorch, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
-    const std::shared_ptr<anira::backend::BuiltinEngine> engine =
-        anira::backend::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
+    const std::shared_ptr<anira::engine::BuiltinEngine> engine =
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_EXECUTORCH);
     ASSERT_NE(engine, nullptr);
     anira_init_info info = ANIRA_INIT_INFO_INIT;
     info.log_level = static_cast<uint32_t>(anira::get_log_level());
@@ -302,7 +301,7 @@ TEST(AdapterExecuTorch, TheEngineInitSetsTheXnnpackOptionsOfTheProcess) {
     int workspace_sharing_mode = -1;
     bool weight_cache_enabled = true;
     ASSERT_TRUE(
-        anira::backend::executorch_xnnpack_options(workspace_sharing_mode, weight_cache_enabled))
+        anira::engine::executorch_xnnpack_options(workspace_sharing_mode, weight_cache_enabled))
         << "the registered backend answers";
     EXPECT_EQ(workspace_sharing_mode, 0) << "a workspace per delegate instance";
     EXPECT_FALSE(weight_cache_enabled);

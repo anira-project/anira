@@ -70,9 +70,9 @@
 #include <variant>
 #include <vector>
 
-#include "../backends/Adapter.h"
-#include "../backends/Adapters.h"
-#include "../backends/DescriptorAdapter.h"
+#include "../engines/Adapter.h"
+#include "../engines/Adapters.h"
+#include "../engines/DescriptorAdapter.h"
 #include "../scheduler/TensorRun.h"
 #include "capi_internal.h"
 #include "context.h"
@@ -909,7 +909,7 @@ void check_providers(const anira_context& context,
     }
 }
 
-// The record of one row's model for the engine room (anira::backend::Model): the row's path
+// The record of one row's model for the engine room (anira::engine::Model): the row's path
 // or its bytes (kept alive through the row's carrier for the loaded model's life), the entry
 // of the row's "entry" extension, one TensorInfo per tensor of either side in slot order (the
 // canonical name; the export's name where the row's tensors record names the slot, else
@@ -917,11 +917,11 @@ void check_providers(const anira_context& context,
 // position otherwise; the engine's extents under the row's layout; the spec's dtype), the
 // shared slots and the warm-up of the 2.x configuration. Everything copied: a pooled loaded
 // model never aliases this handler's configuration.
-anira::backend::Model model_of_row(const anira_model_config& model,
-                                   const anira::capi::ModelEntry& row,
-                                   const anira::capi::Derived& derived,
-                                   const anira::InferenceConfig& config) {
-    anira::backend::Model record;
+anira::engine::Model model_of_row(const anira_model_config& model,
+                                  const anira::capi::ModelEntry& row,
+                                  const anira::capi::Derived& derived,
+                                  const anira::InferenceConfig& config) {
+    anira::engine::Model record;
     record.m_engine = row.m_engine;
     record.m_engine_id = row.m_engine_id;
     if (row.has_bytes()) {
@@ -936,10 +936,10 @@ anira::backend::Model model_of_row(const anira_model_config& model,
     }
     const auto tensors_of = [&row](const std::vector<anira_tensor_spec>& specs,
                                    const std::vector<anira::capi::DerivedSpec>& rows) {
-        std::vector<anira::backend::TensorInfo> tensors;
+        std::vector<anira::engine::TensorInfo> tensors;
         tensors.reserve(specs.size());
         for (size_t i = 0; i < specs.size(); ++i) {
-            anira::backend::TensorInfo info;
+            anira::engine::TensorInfo info;
             info.m_name = specs[i].m_name;
             const auto binding = row.m_tensors.find(specs[i].m_name);
             const bool bound = binding != row.m_tensors.end();
@@ -982,21 +982,21 @@ anira::backend::Model model_of_row(const anira_model_config& model,
 // is the prepared handle's, not the model's), with the handler's context for the engine's
 // init. Every custom row has a registered engine by then, anira.v2.custom included (validate
 // refused one without); the engine-free roundtrip is the 2.x class's alone.
-std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& handler,
-                                                       const anira::capi::Derived& derived,
-                                                       const anira::InferenceConfig& config) {
+std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handler,
+                                                      const anira::capi::Derived& derived,
+                                                      const anira::InferenceConfig& config) {
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
     // The variant a registered engine's load reads (the load record names it): anira's own
     // copy, shared by the registered rows of this prepare and kept alive by their loaded
     // models, which may outlive this handler in the pool.
     std::shared_ptr<const anira_model_config> variant;
     std::string variant_json;
-    std::vector<anira::backend::PlanRequest> requests;
+    std::vector<anira::engine::PlanRequest> requests;
     requests.reserve(derived.m_plans.size());
     for (const anira::capi::PlanKey& key : derived.m_plans) {
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
-        anira::backend::PlanRequest request;
+        anira::engine::PlanRequest request;
         request.m_legacy_backend = backend_of_row(row, row_index);
         request.m_model = model_of_row(model, row, derived, config);
         // The provider is the plan's, part of the pool key: two providers of one row are two
@@ -1027,20 +1027,20 @@ std::vector<anira::backend::PlanRequest> plan_requests(const anira_handler& hand
             // the text beside the record. The carrier is the other half of the key: the same
             // engine object, whichever pipeline it was added to.
             request.m_model.m_variant = variant_json;
-            request.m_source = anira::backend::Source::Registered;
+            request.m_source = anira::engine::Source::Registered;
             request.m_carrier = engine;
             request.m_context = handler.m_context;
             request.m_loaded =
-                std::make_shared<anira::backend::DescriptorLoaded>(engine,
-                                                                   static_cast<uint32_t>(row_index),
-                                                                   variant);
+                std::make_shared<anira::engine::DescriptorLoaded>(engine,
+                                                                  static_cast<uint32_t>(row_index),
+                                                                  variant);
         } else if (row.is_custom()) {
             // validate refused a custom id no engine of the pipeline has.
             throw StatusError(ANIRA_ERROR_INTERNAL,
                               "handler: model entry " + std::to_string(row_index) + " (custom '" +
                                   row.m_engine_id + "') passed validate without an engine");
         } else {
-            request.m_source = anira::backend::Source::BuiltIn;
+            request.m_source = anira::engine::Source::BuiltIn;
         }
         requests.push_back(std::move(request));
     }
@@ -1129,7 +1129,7 @@ anira_plan_slot host_slot(uint32_t slot,
     return row;
 }
 
-// How the loaded model of a plan bound one slot (anira::backend::Loaded::bindings), read off
+// How the loaded model of a plan bound one slot (anira::engine::Loaded::bindings), read off
 // the session's plan table under the plan's dense index; by position for a slot the model's
 // report does not cover (a table shorter than the report is anira's own bug and stays
 // visible as such in the rows, never a crash).
@@ -1140,7 +1140,7 @@ anira_binding binding_of(const anira::SessionElement& session,
     if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) {
         return ANIRA_BINDING_POSITION;
     }
-    const anira::backend::Bindings& bindings = session.m_plans[plan].m_loaded->bindings();
+    const anira::engine::Bindings& bindings = session.m_plans[plan].m_loaded->bindings();
     const std::vector<anira_binding>& side = is_input ? bindings.m_inputs : bindings.m_outputs;
     return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
 }
@@ -1444,7 +1444,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // default processor's. The plan table is the session's from its construction: one plan
     // per surviving row, in entry order, what build_plans reports under the same indices.
     handler.m_inference_config = std::move(config);
-    std::vector<anira::backend::PlanRequest> requests =
+    std::vector<anira::engine::PlanRequest> requests =
         plan_requests(handler, derived, handler.m_inference_config);
     auto processor = std::make_unique<anira::capi::StageProcessor>(handler.m_inference_config,
                                                                    stage,
@@ -1573,8 +1573,8 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
         if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
         slot.m_prepared = slot.m_loaded->prepare(
-            anira::backend::PrepareRequest{.m_exclusive = prepared.m_session_exclusive_processor,
-                                           .m_info = &info});
+            anira::engine::PrepareRequest{.m_exclusive = prepared.m_session_exclusive_processor,
+                                          .m_info = &info});
     }
 
     // Last, the stage's prepare function, when it has one, with the record (its init ran above,

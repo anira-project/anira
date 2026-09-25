@@ -25,15 +25,15 @@
 #include <utility>
 #include <vector>
 
-#include "backend_test_support.h"
-#include "backends/Adapter.h"
-#include "backends/Adapters.h"
+#include "engine_test_support.h"
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
 #include "gtest/gtest.h"
 #include "utils/StatusError.h"
 
 namespace {
 
-using anira::backend::Model;
+using anira::engine::Model;
 using anira_test::any_sample_nonzero;
 using anira_test::context_of;
 using anira_test::descriptors_of;
@@ -54,9 +54,9 @@ std::string gain_model_path() {
 /// exclusive when the record has no shared slot (a session-exclusive configuration).
 class Rig {
 public:
-    explicit Rig(std::shared_ptr<anira::backend::Loaded> loaded) : m_loaded(std::move(loaded)) {}
+    explicit Rig(std::shared_ptr<anira::engine::Loaded> loaded) : m_loaded(std::move(loaded)) {}
 
-    void prepare(const anira::backend::Model& model) {
+    void prepare(const anira::engine::Model& model) {
         m_prepared.reset();
         // The engine object's init, as the core runs it before a load: the level in effect.
         anira_init_info info = ANIRA_INIT_INFO_INIT;
@@ -64,26 +64,26 @@ public:
         m_loaded->init(info);
         m_loaded->load(model);
         m_prepared =
-            m_loaded->prepare(anira::backend::PrepareRequest{.m_exclusive = model.m_instances == 0,
-                                                             .m_info = nullptr});
+            m_loaded->prepare(anira::engine::PrepareRequest{.m_exclusive = model.m_instances == 0,
+                                                            .m_info = nullptr});
     }
     bool prepared() const noexcept { return m_loaded->loaded() && m_prepared != nullptr; }
-    const anira::backend::Model& model() const noexcept { return m_loaded->model(); }
-    const anira::backend::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
+    const anira::engine::Model& model() const noexcept { return m_loaded->model(); }
+    const anira::engine::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
     anira_status run(const anira_engine_ctx& ctx,
-                     anira::backend::ChunkBuffers* chunk,
+                     anira::engine::ChunkBuffers* chunk,
                      bool reset_first) noexcept {
         return m_prepared->run(ctx, chunk, reset_first);
     }
 
 private:
-    std::shared_ptr<anira::backend::Loaded> m_loaded;
-    std::unique_ptr<anira::backend::Prepared> m_prepared;
+    std::shared_ptr<anira::engine::Loaded> m_loaded;
+    std::unique_ptr<anira::engine::Prepared> m_prepared;
 };
 
 std::shared_ptr<Rig> libtorch_adapter() {
-    std::shared_ptr<anira::backend::Loaded> loaded = anira::backend::make_builtin_loaded(
-        anira::backend::make_builtin_engine(ANIRA_ENGINE_LIBTORCH));
+    std::shared_ptr<anira::engine::Loaded> loaded = anira::engine::make_builtin_loaded(
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_LIBTORCH));
     EXPECT_NE(loaded, nullptr);
     return std::make_shared<Rig>(std::move(loaded));
 }
@@ -128,7 +128,7 @@ TEST(AdapterLibTorch, BinaryModelDataLoadsFromMemory) {
                                         /*warm_up=*/0,
                                         /*session_exclusive_processor=*/true);
     ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::LIBTORCH));
-    const Model model = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
+    const Model model = anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH);
     ASSERT_NE(model.m_bytes, nullptr);
 
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
@@ -154,7 +154,7 @@ TEST(AdapterLibTorch, NamedModelFunctionIsUsedForWarmUpAndProcessing) {
         42.66F,
         /*warm_up=*/2,
         /*session_exclusive_processor=*/true);
-    const Model model = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
+    const Model model = anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH);
     ASSERT_EQ(model.m_entry, "encode");
     ASSERT_EQ(model.m_warm_up, 2U);
 
@@ -183,7 +183,7 @@ TEST(AdapterLibTorch, UnloadableModelThrowsRuntimeError) {
         /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
     EXPECT_THROW(
-        adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH)),
+        adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH)),
         std::runtime_error);
     EXPECT_FALSE(adapter->prepared());
 
@@ -196,7 +196,7 @@ TEST(AdapterLibTorch, UnloadableModelThrowsRuntimeError) {
         /*warm_up=*/0,
         /*session_exclusive_processor=*/true);
     try {
-        adapter->prepare(anira::backend::model_of(no_method, anira::InferenceBackend::LIBTORCH));
+        adapter->prepare(anira::engine::model_of(no_method, anira::InferenceBackend::LIBTORCH));
         FAIL() << "a missing method loaded";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
@@ -212,7 +212,7 @@ TEST(AdapterLibTorch, MultiTensorOutputIsUnpacked) {
     ASSERT_FALSE(read_model_file(gain_model_path()).empty())
         << "fixture missing: " << gain_model_path();
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
-    adapter->prepare(anira::backend::model_of(gain_config(), anira::InferenceBackend::LIBTORCH));
+    adapter->prepare(anira::engine::model_of(gain_config(), anira::InferenceBackend::LIBTORCH));
     EXPECT_EQ(adapter->bindings().m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
     EXPECT_EQ(adapter->bindings().m_outputs,
@@ -240,7 +240,7 @@ TEST(AdapterLibTorch, InputsBindToTheMethodsArgumentsByName) {
         5.F,
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
-    Model model = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
+    Model model = anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH);
     model.m_inputs[0].m_export_name = "gain";
     model.m_inputs[1].m_export_name = "data";
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
@@ -290,7 +290,7 @@ TEST(AdapterLibTorch, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
-    adapter->prepare(anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH));
+    adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH));
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 
     std::vector<anira::BufferF> input = filled_buffers({4}, 0.1F);
@@ -310,7 +310,7 @@ TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtLoadWithOrWithoutAWarmUp)
         5.F,
         /*warm_up=*/1,
         /*session_exclusive_processor=*/true);
-    const Model warmed = anira::backend::model_of(config, anira::InferenceBackend::LIBTORCH);
+    const Model warmed = anira::engine::model_of(config, anira::InferenceBackend::LIBTORCH);
     const Model unwarmed = [&warmed] {
         Model record = warmed;
         record.m_warm_up = 0;

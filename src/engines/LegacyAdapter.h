@@ -1,8 +1,8 @@
-#ifndef ANIRA_BACKENDS_LEGACYADAPTER_H
-#define ANIRA_BACKENDS_LEGACYADAPTER_H
+#ifndef ANIRA_ENGINES_LEGACYADAPTER_H
+#define ANIRA_ENGINES_LEGACYADAPTER_H
 /*
  * The adapter over the 2.x virtual: BackendBase::process(inputs, outputs, session) over the
- * struct's two BufferF vectors. Private to src/backends and the scheduler (and the tests
+ * struct's two BufferF vectors. Private to src/engines and the scheduler (and the tests
  * through the src/ include directory). Dies with the 2.x call shape (PR 12).
  */
 #include <anira/InferenceConfig.h>
@@ -15,7 +15,7 @@
 
 #include "Adapter.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// A 2.x backend behind the engine room's interface: a caller's BackendBase (the 2.x custom
 /// constructor of InferenceHandler and InferenceManager, the twins of the C tests), or the
@@ -70,6 +70,6 @@ private:
     anira::BackendBase* m_backend;
 };
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_LEGACYADAPTER_H
+#endif  // ANIRA_ENGINES_LEGACYADAPTER_H

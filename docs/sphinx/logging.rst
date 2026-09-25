@@ -339,7 +339,7 @@ scanning for a terminator.
 Android tag and the Apple subsystem and category are ``anira``, and every line reads
 ``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
 ``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
-``anira.system``, ``anira.backend.<engine>``, ``anira.web``, ``anira.capi``). A host that also
+``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``). A host that also
 uses tanh-lib has a second logger under ``thl``, which anira never touches.
 
 - Android: ``adb logcat -s anira:W`` for anira's warnings and errors, ``adb logcat -s anira``

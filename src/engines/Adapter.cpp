@@ -22,7 +22,7 @@
 #include "../utils/StatusError.h"
 #include "ProcessingGuard.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 bool Model::operator==(const Model& other) const {
     return m_engine == other.m_engine && m_path == other.m_path && m_bytes == other.m_bytes &&
@@ -412,4 +412,4 @@ Bindings bindings_of(const std::vector<SlotBinding>& inputs,
     return bindings;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

@@ -18,8 +18,8 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapter.h"
 #include "../capi/words.h"
+#include "../engines/Adapter.h"
 
 namespace anira {
 
@@ -494,8 +494,8 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an executor of the
     // descriptor shape reads the context alone. A plan without a prepared handle (a registered
     // engine's whose handler never prepared it) is anira's own bug: the chunk fails.
-    backend::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
-                                  .m_outputs = &chunk.m_tensor_output_data};
+    engine::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
+                                 .m_outputs = &chunk.m_tensor_output_data};
     if (slot.m_prepared == nullptr) { return ANIRA_ERROR_INTERNAL; }
     return slot.m_prepared->run(ctx, &buffers, reset_first);
 }

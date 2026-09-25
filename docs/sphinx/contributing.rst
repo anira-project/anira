@@ -130,8 +130,8 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 ``test/CMakeLists.txt``).
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/backends/`` mostly
-  covers ``src/backends/`` (the engine adapters), since ``include/anira/backends/`` holds
+  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
+  covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
   only ``BackendBase.h``.
 - Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
   ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the

@@ -10,7 +10,7 @@
  * and every tensor of a call bound over anira's memory: Ort::Value tensors created per call
  * over the descriptors of the context, the outputs pre-created over the output descriptors'
  * memory and handed to Session::Run, so no result is copied. File-local over
- * anira::backend::Model: nothing of ONNX Runtime enters a public header.
+ * anira::engine::Model: nothing of ONNX Runtime enters a public header.
  */
 #include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
@@ -40,7 +40,7 @@
 #include "Adapter.h"
 #include "Adapters.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -482,17 +482,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_onnx, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_onnx, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_onnx,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_onnx,
                                "onnxruntime threw a non-std exception out of Session::Run");
         }
         return ANIRA_ERROR_ENGINE;
@@ -613,7 +613,7 @@ std::vector<ProviderInfo> onnxruntime_providers() {
             providers.push_back(std::move(info));
         }
     } catch (const std::exception& error) {
-        ANIRA_LOG_WARNING(anira::log_group::k_backend_onnx,
+        ANIRA_LOG_WARNING(anira::log_group::k_engine_onnx,
                           "onnxruntime: the runtime could not be asked for its execution "
                           "providers (%s); the capabilities list the default provider alone",
                           error.what());
@@ -622,4 +622,4 @@ std::vector<ProviderInfo> onnxruntime_providers() {
     return providers;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

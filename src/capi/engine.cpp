@@ -1,6 +1,6 @@
 // anira/abi/engine.h: the carrier of a registered engine's descriptor and what a pipeline's
 // registrations mean to the validator (the adapter that runs a registered engine is the engine
-// room's DescriptorAdapter, src/backends/DescriptorAdapter.h).
+// room's DescriptorAdapter, src/engines/DescriptorAdapter.h).
 #include "engine.h"
 
 #include <anira/abi/engine.h>

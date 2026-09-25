@@ -42,8 +42,8 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "backends/Adapter.h"
 #include "capi/engine.h"
+#include "engines/Adapter.h"
 #include "float_face.h"
 #include "handler_support.h"
 

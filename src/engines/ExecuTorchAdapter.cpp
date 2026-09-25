@@ -11,7 +11,7 @@
  * delegate of every method is loaded with its runtime options set to no shared workspace and
  * no weight cache (the process-wide mutexes the prebuilt runtime otherwise takes around every
  * call), and it captures its thread pool at that load under NoThreadPoolGuard, so every call
- * runs inline on the inference thread that made it. File-local over anira::backend::Model:
+ * runs inline on the inference thread that made it. File-local over anira::engine::Model:
  * nothing of ExecuTorch enters a public header.
  */
 #ifdef USE_EXECUTORCH
@@ -65,7 +65,7 @@
 #include "executorch/runtime/platform/runtime.h"
 // IWYU pragma: end_keep
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -183,7 +183,7 @@ void set_xnnpack_options_of_the_process() {
                                                                       options.size()));
     if (error == executorch::runtime::Error::NotFound) { return; }
     if (error != executorch::runtime::Error::Ok) {
-        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+        ANIRA_LOG_WARNING(log_group::k_engine_executorch,
                           "executorch: the XNNPACK delegate refused its runtime options "
                           "(workspace_sharing_mode %d, weight_cache_enabled 0): %s; this release "
                           "spells the option keys otherwise, and executors may meet on the "
@@ -196,7 +196,7 @@ void set_xnnpack_options_of_the_process() {
     if (!in_effect.has_value() ||
         in_effect->m_workspace_sharing_mode != k_xnnpack_workspace_per_instance ||
         in_effect->m_weight_cache_enabled) {
-        ANIRA_LOG_WARNING(log_group::k_backend_executorch,
+        ANIRA_LOG_WARNING(log_group::k_engine_executorch,
                           "executorch: the XNNPACK delegate reports workspace_sharing_mode %d "
                           "and weight_cache_enabled %d after its init set %d and 0: this "
                           "release spells the option keys otherwise, and executors may meet on "
@@ -530,17 +530,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_executorch,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_executorch,
                                "executorch threw a non-std exception out of execute");
         }
         return ANIRA_ERROR_ENGINE;
@@ -701,6 +701,6 @@ std::vector<ProviderInfo> executorch_providers() {
     return providers;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 #endif  // USE_EXECUTORCH

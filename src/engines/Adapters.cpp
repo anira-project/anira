@@ -15,7 +15,7 @@
 
 #include "Adapter.h"
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -196,4 +196,4 @@ std::vector<PlanRequest> legacy_plan_requests(const anira::InferenceConfig& conf
     return requests;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

@@ -1,5 +1,5 @@
-#ifndef ANIRA_TEST_BACKENDS_BACKEND_TEST_SUPPORT_H
-#define ANIRA_TEST_BACKENDS_BACKEND_TEST_SUPPORT_H
+#ifndef ANIRA_TEST_ENGINES_ENGINE_TEST_SUPPORT_H
+#define ANIRA_TEST_ENGINES_ENGINE_TEST_SUPPORT_H
 
 // Shared helpers for the tests that drive a built-in adapter directly through the engine
 // room's interface (no Context, no threads): building the BufferF vectors a chunk holds,
@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#include "backends/Adapter.h"
+#include "engines/Adapter.h"
 
 namespace anira_test {
 
@@ -59,7 +59,7 @@ inline bool any_sample_nonzero(const anira::BufferF& buffer) {
 /// what the inference thread hands an adapter for one side of a chunk.
 inline std::vector<anira_tensor> descriptors_of(
     std::vector<anira::BufferF>& buffers,
-    const std::vector<anira::backend::TensorInfo>& tensors) {
+    const std::vector<anira::engine::TensorInfo>& tensors) {
     std::vector<anira_tensor> descriptors(buffers.size());
     for (size_t slot = 0; slot < buffers.size(); ++slot) {
         const bool has_shape = slot < tensors.size();
@@ -99,4 +99,4 @@ inline std::vector<char> read_model_file(const std::string& path) {
 
 }  // namespace anira_test
 
-#endif  // ANIRA_TEST_BACKENDS_BACKEND_TEST_SUPPORT_H
+#endif  // ANIRA_TEST_ENGINES_ENGINE_TEST_SUPPORT_H

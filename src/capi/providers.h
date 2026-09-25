@@ -20,7 +20,7 @@
 #include <string_view>
 #include <vector>
 
-#include "../backends/Adapters.h"
+#include "../engines/Adapters.h"
 #include "context.h"
 #include "engine.h"
 #include "handler.h"
@@ -46,10 +46,10 @@ struct ANIRA_API ServedProviders {
     std::string m_label;  ///< the engine's word, or a custom engine's id, for a message
     /// Usable here, the default provider first: a built-in engine's probed rows, a custom
     /// engine's declared list through its query.
-    std::vector<anira::backend::ProviderInfo> m_available;
+    std::vector<anira::engine::ProviderInfo> m_available;
     /// A custom engine's declared list, the default provider first; a built-in engine's equals
     /// m_available.
-    std::vector<anira::backend::ProviderInfo> m_declared;
+    std::vector<anira::engine::ProviderInfo> m_declared;
 
     bool serves(anira_provider provider, std::string_view provider_id) const noexcept;
     bool declares(anira_provider provider, std::string_view provider_id) const noexcept;

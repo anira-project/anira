@@ -48,7 +48,7 @@ left:
 What is no longer a stage's job: chunking a stream (the default body does it, and a stage that
 fills ``pre_process`` calls it for the slots it does not handle), feeding a recurrent state
 back (declare the pair), and a custom engine (part of the inference stage,
-:doc:`custom_backends`).
+:doc:`custom_engines`).
 
 The rules in short
 ------------------

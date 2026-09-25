@@ -24,8 +24,8 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapters.h"
 #include "../capi/v3_to_v2.h"
+#include "../engines/Adapters.h"
 #include "TensorRun.h"
 
 namespace anira {
@@ -51,13 +51,13 @@ InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
     // build, CUSTOM last, on the custom backend when one is given.
     : InferenceManager(pp_processor,
                        inference_config,
-                       backend::legacy_plan_requests(inference_config, custom_processor),
+                       engine::legacy_plan_requests(inference_config, custom_processor),
                        context_config,
                        rt_latch) {}
 
 InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
-                                   std::vector<backend::PlanRequest> requests,
+                                   std::vector<engine::PlanRequest> requests,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
     : m_inference_config(inference_config)

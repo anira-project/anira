@@ -240,7 +240,7 @@ inline size_t elements_of(const anira_tensor& tensor) noexcept {
     return count;
 }
 
-/// The C twin of the 2.x pass-through (BackendBase::process, src/backends/BackendBase.cpp):
+/// The C twin of the 2.x pass-through (BackendBase::process, src/engines/BackendBase.cpp):
 /// output i is a copy of input i when both carry the same element count and dtype, zeros
 /// otherwise; every output beyond the input count is zeros; State and Static slots pair by
 /// index like every other slot. ANIRA_ERROR_INVALID_ARGUMENT for a tensor that is no packed

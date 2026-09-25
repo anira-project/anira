@@ -29,7 +29,7 @@ namespace anira::capi {
 
 /// The model config as the compact JSON text anira_model_config_to_json writes (json.cpp): the
 /// whole variant, every entry, spec and extension, in a canonical order. What a custom engine's
-/// loaded model is pooled by beside its record (backend::Model::m_variant), since its load may
+/// loaded model is pooled by beside its record (engine::Model::m_variant), since its load may
 /// read any of it.
 std::string model_config_json(const anira_model_config& model);
 

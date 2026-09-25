@@ -10,7 +10,7 @@
  * index order (what LiteRtRunCompiledModel takes), filled from and read into the descriptors'
  * memory through a lock and a memcpy per call (the managed buffers need LiteRT's own
  * alignment; binding anira's memory in place waits for the aligned chunk storage). File-local
- * over anira::backend::Model: nothing of LiteRT enters a public header.
+ * over anira::engine::Model: nothing of LiteRT enters a public header.
  */
 #ifdef USE_LITERT
 
@@ -54,12 +54,12 @@
 #include "litert/c/litert_tensor_buffer_types.h"
 
 // The accelerator query is internal to LiteRT and exported by every package but the Windows
-// DLL (cmake/backends/litert.cmake defines ANIRA_LITERT_ACCELERATOR_QUERY where it is).
+// DLL (cmake/engines/litert.cmake defines ANIRA_LITERT_ACCELERATOR_QUERY where it is).
 #if defined(ANIRA_LITERT_ACCELERATOR_QUERY)
 #include "litert/c/internal/litert_accelerator.h"
 #endif
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -619,17 +619,17 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert, "%s", e.what());
         }
         return e.status();
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_litert,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_litert,
                                "litert threw a non-std exception out of LiteRtRunCompiledModel");
         }
         return ANIRA_ERROR_ENGINE;
@@ -751,7 +751,7 @@ std::vector<ProviderInfo> litert_providers() {
     }};
     LiteRtEnvironment env = nullptr;
     if (LiteRtCreateEnvironment(1, env_options.data(), &env) != kLiteRtStatusOk || env == nullptr) {
-        ANIRA_LOG_WARNING(anira::log_group::k_backend_litert,
+        ANIRA_LOG_WARNING(anira::log_group::k_engine_litert,
                           "litert: no environment could be created to ask for the accelerators; "
                           "the capabilities list the default provider alone");
         return providers;
@@ -767,6 +767,6 @@ std::vector<ProviderInfo> litert_providers() {
     return providers;
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
 #endif  // USE_LITERT

@@ -91,7 +91,7 @@ public:
      * @brief The 2.x constructor over a context config: the 2.x plan table, the context's
      * config passed through unchanged
      *
-     * Asks the core for the 2.x plan table (backend::legacy_plan_requests: one plan per
+     * Asks the core for the 2.x plan table (engine::legacy_plan_requests: one plan per
      * configured model, then every other backend of the build, CUSTOM last, on
      * `custom_processor` when one is given) and delegates to the constructor over requests.
      *
@@ -128,7 +128,7 @@ public:
      */
     InferenceManager(PrePostProcessor& pp_processor,
                      InferenceConfig& inference_config,
-                     std::vector<backend::PlanRequest> requests,
+                     std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,
                      anira::RtLatch* rt_latch = nullptr);
 

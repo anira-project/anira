@@ -1,9 +1,9 @@
-#ifndef ANIRA_BACKENDS_ADAPTER_H
-#define ANIRA_BACKENDS_ADAPTER_H
+#ifndef ANIRA_ENGINES_ADAPTER_H
+#define ANIRA_ENGINES_ADAPTER_H
 /*
  * The engine room's interface: what every engine anira runs looks like from the scheduler,
  * built in or registered, in the shape of the C descriptor (anira/abi/engine.h) and its
- * lifecycle. Private to src/backends and the scheduler (and the tests through the src/ include
+ * lifecycle. Private to src/engines and the scheduler (and the tests through the src/ include
  * directory): nothing here enters the ABI. An adapter is what adapts an engine to this shape;
  * the files keep that word, the classes carry the lifecycle's.
  *
@@ -50,7 +50,7 @@
 #include <utility>
 #include <vector>
 
-namespace anira::backend {
+namespace anira::engine {
 
 /// One tensor of a loaded model as its engine is handed it: the canonical name, the export's
 /// name where the entry's tensors record names the slot (empty otherwise: the slot then binds
@@ -583,6 +583,6 @@ ANIRA_API float* host_f32_packed(const anira_tensor& tensor, size_t expected) no
 /// not float32.
 ANIRA_API void require_f32(const Model& model, const char* engine);
 
-}  // namespace anira::backend
+}  // namespace anira::engine
 
-#endif  // ANIRA_BACKENDS_ADAPTER_H
+#endif  // ANIRA_ENGINES_ADAPTER_H

@@ -28,9 +28,9 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
-#include "backends/Adapter.h"
-#include "backends/Adapters.h"
 #include "capi/capi_internal.h"
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
 
 using namespace anira;
 using anira_test::RecordCollector;
@@ -615,7 +615,7 @@ std::vector<anira_backend_id> rows_of(const std::vector<anira_backend_id>& backe
 }
 
 /// Whether a backend row names a provider (the enum's value, or a custom name).
-bool names(const anira_backend_id& row, const anira::backend::ProviderInfo& provider) {
+bool names(const anira_backend_id& row, const anira::engine::ProviderInfo& provider) {
     const std::string id = row.provider_id != nullptr ? row.provider_id : "";
     return row.provider == static_cast<uint32_t>(provider.m_provider) &&
            id == provider.m_provider_id;
@@ -649,8 +649,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     size_t total = 0;
     for (const anira_engine engine : expected) {
         SCOPED_TRACE(static_cast<int>(engine));
-        const std::vector<anira::backend::ProviderInfo> oracle =
-            anira::backend::builtin_providers(engine);
+        const std::vector<anira::engine::ProviderInfo> oracle =
+            anira::engine::builtin_providers(engine);
         const std::vector<anira_backend_id> rows = rows_of(backends, engine);
         ASSERT_EQ(rows.size(), oracle.size()) << "one row per provider the runtime reports";
         ASSERT_FALSE(rows.empty());

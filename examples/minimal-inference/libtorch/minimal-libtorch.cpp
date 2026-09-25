@@ -19,7 +19,7 @@ Licence: modified BSD
 #include "../../../include/anira/utils/MemoryBlock.h"
 
 // m_ prefix is not used to indicate member variables it is used to be compatible with code in the
-// LibTorch adapter (src/backends/LibTorchAdapter.cpp)
+// LibTorch adapter (src/engines/LibTorchAdapter.cpp)
 
 void minimal_inference(anira::InferenceConfig m_inference_config) {
     std::cout << "Minimal LibTorch example:" << std::endl;

@@ -263,7 +263,7 @@ and no ``unload`` follows for that load. What the call hands back through ``out_
 **executor** is one call slot, what one ``process`` call runs on and never two at once (a
 session, an interpreter, a method), and it owns everything with run-time state; what one load
 shares between its executors is only what is immutable during a run. The built-in engines
-draw the line so (``src/backends/``, internal):
+draw the line so (``src/engines/``, internal):
 
 - ONNX Runtime: one session-options object per loaded model, shared, over the engine object's
   environment (one per process, created at the engine's init with anira's log level; the web
@@ -886,7 +886,7 @@ Using an engine directly in a custom engine
 
 A custom engine may drive one of the bundled inference engines itself, for example to use an
 ONNX Runtime execution provider or session option anira's own ONNX Runtime adapter
-(``src/backends/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that
+(``src/engines/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that
 safe, and they are the same rules anira's own adapters follow.
 
 **Link the engine target.** ``anira::anira`` carries anira's headers and the ``USE_<ENGINE>``
@@ -981,6 +981,6 @@ application ships its own engine runtime").
     Subclassing :cpp:class:`anira::BackendBase` is the 2.x runtime's way of adding an engine,
     and stays with the 2.x :cpp:class:`anira::InferenceHandler` until the runtime cut-over;
     :doc:`migration` maps each of its virtuals onto the descriptor above. The engines anira
-    ships are implemented as adapters of the same descriptor shape (``src/backends/``, internal),
+    ships are implemented as adapters of the same descriptor shape (``src/engines/``, internal),
     which is where to look for how a real engine binds by name, checks the shapes it was
     handed, splits what one load shares from what one executor owns, and stages its buffers.

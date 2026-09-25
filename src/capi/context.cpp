@@ -23,7 +23,7 @@
 #include <utility>
 #include <vector>
 
-#include "../backends/Adapter.h"
+#include "../engines/Adapter.h"
 #include "capi_internal.h"
 #include "enumerate.h"
 #include "ext_registry.h"
@@ -70,7 +70,7 @@ bool has_device_block(const anira_context_config& config) {
 }
 
 // The CPU rule of the edge registry (providers.h cpu_provider), on a probed provider.
-bool cpu_provider(const anira::backend::ProviderInfo& provider) noexcept {
+bool cpu_provider(const anira::engine::ProviderInfo& provider) noexcept {
     return anira::capi::cpu_provider(provider.m_provider, provider.m_provider_id);
 }
 
@@ -87,10 +87,10 @@ void probe(anira_capabilities& capabilities) {
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         // The core's engine object of the engine: the one its loaded models hold, or one made
         // for this query alone and freed with it.
-        const std::shared_ptr<anira::backend::BuiltinEngine> object =
+        const std::shared_ptr<anira::engine::BuiltinEngine> object =
             anira::Core::builtin_engine(engine);
         if (object == nullptr) { continue; }
-        for (const anira::backend::ProviderInfo& provider : object->providers()) {
+        for (const anira::engine::ProviderInfo& provider : object->providers()) {
             const char* provider_id = nullptr;
             if (!provider.m_provider_id.empty()) {
                 strings.push_back(provider.m_provider_id);

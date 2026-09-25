@@ -7,7 +7,7 @@
  * returns by position (a method returns unnamed tensors). Every input of a call is a
  * torch::from_blob view over the descriptor's memory (no deleter: the view owns nothing and
  * the struct's memory is never swapped away); the result tensors are the engine's own and are
- * copied into the output descriptors' memory. File-local over anira::backend::Model: nothing
+ * copied into the output descriptors' memory. File-local over anira::engine::Model: nothing
  * of LibTorch enters a public header.
  */
 #include <anira/abi/engine.h>
@@ -77,7 +77,7 @@
 #pragma GCC diagnostic pop
 #endif
 
-namespace anira::backend {
+namespace anira::engine {
 
 namespace {
 
@@ -414,22 +414,22 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
         return ANIRA_OK;
     } catch (const StatusError& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_libtorch, "%s", e.what());
         }
         return e.status();
     } catch (const c10::Error& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what_without_backtrace());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_libtorch, "%s", e.what_without_backtrace());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (const std::exception& e) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch, "%s", e.what());
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_libtorch, "%s", e.what());
         }
         return ANIRA_ERROR_ENGINE;
     } catch (...) {
         if (m_failures.first_failure()) {
-            ANIRA_LOG_RT_ERROR(log_group::k_backend_libtorch,
+            ANIRA_LOG_RT_ERROR(log_group::k_engine_libtorch,
                                "libtorch threw a non-std exception out of the method");
         }
         return ANIRA_ERROR_ENGINE;
@@ -548,4 +548,4 @@ std::shared_ptr<Loaded> make_libtorch_loaded(const std::shared_ptr<BuiltinEngine
     return std::make_shared<LibTorchLoaded>(std::move(own));
 }
 
-}  // namespace anira::backend
+}  // namespace anira::engine

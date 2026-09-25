@@ -18,8 +18,8 @@
 #include <string_view>
 #include <vector>
 
-#include "../backends/Adapter.h"
-#include "../backends/Adapters.h"
+#include "../engines/Adapter.h"
+#include "../engines/Adapters.h"
 #include "../utils/StatusError.h"
 #include "engine.h"
 #include "handles.h"
@@ -29,30 +29,29 @@ namespace anira::capi {
 
 namespace {
 
-anira::backend::ProviderInfo default_provider() {
-    return anira::backend::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = ""};
+anira::engine::ProviderInfo default_provider() {
+    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = ""};
 }
 
 // A declared provider of a custom engine's list: a word of the enum by its value, any other
 // word a custom provider by its name.
-anira::backend::ProviderInfo declared_provider(const std::string& word) {
+anira::engine::ProviderInfo declared_provider(const std::string& word) {
     if (const std::optional<anira_provider> known = provider_of_word(word)) {
-        return anira::backend::ProviderInfo{.m_provider = *known, .m_provider_id = ""};
+        return anira::engine::ProviderInfo{.m_provider = *known, .m_provider_id = ""};
     }
-    return anira::backend::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT,
-                                        .m_provider_id = word};
+    return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_DEFAULT, .m_provider_id = word};
 }
 
-bool same(const anira::backend::ProviderInfo& info,
+bool same(const anira::engine::ProviderInfo& info,
           anira_provider provider,
           std::string_view provider_id) noexcept {
     return info.m_provider == provider && info.m_provider_id == provider_id;
 }
 
 // "default, coreml, com.example.npu"; "none" for an empty list.
-std::string provider_list(const std::vector<anira::backend::ProviderInfo>& providers) {
+std::string provider_list(const std::vector<anira::engine::ProviderInfo>& providers) {
     std::string text;
-    for (const anira::backend::ProviderInfo& info : providers) {
+    for (const anira::engine::ProviderInfo& info : providers) {
         if (!text.empty()) { text += ", "; }
         text += provider_label(info.m_provider, info.m_provider_id);
     }
@@ -77,7 +76,7 @@ anira_init_info query_info(const anira_context& context) {
 }
 
 bool ServedProviders::serves(anira_provider provider, std::string_view provider_id) const noexcept {
-    for (const anira::backend::ProviderInfo& info : m_available) {
+    for (const anira::engine::ProviderInfo& info : m_available) {
         if (same(info, provider, provider_id)) { return true; }
     }
     return false;
@@ -85,7 +84,7 @@ bool ServedProviders::serves(anira_provider provider, std::string_view provider_
 
 bool ServedProviders::declares(anira_provider provider,
                                std::string_view provider_id) const noexcept {
-    for (const anira::backend::ProviderInfo& info : m_declared) {
+    for (const anira::engine::ProviderInfo& info : m_declared) {
         if (same(info, provider, provider_id)) { return true; }
     }
     return false;
@@ -98,7 +97,7 @@ ServedProviders served_by_builtin(const anira_context& context, anira_engine eng
     const std::scoped_lock<std::mutex> lock(context.m_capabilities.m_mutex);
     for (const anira_backend_id& row : context.m_capabilities.m_backends) {
         if (row.engine != static_cast<uint32_t>(engine)) { continue; }
-        served.m_available.push_back(anira::backend::ProviderInfo{
+        served.m_available.push_back(anira::engine::ProviderInfo{
             .m_provider = static_cast<anira_provider>(row.provider),
             .m_provider_id = row.provider_id != nullptr ? row.provider_id : ""});
     }
@@ -191,7 +190,7 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
     CustomRows rows;
     for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
         const ServedProviders served = served_by_custom(context, *engine);
-        for (const anira::backend::ProviderInfo& info : served.m_available) {
+        for (const anira::engine::ProviderInfo& info : served.m_available) {
             // The strings are the carrier's: its id, and the declared word of a custom
             // provider (the list's own string, at a stable address while the carrier lives).
             const char* provider_id = nullptr;

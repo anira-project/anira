@@ -41,7 +41,7 @@ function(anira_add_test_binary TARGET)
         # second a neighbour's fopen truncated a list between its writer's exit and
         # CMake's read, and the build failed with "Syntax error: value, object or array
         # expected" (Homebrew CMake 4.4.0 on the macOS runners; test_utils,
-        # test_backends and test_scheduler each hit it). Serial discovery has no such
+        # test_engines and test_scheduler each hit it). Serial discovery has no such
         # window on any CMake version.
         gtest_discover_tests(${TARGET}
             DISCOVERY_MODE PRE_TEST
@@ -66,7 +66,7 @@ endfunction()
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
 #   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Stages).
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
-#       test_backends, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
+#       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
 #       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
 #       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal (test_abi's
 #       internal probes and the v2_objects.h oracle arms, PR 12).
@@ -112,15 +112,15 @@ anira_add_test_binary(test_scheduler
 # and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
-anira_add_test_binary(test_backends
-	backends/test_Adapter.cpp
-	backends/test_BackendBase.cpp
-	backends/test_ExecuTorchModelFunction.cpp
-	backends/test_AdapterExecuTorch.cpp
-	backends/test_AdapterLibTorch.cpp
+anira_add_test_binary(test_engines
+	engines/test_Adapter.cpp
+	engines/test_BackendBase.cpp
+	engines/test_ExecuTorchModelFunction.cpp
+	engines/test_AdapterExecuTorch.cpp
+	engines/test_AdapterLibTorch.cpp
 )
-# The engine room (src/backends/Adapter.h and the adapters) for test_Adapter.
-target_include_directories(test_backends PRIVATE "${anira_SOURCE_DIR}/src")
+# The engine room (src/engines/Adapter.h and the adapters) for test_Adapter.
+target_include_directories(test_engines PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_handler
 	contracts/test_EngineLinkage.cpp

@@ -3,7 +3,7 @@
 # ==============================================================================
 
 # (The static TFLite archive's TFL_COMPILE_LIBRARY definition rides on anira::tflite,
-# see cmake/backends.cmake.)
+# see cmake/engines.cmake.)
 
 if(NOT CMAKE_BUILD_TYPE)
     message(FATAL_ERROR "You need to specify CMAKE_BUILD_TYPE")
