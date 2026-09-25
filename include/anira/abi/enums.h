@@ -617,8 +617,8 @@ typedef enum anira_pad_policy {
  * the engine is ANIRA_ENGINE_CUSTOM. A built-in engine is its value with a NULL id; a
  * custom engine (anira_custom_engine_create, added to a pipeline with
  * anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its reverse-URI id (a stage
- * reads it with anira_stage_engine_id); ANIRA_ENGINE_NONE names no engine and takes no
- * id. A setter refuses any other combination with ANIRA_ERROR_INVALID_ARGUMENT.
+ * reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no engine and takes no id.
+ * A setter refuses any other combination with ANIRA_ERROR_INVALID_ARGUMENT.
  */
 typedef enum anira_engine {
     /**

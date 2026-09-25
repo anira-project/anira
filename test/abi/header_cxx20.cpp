@@ -145,8 +145,8 @@ static_assert(noexcept(std::declval<const anira::RingView&>().dtype()) &&
               noexcept(std::declval<anira::RingView&>().pop_block(0, std::span<float>{})) &&
               noexcept(std::declval<anira::RingView&>().push_fill(0, 0.0F, 0)));
 static_assert(noexcept(std::declval<const anira::StageContext&>().phase()) &&
-              noexcept(std::declval<const anira::StageContext&>().engine_id()) &&
-              noexcept(std::declval<const anira::StageContext&>().provider_id()) &&
+              noexcept(std::declval<const anira::StageContext&>().engine()) &&
+              noexcept(std::declval<const anira::StageContext&>().provider()) &&
               noexcept(std::declval<const anira::StageContext&>()
                            .input_role(0, std::declval<anira::Role&>())) &&
               noexcept(std::declval<const anira::StageContext&>()
@@ -224,7 +224,9 @@ static_assert(std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>
               std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>().model_bytes(0)),
                              std::span<const std::byte>> &&
               std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>().model_engine(0)),
-                             anira::EngineKind> &&
+                             anira::EngineRef> &&
+              std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>().provider()),
+                             anira::ProviderRef> &&
               std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>().model_path(0)),
                              std::string_view> &&
               std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>().model()),
@@ -232,10 +234,21 @@ static_assert(std::is_same_v<decltype(std::declval<const anira::EngineLoadInfo&>
               noexcept(std::declval<const anira::EngineLoadInfo&>().row()) &&
               noexcept(std::declval<const anira::EngineLoadInfo&>().instances()) &&
               noexcept(std::declval<const anira::EngineLoadInfo&>().model_count()) &&
-              noexcept(std::declval<const anira::EngineLoadInfo&>().model_engine_id(0)) &&
+              noexcept(std::declval<const anira::EngineLoadInfo&>().model_engine(0)) &&
               noexcept(std::declval<const anira::EngineLoadInfo&>().model_bytes(0)) &&
               noexcept(std::declval<const anira::EngineLoadInfo&>().input_names()) &&
               noexcept(std::declval<const anira::EngineLoadInfo&>().output_names()));
+// The pairs of the C getters, one small aggregate per axis: the value and the id beside it.
+static_assert(std::is_trivially_copyable_v<anira::EngineRef>);
+static_assert(std::is_aggregate_v<anira::EngineRef>);
+static_assert(std::is_trivially_copyable_v<anira::ProviderRef>);
+static_assert(std::is_aggregate_v<anira::ProviderRef>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>().model_engine(0)),
+                             anira::EngineRef>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>().default_provider()),
+                             anira::ProviderRef>);
+static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>().engine()),
+                             anira::EngineRef>);
 static_assert(std::is_trivially_copyable_v<anira::EngineContext> &&
               !std::is_default_constructible_v<anira::EngineContext>);
 static_assert(
@@ -309,12 +322,12 @@ static_assert(noexcept(std::declval<const anira::SpecView&>().name()) &&
 static_assert(noexcept(std::declval<const anira::TensorSpec&>().view()));
 static_assert(noexcept(std::declval<const anira::ModelConfig&>().input_count()) &&
               noexcept(std::declval<const anira::ModelConfig&>().output_count()) &&
-              noexcept(std::declval<const anira::ModelConfig&>().default_engine()) &&
-              noexcept(std::declval<const anira::ModelConfig&>().default_engine_id()) &&
-              noexcept(std::declval<const anira::ModelConfig&>().default_provider()) &&
-              noexcept(std::declval<const anira::ModelConfig&>().default_provider_id()) &&
-              noexcept(std::declval<const anira::ModelConfig&>().model_provider(0)) &&
-              noexcept(std::declval<const anira::ModelConfig&>().model_provider_id(0)) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_engine().kind) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_engine().id) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_provider().kind) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_provider().id) &&
+              noexcept(std::declval<const anira::ModelConfig&>().model_provider(0).kind) &&
+              noexcept(std::declval<const anira::ModelConfig&>().model_provider(0).id) &&
               noexcept(std::declval<const anira::ModelConfig&>().state()) &&
               noexcept(std::declval<const anira::ModelConfig&>().max_instances()) &&
               noexcept(std::declval<const anira::ModelConfig&>().anchor()));
@@ -503,8 +516,8 @@ public:
 
     std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& info) override {
         if (info.model() == nullptr || info.row() >= info.model_count() ||
-            info.model_engine(info.row()) != ANIRA_ENGINE_CUSTOM ||
-            info.model_engine_id(info.row()).empty() || info.inputs().empty() ||
+            info.model_engine(info.row()).kind != ANIRA_ENGINE_CUSTOM ||
+            info.model_engine(info.row()).id.empty() || info.inputs().empty() ||
             info.inputs().size() != info.input_names().size() ||
             info.outputs().size() != info.output_names().size() ||
             info.option_keys().size() != info.option_values().size() ||
@@ -553,7 +566,7 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
              out.push_block(0, std::span<const float>(block)) + out.push_fill(0, fill, 1) +
              in.available(0) + in.available_past(0) + in.num_channels() + in.dtype();
     moved += ctx.num_inputs() + ctx.num_outputs() + ctx.variant() + ctx.ticket() + ctx.phase() +
-             ctx.engine() + ctx.provider() + ctx.entry();
+             ctx.engine().kind + ctx.provider().kind + ctx.entry();
     moved += ctx.input_role(0, role) == ANIRA_OK ? 1 : 0;
     moved += ctx.output_role(0, role) == ANIRA_OK ? 1 : 0;
     moved += role;
@@ -616,13 +629,14 @@ int anira_header_cxx20_probe() {
                       : 0;
         checks += first_in.native() != nullptr && first_in.axis(0).tag == ANIRA_AXIS_ANY ? 1 : 0;
         checks += model.input_count() + model.output_count() + model.max_instances() > 0 ? 1 : 0;
-        checks += model.default_engine() == ANIRA_ENGINE_NONE && model.default_engine_id().empty()
-                      ? 1
-                      : 0;
-        checks += model.default_provider() == ANIRA_PROVIDER_DEFAULT &&
-                          model.default_provider_id().empty() &&
-                          model.model_provider(0) == ANIRA_PROVIDER_DEFAULT &&
-                          model.model_provider_id(0).empty()
+        checks +=
+            model.default_engine().kind == ANIRA_ENGINE_NONE && model.default_engine().id.empty()
+                ? 1
+                : 0;
+        checks += model.default_provider().kind == ANIRA_PROVIDER_DEFAULT &&
+                          model.default_provider().id.empty() &&
+                          model.model_provider(0).kind == ANIRA_PROVIDER_DEFAULT &&
+                          model.model_provider(0).id.empty()
                       ? 1
                       : 0;
         checks += model.state() == ANIRA_MODEL_STATELESS && model.anchor().empty() ? 1 : 0;
@@ -660,7 +674,7 @@ int anira_header_cxx20_probe() {
         const anira::Pipeline with_engine{anira::stage::Inference(model).engine(probe_engine)};
         const anira::stage::Inference brings(model);
         checks += brings.engines().empty() ? 1 : 0;
-        const anira::EngineKind kind = model.model_engine(0);
+        const anira::EngineKind kind = model.model_engine(0).kind;
         model.default_engine(kind)
             .default_provider(ANIRA_PROVIDER_CUDA)
             .add_model_path("org.example.probe", path);

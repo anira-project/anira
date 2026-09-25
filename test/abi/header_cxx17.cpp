@@ -259,14 +259,17 @@ static_assert(noexcept(anira_contract_hard_set_latency(nullptr, nullptr, 0)));
 static_assert(noexcept(anira_contract_hard_num_latencies(nullptr)));
 static_assert(noexcept(anira_contract_hard_latency(nullptr, 0, nullptr, nullptr)));
 static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
-// The engine word on the public surface: the default provider and its read-back, the stage's
-// two id accessors, the renamed enumeration and setters.
+// The engine word on the public surface: the default provider and its read-back, the pair
+// getters and the stage's two pair accessors (a status, the value and the nullable id), the
+// renamed enumeration and the pair setters.
 static_assert(
     noexcept(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_DEFAULT, nullptr)));
-static_assert(noexcept(anira_model_config_default_provider(nullptr)));
-static_assert(noexcept(anira_model_config_default_provider_id(nullptr)));
-static_assert(noexcept(anira_stage_engine_id(nullptr, nullptr)));
-static_assert(noexcept(anira_stage_provider_id(nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_default_provider(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_default_engine(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_model_engine(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_model_config_model_provider(nullptr, 0, nullptr, nullptr)));
+static_assert(noexcept(anira_stage_engine(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_stage_provider(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_enabled_engines(0, nullptr, nullptr)));
 static_assert(noexcept(
     anira_model_config_set_default_engine(nullptr, ANIRA_ENGINE_CUSTOM, nullptr, nullptr)));
@@ -276,8 +279,17 @@ static_assert(noexcept(anira_model_config_add_model_path(nullptr,
                                                          nullptr,
                                                          nullptr,
                                                          nullptr)));
-static_assert(
-    std::is_same_v<decltype(anira_model_config_default_provider_id(nullptr)), const char*>);
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_model_config_model_engine),
+                                    const anira_model_config*,
+                                    uint32_t,
+                                    anira_engine*,
+                                    const char**>);
+static_assert(std::is_invocable_r_v<anira_status,
+                                    decltype(&anira_stage_provider),
+                                    const anira_stage_ctx*,
+                                    anira_provider*,
+                                    const char**>);
 static_assert(
     std::is_same_v<decltype(anira_model_config_input(nullptr, 0)), const anira_tensor_spec*>);
 static_assert(std::is_invocable_r_v<anira_status,

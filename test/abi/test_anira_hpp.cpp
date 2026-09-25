@@ -282,8 +282,8 @@ TEST(AbiCxx, BuildersLandInTheHandle) {
     EXPECT_EQ(cfg.m_max_instances, 2u);
     EXPECT_EQ(cfg.m_anchor, "audio_out");
     EXPECT_EQ(model.model_count(), 2u);
-    EXPECT_EQ(model.model_engine(0), ANIRA_ENGINE_LIBTORCH);
-    EXPECT_TRUE(model.model_engine_id(0).empty()) << "a built-in engine has no id";
+    EXPECT_EQ(model.model_engine(0).kind, ANIRA_ENGINE_LIBTORCH);
+    EXPECT_TRUE(model.model_engine(0).id.empty()) << "a built-in engine has no id";
     EXPECT_EQ(model.model_path(1), "model.tflite");
 }
 
@@ -337,8 +337,8 @@ TEST(AbiCxx, TheVersionTwoUpgradeHoldsBackTheLegacyContractOnce) {
     ModelConfig gain = ModelConfig::from_json(anira_test::k_simple_gain_v2);
     EXPECT_TRUE(gain.upgraded());
     EXPECT_EQ(gain.model_count(), 5u);
-    EXPECT_EQ(gain.model_engine(0), ANIRA_ENGINE_LIBTORCH);
-    EXPECT_EQ(gain.model_engine(4), ANIRA_ENGINE_EXECUTORCH);
+    EXPECT_EQ(gain.model_engine(0).kind, ANIRA_ENGINE_LIBTORCH);
+    EXPECT_EQ(gain.model_engine(4).kind, ANIRA_ENGINE_EXECUTORCH);
     std::optional<ContractHandle> legacy = gain.take_legacy_contract();
     ASSERT_TRUE(legacy.has_value());
     // The handle, or an empty one; has_value() was asserted above.
@@ -362,7 +362,7 @@ TEST(AbiCxx, AVersionThreeDocumentIsNotUpgradedAndCarriesNoLegacyContract) {
     EXPECT_EQ(model.model_count(), 3u);
     EXPECT_EQ(model.model_path(0), "/base/model.onnx") << "relative paths resolve against base_dir";
     EXPECT_EQ(model.model_path(2), "/abs/model.mlpackage") << "absolute paths stay";
-    EXPECT_EQ(model.model_engine_id(2), "de.tu-berlin.coreml");
+    EXPECT_EQ(model.model_engine(2).id, "de.tu-berlin.coreml");
     EXPECT_FALSE(model.take_legacy_contract().has_value());
 }
 
@@ -1046,8 +1046,8 @@ public:
         anira::RingView ring;
         anira::Tensor tensor{};
         const bool as_promised =
-            ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine() == ANIRA_ENGINE_CUSTOM &&
-            ctx.provider() == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
+            ctx.phase() == ANIRA_PHASE_PRE_PROCESS && ctx.engine().kind == ANIRA_ENGINE_CUSTOM &&
+            ctx.provider().kind == ANIRA_PROVIDER_DEFAULT && ctx.variant() == 0 &&
             ctx.num_inputs() == 1 && ctx.num_outputs() == 1 &&
             ctx.ticket() == ANIRA_TICKET_INVALID && ctx.entry() < m_counts->m_num_entries &&
             ctx.input_role(0, in_role) == ANIRA_OK && in_role == ANIRA_ROLE_STREAMED &&
@@ -2011,13 +2011,13 @@ public:
         auto counts = std::make_shared<EngineLoadCounts>();
         counts->m_row = info.row();
         counts->m_model_count = info.model_count();
-        counts->m_engine = info.model_engine(info.row());
-        counts->m_engine_id = std::string(info.model_engine_id(info.row()));
+        counts->m_engine = info.model_engine(info.row()).kind;
+        counts->m_engine_id = std::string(info.model_engine(info.row()).id);
         counts->m_path = std::string(info.model_path(info.row()));
         counts->m_num_bytes = info.model_bytes(info.row()).size();
         counts->m_instances = info.instances();
-        counts->m_provider = info.provider();
-        counts->m_provider_id = std::string(info.provider_id());
+        counts->m_provider = info.provider().kind;
+        counts->m_provider_id = std::string(info.provider().id);
         for (const char* name : info.input_names()) { counts->m_input_names.emplace_back(name); }
         for (const char* name : info.output_names()) { counts->m_output_names.emplace_back(name); }
         counts->m_inputs.assign(info.inputs().begin(), info.inputs().end());
@@ -2800,13 +2800,13 @@ TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
 TEST(AbiCxx, EngineKindIsTheEnumAlias) {
     static_assert(std::is_same_v<anira::EngineKind, anira_engine>);
     ModelConfig model = engine_stream_model();
-    const anira::EngineKind custom = model.model_engine(0);
+    const anira::EngineKind custom = model.model_engine(0).kind;
     EXPECT_EQ(custom, ANIRA_ENGINE_CUSTOM);
     const anira::EngineKind torch = ANIRA_ENGINE_LIBTORCH;
     const uint32_t index = model.add_model_path(torch, "model.pt");
-    EXPECT_EQ(model.model_engine(index), torch);
+    EXPECT_EQ(model.model_engine(index).kind, torch);
     model.default_engine(torch);
-    EXPECT_EQ(model.model_engine_id(index), std::string_view{});
+    EXPECT_EQ(model.model_engine(index).id, std::string_view{});
 }
 // ---- runtime tensors -------------------------------------------------------------------------
 

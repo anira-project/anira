@@ -15,6 +15,7 @@
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "fixtures.h"
+#include "pair_read.h"
 
 namespace {
 
@@ -227,18 +228,22 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
         {"engine": "onnxruntime", "provider": "default", "path": "net.onnx"},
         {"engine": "libtorch", "path": "net.pt"}]})");
     ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
-    EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 0), ANIRA_ENGINE_EXECUTORCH);
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 0), ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 0), nullptr);
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 1), ANIRA_PROVIDER_CUSTOM);
-    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 1), "com.example.npu");
-    EXPECT_EQ(anira_model_config_model_engine(loaded.m_config, 2), ANIRA_ENGINE_CUSTOM);
-    EXPECT_STREQ(anira_model_config_model_engine_id(loaded.m_config, 2), "com.example.engine");
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 2), ANIRA_PROVIDER_CUSTOM);
-    EXPECT_STREQ(anira_model_config_model_provider_id(loaded.m_config, 2), "fast");
-    EXPECT_EQ(anira_model_config_model_provider(loaded.m_config, 3), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 3), nullptr);
-    EXPECT_EQ(anira_model_config_model_provider_id(loaded.m_config, 4), nullptr);
+    const anira_model_config* config = loaded.m_config;
+    EXPECT_EQ(anira_test::model_engine(config, 0),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_EXECUTORCH, ""}));
+    EXPECT_EQ(anira_test::model_provider(config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_COREML, ""}));
+    EXPECT_EQ(anira_test::model_provider(config, 1),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "com.example.npu"}));
+    EXPECT_EQ(anira_test::model_engine(config, 2),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_CUSTOM, "com.example.engine"}));
+    EXPECT_EQ(anira_test::model_provider(config, 2),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "fast"}));
+    EXPECT_EQ(anira_test::model_provider(config, 3),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
+        << "\"default\" spells a neutral entry";
+    EXPECT_EQ(anira_test::model_provider(config, 4),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}));
     const std::string text = model_text(loaded.m_config);
     EXPECT_NE(text.find("\"engine\": \"executorch\""), std::string::npos) << text;
     EXPECT_NE(text.find("\"provider\": \"coreml\""), std::string::npos) << text;

@@ -446,8 +446,8 @@ engine's, and say what the handler is: ``ANIRA_PREPARE_EXCLUSIVE`` in
 the id and the plan's provider beside it (``provider``, or ``ANIRA_PROVIDER_CUSTOM`` with
 ``provider_id`` for a custom one; the pair rule of ``anira_engine`` and ``anira_provider``):
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
-``anira_stage_ctx.engine`` and ``provider`` in the stage's phases with the id and the name
-through ``anira_stage_engine_id`` and ``anira_stage_provider_id``, ``anira_edge_info.to_engine``
+``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, both pairs whole through
+``anira_stage_engine`` and ``anira_stage_provider``, ``anira_edge_info.to_engine``
 with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
 ``ANIRA_ENGINE_CUSTOM``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
@@ -749,9 +749,10 @@ returns a ``std::unique_ptr<Engine::Prepared>``, the handler's handle, on which
 base ``reset`` does nothing). The records are views: :cpp:class:`anira::InitInfo`
 (``log_level()``, ``num_threads()``, ``context()``), :cpp:class:`anira::EngineLoadInfo`
 (``row()``, ``model()``, the getters ``model_path(i)``, ``model_bytes(i)``,
-``model_engine_id(i)``, ``inputs()`` / ``outputs()`` as ``std::span<const Tensor>``,
-``input_names()`` / ``output_names()``, ``instances()``, ``provider()``,
-``provider_id()`` and the options ``option_keys()`` / ``option_values()``),
+``model_engine(i)`` (an :cpp:struct:`anira::EngineRef`, the pair), ``inputs()`` /
+``outputs()`` as ``std::span<const Tensor>``, ``input_names()`` / ``output_names()``,
+``instances()``, ``provider()`` (an :cpp:struct:`anira::ProviderRef`) and the options
+``option_keys()`` / ``option_values()``),
 :cpp:class:`anira::PrepareInfo`
 (``handler()``, ``report()``, ``num_entries()``, ``inputs()`` / ``outputs()``,
 ``input_names()`` / ``output_names()``, ``flags()`` and ``exclusive()``), and

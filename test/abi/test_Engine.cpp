@@ -394,7 +394,12 @@ anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
     // The row's facts through the config getters on the variant: the engine's own way to the
     // model, which anira never opened.
     const char* path = anira_model_config_model_path(info->model, info->row);
-    const char* id = anira_model_config_model_engine_id(info->model, info->row);
+    anira_engine kind = ANIRA_ENGINE_FORCE32;
+    const char* id = nullptr;
+    if (anira_model_config_model_engine(info->model, info->row, &kind, &id) != ANIRA_OK ||
+        kind != ANIRA_ENGINE_CUSTOM) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
     loaded->m_path = path != nullptr ? path : "";
     loaded->m_engine_id = id != nullptr ? id : "";
     loaded->m_instances = info->instances;
@@ -1263,8 +1268,8 @@ TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
 
     ModelConfig on_npu = gain_model();
     on_npu.default_engine(std::string_view(k_gain_id)).default_provider("com.example.npu");
-    EXPECT_EQ(on_npu.default_provider(), ANIRA_PROVIDER_CUSTOM);
-    EXPECT_EQ(on_npu.default_provider_id(), "com.example.npu");
+    EXPECT_EQ(on_npu.default_provider().kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(on_npu.default_provider().id, "com.example.npu");
     EXPECT_EQ(initial_plan(on_npu), 1U) << "the default engine's plan on the default provider";
 
     ModelConfig any_engine = gain_model();
@@ -1275,8 +1280,8 @@ TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
     on_default.default_engine(std::string_view(k_gain_id));
     EXPECT_EQ(initial_plan(on_default), 0U) << "no default provider: the first plan";
     on_default.default_provider(ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(on_default.default_provider(), ANIRA_PROVIDER_COREML);
-    EXPECT_TRUE(on_default.default_provider_id().empty());
+    EXPECT_EQ(on_default.default_provider().kind, ANIRA_PROVIDER_COREML);
+    EXPECT_TRUE(on_default.default_provider().id.empty());
     EXPECT_EQ(initial_plan(on_default), 0U) << "coreml is the first plan";
     on_default.default_provider(ANIRA_PROVIDER_DEFAULT);
     EXPECT_EQ(initial_plan(on_default), 0U) << "DEFAULT without a name sets none";
@@ -1339,11 +1344,12 @@ TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
     EXPECT_EQ(anira_model_config_set_default_provider(on_cuda.native(), unknown_provider, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT)
         << "a provider this header does not name";
-    EXPECT_EQ(on_cuda.default_provider(), ANIRA_PROVIDER_CUDA) << "a refusal changes nothing";
+    EXPECT_EQ(on_cuda.default_provider().kind, ANIRA_PROVIDER_CUDA) << "a refusal changes nothing";
     const ModelConfig reloaded = ModelConfig::from_json(on_npu.to_json());
-    EXPECT_EQ(reloaded.default_provider(), ANIRA_PROVIDER_CUSTOM);
-    EXPECT_EQ(reloaded.default_provider_id(), "com.example.npu");
-    EXPECT_EQ(ModelConfig::from_json(on_cuda.to_json()).default_provider(), ANIRA_PROVIDER_CUDA);
+    EXPECT_EQ(reloaded.default_provider().kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(reloaded.default_provider().id, "com.example.npu");
+    EXPECT_EQ(ModelConfig::from_json(on_cuda.to_json()).default_provider().kind,
+              ANIRA_PROVIDER_CUDA);
 }
 
 // A candidate naming a provider the engine's descriptor does not list is ANIRA_ERROR_NOT_SUPPORTED

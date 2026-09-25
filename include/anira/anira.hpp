@@ -149,6 +149,24 @@ using Role = anira_role;
 using AxisTag = anira_axis_tag;
 using BackendId = anira_backend_id;
 
+// NOLINTBEGIN(readability-identifier-naming) the aggregates spell the pair's two halves
+/// An engine as the pair names it (the pair rule of anira_engine): the value, and the custom
+/// engine's id beside ANIRA_ENGINE_CUSTOM, empty for every other value. What every engine getter
+/// returns; the view is owned by what it was read from (the config, the record of a call).
+struct EngineRef {
+    EngineKind kind = ANIRA_ENGINE_NONE;
+    std::string_view id;
+};
+
+/// A provider as the pair names it (the pair rule of anira_provider): the value, and the custom
+/// provider's name beside ANIRA_PROVIDER_CUSTOM, empty for every other value. What every
+/// provider getter returns; the view is owned by what it was read from.
+struct ProviderRef {
+    Provider kind = ANIRA_PROVIDER_DEFAULT;
+    std::string_view id;
+};
+// NOLINTEND(readability-identifier-naming)
+
 namespace detail {
 
 /// ANIRA_FAILED / ANIRA_SUCCEEDED without the C macros (no C-style cast in the wrapper).
@@ -157,6 +175,25 @@ constexpr bool failed(anira_status status) noexcept {
 }
 constexpr bool succeeded(anira_status status) noexcept {
     return !failed(status);
+}
+
+/// A pair read through a status getter with two out-parameters: the value and its id, the
+/// default EngineRef / ProviderRef when the getter refuses.
+template <class Read>
+EngineRef engine_ref(Read read) noexcept {
+    anira_engine engine = ANIRA_ENGINE_NONE;
+    const char* id = nullptr;
+    if (failed(read(&engine, &id))) { return EngineRef{}; }
+    return EngineRef{.kind = engine,
+                     .id = id != nullptr ? std::string_view(id) : std::string_view()};
+}
+template <class Read>
+ProviderRef provider_ref(Read read) noexcept {
+    anira_provider provider = ANIRA_PROVIDER_DEFAULT;
+    const char* id = nullptr;
+    if (failed(read(&provider, &id))) { return ProviderRef{}; }
+    return ProviderRef{.kind = provider,
+                       .id = id != nullptr ? std::string_view(id) : std::string_view()};
 }
 /// ANIRA_ABI_VERSION, spelled with static_casts.
 inline constexpr uint32_t k_abi_version =
@@ -1359,29 +1396,21 @@ public:
         return *this;
     }
     uint32_t model_count() const noexcept { return anira_model_config_model_count(m_config); }
-    /// The entry's engine; ANIRA_ENGINE_CUSTOM for a custom one (model_engine_id names it),
-    /// ANIRA_ENGINE_NONE for an index out of range.
-    EngineKind model_engine(uint32_t index) const noexcept {
-        return anira_model_config_model_engine(m_config, index);
+    /// The entry's engine as the pair (anira_model_config_model_engine): ANIRA_ENGINE_CUSTOM with
+    /// the id for a custom one; {ANIRA_ENGINE_NONE, empty} for an index out of range. The id is
+    /// owned by the config and valid until it is mutated, moved or destroyed.
+    EngineRef model_engine(uint32_t index) const noexcept {
+        return detail::engine_ref([&](anira_engine* engine, const char** id) {
+            return anira_model_config_model_engine(m_config, index, engine, id);
+        });
     }
-    /// The custom engine's name; empty for a built-in engine. The view is owned by the config
-    /// and valid until the config is mutated, moved or destroyed.
-    std::string_view model_engine_id(uint32_t index) const noexcept {
-        const char* id = anira_model_config_model_engine_id(m_config, index);
-        return id != nullptr ? std::string_view(id) : std::string_view();
-    }
-    /// The provider the entry is pinned to; ANIRA_PROVIDER_CUSTOM for a custom pin
-    /// (model_provider_id names it), ANIRA_PROVIDER_DEFAULT for an entry without a pin and for
-    /// an index out of range.
-    anira_provider model_provider(uint32_t index) const noexcept {
-        return anira_model_config_model_provider(m_config, index);
-    }
-    /// The custom provider the entry is pinned to; empty for a pin of the enum, for none and
-    /// for an index out of range. Owned by the config, valid until it is mutated, moved or
-    /// destroyed.
-    std::string_view model_provider_id(uint32_t index) const noexcept {
-        const char* id = anira_model_config_model_provider_id(m_config, index);
-        return id != nullptr ? std::string_view(id) : std::string_view();
+    /// The provider the entry is pinned to as the pair (anira_model_config_model_provider):
+    /// ANIRA_PROVIDER_CUSTOM with the name for a custom pin, ANIRA_PROVIDER_DEFAULT for an entry
+    /// without a pin and for an index out of range. The name is owned by the config.
+    ProviderRef model_provider(uint32_t index) const noexcept {
+        return detail::provider_ref([&](anira_provider* provider, const char** id) {
+            return anira_model_config_model_provider(m_config, index, provider, id);
+        });
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
     /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry.
@@ -1495,25 +1524,19 @@ public:
         }
         return SpecView(spec);
     }
-    /// The default engine; ANIRA_ENGINE_CUSTOM for a custom one (default_engine_id names it),
-    /// ANIRA_ENGINE_NONE for plan 0.
-    EngineKind default_engine() const noexcept {
-        return anira_model_config_default_engine(m_config);
+    /// The default engine as the pair (anira_model_config_default_engine): ANIRA_ENGINE_NONE
+    /// for plan 0, ANIRA_ENGINE_CUSTOM with the id for a custom one.
+    EngineRef default_engine() const noexcept {
+        return detail::engine_ref([&](anira_engine* engine, const char** id) {
+            return anira_model_config_default_engine(m_config, engine, id);
+        });
     }
-    /// The custom default engine's id; empty for a built-in default or none.
-    std::string_view default_engine_id() const noexcept {
-        const char* id = anira_model_config_default_engine_id(m_config);
-        return id != nullptr ? std::string_view(id) : std::string_view();
-    }
-    /// The default provider; ANIRA_PROVIDER_CUSTOM for a custom one (default_provider_id names
-    /// it), ANIRA_PROVIDER_DEFAULT for none.
-    anira_provider default_provider() const noexcept {
-        return anira_model_config_default_provider(m_config);
-    }
-    /// The custom default provider's name; empty for one of the enum or none.
-    std::string_view default_provider_id() const noexcept {
-        const char* id = anira_model_config_default_provider_id(m_config);
-        return id != nullptr ? std::string_view(id) : std::string_view();
+    /// The default provider as the pair (anira_model_config_default_provider):
+    /// ANIRA_PROVIDER_DEFAULT for none, ANIRA_PROVIDER_CUSTOM with the name for a custom one.
+    ProviderRef default_provider() const noexcept {
+        return detail::provider_ref([&](anira_provider* provider, const char** id) {
+            return anira_model_config_default_provider(m_config, provider, id);
+        });
     }
     /// As set; a model with a declared State pair runs as ANIRA_MODEL_STATEFUL anyway.
     anira_model_state state() const noexcept { return anira_model_config_state(m_config); }
@@ -2197,23 +2220,19 @@ public:
 
     /// The phase this call runs in.
     anira_phase phase() const noexcept { return static_cast<anira_phase>(m_ctx->phase); }
-    /// The engine of the plan the chunk was submitted under; ANIRA_ENGINE_CUSTOM for a custom
-    /// one (engine_id() names it).
-    EngineKind engine() const noexcept { return static_cast<EngineKind>(m_ctx->engine); }
-    /// The provider of that plan.
-    Provider provider() const noexcept { return static_cast<Provider>(m_ctx->provider); }
-    /// anira_stage_engine_id: the custom engine id of that plan; empty for a built-in engine.
-    std::string_view engine_id() const noexcept {
-        const char* id = nullptr;
-        static_cast<void>(anira_stage_engine_id(m_ctx, &id));
-        return id != nullptr ? std::string_view(id) : std::string_view();
+    /// anira_stage_engine: the engine of the plan the chunk was submitted under, as the pair
+    /// (ANIRA_ENGINE_CUSTOM with the id for a custom one). Valid for the duration of the call.
+    EngineRef engine() const noexcept {
+        return detail::engine_ref([this](anira_engine* engine, const char** id) {
+            return anira_stage_engine(m_ctx, engine, id);
+        });
     }
-    /// anira_stage_provider_id: the custom provider name of that plan; empty for a provider of
-    /// the enum.
-    std::string_view provider_id() const noexcept {
-        const char* id = nullptr;
-        static_cast<void>(anira_stage_provider_id(m_ctx, &id));
-        return id != nullptr ? std::string_view(id) : std::string_view();
+    /// anira_stage_provider: the provider of that plan, as the pair (ANIRA_PROVIDER_CUSTOM
+    /// with the name for a custom one).
+    ProviderRef provider() const noexcept {
+        return detail::provider_ref([this](anira_provider* provider, const char** id) {
+            return anira_stage_provider(m_ctx, provider, id);
+        });
     }
     /// The variant of that plan; 0 in this pre-release.
     uint32_t variant() const noexcept { return m_ctx->variant; }
@@ -2680,17 +2699,13 @@ public:
     const anira_model_config* model() const noexcept { return m_info->model; }
     /// anira_model_config_model_count: the entries of the variant.
     uint32_t model_count() const noexcept { return anira_model_config_model_count(m_info->model); }
-    /// anira_model_config_model_engine: an entry's engine; ANIRA_ENGINE_CUSTOM for a custom
-    /// entry (the row itself), ANIRA_ENGINE_NONE for an index out of range.
-    EngineKind model_engine(uint32_t index) const noexcept {
-        return anira_model_config_model_engine(m_info->model, index);
-    }
-    /// anira_model_config_model_engine_id: an entry's custom engine id (the row's is the id this
-    /// engine was registered under); empty for a built-in entry or an index out of range. Valid
-    /// for the duration of the call.
-    std::string_view model_engine_id(uint32_t index) const noexcept {
-        const char* id = anira_model_config_model_engine_id(m_info->model, index);
-        return id != nullptr ? std::string_view(id) : std::string_view();
+    /// anira_model_config_model_engine: an entry's engine as the pair, ANIRA_ENGINE_CUSTOM with
+    /// the id for a custom entry (the row's is the id this engine was registered under);
+    /// {ANIRA_ENGINE_NONE, empty} for an index out of range. Valid for the duration of the call.
+    EngineRef model_engine(uint32_t index) const noexcept {
+        return detail::engine_ref([&](anira_engine* engine, const char** id) {
+            return anira_model_config_model_engine(m_info->model, index, engine, id);
+        });
     }
     /// anira_model_config_model_path: an entry's file, which anira never opens for a registered
     /// engine's row; empty for a bytes entry or an index out of range. Valid for the duration of
@@ -2741,17 +2756,18 @@ public:
     /// State pair, whose handlers are exclusive (PrepareInfo::exclusive at their prepare) and
     /// run on what their Prepared builds, never on a shared slot.
     uint32_t instances() const noexcept { return m_info->instances; }
-    /// The provider this load is for: a provider of the enum, or ANIRA_PROVIDER_CUSTOM beside
-    /// provider_id() for a custom one. A provider is part of the loaded model: two providers of
-    /// one model are two loads, each its own Loaded. What a load cannot serve it refuses with
+    /// The provider this load is for, as the pair: a provider of the enum, or
+    /// ANIRA_PROVIDER_CUSTOM with the custom provider's name in the engine's own vocabulary (an
+    /// entry of providers()). A provider is part of the loaded model: two providers of one model
+    /// are two loads, each its own Loaded. What a load cannot serve it refuses with
     /// ANIRA_ERROR_NOT_SUPPORTED (the handler checked the plan's provider against providers()
-    /// at create; a device missing at run time is the load's to report).
-    Provider provider() const noexcept { return static_cast<Provider>(m_info->provider); }
-    /// The custom provider's name, in the engine's own vocabulary (an entry of providers());
-    /// empty for a provider the enum names. Valid for the duration of the call.
-    std::string_view provider_id() const noexcept {
-        return m_info->provider_id != nullptr ? std::string_view(m_info->provider_id)
-                                              : std::string_view();
+    /// at create; a device missing at run time is the load's to report). Valid for the
+    /// duration of the call.
+    ProviderRef provider() const noexcept {
+        return ProviderRef{.kind = static_cast<Provider>(m_info->provider),
+                           .id = m_info->provider_id != nullptr
+                                     ? std::string_view(m_info->provider_id)
+                                     : std::string_view()};
     }
     /// The provider options of this backend: the set of the context config's
     /// "provider_options" extension for the engine on this provider (ext::ProviderOptions), as

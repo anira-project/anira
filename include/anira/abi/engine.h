@@ -23,8 +23,8 @@
  * anira_model_config_add_model_bytes) and a candidate of anira_pipeline_add_inference with the
  * same pair selects it; wherever the engine-provider pair travels a custom engine is
  * ANIRA_ENGINE_CUSTOM with its id (anira_backend_id, anira_plan_info; a stage reads it with
- * anira_stage_engine_id). An added engine no entry names is not a plan and not an error; an
- * entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_stage_engine). An added engine no entry names is not a plan and not an error; an entry
+ * whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
  * anira_handler_create. Which of an engine's declared providers are usable here is its query's
  * answer (anira_engine_query_fn, a tail slot of the descriptor, the engine's own
  * GetAvailableProviders): anira_handler_create checks every candidate's provider of the engine

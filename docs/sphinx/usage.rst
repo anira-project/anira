@@ -253,8 +253,8 @@ is part of the build is decided at prepare, not here, so one config serves every
   ``model_provider(i, ANIRA_PROVIDER_XNNPACK)`` or ``model_provider(i, "com.example.npu")``
   (``anira_model_config_set_model_provider``, with ``ANIRA_PROVIDER_CUSTOM`` beside the name in
   C; read back with
-  ``model_provider(i)`` / ``model_provider_id(i)``, in C ``anira_model_config_model_provider``
-  and ``anira_model_config_model_provider_id``), in a model file the entry's ``"provider"``
+  ``model_provider(i)``, an :cpp:struct:`anira::ProviderRef` of the pair, in C
+  ``anira_model_config_model_provider``), in a model file the entry's ``"provider"``
   key beside its ``"engine"``, ``"xnnpack"`` or ``"com.example.npu"``. A pinned entry runs on
   its pin alone, and two entries of one engine are legal when their pins differ (an export per
   provider); an ExecuTorch entry pinned to a provider its method does not use is a mislabeled
@@ -300,10 +300,11 @@ extent}``; ``{ANIRA_AXIS_ANY, 0}`` for a hole and at or beyond ``ndim()``), ``wi
 (``{min, max, overlap}``), ``time_ratio()`` (``{num, den}``), ``latency()`` and
 ``state_source()``. A view is valid until the config is mutated, moved or destroyed, and
 ``TensorSpec::view()`` is the same view over a spec being built. The scalars are
-``default_engine()`` / ``default_engine_id()`` (``ANIRA_ENGINE_NONE`` and an empty id for plan
-0, ``ANIRA_ENGINE_CUSTOM`` beside a custom default's id), ``default_provider()`` /
-``default_provider_id()`` (``ANIRA_PROVIDER_DEFAULT`` and an empty name for none,
-``ANIRA_PROVIDER_CUSTOM`` beside a custom name), ``model_provider(i)`` / ``model_provider_id(i)`` (an entry's pin), ``state()``, ``max_instances()`` and ``anchor()`` (empty for the default); the tensor
+``default_engine()`` (an :cpp:struct:`anira::EngineRef`: ``kind`` ``ANIRA_ENGINE_NONE`` and
+an empty ``id`` for plan 0, ``ANIRA_ENGINE_CUSTOM`` beside a custom default's id),
+``default_provider()`` (an :cpp:struct:`anira::ProviderRef`: ``ANIRA_PROVIDER_DEFAULT`` and an
+empty ``id`` for none, ``ANIRA_PROVIDER_CUSTOM`` beside a custom name), ``model_engine(i)`` and
+``model_provider(i)`` (an entry's pair and pin), ``state()``, ``max_instances()`` and ``anchor()`` (empty for the default); the tensor
 records of an entry are ``tensor_name(i, canonical)`` (empty where the entry binds
 positionally) and ``tensor_layout(i, canonical)`` (empty for the spec's order), and its entry
 point is ``model_ext<anira::ext::Entry>(i)`` (``std::nullopt`` without one). The indexed
@@ -732,11 +733,12 @@ anira fills on its own stack for the duration of the call: ``phase``, the ``engi
 ``provider`` of the plan the chunk was submitted under, ``variant``, ``num_inputs`` and
 ``num_outputs`` (the lengths of the model config's two lists, State tensors included),
 ``ticket`` (``ANIRA_TICKET_INVALID`` under a Hard contract), ``entry`` (below) and an opaque
-``frame`` that is anira's and is never dereferenced. The names of a custom engine and a custom
-provider come through two accessors, ``anira_stage_engine_id(ctx, &id)`` and
-``anira_stage_provider_id(ctx, &name)`` (``NULL`` for a built-in engine and a provider of the
-enum, the plan report's ``engine_id`` and ``provider_id``; in C++ ``ctx.engine_id()`` and
-``ctx.provider_id()``). The tensors and the rings are not in the
+``frame`` that is anira's and is never dereferenced. Both pairs come whole through two
+accessors, ``anira_stage_engine(ctx, &engine, &id)`` and ``anira_stage_provider(ctx,
+&provider, &name)`` (the id ``NULL`` beside every value but CUSTOM, the plan report's
+``engine_id`` and ``provider_id``; the id out-parameter may be ``NULL``; in C++
+``ctx.engine()`` and ``ctx.provider()``, an :cpp:struct:`anira::EngineRef` and an
+:cpp:struct:`anira::ProviderRef`). The tensors and the rings are not in the
 record: a callback asks **per slot**, the tensor's position in the model config's list of its
 side (the one number every entry of section 3.2 uses), through six accessors,
 ``[callback-safe]`` and ``ANIRA_NONBLOCKING``:

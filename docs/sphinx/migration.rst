@@ -405,7 +405,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
      - ``ANIRA_ENGINE_CUSTOM`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
-       a stage reads it with ``anira_stage_engine_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
+       a stage reads the pair with ``anira_stage_engine``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
        C handler runs it like every added id, on the engine added under it (the one id with
        the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
        adds it for a 2.x custom backend); the bridge keeps serving it without an engine until

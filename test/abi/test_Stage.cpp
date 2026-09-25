@@ -248,9 +248,11 @@ struct Probe {
     std::array<std::array<anira_status, k_tensors>, k_phases> m_output_status{};
     std::array<std::array<anira_tensor, k_tensors>, k_phases> m_inputs{};
     std::array<std::array<anira_tensor, k_tensors>, k_phases> m_outputs{};
-    // What the two id accessors answered per phase: the plan's names, the session's strings.
-    std::array<anira_status, k_phases> m_engine_id_status{};
-    std::array<anira_status, k_phases> m_provider_id_status{};
+    // What the two pair accessors answered per phase: the plan's pairs, the session's strings.
+    std::array<anira_status, k_phases> m_engine_status{};
+    std::array<anira_status, k_phases> m_provider_status{};
+    std::array<anira_engine, k_phases> m_engines{};
+    std::array<anira_provider, k_phases> m_providers{};
     std::array<const char*, k_phases> m_engine_ids{};
     std::array<const char*, k_phases> m_provider_ids{};
     std::array<std::thread::id, k_phases> m_thread{};
@@ -278,10 +280,10 @@ anira_status ANIRA_CALL probe_phase(const anira_stage_ctx* ctx,
     if (probe->m_order != nullptr) { probe->m_seen_order.at(phase) = probe->m_order->fetch_add(1); }
     const bool pre = phase == ANIRA_PHASE_PRE_PROCESS;
     const bool post = phase == ANIRA_PHASE_POST_PROCESS;
-    probe->m_engine_id_status.at(phase) =
-        anira_stage_engine_id(ctx, &probe->m_engine_ids.at(phase));
-    probe->m_provider_id_status.at(phase) =
-        anira_stage_provider_id(ctx, &probe->m_provider_ids.at(phase));
+    probe->m_engine_status.at(phase) =
+        anira_stage_engine(ctx, &probe->m_engines.at(phase), &probe->m_engine_ids.at(phase));
+    probe->m_provider_status.at(phase) =
+        anira_stage_provider(ctx, &probe->m_providers.at(phase), &probe->m_provider_ids.at(phase));
     for (uint32_t slot = 0; slot < ctx->num_inputs && slot < k_tensors; ++slot) {
         anira_role& role = probe->m_input_roles.at(phase).at(slot);
         probe->m_input_role_status.at(phase).at(slot) = anira_stage_input_role(ctx, slot, &role);
@@ -1238,10 +1240,12 @@ TEST(AbiStage, CtxPerPhase) {
         // The frame is anira's; the reserved slot is NULL, its high half included.
         EXPECT_NE(ctx.frame_bits, 0U);
         EXPECT_EQ(ctx.reserved_ptr2_bits, 0U);
-        // The pair's names, the plan report's: the custom row's id, the default provider's
-        // NULL; the two slots hold what the accessors answer.
-        EXPECT_EQ(probe.m_engine_id_status.at(phase), ANIRA_OK);
-        EXPECT_EQ(probe.m_provider_id_status.at(phase), ANIRA_OK);
+        // The pairs, the plan report's: the custom row's engine with its id, the default
+        // provider with none; the fields and the two slots hold what the accessors answer.
+        EXPECT_EQ(probe.m_engine_status.at(phase), ANIRA_OK);
+        EXPECT_EQ(probe.m_provider_status.at(phase), ANIRA_OK);
+        EXPECT_EQ(probe.m_engines.at(phase), ANIRA_ENGINE_CUSTOM);
+        EXPECT_EQ(probe.m_providers.at(phase), ANIRA_PROVIDER_DEFAULT);
         ASSERT_NE(info.engine_id, nullptr) << "the handler starts on the custom row";
         ASSERT_NE(probe.m_engine_ids.at(phase), nullptr);
         EXPECT_STREQ(probe.m_engine_ids.at(phase), info.engine_id);
@@ -1578,11 +1582,12 @@ TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
 // The context accessors over a hand-built context
 // ============================================================================================
 
-// The two id accessors: the record's slots as the processor fills them (a custom engine's id, a
-// custom provider's name; NULL for a built-in engine and a provider of the enum), the same
-// through anira::StageContext; a NULL out is refused and recorded, a NULL ctx and a ctx without
-// a frame are refused with nothing to record into.
-TEST(AbiStage, TheIdAccessorsAnswerThePairsNames) {
+// The two pair accessors: the record's value fields and id slots as the processor fills them
+// (a custom engine's id beside ANIRA_ENGINE_CUSTOM, a custom provider's name beside
+// ANIRA_PROVIDER_CUSTOM; NULL beside every other value), the same through anira::StageContext;
+// the id out-parameter may be NULL; a NULL value out-parameter is refused and recorded, a NULL
+// ctx and a ctx without a frame are refused with nothing to record into, the outs reset.
+TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
     const Context context;  // the real-time log queue is the core's
     anira_drain_log();
     const RecordCollector collector;
@@ -1594,42 +1599,64 @@ TEST(AbiStage, TheIdAccessorsAnswerThePairsNames) {
     const char* const engine_id = "com.example.engine";
     const char* const provider_id = "com.example.npu";
 
-    // A built-in engine on a provider of the enum: both NULL.
-    const char* out = "untouched";
-    EXPECT_EQ(anira_stage_engine_id(&built.m_ctx, &out), ANIRA_OK);
-    EXPECT_EQ(out, nullptr);
-    out = "untouched";
-    EXPECT_EQ(anira_stage_provider_id(&built.m_ctx, &out), ANIRA_OK);
-    EXPECT_EQ(out, nullptr);
-    EXPECT_TRUE(anira::StageContext(&built.m_ctx).engine_id().empty());
-    EXPECT_TRUE(anira::StageContext(&built.m_ctx).provider_id().empty());
+    // A built-in engine on a provider of the enum: the values, no ids.
+    built.m_ctx.engine = ANIRA_ENGINE_ONNXRUNTIME;
+    built.m_ctx.provider = ANIRA_PROVIDER_COREML;
+    anira_engine engine = ANIRA_ENGINE_FORCE32;
+    anira_provider provider = ANIRA_PROVIDER_FORCE32;
+    const char* id = "untouched";
+    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
+    EXPECT_EQ(engine, ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(id, nullptr);
+    id = "untouched";
+    EXPECT_EQ(anira_stage_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
+    EXPECT_EQ(provider, ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(id, nullptr);
+    const anira::StageContext cxx(&built.m_ctx);
+    EXPECT_EQ(cxx.engine().kind, ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_TRUE(cxx.engine().id.empty());
+    EXPECT_EQ(cxx.provider().kind, ANIRA_PROVIDER_COREML);
+    EXPECT_TRUE(cxx.provider().id.empty());
 
-    // A custom engine on a custom provider: the slots' own strings.
+    // A custom engine on a custom provider: CUSTOM with the slots' own strings; the id
+    // out-parameter may be NULL.
+    built.m_ctx.engine = ANIRA_ENGINE_CUSTOM;
+    built.m_ctx.provider = ANIRA_PROVIDER_CUSTOM;
     built.m_ctx.engine_id = engine_id;
     built.m_ctx.provider_id = provider_id;
-    EXPECT_EQ(anira_stage_engine_id(&built.m_ctx, &out), ANIRA_OK);
-    EXPECT_EQ(out, engine_id);
-    EXPECT_EQ(anira_stage_provider_id(&built.m_ctx, &out), ANIRA_OK);
-    EXPECT_EQ(out, provider_id);
-    EXPECT_EQ(anira::StageContext(&built.m_ctx).engine_id(), "com.example.engine");
-    EXPECT_EQ(anira::StageContext(&built.m_ctx).provider_id(), "com.example.npu");
+    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
+    EXPECT_EQ(engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(id, engine_id);
+    EXPECT_EQ(anira_stage_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
+    EXPECT_EQ(provider, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(id, provider_id);
+    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, nullptr), ANIRA_OK) << "the value alone";
+    EXPECT_EQ(engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(cxx.engine().kind, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(cxx.engine().id, "com.example.engine");
+    EXPECT_EQ(cxx.provider().kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(cxx.provider().id, "com.example.npu");
     EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "every question so far was a legal one";
 
-    // A NULL out is the stage's bug: refused and recorded.
-    EXPECT_EQ(anira_stage_engine_id(&built.m_ctx, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    // A NULL value out-parameter is the stage's bug: refused, recorded, the id reset.
+    id = "untouched";
+    EXPECT_EQ(anira_stage_engine(&built.m_ctx, nullptr, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(id, nullptr);
     EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_provider_id(&built.m_ctx, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_stage_provider(&built.m_ctx, nullptr, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.m_suppressed.load(), 1U) << "the second of the kind is counted";
 
-    // No ctx, no frame: refused, the out reset, nothing to record into.
-    out = "untouched";
-    EXPECT_EQ(anira_stage_engine_id(nullptr, &out), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(out, nullptr);
+    // No ctx, no frame: refused, the outs reset, nothing to record into.
+    id = "untouched";
+    EXPECT_EQ(anira_stage_engine(nullptr, &engine, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(engine, ANIRA_ENGINE_FORCE32);
+    EXPECT_EQ(id, nullptr);
     anira_stage_ctx frameless = built.m_ctx;
     frameless.frame = nullptr;
-    out = "untouched";
-    EXPECT_EQ(anira_stage_provider_id(&frameless, &out), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(out, nullptr);
+    id = "untouched";
+    EXPECT_EQ(anira_stage_provider(&frameless, &provider, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(provider, ANIRA_PROVIDER_FORCE32);
+    EXPECT_EQ(id, nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 1U) << "a ctx without a frame records nothing";
 }
 

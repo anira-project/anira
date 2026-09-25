@@ -297,6 +297,9 @@ int anira_header_c_probe(void) {
         void* miss_user_data = NULL;
         anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
         anira_log_desc log = ANIRA_LOG_DESC_INIT;
+        anira_engine engine = ANIRA_ENGINE_FORCE32;
+        anira_provider provider = ANIRA_PROVIDER_FORCE32;
+        const char* pair_id = NULL;
         axes[0] = 0u;
         if (checks < 0) { /* never true: the object is never linked */
             spec = anira_model_config_input(NULL, 0u);
@@ -313,8 +316,21 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_model_config_default_provider(NULL) == ANIRA_PROVIDER_DEFAULT &&
-                              anira_model_config_default_provider_id(NULL) == NULL
+            /* The pair getters: a status and two out-parameters, the id one nullable. */
+            checks += anira_model_config_default_provider(NULL, &provider, &pair_id) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_default_engine(NULL, &engine, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_model_engine(NULL, 0u, &engine, &pair_id) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks += anira_model_config_model_provider(NULL, 0u, &provider, NULL) ==
+                              ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
             checks += anira_model_config_tensor_layout(NULL, 0u, "audio_in", &count, axes) ==
@@ -420,6 +436,8 @@ int anira_header_c_probe(void) {
         anira_role role = ANIRA_ROLE_FORCE32;
         anira_ring* ring = NULL;
         const char* name = NULL;
+        anira_engine plan_engine = ANIRA_ENGINE_FORCE32;
+        anira_provider plan_provider = ANIRA_PROVIDER_FORCE32;
         void* prepared = NULL;
         memset(&ctx, 0, sizeof(ctx));
         ctx.phase = (uint32_t)ANIRA_PHASE_PRE_PROCESS;
@@ -495,8 +513,13 @@ int anira_header_c_probe(void) {
             checks +=
                 anira_stage_output_tensor(NULL, 0u, &model_end) == ANIRA_ERROR_INVALID_ARGUMENT ? 1
                                                                                                 : 0;
-            checks += anira_stage_engine_id(NULL, &name) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
-            checks += anira_stage_provider_id(NULL, &name) == ANIRA_ERROR_INVALID_ARGUMENT ? 1 : 0;
+            checks += anira_stage_engine(NULL, &plan_engine, &name) == ANIRA_ERROR_INVALID_ARGUMENT
+                          ? 1
+                          : 0;
+            checks +=
+                anira_stage_provider(NULL, &plan_provider, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
         }
     }
     {

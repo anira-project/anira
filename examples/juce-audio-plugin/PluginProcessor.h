@@ -88,7 +88,7 @@ inline anira::ModelConfig embedded_cnn_model_config() {
         std::string_view{BinaryData::cnn_model_json,
                          static_cast<size_t>(BinaryData::cnn_model_jsonSize)});
     for (uint32_t i = 0; i < config.model_count(); ++i) {
-        switch (config.model_engine(i)) {
+        switch (config.model_engine(i).kind) {
             case ANIRA_ENGINE_LIBTORCH:
                 config.set_model_bytes(i,
                                        embedded(BinaryData::steerablenafxdynamic_pt,

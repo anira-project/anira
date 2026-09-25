@@ -18,6 +18,7 @@
 
 #include "capi/handles.h"
 #include "capi/layout.h"
+#include "pair_read.h"
 
 namespace {
 
@@ -168,9 +169,9 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
               ANIRA_OK);
     EXPECT_EQ(index, 2u);
     EXPECT_EQ(anira_model_config_model_count(m.m_config), 3u);
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 0), ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 0),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_ONNXRUNTIME, ""}));
     EXPECT_STREQ(anira_model_config_model_path(m.m_config, 0), "model.onnx");
-    EXPECT_EQ(anira_model_config_model_engine_id(m.m_config, 0), nullptr);
     EXPECT_EQ(anira_model_config_model_path(m.m_config, 1), nullptr) << "a bytes entry has no path";
     const void* bytes = nullptr;
     size_t size = 0;
@@ -181,9 +182,10 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
     EXPECT_EQ(anira_model_config_model_bytes(m.m_config, 0, &bytes, &size),
               ANIRA_ERROR_INVALID_STATE)
         << "a path entry";
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 2), ANIRA_ENGINE_CUSTOM);
-    EXPECT_STREQ(anira_model_config_model_engine_id(m.m_config, 2), "com.example.engine");
-    EXPECT_EQ(anira_model_config_model_engine(m.m_config, 3), ANIRA_ENGINE_NONE) << "out of range";
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 2),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_CUSTOM, "com.example.engine"}));
+    EXPECT_EQ(anira_test::model_engine(m.m_config, 3).status, ANIRA_ERROR_INVALID_ARGUMENT)
+        << "out of range";
     EXPECT_EQ(anira_model_config_model_path(m.m_config, 3), nullptr);
 }
 
@@ -199,26 +201,26 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
                                                 &index,
                                                 &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
         << "neutral until pinned";
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
                                                     ANIRA_PROVIDER_COREML,
                                                     nullptr,
                                                     &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_COREML, ""}));
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
                                                     ANIRA_PROVIDER_CUSTOM,
                                                     "com.example.npu",
                                                     &m.m_err),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_CUSTOM)
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "com.example.npu"}))
         << "a custom provider is CUSTOM with its name";
-    EXPECT_STREQ(anira_model_config_model_provider_id(m.m_config, 0), "com.example.npu");
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     0,
                                                     ANIRA_PROVIDER_DEFAULT,
@@ -226,7 +228,8 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
                                                     &m.m_err),
               ANIRA_OK)
         << "unpinned again";
-    EXPECT_EQ(anira_model_config_model_provider_id(m.m_config, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}));
     // The refusals.
     EXPECT_EQ(anira_model_config_set_model_provider(m.m_config,
                                                     1,
@@ -271,10 +274,10 @@ TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
     EXPECT_EQ(
         anira_model_config_set_model_provider(nullptr, 0, ANIRA_PROVIDER_CUDA, nullptr, &m.m_err),
         ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_model_provider(m.m_config, 0), ANIRA_PROVIDER_DEFAULT)
+    EXPECT_EQ(anira_test::model_provider(m.m_config, 0),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
         << "a refused call leaves the entry as it was";
-    EXPECT_EQ(anira_model_config_model_provider(nullptr, 0), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_model_provider_id(nullptr, 0), nullptr);
+    EXPECT_EQ(anira_test::model_provider(nullptr, 0).status, ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 TEST(AbiModelConfig, EntryRejections) {

@@ -28,6 +28,7 @@
 #include <vector>
 
 #include "fixtures.h"
+#include "pair_read.h"
 
 namespace {
 
@@ -255,8 +256,8 @@ TEST(AbiReadBack, ConfigSpecsAreTheConfigsCopies) {
 TEST(AbiReadBack, ConfigScalars) {
     const Model model;
     // The defaults a fresh config answers.
-    EXPECT_EQ(anira_model_config_default_engine(model.m_config), ANIRA_ENGINE_NONE);
-    EXPECT_EQ(anira_model_config_default_engine_id(model.m_config), nullptr);
+    EXPECT_EQ(anira_test::default_engine(model.m_config),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_NONE, ""}));
     EXPECT_EQ(anira_model_config_state(model.m_config), ANIRA_MODEL_STATELESS);
     EXPECT_EQ(anira_model_config_max_instances(model.m_config), 1u);
     EXPECT_EQ(anira_model_config_anchor(model.m_config), nullptr);
@@ -266,40 +267,44 @@ TEST(AbiReadBack, ConfigScalars) {
                                                     nullptr,
                                                     nullptr),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_engine(model.m_config), ANIRA_ENGINE_LIBTORCH);
-    EXPECT_EQ(anira_model_config_default_engine_id(model.m_config), nullptr);
+    EXPECT_EQ(anira_test::default_engine(model.m_config),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_LIBTORCH, ""}));
     ASSERT_EQ(anira_model_config_set_default_engine(model.m_config,
                                                     ANIRA_ENGINE_CUSTOM,
                                                     "org.example.engine",
                                                     nullptr),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_engine(model.m_config), ANIRA_ENGINE_CUSTOM)
+    EXPECT_EQ(anira_test::default_engine(model.m_config),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_CUSTOM, "org.example.engine"}))
         << "a custom default";
-    EXPECT_STREQ(anira_model_config_default_engine_id(model.m_config), "org.example.engine");
     ASSERT_EQ(
         anira_model_config_set_default_engine(model.m_config, ANIRA_ENGINE_NONE, nullptr, nullptr),
         ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_engine_id(model.m_config), nullptr) << "back to plan 0";
+    EXPECT_EQ(anira_test::default_engine(model.m_config),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_NONE, ""}))
+        << "back to plan 0";
 
     // The default provider: none, one of the enum, a custom name, none again.
-    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr);
+    EXPECT_EQ(anira_test::default_provider(model.m_config),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}));
     ASSERT_EQ(
         anira_model_config_set_default_provider(model.m_config, ANIRA_PROVIDER_COREML, nullptr),
         ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr);
+    EXPECT_EQ(anira_test::default_provider(model.m_config),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_COREML, ""}));
     ASSERT_EQ(anira_model_config_set_default_provider(model.m_config,
                                                       ANIRA_PROVIDER_CUSTOM,
                                                       "com.example.npu"),
               ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_CUSTOM)
+    EXPECT_EQ(anira_test::default_provider(model.m_config),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_CUSTOM, "com.example.npu"}))
         << "a custom default provider";
-    EXPECT_STREQ(anira_model_config_default_provider_id(model.m_config), "com.example.npu");
     ASSERT_EQ(
         anira_model_config_set_default_provider(model.m_config, ANIRA_PROVIDER_DEFAULT, nullptr),
         ANIRA_OK);
-    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr) << "none again";
+    EXPECT_EQ(anira_test::default_provider(model.m_config),
+              (anira_test::ProviderRead{ANIRA_OK, ANIRA_PROVIDER_DEFAULT, ""}))
+        << "none again";
 
     ASSERT_EQ(anira_model_config_set_state(model.m_config, ANIRA_MODEL_STATEFUL), ANIRA_OK);
     EXPECT_EQ(anira_model_config_state(model.m_config), ANIRA_MODEL_STATEFUL);
@@ -315,10 +320,32 @@ TEST(AbiReadBack, ConfigScalars) {
     ASSERT_EQ(anira_model_config_set_anchor(model.m_config, ""), ANIRA_OK);
     EXPECT_EQ(anira_model_config_anchor(model.m_config), nullptr) << "so does the empty name";
 
-    EXPECT_EQ(anira_model_config_default_engine(nullptr), ANIRA_ENGINE_NONE);
-    EXPECT_EQ(anira_model_config_default_engine_id(nullptr), nullptr);
-    EXPECT_EQ(anira_model_config_default_provider(nullptr), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_EQ(anira_model_config_default_provider_id(nullptr), nullptr);
+    // The pair getters' refusals: a NULL config, a NULL value out-parameter, an entry out of
+    // range; nothing is written then. The id out-parameter may be NULL (the value alone).
+    anira_engine engine = ANIRA_ENGINE_FORCE32;
+    const char* id = "untouched";
+    EXPECT_EQ(anira_model_config_default_engine(nullptr, &engine, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_default_engine(model.m_config, nullptr, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(engine, ANIRA_ENGINE_FORCE32) << "written on ANIRA_OK only";
+    EXPECT_STREQ(id, "untouched");
+    EXPECT_EQ(anira_model_config_default_engine(model.m_config, &engine, nullptr), ANIRA_OK);
+    EXPECT_EQ(engine, ANIRA_ENGINE_NONE);
+    anira_provider provider = ANIRA_PROVIDER_FORCE32;
+    EXPECT_EQ(anira_model_config_default_provider(nullptr, &provider, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_default_provider(model.m_config, nullptr, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_model_config_default_provider(model.m_config, &provider, nullptr), ANIRA_OK);
+    EXPECT_EQ(provider, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_model_engine(model.m_config, 0, &engine, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "no entry";
+    EXPECT_EQ(anira_model_config_model_provider(model.m_config, 0, &provider, &id),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "no entry";
+    EXPECT_STREQ(id, "untouched");
     EXPECT_EQ(anira_model_config_state(nullptr), ANIRA_MODEL_STATE_FORCE32);
     EXPECT_EQ(anira_model_config_max_instances(nullptr), 0u);
     EXPECT_EQ(anira_model_config_anchor(nullptr), nullptr);
@@ -457,7 +484,8 @@ TEST(AbiReadBack, ALoadedModelFileAnswersTheSame) {
     const Model model(anira_test::k_model_v3);
     ASSERT_EQ(model.m_status, ANIRA_OK) << model.m_err.message;
     const anira_model_config* config = model.m_config;
-    EXPECT_EQ(anira_model_config_default_engine(config), ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_EQ(anira_test::default_engine(config),
+              (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_ONNXRUNTIME, ""}));
     EXPECT_EQ(anira_model_config_state(config), ANIRA_MODEL_STATELESS);
     EXPECT_EQ(anira_model_config_max_instances(config), 4u);
     EXPECT_STREQ(anira_model_config_anchor(config), "mask_out");
@@ -1005,8 +1033,8 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_EQ(status_of([&] { (void)model.input_spec(2); }), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(status_of([&] { (void)model.output_spec(1); }), ANIRA_ERROR_INVALID_ARGUMENT);
 
-    EXPECT_EQ(model.default_engine(), ANIRA_ENGINE_ONNXRUNTIME);
-    EXPECT_TRUE(model.default_engine_id().empty());
+    EXPECT_EQ(model.default_engine().kind, ANIRA_ENGINE_ONNXRUNTIME);
+    EXPECT_TRUE(model.default_engine().id.empty());
     EXPECT_EQ(model.state(), ANIRA_MODEL_STATELESS);
     EXPECT_EQ(model.max_instances(), 4u);
     EXPECT_EQ(model.anchor(), "mask_out");
@@ -1032,8 +1060,8 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     built.default_engine("org.example.engine")
         .state(ANIRA_MODEL_STATEFUL)
         .model_ext(0, anira::ext::Entry{.name = "decode"});
-    EXPECT_EQ(built.default_engine(), ANIRA_ENGINE_CUSTOM);
-    EXPECT_EQ(built.default_engine_id(), "org.example.engine");
+    EXPECT_EQ(built.default_engine().kind, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(built.default_engine().id, "org.example.engine");
     EXPECT_EQ(built.state(), ANIRA_MODEL_STATEFUL);
     EXPECT_EQ(built.max_instances(), 1u);
     EXPECT_TRUE(built.anchor().empty()) << "the default";
@@ -1042,21 +1070,21 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_EQ(built_entry.value_or(anira::ext::Entry{}).name, "decode");
     EXPECT_EQ(built.input_count(), 0u);
     // The pin getters beside the engine getters: none, a custom name, one of the enum.
-    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_TRUE(built.model_provider_id(0).empty());
+    EXPECT_EQ(built.model_provider(0).kind, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_TRUE(built.model_provider(0).id.empty());
     built.model_provider(0, "com.example.npu");
-    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_CUSTOM);
-    EXPECT_EQ(built.model_provider_id(0), "com.example.npu");
+    EXPECT_EQ(built.model_provider(0).kind, ANIRA_PROVIDER_CUSTOM);
+    EXPECT_EQ(built.model_provider(0).id, "com.example.npu");
     built.model_provider(0, ANIRA_PROVIDER_COREML);
-    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_COREML);
-    EXPECT_TRUE(built.model_provider_id(0).empty());
-    EXPECT_EQ(built.model_provider(3), ANIRA_PROVIDER_DEFAULT) << "out of range";
-    EXPECT_TRUE(built.model_provider_id(3).empty());
+    EXPECT_EQ(built.model_provider(0).kind, ANIRA_PROVIDER_COREML);
+    EXPECT_TRUE(built.model_provider(0).id.empty());
+    EXPECT_EQ(built.model_provider(3).kind, ANIRA_PROVIDER_DEFAULT) << "out of range";
+    EXPECT_TRUE(built.model_provider(3).id.empty());
     // The default provider beside the default engine.
-    EXPECT_EQ(built.default_provider(), ANIRA_PROVIDER_DEFAULT);
-    EXPECT_TRUE(built.default_provider_id().empty());
+    EXPECT_EQ(built.default_provider().kind, ANIRA_PROVIDER_DEFAULT);
+    EXPECT_TRUE(built.default_provider().id.empty());
     built.default_provider("com.example.npu");
-    EXPECT_EQ(built.default_provider_id(), "com.example.npu");
+    EXPECT_EQ(built.default_provider().id, "com.example.npu");
     EXPECT_EQ(status_of([&] { built.default_provider(ANIRA_PROVIDER_CUSTOM); }),
               ANIRA_ERROR_INVALID_ARGUMENT);
 }
