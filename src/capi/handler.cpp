@@ -2666,8 +2666,13 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     const anira::InferenceConfig& config = handler->m_inference_config;
-    // An output without a ring (Static, State): 0, nothing recorded.
-    if (config.get_postprocess_output_size()[slot] == 0) { return ANIRA_OK; }
+    // An output without a ring (Static, State): 0, nothing recorded, and the completed
+    // inferences collected all the same (the manager's call collects before it answers 0), so a
+    // Static output's stored value is the latest collected one after this call too.
+    if (config.get_postprocess_output_size()[slot] == 0) {
+        static_cast<void>(handler->m_manager->get_available_samples(slot, 0));
+        return ANIRA_OK;
+    }
     // The ring's own accessor is unbounded on the channel.
     if (!has_arguments(*handler,
                        channel < config.get_postprocess_output_channels()[slot],

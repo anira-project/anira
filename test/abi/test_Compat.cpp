@@ -50,6 +50,8 @@
 #include <utility>
 #include <vector>
 
+#include "../../extras/models/cnn/CNNPrePostProcessor.h"
+#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
 #include "fixtures.h"
@@ -2540,4 +2542,256 @@ TEST(AbiCompat, ACustomEngineWithoutAUsableProviderIsConfig) {
                   const v2::InferenceHandler handler(pp, config, engine, shim_context_config());
               }),
               ANIRA_ERROR_CONFIG);
+}
+
+// ---- the 2.x processors, copied (cases 3, 4), and the forms' own rules (cases 14, 15) ---------
+
+// The extras' 2.x processors are included as they are for the 2.x side; the shim side compiles
+// the same class bodies, pasted verbatim, against anira::v2 through a namespace alias, so one
+// text runs on both type sets (a diff of the bodies against the extras headers is the review).
+// NOLINTBEGIN: verbatim copies of extras/models/cnn/CNNPrePostProcessor.h and
+// extras/models/hybrid-nn/HybridNNPrePostProcessor.h
+namespace compat_copy {
+namespace anira = ::anira::v2;
+
+class CNNPrePostProcessor : public anira::PrePostProcessor {
+public:
+    using anira::PrePostProcessor::PrePostProcessor;
+
+    virtual void pre_process(
+        std::vector<anira::RingBuffer>& input,
+        std::vector<anira::BufferF>& output,
+        [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+        pop_samples_from_buffer(input[0],
+                                output[0],
+                                m_inference_config.get_tensor_output_size()[0],
+                                m_inference_config.get_tensor_input_size()[0] -
+                                    m_inference_config.get_tensor_output_size()[0]);
+    }
+};
+
+class HybridNNPrePostProcessor : public anira::PrePostProcessor {
+public:
+    using anira::PrePostProcessor::PrePostProcessor;
+
+    virtual void pre_process(
+        std::vector<anira::RingBuffer>& input,
+        std::vector<anira::BufferF>& output,
+        [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
+        int64_t num_batches = 0;
+        int64_t num_input_samples = 0;
+        int64_t num_output_samples = 0;
+
+        bool channels_last = false;
+        anira::InferenceBackend channels_last_backend = anira::InferenceBackend::CUSTOM;
+#ifdef USE_TFLITE
+        if (current_inference_backend == anira::InferenceBackend::TFLITE) {
+            channels_last = true;
+            channels_last_backend = anira::InferenceBackend::TFLITE;
+        }
+#endif
+#ifdef USE_LITERT
+        if (current_inference_backend == anira::InferenceBackend::LITERT) {
+            channels_last = true;
+            channels_last_backend = anira::InferenceBackend::LITERT;
+        }
+#endif
+        if (channels_last) {
+            num_batches = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][0];
+            num_input_samples =
+                m_inference_config.get_tensor_input_shape(channels_last_backend)[0][1];
+            num_output_samples =
+                m_inference_config.get_tensor_output_shape(channels_last_backend)[0][1];
+        } else {
+            num_batches = m_inference_config.get_tensor_input_shape()[0][0];
+            num_input_samples = m_inference_config.get_tensor_input_shape()[0][2];
+            num_output_samples = m_inference_config.get_tensor_output_shape()[0][1];
+        }
+        if (
+#ifdef USE_LIBTORCH
+            current_inference_backend != anira::InferenceBackend::LIBTORCH &&
+#endif
+#ifdef USE_ONNXRUNTIME
+            current_inference_backend != anira::InferenceBackend::ONNX &&
+#endif
+#ifdef USE_TFLITE
+            current_inference_backend != anira::InferenceBackend::TFLITE &&
+#endif
+#ifdef USE_LITERT
+            current_inference_backend != anira::InferenceBackend::LITERT &&
+#endif
+#ifdef USE_EXECUTORCH
+            current_inference_backend != anira::InferenceBackend::EXECUTORCH &&
+#endif
+            current_inference_backend != anira::InferenceBackend::CUSTOM) {
+            throw std::runtime_error("Invalid inference backend");
+        }
+
+        for (size_t batch = 0; batch < (size_t)num_batches; batch++) {
+            size_t base_index = batch * (size_t)num_input_samples;
+            pop_samples_from_buffer(input[0],
+                                    output[0],
+                                    (size_t)num_output_samples,
+                                    (size_t)(num_input_samples - num_output_samples),
+                                    base_index);
+        }
+    }
+};
+
+}  // namespace compat_copy
+// NOLINTEND
+
+namespace {
+
+/// A 2.x handler and a shim handler, each with its own processor class, over the same
+/// arguments.
+template <class OldProcessor, class Processor>
+struct ProcessorPair {
+    explicit ProcessorPair(const Arguments& args)
+        : m_old(make_old(args))
+        , m_old_pp(m_old)
+        , m_old_handler(m_old_pp, m_old, oracle_core_config())
+        , m_shim(make_shim(args))
+        , m_pp(m_shim)
+        , m_handler(m_pp, m_shim, shim_context_config()) {}
+
+    anira::InferenceConfig m_old;
+    OldProcessor m_old_pp;
+    anira::InferenceHandler m_old_handler;
+    v2::InferenceConfig m_shim;
+    Processor m_pp;
+    v2::InferenceHandler m_handler;
+};
+
+/// The rows of a bundled model on the oracle engines (LiteRT left out, as for the gain).
+Arguments without_litert(Arguments args) {
+    std::erase_if(args.m_rows, [](const Row& row) { return row.m_backend == v2::LITERT; });
+    std::erase_if(args.m_shapes, [](const Shapes& row) { return row.m_backend == v2::LITERT; });
+    return args;
+}
+
+/// One block in place on a mono handler of `block` samples; returns the delivered count.
+template <class Handler>
+size_t run_in_place(Handler& handler, size_t k, size_t block, std::vector<float>& out) {
+    out = anira_test::ramp(k, block);
+    const size_t prev = handler.get_available_samples(0);
+    const std::array<float*, 1> io{out.data()};
+    const size_t delivered = handler.process(io.data(), block);
+    wait_ring(handler, prev);
+    return delivered;
+}
+
+/// Every plan of a processor pair in place, `blocks` blocks each, bit for bit.
+template <class Pair>
+void expect_every_plan_matches(Pair& pair, size_t block, size_t blocks) {
+    std::vector<std::pair<anira::InferenceBackend, v2::InferenceBackend>> backends;
+    for (const v2::InferenceBackend backend : k_backends) {
+        if (backend == v2::CUSTOM || pair.m_shim.get_model_data(backend) == nullptr) { continue; }
+        const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
+        if (mapped.has_value()) { backends.emplace_back(*mapped, backend); }
+    }
+    ASSERT_FALSE(backends.empty()) << "no engine of this build runs the model";
+    size_t k = 1;
+    for (const auto& [old_backend_value, backend] : backends) {
+        SCOPED_TRACE(static_cast<uint32_t>(backend));
+        pair.m_old_handler.set_inference_backend(old_backend_value);
+        pair.m_handler.set_inference_backend(backend);
+        for (size_t i = 0; i < blocks; ++i, ++k) {
+            std::vector<float> c;
+            std::vector<float> v;
+            const size_t n_c = run_in_place(pair.m_handler, k, block, c);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            const size_t n_v = run_in_place(pair.m_old_handler, k, block, v);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            EXPECT_EQ(n_c, n_v) << "block " << k;
+            anira_test::expect_same_block(c, v, k);
+        }
+    }
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
+}
+
+}  // namespace
+
+// Case 3: the steerable-nafx CNN through the copied 2.x processor (a window of 15380 samples,
+// 2048 of them new) on every engine of the oracle, in place: the samples of the 2.x class.
+TEST(AbiCompat, CnnMatchesThroughTheCopiedProcessor) {
+    if (anira_test::oracle_engines().empty()) {
+        GTEST_SKIP() << "no built-in engine in this build";
+    }
+    ProcessorPair<CNNPrePostProcessor, compat_copy::CNNPrePostProcessor> pair(
+        without_litert(cnn_arguments()));
+    pair.m_old_handler.prepare(anira::HostConfig(2048.F, static_cast<float>(anira_test::k_rate)));
+    pair.m_handler.prepare(v2::HostConfig(2048.F, static_cast<float>(anira_test::k_rate)));
+    expect_every_plan_matches(pair, 2048, 4);
+}
+
+// Case 4: GuitarLSTM through the copied 2.x processor, which reads the backend-qualified shape
+// (the channels-last TensorFlow rows read [256, 150, 1] through the entry's layout, decision
+// 8.1) and pops 256 windows of 150 samples per inference: the samples of the 2.x class.
+TEST(AbiCompat, HybridNnMatchesThroughTheCopiedProcessor) {
+    if (anira_test::oracle_engines().empty()) {
+        GTEST_SKIP() << "no built-in engine in this build";
+    }
+    ProcessorPair<HybridNNPrePostProcessor, compat_copy::HybridNNPrePostProcessor> pair(
+        without_litert(hybridnn_arguments()));
+    pair.m_old_handler.prepare(anira::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
+    pair.m_handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
+    expect_every_plan_matches(pair, 256, 6);
+}
+
+// Case 14: a single form carries its one slot per side: after a pop of both outputs, a single
+// pop of output 0 leaves output 1's memory and ring alone (2.x resent the last pointers of
+// every slot, and re-popped output 1 into the previous call's memory). A shim rule, no 2.x
+// comparison.
+TEST(AbiCompat, ASingleFormCarriesOneSlotPerSide) {
+    v2::InferenceConfig config = make_shim(two_output_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    // One block in, so both output rings hold more than the pops below take.
+    const std::vector<float> in = anira_test::ramp(1);
+    const std::array<const float*, 1> in_ch{in.data()};
+    const size_t prev = handler.get_available_samples(0);
+    handler.push_data(in_ch.data(), 512);
+    wait_ring(handler, prev + 512);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+    std::vector<float> out0(256, -1.F);
+    std::vector<float> out1(256, -1.F);
+    const std::array<float*, 1> out0_ch{out0.data()};
+    const std::array<float*, 1> out1_ch{out1.data()};
+    const std::array<float* const*, 2> outs{out0_ch.data(), out1_ch.data()};
+    std::array<size_t, 2> num_out{256, 256};
+    handler.pop_data(outs.data(), num_out.data());
+    EXPECT_EQ(num_out[0], 256U);
+    EXPECT_EQ(num_out[1], 256U);
+    const size_t ring1 = handler.get_available_samples(1);
+    std::ranges::fill(out1, 7.F);
+    EXPECT_EQ(handler.pop_data(out0_ch.data(), 128, 0), 128U);
+    anira_test::expect_all(out1, 7.F, "output 1's memory is not written");
+    EXPECT_EQ(handler.get_available_samples(1), ring1) << "output 1's ring is not popped";
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+}
+
+// Case 15: the in-place single form on a generator (its input slot 0 is the Static parameter
+// tensor, its output slot 0 the stream) stores min(count, 4) values into the processor and
+// pulls the stream; the stream-sized count writes nothing past the parameters.
+TEST(AbiCompat, AGeneratorSingleFormClampsTheStaticCount) {
+    v2::InferenceConfig config = make_shim(generator_arguments());
+    v2::PrePostProcessor pp(config);
+    KernelEngine<ParamFillKernel> engine;
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    for (size_t block = 0; block < 8; ++block) {
+        std::vector<float> buffer(512);
+        for (size_t i = 0; i < buffer.size(); ++i) {
+            buffer[i] = static_cast<float>(block * 1000 + i);
+        }
+        const std::vector<float> sent = buffer;
+        const std::array<float*, 1> channels{buffer.data()};
+        const size_t received = handler.process(channels.data(), 512, 0);
+        EXPECT_TRUE(received == 0 || received == 512U) << "received " << received;
+        for (size_t j = 0; j < 4; ++j) { EXPECT_EQ(pp.get_input(0, j), sent[j]); }
+        EXPECT_EQ(pp.get_input(0, 4), 0.F) << "nothing past the tensor's four values";
+    }
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
 }
