@@ -3040,8 +3040,9 @@ public:
     /// candidate's provider of the engine is checked against the answer (a declared provider
     /// the answer clears is ANIRA_ERROR_NOT_SUPPORTED, "declares provider 'x' but its query
     /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
-    /// engine's rows beside the context's. The base answers every bit: every declared
-    /// provider is usable. It may throw, as init may: the status fails the calling entry.
+    /// engine's rows beside the context's. A handler's prepare uses the answer its create got
+    /// and never calls query, whatever thread it runs on. The base answers every bit: every
+    /// declared provider is usable. It may throw, as init may: the status fails the calling entry.
     virtual std::uint64_t query(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches

@@ -904,8 +904,11 @@ bool consumes_provider_options(const anira_pipeline& pipeline, const anira::capi
 // the kind and serve the provider by its declared list and its query; a set for a custom
 // engine this pipeline does not add is another pipeline's and passes. So a misspelled provider
 // word, which reads as a custom provider's name, is refused here and never silently ignored,
-// and a set no plan of the handler runs on is still no error.
-void check_option_sets(const anira_context& context, const anira_pipeline& pipeline) {
+// and a set no plan of the handler runs on is still no error. A custom engine's query answer is
+// asked through `answers` (QueryUse::Ask), which the handler keeps.
+void check_option_sets(const anira_context& context,
+                       const anira_pipeline& pipeline,
+                       anira::capi::QueryAnswers& answers) {
     const auto* options =
         context.m_config.m_ext.payload<anira::capi::ProviderOptionsPayload>("provider_options");
     if (options == nullptr) { return; }
@@ -929,7 +932,9 @@ void check_option_sets(const anira_context& context, const anira_pipeline& pipel
                     "consumed_kinds lacks \"context:provider_options\")";
                 throw StatusError(ANIRA_ERROR_EXTENSION_UNCONSUMED, message);
             }
-            served = anira::capi::served_by_custom(context, *engine);
+            served =
+                anira::capi::served_by_custom(*engine,
+                                              anira::capi::ask_query(context, *engine, answers));
         } else {
             served = anira::capi::served_by_builtin(context, set.m_engine);
         }
@@ -950,16 +955,20 @@ bool listless_engine(const anira_pipeline& pipeline, const anira::capi::ModelEnt
 // Whether every plan of the table runs on a provider its engine serves here, through the one
 // path of providers.h: a built-in engine's provider must be in the context's capabilities
 // (what its runtime reported at the last probe), a registered engine's in its descriptor's
-// list and reported usable by its query (run now, before its init); an engine without a list
-// serves ANIRA_PROVIDER_CPU alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
-// the provider and what is served (a declared provider the query cleared says so); a query
-// that fails fails the create with its status; the engine's load may still refuse a provider
-// at run time (a device lost between create and prepare). Under the default set a plan on a
-// provider its engine declares but cannot use here is dropped from the table instead (with
-// its row when no plan of the row is left), and a table left empty is ANIRA_ERROR_CONFIG.
+// list and reported usable by its query (before its init; asked at create under
+// QueryUse::Ask and kept in `answers`, reused at prepare under QueryUse::Reuse, so the query
+// runs on the main thread only); an engine without a list serves ANIRA_PROVIDER_CPU alone.
+// ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and what is served (a
+// declared provider the query cleared says so); a query that fails fails the create with its
+// status; the engine's load may still refuse a provider at run time (a device lost between create
+// and prepare). Under the default set a plan on a provider its engine declares but cannot use here
+// is dropped from the table instead (with its row when no plan of the row is left), and a table
+// left empty is ANIRA_ERROR_CONFIG.
 void check_providers(const anira_context& context,
                      const anira_pipeline& pipeline,
-                     anira::capi::Derived& derived) {
+                     anira::capi::Derived& derived,
+                     anira::capi::QueryAnswers& answers,
+                     anira::capi::QueryUse use) {
     const anira_model_config& model = pipeline.m_variants[0];
     std::vector<anira::capi::PlanKey> kept;
     kept.reserve(derived.m_plans.size());
@@ -974,7 +983,7 @@ void check_providers(const anira_context& context,
             continue;
         }
         const anira::capi::ServedProviders served =
-            anira::capi::served_providers(context, pipeline, row);
+            anira::capi::served_providers(context, pipeline, row, answers, use);
         if (served.serves(key.m_provider, key.m_provider_id)) {
             kept.push_back(std::move(key));
             continue;
@@ -1512,9 +1521,15 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     check_stage_flags(stage);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
-    // The plans' providers against what their engines serve now (a built-in engine's runtime,
-    // a custom engine's query), as at create: a context probed again since is seen here.
-    check_providers(*handler.m_context, handler.m_pipeline, derived);
+    // The plans' providers against what their engines serve, as at create: a built-in
+    // engine's runtime as the context reports it now (a context probed again since is seen
+    // here), a custom engine's query as it answered at create (the query runs on the main
+    // thread only; a prepare may run on any control thread).
+    check_providers(*handler.m_context,
+                    handler.m_pipeline,
+                    derived,
+                    handler.m_query_answers,
+                    anira::capi::QueryUse::Reuse);
     // The stage's init, once per registration, at the first prepare of a handler of the
     // pipeline that survives validation, before any model loads (a refused init throws none of
     // that work away and is tried again by the next prepare), with the facts of the core in
@@ -2287,11 +2302,15 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                           &stages,
                           &engines,
                           pipeline->m_default_set);
-    check_providers(*context, *pipeline, derived);
-    check_option_sets(*context, *pipeline);
+    // The custom engines' queries run here, on the main thread, and the handler keeps their
+    // answers for its prepares.
+    anira::capi::QueryAnswers answers;
+    check_providers(*context, *pipeline, derived, answers, anira::capi::QueryUse::Ask);
+    check_option_sets(*context, *pipeline, answers);
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);
+    handler->m_query_answers = std::move(answers);
     // The ports: one per tensor of either list, the arm by the spec's role (the copy fixes the
     // specs, so the vectors are never resized and no arm ever changes). A static port holds
     // its zeroed value in the spec's shape and dtype, built in place (an atomic does not

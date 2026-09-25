@@ -153,7 +153,8 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   without a list serves the CPU path without a bit). It runs before ``init`` and any number of times, on the main thread, at
   ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
   ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
-  lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
+  lock. ``anira_handler_prepare`` never calls it: the handler keeps the answer its create got
+  and checks the plans against that again, so a prepare on another thread does not run it. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
   ``NULL``: every listed provider is usable.
 
 Three levels, three pointers, three lifetimes: ``user_data`` lives with the engine object,
