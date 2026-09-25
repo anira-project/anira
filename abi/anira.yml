@@ -1679,6 +1679,18 @@ headers:
         doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a stage of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/stage.h still refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed tensor is checked at prepare, not here."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
       - kind: function
+        name: anira_contract_hard_set_latency
+        returns: anira_status
+        params:
+          - {type: anira_contract*, name: contract, doc: "A Hard contract."}
+          - {type: const char*, name: canonical, doc: "The canonical name of a Streamed output (the one its spec was created with)."}
+          - {type: uint32_t, name: samples, doc: "The stream latency in samples of that output, at most INT32_MAX."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "The declared stream latency of one output under a Hard contract, in samples of that output: what anira_handler_get_latency reports for the slot and what its receive ring is primed with, REPLACING the figure anira computes (the buffer-adaptation delay, the queue term, the wait credit and the model's internal latency; docs/sphinx/latency.rst). A host that needs one figure across block sizes, or one that aligns this stream with another, sets it; every output never named keeps the computed figure. Never below the model's internal latency (anira_tensor_spec_set_latency: a stream cannot deliver before the model does). Checked at anira_handler_prepare, not here: a figure below that floor, and a name that matches no Streamed output (an input has no stream latency), are ANIRA_ERROR_CONFIG there. Set per output by canonical name, a second set of a name replacing the first. In a contract file the key is \"latencies\": {\"<name>\": samples} in the hard object."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or samples above INT32_MAX (the scheduler's per-output figure is a long: one bound on every platform)."
+      - kind: function
         name: anira_contract_async_set_deadline
         returns: anira_status
         params:
@@ -2821,6 +2833,29 @@ headers:
         status: promised
         since: "0.2"
         doc: "One ring dtype the contract names, enumerated by index in bytewise order of the canonical names: what lists what was set, which a lookup by name could not (it would answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike)."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
+      - kind: function
+        name: anira_contract_hard_num_latencies
+        returns: uint32_t
+        params:
+          - {type: const anira_contract*, name: contract, doc: "A Hard contract."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "The number of outputs anira_contract_hard_set_latency (or a contract file's latencies) named; every other output keeps the computed figure."
+        return_doc: "The count; 0 on an Async contract and for NULL."
+      - kind: function
+        name: anira_contract_hard_latency
+        returns: anira_status
+        params:
+          - {type: const anira_contract*, name: contract, doc: "A Hard contract."}
+          - {type: uint32_t, name: index, doc: "Below anira_contract_hard_num_latencies."}
+          - {type: const char**, name: canonical, doc: "Receives the output's canonical name (object-owned)."}
+          - {type: uint32_t*, name: samples, doc: "Receives its declared stream latency in samples."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "One declared stream latency the contract names, enumerated by index in bytewise order of the canonical names, the shape of anira_contract_hard_ring_dtype."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
       - kind: function
         name: anira_contract_edge_cost
@@ -4569,7 +4604,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The stream latency of one output in samples of that output, valid from prepare on and not while anira_handler_prepare runs: the 2.x arithmetic including the wait_ratio credit, so a host that calls the ANIRA_NONBLOCKING entries on a wait_ratio above 0 handler gets the same figure and more on_miss events. A generator counts from its first process or pop after prepare or reset."
+        doc: "The stream latency of one output in samples of that output, valid from prepare on and not while anira_handler_prepare runs: the 2.x arithmetic including the wait_ratio credit, so a host that calls the ANIRA_NONBLOCKING entries on a wait_ratio above 0 handler gets the same figure and more on_miss events. A generator counts from its first process or pop after prepare or reset. Where the Hard contract declared a stream latency for the slot (anira_contract_hard_set_latency), that figure replaces the computed one."
         return_doc: "The latency; 0 for an output that is not Streamed (Static, State), a NULL or unprepared handler or an index out of range."
 
       - kind: function
@@ -4583,7 +4618,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The latency vector, index-aligned with the output list; valid from prepare on and not while anira_handler_prepare runs."
+        doc: "The latency vector, index-aligned with the output list; valid from prepare on and not while anira_handler_prepare runs. A slot the Hard contract declared a stream latency for (anira_contract_hard_set_latency) reports that figure."
         return_doc: "ANIRA_OK; ANIRA_INCOMPLETE when out is too short (count holds the total); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or count; ANIRA_ERROR_NOT_PREPARED before a successful prepare."
 
       - kind: function

@@ -34,6 +34,8 @@
 namespace anira {
 /// The ring dtype of every slot (include/anira/scheduler/SessionElement.h).
 struct RingDtypes;
+/// A latency per output tensor replacing the computed one (the same header).
+struct CustomLatencies;
 }  // namespace anira
 
 namespace anira::capi {
@@ -195,6 +197,15 @@ ANIRA_API void validate(const anira_model_config& model,
 /// a stage fills the phase that moves that ring.
 ANIRA_API anira::RingDtypes ring_dtypes_of(const anira_contract& contract,
                                            const anira_model_config& model);
+
+/// The declared stream latency of every output slot (anira_contract_hard_set_latency), what the
+/// C prepare hands the scheduler: one entry per tensor of the model's output list, -1 (the
+/// computed figure) everywhere, then each entry of the Hard contract's latencies resolved by
+/// tensor name into its slot; exact on every platform, since a figure is at most INT32_MAX.
+/// Run validate first: it refuses a name that matches no tensor, an input, a non-Streamed
+/// output and a figure below the spec's latency.
+ANIRA_API anira::CustomLatencies latencies_of(const anira_contract& contract,
+                                              const anira_model_config& model);
 
 /// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
 /// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry

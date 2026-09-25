@@ -252,6 +252,9 @@ static_assert(noexcept(anira_model_config_tensor_layout(nullptr, 0, nullptr, nul
 static_assert(noexcept(anira_contract_hard_ring_dtype(nullptr, 0, nullptr, nullptr)));
 static_assert(noexcept(anira_contract_hard_miss_fn(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_contract_edge_cost(nullptr)));
+static_assert(noexcept(anira_contract_hard_set_latency(nullptr, nullptr, 0)));
+static_assert(noexcept(anira_contract_hard_num_latencies(nullptr)));
+static_assert(noexcept(anira_contract_hard_latency(nullptr, 0, nullptr, nullptr)));
 static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
 static_assert(
     std::is_same_v<decltype(anira_model_config_input(nullptr, 0)), const anira_tensor_spec*>);

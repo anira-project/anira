@@ -121,6 +121,12 @@ struct HardContract {
     /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare.
     /// Absent = ANIRA_DTYPE_F32, which is what the float entries are legal on.
     std::map<std::string, anira_dtype> m_ring_dtypes;
+    /// The declared stream latency per Streamed output by canonical name, in samples of that
+    /// output (anira_contract_hard_set_latency, the JSON key "latencies"): it replaces the
+    /// figure the scheduler computes and primes the receive ring. Absent = the computed figure.
+    /// Resolved at prepare (validate), where a name that is no Streamed output and a figure
+    /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
+    std::map<std::string, uint32_t> m_latencies;
 };
 
 /// The Async half of a contract.

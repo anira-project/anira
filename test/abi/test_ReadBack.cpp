@@ -584,6 +584,58 @@ TEST(AbiReadBack, RingDtypesAreEnumeratedInBytewiseOrder) {
     EXPECT_EQ(anira_contract_hard_num_ring_dtypes(nullptr), 0u);
 }
 
+TEST(AbiReadBack, DeclaredLatenciesAreEnumeratedInBytewiseOrder) {
+    const Contract hard(512, 512, 48000.0);
+    EXPECT_EQ(anira_contract_hard_num_latencies(hard.m_contract), 0u) << "none declared";
+    ASSERT_EQ(anira_contract_hard_set_latency(hard.m_contract, "mask_out", 2048), ANIRA_OK);
+    ASSERT_EQ(anira_contract_hard_set_latency(hard.m_contract, "audio_out", 1024), ANIRA_OK);
+    ASSERT_EQ(anira_contract_hard_num_latencies(hard.m_contract), 2u);
+    const char* canonical = nullptr;
+    uint32_t samples = 0;
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 0, &canonical, &samples), ANIRA_OK);
+    EXPECT_STREQ(canonical, "audio_out");
+    EXPECT_EQ(samples, 1024u);
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 1, &canonical, &samples), ANIRA_OK);
+    EXPECT_STREQ(canonical, "mask_out");
+    EXPECT_EQ(samples, 2048u);
+    // The overwrite keeps the count; the bound is refused at set and leaves the figure.
+    ASSERT_EQ(anira_contract_hard_set_latency(hard.m_contract, "audio_out", 4096), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard.m_contract, "audio_out", 0x80000000U),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_num_latencies(hard.m_contract), 2u);
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 0, &canonical, &samples), ANIRA_OK);
+    EXPECT_EQ(samples, 4096u);
+
+    canonical = "untouched";
+    samples = 7;
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 2, &canonical, &samples),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 0, nullptr, &samples),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_latency(hard.m_contract, 0, &canonical, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_latency(nullptr, 0, &canonical, &samples),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    const Contract async_contract;
+    EXPECT_EQ(anira_contract_hard_latency(async_contract.m_contract, 0, &canonical, &samples),
+              ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_STREQ(canonical, "untouched");
+    EXPECT_EQ(samples, 7u);
+    EXPECT_EQ(anira_contract_hard_num_latencies(async_contract.m_contract), 0u);
+    EXPECT_EQ(anira_contract_hard_num_latencies(nullptr), 0u);
+
+    // A contract file carries them under "latencies".
+    static constexpr const char* k_file = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "latencies": {"audio_out": 1536}
+    } })";
+    const Contract loaded(k_file);
+    ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
+    ASSERT_EQ(anira_contract_hard_num_latencies(loaded.m_contract), 1u);
+    EXPECT_EQ(anira_contract_hard_latency(loaded.m_contract, 0, &canonical, &samples), ANIRA_OK);
+    EXPECT_STREQ(canonical, "audio_out");
+    EXPECT_EQ(samples, 1536u);
+}
+
 TEST(AbiReadBack, TheHardFamilyIsWrongContractOnAsync) {
     const Contract async_contract;
     uint32_t u = 7;

@@ -318,6 +318,30 @@ void check_contract(const anira_contract& contract,
                          " and converts, anira_pipeline_add_stage)");
         }
     }
+    // The declared stream latency rules: the figure replaces the computed one for a stream,
+    // which only a Streamed output has, and primes its receive ring with (figure - the model's
+    // internal latency) zeros, so it cannot be below that internal latency. The 2.x scheduler
+    // clamps such a figure up with a warning; here it is the host's error.
+    for (const auto& [name, samples] : hard->m_latencies) {
+        bool is_input = true;
+        const anira_tensor_spec* spec = find_spec(model, name, &is_input, nullptr);
+        if (spec == nullptr) {
+            config_error("contract: the latency of '" + name + "' names no tensor");
+        }
+        if (is_input) {
+            config_error("contract: the latency of '" + name +
+                         "' is set on an input tensor; a stream latency belongs to an output");
+        }
+        if (spec->m_role != ANIRA_ROLE_STREAMED) {
+            config_error("contract: the latency of '" + name + "' is set on a " +
+                         role_word(spec->m_role) + " tensor; only a Streamed output has a stream");
+        }
+        if (static_cast<int64_t>(samples) < spec->m_latency) {
+            config_error("contract: the latency of '" + name + "' is " + std::to_string(samples) +
+                         " but the model's internal latency is " + std::to_string(spec->m_latency) +
+                         "; a stream cannot deliver before the model does");
+        }
+    }
     // The host-end domain rules: every tensor of either side, whatever its role, has one
     // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
     // domain anira allocates the ring, the model tensor, the Static store and the state buffers
@@ -827,6 +851,23 @@ anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_mod
         }
     }
     return dtypes;
+}
+
+anira::CustomLatencies latencies_of(const anira_contract& contract,
+                                    const anira_model_config& model) {
+    anira::CustomLatencies latencies;
+    latencies.m_outputs.assign(model.m_outputs.size(), -1);
+    const HardContract* hard = contract.hard();
+    if (hard == nullptr) { return latencies; }
+    for (const auto& [name, samples] : hard->m_latencies) {
+        bool is_input = true;
+        size_t index = 0;
+        if (find_spec(model, name, &is_input, &index) == nullptr || is_input) {
+            continue;  // validate ran
+        }
+        latencies.m_outputs[index] = static_cast<long>(samples);
+    }
+    return latencies;
 }
 
 HostDomains host_domains_of(const anira_contract& contract, const anira_model_config& model) {

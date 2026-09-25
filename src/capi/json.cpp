@@ -805,6 +805,19 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
                 hard.m_ring_dtypes[tensor] =
                     vocabulary(word, child(key_path, tensor.c_str()), k_dtypes);
             }
+        } else if (key == "latencies") {
+            // The declared stream latency per output (anira_contract_hard_set_latency), with
+            // the setter's bound.
+            require_object(value, key_path);
+            for (const auto& [tensor, samples] : value.items()) {
+                if (tensor.empty()) { fail_json(key_path, "a tensor name must not be empty"); }
+                const std::string tensor_path = child(key_path, tensor.c_str());
+                const uint32_t figure = require_u32(samples, tensor_path);
+                if (figure > static_cast<uint32_t>(INT32_MAX)) {
+                    fail_json(tensor_path, "must not exceed 2147483647");
+                }
+                hard.m_latencies[tensor] = figure;
+            }
         } else {
             fail_json(key_path, "unknown hard contract key");
         }

@@ -770,6 +770,26 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_set_ring_dtype(async_contract, "audio_in", ANIRA_DTYPE_F32),
               ANIRA_ERROR_WRONG_CONTRACT);
+    // The declared stream latency: by canonical name, a second set replaces, at most INT32_MAX;
+    // the name resolves at prepare.
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", 1024), ANIRA_OK);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 1024u);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", 4096), ANIRA_OK)
+        << "a second set replaces";
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 4096u);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "ghost", 0), ANIRA_OK) << "resolved at prepare";
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", INT32_MAX), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "audio_out", uint32_t{INT32_MAX} + 1U),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), static_cast<uint32_t>(INT32_MAX))
+        << "untouched by the refused set";
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, "", 1024), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(hard, nullptr, 1024), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(nullptr, "audio_out", 1024),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_set_latency(async_contract, "audio_out", 1024),
+              ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(hard->hard()->m_latencies.size(), 2u);
     EXPECT_EQ(anira_contract_async_set_deadline(hard, 10.0), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_async_set_policy(hard,
                                               ANIRA_LATE_DROP,

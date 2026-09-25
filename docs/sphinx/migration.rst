@@ -213,7 +213,17 @@ a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
        collected inference.
    * - ``get_latency()`` / ``get_latency_vector()``
      - ``anira_handler_get_latency(h, slot)`` / ``anira_handler_get_latencies(h, &count,
-       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output.
+       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output;
+       a figure the Hard contract declared for the slot (below) where it did.
+   * - ``prepare(host_config, custom_latency, tensor_index)`` and ``prepare(host_config,
+       std::vector<unsigned int> custom_latency)``
+     - The declared stream latency of an output on the Hard contract,
+       ``anira_contract_hard_set_latency(contract, "audio_out", samples)`` per named output
+       (``"latencies"`` in the contract file), then ``anira_handler_prepare``: the figure
+       replaces the computed one and primes the receive ring, as the 2.x custom latency did.
+       Where 2.x clamped a figure below the model's internal latency up to it with a warning,
+       prepare refuses it with ``ANIRA_ERROR_CONFIG``, as it refuses a name that is no
+       Streamed output; an output never named keeps the computed figure.
    * - ``reset()``
      - ``anira_handler_reset(h)``; it also re-initialises declared state.
    * - ``set_inference_backend(backend)``

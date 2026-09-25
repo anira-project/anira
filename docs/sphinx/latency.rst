@@ -119,6 +119,11 @@ When several output tensors are present, the integer latencies are raised to a c
 
 The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, one entry per output tensor of the model config's list (``0`` for a Static or a State output), and ``anira_handler_get_latency(h, slot)`` one entry of it.
 
+Declaring the figure
+--------------------
+
+A host that needs another figure than the computed one declares it on the Hard contract, per streamed output and in samples of that output: ``anira_contract_hard_set_latency(contract, "audio_out", 4096)``, or ``"latencies": {"audio_out": 4096}`` in the contract file. The declared figure *replaces* everything above for that output (the buffer adaptation, the inference queue, the wait credit and the internal model latency): ``anira_handler_get_latency`` reports it, and the receive ring is primed to it: with the figure less the internal model latency in zeros, the model's own delay supplying the rest. Every output never named keeps its computed figure, and the synchronization above does not raise a declared one. A figure below the model's internal latency cannot be delivered and is ``ANIRA_ERROR_CONFIG`` at prepare, as is a name that is no streamed output. Declaring the same figure for every block size, or the figure of another stream, is how a host keeps its reported latency constant or aligns two streams. It is the custom latency of the two 2.x ``InferenceHandler::prepare`` overloads that take one, which the 2.x runtime clamps up to the internal latency with a warning instead of refusing.
+
 Ring buffer sizes
 -----------------
 

@@ -541,6 +541,41 @@ TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     EXPECT_EQ(hard, nullptr);
 }
 
+// The declared stream latency per output (anira_contract_hard_set_latency): non-negative
+// integers by canonical name, at most INT32_MAX like the setter; whether a name is a Streamed
+// output is prepare's question.
+TEST(AbiJsonContract, LatenciesAreReadByTensorName) {
+    static constexpr const char* k_text = R"({ "hard": {
+        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},
+        "latencies": {"audio_out": 1024, "aux_out": 0}
+    } })";
+    anira_contract* hard = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_contract_from_json(k_text, std::strlen(k_text), &hard, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(hard->hard()->m_latencies.size(), 2u);
+    EXPECT_EQ(hard->hard()->m_latencies.at("audio_out"), 1024u);
+    EXPECT_EQ(hard->hard()->m_latencies.at("aux_out"), 0u);
+    anira_contract_destroy(hard);
+
+    for (const char* bad : {R"({ "hard": { "latencies": {"audio_out": -1} } })",
+                            R"({ "hard": { "latencies": {"audio_out": 1024.5} } })",
+                            R"({ "hard": { "latencies": {"audio_out": "1024"} } })",
+                            R"({ "hard": { "latencies": {"audio_out": 2147483648} } })"}) {
+        hard = nullptr;
+        err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_contract_from_json(bad, std::strlen(bad), &hard, &err), ANIRA_ERROR_JSON)
+            << bad;
+        EXPECT_NE(std::string(err.message).find("hard.latencies.audio_out"), std::string::npos)
+            << err.message;
+        EXPECT_EQ(hard, nullptr);
+    }
+    static constexpr const char* k_not_object = R"({ "hard": { "latencies": [1024] } })";
+    EXPECT_EQ(anira_contract_from_json(k_not_object, std::strlen(k_not_object), &hard, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::string(err.message).find("hard.latencies"), std::string::npos) << err.message;
+}
+
 // The declared host-end domain per tensor is a top-level key, common to both kinds like
 // edge_cost, the words the lower-case suffixes of anira_domain.
 TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {

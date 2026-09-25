@@ -1051,7 +1051,9 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_get_static_output(anira_handler*
  * not while anira_handler_prepare runs: the 2.x arithmetic including the wait_ratio
  * credit, so a host that calls the ANIRA_NONBLOCKING entries on a wait_ratio above 0
  * handler gets the same figure and more on_miss events. A generator counts from its
- * first process or pop after prepare or reset.
+ * first process or pop after prepare or reset. Where the Hard contract declared a stream
+ * latency for the slot (anira_contract_hard_set_latency), that figure replaces the
+ * computed one.
  * @param handler A prepared handler.
  * @param slot The slot: the tensor's position in the model config's output list.
  * @return The latency; 0 for an output that is not Streamed (Static, State), a NULL or
@@ -1065,7 +1067,8 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_latency(const anira_handler* han
 
 /**
  * @brief The latency vector, index-aligned with the output list; valid from prepare on and not
- * while anira_handler_prepare runs.
+ * while anira_handler_prepare runs. A slot the Hard contract declared a stream latency
+ * for (anira_contract_hard_set_latency) reports that figure.
  * @param handler A prepared handler.
  * @param count In: the capacity of out; out: the number of output tensors.
  * @param out Receives one latency per output slot, in slot order: one entry per tensor of the

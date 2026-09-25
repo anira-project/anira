@@ -387,6 +387,21 @@ anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contract* contr
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
+// Whether the name is a Streamed output, and whether the figure covers the model's internal
+// latency, is validate's question at prepare: the contract does not know the model here.
+anira_status ANIRA_CALL anira_contract_hard_set_latency(anira_contract* contract,
+                                                        const char* canonical,
+                                                        uint32_t samples) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || !non_empty(canonical) ||
+        samples > static_cast<uint32_t>(INT32_MAX)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    hard->m_latencies[canonical] = samples;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
 anira_status ANIRA_CALL anira_contract_async_set_deadline(anira_contract* contract,
                                                           double deadline_ms) ANIRA_NOEXCEPT try {
     if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -1408,6 +1423,29 @@ anira_status ANIRA_CALL anira_contract_hard_ring_dtype(const anira_contract* con
     const auto entry = std::next(hard->m_ring_dtypes.begin(), index);
     *canonical = entry->first.c_str();
     *dtype = entry->second;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+uint32_t ANIRA_CALL anira_contract_hard_num_latencies(const anira_contract* contract)
+    ANIRA_NOEXCEPT {
+    const anira::capi::HardContract* hard = contract == nullptr ? nullptr : contract->hard();
+    return hard == nullptr ? 0u : static_cast<uint32_t>(hard->m_latencies.size());
+}
+
+// The enumeration of anira_contract_hard_ring_dtype, over the declared stream latencies.
+anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contract* contract,
+                                                    uint32_t index,
+                                                    const char** canonical,
+                                                    uint32_t* samples) ANIRA_NOEXCEPT try {
+    if (contract == nullptr || canonical == nullptr || samples == nullptr) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira::capi::HardContract* hard = contract->hard();
+    if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
+    if (index >= hard->m_latencies.size()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    const auto entry = std::next(hard->m_latencies.begin(), index);
+    *canonical = entry->first.c_str();
+    *samples = entry->second;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 

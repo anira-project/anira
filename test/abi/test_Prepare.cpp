@@ -241,6 +241,88 @@ TEST(AbiPrepare, RingDtypeRulesAreConfigAtPrepare) {
     run_waited_block(handler.m_handler, 1);
 }
 
+namespace {
+
+/// A mono stream in, two mono streams out (the custom row's pass-through copies the first and
+/// zeroes the second), every tensor 512 wide; the second output carries a model latency of 256.
+ModelConfig two_stream_outputs_model() {
+    ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    model.input(streamed("audio_in"));
+    model.output(streamed("audio_out"));
+    TensorSpec aux = streamed("aux_out");
+    aux.latency(256);
+    model.output(aux);
+    return model;
+}
+
+/// explicit_contract() with the declared stream latency of one output, set through the C entry.
+ContractHandle with_latency(const char* canonical, uint32_t samples) {
+    ContractHandle contract = explicit_contract();
+    EXPECT_EQ(anira_contract_hard_set_latency(contract.native(), canonical, samples), ANIRA_OK);
+    return contract;
+}
+
+}  // namespace
+
+// The declared stream latency of an output resolves at prepare: a name that is no tensor, an
+// input, a Static output and a figure below the model's internal latency are CONFIG. A legal
+// declaration replaces the computed figure of its slot alone, and the receive ring is primed
+// with it: the first samples popped after prepare are that many zeros.
+TEST(AbiPrepare, LatencyRulesAreConfigAtPrepare) {
+    const Context context;
+    {
+        const ModelConfig model = gain_with_custom();
+        const std::vector<anira_backend_id> candidates = custom_candidates();
+        Handler handler(context, model, candidates);
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(handler.prepare(with_latency("ghost", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "contract: the latency of 'ghost' names no tensor");
+        EXPECT_EQ(handler.prepare(with_latency("audio_in", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "the latency of 'audio_in' is set on an input tensor");
+        EXPECT_EQ(handler.prepare(with_latency("gain_out", 1024), &err), ANIRA_ERROR_CONFIG);
+        expect_contains(err.message, "the latency of 'gain_out' is set on a Static tensor");
+        expect_unprepared(handler.m_handler);
+    }
+
+    const ModelConfig model = two_stream_outputs_model();
+    const std::vector<anira_backend_id> none{{.struct_size = sizeof(anira_backend_id),
+                                              .engine = ANIRA_ENGINE_NONE,
+                                              .provider = ANIRA_PROVIDER_DEFAULT,
+                                              .engine_id = nullptr}};
+    Handler handler(context, model, none);
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(handler.prepare(with_latency("aux_out", 100), &err), ANIRA_ERROR_CONFIG);
+    expect_contains(err.message,
+                    "the latency of 'aux_out' is 100 but the model's internal latency is 256");
+
+    // The computed figures, then the declaration on slot 0 alone.
+    ASSERT_EQ(handler.prepare(explicit_contract(), &err), ANIRA_OK) << err.message;
+    const uint32_t computed_0 = anira_handler_get_latency(handler.m_handler, 0);
+    const uint32_t computed_1 = anira_handler_get_latency(handler.m_handler, 1);
+    ASSERT_NE(computed_0, 4096U);
+    ASSERT_EQ(handler.prepare(with_latency("audio_out", 4096), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(anira_handler_get_latency(handler.m_handler, 0), 4096U);
+    EXPECT_EQ(anira_handler_get_latency(handler.m_handler, 1), computed_1)
+        << "an output never named keeps the computed figure";
+    uint32_t count = 2;
+    std::array<uint32_t, 2> latencies{0, 0};
+    ASSERT_EQ(anira_handler_get_latencies(handler.m_handler, &count, latencies.data()), ANIRA_OK);
+    EXPECT_EQ(count, 2U);
+    EXPECT_EQ(latencies[0], 4096U) << "index-aligned with the output list";
+    EXPECT_EQ(latencies[1], computed_1);
+
+    // The priming: the receive ring of slot 0 holds 4096 zeros before any block ran.
+    EXPECT_EQ(anira_test::available(handler.m_handler, 0), 4096U);
+    std::vector<float> primed(4096, -1.0F);
+    const std::array<float*, 1> ch{primed.data()};
+    const anira_tensor out = anira_test::planar_f32(ch.data(), 1, primed.size());
+    size_t delivered = 0;
+    EXPECT_EQ(anira_handler_pop_data(handler.m_handler, &out, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(delivered, 4096U);
+    expect_all(primed, 0.0F, "the priming of the declared latency");
+}
+
 // The declared host-end domain of a tensor resolves at prepare: a name that is no tensor is
 // CONFIG, any domain but host memory is NOT_SUPPORTED naming the tensor (the declaration is
 // data in this pre-release), and a Static tensor takes a declaration like a Streamed one. The

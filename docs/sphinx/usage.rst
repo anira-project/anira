@@ -369,6 +369,17 @@ an ``anira::ContractHandle``.
   ``post_process`` for an output; section 2) and so takes the conversion on itself: the ring
   then holds the host's element type, the model tensor the spec's, and the stage moves
   between the two.
+- **Stream latency.** ``anira_contract_hard_set_latency(contract, "audio_out", 4096)``
+  (``"latencies": {"audio_out": 4096}`` in the contract file) declares the stream latency of
+  one output, by canonical name, in samples of that output: what
+  ``anira_handler_get_latency`` reports for the slot and what its receive ring is primed
+  with, *replacing* the figure anira computes (:doc:`latency`). A host that needs one figure
+  across block sizes, or one that aligns this stream with another, sets it; every output
+  never named keeps the computed figure. It is the 2.x custom latency of
+  ``InferenceHandler::prepare(host_config, custom_latency)``. Resolved at prepare, where it is
+  ``ANIRA_ERROR_CONFIG`` below the model's internal latency (the spec's ``latency``: a
+  stream cannot deliver before the model does), on an input, on a Static output and on a
+  name that matches no tensor; the setter refuses a figure above ``INT32_MAX``.
 - **Host domain.** ``contract.host_domain("audio_in", ANIRA_DOMAIN_HOST)``
   (``anira_contract_set_host_domain``; ``"host_domains": {"audio_in": "host"}`` in the
   contract file, the words being the lower-case suffixes of ``anira_domain``) declares where
@@ -497,7 +508,8 @@ root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measure
 the function is set in code), ``wait_ratio`` as a number, the
 geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional; a plugin patches them from
 the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
-by canonical name), and the optional top-level keys ``edge_cost`` and ``host_domains``
+by canonical name), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
+latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost`` and ``host_domains``
 (``{"audio_in": "host"}``, section 1.3), which stand beside either root.
 
 .. code-block:: cpp

@@ -1461,7 +1461,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                                      &handler);
     // The report's plan rows and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
-    handler.m_manager->prepare(host, anira::CustomLatencies{}, ring_dtypes);
+    handler.m_manager->prepare(host, anira::capi::latencies_of(snapshot, model), ring_dtypes);
     // The session's structs and rings exist now, and no chunk does: the processor binds to
     // them (the plan table included: what a ctx reports for a chunk is the engine and the
     // provider of the plan it was stamped with), and every stream port gets its ring.

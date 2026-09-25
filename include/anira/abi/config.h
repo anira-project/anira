@@ -636,6 +636,34 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_ring_dtype(anira_contr
                                                                      anira_dtype dtype) ANIRA_NOEXCEPT;
 
 /**
+ * @brief The declared stream latency of one output under a Hard contract, in samples of that
+ * output: what anira_handler_get_latency reports for the slot and what its receive ring
+ * is primed with, REPLACING the figure anira computes (the buffer-adaptation delay, the
+ * queue term, the wait credit and the model's internal latency;
+ * docs/sphinx/latency.rst). A host that needs one figure across block sizes, or one that
+ * aligns this stream with another, sets it; every output never named keeps the computed
+ * figure. Never below the model's internal latency (anira_tensor_spec_set_latency: a
+ * stream cannot deliver before the model does). Checked at anira_handler_prepare, not
+ * here: a figure below that floor, and a name that matches no Streamed output (an input
+ * has no stream latency), are ANIRA_ERROR_CONFIG there. Set per output by canonical
+ * name, a second set of a name replacing the first. In a contract file the key is
+ * "latencies": {"<name>": samples} in the hard object.
+ * @param contract A Hard contract.
+ * @param canonical The canonical name of a Streamed output (the one its spec was created with).
+ * @param samples The stream latency in samples of that output, at most INT32_MAX.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or samples
+ *         above INT32_MAX (the scheduler's per-output figure is a long: one bound on every
+ *         platform).
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_latency(anira_contract* contract,
+                                                                  const char* canonical,
+                                                                  uint32_t samples) ANIRA_NOEXCEPT;
+
+/**
  * @brief The per-job deadline of an Async contract; an absolute per-job override is the
  * deadline_ms argument of anira_handler_submit.
  * @param contract An Async contract.
@@ -2137,6 +2165,37 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_ring_dtype(const anira_con
                                                                  uint32_t index,
                                                                  const char** canonical,
                                                                  anira_dtype* dtype) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The number of outputs anira_contract_hard_set_latency (or a contract file's latencies)
+ * named; every other output keeps the computed figure.
+ * @param contract A Hard contract.
+ * @return The count; 0 on an Async contract and for NULL.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_contract_hard_num_latencies(const anira_contract* contract)
+                                                                ANIRA_NOEXCEPT;
+
+/**
+ * @brief One declared stream latency the contract names, enumerated by index in bytewise order
+ * of the canonical names, the shape of anira_contract_hard_ring_dtype.
+ * @param contract A Hard contract.
+ * @param index Below anira_contract_hard_num_latencies.
+ * @param canonical Receives the output's canonical name (object-owned).
+ * @param samples Receives its declared stream latency in samples.
+ * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index
+ *         out of range.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contract* contract,
+                                                              uint32_t index,
+                                                              const char** canonical,
+                                                              uint32_t* samples) ANIRA_NOEXCEPT;
 
 /**
  * @brief The edge cost policy anira_contract_set_edge_cost stored.
