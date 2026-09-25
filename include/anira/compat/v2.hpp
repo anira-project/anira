@@ -1,0 +1,1329 @@
+/**
+ * @file compat/v2.hpp
+ * @brief The 2.x source-compatible face of anira over the 3.x C entries: namespace anira::v2,
+ * header-only C++20 over <anira/anira.hpp> and the anira/abi headers, nothing of the 2.x tree.
+ *
+ * A 2.x program compiles against this header by including it in place of <anira/anira.h> and
+ * spelling the 2.x names in anira::v2 (a `using namespace anira::v2;` does it); it names the
+ * classes of the last 2.x release, v2.3.0: anira::v2::ContextConfig and anira::v2::Context, the
+ * loader's get_context_config(). Every class runs over the C handles, so what it does is what
+ * anira 3 does; where that differs from 2.x the difference is stated on the member and on the
+ * compat page of the documentation (docs/sphinx/migration.rst). Every failure is an
+ * anira::Error, which derives from std::runtime_error (2.x threw std::invalid_argument or
+ * asserted); a catch of std::exception still sees it.
+ *
+ * Scope at this pre-release: the configuration half (InferenceBackend and its conversions,
+ * ModelData, TensorShape, ProcessingSpec, InferenceConfig, JsonConfigLoader, ContextConfig,
+ * HostConfig and the log enums). The runtime half (the processor, the handler) follows.
+ *
+ * Deprecated from the start: every entity of namespace anira::v2 is removed one minor release
+ * after 3.0.0; there is no [[deprecated]] attribute until then.
+ *
+ * Every entry is [main-thread] and may allocate, as anira.hpp's are.
+ */
+#ifndef ANIRA_COMPAT_V2_HPP
+#define ANIRA_COMPAT_V2_HPP
+
+#include <anira/abi/config.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/log.h>
+#include <anira/abi/status.h>
+
+#include <anira/anira.hpp>
+#include <array>
+#include <cmath>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <filesystem>
+#include <istream>
+#include <iterator>
+#include <limits>
+#include <locale>
+#include <memory>
+#include <optional>
+#include <ostream>
+#include <span>
+#include <sstream>
+#include <string>
+#include <string_view>
+#include <thread>
+#include <utility>
+#include <vector>
+
+namespace anira::v2 {
+
+// ---- backends ------------------------------------------------------------------------------
+
+/// The id a 2.x custom backend runs under: the engine a CUSTOM row of a 2.x configuration names
+/// (ANIRA_ENGINE_CUSTOM with this id), and the one id with the prefix "anira." a custom engine
+/// may be created with. A 2.x custom backend is an anira::Engine constructed with it.
+inline constexpr const char* k_custom_engine_id = "anira.v2.custom";
+
+// NOLINTBEGIN(readability-identifier-naming) the enumerators spell the 2.x names
+/**
+ * @brief The 2.x backend enum. Every enumerator exists in every build, whatever engines it
+ * carries; the values are the shim's own (the 2.x values depended on the engines of the build,
+ * so a cast to or from int was never portable) and convert to and from the 3.x engine by
+ * to_engine and to_backend, never by a cast. Unscoped, as in 2.x: TFLITE and
+ * InferenceBackend::TFLITE both spell.
+ */
+enum InferenceBackend : int32_t {
+    LIBTORCH = 0,
+    ONNX = 1,
+    TFLITE = 2,
+    LITERT = 3,
+    EXECUTORCH = 4,
+    CUSTOM = 5
+};
+// NOLINTEND(readability-identifier-naming)
+
+/// The backend as the engine pair of anira 3: LIBTORCH is ANIRA_ENGINE_LIBTORCH, ONNX
+/// ANIRA_ENGINE_ONNXRUNTIME, TFLITE, LITERT and EXECUTORCH likewise; CUSTOM is
+/// ANIRA_ENGINE_CUSTOM with k_custom_engine_id. No provider: every plan the shim builds is on
+/// the engine's CPU path (ANIRA_PROVIDER_CPU). A value outside the enum is {ANIRA_ENGINE_NONE}.
+constexpr anira::EngineRef to_engine(InferenceBackend backend) noexcept {
+    switch (backend) {
+        case LIBTORCH: return anira::EngineRef{.kind = ANIRA_ENGINE_LIBTORCH, .id = {}};
+        case ONNX: return anira::EngineRef{.kind = ANIRA_ENGINE_ONNXRUNTIME, .id = {}};
+        case TFLITE: return anira::EngineRef{.kind = ANIRA_ENGINE_TFLITE, .id = {}};
+        case LITERT: return anira::EngineRef{.kind = ANIRA_ENGINE_LITERT, .id = {}};
+        case EXECUTORCH: return anira::EngineRef{.kind = ANIRA_ENGINE_EXECUTORCH, .id = {}};
+        case CUSTOM: return anira::EngineRef{.kind = ANIRA_ENGINE_CUSTOM, .id = k_custom_engine_id};
+    }
+    return anira::EngineRef{};
+}
+
+/// The engine pair as a 2.x backend: the five built-in engines by name, ANIRA_ENGINE_CUSTOM as
+/// CUSTOM whatever its id (to a 2.x processor every custom engine is CUSTOM), and anything else
+/// (ANIRA_ENGINE_NONE, which no plan carries) as CUSTOM.
+constexpr InferenceBackend to_backend(anira::EngineRef engine) noexcept {
+    switch (engine.kind) {
+        case ANIRA_ENGINE_LIBTORCH: return LIBTORCH;
+        case ANIRA_ENGINE_ONNXRUNTIME: return ONNX;
+        case ANIRA_ENGINE_TFLITE: return TFLITE;
+        case ANIRA_ENGINE_LITERT: return LITERT;
+        case ANIRA_ENGINE_EXECUTORCH: return EXECUTORCH;
+        default: return CUSTOM;
+    }
+}
+
+/// Whether an entry's or a plan's engine pair is this backend's: the engine equal, and for
+/// CUSTOM the id equal to k_custom_engine_id.
+constexpr bool names(anira::EngineRef engine, InferenceBackend backend) noexcept {
+    const anira::EngineRef wanted = to_engine(backend);
+    if (wanted.kind == ANIRA_ENGINE_NONE || engine.kind != wanted.kind) { return false; }
+    return engine.kind != ANIRA_ENGINE_CUSTOM || engine.id == wanted.id;
+}
+
+/// Whether this build carries the backend's engine (anira::enabled_engines); CUSTOM always.
+/// Allocates: main thread only.
+inline bool is_available(InferenceBackend backend) {
+    if (backend == CUSTOM) { return true; }
+    const anira::EngineRef engine = to_engine(backend);
+    if (engine.kind == ANIRA_ENGINE_NONE) { return false; }
+    for (const anira::BackendId& row : anira::enabled_engines()) {
+        if (row.engine == static_cast<uint32_t>(engine.kind)) { return true; }
+    }
+    return false;
+}
+
+namespace detail {
+
+/// Throws an anira::Error with the status and this message (no entry name prefixed).
+[[noreturn]] inline void fail(anira_status status, const std::string& message) {
+    anira_error err = ANIRA_ERROR_INIT;
+    err.status = status;
+    std::snprintf(err.message, sizeof(err.message), "%s", message.c_str());
+    throw anira::Error(status, err);
+}
+
+/// One record through anira_log under the shim's group.
+inline void warn(const std::string& message) noexcept {
+    anira_log(ANIRA_LOG_WARNING, "anira.compat", message.c_str());
+}
+
+/// The index of a backend into a per-backend table; InferenceBackend values are 0 to 5.
+inline constexpr std::size_t k_num_backends = 6;
+constexpr std::size_t backend_index(InferenceBackend backend) noexcept {
+    return static_cast<std::size_t>(backend);
+}
+constexpr bool is_backend(InferenceBackend backend) noexcept {
+    return backend >= LIBTORCH && backend <= CUSTOM;
+}
+
+/// The word the version-2 document spells a backend with.
+constexpr const char* backend_word(InferenceBackend backend) noexcept {
+    switch (backend) {
+        case LIBTORCH: return "LIBTORCH";
+        case ONNX: return "ONNX";
+        case TFLITE: return "TFLITE";
+        case LITERT: return "LITERT";
+        case EXECUTORCH: return "EXECUTORCH";
+        case CUSTOM: return "CUSTOM";
+    }
+    return nullptr;
+}
+
+/// A JSON string literal: quotes, backslashes and control characters escaped.
+inline void append_json_string(std::string& out, std::string_view text) {
+    out.push_back('"');
+    for (const char c : text) {
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                if (static_cast<unsigned char>(c) < 0x20U) {
+                    std::array<char, 8> escaped{};
+                    std::snprintf(escaped.data(),
+                                  escaped.size(),
+                                  "\\u%04x",
+                                  static_cast<unsigned>(static_cast<unsigned char>(c)));
+                    out += escaped.data();
+                } else {
+                    out.push_back(c);
+                }
+        }
+    }
+    out.push_back('"');
+}
+
+/// A float as a JSON number that reads back as the same float: nine significant digits in the
+/// classic locale (a host's LC_NUMERIC never turns the point into a comma).
+inline std::string json_number(float value) {
+    std::ostringstream text;
+    text.imbue(std::locale::classic());
+    text.precision(std::numeric_limits<float>::max_digits10);
+    text << value;
+    return text.str();
+}
+
+}  // namespace detail
+
+// ---- the context -----------------------------------------------------------------------------
+
+/// How an idle inference thread waits for work.
+enum class WaitStrategy { SpinBackoff, Blocking };
+
+inline const char* to_string(WaitStrategy wait_strategy) noexcept {
+    return wait_strategy == WaitStrategy::Blocking ? "blocking" : "spin_backoff";
+}
+
+/// The level of the records anira logs.
+enum class LogLevel { Debug = 0, Info = 1, Warning = 2, Error = 3 };
+
+inline const char* to_string(LogLevel log_level) noexcept {
+    switch (log_level) {
+        case LogLevel::Debug: return "debug";
+        case LogLevel::Info: return "info";
+        case LogLevel::Warning: return "warning";
+        case LogLevel::Error: return "error";
+    }
+    return "unknown";
+}
+
+/// Info in a debug build, Error under NDEBUG: evaluated in the TU that includes this header,
+/// as the 2.x inline was.
+constexpr LogLevel default_log_level() noexcept {
+#ifdef NDEBUG
+    return LogLevel::Error;
+#else
+    return LogLevel::Info;
+#endif
+}
+
+/// Who drains the real-time log queue: anira's drain thread, or the host (anira_drain_log).
+enum class LogDrain { Thread = 0, Manual = 1 };
+
+inline const char* to_string(LogDrain log_drain) noexcept {
+    switch (log_drain) {
+        case LogDrain::Thread: return "thread";
+        case LogDrain::Manual: return "manual";
+    }
+    return "unknown";
+}
+
+/// The drain thread natively, the host under Emscripten.
+constexpr LogDrain default_log_drain() noexcept {
+#ifdef __EMSCRIPTEN__
+    return LogDrain::Manual;
+#else
+    return LogDrain::Thread;
+#endif
+}
+
+/// The logging part of a ContextConfig.
+struct LogConfig {
+    LogLevel m_level = default_log_level();
+    LogDrain m_drain = default_log_drain();
+    size_t m_queue_capacity = 512;      ///< real-time records; anira clamps it to [64, 65536]
+    uint32_t m_drain_interval_ms = 10;  ///< the drain thread's period
+
+    bool operator==(const LogConfig& other) const noexcept {
+        return m_level == other.m_level && m_drain == other.m_drain &&
+               m_queue_capacity == other.m_queue_capacity &&
+               m_drain_interval_ms == other.m_drain_interval_ms;
+    }
+    bool operator!=(const LogConfig& other) const noexcept { return !(*this == other); }
+};
+
+/**
+ * @brief The 2.x ContextConfig (v2.3.0's name; the pre-release that preceded anira 3 called it
+ * CoreConfig): a plain value with the 2.x fields, minted into an anira::ContextConfig when a
+ * handler is built (to_context_config). The default thread count is k_threads_auto, the
+ * sentinel anira resolves (half the hardware threads, at least 1; 0 on WebAssembly) where 2.x
+ * stored the resolved count: a host that read m_num_threads back to learn the count reads the
+ * sentinel.
+ */
+struct ContextConfig {
+    static constexpr unsigned k_threads_auto = ANIRA_THREADS_AUTO;
+
+    ContextConfig(unsigned num_threads = k_threads_auto,
+                  WaitStrategy wait_strategy = WaitStrategy::SpinBackoff,
+                  LogLevel log_level = default_log_level())
+        : m_num_threads(num_threads), m_wait_strategy(wait_strategy) {
+        m_log.m_level = log_level;
+    }
+
+    /// The values a loaded context config holds (anira_context_config_threads and
+    /// anira_context_config_log), e.g. one ContextConfig::from_json read from a 2.x document. A
+    /// field the document left out reads anira's default: ANIRA_THREADS_AUTO threads, and the
+    /// Warning level where 2.x took default_log_level().
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} on an empty handle.
+    explicit ContextConfig(const anira::ContextConfig& loaded) {
+        uint32_t num_threads = 0;
+        anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
+        anira::detail::check(anira_context_config_threads(loaded.native(), &num_threads, &wait),
+                             "anira_context_config_threads");
+        anira_log_desc log = ANIRA_LOG_DESC_INIT;
+        anira::detail::check(anira_context_config_log(loaded.native(), &log),
+                             "anira_context_config_log");
+        m_num_threads = num_threads;
+        m_wait_strategy =
+            wait == ANIRA_WAIT_BLOCKING ? WaitStrategy::Blocking : WaitStrategy::SpinBackoff;
+        switch (log.level) {
+            case ANIRA_LOG_DEBUG: m_log.m_level = LogLevel::Debug; break;
+            case ANIRA_LOG_INFO: m_log.m_level = LogLevel::Info; break;
+            case ANIRA_LOG_ERROR: m_log.m_level = LogLevel::Error; break;
+            default: m_log.m_level = LogLevel::Warning; break;
+        }
+        m_log.m_drain = log.drain == ANIRA_LOG_DRAIN_MANUAL ? LogDrain::Manual : LogDrain::Thread;
+        m_log.m_queue_capacity = log.queue_capacity;
+        m_log.m_drain_interval_ms = log.drain_interval_ms;
+    }
+
+    unsigned m_num_threads = k_threads_auto;
+    WaitStrategy m_wait_strategy = WaitStrategy::SpinBackoff;
+    LogConfig m_log;
+
+    /// The anira::ContextConfig of these values: the threads with the wait strategy, the log
+    /// level, the drain with its interval and the queue capacity; no sink, no flags, no device.
+    anira::ContextConfig to_context_config() const {
+        anira::ContextConfig config;
+        config.threads(m_num_threads,
+                       m_wait_strategy == WaitStrategy::Blocking ? ANIRA_WAIT_BLOCKING
+                                                                 : ANIRA_WAIT_SPIN_BACKOFF);
+        anira_log_level level = ANIRA_LOG_WARNING;
+        switch (m_log.m_level) {
+            case LogLevel::Debug: level = ANIRA_LOG_DEBUG; break;
+            case LogLevel::Info: level = ANIRA_LOG_INFO; break;
+            case LogLevel::Warning: level = ANIRA_LOG_WARNING; break;
+            case LogLevel::Error: level = ANIRA_LOG_ERROR; break;
+        }
+        config.log_level(level);
+        config.log_drain(
+            m_log.m_drain == LogDrain::Manual ? ANIRA_LOG_DRAIN_MANUAL : ANIRA_LOG_DRAIN_THREAD,
+            m_log.m_drain_interval_ms);
+        config.log_queue_capacity(static_cast<uint32_t>(
+            std::min<size_t>(m_log.m_queue_capacity, std::numeric_limits<uint32_t>::max())));
+        return config;
+    }
+};
+
+/**
+ * @brief The 2.x HostConfig: the host's block size and sample rate in samples of the reference
+ * stream, whether smaller blocks come, and which tensor is the reference stream
+ * (k_first_streamable: the first Streamed input, else the first Streamed output). The handler's
+ * prepare refuses a fractional m_buffer_size (ANIRA_ERROR_CONFIG): a host that scaled its block
+ * to another stream anchors on that stream instead (m_tensor_index, m_tensor_is_input) and
+ * passes its own block. The session's arithmetic of 2.x (resolve_reference,
+ * get_reference_size, get_relative_buffer_size, get_relative_sample_rate) is not declared.
+ */
+struct HostConfig {
+    static constexpr size_t k_first_streamable = static_cast<size_t>(-1);
+
+    HostConfig() = default;
+    HostConfig(float host_buffer_size,
+               float host_sample_rate,
+               bool allow_smaller_buffers = false,
+               size_t tensor_index = k_first_streamable,
+               bool tensor_is_input = true)
+        : m_buffer_size(host_buffer_size)
+        , m_sample_rate(host_sample_rate)
+        , m_allow_smaller_buffers(allow_smaller_buffers)
+        , m_tensor_index(tensor_index)
+        , m_tensor_is_input(tensor_is_input) {}
+
+    float m_buffer_size = 0;                     ///< the host's largest block, a whole number
+    float m_sample_rate = 0;                     ///< Hz
+    bool m_allow_smaller_buffers = false;        ///< blocks below m_buffer_size may come
+    size_t m_tensor_index = k_first_streamable;  ///< the reference tensor's index
+    bool m_tensor_is_input = true;               ///< the side m_tensor_index counts on
+
+    /// Equal within 1e-6 on the two floats, as in 2.x.
+    bool operator==(const HostConfig& other) const noexcept {
+        return std::abs(m_buffer_size - other.m_buffer_size) < 1e-6F &&
+               std::abs(m_sample_rate - other.m_sample_rate) < 1e-6F &&
+               m_allow_smaller_buffers == other.m_allow_smaller_buffers &&
+               m_tensor_index == other.m_tensor_index &&
+               m_tensor_is_input == other.m_tensor_is_input;
+    }
+    bool operator!=(const HostConfig& other) const noexcept { return !(*this == other); }
+};
+
+// ---- the configuration -----------------------------------------------------------------------
+
+using TensorShapeList = std::vector<std::vector<int64_t>>;
+
+/**
+ * @brief One model entry of a 2.x configuration: a path (m_is_binary false; the characters are
+ * owned by the object) or model bytes (m_is_binary true; borrowed, the caller's buffer outlives
+ * every configuration and handler built from it, as in 2.x), the backend, and the entry point
+ * of a LibTorch or ExecuTorch file.
+ */
+struct ModelData {
+    /// @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for NULL data or a size of 0 (2.x asserted).
+    ModelData(void* data,
+              size_t size,
+              InferenceBackend backend,
+              std::string model_function = "",
+              bool is_binary = true)
+        : m_data(data)
+        , m_size(size)
+        , m_backend(backend)
+        , m_model_function(std::move(model_function))
+        , m_is_binary(is_binary) {
+        if (data == nullptr || size == 0) {
+            detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                         "anira::v2::ModelData: the data pointer is null or the size is 0");
+        }
+        if (!m_is_binary) {
+            m_path.assign(static_cast<const char*>(data), size);
+            m_data = m_path.data();
+        }
+    }
+    ModelData(const std::string& model_path,
+              InferenceBackend backend,
+              const std::string& model_function = "",
+              bool is_binary = false)
+        : ModelData(const_cast<char*>(model_path.data()),
+                    model_path.size(),
+                    backend,
+                    model_function,
+                    is_binary) {}
+
+    ModelData(const ModelData& other)
+        : m_data(other.m_data)
+        , m_size(other.m_size)
+        , m_backend(other.m_backend)
+        , m_model_function(other.m_model_function)
+        , m_is_binary(other.m_is_binary)
+        , m_path(other.m_path) {
+        repoint();
+    }
+    ModelData(ModelData&& other) noexcept
+        : m_data(other.m_data)
+        , m_size(other.m_size)
+        , m_backend(other.m_backend)
+        , m_model_function(std::move(other.m_model_function))
+        , m_is_binary(other.m_is_binary)
+        , m_path(std::move(other.m_path)) {
+        repoint();
+    }
+    ModelData& operator=(const ModelData& other) {
+        if (this != &other) {
+            m_data = other.m_data;
+            m_size = other.m_size;
+            m_backend = other.m_backend;
+            m_model_function = other.m_model_function;
+            m_is_binary = other.m_is_binary;
+            m_path = other.m_path;
+            repoint();
+        }
+        return *this;
+    }
+    ModelData& operator=(ModelData&& other) noexcept {
+        if (this != &other) {
+            m_data = other.m_data;
+            m_size = other.m_size;
+            m_backend = other.m_backend;
+            m_model_function = std::move(other.m_model_function);
+            m_is_binary = other.m_is_binary;
+            m_path = std::move(other.m_path);
+            repoint();
+        }
+        return *this;
+    }
+    ~ModelData() = default;
+
+    void* m_data;                  ///< the bytes, or the path's characters (not NUL-terminated)
+    size_t m_size;                 ///< the byte count, or the path's length
+    InferenceBackend m_backend;    ///< the backend that runs the entry
+    std::string m_model_function;  ///< the entry point (LibTorch, ExecuTorch); empty = default
+    bool m_is_binary;              ///< bytes (true) or a path (false)
+
+    /// The 2.x rule: size, backend and kind equal, then the bytes by pointer or the path by
+    /// content; the entry point is not compared.
+    bool operator==(const ModelData& other) const noexcept {
+        if (m_size != other.m_size || m_backend != other.m_backend ||
+            m_is_binary != other.m_is_binary) {
+            return false;
+        }
+        if (m_is_binary) { return m_data == other.m_data; }
+        return std::string_view(static_cast<const char*>(m_data), m_size) ==
+               std::string_view(static_cast<const char*>(other.m_data), other.m_size);
+    }
+    bool operator!=(const ModelData& other) const noexcept { return !(*this == other); }
+
+private:
+    void repoint() noexcept {
+        if (!m_is_binary) { m_data = m_path.data(); }
+    }
+
+    std::string m_path;  ///< a path entry's characters, which m_data points at
+};
+
+/**
+ * @brief The tensor shapes of a 2.x configuration: universal (every backend) or of one backend,
+ * whose row must hold the universal shapes with their axes permuted or unit axes inserted
+ * (anira 3 keeps one shape per tensor and an axis layout per engine; a row that reshapes
+ * is refused with ANIRA_ERROR_JSON when the configuration is built).
+ */
+struct TensorShape {
+    TensorShapeList m_tensor_input_shape;
+    TensorShapeList m_tensor_output_shape;
+    InferenceBackend m_backend = CUSTOM;  ///< a backend row's backend; CUSTOM on a universal row
+    bool m_universal = false;
+
+    TensorShape() = delete;
+    /// A universal row. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an empty list.
+    TensorShape(TensorShapeList input_shape, TensorShapeList output_shape)
+        : m_tensor_input_shape(std::move(input_shape))
+        , m_tensor_output_shape(std::move(output_shape))
+        , m_universal(true) {
+        check();
+    }
+    /// A row of one backend. @throws Error{ANIRA_ERROR_INVALID_ARGUMENT} for an empty list.
+    TensorShape(TensorShapeList input_shape, TensorShapeList output_shape, InferenceBackend backend)
+        : m_tensor_input_shape(std::move(input_shape))
+        , m_tensor_output_shape(std::move(output_shape))
+        , m_backend(backend) {
+        check();
+    }
+
+    bool is_universal() const noexcept { return m_universal; }
+
+    /// The 2.x rule: two universal rows by their shapes, two backend rows by their shapes and
+    /// backend, never one of each.
+    bool operator==(const TensorShape& other) const noexcept {
+        if (m_universal != other.m_universal) { return false; }
+        return m_tensor_input_shape == other.m_tensor_input_shape &&
+               m_tensor_output_shape == other.m_tensor_output_shape &&
+               (m_universal || m_backend == other.m_backend);
+    }
+    bool operator!=(const TensorShape& other) const noexcept { return !(*this == other); }
+
+private:
+    void check() const {
+        if (m_tensor_input_shape.empty() || m_tensor_output_shape.empty()) {
+            detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                         "anira::v2::TensorShape: at least one input and one output shape are "
+                         "required");
+        }
+    }
+};
+
+/**
+ * @brief The 2.x processing specification: per input the channels and the samples per
+ * inference (0 = a non-streamable tensor), per output likewise and the model's internal
+ * latency; the element counts are computed. An empty vector takes the 2.x default (1 channel,
+ * the per-channel element count, latency 0).
+ */
+struct ProcessingSpec {
+    std::vector<size_t> m_preprocess_input_channels;
+    std::vector<size_t> m_postprocess_output_channels;
+    std::vector<size_t> m_preprocess_input_size;
+    std::vector<size_t> m_postprocess_output_size;
+    std::vector<size_t> m_internal_model_latency;
+    std::vector<size_t> m_tensor_input_size;   ///< computed: the elements of each input
+    std::vector<size_t> m_tensor_output_size;  ///< computed: the elements of each output
+
+    ProcessingSpec() = default;
+    ProcessingSpec(std::vector<size_t> preprocess_input_channels,
+                   std::vector<size_t> preprocess_output_channels,
+                   std::vector<size_t> preprocess_input_size,
+                   std::vector<size_t> postprocess_output_size,
+                   std::vector<size_t> internal_model_latency)
+        : m_preprocess_input_channels(std::move(preprocess_input_channels))
+        , m_postprocess_output_channels(std::move(preprocess_output_channels))
+        , m_preprocess_input_size(std::move(preprocess_input_size))
+        , m_postprocess_output_size(std::move(postprocess_output_size))
+        , m_internal_model_latency(std::move(internal_model_latency)) {}
+    ProcessingSpec(std::vector<size_t> preprocess_input_channels,
+                   std::vector<size_t> preprocess_output_channels)
+        : ProcessingSpec(std::move(preprocess_input_channels),
+                         std::move(preprocess_output_channels),
+                         {},
+                         {},
+                         {}) {}
+    ProcessingSpec(std::vector<size_t> preprocess_input_channels,
+                   std::vector<size_t> preprocess_output_channels,
+                   std::vector<size_t> preprocess_input_size,
+                   std::vector<size_t> postprocess_output_size)
+        : ProcessingSpec(std::move(preprocess_input_channels),
+                         std::move(preprocess_output_channels),
+                         std::move(preprocess_input_size),
+                         std::move(postprocess_output_size),
+                         {}) {}
+
+    /// The five given vectors; the computed sizes are not compared (2.x).
+    bool operator==(const ProcessingSpec& other) const noexcept {
+        return m_preprocess_input_channels == other.m_preprocess_input_channels &&
+               m_postprocess_output_channels == other.m_postprocess_output_channels &&
+               m_preprocess_input_size == other.m_preprocess_input_size &&
+               m_postprocess_output_size == other.m_postprocess_output_size &&
+               m_internal_model_latency == other.m_internal_model_latency;
+    }
+    bool operator!=(const ProcessingSpec& other) const noexcept { return !(*this == other); }
+};
+
+class JsonConfigLoader;
+
+/**
+ * @brief The 2.x InferenceConfig as a value over an anira::ModelConfig: the constructors write
+ * their arguments as a version-2 document and load it through ModelConfig::from_json, the one
+ * upgrade path (a bytes entry borrowed, its path the placeholder "anira:bytes"), and take the
+ * legacy Hard contract; the 2.x public fields and getters are read back from the handle.
+ *
+ * What the constructors normalise as 2.x did: max_inference_time must be positive
+ * (ANIRA_ERROR_CONFIG, first); a session-exclusive configuration runs one processor; a
+ * processor count below 1 is 1 (with a Warning); a non-empty ProcessingSpec vector with the
+ * wrong entry count is dropped and defaulted (2.x did so silently, the shim with a Warning); a
+ * non-streamable tensor with more than one channel is refused (ANIRA_ERROR_CONFIG); a
+ * model_function on a backend other than LIBTORCH or EXECUTORCH is dropped (with the 2.x
+ * message as a Warning); a backend row of a backend without a model entry is dropped. What
+ * anira 3 refuses where 2.x ran: a backend row that is no axis permutation of the universal one
+ * (ANIRA_ERROR_JSON), a streamed tensor with channels > 1 and no axis of that extent
+ * (ANIRA_ERROR_JSON). A backend this build lacks stays an entry, which a handler skips.
+ *
+ * Copyable (the copy loads its document again, the bytes borrowed again) and movable;
+ * operator== compares the configurations anira 3 holds (the model file, the three legacy
+ * scalars, the borrowed bytes by pointer and size), not the spelling.
+ */
+class InferenceConfig {
+public:
+    struct Defaults {
+        static constexpr unsigned k_warm_up = 0;
+        static constexpr bool k_session_exclusive_processor = false;
+        static constexpr float k_blocking_ratio = 0.F;
+        /// Half the hardware threads, at least 1. A function where 2.x had a static member: a
+        /// header has no out-of-line definition, and an inline variable would be bound
+        /// STB_GNU_UNIQUE by GCC, which pins a plugin in memory.
+        static unsigned num_parallel_processors() noexcept {
+            const unsigned hardware = std::thread::hardware_concurrency();
+            return hardware / 2 > 0 ? hardware / 2 : 1;
+        }
+    };
+
+    /// An empty configuration: every getter answers empty, model_config() throws
+    /// ANIRA_ERROR_INVALID_STATE.
+    InferenceConfig() = default;
+    /// @throws Error with the status of the normalisation or of ModelConfig::from_json.
+    InferenceConfig(std::vector<ModelData> model_data,
+                    std::vector<TensorShape> tensor_shape,
+                    ProcessingSpec processing_spec,
+                    float max_inference_time,
+                    unsigned warm_up = Defaults::k_warm_up,
+                    bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
+                    float blocking_ratio = Defaults::k_blocking_ratio,
+                    unsigned num_parallel_processors = Defaults::num_parallel_processors()) {
+        m_document = document_of(std::move(model_data),
+                                 std::move(tensor_shape),
+                                 std::move(processing_spec),
+                                 max_inference_time,
+                                 warm_up,
+                                 session_exclusive_processor,
+                                 blocking_ratio,
+                                 num_parallel_processors,
+                                 m_borrowed);
+        load();
+    }
+    InferenceConfig(std::vector<ModelData> model_data,
+                    std::vector<TensorShape> tensor_shape,
+                    float max_inference_time,
+                    unsigned warm_up = Defaults::k_warm_up,
+                    bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
+                    float blocking_ratio = Defaults::k_blocking_ratio,
+                    unsigned num_parallel_processors = Defaults::num_parallel_processors())
+        : InferenceConfig(std::move(model_data),
+                          std::move(tensor_shape),
+                          ProcessingSpec(),
+                          max_inference_time,
+                          warm_up,
+                          session_exclusive_processor,
+                          blocking_ratio,
+                          num_parallel_processors) {}
+
+    /// Loads the document again: an equal configuration over its own handles.
+    InferenceConfig(const InferenceConfig& other)
+        : m_document(other.m_document), m_base_dir(other.m_base_dir), m_borrowed(other.m_borrowed) {
+        if (!m_document.empty()) { load(); }
+    }
+    InferenceConfig& operator=(const InferenceConfig& other) {
+        if (this != &other) {
+            InferenceConfig copy(other);
+            *this = std::move(copy);
+        }
+        return *this;
+    }
+    InferenceConfig(InferenceConfig&&) noexcept = default;
+    InferenceConfig& operator=(InferenceConfig&&) noexcept = default;
+    ~InferenceConfig() = default;
+
+    // -- the model entries --
+
+    /// The first entry of the backend: its path, or its bytes as a string (2.x); "" without one.
+    std::string get_model_path(InferenceBackend backend) const {
+        const ModelData* entry = get_model_data(backend);
+        if (entry == nullptr) { return ""; }
+        return {static_cast<const char*>(entry->m_data), entry->m_size};
+    }
+    /// The first entry of the backend (a pointer into m_model_data); nullptr without one.
+    const ModelData* get_model_data(InferenceBackend backend) const {
+        for (const ModelData& entry : m_model_data) {
+            if (entry.m_backend == backend) { return &entry; }
+        }
+        return nullptr;
+    }
+    std::string get_model_function(InferenceBackend backend) const {
+        const ModelData* entry = get_model_data(backend);
+        return entry != nullptr ? entry->m_model_function : std::string();
+    }
+    bool is_model_binary(InferenceBackend backend) const {
+        const ModelData* entry = get_model_data(backend);
+        return entry != nullptr && entry->m_is_binary;
+    }
+
+    // -- the tensor shapes --
+
+    /// The universal shapes: anira 3's one shape per tensor.
+    const TensorShapeList& get_tensor_input_shape() const noexcept { return m_input_shape; }
+    const TensorShapeList& get_tensor_output_shape() const noexcept { return m_output_shape; }
+    /// The shapes the backend's first entry holds: the universal ones with that entry's axis
+    /// layout applied (a channels-last TFLite row reads channels last), the universal ones for
+    /// a backend without an entry or a layout.
+    const TensorShapeList& get_tensor_input_shape(InferenceBackend backend) const noexcept {
+        return detail::is_backend(backend) ? m_input_shapes[detail::backend_index(backend)]
+                                           : m_input_shape;
+    }
+    const TensorShapeList& get_tensor_output_shape(InferenceBackend backend) const noexcept {
+        return detail::is_backend(backend) ? m_output_shapes[detail::backend_index(backend)]
+                                           : m_output_shape;
+    }
+
+    // -- the processing specification --
+
+    const std::vector<size_t>& get_tensor_input_size() const noexcept {
+        return m_processing_spec.m_tensor_input_size;
+    }
+    const std::vector<size_t>& get_tensor_output_size() const noexcept {
+        return m_processing_spec.m_tensor_output_size;
+    }
+    const std::vector<size_t>& get_preprocess_input_channels() const noexcept {
+        return m_processing_spec.m_preprocess_input_channels;
+    }
+    const std::vector<size_t>& get_postprocess_output_channels() const noexcept {
+        return m_processing_spec.m_postprocess_output_channels;
+    }
+    const std::vector<size_t>& get_preprocess_input_size() const noexcept {
+        return m_processing_spec.m_preprocess_input_size;
+    }
+    const std::vector<size_t>& get_postprocess_output_size() const noexcept {
+        return m_processing_spec.m_postprocess_output_size;
+    }
+    const std::vector<size_t>& get_internal_model_latency() const noexcept {
+        return m_processing_spec.m_internal_model_latency;
+    }
+
+    // -- the 2.x public fields, read back from the handles --
+
+    std::vector<ModelData> m_model_data;      ///< one per model entry, in entry order
+    std::vector<TensorShape> m_tensor_shape;  ///< the universal row, the rows of the entries
+                                              ///< with a layout, a universal clone per other
+                                              ///< backend of an entry
+    ProcessingSpec m_processing_spec;
+    float m_max_inference_time = 0;              ///< ms, the legacy contract's explicit budget
+    unsigned m_warm_up = 0;                      ///< the legacy contract's fixed warm-up count
+    bool m_session_exclusive_processor = false;  ///< the model's state is STATEFUL
+    float m_blocking_ratio = 0;                  ///< the legacy contract's wait ratio
+    unsigned m_num_parallel_processors = 0;      ///< the model's max_instances; 1 when exclusive
+
+    /// The configurations anira 3 holds: the model files (ModelConfig::to_json), the three
+    /// legacy scalars, the borrowed bytes by pointer and size.
+    bool operator==(const InferenceConfig& other) const {
+        if (m_model.has_value() != other.m_model.has_value()) { return false; }
+        if (!m_model.has_value()) { return true; }
+        if (m_borrowed.size() != other.m_borrowed.size()) { return false; }
+        for (size_t i = 0; i < m_borrowed.size(); ++i) {
+            if (m_borrowed[i].first != other.m_borrowed[i].first ||
+                m_borrowed[i].second.data() != other.m_borrowed[i].second.data() ||
+                m_borrowed[i].second.size() != other.m_borrowed[i].second.size()) {
+                return false;
+            }
+        }
+        return std::abs(m_max_inference_time - other.m_max_inference_time) < 1e-6F &&
+               m_warm_up == other.m_warm_up &&
+               std::abs(m_blocking_ratio - other.m_blocking_ratio) < 1e-6F &&
+               m_model->to_json() == other.m_model->to_json();
+    }
+    bool operator!=(const InferenceConfig& other) const { return !(*this == other); }
+
+    // -- what the runtime reads --
+
+    /// The model configuration, bytes entries borrowed (the caller's buffer outlives this
+    /// object and every handler built from it, as in 2.x).
+    /// @throws Error{ANIRA_ERROR_INVALID_STATE} on an empty configuration.
+    const anira::ModelConfig& model_config() const {
+        if (!m_model.has_value()) {
+            detail::fail(ANIRA_ERROR_INVALID_STATE,
+                         "anira::v2::InferenceConfig::model_config: an empty configuration");
+        }
+        return *m_model;
+    }
+    /// A fresh ModelConfig of the same document, bytes entries borrowed again: a handler's
+    /// private copy, whose anchor it may set without touching this configuration.
+    /// @throws Error{ANIRA_ERROR_INVALID_STATE} on an empty configuration.
+    anira::ModelConfig model_config_copy() const {
+        if (m_document.empty()) {
+            detail::fail(ANIRA_ERROR_INVALID_STATE,
+                         "anira::v2::InferenceConfig::model_config_copy: an empty configuration");
+        }
+        anira::ModelConfig copy = anira::ModelConfig::from_json(m_document, m_base_dir);
+        for (const auto& [row, bytes] : m_borrowed) {
+            copy.set_model_bytes(row, bytes, ANIRA_BYTES_BORROW);
+        }
+        return copy;
+    }
+    /// The legacy Hard contract read back: the explicit budget (max_inference_time), the fixed
+    /// warm-up, the wait ratio (blocking_ratio), ANIRA_MISS_ZEROS; no geometry, which the
+    /// handler's prepare sets.
+    /// @throws Error{ANIRA_ERROR_INVALID_STATE} on an empty configuration.
+    anira::Hard hard() const {
+        if (!m_legacy.has_value()) {
+            detail::fail(ANIRA_ERROR_INVALID_STATE,
+                         "anira::v2::InferenceConfig::hard: an empty configuration");
+        }
+        return m_legacy->hard();
+    }
+
+private:
+    friend class JsonConfigLoader;
+
+    /// A configuration of a version-2 document's text; relative paths resolve against
+    /// base_dir. @throws Error{ANIRA_ERROR_CONFIG} for a document that is not version 2.
+    static InferenceConfig from_document(std::string document, std::string base_dir) {
+        InferenceConfig config;
+        config.m_document = std::move(document);
+        config.m_base_dir = std::move(base_dir);
+        config.load();
+        return config;
+    }
+
+    /// The document of the constructors' arguments, normalised as 2.x did (see the class
+    /// comment); the bytes entries land in `borrowed` by entry index.
+    static std::string document_of(
+        std::vector<ModelData> model_data,
+        std::vector<TensorShape> tensor_shape,
+        ProcessingSpec spec,
+        float max_inference_time,
+        unsigned warm_up,
+        bool session_exclusive_processor,
+        float blocking_ratio,
+        unsigned num_parallel_processors,
+        std::vector<std::pair<uint32_t, std::span<const std::byte>>>& borrowed) {
+        if (!(max_inference_time > 0.F) || !std::isfinite(max_inference_time)) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "max_inference_time must be greater than 0, got " +
+                             detail::json_number(max_inference_time));
+        }
+        if (!(blocking_ratio >= 0.F) || !std::isfinite(blocking_ratio)) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "blocking_ratio must be a finite number of at least 0, got " +
+                             detail::json_number(blocking_ratio));
+        }
+        if (tensor_shape.empty()) {
+            detail::fail(ANIRA_ERROR_CONFIG, "at least one tensor shape must be provided");
+        }
+        if (session_exclusive_processor) { num_parallel_processors = 1; }
+        if (num_parallel_processors < 1) {
+            num_parallel_processors = 1;
+            detail::warn("Number of parallel processors must be at least 1. Setting to 1.");
+        }
+
+        // The canonical row: the universal one, else the first (what the upgrade takes).
+        size_t canonical = 0;
+        for (size_t i = 0; i < tensor_shape.size(); ++i) {
+            if (tensor_shape[i].m_universal) {
+                canonical = i;
+                break;
+            }
+        }
+        const size_t num_inputs = tensor_shape[canonical].m_tensor_input_shape.size();
+        const size_t num_outputs = tensor_shape[canonical].m_tensor_output_shape.size();
+        const auto per_tensor =
+            [](std::vector<size_t>& values, size_t count, const char* name, const char* side) {
+                if (!values.empty() && values.size() != count) {
+                    detail::warn(std::string(name) + " has " + std::to_string(values.size()) +
+                                 " entries; the model has " + std::to_string(count) + " " + side +
+                                 " tensors: the default is used");
+                    values.clear();
+                }
+            };
+        per_tensor(spec.m_preprocess_input_channels,
+                   num_inputs,
+                   "preprocess_input_channels",
+                   "input");
+        per_tensor(spec.m_postprocess_output_channels,
+                   num_outputs,
+                   "postprocess_output_channels",
+                   "output");
+        per_tensor(spec.m_preprocess_input_size, num_inputs, "preprocess_input_size", "input");
+        per_tensor(spec.m_postprocess_output_size,
+                   num_outputs,
+                   "postprocess_output_size",
+                   "output");
+        per_tensor(spec.m_internal_model_latency, num_outputs, "internal_model_latency", "output");
+        const auto non_streamable = [](const std::vector<size_t>& sizes,
+                                       const std::vector<size_t>& channels,
+                                       const char* side,
+                                       const char* key) {
+            for (size_t i = 0; i < sizes.size(); ++i) {
+                const size_t count = channels.empty() ? 1 : channels[i];
+                if (sizes[i] == 0 && count != 1) {
+                    detail::fail(ANIRA_ERROR_CONFIG,
+                                 std::string(side) + " tensor " + std::to_string(i) +
+                                     " is non-streamable (" + key + " 0) but has " +
+                                     std::to_string(count) +
+                                     " channels; a non-streamable tensor has exactly 1");
+                }
+            }
+        };
+        non_streamable(spec.m_preprocess_input_size,
+                       spec.m_preprocess_input_channels,
+                       "input",
+                       "preprocess_input_size");
+        non_streamable(spec.m_postprocess_output_size,
+                       spec.m_postprocess_output_channels,
+                       "output",
+                       "postprocess_output_size");
+
+        std::string doc = R"({"inference_config":{"model_data":[)";
+        for (size_t i = 0; i < model_data.size(); ++i) {
+            ModelData& entry = model_data[i];
+            const char* word = detail::backend_word(entry.m_backend);
+            if (word == nullptr) {
+                detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                             "model_data[" + std::to_string(i) +
+                                 "]: the backend is no value of anira::v2::InferenceBackend");
+            }
+            if (!entry.m_model_function.empty() && entry.m_backend != LIBTORCH &&
+                entry.m_backend != EXECUTORCH) {
+                detail::warn(
+                    "Model function is only applicable to the LIBTORCH and EXECUTORCH backends.");
+                entry.m_model_function.clear();
+            }
+            if (i > 0) { doc += ','; }
+            doc += R"({"model_path":)";
+            if (entry.m_is_binary) {
+                detail::append_json_string(doc, "anira:bytes");
+                borrowed.emplace_back(
+                    static_cast<uint32_t>(i),
+                    std::span<const std::byte>(static_cast<const std::byte*>(entry.m_data),
+                                               entry.m_size));
+            } else {
+                detail::append_json_string(
+                    doc,
+                    std::string_view(static_cast<const char*>(entry.m_data), entry.m_size));
+            }
+            doc += R"(,"inference_backend":)";
+            detail::append_json_string(doc, word);
+            if (!entry.m_model_function.empty()) {
+                doc += R"(,"model_function":)";
+                detail::append_json_string(doc, entry.m_model_function);
+            }
+            doc += '}';
+        }
+        doc += R"(],"tensor_shape":[)";
+        const auto has_entry = [&model_data](InferenceBackend backend) {
+            for (const ModelData& entry : model_data) {
+                if (entry.m_backend == backend) { return true; }
+            }
+            return false;
+        };
+        const auto append_shapes = [&doc](const TensorShapeList& shapes) {
+            doc += '[';
+            for (size_t t = 0; t < shapes.size(); ++t) {
+                if (t > 0) { doc += ','; }
+                doc += '[';
+                for (size_t d = 0; d < shapes[t].size(); ++d) {
+                    if (d > 0) { doc += ','; }
+                    doc += std::to_string(shapes[t][d]);
+                }
+                doc += ']';
+            }
+            doc += ']';
+        };
+        bool first_row = true;
+        for (size_t i = 0; i < tensor_shape.size(); ++i) {
+            const TensorShape& row = tensor_shape[i];
+            if (i != canonical && !row.m_universal && !has_entry(row.m_backend)) {
+                continue;  // a backend row no entry reads
+            }
+            if (!row.m_universal && detail::backend_word(row.m_backend) == nullptr) {
+                detail::fail(ANIRA_ERROR_INVALID_ARGUMENT,
+                             "tensor_shape[" + std::to_string(i) +
+                                 "]: the backend is no value of anira::v2::InferenceBackend");
+            }
+            if (!first_row) { doc += ','; }
+            first_row = false;
+            doc += R"({"input_shape":)";
+            append_shapes(row.m_tensor_input_shape);
+            doc += R"(,"output_shape":)";
+            append_shapes(row.m_tensor_output_shape);
+            if (!row.m_universal) {
+                doc += R"(,"inference_backend":)";
+                detail::append_json_string(doc, detail::backend_word(row.m_backend));
+            }
+            doc += '}';
+        }
+        doc += R"(],"processing_spec":{)";
+        bool first_key = true;
+        const auto append_list = [&doc, &first_key](const char* key,
+                                                    const std::vector<size_t>& values) {
+            if (values.empty()) { return; }
+            if (!first_key) { doc += ','; }
+            first_key = false;
+            detail::append_json_string(doc, key);
+            doc += ":[";
+            for (size_t i = 0; i < values.size(); ++i) {
+                if (i > 0) { doc += ','; }
+                doc += std::to_string(values[i]);
+            }
+            doc += ']';
+        };
+        append_list("preprocess_input_channels", spec.m_preprocess_input_channels);
+        append_list("postprocess_output_channels", spec.m_postprocess_output_channels);
+        append_list("preprocess_input_size", spec.m_preprocess_input_size);
+        append_list("postprocess_output_size", spec.m_postprocess_output_size);
+        append_list("internal_model_latency", spec.m_internal_model_latency);
+        doc += R"(},"max_inference_time":)";
+        doc += detail::json_number(max_inference_time);
+        doc += R"(,"warm_up":)";
+        doc += std::to_string(warm_up);
+        doc += R"(,"blocking_ratio":)";
+        doc += detail::json_number(blocking_ratio);
+        doc += R"(,"session_exclusive_processor":)";
+        doc += session_exclusive_processor ? "true" : "false";
+        doc += R"(,"num_parallel_processors":)";
+        doc += std::to_string(num_parallel_processors);
+        doc += "}}";
+        return doc;
+    }
+
+    /// The handles of the document, the model config (bytes entries borrowed) and its legacy
+    /// Hard contract, and the 2.x fields read back from them. @throws Error;
+    /// ANIRA_ERROR_CONFIG for a document that is not version 2.
+    void load() {
+        anira::ModelConfig model = anira::ModelConfig::from_json(m_document, m_base_dir);
+        for (const auto& [row, bytes] : m_borrowed) {
+            model.set_model_bytes(row, bytes, ANIRA_BYTES_BORROW);
+        }
+        std::optional<anira::ContractHandle> legacy = model.take_legacy_contract();
+        if (!legacy.has_value()) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "not a version 2 document (no inference_config root): a 3.x model file "
+                         "loads through anira::ModelConfig::from_file");
+        }
+        read_back(model, *legacy);
+        m_model.emplace(std::move(model));
+        m_legacy.emplace(std::move(*legacy));
+    }
+
+    /// The canonical dims of a spec: the extents, a dynamic Time extent read as the window.
+    static std::vector<int64_t> dims_of(const anira::SpecView& spec) {
+        std::vector<int64_t> dims(spec.ndim());
+        for (uint32_t k = 0; k < spec.ndim(); ++k) {
+            const int64_t extent = spec.axis(k).extent;
+            dims[k] = extent > 0 ? extent : spec.window().min;
+        }
+        return dims;
+    }
+
+    /// The dims an entry holds a tensor in: the canonical dims permuted by its layout, a unit
+    /// axis where the layout inserts one.
+    static std::vector<int64_t> laid_out(const std::vector<int64_t>& dims,
+                                         const std::vector<uint32_t>& layout) {
+        if (layout.empty()) { return dims; }
+        std::vector<int64_t> out(layout.size());
+        for (size_t k = 0; k < layout.size(); ++k) {
+            out[k] =
+                layout[k] == ANIRA_AXIS_INSERT || layout[k] >= dims.size() ? 1 : dims[layout[k]];
+        }
+        return out;
+    }
+
+    /// The 2.x fields and the per-backend shapes, from the handles.
+    void read_back(const anira::ModelConfig& model, const anira::ContractHandle& contract) {
+        const uint32_t num_entries = model.model_count();
+
+        m_model_data.clear();
+        m_model_data.reserve(num_entries);
+        for (uint32_t e = 0; e < num_entries; ++e) {
+            const InferenceBackend backend = to_backend(model.model_engine(e));
+            const std::optional<anira::ext::Entry> function = model.model_ext<anira::ext::Entry>(e);
+            const std::string name = function.has_value() ? function->name : std::string();
+            const char* path = anira_model_config_model_path(model.native(), e);
+            if (path != nullptr) {
+                m_model_data.emplace_back(std::string(path), backend, name, false);
+            } else {
+                const std::span<const std::byte> bytes = model.model_bytes(e);
+                m_model_data.emplace_back(const_cast<std::byte*>(bytes.data()),
+                                          bytes.size(),
+                                          backend,
+                                          name,
+                                          true);
+            }
+        }
+
+        ProcessingSpec spec;
+        std::vector<std::vector<int64_t>> inputs;
+        std::vector<std::vector<int64_t>> outputs;
+        std::vector<std::string> input_names;
+        std::vector<std::string> output_names;
+        const auto channels_of = [](const anira::SpecView& view) -> size_t {
+            if (view.role() != ANIRA_ROLE_STREAMED) { return 1; }
+            for (uint32_t k = 0; k < view.ndim(); ++k) {
+                const anira::SpecView::Axis axis = view.axis(k);
+                if (axis.tag == ANIRA_AXIS_CHANNEL && axis.extent > 0) {
+                    return static_cast<size_t>(axis.extent);
+                }
+            }
+            return 1;
+        };
+        const auto size_of = [](const anira::SpecView& view) -> size_t {
+            if (view.role() != ANIRA_ROLE_STREAMED) { return 0; }
+            const anira::SpecView::Window window = view.window();
+            return static_cast<size_t>(window.min - window.overlap);
+        };
+        const auto elements_of = [](const std::vector<int64_t>& dims) -> size_t {
+            size_t count = 1;
+            for (const int64_t extent : dims) { count *= static_cast<size_t>(extent); }
+            return count;
+        };
+        for (uint32_t i = 0; i < model.input_count(); ++i) {
+            const anira::SpecView view = model.input_spec(i);
+            inputs.push_back(dims_of(view));
+            input_names.emplace_back(view.name());
+            spec.m_tensor_input_size.push_back(elements_of(inputs.back()));
+            spec.m_preprocess_input_channels.push_back(channels_of(view));
+            spec.m_preprocess_input_size.push_back(size_of(view));
+        }
+        for (uint32_t i = 0; i < model.output_count(); ++i) {
+            const anira::SpecView view = model.output_spec(i);
+            outputs.push_back(dims_of(view));
+            output_names.emplace_back(view.name());
+            spec.m_tensor_output_size.push_back(elements_of(outputs.back()));
+            spec.m_postprocess_output_channels.push_back(channels_of(view));
+            spec.m_postprocess_output_size.push_back(size_of(view));
+            spec.m_internal_model_latency.push_back(
+                static_cast<size_t>(std::max<int64_t>(view.latency(), 0)));
+        }
+        m_processing_spec = std::move(spec);
+        m_input_shape = inputs;
+        m_output_shape = outputs;
+
+        // The shapes an entry holds: the canonical ones through the entry's layouts.
+        const auto entry_shapes = [&](uint32_t e, bool& has_layout) {
+            TensorShapeList in;
+            TensorShapeList out;
+            for (size_t i = 0; i < inputs.size(); ++i) {
+                const std::vector<uint32_t> layout = model.tensor_layout(e, input_names[i]);
+                has_layout = has_layout || !layout.empty();
+                in.push_back(laid_out(inputs[i], layout));
+            }
+            for (size_t i = 0; i < outputs.size(); ++i) {
+                const std::vector<uint32_t> layout = model.tensor_layout(e, output_names[i]);
+                has_layout = has_layout || !layout.empty();
+                out.push_back(laid_out(outputs[i], layout));
+            }
+            return std::pair<TensorShapeList, TensorShapeList>{std::move(in), std::move(out)};
+        };
+        m_tensor_shape.clear();
+        m_tensor_shape.emplace_back(m_input_shape, m_output_shape);
+        std::vector<InferenceBackend> clones;
+        for (size_t b = 0; b < detail::k_num_backends; ++b) {
+            const auto backend = static_cast<InferenceBackend>(b);
+            m_input_shapes[b] = m_input_shape;
+            m_output_shapes[b] = m_output_shape;
+            for (uint32_t e = 0; e < num_entries; ++e) {
+                if (!names(model.model_engine(e), backend)) { continue; }
+                bool has_layout = false;
+                auto [in, out] = entry_shapes(e, has_layout);
+                if (has_layout) {
+                    m_input_shapes[b] = std::move(in);
+                    m_output_shapes[b] = std::move(out);
+                }
+                break;
+            }
+        }
+        // The rows in entry order: a backend row per entry with a layout, then a universal
+        // clone per other backend of an entry (the 2.x set).
+        std::array<bool, detail::k_num_backends> seen{};
+        for (uint32_t e = 0; e < num_entries; ++e) {
+            const InferenceBackend backend = m_model_data[e].m_backend;
+            if (seen[detail::backend_index(backend)]) { continue; }
+            seen[detail::backend_index(backend)] = true;
+            if (m_input_shapes[detail::backend_index(backend)] != m_input_shape ||
+                m_output_shapes[detail::backend_index(backend)] != m_output_shape) {
+                m_tensor_shape.emplace_back(m_input_shapes[detail::backend_index(backend)],
+                                            m_output_shapes[detail::backend_index(backend)],
+                                            backend);
+            } else {
+                clones.push_back(backend);
+            }
+        }
+        for (const InferenceBackend backend : clones) {
+            TensorShape clone(m_input_shape, m_output_shape);
+            clone.m_backend = backend;
+            m_tensor_shape.push_back(std::move(clone));
+        }
+
+        const anira::Hard legacy = contract.hard();
+        // The budget as the handle stores it (double milliseconds), not rounded to the
+        // nanosecond: the float the constructor was given reads back as the same float.
+        anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
+        double budget_ms = 0.0;
+        anira::detail::check(anira_contract_hard_budget(contract.native(), &budget, &budget_ms),
+                             "anira_contract_hard_budget");
+        m_max_inference_time = static_cast<float>(budget_ms);
+        m_warm_up = legacy.warmup_iterations;
+        m_blocking_ratio = static_cast<float>(legacy.wait_ratio);
+        m_session_exclusive_processor = model.state() == ANIRA_MODEL_STATEFUL;
+        // 2.x ran a session-exclusive configuration on one processor whatever the count said;
+        // a document may leave the count out, which the upgrade fills with the default.
+        m_num_parallel_processors = m_session_exclusive_processor ? 1 : model.max_instances();
+    }
+
+    std::optional<anira::ModelConfig> m_model;
+    std::optional<anira::ContractHandle> m_legacy;
+    std::string m_document;
+    std::string m_base_dir;
+    std::vector<std::pair<uint32_t, std::span<const std::byte>>> m_borrowed;
+    TensorShapeList m_input_shape;
+    TensorShapeList m_output_shape;
+    std::array<TensorShapeList, detail::k_num_backends> m_input_shapes;
+    std::array<TensorShapeList, detail::k_num_backends> m_output_shapes;
+};
+
+/**
+ * @brief The 2.x JsonConfigLoader over the 3.x loaders: reads a version-2 document once and
+ * builds both objects, the ContextConfig (anira::ContextConfig::from_json, read back) and the
+ * InferenceConfig (ModelConfig::from_json, the one upgrade path). No leniency where 2.x logged
+ * and returned nullptr: a file that does not open is ANIRA_ERROR_NO_SUCH_FILE, malformed text,
+ * a wrong type or a word outside a vocabulary ANIRA_ERROR_JSON with the key path, a document
+ * that is not version 2 ANIRA_ERROR_CONFIG, all from the constructor. A relative model_path
+ * resolves against the document's directory (the 3.x rule; 2.x left it to the working
+ * directory), and a backend this build lacks is kept as an entry a handler skips (2.x dropped
+ * it).
+ */
+class JsonConfigLoader {
+public:
+    /// Relative model paths resolve against the file's directory.
+    explicit JsonConfigLoader(const std::string& file_path) {
+        const std::filesystem::path path(file_path);
+        initialize(anira::detail::read_text(path), anira::detail::utf8(path.parent_path()));
+    }
+    /// Model paths as written.
+    explicit JsonConfigLoader(std::istream& stream) {
+        initialize(
+            std::string(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()),
+            std::string());
+    }
+
+    /// The document's context_config (the defaults without one); once: the second call returns
+    /// nullptr, as in 2.x.
+    std::unique_ptr<ContextConfig> get_context_config() { return std::move(m_context_config); }
+    /// The document's inference_config; once: the second call returns nullptr, as in 2.x.
+    /// @throws Error{ANIRA_ERROR_CONFIG} for a document that carries only a context_config.
+    std::unique_ptr<InferenceConfig> get_inference_config() {
+        if (m_no_inference_config) {
+            detail::fail(ANIRA_ERROR_CONFIG,
+                         "anira::v2::JsonConfigLoader: the document has no inference_config");
+        }
+        return std::move(m_inference_config);
+    }
+
+private:
+    void initialize(const std::string& text, std::string base_dir) {
+        // What the model load refused, rethrown below where it decides the outcome.
+        anira_status model_status = ANIRA_OK;
+        std::string model_message;
+        try {
+            m_inference_config = std::make_unique<InferenceConfig>(
+                InferenceConfig::from_document(text, std::move(base_dir)));
+        } catch (const anira::Error& error) {
+            model_status = error.status;
+            model_message = error.what();
+        }
+        const bool model_failed = model_status != ANIRA_OK;
+        std::optional<anira::ContextConfig> context;
+        try {
+            context.emplace(anira::ContextConfig::from_json(text));
+        } catch (const anira::Error&) {
+            // Malformed text, or a 3.x model file (whose keys no context file has): the model
+            // load said which.
+            if (model_failed) { detail::fail(model_status, model_message); }
+            throw;
+        }
+        if (!context->upgraded()) {
+            if (model_failed && model_status != ANIRA_ERROR_CONFIG) {
+                detail::fail(ANIRA_ERROR_CONFIG,
+                             "anira::v2::JsonConfigLoader: not a version 2 document (no "
+                             "inference_config or context_config root): a 3.x context file "
+                             "loads through anira::ContextConfig::from_file");
+            }
+            if (model_failed) { detail::fail(model_status, model_message); }
+        }
+        if (model_failed) {
+            // A version 2 document whose inference_config did not load. Without the key at all
+            // (it cannot appear unquoted in the text) the document is a context_config alone,
+            // which get_inference_config() answers; otherwise the model load's error stands.
+            if (text.find("\"inference_config\"") != std::string::npos) {
+                detail::fail(model_status, model_message);
+            }
+            m_no_inference_config = true;
+        }
+        m_context_config = std::make_unique<ContextConfig>(*context);
+    }
+
+    std::unique_ptr<ContextConfig> m_context_config;
+    std::unique_ptr<InferenceConfig> m_inference_config;
+    bool m_no_inference_config = false;
+};
+
+}  // namespace anira::v2
+
+#endif  // ANIRA_COMPAT_V2_HPP

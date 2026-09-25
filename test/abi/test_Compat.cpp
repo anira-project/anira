@@ -1,0 +1,913 @@
+// anira/compat/v2.hpp against the live 2.x classes, which stay public until the cut-over: the
+// same arguments on both sides, every getter compared. Suite AbiCompatConfig is the
+// configuration half (the enum and its conversions, ModelData, TensorShape, ProcessingSpec,
+// InferenceConfig, JsonConfigLoader, ContextConfig): the upgrade of what the constructors
+// write, the getters of the live class on the same arguments, the normalisation table row by
+// row, the loader over the version-2 documents of test/support/v2_documents.h. A 2.x value and
+// a shim value are compared by name through same_backend, never by a cast: the 2.x enumerators
+// depend on the engines of the build, the shim's do not.
+#include <anira/CoreConfig.h>
+#include <anira/InferenceConfig.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/status.h>
+#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/JsonConfigLoader.h>
+#include <anira/utils/Logger.h>
+#include <gtest/gtest.h>
+
+#include <anira/anira.hpp>
+#include <anira/compat/v2.hpp>
+#include <array>
+#include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <memory>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "../support/log_record_collector.h"
+#include "../support/v2_documents.h"
+#include "fixtures.h"
+
+namespace {
+
+namespace v2 = anira::v2;
+
+/// A value outside the enum, as a cast from an int of a stale 2.x build would give.
+// NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) the out-of-range value is the point
+const auto k_no_backend = static_cast<v2::InferenceBackend>(17);
+
+// ---- the two backend enums -----------------------------------------------------------------
+
+/// The 2.x enumerator of a shim backend, where this build has one.
+std::optional<anira::InferenceBackend> old_backend(v2::InferenceBackend backend) {
+    switch (backend) {
+#ifdef USE_LIBTORCH
+        case v2::LIBTORCH: return anira::InferenceBackend::LIBTORCH;
+#endif
+#ifdef USE_ONNXRUNTIME
+        case v2::ONNX: return anira::InferenceBackend::ONNX;
+#endif
+#ifdef USE_TFLITE
+        case v2::TFLITE: return anira::InferenceBackend::TFLITE;
+#endif
+#ifdef USE_LITERT
+        case v2::LITERT: return anira::InferenceBackend::LITERT;
+#endif
+#ifdef USE_EXECUTORCH
+        case v2::EXECUTORCH: return anira::InferenceBackend::EXECUTORCH;
+#endif
+        case v2::CUSTOM: return anira::InferenceBackend::CUSTOM;
+        default: return std::nullopt;
+    }
+}
+
+/// The 2.x enumerator of a backend the build has (the argument lists hold no other).
+anira::InferenceBackend required_old_backend(v2::InferenceBackend backend) {
+    const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
+    if (!mapped.has_value()) { throw std::logic_error("a backend this build does not have"); }
+    return *mapped;
+}
+
+/// Whether a 2.x value and a shim value name one backend.
+bool same_backend(anira::InferenceBackend old, v2::InferenceBackend shim) {
+    const std::optional<anira::InferenceBackend> mapped = old_backend(shim);
+    return mapped.has_value() && *mapped == old;
+}
+
+constexpr std::array<v2::InferenceBackend, 6> k_backends{v2::LIBTORCH,
+                                                         v2::ONNX,
+                                                         v2::TFLITE,
+                                                         v2::LITERT,
+                                                         v2::EXECUTORCH,
+                                                         v2::CUSTOM};
+
+// ---- the arguments, spelled once for both sides ----------------------------------------------
+
+/// One model entry: a path (or bytes) for a backend, with an entry point.
+struct Row {
+    Row(v2::InferenceBackend backend, std::string path, std::string function = "")
+        : m_backend(backend), m_path(std::move(path)), m_function(std::move(function)) {}
+
+    v2::InferenceBackend m_backend;
+    std::string m_path;
+    std::string m_function;
+};
+
+/// One tensor-shape row: universal, or of a backend.
+struct Shapes {
+    Shapes(v2::TensorShapeList inputs,
+           v2::TensorShapeList outputs,
+           std::optional<v2::InferenceBackend> backend = std::nullopt)
+        : m_inputs(std::move(inputs)), m_outputs(std::move(outputs)), m_backend(backend) {}
+
+    v2::TensorShapeList m_inputs;
+    v2::TensorShapeList m_outputs;
+    std::optional<v2::InferenceBackend> m_backend;
+};
+
+/// Everything the two constructors take.
+struct Arguments {
+    std::vector<Row> m_rows;
+    std::vector<Shapes> m_shapes;
+    std::vector<size_t> m_in_channels;
+    std::vector<size_t> m_out_channels;
+    std::vector<size_t> m_in_sizes;
+    std::vector<size_t> m_out_sizes;
+    std::vector<size_t> m_latencies;
+    float m_max_inference_time = 5.F;
+    unsigned m_warm_up = 0;
+    bool m_exclusive = false;
+    float m_blocking_ratio = 0.F;
+    unsigned m_processors = 2;
+};
+
+/// The rows of this build only: the 2.x side cannot name an engine the build lacks.
+std::vector<Row> rows_of_build(const std::vector<Row>& rows) {
+    std::vector<Row> kept;
+    for (const Row& row : rows) {
+        if (old_backend(row.m_backend).has_value()) { kept.push_back(row); }
+    }
+    return kept;
+}
+
+/// A shape row survives on the 2.x side only for a backend the build has.
+std::vector<Shapes> shapes_of_build(const std::vector<Shapes>& shapes) {
+    std::vector<Shapes> kept;
+    for (const Shapes& row : shapes) {
+        if (!row.m_backend.has_value() || old_backend(*row.m_backend).has_value()) {
+            kept.push_back(row);
+        }
+    }
+    return kept;
+}
+
+anira::InferenceConfig make_old(const Arguments& args) {
+    std::vector<anira::ModelData> rows;
+    rows.reserve(args.m_rows.size());
+    for (const Row& row : args.m_rows) {
+        rows.emplace_back(row.m_path, required_old_backend(row.m_backend), row.m_function);
+    }
+    std::vector<anira::TensorShape> shapes;
+    shapes.reserve(args.m_shapes.size());
+    for (const Shapes& row : args.m_shapes) {
+        if (row.m_backend.has_value()) {
+            shapes.emplace_back(row.m_inputs, row.m_outputs, required_old_backend(*row.m_backend));
+        } else {
+            shapes.emplace_back(row.m_inputs, row.m_outputs);
+        }
+    }
+    return {rows,
+            shapes,
+            anira::ProcessingSpec(args.m_in_channels,
+                                  args.m_out_channels,
+                                  args.m_in_sizes,
+                                  args.m_out_sizes,
+                                  args.m_latencies),
+            args.m_max_inference_time,
+            args.m_warm_up,
+            args.m_exclusive,
+            args.m_blocking_ratio,
+            args.m_processors};
+}
+
+v2::InferenceConfig make_shim(const Arguments& args) {
+    std::vector<v2::ModelData> rows;
+    rows.reserve(args.m_rows.size());
+    for (const Row& row : args.m_rows) {
+        rows.emplace_back(row.m_path, row.m_backend, row.m_function);
+    }
+    std::vector<v2::TensorShape> shapes;
+    shapes.reserve(args.m_shapes.size());
+    for (const Shapes& row : args.m_shapes) {
+        if (row.m_backend.has_value()) {
+            shapes.emplace_back(row.m_inputs, row.m_outputs, row.m_backend.value());
+        } else {
+            shapes.emplace_back(row.m_inputs, row.m_outputs);
+        }
+    }
+    return {rows,
+            shapes,
+            v2::ProcessingSpec(args.m_in_channels,
+                               args.m_out_channels,
+                               args.m_in_sizes,
+                               args.m_out_sizes,
+                               args.m_latencies),
+            args.m_max_inference_time,
+            args.m_warm_up,
+            args.m_exclusive,
+            args.m_blocking_ratio,
+            args.m_processors};
+}
+
+std::string model_path(const char* relative) {
+    return std::string(ANIRA_EXTRAS_MODELS_DIR) + "/" + relative;
+}
+
+/// SimpleGainNetwork, mono: a 512-sample stream and a static gain, both ways; the TensorFlow
+/// exports hold the gain at rank 3.
+Arguments gain_arguments() {
+    const std::string stem =
+        model_path("model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono");
+    Arguments args;
+    args.m_rows = rows_of_build({{v2::LIBTORCH, stem + ".pt", ""},
+                                 {v2::ONNX, stem + ".onnx", ""},
+                                 {v2::TFLITE, stem + ".tflite", ""},
+                                 {v2::LITERT, stem + ".tflite", ""},
+                                 {v2::EXECUTORCH, stem + ".pte", ""},
+                                 {v2::CUSTOM, "placeholder", ""}});
+    args.m_shapes = shapes_of_build({{{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::TFLITE},
+                                     {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::LITERT},
+                                     {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}, std::nullopt}});
+    args.m_in_channels = {1, 1};
+    args.m_out_channels = {1, 1};
+    args.m_in_sizes = {512, 0};
+    args.m_out_sizes = {512, 0};
+    args.m_warm_up = 1;
+    return args;
+}
+
+/// GuitarLSTM: 256 windows of 150 samples in, 256 samples out; the TensorFlow exports hold the
+/// input channels last.
+Arguments hybridnn_arguments() {
+    const std::string dir = model_path("hybrid-nn/GuitarLSTM/");
+    Arguments args;
+    args.m_rows = rows_of_build(
+        {{v2::LIBTORCH, dir + "pytorch-version/models/model_0/GuitarLSTM-dynamic.pt", ""},
+         {v2::ONNX, dir + "pytorch-version/models/model_0/GuitarLSTM-libtorch-dynamic.onnx", ""},
+         {v2::TFLITE, dir + "tensorflow-version/models/model_0/GuitarLSTM-256.tflite", ""},
+         {v2::LITERT, dir + "tensorflow-version/models/model_0/GuitarLSTM-256.tflite", ""}});
+    args.m_shapes = shapes_of_build({{{{256, 1, 150}}, {{256, 1}}, std::nullopt},
+                                     {{{256, 150, 1}}, {{256, 1}}, v2::TFLITE},
+                                     {{{256, 150, 1}}, {{256, 1}}, v2::LITERT}});
+    args.m_in_channels = {1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {256};
+    args.m_out_sizes = {256};
+    return args;
+}
+
+/// The steerable-nafx CNN: a 15380-sample window of which 2048 are new, 2048 out; the
+/// TensorFlow exports channels last on both sides.
+Arguments cnn_arguments() {
+    const std::string dir = model_path("cnn/steerable-nafx/models/model_0/steerable-nafx");
+    Arguments args;
+    args.m_rows = rows_of_build({{v2::LIBTORCH, dir + "-dynamic.pt", ""},
+                                 {v2::ONNX, dir + "-libtorch-dynamic.onnx", ""},
+                                 {v2::TFLITE, dir + "-dynamic.tflite", ""},
+                                 {v2::LITERT, dir + "-dynamic.tflite", ""}});
+    args.m_shapes = shapes_of_build({{{{1, 1, 15380}}, {{1, 1, 2048}}, std::nullopt},
+                                     {{{1, 15380, 1}}, {{1, 2048, 1}}, v2::TFLITE},
+                                     {{{1, 15380, 1}}, {{1, 2048, 1}}, v2::LITERT}});
+    args.m_in_channels = {1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {2048};
+    args.m_out_sizes = {2048};
+    args.m_max_inference_time = 10.F;
+    return args;
+}
+
+/// RAVE, the whole model: stateful, 2048 samples of latency, a fractional budget.
+Arguments rave_arguments() {
+    Arguments args;
+    args.m_rows = rows_of_build(
+        {{v2::LIBTORCH, model_path("third-party/ircam-acids/RAVE/rave_funk_drum.ts"), ""},
+         {v2::CUSTOM, "placeholder", ""}});
+    args.m_shapes = {{{{1, 1, 2048}}, {{1, 1, 2048}}, std::nullopt}};
+    args.m_in_channels = {1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {2048};
+    args.m_out_sizes = {2048};
+    args.m_latencies = {2048};
+    args.m_max_inference_time = 42.66F;
+    args.m_warm_up = 5;
+    args.m_exclusive = true;
+    args.m_blocking_ratio = 0.5F;
+    args.m_processors = 4;
+    return args;
+}
+
+/// A stereo stream with a Static output and the default processing sizes.
+Arguments stereo_arguments() {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder", ""}};
+    args.m_shapes = {{{{1, 2, 256}}, {{1, 2, 256}, {1, 4}}, std::nullopt}};
+    args.m_in_channels = {2};
+    args.m_out_channels = {2, 1};
+    args.m_out_sizes = {128, 0};
+    args.m_latencies = {64, 0};
+    return args;
+}
+
+// ---- the comparison ----------------------------------------------------------------------------
+
+/// Every getter of the live class against the shim on the same arguments, for every backend
+/// this build has.
+void expect_getters_equal(anira::InferenceConfig& old, const v2::InferenceConfig& shim) {
+    EXPECT_EQ(old.get_tensor_input_shape(), shim.get_tensor_input_shape());
+    EXPECT_EQ(old.get_tensor_output_shape(), shim.get_tensor_output_shape());
+    EXPECT_EQ(old.get_tensor_input_size(), shim.get_tensor_input_size());
+    EXPECT_EQ(old.get_tensor_output_size(), shim.get_tensor_output_size());
+    EXPECT_EQ(old.get_preprocess_input_channels(), shim.get_preprocess_input_channels());
+    EXPECT_EQ(old.get_postprocess_output_channels(), shim.get_postprocess_output_channels());
+    EXPECT_EQ(old.get_preprocess_input_size(), shim.get_preprocess_input_size());
+    EXPECT_EQ(old.get_postprocess_output_size(), shim.get_postprocess_output_size());
+    EXPECT_EQ(old.get_internal_model_latency(), shim.get_internal_model_latency());
+    EXPECT_FLOAT_EQ(old.m_max_inference_time, shim.m_max_inference_time);
+    EXPECT_EQ(old.m_warm_up, shim.m_warm_up);
+    EXPECT_EQ(old.m_session_exclusive_processor, shim.m_session_exclusive_processor);
+    EXPECT_FLOAT_EQ(old.m_blocking_ratio, shim.m_blocking_ratio);
+    EXPECT_EQ(old.m_num_parallel_processors, shim.m_num_parallel_processors);
+    for (const v2::InferenceBackend backend : k_backends) {
+        const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
+        if (!mapped.has_value()) { continue; }
+        SCOPED_TRACE(v2::to_engine(backend).kind);
+        EXPECT_EQ(old.get_tensor_input_shape(*mapped), shim.get_tensor_input_shape(backend));
+        EXPECT_EQ(old.get_tensor_output_shape(*mapped), shim.get_tensor_output_shape(backend));
+        const anira::ModelData* old_entry = old.get_model_data(*mapped);
+        const v2::ModelData* shim_entry = shim.get_model_data(backend);
+        ASSERT_EQ(old_entry != nullptr, shim_entry != nullptr);
+        EXPECT_EQ(old.get_model_function(*mapped), shim.get_model_function(backend));
+        EXPECT_EQ(old.is_model_binary(*mapped), shim.is_model_binary(backend));
+        if (old_entry != nullptr) {
+            // 2.x asserts on a backend without an entry: asked only where one exists.
+            EXPECT_EQ(old.get_model_path(*mapped), shim.get_model_path(backend));
+            EXPECT_TRUE(same_backend(old_entry->m_backend, shim_entry->m_backend));
+            EXPECT_EQ(old_entry->m_size, shim_entry->m_size);
+            EXPECT_EQ(old_entry->m_is_binary, shim_entry->m_is_binary);
+        }
+    }
+    ASSERT_EQ(old.m_model_data.size(), shim.m_model_data.size());
+    for (size_t i = 0; i < old.m_model_data.size(); ++i) {
+        EXPECT_TRUE(same_backend(old.m_model_data[i].m_backend, shim.m_model_data[i].m_backend))
+            << "model_data[" << i << "]";
+        EXPECT_EQ(old.m_model_data[i].m_model_function, shim.m_model_data[i].m_model_function);
+    }
+}
+
+/// Raises the log level to Warning for a scope, so that the shim's warnings are delivered in
+/// every build type, and puts the previous level back.
+struct WarningLevel {
+    WarningLevel() : m_previous(anira::get_log_level()) {
+        anira::set_log_level(anira::LogLevel::Warning);
+    }
+    ~WarningLevel() { anira::set_log_level(m_previous); }
+    WarningLevel(const WarningLevel&) = delete;
+    WarningLevel& operator=(const WarningLevel&) = delete;
+    WarningLevel(WarningLevel&&) = delete;
+    WarningLevel& operator=(WarningLevel&&) = delete;
+
+    anira::LogLevel m_previous;
+};
+
+/// The status of the anira::Error a call throws; ANIRA_OK when it throws none.
+template <class Call>
+anira_status status_of(Call&& call) {
+    try {
+        call();
+    } catch (const anira::Error& error) { return error.status; }
+    return ANIRA_OK;
+}
+
+}  // namespace
+
+// ---- the enum --------------------------------------------------------------------------------
+
+// The shim's values are its own, both conversions are switches, and CUSTOM is the pair on
+// anira.v2.custom: an entry of another custom id is CUSTOM to a processor but not the shim's.
+TEST(AbiCompatConfig, TheBackendsConvertByName) {
+    const std::array<std::pair<v2::InferenceBackend, anira_engine>, 5> built_in{{
+        {v2::LIBTORCH, ANIRA_ENGINE_LIBTORCH},
+        {v2::ONNX, ANIRA_ENGINE_ONNXRUNTIME},
+        {v2::TFLITE, ANIRA_ENGINE_TFLITE},
+        {v2::LITERT, ANIRA_ENGINE_LITERT},
+        {v2::EXECUTORCH, ANIRA_ENGINE_EXECUTORCH},
+    }};
+    for (const auto& [backend, engine] : built_in) {
+        EXPECT_EQ(v2::to_engine(backend).kind, engine);
+        EXPECT_TRUE(v2::to_engine(backend).id.empty());
+        EXPECT_EQ(v2::to_backend(anira::EngineRef{.kind = engine, .id = {}}), backend);
+        EXPECT_TRUE(v2::names(anira::EngineRef{.kind = engine, .id = {}}, backend));
+        EXPECT_FALSE(v2::names(anira::EngineRef{.kind = engine, .id = {}}, v2::CUSTOM));
+        EXPECT_EQ(v2::is_available(backend), old_backend(backend).has_value());
+    }
+    EXPECT_EQ(v2::to_engine(v2::CUSTOM).kind, ANIRA_ENGINE_CUSTOM);
+    EXPECT_EQ(v2::to_engine(v2::CUSTOM).id, "anira.v2.custom");
+    EXPECT_EQ(v2::to_backend(v2::to_engine(v2::CUSTOM)), v2::CUSTOM);
+    const anira::EngineRef other{.kind = ANIRA_ENGINE_CUSTOM, .id = "org.example.gain"};
+    EXPECT_EQ(v2::to_backend(other), v2::CUSTOM);
+    EXPECT_FALSE(v2::names(other, v2::CUSTOM));
+    EXPECT_EQ(v2::to_backend(anira::EngineRef{}), v2::CUSTOM);
+    EXPECT_TRUE(v2::is_available(v2::CUSTOM));
+    EXPECT_EQ(v2::to_engine(k_no_backend).kind, ANIRA_ENGINE_NONE);
+    EXPECT_FALSE(v2::is_available(k_no_backend));
+    EXPECT_TRUE(same_backend(anira::InferenceBackend::CUSTOM, v2::CUSTOM));
+}
+
+// ---- InferenceConfig
+// -----------------------------------------------------------------------------
+
+// What the constructor writes is a version-2 document: its upgrade equals the upgrade of the
+// same configuration spelled as a 2.x file, the model file and the legacy contract alike.
+TEST(AbiCompatConfig, TheConstructorUpgradesLikeTheDocument) {
+    const std::string stem =
+        model_path("model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono");
+    const v2::InferenceConfig shim(
+        {v2::ModelData(stem + ".onnx", v2::ONNX), v2::ModelData(stem + ".tflite", v2::LITERT)},
+        {v2::TensorShape({{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::LITERT),
+         v2::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {1}})},
+        v2::ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {512, 0}),
+        5.F,
+        1,
+        false,
+        0.25F,
+        3);
+    const std::string document = R"({ "inference_config": {
+    "model_data": [ { "model_path": ")" +
+                                 stem + R"(.onnx", "inference_backend": "ONNX" },
+                    { "model_path": ")" +
+                                 stem + R"(.tflite", "inference_backend": "LITERT" } ],
+    "tensor_shape": [ { "input_shape": [[1, 1, 512], [1, 1, 1]], "output_shape": [[1, 1, 512], [1]],
+                        "inference_backend": "LITERT" },
+                      { "input_shape": [[1, 1, 512], [1]], "output_shape": [[1, 1, 512], [1]] } ],
+    "processing_spec": { "preprocess_input_channels": [1, 1], "postprocess_output_channels": [1, 1],
+                         "preprocess_input_size": [512, 0], "postprocess_output_size": [512, 0] },
+    "max_inference_time": 5.0, "warm_up": 1, "blocking_ratio": 0.25, "num_parallel_processors": 3 } })";
+    anira::ModelConfig upgraded = anira::ModelConfig::from_json(document);
+    ASSERT_TRUE(upgraded.upgraded());
+    EXPECT_EQ(shim.model_config().to_json(), upgraded.to_json());
+    const std::optional<anira::ContractHandle> legacy = upgraded.take_legacy_contract();
+    if (!legacy.has_value()) { FAIL() << "the upgrade holds no legacy contract"; }
+    const anira::Hard expected = legacy->hard();
+    const anira::Hard actual = shim.hard();
+    EXPECT_EQ(actual.budget, ANIRA_BUDGET_EXPLICIT);
+    EXPECT_EQ(actual.budget_value, expected.budget_value);
+    EXPECT_EQ(actual.warmup, ANIRA_WARMUP_FIXED);
+    EXPECT_EQ(actual.warmup_iterations, 1U);
+    EXPECT_EQ(actual.on_miss, ANIRA_MISS_ZEROS);
+    EXPECT_DOUBLE_EQ(actual.wait_ratio, expected.wait_ratio);
+    EXPECT_EQ(actual.block_max, 0U) << "no geometry: the handler's prepare sets it";
+    EXPECT_TRUE(actual.ring_dtypes.empty());
+    EXPECT_TRUE(actual.latencies.empty());
+}
+
+// Every getter of the live class on the same arguments: the gain (a Static tensor, a unit axis
+// inserted on the TensorFlow rows), GuitarLSTM and the CNN (channels-last rows, a window longer
+// than its hop), RAVE (stateful, latency, a fractional budget) and a stereo stream with a
+// Static output and the default sizes.
+TEST(AbiCompatConfig, TheGettersMatchTheLiveClass) {
+    for (const auto& [name, args] : std::vector<std::pair<const char*, Arguments>>{
+             {"gain", gain_arguments()},
+             {"hybridnn", hybridnn_arguments()},
+             {"cnn", cnn_arguments()},
+             {"rave", rave_arguments()},
+             {"stereo", stereo_arguments()},
+         }) {
+        SCOPED_TRACE(name);
+        anira::InferenceConfig old = make_old(args);
+        const v2::InferenceConfig shim = make_shim(args);
+        expect_getters_equal(old, shim);
+    }
+}
+
+// The backend-qualified shape getter answers the entry's layout over the canonical shape (what
+// the 2.x HybridNN processor reads as its window length) and the canonical shape for a backend
+// without an entry or without a layout.
+TEST(AbiCompatConfig, TheBackendShapeGetterAppliesTheLayout) {
+    const v2::InferenceConfig hybridnn = make_shim(hybridnn_arguments());
+    const v2::TensorShapeList canonical{{256, 1, 150}};
+    EXPECT_EQ(hybridnn.get_tensor_input_shape(), canonical);
+    for (const v2::InferenceBackend backend : {v2::TFLITE, v2::LITERT}) {
+        if (hybridnn.get_model_data(backend) == nullptr) {
+            EXPECT_EQ(hybridnn.get_tensor_input_shape(backend), canonical);
+            continue;
+        }
+        EXPECT_EQ(hybridnn.get_tensor_input_shape(backend)[0][1], 150);
+        EXPECT_EQ(hybridnn.get_tensor_input_shape(backend), (v2::TensorShapeList{{256, 150, 1}}));
+    }
+    EXPECT_EQ(hybridnn.get_tensor_input_shape(v2::CUSTOM), canonical);
+    EXPECT_EQ(hybridnn.get_tensor_input_shape(k_no_backend), canonical);
+
+    // The shim keeps the rows of every backend, present in this build or not.
+    const v2::InferenceConfig gain(
+        {v2::ModelData("gain.tflite", v2::TFLITE), v2::ModelData("gain.onnx", v2::ONNX)},
+        {v2::TensorShape({{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::TFLITE),
+         v2::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {1}})},
+        v2::ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {512, 0}),
+        5.F);
+    EXPECT_EQ(gain.get_tensor_input_shape(v2::TFLITE),
+              (v2::TensorShapeList{{1, 1, 512}, {1, 1, 1}}));
+    EXPECT_EQ(gain.get_tensor_input_shape(v2::ONNX), (v2::TensorShapeList{{1, 1, 512}, {1}}));
+    EXPECT_EQ(gain.get_tensor_output_shape(v2::TFLITE), (v2::TensorShapeList{{1, 1, 512}, {1}}));
+    // The rows: the universal one, TFLITE's own, a universal clone for ONNX (the 2.x set).
+    ASSERT_EQ(gain.m_tensor_shape.size(), 3U);
+    EXPECT_TRUE(gain.m_tensor_shape[0].is_universal());
+    EXPECT_FALSE(gain.m_tensor_shape[1].is_universal());
+    EXPECT_EQ(gain.m_tensor_shape[1].m_backend, v2::TFLITE);
+    EXPECT_TRUE(gain.m_tensor_shape[2].is_universal());
+    EXPECT_EQ(gain.m_tensor_shape[2].m_backend, v2::ONNX);
+}
+
+// A bytes entry is borrowed: the handle, the read-back and a copy all point at the caller's
+// buffer; the path getter answers the bytes as a string, as 2.x did.
+TEST(AbiCompatConfig, BytesEntriesAreBorrowed) {
+    const std::string bytes = "not really a model, but bytes";
+    std::vector<char> buffer(bytes.begin(), bytes.end());
+    Arguments args = stereo_arguments();
+    args.m_rows.clear();
+    anira::InferenceConfig old(
+        {anira::ModelData(buffer.data(), buffer.size(), anira::InferenceBackend::CUSTOM)},
+        {anira::TensorShape(args.m_shapes[0].m_inputs, args.m_shapes[0].m_outputs)},
+        anira::ProcessingSpec(args.m_in_channels,
+                              args.m_out_channels,
+                              args.m_in_sizes,
+                              args.m_out_sizes,
+                              args.m_latencies),
+        5.F);
+    const v2::InferenceConfig shim(
+        {v2::ModelData(buffer.data(), buffer.size(), v2::CUSTOM),
+         v2::ModelData("entry.pt", v2::LIBTORCH, "forward_streaming")},
+        {v2::TensorShape(args.m_shapes[0].m_inputs, args.m_shapes[0].m_outputs)},
+        v2::ProcessingSpec(args.m_in_channels,
+                           args.m_out_channels,
+                           args.m_in_sizes,
+                           args.m_out_sizes,
+                           args.m_latencies),
+        5.F);
+    EXPECT_TRUE(shim.is_model_binary(v2::CUSTOM));
+    EXPECT_EQ(shim.get_model_data(v2::CUSTOM)->m_data, buffer.data());
+    EXPECT_EQ(old.get_model_data(anira::InferenceBackend::CUSTOM)->m_data, buffer.data());
+    EXPECT_EQ(shim.get_model_path(v2::CUSTOM), bytes);
+    EXPECT_EQ(old.get_model_path(anira::InferenceBackend::CUSTOM), bytes);
+    EXPECT_EQ(shim.model_config().model_bytes(0).data(),
+              reinterpret_cast<const std::byte*>(buffer.data()));
+    EXPECT_FALSE(shim.is_model_binary(v2::LIBTORCH));
+    EXPECT_EQ(shim.get_model_path(v2::LIBTORCH), "entry.pt");
+    EXPECT_EQ(shim.get_model_function(v2::LIBTORCH), "forward_streaming");
+
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) the copy is the subject
+    const v2::InferenceConfig copy = shim;
+    EXPECT_EQ(copy, shim);
+    EXPECT_NE(copy.model_config().native(), shim.model_config().native());
+    EXPECT_EQ(copy.get_model_data(v2::CUSTOM)->m_data, buffer.data());
+    EXPECT_EQ(copy.model_config().model_bytes(0).data(),
+              reinterpret_cast<const std::byte*>(buffer.data()));
+    const anira::ModelConfig own = shim.model_config_copy();
+    EXPECT_EQ(own.model_bytes(0).data(), reinterpret_cast<const std::byte*>(buffer.data()));
+    EXPECT_EQ(own.to_json(), shim.model_config().to_json());
+
+    // Another buffer with the same bytes is another configuration (the 2.x rule: by pointer).
+    std::vector<char> other(bytes.begin(), bytes.end());
+    const v2::InferenceConfig elsewhere(
+        {v2::ModelData(other.data(), other.size(), v2::CUSTOM),
+         v2::ModelData("entry.pt", v2::LIBTORCH, "forward_streaming")},
+        {v2::TensorShape(args.m_shapes[0].m_inputs, args.m_shapes[0].m_outputs)},
+        v2::ProcessingSpec(args.m_in_channels,
+                           args.m_out_channels,
+                           args.m_in_sizes,
+                           args.m_out_sizes,
+                           args.m_latencies),
+        5.F);
+    EXPECT_NE(elsewhere, shim);
+}
+
+// A copy loads its document again and equals the original; equality is the configuration's,
+// not the spelling's (an explicit default equals the default); an empty configuration answers
+// empty and has no model config; the handler's private copy takes an anchor the original never
+// sees.
+TEST(AbiCompatConfig, CopiesAndEquality) {
+    const v2::InferenceConfig rave = make_shim(rave_arguments());
+    v2::InferenceConfig copy = rave;
+    EXPECT_EQ(copy, rave);
+    EXPECT_NE(copy.model_config().native(), rave.model_config().native());
+    const v2::InferenceConfig moved = std::move(copy);
+    EXPECT_EQ(moved, rave);
+
+    Arguments spelled = stereo_arguments();
+    Arguments defaulted = spelled;
+    spelled.m_in_sizes = {256};  // what the default computes
+    EXPECT_EQ(make_shim(spelled), make_shim(defaulted));
+    defaulted.m_warm_up = 3;
+    EXPECT_NE(make_shim(spelled), make_shim(defaulted));
+
+    v2::InferenceConfig assigned = make_shim(stereo_arguments());
+    assigned = rave;
+    EXPECT_EQ(assigned, rave);
+
+    const v2::InferenceConfig empty;
+    EXPECT_TRUE(empty.get_tensor_input_shape().empty());
+    EXPECT_TRUE(empty.get_tensor_input_shape(v2::ONNX).empty());
+    EXPECT_TRUE(empty.get_preprocess_input_size().empty());
+    EXPECT_TRUE(empty.m_model_data.empty());
+    EXPECT_EQ(empty.get_model_data(v2::ONNX), nullptr);
+    EXPECT_EQ(empty.get_model_path(v2::ONNX), "");
+    EXPECT_EQ(status_of([&] { static_cast<void>(empty.model_config()); }),
+              ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(status_of([&] { static_cast<void>(empty.model_config_copy()); }),
+              ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(status_of([&] { static_cast<void>(empty.hard()); }), ANIRA_ERROR_INVALID_STATE);
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) the copy is the subject
+    const v2::InferenceConfig empty_copy = empty;
+    EXPECT_EQ(empty_copy, empty);
+    EXPECT_NE(empty, rave);
+
+    anira::ModelConfig own = rave.model_config_copy();
+    own.anchor("output_0");
+    EXPECT_EQ(own.anchor(), "output_0");
+    EXPECT_TRUE(rave.model_config().anchor().empty());
+}
+
+// The normalisation table, row by row: what the 2.x constructor did that the upgrade does not,
+// and what anira 3 refuses where 2.x ran.
+TEST(AbiCompatConfig, TheNormalisationTable) {
+    const WarningLevel level;
+    anira_test::RecordCollector collector;
+
+    // max_inference_time <= 0: refused first, by both (2.x: std::invalid_argument).
+    Arguments args = stereo_arguments();
+    args.m_max_inference_time = 0.F;
+    EXPECT_EQ(status_of([&] { make_shim(args); }), ANIRA_ERROR_CONFIG);
+    EXPECT_THROW(make_old(args), std::invalid_argument);
+
+    // Session-exclusive: one processor on both.
+    args = stereo_arguments();
+    args.m_exclusive = true;
+    args.m_processors = 4;
+    EXPECT_EQ(make_shim(args).m_num_parallel_processors, 1U);
+    EXPECT_EQ(make_old(args).m_num_parallel_processors, 1U);
+
+    // A count below 1: 1 on both, with the 2.x warning.
+    args = stereo_arguments();
+    args.m_processors = 0;
+    EXPECT_EQ(make_shim(args).m_num_parallel_processors, 1U);
+    EXPECT_EQ(make_old(args).m_num_parallel_processors, 1U);
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("parallel processors must be at least 1", "native"));
+#endif
+
+    // A spec vector with the wrong entry count: dropped and defaulted on both, with a warning
+    // on the shim's side.
+    args = stereo_arguments();
+    args.m_in_channels = {2, 2, 2};
+    args.m_in_sizes = {256, 256};
+    args.m_latencies = {1};
+    {
+        anira::InferenceConfig old = make_old(args);
+        const v2::InferenceConfig shim = make_shim(args);
+        EXPECT_EQ(shim.get_preprocess_input_channels(), (std::vector<size_t>{1}));
+        expect_getters_equal(old, shim);
+    }
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("preprocess_input_channels has 3 entries", "native"));
+    EXPECT_TRUE(collector.has("internal_model_latency has 1 entries", "native"));
+#endif
+
+    // A non-streamable tensor with more than one channel: refused by both.
+    args = stereo_arguments();
+    args.m_out_channels = {2, 2};
+    EXPECT_EQ(status_of([&] { make_shim(args); }), ANIRA_ERROR_CONFIG);
+    EXPECT_THROW(make_old(args), std::invalid_argument);
+
+    // A model_function on a backend that has none: the shim drops it with the 2.x message.
+    {
+        const v2::InferenceConfig shim({v2::ModelData("gain.onnx", v2::ONNX, "forward")},
+                                       {v2::TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
+                                       5.F);
+        EXPECT_EQ(shim.get_model_function(v2::ONNX), "");
+        EXPECT_FALSE(shim.model_config().model_ext<anira::ext::Entry>(0).has_value());
+    }
+#ifdef ENABLE_LOGGING
+    EXPECT_TRUE(collector.has("Model function is only applicable", "native"));
+#endif
+
+    // A backend row that reshapes (the same element count, other extents): 2.x ran it, anira 3
+    // permutes axes per engine and cannot reshape.
+    EXPECT_EQ(status_of([] {
+                  const v2::InferenceConfig shim(
+                      {v2::ModelData("gain.onnx", v2::ONNX)},
+                      {v2::TensorShape({{1, 1, 512}}, {{1, 1, 512}}),
+                       v2::TensorShape({{1, 2, 256}}, {{1, 1, 512}}, v2::ONNX)},
+                      5.F);
+              }),
+              ANIRA_ERROR_JSON);
+
+    // A backend row of a backend without an entry is dropped, whatever it holds.
+    {
+        const v2::InferenceConfig shim({v2::ModelData("gain.onnx", v2::ONNX)},
+                                       {v2::TensorShape({{1, 1, 512}}, {{1, 1, 512}}),
+                                        v2::TensorShape({{1, 2, 256}}, {{1, 1, 512}}, v2::TFLITE)},
+                                       5.F);
+        EXPECT_EQ(shim.get_tensor_input_shape(v2::TFLITE), (v2::TensorShapeList{{1, 1, 512}}));
+    }
+
+    // A streamed tensor with two channels and no axis of extent 2: refused.
+    args = stereo_arguments();
+    args.m_shapes = {{{{1, 1, 512}}, {{1, 2, 256}, {1, 4}}, std::nullopt}};
+    EXPECT_EQ(status_of([&] { make_shim(args); }), ANIRA_ERROR_JSON);
+
+    // The value types refuse what 2.x asserted.
+    EXPECT_EQ(status_of([] { const v2::ModelData data(nullptr, 4, v2::ONNX); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([] { const v2::ModelData data("", v2::ONNX); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([] { const v2::TensorShape shape({}, {{1}}); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(status_of([] {
+                  const v2::InferenceConfig shim({v2::ModelData("gain.onnx", k_no_backend)},
+                                                 {v2::TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
+                                                 5.F);
+              }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+}
+
+// A path entry owns its characters: copies and moves point at their own, equal by content.
+TEST(AbiCompatConfig, ModelDataOwnsItsPath) {
+    std::string path = "a/path/to/model.onnx";
+    const v2::ModelData entry(path, v2::ONNX);
+    path.assign(path.size(), 'x');
+    EXPECT_EQ(std::string(static_cast<const char*>(entry.m_data), entry.m_size),
+              "a/path/to/model.onnx");
+    v2::ModelData copy = entry;
+    EXPECT_NE(copy.m_data, entry.m_data);
+    EXPECT_EQ(copy, entry);
+    const v2::ModelData moved = std::move(copy);
+    EXPECT_EQ(moved, entry);
+    v2::ModelData assigned("other.pt", v2::LIBTORCH, "forward");
+    assigned = entry;
+    EXPECT_EQ(assigned, entry);
+    EXPECT_NE(assigned.m_data, entry.m_data);
+    EXPECT_NE(v2::ModelData("a/path/to/model.onnx", v2::LITERT), entry);
+    std::vector<char> bytes(8);
+    const v2::ModelData binary(bytes.data(), bytes.size(), v2::ONNX);
+    // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) the copy is the subject
+    const v2::ModelData binary_copy = binary;
+    EXPECT_EQ(binary_copy.m_data, bytes.data()) << "bytes are borrowed";
+}
+
+// ---- ContextConfig ----------------------------------------------------------------------------
+
+// The 2.x fields mint an anira::ContextConfig and read back from one; the default thread count
+// is the sentinel anira resolves.
+TEST(AbiCompatConfig, TheContextConfigMintsAndReadsBack) {
+    const v2::ContextConfig defaults;
+    EXPECT_EQ(defaults.m_num_threads, v2::ContextConfig::k_threads_auto);
+    EXPECT_EQ(defaults.m_wait_strategy, v2::WaitStrategy::SpinBackoff);
+    EXPECT_EQ(defaults.m_log, v2::LogConfig());
+    EXPECT_EQ(defaults.m_log.m_level, v2::default_log_level());
+
+    v2::ContextConfig config(3, v2::WaitStrategy::Blocking, v2::LogLevel::Debug);
+    config.m_log.m_drain = v2::LogDrain::Manual;
+    config.m_log.m_queue_capacity = 1024;
+    config.m_log.m_drain_interval_ms = 5;
+    const v2::ContextConfig read(config.to_context_config());
+    EXPECT_EQ(read.m_num_threads, 3U);
+    EXPECT_EQ(read.m_wait_strategy, v2::WaitStrategy::Blocking);
+    EXPECT_EQ(read.m_log, config.m_log);
+
+    const v2::ContextConfig two = 2;  // the 2.x implicit form
+    EXPECT_EQ(two.m_num_threads, 2U);
+    EXPECT_STREQ(v2::to_string(v2::WaitStrategy::Blocking), "blocking");
+    EXPECT_STREQ(v2::to_string(v2::LogLevel::Warning), "warning");
+    EXPECT_STREQ(v2::to_string(v2::LogDrain::Manual), "manual");
+    const v2::HostConfig host(512.F, 48000.F);
+    EXPECT_EQ(host,
+              v2::HostConfig(512.F, 48000.F, false, v2::HostConfig::k_first_streamable, true));
+    EXPECT_NE(host, v2::HostConfig(512.F, 44100.F));
+}
+
+// ---- JsonConfigLoader ------------------------------------------------------------------------
+
+// The four version-2 documents through the istream constructor, against the live loader: the
+// context's thread count where the document sets it, and every getter of the configuration.
+TEST(AbiCompatConfig, TheLoaderMatchesTheLiveLoader) {
+    for (const auto& [name, text] : std::vector<std::pair<const char*, std::string>>{
+             {"gain", anira_test::gain_v2_document()},
+             {"rave", anira_test::rave_funk_drum_v2_document()},
+             {"encoder", anira_test::rave_funk_drum_encoder_v2_document()},
+             {"decoder", anira_test::rave_funk_drum_decoder_v2_document()},
+         }) {
+        SCOPED_TRACE(name);
+        std::istringstream old_stream(text);
+        anira::JsonConfigLoader old_loader(old_stream);
+        std::istringstream shim_stream(text);
+        v2::JsonConfigLoader shim_loader(shim_stream);
+
+        const std::unique_ptr<anira::CoreConfig> old_context = old_loader.get_core_config();
+        const std::unique_ptr<v2::ContextConfig> shim_context = shim_loader.get_context_config();
+        ASSERT_NE(old_context, nullptr);
+        ASSERT_NE(shim_context, nullptr);
+        if (text.find("\"context_config\"") != std::string::npos) {
+            EXPECT_EQ(shim_context->m_num_threads, old_context->m_num_threads);
+        } else {
+            EXPECT_EQ(shim_context->m_num_threads, v2::ContextConfig::k_threads_auto);
+        }
+        EXPECT_EQ(shim_loader.get_context_config(), nullptr) << "once, as in 2.x";
+
+        const std::unique_ptr<anira::InferenceConfig> old = old_loader.get_inference_config();
+        const std::unique_ptr<v2::InferenceConfig> shim = shim_loader.get_inference_config();
+        if (old == nullptr) {
+            // The document's only engine is not in this build: 2.x dropped the row and gave up.
+            ASSERT_NE(shim, nullptr);
+            continue;
+        }
+        ASSERT_NE(shim, nullptr);
+        EXPECT_EQ(shim_loader.get_inference_config(), nullptr) << "once, as in 2.x";
+        // Only the rows of this build: 2.x dropped the others, the shim keeps them as entries.
+        for (const v2::InferenceBackend backend : k_backends) {
+            const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
+            if (!mapped.has_value()) { continue; }
+            EXPECT_EQ(old->get_model_function(*mapped), shim->get_model_function(backend));
+            EXPECT_EQ(old->get_tensor_input_shape(*mapped), shim->get_tensor_input_shape(backend));
+            EXPECT_EQ(old->get_tensor_output_shape(*mapped),
+                      shim->get_tensor_output_shape(backend));
+            if (old->get_model_data(*mapped) != nullptr) {
+                EXPECT_EQ(old->get_model_path(*mapped), shim->get_model_path(backend));
+            }
+        }
+        EXPECT_EQ(old->get_tensor_input_shape(), shim->get_tensor_input_shape());
+        EXPECT_EQ(old->get_tensor_input_size(), shim->get_tensor_input_size());
+        EXPECT_EQ(old->get_tensor_output_size(), shim->get_tensor_output_size());
+        EXPECT_EQ(old->get_preprocess_input_channels(), shim->get_preprocess_input_channels());
+        EXPECT_EQ(old->get_postprocess_output_channels(), shim->get_postprocess_output_channels());
+        EXPECT_EQ(old->get_preprocess_input_size(), shim->get_preprocess_input_size());
+        EXPECT_EQ(old->get_postprocess_output_size(), shim->get_postprocess_output_size());
+        EXPECT_EQ(old->get_internal_model_latency(), shim->get_internal_model_latency());
+        EXPECT_FLOAT_EQ(old->m_max_inference_time, shim->m_max_inference_time);
+        EXPECT_EQ(old->m_warm_up, shim->m_warm_up);
+        EXPECT_EQ(old->m_session_exclusive_processor, shim->m_session_exclusive_processor);
+        EXPECT_FLOAT_EQ(old->m_blocking_ratio, shim->m_blocking_ratio);
+        EXPECT_EQ(old->m_num_parallel_processors, shim->m_num_parallel_processors);
+    }
+}
+
+// The path constructor: a relative model_path resolves against the document's directory (the
+// 3.x rule), and every entry of the document is kept, present in this build or not.
+TEST(AbiCompatConfig, TheLoaderReadsAFile) {
+    const std::filesystem::path dir =
+        std::filesystem::temp_directory_path() / "anira_test_compat_loader";
+    std::filesystem::create_directories(dir);
+    const std::filesystem::path file = dir / "gain.json";
+    {
+        std::ofstream out(file);
+        out << R"({ "context_config": { "num_threads": 2, "wait_strategy": "blocking",
+                  "log": { "level": "debug", "drain": "manual", "queue_capacity": 1024,
+                           "drain_interval_ms": 7 } },
+  "inference_config": {
+    "model_data": [ { "model_path": "models/gain.onnx", "inference_backend": "ONNX" },
+                    { "model_path": "models/gain.pte", "inference_backend": "EXECUTORCH",
+                      "model_function": "forward" } ],
+    "tensor_shape": [ { "input_shape": [1, 1, 512], "output_shape": [1, 1, 512] } ],
+    "max_inference_time": 2.5 } })";
+    }
+    v2::JsonConfigLoader loader(file.string());
+    const std::unique_ptr<v2::ContextConfig> context = loader.get_context_config();
+    ASSERT_NE(context, nullptr);
+    EXPECT_EQ(context->m_num_threads, 2U);
+    EXPECT_EQ(context->m_wait_strategy, v2::WaitStrategy::Blocking);
+    EXPECT_EQ(context->m_log.m_level, v2::LogLevel::Debug);
+    EXPECT_EQ(context->m_log.m_drain, v2::LogDrain::Manual);
+    EXPECT_EQ(context->m_log.m_queue_capacity, 1024U);
+    EXPECT_EQ(context->m_log.m_drain_interval_ms, 7U);
+    const std::unique_ptr<v2::InferenceConfig> config = loader.get_inference_config();
+    ASSERT_NE(config, nullptr);
+    EXPECT_EQ(config->get_model_path(v2::ONNX),
+              (dir / "models/gain.onnx").lexically_normal().generic_string());
+    EXPECT_EQ(config->get_model_function(v2::EXECUTORCH), "forward");
+    EXPECT_FLOAT_EQ(config->m_max_inference_time, 2.5F);
+    EXPECT_EQ(config->get_preprocess_input_size(), (std::vector<size_t>{512}));
+    std::filesystem::remove_all(dir);
+}
+
+// No leniency: what the 2.x loader logged and answered with nullptr is an anira::Error, from
+// the constructor; a document with a context_config alone has no InferenceConfig to give.
+TEST(AbiCompatConfig, TheLoaderRefuses) {
+    EXPECT_EQ(status_of([] { const v2::JsonConfigLoader loader("/no/such/anira/config.json"); }),
+              ANIRA_ERROR_NO_SUCH_FILE);
+    const auto from_text = [](const std::string& text) {
+        return status_of([&text] {
+            std::istringstream stream(text);
+            const v2::JsonConfigLoader loader(stream);
+        });
+    };
+    EXPECT_EQ(from_text("{ \"inference_config\": "), ANIRA_ERROR_JSON);
+    EXPECT_EQ(from_text(anira_test::k_model_v3), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(from_text(anira_test::k_context_v3), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(from_text(R"({ "inference_config": { "model_data": [],
+        "tensor_shape": [ { "input_shape": [1, 512], "output_shape": [1, 512] } ],
+        "max_inference_time": 5.0, "warm_up": "five" } })"),
+              ANIRA_ERROR_JSON);
+    EXPECT_EQ(from_text(R"({ "context_config": { "num_threads": "two" } })"), ANIRA_ERROR_JSON);
+
+    std::istringstream context_only(R"({ "context_config": { "num_threads": 3 } })");
+    v2::JsonConfigLoader loader(context_only);
+    const std::unique_ptr<v2::ContextConfig> context = loader.get_context_config();
+    ASSERT_NE(context, nullptr);
+    EXPECT_EQ(context->m_num_threads, 3U);
+    EXPECT_EQ(status_of([&loader] { static_cast<void>(loader.get_inference_config()); }),
+              ANIRA_ERROR_CONFIG);
+}

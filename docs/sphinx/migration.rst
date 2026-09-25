@@ -54,9 +54,10 @@ Where the 2.x API stands in this pre-release
   ``STEERABLENAFX_MODELS_PATH_*``, ``STATEFULLSTM_MODELS_PATH_*``, ``SIMPLEGAIN_MODEL_PATH``,
   ``RAVE_MODEL_DIR``, ``*_JSON_CONFIG_PATH``) are gone with them; ``ANIRA_EXTRAS_MODELS_DIR``,
   the root of the model tree at run time, is the one definition left.
-- **Schedule.** The 2.x configuration classes become deprecated constructor shims
-  (``anira/compat/v2.hpp``, ``namespace anira::v2``) once the 3.x handler lands, and are removed
-  one minor release after 3.0.0; the 2.x ``ContextConfig`` returns there as ``anira::v2::ContextConfig``
+- **Schedule.** The 2.x configuration classes have deprecated twins over the 3.x handles in
+  ``anira/compat/v2.hpp`` (``namespace anira::v2``; :ref:`migration-compat-config`), which gains
+  the runtime half (the processor and the handler) before the cut-over and is removed one minor
+  release after 3.0.0; the 2.x ``ContextConfig`` is there as ``anira::v2::ContextConfig``
   (``anira::CoreConfig`` is this pre-release's spelling). The 2.x JSON document is read by the 3.x loaders for as long as
   the 3.x line lives (:ref:`migration-json`).
 
@@ -159,11 +160,101 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``cfg.anchor(canonical)`` with the tensor's canonical name
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
        (the first streamable tensor).
+   * - ``anira::JsonConfigLoader`` (``get_inference_config()``, ``get_core_config()``)
+     - ``anira::ModelConfig::from_file(path)`` with ``take_legacy_contract()`` for the Hard
+       contract, and ``anira::ContextConfig::from_file(path)``
+       (``anira_model_config_from_json_file``, ``anira_model_config_take_legacy_contract``,
+       ``anira_context_config_from_json``), which read a 2.x document as it is; in the 2.x
+       spelling ``anira::v2::JsonConfigLoader`` (:ref:`migration-compat-config`).
    * - ``anira::InferenceHandler::set_inference_backend`` (the starting backend)
      - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``), with
        ``cfg.default_provider(provider)`` beside it for an engine with several providers,
        selects the starting plan; switching at run time is ``anira_handler_set_plan`` over the
        plan report (``set_inference_backend`` on the 2.x handler).
+
+.. _migration-compat-config:
+
+The 2.x configuration classes in ``anira/compat/v2.hpp``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+``#include <anira/compat/v2.hpp>`` declares the 2.x configuration classes in
+``namespace anira::v2`` under the names of the last 2.x release (v2.3.0):
+``InferenceBackend`` with ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH`` and
+``CUSTOM``, ``ModelData``, ``TensorShape``, ``ProcessingSpec``, ``InferenceConfig``,
+``JsonConfigLoader``, ``ContextConfig`` (this pre-release's ``anira::CoreConfig``) with
+``LogConfig``, ``LogLevel``, ``LogDrain`` and ``WaitStrategy``, and ``HostConfig``. The header
+is header-only C++20 over ``anira/anira.hpp`` and the C entries, includes nothing of the 2.x
+tree, and compiles beside ``<anira/anira.h>``. A 2.x configuration compiles unchanged with a
+``using namespace anira::v2;``:
+
+.. code-block:: cpp
+
+    #include <anira/compat/v2.hpp>
+    using namespace anira::v2;
+
+    InferenceConfig config({ModelData("model.onnx", ONNX), ModelData("model.pt", LIBTORCH)},
+                           {TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
+                           ProcessingSpec({1}, {1}, {2048}, {2048}),
+                           42.66f);
+    const anira::ModelConfig& model = config.model_config();  // the 3.x handle
+    anira::Hard contract = config.hard();  // max_inference_time, warm_up, blocking_ratio
+
+``anira::v2::InferenceConfig`` is a value over the 3.x handles: its constructors write their
+arguments as a version-2 document and load it through ``anira::ModelConfig::from_json``, the one
+upgrade path of :ref:`migration-json` (a bytes entry is borrowed, as in 2.x), take the legacy Hard
+contract, and read the 2.x public fields and getters back from the handles.
+``get_tensor_input_shape(backend)`` answers the shape the backend's first entry holds, the
+canonical one with that entry's axis layout applied (the channels-last TensorFlow rows read
+channels last, as the 2.x HybridNN processor expects). ``model_config()`` hands out the handle,
+``model_config_copy()`` a fresh one of the same document, ``hard()`` the legacy contract
+without geometry. It is copyable (a copy loads its document again) and compares equal when
+anira 3 holds the same configuration, whatever the spelling.
+``anira::v2::JsonConfigLoader`` reads the document once and builds both objects, the
+``ContextConfig`` read back from ``anira::ContextConfig::from_json``; ``get_context_config()``
+and ``get_inference_config()`` hand each out once, as in 2.x.
+
+What differs from 2.x:
+
+- **Errors.** Every failure is an ``anira::Error`` with a status, a ``std::runtime_error`` (2.x
+  threw ``std::invalid_argument`` or asserted): a ``max_inference_time`` that is not positive
+  and a non-streamable tensor with more than one channel are ``ANIRA_ERROR_CONFIG``, a null
+  ``ModelData`` or an empty ``TensorShape`` ``ANIRA_ERROR_INVALID_ARGUMENT``. The loader has no
+  leniency: a file that does not open is ``ANIRA_ERROR_NO_SUCH_FILE``, malformed text, a wrong
+  type or a word outside a vocabulary ``ANIRA_ERROR_JSON`` with the key path, a 3.x document
+  ``ANIRA_ERROR_CONFIG``, all from the constructor, where 2.x logged and returned ``nullptr``;
+  ``get_inference_config()`` on a document that carries only a ``context_config`` throws
+  ``ANIRA_ERROR_CONFIG``.
+- **The backend values** are the header's own (``LIBTORCH`` 0 to ``CUSTOM`` 5, every enumerator
+  in every build) and convert to and from the 3.x engine by name: ``to_engine(backend)``
+  answers the ``anira::EngineRef`` (``CUSTOM`` is ``ANIRA_ENGINE_CUSTOM`` with
+  ``anira::v2::k_custom_engine_id``, ``"anira.v2.custom"``), ``to_backend(engine)`` the
+  backend, ``is_available(backend)`` whether this build has the engine. The 2.x values
+  depended on the engines of the build, so a cast to or from ``int`` was never portable.
+- **Shapes.** A backend row must hold the universal shapes with their axes permuted or unit
+  axes inserted, the per-entry layout of anira 3; a row that reshapes (the same element count,
+  other extents) is ``ANIRA_ERROR_JSON``, and so is a streamed tensor with more than one channel
+  and no axis of that extent. A backend row of a backend without a model entry is dropped.
+- **Normalisation.** What the 2.x constructor normalised, the shim does: a session-exclusive
+  configuration runs one processor, a processor count below 1 is 1; a ``ProcessingSpec``
+  vector with the wrong entry count is defaulted, with a Warning of the group
+  ``anira.compat`` (2.x did it silently); a ``model_function`` on a backend other than
+  ``LIBTORCH`` or ``EXECUTORCH`` is dropped with the 2.x message as a Warning (2.x kept the
+  string).
+- **The loader.** A relative ``model_path`` resolves against the document's directory (2.x left
+  it to the working directory); an entry of a backend this build lacks is kept, and a handler
+  skips it (2.x dropped the row). A field the document leaves out reads anira's default:
+  ``ContextConfig::k_threads_auto`` threads and the ``Warning`` level (2.x took
+  ``default_num_threads()`` and ``default_log_level()``).
+- **ContextConfig** defaults its thread count to ``ContextConfig::k_threads_auto``, the sentinel
+  anira resolves (half the hardware threads, at least one), where 2.x stored the resolved
+  count; ``to_context_config()`` mints the ``anira::ContextConfig``.
+- **HostConfig** keeps its fields and ``operator==``; the session's arithmetic of 2.x
+  (``resolve_reference``, ``get_reference_size``, the relative size and rate getters) is not
+  declared.
+- **Not declared:** the ``InferenceConfig`` setters (``set_tensor_input_shape``,
+  ``set_model_path``, ...), ``get_tensor_shape(backend)``, ``clear_processing_spec`` and
+  ``update_processing_spec``, and ``Defaults::m_num_parallel_processors``, which is the function
+  ``Defaults::num_parallel_processors()``.
 
 .. _migration-runtime:
 
