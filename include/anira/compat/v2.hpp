@@ -14,27 +14,42 @@
  *
  * Scope at this pre-release: the configuration half (InferenceBackend and its conversions,
  * ModelData, TensorShape, ProcessingSpec, InferenceConfig, JsonConfigLoader, ContextConfig,
- * HostConfig and the log enums). The runtime half (the processor, the handler) follows.
+ * HostConfig and the log enums) and the processor half of the runtime (RingBuffer and BufferF as
+ * views, PrePostProcessor, LegacyProcessorStage, which runs a 2.x processor as the stage of a
+ * 3.x pipeline, PassthroughEngine, the 2.x base backend as an anira::Engine, and the static
+ * Context). The InferenceHandler follows.
  *
  * Deprecated from the start: every entity of namespace anira::v2 is removed one minor release
  * after 3.0.0; there is no [[deprecated]] attribute until then.
  *
- * Every entry is [main-thread] and may allocate, as anira.hpp's are.
+ * Every entry is [main-thread] and may allocate, as anira.hpp's are, except what a phase of the
+ * processor reaches: RingBuffer and BufferF, the processor's atomics (set_input, get_output and
+ * their twins, any thread) and its five helpers are noexcept, allocate nothing and carry
+ * ANIRA_NONBLOCKING; the processor's virtuals carry no attribute (a host's override decides),
+ * and the stage's phases are noexcept and unattributed like every anira.hpp trampoline.
  */
 #ifndef ANIRA_COMPAT_V2_HPP
 #define ANIRA_COMPAT_V2_HPP
 
 #include <anira/abi/config.h>
+#include <anira/abi/core.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
+#include <anira/abi/thread.h>
 
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <istream>
 #include <iterator>
@@ -1322,6 +1337,601 @@ private:
     std::unique_ptr<ContextConfig> m_context_config;
     std::unique_ptr<InferenceConfig> m_inference_config;
     bool m_no_inference_config = false;
+};
+
+// ---- the runtime -------------------------------------------------------------------------------
+
+/**
+ * @brief The 2.x RingBuffer as a view of the anira_ring of one Streamed slot, the float face over
+ * the ring accessors of anira/abi/stage.h (anira_ring_*): what a PrePostProcessor's pre_process
+ * pops and its post_process pushes. A view of no ring (the slot of a Static or State tensor)
+ * moves nothing and answers 0. Valid for the duration of the phase call that handed it out.
+ * Absent from the 2.x class: get_future_sample and get_past_sample (no accessor reads one
+ * element; peek_past_block reads the history as a block), get_num_samples (the capacity is
+ * anira's), swap_data, initialize_with_positions and clear_with_positions (anira owns the ring).
+ *
+ * [driver-thread] [callback-safe], nonblocking: every method is noexcept and allocates nothing.
+ */
+class RingBuffer {
+public:
+    /// A view of no ring.
+    RingBuffer() noexcept = default;
+    explicit RingBuffer(anira_ring* ring) noexcept : m_ring(ring) {}
+
+    /// Whether the view has a ring.
+    explicit operator bool() const noexcept ANIRA_NONBLOCKING { return m_ring != nullptr; }
+
+    /// The extent of the tensor's Channel axis, 1 without one; 0 for a view of no ring.
+    size_t get_num_channels() const noexcept ANIRA_NONBLOCKING {
+        return anira_ring_num_channels(m_ring);
+    }
+    /// The unread samples of one channel.
+    size_t get_available_samples(size_t channel) const noexcept ANIRA_NONBLOCKING {
+        return anira_ring_available(m_ring, static_cast<uint32_t>(channel));
+    }
+    /// The consumed samples of one channel the ring still holds as history.
+    size_t get_available_past_samples(size_t channel) const noexcept ANIRA_NONBLOCKING {
+        return anira_ring_available_past(m_ring, static_cast<uint32_t>(channel));
+    }
+
+    void push_sample(size_t channel, float sample) noexcept ANIRA_NONBLOCKING {
+        anira_ring_push_block(m_ring, static_cast<uint32_t>(channel), &sample, ANIRA_DTYPE_F32, 1);
+    }
+    /// The oldest unread sample of one channel; 0 when none is available.
+    float pop_sample(size_t channel) noexcept ANIRA_NONBLOCKING {
+        float sample = 0.F;
+        anira_ring_pop_block(m_ring, static_cast<uint32_t>(channel), &sample, ANIRA_DTYPE_F32, 1);
+        return sample;
+    }
+    void push_block(size_t channel,
+                    const float* data,
+                    size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        anira_ring_push_block(m_ring,
+                              static_cast<uint32_t>(channel),
+                              data,
+                              ANIRA_DTYPE_F32,
+                              num_samples);
+    }
+    /// Pops num_samples samples of one channel, oldest first; those beyond the available ones
+    /// are zero.
+    void pop_block(size_t channel, float* data, size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        anira_ring_pop_block(m_ring,
+                             static_cast<uint32_t>(channel),
+                             data,
+                             ANIRA_DTYPE_F32,
+                             num_samples);
+    }
+    /// Copies the num_samples most recently consumed samples of one channel, oldest first,
+    /// without popping; history the ring never held reads as zero.
+    void peek_past_block(size_t channel,
+                         float* data,
+                         size_t num_samples) const noexcept ANIRA_NONBLOCKING {
+        anira_ring_peek_past_block(m_ring,
+                                   static_cast<uint32_t>(channel),
+                                   data,
+                                   ANIRA_DTYPE_F32,
+                                   num_samples);
+    }
+    void push_fill(size_t channel, float value, size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        anira_ring_push_fill(m_ring,
+                             static_cast<uint32_t>(channel),
+                             &value,
+                             ANIRA_DTYPE_F32,
+                             num_samples);
+    }
+    /// Drops up to num_samples unread samples of one channel. @return the samples dropped.
+    size_t discard(size_t channel, size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        return anira_ring_discard(m_ring, static_cast<uint32_t>(channel), num_samples);
+    }
+    /// num_batches overlapping windows of one channel, window b at data + offset + b * (num_new
+    /// + num_old): num_old samples of history, then num_new popped ones. @return the elements
+    /// written, 0 when refused (a dtype that is not the ring's among them).
+    size_t pop_windows(size_t channel,
+                       void* data,
+                       anira_dtype dtype,
+                       size_t num_new,
+                       size_t num_old,
+                       size_t offset,
+                       size_t num_batches) noexcept ANIRA_NONBLOCKING {
+        return anira_ring_pop_windows(m_ring,
+                                      static_cast<uint32_t>(channel),
+                                      data,
+                                      dtype,
+                                      num_new,
+                                      num_old,
+                                      offset,
+                                      static_cast<uint32_t>(num_batches));
+    }
+
+    /// The element type of the ring (the Hard contract's ring dtype, F32 unless declared); 0
+    /// for a view of no ring.
+    anira_dtype dtype() const noexcept ANIRA_NONBLOCKING { return anira_ring_dtype(m_ring); }
+    anira_ring* native() const noexcept ANIRA_NONBLOCKING { return m_ring; }
+
+private:
+    anira_ring* m_ring = nullptr;
+};
+
+/**
+ * @brief The 2.x BufferF as a view of the model end of one slot: one channel of
+ * get_num_samples() floats, the tensor's elements packed (every channel of a multichannel tensor
+ * lies in that one channel, channel c at [c * n, (c + 1) * n), as 2.x laid it out). Re-pointed
+ * for every phase call; valid for the duration of the call. Channel 0 is the only channel: a
+ * pointer to another is nullptr and a sample of another reads 0. Absent from the 2.x class: the
+ * owning BufferF(channels, samples) (a host buffer is the host's own container now), swap_data,
+ * get_sample_rate.
+ *
+ * [driver-thread | inference-thread] [callback-safe], nonblocking.
+ */
+class BufferF {
+public:
+    /// A buffer of nothing: no elements.
+    BufferF() noexcept = default;
+    BufferF(float* data, size_t num_samples) noexcept : m_data(data), m_num_samples(num_samples) {}
+
+    size_t get_num_channels() const noexcept ANIRA_NONBLOCKING { return 1; }
+    size_t get_num_samples() const noexcept ANIRA_NONBLOCKING { return m_num_samples; }
+
+    const float* get_read_pointer(size_t channel) const noexcept ANIRA_NONBLOCKING {
+        return channel == 0 ? m_data : nullptr;
+    }
+    const float* get_read_pointer(size_t channel,
+                                  size_t sample_index) const noexcept ANIRA_NONBLOCKING {
+        return channel == 0 && m_data != nullptr ? m_data + sample_index : nullptr;
+    }
+    float* get_write_pointer(size_t channel) noexcept ANIRA_NONBLOCKING {
+        return channel == 0 ? m_data : nullptr;
+    }
+    float* get_write_pointer(size_t channel, size_t sample_index) noexcept ANIRA_NONBLOCKING {
+        return channel == 0 && m_data != nullptr ? m_data + sample_index : nullptr;
+    }
+    /// One sample; 0 outside the buffer.
+    float get_sample(size_t channel, size_t sample_index) const noexcept ANIRA_NONBLOCKING {
+        return channel == 0 && sample_index < m_num_samples ? m_data[sample_index] : 0.F;
+    }
+    /// One sample; nothing outside the buffer.
+    void set_sample(size_t channel, size_t sample_index, float value) noexcept ANIRA_NONBLOCKING {
+        if (channel == 0 && sample_index < m_num_samples) { m_data[sample_index] = value; }
+    }
+    /// Zeroes every sample.
+    void clear() noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < m_num_samples; ++i) { m_data[i] = 0.F; }
+    }
+    float* data() noexcept ANIRA_NONBLOCKING { return m_data; }
+    const float* data() const noexcept ANIRA_NONBLOCKING { return m_data; }
+    /// The array of the one channel pointer, valid while this view is.
+    const float* const* get_array_of_read_pointers() const noexcept ANIRA_NONBLOCKING {
+        return &m_data;
+    }
+    float* const* get_array_of_write_pointers() noexcept ANIRA_NONBLOCKING { return &m_data; }
+
+private:
+    float* m_data = nullptr;
+    size_t m_num_samples = 0;
+};
+
+/**
+ * @brief The 2.x PrePostProcessor over the views: the four virtuals with their 2.x signatures and
+ * default bodies, the values of the non-streamable tensors as per-element atomics any thread may
+ * set and read, and the five 2.x helpers with their 2.x rules (a plain pop lands ring channel c
+ * at [c * n, (c + 1) * n) of the buffer; the window, offset and batched pops write every ring
+ * channel to the same position, mono windows). It runs inside a LegacyProcessorStage: the
+ * phases of the stage call the virtuals, pre_process and post_process on the thread that drives
+ * the handler, before_inference and after_inference on an inference thread, with the backend of
+ * the plan the chunk runs on. A virtual that throws fails its chunk (the chunk delivers zeros and
+ * the status lands in anira_handler_rt_error: an anira::Error's status, else
+ * ANIRA_ERROR_ENGINE); in 2.x the throw reached the host. A Static input a custom pre_process
+ * leaves alone reads zeros, where 2.x left what the buffer last held.
+ */
+class PrePostProcessor {
+public:
+    PrePostProcessor() = delete;
+    /// Sizes the atomics from the configuration: one per element of every non-streamable
+    /// tensor, zero until set (inputs) or until an inference is collected (outputs). The
+    /// configuration outlives the processor.
+    explicit PrePostProcessor(InferenceConfig& inference_config)
+        : m_inference_config(inference_config)
+        , m_inputs(values_of(inference_config.get_preprocess_input_size(),
+                             inference_config.get_tensor_input_size()))
+        , m_outputs(values_of(inference_config.get_postprocess_output_size(),
+                              inference_config.get_tensor_output_size())) {}
+    virtual ~PrePostProcessor() = default;
+    PrePostProcessor(const PrePostProcessor&) = delete;
+    PrePostProcessor& operator=(const PrePostProcessor&) = delete;
+    PrePostProcessor(PrePostProcessor&&) = delete;
+    PrePostProcessor& operator=(PrePostProcessor&&) = delete;
+
+    /// The model input of every slot from its host end: a streamable tensor pops its hop from
+    /// the ring (with the window's history ahead of it when the tensor holds more than one hop
+    /// per channel), a non-streamable one takes its atomics.
+    virtual void pre_process(std::vector<RingBuffer>& input,
+                             std::vector<BufferF>& output,
+                             [[maybe_unused]] InferenceBackend current_inference_backend) {
+        const std::vector<size_t>& sizes = m_inference_config.get_preprocess_input_size();
+        const std::vector<size_t>& elements = m_inference_config.get_tensor_input_size();
+        const std::vector<size_t>& channels = m_inference_config.get_preprocess_input_channels();
+        for (size_t tensor_index = 0; tensor_index < sizes.size(); ++tensor_index) {
+            if (sizes[tensor_index] > 0) {
+                const size_t num_new_samples = sizes[tensor_index];
+                const size_t tensor_size = elements[tensor_index] / channels[tensor_index];
+                if (tensor_size > num_new_samples) {
+                    pop_samples_from_buffer(input[tensor_index],
+                                            output[tensor_index],
+                                            num_new_samples,
+                                            tensor_size - num_new_samples);
+                } else {
+                    pop_samples_from_buffer(input[tensor_index],
+                                            output[tensor_index],
+                                            num_new_samples);
+                }
+            } else {
+                for (size_t sample = 0; sample < elements[tensor_index]; ++sample) {
+                    output[tensor_index].set_sample(0, sample, get_input(tensor_index, sample));
+                }
+            }
+        }
+    }
+    /// The host end of every output slot from the model output: a streamable tensor pushes its
+    /// hop into the ring, a non-streamable one sets its atomics.
+    virtual void post_process(std::vector<BufferF>& input,
+                              std::vector<RingBuffer>& output,
+                              [[maybe_unused]] InferenceBackend current_inference_backend) {
+        const std::vector<size_t>& sizes = m_inference_config.get_postprocess_output_size();
+        const std::vector<size_t>& elements = m_inference_config.get_tensor_output_size();
+        for (size_t tensor_index = 0; tensor_index < sizes.size(); ++tensor_index) {
+            if (sizes[tensor_index] > 0) {
+                push_samples_to_buffer(input[tensor_index],
+                                       output[tensor_index],
+                                       sizes[tensor_index]);
+            } else {
+                for (size_t sample = 0; sample < elements[tensor_index]; ++sample) {
+                    set_output(input[tensor_index].get_sample(0, sample), tensor_index, sample);
+                }
+            }
+        }
+    }
+    /// On an inference thread, before the model runs, over the model inputs. Does nothing.
+    virtual void before_inference([[maybe_unused]] std::vector<BufferF>& input,
+                                  [[maybe_unused]] InferenceBackend current_inference_backend) {}
+    /// On an inference thread, after the model ran, over the model outputs. Does nothing.
+    virtual void after_inference([[maybe_unused]] std::vector<BufferF>& output,
+                                 [[maybe_unused]] InferenceBackend current_inference_backend) {}
+
+    /// Element j of non-streamable input i, any thread; captured when an inference is
+    /// submitted. An index out of range, or a streamable tensor's, is ignored (2.x asserted).
+    void set_input(const float& input, size_t i, size_t j) noexcept ANIRA_NONBLOCKING {
+        if (i < m_inputs.size() && j < m_inputs[i].size()) {
+            m_inputs[i][j].store(input, std::memory_order_relaxed);
+        }
+    }
+    void set_output(const float& output, size_t i, size_t j) noexcept ANIRA_NONBLOCKING {
+        if (i < m_outputs.size() && j < m_outputs[i].size()) {
+            m_outputs[i][j].store(output, std::memory_order_relaxed);
+        }
+    }
+    /// Element j of non-streamable input i; 0 out of range.
+    float get_input(size_t i, size_t j) const noexcept ANIRA_NONBLOCKING {
+        return i < m_inputs.size() && j < m_inputs[i].size()
+                   ? m_inputs[i][j].load(std::memory_order_relaxed)
+                   : 0.F;
+    }
+    /// Element j of non-streamable output i as the last collected inference left it, any
+    /// thread; 0 out of range.
+    float get_output(size_t i, size_t j) const noexcept ANIRA_NONBLOCKING {
+        return i < m_outputs.size() && j < m_outputs[i].size()
+                   ? m_outputs[i][j].load(std::memory_order_relaxed)
+                   : 0.F;
+    }
+
+    /// num_samples of every ring channel c into [c * num_samples, (c + 1) * num_samples).
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < input.get_num_channels(); ++i) {
+            input.pop_block(i, output.get_write_pointer(0, i * num_samples), num_samples);
+        }
+    }
+    /// A window of num_old samples of history and num_new popped ones at the buffer's start.
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_new_samples,
+                                 size_t num_old_samples) noexcept ANIRA_NONBLOCKING {
+        pop_samples_from_buffer(input, output, num_new_samples, num_old_samples, 0);
+    }
+    /// The window at an offset; every ring channel writes the same position (mono windows).
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_new_samples,
+                                 size_t num_old_samples,
+                                 size_t offset) noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < input.get_num_channels(); ++i) {
+            float* window = output.get_write_pointer(0, offset);
+            input.peek_past_block(i, window, num_old_samples);
+            input.pop_block(i, window + num_old_samples, num_new_samples);
+        }
+    }
+    /// num_batches windows (RingBuffer::pop_windows); every ring channel writes the same windows.
+    void pop_samples_from_buffer(RingBuffer& input,
+                                 BufferF& output,
+                                 size_t num_new_samples,
+                                 size_t num_old_samples,
+                                 size_t offset,
+                                 size_t num_batches) noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < input.get_num_channels(); ++i) {
+            input.pop_windows(i,
+                              output.get_write_pointer(0, 0),
+                              ANIRA_DTYPE_F32,
+                              num_new_samples,
+                              num_old_samples,
+                              offset,
+                              num_batches);
+        }
+    }
+    /// num_samples of every ring channel c from [c * num_samples, (c + 1) * num_samples).
+    void push_samples_to_buffer(const BufferF& input,
+                                RingBuffer& output,
+                                size_t num_samples) noexcept ANIRA_NONBLOCKING {
+        for (size_t i = 0; i < output.get_num_channels(); ++i) {
+            output.push_block(i, input.get_read_pointer(0, i * num_samples), num_samples);
+        }
+    }
+
+    /// The configuration the processor was built with: the slot roles its stage reads.
+    const InferenceConfig& config() const noexcept { return m_inference_config; }
+
+protected:
+    InferenceConfig& m_inference_config;
+
+private:
+    /// One vector of atomics per slot: the elements of a non-streamable tensor, none for a
+    /// streamable one.
+    static std::vector<std::vector<std::atomic<float>>> values_of(
+        const std::vector<size_t>& sizes,
+        const std::vector<size_t>& elements) {
+        std::vector<std::vector<std::atomic<float>>> values;
+        values.reserve(sizes.size());
+        for (size_t i = 0; i < sizes.size(); ++i) {
+            values.emplace_back(sizes[i] == 0 && i < elements.size() ? elements[i] : 0);
+        }
+        return values;
+    }
+
+    std::vector<std::vector<std::atomic<float>>> m_inputs;
+    std::vector<std::vector<std::atomic<float>>> m_outputs;
+};
+
+/**
+ * @brief The anira::Stage that runs one 2.x PrePostProcessor: all four phases and
+ * ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the 2.x processor ran pre_process and post_process on the
+ * audio thread already). What a 2.x host that moves to a 3.x Pipeline keeps its processor with:
+ * `pipeline.add(anira::stage::Custom(std::make_shared<anira::v2::LegacyProcessorStage>(pp)))`.
+ * Per phase call it points the processor's view vectors at the chunk's rings and model tensors
+ * (per entry, so concurrent chunks never share them) and calls the virtual with the backend of
+ * the chunk's plan (to_backend of StageContext::engine()). The processor and its configuration
+ * outlive every handler that runs the stage.
+ */
+class LegacyProcessorStage final : public anira::Stage {
+public:
+    explicit LegacyProcessorStage(PrePostProcessor& processor) noexcept : m_processor(processor) {}
+
+    uint32_t phases() const noexcept override { return k_all_phases; }
+    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+    /// The view vectors per entry, sized for the handler. @throws Error{ANIRA_ERROR_CONFIG}
+    /// when the processor's configuration has another tensor count than the handler's model.
+    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& info) override;
+
+    class Prepared;
+
+private:
+    PrePostProcessor& m_processor;
+};
+
+/// One handler's views of the stage: per entry the four vectors the 2.x virtuals take, one
+/// element per slot of the side (State and Static positions included), re-pointed per call.
+class LegacyProcessorStage::Prepared final : public anira::Stage::Prepared {
+public:
+    Prepared(PrePostProcessor& processor,
+             std::vector<anira_role> input_roles,
+             std::vector<anira_role> output_roles,
+             uint32_t num_entries)
+        : m_processor(processor)
+        , m_input_roles(std::move(input_roles))
+        , m_output_roles(std::move(output_roles))
+        , m_in_rings(num_entries, std::vector<RingBuffer>(m_input_roles.size()))
+        , m_in_buffers(num_entries, std::vector<BufferF>(m_input_roles.size()))
+        , m_out_buffers(num_entries, std::vector<BufferF>(m_output_roles.size()))
+        , m_out_rings(num_entries, std::vector<RingBuffer>(m_output_roles.size())) {}
+
+    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+        const uint32_t e = ctx.entry();
+        if (e >= m_in_rings.size()) { return ANIRA_ERROR_INTERNAL; }
+        for (uint32_t slot = 0; slot < m_input_roles.size(); ++slot) {
+            anira::RingView ring;
+            anira::Tensor tensor{};
+            if (m_input_roles[slot] == ANIRA_ROLE_STREAMED) { ctx.input_ring(slot, ring); }
+            if (m_input_roles[slot] != ANIRA_ROLE_STATE) { ctx.input_tensor(slot, tensor); }
+            m_in_rings[e][slot] = RingBuffer(ring.native());
+            m_in_buffers[e][slot] = BufferF(tensor.data_f32(), tensor.num_elements());
+        }
+        return run(ANIRA_PHASE_PRE_PROCESS, [&] {
+            m_processor.pre_process(m_in_rings[e], m_in_buffers[e], to_backend(ctx.engine()));
+        });
+    }
+    anira_status post_process(anira::StageContext& ctx) noexcept override {
+        const uint32_t e = ctx.entry();
+        if (e >= m_out_rings.size()) { return ANIRA_ERROR_INTERNAL; }
+        for (uint32_t slot = 0; slot < m_output_roles.size(); ++slot) {
+            anira::RingView ring;
+            anira::Tensor tensor{};
+            if (m_output_roles[slot] == ANIRA_ROLE_STREAMED) { ctx.output_ring(slot, ring); }
+            if (m_output_roles[slot] != ANIRA_ROLE_STATE) { ctx.output_tensor(slot, tensor); }
+            m_out_rings[e][slot] = RingBuffer(ring.native());
+            m_out_buffers[e][slot] = BufferF(tensor.data_f32(), tensor.num_elements());
+        }
+        return run(ANIRA_PHASE_POST_PROCESS, [&] {
+            m_processor.post_process(m_out_buffers[e], m_out_rings[e], to_backend(ctx.engine()));
+        });
+    }
+    anira_status before_inference(anira::StageContext& ctx) noexcept override {
+        const uint32_t e = ctx.entry();
+        if (e >= m_in_buffers.size()) { return ANIRA_ERROR_INTERNAL; }
+        for (uint32_t slot = 0; slot < m_input_roles.size(); ++slot) {
+            anira::Tensor tensor{};
+            ctx.input_tensor(slot, tensor);
+            m_in_buffers[e][slot] = BufferF(tensor.data_f32(), tensor.num_elements());
+        }
+        return run(ANIRA_PHASE_BEFORE_INFERENCE, [&] {
+            m_processor.before_inference(m_in_buffers[e], to_backend(ctx.engine()));
+        });
+    }
+    anira_status after_inference(anira::StageContext& ctx) noexcept override {
+        const uint32_t e = ctx.entry();
+        if (e >= m_out_buffers.size()) { return ANIRA_ERROR_INTERNAL; }
+        for (uint32_t slot = 0; slot < m_output_roles.size(); ++slot) {
+            anira::Tensor tensor{};
+            ctx.output_tensor(slot, tensor);
+            m_out_buffers[e][slot] = BufferF(tensor.data_f32(), tensor.num_elements());
+        }
+        return run(ANIRA_PHASE_AFTER_INFERENCE, [&] {
+            m_processor.after_inference(m_out_buffers[e], to_backend(ctx.engine()));
+        });
+    }
+    // reset: the base's, which does nothing (2.x had no reset hook; the rings are anira's).
+
+private:
+    /// A throw never crosses the C boundary: an anira::Error fails the chunk with its status,
+    /// anything else with ANIRA_ERROR_ENGINE and one real-time record naming the phase.
+    template <class Call>
+    static anira_status run(anira_phase phase, Call&& call) noexcept {
+        try {
+            std::forward<Call>(call)();
+            return ANIRA_OK;
+        } catch (const anira::Error& error) {
+            return anira::detail::failed(error.status) ? error.status : ANIRA_ERROR_ENGINE;
+        } catch (...) {
+            anira_log_rt(ANIRA_LOG_ERROR,
+                         "anira.compat",
+                         "a 2.x PrePostProcessor threw out of a phase; the chunk delivers zeros",
+                         static_cast<int32_t>(phase),
+                         0);
+            return ANIRA_ERROR_ENGINE;
+        }
+    }
+
+    PrePostProcessor& m_processor;
+    std::vector<anira_role> m_input_roles;
+    std::vector<anira_role> m_output_roles;
+    std::vector<std::vector<RingBuffer>> m_in_rings;
+    std::vector<std::vector<BufferF>> m_in_buffers;
+    std::vector<std::vector<BufferF>> m_out_buffers;
+    std::vector<std::vector<RingBuffer>> m_out_rings;
+};
+
+inline std::unique_ptr<anira::Stage::Prepared> LegacyProcessorStage::prepare(
+    const anira::PrepareInfo& info) {
+    const anira::ModelConfig& model = m_processor.config().model_config();
+    if (model.input_count() != info.inputs().size() ||
+        model.output_count() != info.outputs().size()) {
+        detail::fail(ANIRA_ERROR_CONFIG,
+                     "anira::v2::LegacyProcessorStage: the PrePostProcessor's configuration has " +
+                         std::to_string(model.input_count()) + " inputs and " +
+                         std::to_string(model.output_count()) + " outputs, the handler's model " +
+                         std::to_string(info.inputs().size()) + " and " +
+                         std::to_string(info.outputs().size()));
+    }
+    std::vector<anira_role> input_roles;
+    std::vector<anira_role> output_roles;
+    input_roles.reserve(model.input_count());
+    output_roles.reserve(model.output_count());
+    for (uint32_t i = 0; i < model.input_count(); ++i) {
+        input_roles.push_back(model.input_spec(i).role());
+    }
+    for (uint32_t i = 0; i < model.output_count(); ++i) {
+        output_roles.push_back(model.output_spec(i).role());
+    }
+    return std::make_unique<Prepared>(m_processor,
+                                      std::move(input_roles),
+                                      std::move(output_roles),
+                                      info.num_entries());
+}
+
+/**
+ * @brief The 2.x BackendBase::process as an anira::Engine under k_custom_engine_id: output i a
+ * copy of input i when both have the same element count and dtype, zeros otherwise, every output
+ * beyond the input count zeros. What a CUSTOM row runs when no engine was passed, and what a
+ * host that passed a plain BackendBase passes now. No providers list, so it serves
+ * ANIRA_PROVIDER_CPU alone, and a neutral CUSTOM row under the default candidate set is one plan
+ * on the CPU path. flags(): ANIRA_ENGINE_FLAG_REALTIME_SAFE | ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL.
+ * Three trivial levels: load keeps nothing (the row's path is never opened), the Loaded hands
+ * every handler, exclusive or not, a Prepared that keeps nothing, so a shared and an exclusive
+ * call run the same body and a reset has nothing to clear. Its code is the host's (the header is
+ * compiled into it): a handler must be destroyed before the module that holds the code unloads.
+ */
+class PassthroughEngine final : public anira::Engine {
+public:
+    PassthroughEngine() : anira::Engine(k_custom_engine_id) {}
+
+    uint32_t flags() const noexcept override {
+        return ANIRA_ENGINE_FLAG_REALTIME_SAFE | ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL;
+    }
+    std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& /*info*/) override {
+        return std::make_unique<Loaded>();
+    }
+
+private:
+    class Prepared final : public anira::Engine::Prepared {
+    public:
+        anira_status process(anira::EngineContext& ctx) noexcept override {
+            const std::span<const anira::Tensor> inputs = ctx.inputs();
+            const std::span<anira::Tensor> outputs = ctx.outputs();
+            for (size_t i = 0; i < outputs.size(); ++i) {
+                const anira::Tensor& out = outputs[i];
+                void* target = out.data(out.dtype);
+                if (target == nullptr) { continue; }
+                const size_t bytes = out.num_elements() * ANIRA_DTYPE_BITS(out.dtype) *
+                                     ANIRA_DTYPE_LANES(out.dtype) / 8;
+                const void* source = nullptr;
+                if (i < inputs.size() && inputs[i].dtype == out.dtype &&
+                    inputs[i].num_elements() == out.num_elements()) {
+                    source = inputs[i].data(inputs[i].dtype);
+                }
+                if (source != nullptr) {
+                    std::memmove(target, source, bytes);
+                } else {
+                    std::memset(target, 0, bytes);
+                }
+            }
+            return ANIRA_OK;
+        }
+    };
+    class Loaded final : public anira::Engine::Loaded {
+    public:
+        std::unique_ptr<anira::Engine::Prepared> prepare(
+            const anira::PrepareInfo& /*info*/) override {
+            return std::make_unique<Prepared>();
+        }
+    };
+};
+
+/**
+ * @brief The 2.x static face of the core (v2.3.0's anira::Context; the pre-release that preceded
+ * anira 3 called it anira::Core), over the core entries. The rest of the 2.x class (the
+ * inference threads of the host, the session list) is not declared: a host drives its own
+ * threads through anira_inference_thread_create on a context.
+ */
+struct Context {
+    /// anira_shutdown: ANIRA_ERROR_INVALID_STATE while a context or a handler lives, which
+    /// through this header means while an InferenceHandler lives (2.x stopped the pool
+    /// regardless).
+    static anira_status shutdown() noexcept { return anira_shutdown(); }
+    /// anira_release_core_if_idle: true when the core was freed.
+    static bool release_core_if_idle() noexcept { return anira_release_core_if_idle() != 0U; }
+    static bool has_core() noexcept { return anira_has_core() != 0U; }
+    /// The size of the core's inference thread pool: 0 until the first handler is prepared
+    /// (the core builds the pool then); the host's own threads are not counted.
+    static unsigned get_num_inference_threads() noexcept { return anira_num_inference_threads(); }
+    /// anira_drain_log: delivers the queued real-time records to the sinks.
+    static size_t drain_log() noexcept { return anira_drain_log(); }
 };
 
 }  // namespace anira::v2

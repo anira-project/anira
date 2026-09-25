@@ -60,6 +60,85 @@ static_assert(std::is_same_v<decltype(std::declval<v2::JsonConfigLoader&>().get_
 static_assert(v2::default_log_drain() == v2::LogDrain::Thread ||
               v2::default_log_drain() == v2::LogDrain::Manual);
 
+// The runtime half: views, the processor, the stage and the engine.
+static_assert(std::is_nothrow_default_constructible_v<v2::RingBuffer>);
+static_assert(std::is_trivially_copyable_v<v2::RingBuffer>);
+static_assert(std::is_nothrow_default_constructible_v<v2::BufferF>);
+static_assert(std::is_trivially_copyable_v<v2::BufferF>);
+static_assert(!std::is_default_constructible_v<v2::PrePostProcessor>);
+static_assert(!std::is_copy_constructible_v<v2::PrePostProcessor>);
+static_assert(std::has_virtual_destructor_v<v2::PrePostProcessor>);
+static_assert(std::is_base_of_v<anira::Stage, v2::LegacyProcessorStage>);
+static_assert(std::is_base_of_v<anira::Stage::Prepared, v2::LegacyProcessorStage::Prepared>);
+static_assert(std::is_base_of_v<anira::Engine, v2::PassthroughEngine>);
+static_assert(std::is_default_constructible_v<v2::PassthroughEngine>);
+static_assert(noexcept(std::declval<v2::PrePostProcessor&>().set_input(0.F, 0, 0)));
+static_assert(noexcept(std::declval<const v2::PrePostProcessor&>().get_output(0, 0)));
+static_assert(noexcept(v2::Context::shutdown()));
+
+/// A 2.x processor overriding the four virtuals, as the extras' processors do.
+class ProbeProcessor : public v2::PrePostProcessor {
+public:
+    explicit ProbeProcessor(v2::InferenceConfig& config) : v2::PrePostProcessor(config) {}
+    void pre_process(std::vector<v2::RingBuffer>& input,
+                     std::vector<v2::BufferF>& output,
+                     v2::InferenceBackend backend) override {
+        v2::PrePostProcessor::pre_process(input, output, backend);
+        pop_samples_from_buffer(input[0], output[0], 1, 149, 0);
+    }
+    void post_process(std::vector<v2::BufferF>& input,
+                      std::vector<v2::RingBuffer>& output,
+                      v2::InferenceBackend backend) override {
+        push_samples_to_buffer(input[0], output[0], input[0].get_num_samples());
+        static_cast<void>(backend);
+    }
+    void before_inference(std::vector<v2::BufferF>& input,
+                          v2::InferenceBackend /*backend*/) override {
+        input[0].clear();
+    }
+    void after_inference(std::vector<v2::BufferF>& output,
+                         v2::InferenceBackend /*backend*/) override {
+        output[0].set_sample(0, 0, m_inference_config.m_blocking_ratio);
+    }
+};
+
+/// What a phase of the processor reaches is nonblocking: under -Werror=function-effects (clang
+/// 20 or later) a view method or a helper that allocates, locks or calls an unattributed function
+/// is a compiler error here.
+std::size_t nonblocking_probe(anira_ring* ring,
+                              float* data,
+                              v2::PrePostProcessor& processor) noexcept ANIRA_NONBLOCKING {
+    v2::RingBuffer view(ring);
+    v2::BufferF buffer(data, 4);
+    std::size_t checks = view ? 1 : 0;
+    checks += view.get_num_channels() + view.get_available_samples(0) +
+              view.get_available_past_samples(0);
+    view.push_sample(0, 1.F);
+    checks += view.pop_sample(0) > 0.F ? 1 : 0;
+    view.push_block(0, buffer.get_read_pointer(0), buffer.get_num_samples());
+    view.pop_block(0, buffer.get_write_pointer(0), buffer.get_num_samples());
+    view.peek_past_block(0, buffer.data(), 2);
+    view.push_fill(0, 0.5F, 2);
+    checks += view.discard(0, 1);
+    checks += view.pop_windows(0, buffer.data(), ANIRA_DTYPE_F32, 1, 1, 0, 2);
+    checks += view.dtype() == ANIRA_DTYPE_F32 && view.native() == ring ? 1 : 0;
+    buffer.set_sample(0, 1, buffer.get_sample(0, 0));
+    checks += buffer.get_num_channels() + (buffer.get_read_pointer(0, 1) != nullptr ? 1 : 0);
+    checks += buffer.get_write_pointer(0, 2) != nullptr ? 1 : 0;
+    checks += buffer.get_array_of_read_pointers() != nullptr ? 1 : 0;
+    checks += buffer.get_array_of_write_pointers() != nullptr ? 1 : 0;
+    buffer.clear();
+    processor.set_input(1.F, 0, 0);
+    processor.set_output(processor.get_input(0, 0), 0, 0);
+    checks += processor.get_output(0, 0) > 0.F ? 1 : 0;
+    processor.pop_samples_from_buffer(view, buffer, 2);
+    processor.pop_samples_from_buffer(view, buffer, 1, 1);
+    processor.pop_samples_from_buffer(view, buffer, 1, 1, 0);
+    processor.pop_samples_from_buffer(view, buffer, 1, 1, 0, 2);
+    processor.push_samples_to_buffer(buffer, view, 2);
+    return checks;
+}
+
 }  // namespace
 
 int anira_header_compat_probe();  // NOLINT(misc-use-internal-linkage)
@@ -129,6 +208,24 @@ int anira_header_compat_probe() {
         const std::unique_ptr<v2::ContextConfig> loaded_context = from_file.get_context_config();
         const std::unique_ptr<v2::InferenceConfig> loaded = from_stream.get_inference_config();
         checks += loaded_context != nullptr && loaded != nullptr ? 1 : 0;
+
+        v2::InferenceConfig mutable_config = config;
+        ProbeProcessor processor(mutable_config);
+        checks += static_cast<int>(nonblocking_probe(nullptr, nullptr, processor));
+        checks += &processor.config() == &mutable_config ? 1 : 0;
+        const std::shared_ptr<v2::LegacyProcessorStage> stage =
+            std::make_shared<v2::LegacyProcessorStage>(processor);
+        checks += static_cast<int>(stage->phases() + stage->flags());
+        const std::shared_ptr<anira::Engine> engine = std::make_shared<v2::PassthroughEngine>();
+        checks += static_cast<int>(engine->flags() + engine->id().size());
+        anira::Pipeline pipeline;
+        pipeline.register_engine(engine);
+        pipeline.inference(config.model_config());
+        pipeline.add(anira::stage::Custom(stage));
+        checks += v2::Context::shutdown() == ANIRA_OK ? 1 : 0;
+        checks += v2::Context::release_core_if_idle() && v2::Context::has_core() ? 1 : 0;
+        checks +=
+            static_cast<int>(v2::Context::get_num_inference_threads() + v2::Context::drain_log());
     }
     return checks;
 }

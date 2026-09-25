@@ -17,7 +17,10 @@ cases a stage is for, in the order they come up.
     Coming from anira 2.x? The 2.x :cpp:class:`anira::PrePostProcessor` stays with the 2.x
     :cpp:class:`anira::InferenceHandler` in this pre-release, unchanged, and its API reference
     still describes it; :ref:`migration-runtime` maps each of its virtuals and helpers onto the
-    stage.
+    stage. A 2.x processor also runs as the stage of a 3.x pipeline as it is: written against
+    ``anira::v2::PrePostProcessor`` of ``anira/compat/v2.hpp``, it is added with
+    ``pipeline.add(anira::stage::Custom(std::make_shared<anira::v2::LegacyProcessorStage>(pp)))``
+    (:ref:`migration-compat-config`).
 
 When you need a stage
 ---------------------

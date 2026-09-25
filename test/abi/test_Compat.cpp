@@ -3,22 +3,36 @@
 // configuration half (the enum and its conversions, ModelData, TensorShape, ProcessingSpec,
 // InferenceConfig, JsonConfigLoader, ContextConfig): the upgrade of what the constructors
 // write, the getters of the live class on the same arguments, the normalisation table row by
-// row, the loader over the version-2 documents of test/support/v2_documents.h. A 2.x value and
-// a shim value are compared by name through same_backend, never by a cast: the 2.x enumerators
-// depend on the engines of the build, the shim's do not.
+// row, the loader over the version-2 documents of test/support/v2_documents.h. Suite AbiCompat
+// is the runtime half: the PassthroughEngine against the 2.x BackendBase and the
+// LegacyProcessorStage on C handlers built through anira::Pipeline, against the live 2.x
+// handler where both run. A 2.x value and a shim value are compared by name through
+// same_backend, never by a cast: the 2.x enumerators depend on the engines of the build, the
+// shim's do not.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
+#include <anira/InferenceHandler.h>
+#include <anira/PrePostProcessor.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
+#include <anira/backends/BackendBase.h>
+#include <anira/utils/Buffer.h>
+#include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/JsonConfigLoader.h>
 #include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <anira/compat/v2.hpp>
 #include <array>
+#include <atomic>
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -27,12 +41,15 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
 #include "fixtures.h"
+#include "float_face.h"
+#include "handler_support.h"
 
 namespace {
 
@@ -910,4 +927,434 @@ TEST(AbiCompatConfig, TheLoaderRefuses) {
     EXPECT_EQ(context->m_num_threads, 3U);
     EXPECT_EQ(status_of([&loader] { static_cast<void>(loader.get_inference_config()); }),
               ANIRA_ERROR_CONFIG);
+}
+
+// ---- the runtime half: the pass-through and the stage (suite AbiCompat) ----------------------
+
+namespace {
+
+/// A C handler created from a C++ Pipeline, destroyed with the object.
+struct PipelineHandler {
+    PipelineHandler(const anira_test::Context& context, const anira::Pipeline& pipeline) {
+        m_status = anira_handler_create(context.m_context, pipeline.native(), &m_handler, &m_err);
+    }
+    ~PipelineHandler() { anira_handler_destroy(m_handler); }
+    PipelineHandler(const PipelineHandler&) = delete;
+    PipelineHandler& operator=(const PipelineHandler&) = delete;
+    PipelineHandler(PipelineHandler&&) = delete;
+    PipelineHandler& operator=(PipelineHandler&&) = delete;
+
+    anira_status prepare(const anira::ContractHandle& contract) {
+        m_err = ANIRA_ERROR_INIT;
+        return anira_handler_prepare(m_handler, contract.native(), &m_err);
+    }
+
+    anira_handler* m_handler = nullptr;
+    anira_status m_status = ANIRA_OK;
+    anira_error m_err = ANIRA_ERROR_INIT;
+};
+
+/// The 2.x side's core config: what anira_test::Context sets on the C side, so the two users
+/// of the core reconcile without a mismatch.
+anira::CoreConfig oracle_core_config() {
+    anira::CoreConfig config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
+    config.m_log.m_drain = anira::LogDrain::Manual;
+    return config;
+}
+
+/// The legacy contract of a shim configuration with the host geometry of a block.
+anira::ContractHandle contract_of(const v2::InferenceConfig& config, uint32_t block) {
+    anira::Hard hard = config.hard();
+    hard.block_min = block;
+    hard.block_max = block;
+    hard.rate = anira_test::k_rate;
+    return anira::ContractHandle(hard);
+}
+
+/// The plan rows of a prepared handler.
+std::vector<anira_plan_info> plans_of(const anira_handler* handler) {
+    const anira_plan_report* report = anira_handler_plan_report(handler);
+    EXPECT_NE(report, nullptr);
+    uint32_t count = anira_plan_report_num_plans(report);
+    std::vector<anira_plan_info> rows(count);
+    EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows.data()),
+              ANIRA_OK);
+    return rows;
+}
+
+/// The backend a plan row runs on, as the stage context hands it to a processor.
+v2::InferenceBackend backend_of(const anira_plan_info& info) {
+    return v2::to_backend(anira::EngineRef{
+        .kind = static_cast<anira_engine>(info.engine),
+        .id = info.engine_id != nullptr ? std::string_view(info.engine_id) : std::string_view()});
+}
+
+/// The pass-through's three outputs against its two inputs: a copy, a pair of other sizes, an
+/// output without an input.
+constexpr size_t k_stream = 512;
+constexpr size_t k_small_in = 2;
+constexpr size_t k_small_out = 4;
+
+}  // namespace
+
+// The pass-through is 2.x's BackendBase::process: output i a copy of input i of the same size,
+// zeros for a pair of other sizes and for an output beyond the inputs. Once on the kernel
+// (the engine's three levels against BackendBase over the same data), once through a C handler
+// built on an anira::Pipeline with the LegacyProcessorStage against the live 2.x handler, whose
+// CUSTOM row runs the 2.x base pass-through: the same blocks, bit for bit.
+TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
+    const std::shared_ptr<v2::PassthroughEngine> engine = std::make_shared<v2::PassthroughEngine>();
+    EXPECT_EQ(engine->id(), v2::k_custom_engine_id);
+    EXPECT_EQ(engine->flags(), ANIRA_ENGINE_FLAG_REALTIME_SAFE | ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL);
+    EXPECT_TRUE(engine->providers().empty()) << "the CPU path alone";
+
+    // The kernel: 64 and 16 elements in, 64, 32 and 64 out.
+    {
+        std::vector<float> in0 = anira_test::ramp(1, 64);
+        std::vector<float> in1(16, 0.25F);
+        std::vector<float> out0(64, 7.F);
+        std::vector<float> out1(32, 7.F);
+        std::vector<float> out2(64, 7.F);
+        const std::array<int64_t, 2> wide{1, 64};
+        const std::array<int64_t, 2> narrow{1, 16};
+        const std::array<int64_t, 2> middle{1, 32};
+        const std::array<anira::Tensor, 2> inputs{
+            anira::Tensor::from_host(in0.data(), ANIRA_DTYPE_F32, wide),
+            anira::Tensor::from_host(in1.data(), ANIRA_DTYPE_F32, narrow)};
+        std::array<anira::Tensor, 3> outputs{
+            anira::Tensor::from_host(out0.data(), ANIRA_DTYPE_F32, wide),
+            anira::Tensor::from_host(out1.data(), ANIRA_DTYPE_F32, middle),
+            anira::Tensor::from_host(out2.data(), ANIRA_DTYPE_F32, wide)};
+        const anira_engine_load_info load_info{};
+        const anira_prepare_info prepare_info{};
+        const std::unique_ptr<anira::Engine::Loaded> loaded =
+            engine->load(anira::EngineLoadInfo(&load_info));
+        ASSERT_NE(loaded, nullptr);
+        const std::unique_ptr<anira::Engine::Prepared> prepared =
+            loaded->prepare(anira::PrepareInfo(&prepare_info));
+        ASSERT_NE(prepared, nullptr);
+        anira_engine_ctx record{};
+        record.num_inputs = static_cast<uint32_t>(inputs.size());
+        record.num_outputs = static_cast<uint32_t>(outputs.size());
+        record.inputs = inputs.data();
+        record.outputs = outputs.data();
+        anira::EngineContext context(&record);
+        EXPECT_EQ(prepared->process(context), ANIRA_OK);
+
+        anira::InferenceConfig config_2x(
+            {anira::ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+            {anira::TensorShape({{1, 64}, {1, 16}}, {{1, 64}, {1, 32}, {1, 64}})},
+            5.F);
+        anira::BackendBase base(config_2x);
+        std::vector<anira::BufferF> old_in;
+        old_in.emplace_back(1, 64);
+        old_in.emplace_back(1, 16);
+        std::ranges::copy(in0, old_in[0].get_write_pointer(0));
+        std::ranges::copy(in1, old_in[1].get_write_pointer(0));
+        std::vector<anira::BufferF> old_out;
+        old_out.emplace_back(1, 64);
+        old_out.emplace_back(1, 32);
+        old_out.emplace_back(1, 64);
+        for (anira::BufferF& buffer : old_out) {
+            std::fill_n(buffer.get_write_pointer(0), buffer.get_num_samples(), 7.F);
+        }
+        base.process(old_in, old_out, nullptr);
+
+        anira_test::expect_same_block(out0, in0, 0);
+        anira_test::expect_same_block(out0,
+                                      std::span<const float>(old_out[0].get_read_pointer(0), 64),
+                                      0);
+        anira_test::expect_all(out1, 0.F, "a pair of other sizes");
+        anira_test::expect_same_block(out1,
+                                      std::span<const float>(old_out[1].get_read_pointer(0), 32),
+                                      1);
+        anira_test::expect_all(out2, 0.F, "an output without an input");
+        anira_test::expect_same_block(out2,
+                                      std::span<const float>(old_out[2].get_read_pointer(0), 64),
+                                      2);
+    }
+
+    // Through the handlers: a stream and a Static pair of other sizes in, a stream, a Static
+    // output and a stream without an input out.
+    const anira_test::Context context;
+    v2::InferenceConfig config(
+        {v2::ModelData("placeholder", v2::CUSTOM)},
+        {v2::TensorShape({{1, 1, k_stream}, {1, k_small_in}},
+                         {{1, 1, k_stream}, {1, k_small_out}, {1, 1, k_stream}})},
+        v2::ProcessingSpec({1, 1}, {1, 1, 1}, {k_stream, 0}, {k_stream, 0, k_stream}),
+        5.F,
+        0,
+        false,
+        0.F,
+        2);
+    v2::PrePostProcessor pp(config);
+    anira::Pipeline pipeline;
+    pipeline.register_engine(engine);
+    pipeline.inference(config.model_config());
+    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    PipelineHandler handler(context, pipeline);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(contract_of(config, k_stream)), ANIRA_OK) << handler.m_err.message;
+    const std::vector<anira_plan_info> plans = plans_of(handler.m_handler);
+    ASSERT_EQ(plans.size(), 1U);
+    EXPECT_EQ(plans[0].engine, ANIRA_ENGINE_CUSTOM);
+    EXPECT_STREQ(plans[0].engine_id, v2::k_custom_engine_id);
+    EXPECT_EQ(plans[0].provider, ANIRA_PROVIDER_CPU);
+    EXPECT_EQ(plans[0].engine_flags,
+              ANIRA_ENGINE_FLAG_REALTIME_SAFE | ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL);
+    anira_test::FloatFace face(handler.m_handler);
+
+    anira::InferenceConfig config_2x(
+        {anira::ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        {anira::TensorShape({{1, 1, k_stream}, {1, k_small_in}},
+                            {{1, 1, k_stream}, {1, k_small_out}, {1, 1, k_stream}})},
+        anira::ProcessingSpec({1, 1}, {1, 1, 1}, {k_stream, 0}, {k_stream, 0, k_stream}),
+        5.F,
+        0,
+        false,
+        0.F,
+        2);
+    anira::PrePostProcessor pp_2x(config_2x);
+    anira::InferenceHandler handler_2x(pp_2x, config_2x, oracle_core_config());
+    handler_2x.prepare(
+        anira::HostConfig(static_cast<float>(k_stream), static_cast<float>(anira_test::k_rate)));
+
+    bool delivered_signal = false;
+    for (size_t k = 1; k <= 12; ++k) {
+        const std::vector<float> in = anira_test::ramp(k, k_stream);
+        for (size_t j = 0; j < k_small_in; ++j) {
+            pp.set_input(static_cast<float>(k + j), 1, j);
+            pp_2x.set_input(static_cast<float>(k + j), 1, j);
+        }
+        std::vector<float> c0(k_stream, -1.F);
+        std::vector<float> c2(k_stream, -1.F);
+        const std::array<const float*, 1> c_in_ch{in.data()};
+        const std::array<const float* const*, 2> c_in{c_in_ch.data(), nullptr};
+        const std::array<size_t, 2> num_in{k_stream, 0};
+        const std::array<float*, 1> c_out0{c0.data()};
+        const std::array<float*, 1> c_out2{c2.data()};
+        const std::array<float* const*, 3> c_out{c_out0.data(), nullptr, c_out2.data()};
+        const std::array<size_t, 3> num_out{k_stream, 0, k_stream};
+        std::array<size_t, 3> delivered{};
+        const size_t prev = anira_test::available(handler.m_handler);
+        ASSERT_EQ(face.process_multi(c_in.data(),
+                                     num_in.data(),
+                                     c_out.data(),
+                                     num_out.data(),
+                                     delivered.data()),
+                  ANIRA_OK);
+        anira_test::wait_for_block(handler.m_handler, prev);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+
+        std::vector<float> v0(k_stream, -1.F);
+        std::vector<float> v2_out(k_stream, -1.F);
+        const std::array<const float*, 1> v_in_ch{in.data()};
+        const std::array<const float* const*, 2> v_in{v_in_ch.data(), nullptr};
+        std::array<size_t, 2> v_num_in{k_stream, 0};
+        const std::array<float*, 1> v_out0{v0.data()};
+        const std::array<float*, 1> v_out2{v2_out.data()};
+        const std::array<float* const*, 3> v_out{v_out0.data(), nullptr, v_out2.data()};
+        std::array<size_t, 3> v_num_out{k_stream, 0, k_stream};
+        const size_t prev_2x = handler_2x.get_available_samples(0);
+        handler_2x.process(v_in.data(), v_num_in.data(), v_out.data(), v_num_out.data());
+        anira_test::wait_for_block(handler_2x, prev_2x);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure());
+
+        EXPECT_EQ(delivered[0], v_num_out[0]) << "block " << k;
+        anira_test::expect_same_block(c0, v0, k);
+        anira_test::expect_same_block(c2, v2_out, k);
+        anira_test::expect_all(c2, 0.F, "an output without an input");
+        for (size_t j = 0; j < k_small_out; ++j) {
+            EXPECT_EQ(pp.get_output(1, j), 0.F) << "a pair of other sizes, block " << k;
+            EXPECT_EQ(pp.get_output(1, j), pp_2x.get_output(1, j)) << "block " << k;
+        }
+        delivered_signal = delivered_signal || c0.back() != 0.F;
+    }
+    EXPECT_TRUE(delivered_signal) << "the stream came through within twelve blocks";
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+}
+
+namespace {
+
+/// A 2.x processor that records the backend each of the four phases was called with.
+class RecordingProcessor : public v2::PrePostProcessor {
+public:
+    explicit RecordingProcessor(v2::InferenceConfig& config) : v2::PrePostProcessor(config) {
+        forget();
+    }
+
+    void pre_process(std::vector<v2::RingBuffer>& input,
+                     std::vector<v2::BufferF>& output,
+                     v2::InferenceBackend backend) override {
+        m_pre.store(static_cast<int>(backend));
+        v2::PrePostProcessor::pre_process(input, output, backend);
+    }
+    void post_process(std::vector<v2::BufferF>& input,
+                      std::vector<v2::RingBuffer>& output,
+                      v2::InferenceBackend backend) override {
+        m_post.store(static_cast<int>(backend));
+        v2::PrePostProcessor::post_process(input, output, backend);
+    }
+    void before_inference(std::vector<v2::BufferF>& /*input*/,
+                          v2::InferenceBackend backend) override {
+        m_before.store(static_cast<int>(backend));
+    }
+    void after_inference(std::vector<v2::BufferF>& /*output*/,
+                         v2::InferenceBackend backend) override {
+        m_after.store(static_cast<int>(backend));
+    }
+
+    void forget() {
+        m_pre.store(-1);
+        m_post.store(-1);
+        m_before.store(-1);
+        m_after.store(-1);
+    }
+
+    std::atomic<int> m_pre{-1};
+    std::atomic<int> m_post{-1};
+    std::atomic<int> m_before{-1};
+    std::atomic<int> m_after{-1};
+};
+
+}  // namespace
+
+// The processor sees the backend of the chunk's plan in all four phases: CUSTOM on the custom
+// plan (the stage saw ANIRA_ENGINE_CUSTOM with anira.v2.custom), the engine's backend on a
+// built-in plan. Every plan of the default candidate set is on the CPU path.
+TEST(AbiCompat, TheStageReceivesTheBackendOfThePlan) {
+    const std::string stem =
+        model_path("model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono");
+    std::vector<v2::ModelData> rows;
+    for (const anira_engine engine : anira_test::oracle_engines()) {
+        const v2::InferenceBackend backend =
+            v2::to_backend(anira::EngineRef{.kind = engine, .id = {}});
+        const char* extension = backend == v2::ONNX         ? ".onnx"
+                                : backend == v2::LIBTORCH   ? ".pt"
+                                : backend == v2::EXECUTORCH ? ".pte"
+                                                            : ".tflite";
+        rows.emplace_back(stem + extension, backend);
+    }
+    rows.emplace_back("placeholder", v2::CUSTOM);
+    v2::InferenceConfig config(
+        rows,
+        {v2::TensorShape({{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::TFLITE),
+         v2::TensorShape({{1, 1, 512}, {1}}, {{1, 1, 512}, {1}})},
+        v2::ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {512, 0}),
+        5.F,
+        0,
+        false,
+        0.F,
+        2);
+    RecordingProcessor pp(config);
+    pp.set_input(1.F, 1, 0);
+    anira::Pipeline pipeline;
+    pipeline.register_engine(std::make_shared<v2::PassthroughEngine>());
+    pipeline.inference(config.model_config());
+    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    const anira_test::Context context;
+    PipelineHandler handler(context, pipeline);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(contract_of(config, 512)), ANIRA_OK) << handler.m_err.message;
+    const std::vector<anira_plan_info> plans = plans_of(handler.m_handler);
+    ASSERT_EQ(plans.size(), rows.size()) << "one plan per entry";
+    anira_test::FloatFace face(handler.m_handler);
+
+    bool custom_seen = false;
+    for (uint32_t plan = 0; plan < plans.size(); ++plan) {
+        SCOPED_TRACE(plan);
+        EXPECT_EQ(plans[plan].provider, ANIRA_PROVIDER_CPU);
+        const v2::InferenceBackend expected = backend_of(plans[plan]);
+        custom_seen = custom_seen || expected == v2::CUSTOM;
+        ASSERT_EQ(anira_handler_set_plan(handler.m_handler, plan), ANIRA_OK);
+        // The chunks in flight when the plan switched ran on the previous plan: drive until the
+        // switch is through, then record from a clean slate.
+        for (size_t pass = 0; pass < 2; ++pass) {
+            if (pass == 1) { pp.forget(); }
+            for (size_t k = 0; k < 4; ++k) {
+                std::vector<float> block = anira_test::ramp(k, 512);
+                const std::array<float*, 1> channels{block.data()};
+                size_t delivered = 0;
+                const size_t prev = anira_test::available(handler.m_handler);
+                ASSERT_EQ(face.process_inplace(channels.data(), 512, 0, &delivered), ANIRA_OK);
+                anira_test::wait_for_block(handler.m_handler, prev);
+                ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            }
+        }
+        EXPECT_EQ(pp.m_pre.load(), static_cast<int>(expected));
+        EXPECT_EQ(pp.m_before.load(), static_cast<int>(expected));
+        EXPECT_EQ(pp.m_after.load(), static_cast<int>(expected));
+        EXPECT_EQ(pp.m_post.load(), static_cast<int>(expected));
+    }
+    EXPECT_TRUE(custom_seen);
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+}
+
+namespace {
+
+/// A 2.x processor whose post_process throws on demand: an anira::Error, or anything else.
+class ThrowingProcessor : public v2::PrePostProcessor {
+public:
+    explicit ThrowingProcessor(v2::InferenceConfig& config) : v2::PrePostProcessor(config) {}
+
+    void post_process(std::vector<v2::BufferF>& input,
+                      std::vector<v2::RingBuffer>& output,
+                      v2::InferenceBackend backend) override {
+        if (m_throw_error.load()) { throw anira::Error(ANIRA_ERROR_CONFIG, "post_process"); }
+        if (m_throw_other.load()) { throw std::runtime_error("post_process"); }
+        v2::PrePostProcessor::post_process(input, output, backend);
+    }
+
+    std::atomic<bool> m_throw_error{false};
+    std::atomic<bool> m_throw_other{false};
+};
+
+}  // namespace
+
+// A throw never crosses the C boundary: the stage's trampoline turns an anira::Error into its
+// status and anything else into ANIRA_ERROR_ENGINE, which fails the chunk (zeros at its stream
+// position) and lands in anira_handler_rt_error; the handler keeps running (in 2.x the throw
+// reached the host).
+TEST(AbiCompat, AThrowingProcessorFailsItsChunk) {
+    v2::InferenceConfig config({v2::ModelData("placeholder", v2::CUSTOM)},
+                               {v2::TensorShape({{1, 1, k_stream}}, {{1, 1, k_stream}})},
+                               5.F,
+                               0,
+                               false,
+                               0.F,
+                               2);
+    ThrowingProcessor pp(config);
+    anira::Pipeline pipeline;
+    pipeline.register_engine(std::make_shared<v2::PassthroughEngine>());
+    pipeline.inference(config.model_config());
+    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    const anira_test::Context context;
+    PipelineHandler handler(context, pipeline);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(contract_of(config, k_stream)), ANIRA_OK) << handler.m_err.message;
+    anira_test::FloatFace face(handler.m_handler);
+    const auto run_blocks = [&](size_t count) {
+        for (size_t k = 0; k < count; ++k) {
+            std::vector<float> block = anira_test::ramp(k, k_stream);
+            const std::array<float*, 1> channels{block.data()};
+            size_t delivered = 0;
+            const size_t prev = anira_test::available(handler.m_handler);
+            EXPECT_EQ(face.process_inplace(channels.data(), k_stream, 0, &delivered), ANIRA_OK);
+            anira_test::wait_for_block(handler.m_handler, prev);
+        }
+    };
+    run_blocks(4);
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+
+    pp.m_throw_other.store(true);
+    run_blocks(4);
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_ENGINE);
+    pp.m_throw_other.store(false);
+
+    anira_handler_reset(handler.m_handler);
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK) << "reset clears it";
+    pp.m_throw_error.store(true);
+    run_blocks(4);
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_CONFIG);
+    pp.m_throw_error.store(false);
 }

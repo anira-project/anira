@@ -55,11 +55,12 @@ Where the 2.x API stands in this pre-release
   ``RAVE_MODEL_DIR``, ``*_JSON_CONFIG_PATH``) are gone with them; ``ANIRA_EXTRAS_MODELS_DIR``,
   the root of the model tree at run time, is the one definition left.
 - **Schedule.** The 2.x configuration classes have deprecated twins over the 3.x handles in
-  ``anira/compat/v2.hpp`` (``namespace anira::v2``; :ref:`migration-compat-config`), which gains
-  the runtime half (the processor and the handler) before the cut-over and is removed one minor
-  release after 3.0.0; the 2.x ``ContextConfig`` is there as ``anira::v2::ContextConfig``
-  (``anira::CoreConfig`` is this pre-release's spelling). The 2.x JSON document is read by the 3.x loaders for as long as
-  the 3.x line lives (:ref:`migration-json`).
+  ``anira/compat/v2.hpp`` (``namespace anira::v2``; :ref:`migration-compat-config`), with the
+  2.x processor and its views beside them; the header gains the handler before the cut-over and
+  is removed one minor release after 3.0.0; the 2.x ``ContextConfig`` is there as
+  ``anira::v2::ContextConfig`` (``anira::CoreConfig`` is this pre-release's spelling). The 2.x
+  JSON document is read by the 3.x loaders for as long as the 3.x line lives
+  (:ref:`migration-json`).
 
 .. _migration-config:
 
@@ -174,8 +175,8 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
 
 .. _migration-compat-config:
 
-The 2.x configuration classes in ``anira/compat/v2.hpp``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The 2.x classes in ``anira/compat/v2.hpp``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``#include <anira/compat/v2.hpp>`` declares the 2.x configuration classes in
 ``namespace anira::v2`` under the names of the last 2.x release (v2.3.0):
@@ -255,6 +256,36 @@ What differs from 2.x:
   ``set_model_path``, ...), ``get_tensor_shape(backend)``, ``clear_processing_spec`` and
   ``update_processing_spec``, and ``Defaults::m_num_parallel_processors``, which is the function
   ``Defaults::num_parallel_processors()``.
+
+The processor half of the runtime is in the header too. ``anira::v2::PrePostProcessor`` keeps
+the four virtuals with their 2.x signatures and default bodies, the per-element atomics of the
+non-streamable tensors (``set_input``, ``get_output`` and their twins, from any thread) and
+the five helpers, over two views: ``anira::v2::RingBuffer`` is a view of the ``anira_ring`` of
+one Streamed slot (the float face of the ring accessors of ``anira/abi/stage.h``), and
+``anira::v2::BufferF`` a view of the model end of one slot, one channel of the tensor's packed
+elements, as 2.x laid a model buffer out. ``anira::v2::LegacyProcessorStage`` runs such a
+processor as the stage of a 3.x pipeline (all four phases,
+``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``); the processor sees the backend of the chunk's plan,
+``CUSTOM`` for a custom engine. ``anira::v2::PassthroughEngine`` is ``BackendBase::process`` as
+an :cpp:class:`anira::Engine` under ``anira.v2.custom``: what a 2.x ``CUSTOM`` row runs when
+no engine was passed. ``anira::v2::Context`` carries the 2.x statics (``shutdown``,
+``release_core_if_idle``, ``has_core``, ``get_num_inference_threads``, ``drain_log``).
+What differs from 2.x:
+
+- **The views** are no containers: the owning ``BufferF(channels, samples)``,
+  ``RingBuffer::get_future_sample``, ``get_past_sample``, ``get_num_samples`` and
+  ``swap_data`` are not declared (a host buffer is the host's own container).
+- **The atomics** ignore an index out of range and answer 0 for it, where 2.x asserted.
+- **A throw** out of a virtual fails its chunk (zeros at its stream position, the status in
+  ``anira_handler_rt_error``: an ``anira::Error``'s, else ``ANIRA_ERROR_ENGINE``); in 2.x it
+  reached the host. A Static input a custom ``pre_process`` leaves alone reads zeros.
+- **Context::shutdown()** returns ``ANIRA_ERROR_INVALID_STATE`` while a context or a handler
+  lives (2.x stopped the pool regardless), and ``get_num_inference_threads()`` is the pool
+  size, 0 until the first handler is prepared.
+- **The engine code is the host's.** The header is compiled into the host, so the
+  ``PassthroughEngine`` and every 2.x custom engine run code of the module that includes it,
+  where 2.x ran its pass-through inside libanira: destroy the handler before that module
+  unloads.
 
 .. _migration-runtime:
 
