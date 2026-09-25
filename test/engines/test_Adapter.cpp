@@ -1693,7 +1693,7 @@ TEST(AdapterLiteRt, TheGainBindsByPositionInTheSignaturesKeyOrder) {
     expect_gain_of_one_half(*adapter);
 }
 
-// The provider of the record on LiteRT: an accelerator by its hardware's name beside DEFAULT
+// The provider of the record on LiteRT: an accelerator by its hardware's name beside CUSTOM
 // ("gpu", "npu"), never a provider of the enum; a name whose hardware no registered
 // accelerator supports here is refused at load naming the registered ones (the environment's
 // automatic registration loads the accelerator libraries it finds; a LiteRT library that does

@@ -662,8 +662,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
             EXPECT_EQ(rows[i].engine_id, nullptr);
             EXPECT_TRUE(names(rows[i], oracle[i])) << "row " << i;
             if (rows[i].provider_id != nullptr) {
-                EXPECT_EQ(rows[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT))
-                    << "a custom provider travels beside DEFAULT";
+                EXPECT_EQ(rows[i].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CUSTOM))
+                    << "a custom provider is ANIRA_PROVIDER_CUSTOM beside its name";
                 EXPECT_NE(rows[i].provider_id[0], '\0');
             }
         }
