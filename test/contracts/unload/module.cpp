@@ -65,7 +65,7 @@ anira_custom_engine* make_passthrough() {
 anira_engine first_enabled_engine() {
     anira_backend_id id = ANIRA_BACKEND_ID_INIT;
     uint32_t count = 1;
-    const anira_status status = anira_enabled_backends(sizeof(anira_backend_id), &count, &id);
+    const anira_status status = anira_enabled_engines(sizeof(anira_backend_id), &count, &id);
     if ((status != ANIRA_OK && status != ANIRA_INCOMPLETE) || count == 0) {
         return ANIRA_ENGINE_ONNXRUNTIME;
     }
@@ -99,11 +99,11 @@ anira_model_config* make_model(bool custom) {
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_model_config_create(&config, &err) != ANIRA_OK) { return nullptr; }
     uint32_t index = 0;
-    anira_status status = custom ? anira_model_config_add_model_path_custom(config,
-                                                                            k_custom_engine,
-                                                                            k_custom_path,
-                                                                            &index,
-                                                                            &err)
+    anira_status status = custom ? anira_model_config_add_model_path_engine_id(config,
+                                                                               k_custom_engine,
+                                                                               k_custom_path,
+                                                                               &index,
+                                                                               &err)
                                  : anira_model_config_add_model_path(config,
                                                                      first_enabled_engine(),
                                                                      k_missing_model,

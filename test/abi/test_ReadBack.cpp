@@ -263,13 +263,33 @@ TEST(AbiReadBack, ConfigScalars) {
               ANIRA_OK);
     EXPECT_EQ(anira_model_config_default_engine(model.m_config), ANIRA_ENGINE_LIBTORCH);
     EXPECT_EQ(anira_model_config_default_engine_id(model.m_config), nullptr);
-    ASSERT_EQ(anira_model_config_set_default_engine_custom(model.m_config, "org.example.engine"),
+    ASSERT_EQ(anira_model_config_set_default_engine_id(model.m_config, "org.example.engine"),
               ANIRA_OK);
     EXPECT_EQ(anira_model_config_default_engine(model.m_config), ANIRA_ENGINE_NONE)
         << "a custom default";
     EXPECT_STREQ(anira_model_config_default_engine_id(model.m_config), "org.example.engine");
     ASSERT_EQ(anira_model_config_set_default_engine(model.m_config, ANIRA_ENGINE_NONE), ANIRA_OK);
     EXPECT_EQ(anira_model_config_default_engine_id(model.m_config), nullptr) << "back to plan 0";
+
+    // The default provider: none, one of the enum, a custom name, none again.
+    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr);
+    ASSERT_EQ(
+        anira_model_config_set_default_provider(model.m_config, ANIRA_PROVIDER_COREML, nullptr),
+        ANIRA_OK);
+    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr);
+    ASSERT_EQ(anira_model_config_set_default_provider(model.m_config,
+                                                      ANIRA_PROVIDER_DEFAULT,
+                                                      "com.example.npu"),
+              ANIRA_OK);
+    EXPECT_EQ(anira_model_config_default_provider(model.m_config), ANIRA_PROVIDER_DEFAULT)
+        << "a custom default provider";
+    EXPECT_STREQ(anira_model_config_default_provider_id(model.m_config), "com.example.npu");
+    ASSERT_EQ(
+        anira_model_config_set_default_provider(model.m_config, ANIRA_PROVIDER_DEFAULT, nullptr),
+        ANIRA_OK);
+    EXPECT_EQ(anira_model_config_default_provider_id(model.m_config), nullptr) << "none again";
 
     ASSERT_EQ(anira_model_config_set_state(model.m_config, ANIRA_MODEL_STATEFUL), ANIRA_OK);
     EXPECT_EQ(anira_model_config_state(model.m_config), ANIRA_MODEL_STATEFUL);
@@ -287,6 +307,8 @@ TEST(AbiReadBack, ConfigScalars) {
 
     EXPECT_EQ(anira_model_config_default_engine(nullptr), ANIRA_ENGINE_NONE);
     EXPECT_EQ(anira_model_config_default_engine_id(nullptr), nullptr);
+    EXPECT_EQ(anira_model_config_default_provider(nullptr), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(anira_model_config_default_provider_id(nullptr), nullptr);
     EXPECT_EQ(anira_model_config_state(nullptr), ANIRA_MODEL_STATE_FORCE32);
     EXPECT_EQ(anira_model_config_max_instances(nullptr), 0u);
     EXPECT_EQ(anira_model_config_anchor(nullptr), nullptr);
@@ -1004,6 +1026,24 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_TRUE(built.anchor().empty()) << "the default";
     EXPECT_EQ(built.model_ext<anira::ext::Entry>(0)->name, "decode");
     EXPECT_EQ(built.input_count(), 0u);
+    // The pin getters beside the engine getters: none, a custom name, one of the enum.
+    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_TRUE(built.model_provider_id(0).empty());
+    built.model_provider(0, ANIRA_PROVIDER_DEFAULT, "com.example.npu");
+    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_EQ(built.model_provider_id(0), "com.example.npu");
+    built.model_provider(0, ANIRA_PROVIDER_COREML);
+    EXPECT_EQ(built.model_provider(0), ANIRA_PROVIDER_COREML);
+    EXPECT_TRUE(built.model_provider_id(0).empty());
+    EXPECT_EQ(built.model_provider(3), ANIRA_PROVIDER_DEFAULT) << "out of range";
+    EXPECT_TRUE(built.model_provider_id(3).empty());
+    // The default provider beside the default engine.
+    EXPECT_EQ(built.default_provider(), ANIRA_PROVIDER_DEFAULT);
+    EXPECT_TRUE(built.default_provider_id().empty());
+    built.default_provider(ANIRA_PROVIDER_DEFAULT, "com.example.npu");
+    EXPECT_EQ(built.default_provider_id(), "com.example.npu");
+    EXPECT_EQ(status_of([&] { built.default_provider(ANIRA_PROVIDER_CUDA, "com.example.npu"); }),
+              ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {

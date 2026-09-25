@@ -145,6 +145,8 @@ static_assert(noexcept(std::declval<const anira::RingView&>().dtype()) &&
               noexcept(std::declval<anira::RingView&>().pop_block(0, std::span<float>{})) &&
               noexcept(std::declval<anira::RingView&>().push_fill(0, 0.0F, 0)));
 static_assert(noexcept(std::declval<const anira::StageContext&>().phase()) &&
+              noexcept(std::declval<const anira::StageContext&>().engine_id()) &&
+              noexcept(std::declval<const anira::StageContext&>().provider_id()) &&
               noexcept(std::declval<const anira::StageContext&>()
                            .input_role(0, std::declval<anira::Role&>())) &&
               noexcept(std::declval<const anira::StageContext&>()
@@ -309,6 +311,10 @@ static_assert(noexcept(std::declval<const anira::ModelConfig&>().input_count()) 
               noexcept(std::declval<const anira::ModelConfig&>().output_count()) &&
               noexcept(std::declval<const anira::ModelConfig&>().default_engine()) &&
               noexcept(std::declval<const anira::ModelConfig&>().default_engine_id()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_provider()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().default_provider_id()) &&
+              noexcept(std::declval<const anira::ModelConfig&>().model_provider(0)) &&
+              noexcept(std::declval<const anira::ModelConfig&>().model_provider_id(0)) &&
               noexcept(std::declval<const anira::ModelConfig&>().state()) &&
               noexcept(std::declval<const anira::ModelConfig&>().max_instances()) &&
               noexcept(std::declval<const anira::ModelConfig&>().anchor()));
@@ -485,7 +491,7 @@ public:
     ProbeEngine() : anira::Engine("org.example.probe") {}
     uint32_t flags() const noexcept override { return ANIRA_ENGINE_FLAG_REALTIME_SAFE; }
     // The query: every declared provider but the first is usable here.
-    std::uint64_t available(const anira::InitInfo& info) const override {
+    std::uint64_t query(const anira::InitInfo& info) const override {
         return info.num_threads() > 0 ? ~std::uint64_t{1} : 0;
     }
 
@@ -613,6 +619,12 @@ int anira_header_cxx20_probe() {
         checks += model.default_engine() == ANIRA_ENGINE_NONE && model.default_engine_id().empty()
                       ? 1
                       : 0;
+        checks += model.default_provider() == ANIRA_PROVIDER_DEFAULT &&
+                          model.default_provider_id().empty() &&
+                          model.model_provider(0) == ANIRA_PROVIDER_DEFAULT &&
+                          model.model_provider_id(0).empty()
+                      ? 1
+                      : 0;
         checks += model.state() == ANIRA_MODEL_STATELESS && model.anchor().empty() ? 1 : 0;
         checks += model.tensor_name(0, "x").empty() && model.tensor_layout(0, "x").empty() ? 1 : 0;
         checks += model.model_ext<anira::ext::Entry>(0).has_value() ? 1 : 0;
@@ -649,7 +661,9 @@ int anira_header_cxx20_probe() {
         const anira::stage::Inference brings(model);
         checks += brings.engines().empty() ? 1 : 0;
         const anira::EngineKind kind = model.model_engine(0);
-        model.default_engine(kind).add_model_path("org.example.probe", path);
+        model.default_engine(kind)
+            .default_provider(ANIRA_PROVIDER_CUDA)
+            .add_model_path("org.example.probe", path);
         checks += engine_probe(nullptr) > 0 ? 1 : 0;
         anira::TensorSpec state("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
         state.axis(0, ANIRA_AXIS_ANY, 2).state_source("state_out");
@@ -660,7 +674,7 @@ int anira_header_cxx20_probe() {
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
         running.probe(true);
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
-                                 capabilities.edges().size() + anira::enabled_backends().size() +
+                                 capabilities.edges().size() + anira::enabled_engines().size() +
                                  anira::drain_log();
         const uint64_t numbers = anira::num_inference_threads() + edge.available +
                                  running.byte_image_bytes(1, ANIRA_DTYPE_F32) + anira::now_ns();

@@ -360,10 +360,10 @@ _Static_assert(offsetof(anira_stage_ctx, entry) == 28, "anira_stage_ctx.entry of
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->entry) == 4, "anira_stage_ctx.entry size");
 _Static_assert(offsetof(anira_stage_ctx, frame) == 32, "anira_stage_ctx.frame offset");
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->frame_bits) == 8, "anira_stage_ctx.frame is an 8-byte slot");
-_Static_assert(offsetof(anira_stage_ctx, reserved_ptr0) == 40, "anira_stage_ctx.reserved_ptr0 offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr0_bits) == 8, "anira_stage_ctx.reserved_ptr0 is an 8-byte slot");
-_Static_assert(offsetof(anira_stage_ctx, reserved_ptr1) == 48, "anira_stage_ctx.reserved_ptr1 offset");
-_Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr1_bits) == 8, "anira_stage_ctx.reserved_ptr1 is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, engine_id) == 40, "anira_stage_ctx.engine_id offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->engine_id_bits) == 8, "anira_stage_ctx.engine_id is an 8-byte slot");
+_Static_assert(offsetof(anira_stage_ctx, provider_id) == 48, "anira_stage_ctx.provider_id offset");
+_Static_assert(sizeof(((const anira_stage_ctx*)0)->provider_id_bits) == 8, "anira_stage_ctx.provider_id is an 8-byte slot");
 _Static_assert(offsetof(anira_stage_ctx, reserved_ptr2) == 56, "anira_stage_ctx.reserved_ptr2 offset");
 _Static_assert(sizeof(((const anira_stage_ctx*)0)->reserved_ptr2_bits) == 8, "anira_stage_ctx.reserved_ptr2 is an 8-byte slot");
 
@@ -559,8 +559,8 @@ int main(void) {
     printf("field anira_stage_ctx.ticket offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, ticket), (unsigned)sizeof(((const anira_stage_ctx*)0)->ticket));
     printf("field anira_stage_ctx.entry offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, entry), (unsigned)sizeof(((const anira_stage_ctx*)0)->entry));
     printf("field anira_stage_ctx.frame offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, frame), 8u);
-    printf("field anira_stage_ctx.reserved_ptr0 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr0), 8u);
-    printf("field anira_stage_ctx.reserved_ptr1 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr1), 8u);
+    printf("field anira_stage_ctx.engine_id offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, engine_id), 8u);
+    printf("field anira_stage_ctx.provider_id offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, provider_id), 8u);
     printf("field anira_stage_ctx.reserved_ptr2 offset %u size %u\n", (unsigned)offsetof(anira_stage_ctx, reserved_ptr2), 8u);
     printf("struct anira_engine_ctx size %u align %u\n", (unsigned)sizeof(anira_engine_ctx), (unsigned)_Alignof(anira_engine_ctx));
     printf("field anira_engine_ctx.instance offset %u size %u\n", (unsigned)offsetof(anira_engine_ctx, instance), (unsigned)sizeof(((const anira_engine_ctx*)0)->instance));

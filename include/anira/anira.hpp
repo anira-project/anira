@@ -1286,11 +1286,11 @@ public:
     uint32_t add_model_path(std::string_view engine_id, const std::filesystem::path& path) {
         anira_error err{};
         uint32_t index = 0;
-        detail::check(anira_model_config_add_model_path_custom(m_config,
-                                                               std::string(engine_id).c_str(),
-                                                               detail::utf8(path).c_str(),
-                                                               &index,
-                                                               &err),
+        detail::check(anira_model_config_add_model_path_engine_id(m_config,
+                                                                  std::string(engine_id).c_str(),
+                                                                  detail::utf8(path).c_str(),
+                                                                  &index,
+                                                                  &err),
                       err);
         return index;
     }
@@ -1323,15 +1323,15 @@ public:
                              void* ctx = nullptr) {
         anira_error err{};
         uint32_t index = 0;
-        detail::check(anira_model_config_add_model_bytes_custom(m_config,
-                                                                std::string(engine_id).c_str(),
-                                                                bytes.data(),
-                                                                bytes.size(),
-                                                                ownership,
-                                                                release,
-                                                                ctx,
-                                                                &index,
-                                                                &err),
+        detail::check(anira_model_config_add_model_bytes_engine_id(m_config,
+                                                                   std::string(engine_id).c_str(),
+                                                                   bytes.data(),
+                                                                   bytes.size(),
+                                                                   ownership,
+                                                                   release,
+                                                                   ctx,
+                                                                   &index,
+                                                                   &err),
                       err);
         return index;
     }
@@ -1361,6 +1361,18 @@ public:
     /// and valid until the config is mutated, moved or destroyed.
     std::string_view model_engine_id(uint32_t index) const noexcept {
         const char* id = anira_model_config_model_engine_id(m_config, index);
+        return id != nullptr ? std::string_view(id) : std::string_view();
+    }
+    /// The provider the entry is pinned to; ANIRA_PROVIDER_DEFAULT for an entry without a pin,
+    /// for a custom pin (model_provider_id names it) and for an index out of range.
+    anira_provider model_provider(uint32_t index) const noexcept {
+        return anira_model_config_model_provider(m_config, index);
+    }
+    /// The custom provider the entry is pinned to; empty for a pin of the enum, for none and
+    /// for an index out of range. Owned by the config, valid until it is mutated, moved or
+    /// destroyed.
+    std::string_view model_provider_id(uint32_t index) const noexcept {
+        const char* id = anira_model_config_model_provider_id(m_config, index);
         return id != nullptr ? std::string_view(id) : std::string_view();
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
@@ -1479,6 +1491,15 @@ public:
         const char* id = anira_model_config_default_engine_id(m_config);
         return id != nullptr ? std::string_view(id) : std::string_view();
     }
+    /// The default provider of the enum; ANIRA_PROVIDER_DEFAULT for none or a custom one.
+    anira_provider default_provider() const noexcept {
+        return anira_model_config_default_provider(m_config);
+    }
+    /// The custom default provider's name; empty for one of the enum or none.
+    std::string_view default_provider_id() const noexcept {
+        const char* id = anira_model_config_default_provider_id(m_config);
+        return id != nullptr ? std::string_view(id) : std::string_view();
+    }
     /// As set; a model with a declared State pair runs as ANIRA_MODEL_STATEFUL anyway.
     anira_model_state state() const noexcept { return anira_model_config_state(m_config); }
     uint32_t max_instances() const noexcept { return anira_model_config_max_instances(m_config); }
@@ -1544,8 +1565,21 @@ public:
     }
     ModelConfig& default_engine(std::string_view engine_id) {
         detail::check(
-            anira_model_config_set_default_engine_custom(m_config, std::string(engine_id).c_str()),
-            "anira_model_config_set_default_engine_custom");
+            anira_model_config_set_default_engine_id(m_config, std::string(engine_id).c_str()),
+            "anira_model_config_set_default_engine_id");
+        return *this;
+    }
+    /// The provider the handler starts on beside the default engine: the first plan of the
+    /// default engine (of any engine without one) on this provider; a plan table without one
+    /// starts as without a default provider, with a warning. A provider of the enum, or a
+    /// custom name in the engine's own vocabulary with ANIRA_PROVIDER_DEFAULT beside it;
+    /// DEFAULT with an empty name sets none.
+    ModelConfig& default_provider(anira_provider provider, std::string_view provider_id = {}) {
+        const std::string id(provider_id);
+        detail::check(anira_model_config_set_default_provider(m_config,
+                                                              provider,
+                                                              id.empty() ? nullptr : id.c_str()),
+                      "anira_model_config_set_default_provider");
         return *this;
     }
     ModelConfig& state(anira_model_state value) {
@@ -1906,13 +1940,14 @@ private:
     anira_context* m_context = nullptr;
 };
 
-/// What this build compiled in, without a context (anira_enabled_backends).
-inline std::vector<BackendId> enabled_backends() {
+/// What this build compiled in, without a context: one row per engine on the default provider
+/// (anira_enabled_engines).
+inline std::vector<BackendId> enabled_engines() {
     return detail::enumerate<BackendId>(
         [](uint32_t* count, BackendId* out) {
-            return anira_enabled_backends(sizeof(BackendId), count, out);
+            return anira_enabled_engines(sizeof(BackendId), count, out);
         },
-        "anira_enabled_backends");
+        "anira_enabled_engines");
 }
 
 /// The steady clock of anira_now_ms / anira_now_ns, for deadlines and submit timestamps.
@@ -2138,6 +2173,19 @@ public:
     EngineKind engine() const noexcept { return static_cast<EngineKind>(m_ctx->engine); }
     /// The provider of that plan.
     Provider provider() const noexcept { return static_cast<Provider>(m_ctx->provider); }
+    /// anira_stage_engine_id: the custom engine id of that plan; empty for a built-in engine.
+    std::string_view engine_id() const noexcept {
+        const char* id = nullptr;
+        static_cast<void>(anira_stage_engine_id(m_ctx, &id));
+        return id != nullptr ? std::string_view(id) : std::string_view();
+    }
+    /// anira_stage_provider_id: the custom provider name of that plan; empty for a provider of
+    /// the enum.
+    std::string_view provider_id() const noexcept {
+        const char* id = nullptr;
+        static_cast<void>(anira_stage_provider_id(m_ctx, &id));
+        return id != nullptr ? std::string_view(id) : std::string_view();
+    }
     /// The variant of that plan; 0 in this pre-release.
     uint32_t variant() const noexcept { return m_ctx->variant; }
     /// The tensors of the model's input list, State tensors included: the input slots.
@@ -2944,7 +2992,7 @@ public:
     /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
     /// engine's rows beside the context's. The base answers every bit: every declared
     /// provider is usable. It may throw, as init may: the status fails the calling entry.
-    virtual std::uint64_t available(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
+    virtual std::uint64_t query(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches
     /// it (a row of the engine survives validation), under the core's lifecycle lock
@@ -3109,12 +3157,12 @@ struct EngineTrampolines {
             return ANIRA_OK;
         });
     }
-    /// The query: the object's available() as the bitmask, a throw the status.
+    /// The query: the object's query() as the bitmask, a throw the status.
     static anira_status ANIRA_CALL query(const anira_init_info* info,
                                          void* user_data,
                                          std::uint64_t* out_available) noexcept {
         return guarded("query", [&] {
-            *out_available = engine_of(user_data).available(InitInfo(info));
+            *out_available = engine_of(user_data).query(InitInfo(info));
             return ANIRA_OK;
         });
     }
@@ -3300,7 +3348,7 @@ private:
  * @brief The backends and edges a handler of one Pipeline sees on one Context: the context's
  * probed rows (Capabilities) and then one row per custom engine registered on the pipeline
  * and provider it serves here, the default provider first, then every declared provider its
- * Engine::available reports usable (anira_pipeline_capabilities_backends /
+ * Engine::query reports usable (anira_pipeline_capabilities_backends /
  * anira_pipeline_capabilities_edge). Every call runs the engines' queries; the built-in rows
  * are the context's last probe's. The strings of the rows point into the pipeline's engines
  * and the context's store: valid while the Pipeline lives and until the context's next probe.
@@ -3311,7 +3359,7 @@ public:
         : m_pipeline(pipeline), m_context(context) {}
 
     /// The context's backends, then the custom engines' rows (ANIRA_ENGINE_NONE with the
-    /// engine's id). @throws Error with a query's status when an engine's available() throws.
+    /// engine's id). @throws Error with a query's status when an engine's query() throws.
     std::vector<BackendId> backends() const {
         return detail::enumerate<BackendId>(
             [this](uint32_t* count, BackendId* out) {
@@ -3441,7 +3489,7 @@ public:
     }
 
     /// The backends and edges a handler of this pipeline sees on a context: the context's
-    /// rows and the custom engines' (their Engine::available runs on every call).
+    /// rows and the custom engines' (their Engine::query runs on every call).
     PipelineCapabilities capabilities(const Context& context) const noexcept {
         return {m_pipeline, context.native()};
     }

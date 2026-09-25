@@ -198,6 +198,10 @@ struct anira_model_config {
     std::vector<anira_tensor_spec> m_outputs;
     anira_engine m_default_engine = ANIRA_ENGINE_NONE;
     std::string m_default_engine_id;
+    /// The provider the handler starts on beside the default engine; DEFAULT with an empty id
+    /// sets none (anira_model_config_set_default_provider).
+    anira_provider m_default_provider = ANIRA_PROVIDER_DEFAULT;
+    std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
     uint32_t m_max_instances = 1;
     std::string m_anchor;  ///< canonical name of the clock tensor; empty = the first streamed

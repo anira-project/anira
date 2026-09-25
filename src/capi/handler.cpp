@@ -780,6 +780,22 @@ bool names_default_engine(const anira_model_config& model, const anira::capi::Mo
            row.m_engine == model.m_default_engine;
 }
 
+bool has_default_engine(const anira_model_config& model) {
+    return model.m_default_engine != ANIRA_ENGINE_NONE || !model.m_default_engine_id.empty();
+}
+
+bool has_default_provider(const anira_model_config& model) {
+    return model.m_default_provider != ANIRA_PROVIDER_DEFAULT ||
+           !model.m_default_provider_id.empty();
+}
+
+// Whether a plan runs on the variant's default provider (the enum's value, or a custom name
+// beside ANIRA_PROVIDER_DEFAULT); a variant without one names none.
+bool names_default_provider(const anira_model_config& model, const anira::capi::PlanKey& key) {
+    return has_default_provider(model) && key.m_provider == model.m_default_provider &&
+           key.m_provider_id == model.m_default_provider_id;
+}
+
 // The 2.x backend of a surviving row. validate kept the rows this build has an adapter for; a
 // row without one here is a defect of that check, not of the configuration.
 anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_t row_index) {
@@ -1052,8 +1068,11 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
 // plan_requests (the dense index is the position on both sides); a custom row is
 // ANIRA_ENGINE_NONE with its id, a custom provider is ANIRA_PROVIDER_DEFAULT with its name in
 // provider_id, and a registered engine's row reports the flags of its descriptor; the initial
-// plan is the first of the default engine's when it has one, else 0, selected on the fresh
-// session before it is prepared: no chunk exists that could be stamped with it.
+// plan is the first of the default engine's (of any engine without one) on the default
+// provider, else the first of the default engine's, else 0, selected on the fresh session
+// before it is prepared: no chunk exists that could be stamped with it. A default provider no
+// such plan runs on is a warning, never a refusal: whether a provider has a plan depends on
+// the candidates and on what the context reports usable, not on the configuration alone.
 void build_plans(anira_handler& handler,
                  const anira_model_config& model,
                  const anira::capi::Derived& derived,
@@ -1087,12 +1106,35 @@ void build_plans(anira_handler& handler,
         }
         handler.m_plans.push_back(plan);
     }
-    uint32_t initial = 0;
+    std::optional<uint32_t> of_engine;
+    std::optional<uint32_t> on_provider;
     for (uint32_t i = 0; i < handler.m_plans.size(); ++i) {
-        if (names_default_engine(model, model.m_models[handler.m_plans[i].m_row])) {
-            initial = i;
+        if (has_default_engine(model) &&
+            !names_default_engine(model, model.m_models[handler.m_plans[i].m_row])) {
+            continue;
+        }
+        if (!of_engine.has_value()) { of_engine = i; }
+        if (names_default_provider(model, derived.m_plans[i])) {
+            on_provider = i;
             break;
         }
+    }
+    const uint32_t initial = on_provider.value_or(of_engine.value_or(0));
+    if (has_default_provider(model) && !on_provider.has_value()) {
+        [[maybe_unused]] const std::string which =
+            has_default_engine(model)
+                ? "no plan of default_engine '" +
+                      anira::capi::engine_label(model.m_default_engine, model.m_default_engine_id) +
+                      "'"
+                : std::string("no plan");
+        [[maybe_unused]] const std::string provider =
+            anira::capi::provider_label(model.m_default_provider, model.m_default_provider_id);
+        ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                          "anira_handler_prepare: %s runs on default_provider '%s' here; the "
+                          "handler starts on plan %u",
+                          which.c_str(),
+                          provider.c_str(),
+                          static_cast<unsigned int>(initial));
     }
     if (!handler.m_manager->set_plan(initial)) {
         throw StatusError(
@@ -1645,6 +1687,8 @@ anira_model_config clone_model_config(const anira_model_config& model) {
     copy.m_outputs = model.m_outputs;
     copy.m_default_engine = model.m_default_engine;
     copy.m_default_engine_id = model.m_default_engine_id;
+    copy.m_default_provider = model.m_default_provider;
+    copy.m_default_provider_id = model.m_default_provider_id;
     copy.m_state = model.m_state;
     copy.m_max_instances = model.m_max_instances;
     copy.m_anchor = model.m_anchor;

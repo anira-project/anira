@@ -109,7 +109,7 @@ inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
 /// shape check at prepare; the oracle compares the plans that load on both sides.
 inline std::vector<anira_engine> oracle_engines() {
     std::vector<anira_engine> out;
-    for (const anira::BackendId& id : anira::enabled_backends()) {
+    for (const anira::BackendId& id : anira::enabled_engines()) {
         if (id.engine == static_cast<uint32_t>(ANIRA_ENGINE_LITERT)) { continue; }
         out.push_back(static_cast<anira_engine>(id.engine));
     }

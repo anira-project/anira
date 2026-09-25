@@ -412,22 +412,24 @@ void set_entry_engine_from_json(const Json& node,
     set_engine_from_json(node, path, entry.m_engine, entry.m_engine_id);
 }
 
-// models[].provider: the provider the entry is pinned to
-// (anira_model_config_set_model_provider): the enum's spelling ("coreml"; "default" spells a
-// neutral entry, as no key does) or a custom provider's name in the engine's vocabulary
+// models[].provider, the provider the entry is pinned to (anira_model_config_set_model_provider),
+// and default_provider, the provider the handler starts on
+// (anira_model_config_set_default_provider): the enum's spelling ("coreml"; "default" spells
+// none, as no key does) or a custom provider's name in the engine's vocabulary
 // ("com.example.npu").
-void set_entry_provider_from_json(const Json& node,
-                                  const std::string& path,
-                                  anira::capi::ModelEntry& entry) {
+void set_provider_from_json(const Json& node,
+                            const std::string& path,
+                            anira_provider& provider,
+                            std::string& provider_id) {
     const std::string word = require_string(node, path);
     if (word.empty()) { fail_json(path, "must not be empty"); }
-    entry.m_provider = ANIRA_PROVIDER_DEFAULT;
-    entry.m_provider_id.clear();
+    provider = ANIRA_PROVIDER_DEFAULT;
+    provider_id.clear();
     if (const std::optional<anira_provider> known = anira::capi::provider_of_word(word)) {
-        entry.m_provider = *known;
+        provider = *known;
         return;
     }
-    entry.m_provider_id = word;
+    provider_id = word;
 }
 
 // models[].tensors.<canonical>.layout: spec axis indices and "insert" (ANIRA_AXIS_INSERT).
@@ -548,7 +550,10 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                         set_entry_engine_from_json(evalue, ekey_path, entry);
                         has_engine = true;
                     } else if (ekey == "provider") {
-                        set_entry_provider_from_json(evalue, ekey_path, entry);
+                        set_provider_from_json(evalue,
+                                               ekey_path,
+                                               entry.m_provider,
+                                               entry.m_provider_id);
                     } else if (ekey == "path") {
                         entry.m_path = resolve_path(require_string(evalue, ekey_path), base_dir);
                         if (entry.m_path.empty()) { fail_json(ekey_path, "must not be empty"); }
@@ -574,6 +579,8 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
             }
         } else if (key == "default_engine") {
             set_engine_from_json(value, path, cfg.m_default_engine, cfg.m_default_engine_id);
+        } else if (key == "default_provider") {
+            set_provider_from_json(value, path, cfg.m_default_provider, cfg.m_default_provider_id);
         } else if (key == "state") {
             cfg.m_state = vocabulary(value, path, k_states);
         } else if (key == "max_instances") {
@@ -1385,6 +1392,11 @@ Json model_to_json(const anira_model_config& cfg) {
     } else if (cfg.m_default_engine != ANIRA_ENGINE_NONE) {
         root["default_engine"] = word_of(cfg.m_default_engine, anira::capi::k_engine_words);
     }
+    if (cfg.m_default_provider != ANIRA_PROVIDER_DEFAULT) {
+        root["default_provider"] = anira::capi::provider_word(cfg.m_default_provider);
+    } else if (!cfg.m_default_provider_id.empty()) {
+        root["default_provider"] = cfg.m_default_provider_id;
+    }
     root["state"] = word_of(cfg.m_state, k_states);
     root["max_instances"] = cfg.m_max_instances;
     if (!cfg.m_anchor.empty()) { root["anchor"] = cfg.m_anchor; }
@@ -1480,9 +1492,15 @@ anira_status ANIRA_CALL anira_model_config_from_json(const char* utf8,
     auto cfg = std::make_unique<anira_model_config>();
     anira_status status = ANIRA_OK;
     if (is_v2(root)) {
-        refuse_mixed_roots(
-            root,
-            {"models", "inputs", "outputs", "default_engine", "state", "max_instances", "anchor"});
+        refuse_mixed_roots(root,
+                           {"models",
+                            "inputs",
+                            "outputs",
+                            "default_engine",
+                            "default_provider",
+                            "state",
+                            "max_instances",
+                            "anchor"});
         upgrade_model_v2(root, base_dir, *cfg);
         warn_upgraded_once("model document");
         status = ANIRA_SUCCESS_UPGRADED;

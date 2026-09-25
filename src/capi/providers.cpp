@@ -210,6 +210,7 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
             edge.to_engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
             edge.to_provider = static_cast<uint32_t>(info.m_provider);
             edge.to_provider_id = provider_id;
+            edge.to_engine_id = engine->id().c_str();
             edge.available = 1;
             if (cpu_provider(info.m_provider, info.m_provider_id)) {
                 edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);

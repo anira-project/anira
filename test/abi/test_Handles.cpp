@@ -157,11 +157,11 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
                                                  &m.m_err),
               ANIRA_OK);
     EXPECT_EQ(index, 1u);
-    EXPECT_EQ(anira_model_config_add_model_path_custom(m.m_config,
-                                                       "com.example.engine",
-                                                       "model.bin",
-                                                       &index,
-                                                       &m.m_err),
+    EXPECT_EQ(anira_model_config_add_model_path_engine_id(m.m_config,
+                                                          "com.example.engine",
+                                                          "model.bin",
+                                                          &index,
+                                                          &m.m_err),
               ANIRA_OK);
     EXPECT_EQ(index, 2u);
     EXPECT_EQ(anira_model_config_model_count(m.m_config), 3u);
@@ -309,8 +309,9 @@ TEST(AbiModelConfig, EntryRejections) {
                                                  &index,
                                                  &m.m_err),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_add_model_path_custom(m.m_config, "noDot", "x", &index, &m.m_err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(
+        anira_model_config_add_model_path_engine_id(m.m_config, "noDot", "x", &index, &m.m_err),
+        ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(m.m_err.message, "reverse-URI"), nullptr);
     EXPECT_EQ(anira_model_config_set_model_bytes(m.m_config,
                                                  0,
@@ -414,9 +415,9 @@ TEST(AbiModelConfig, SpecsAreCopiedAndTheRestIsScalar) {
     EXPECT_EQ(anira_model_config_set_default_engine(m.m_config, ANIRA_ENGINE_TFLITE), ANIRA_OK);
     EXPECT_EQ(anira_model_config_set_default_engine(m.m_config, bad_enum<anira_engine>(42)),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_model_config_set_default_engine_custom(m.m_config, "com.example.x"), ANIRA_OK);
+    EXPECT_EQ(anira_model_config_set_default_engine_id(m.m_config, "com.example.x"), ANIRA_OK);
     EXPECT_EQ(m.m_config->m_default_engine, ANIRA_ENGINE_NONE);
-    EXPECT_EQ(anira_model_config_set_default_engine_custom(m.m_config, "nodot"),
+    EXPECT_EQ(anira_model_config_set_default_engine_id(m.m_config, "nodot"),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_model_config_set_state(m.m_config, ANIRA_MODEL_STATEFUL), ANIRA_OK);
     EXPECT_EQ(anira_model_config_set_state(m.m_config, bad_enum<anira_model_state>(3)),

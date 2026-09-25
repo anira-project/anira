@@ -119,7 +119,7 @@ anira::InferenceBackend backend_of(const anira_plan_info& info) {
 
 /// An engine this build does not carry, if there is one.
 std::optional<anira_engine> missing_engine() {
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     for (anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
                                 ANIRA_ENGINE_LIBTORCH,
                                 ANIRA_ENGINE_TFLITE,

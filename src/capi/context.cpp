@@ -296,9 +296,9 @@ anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabi
     return ANIRA_ERROR_EDGE_UNREACHABLE;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
-                                               uint32_t* count,
-                                               anira_backend_id* out) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_enabled_engines(uint32_t element_size,
+                                              uint32_t* count,
+                                              anira_backend_id* out) ANIRA_NOEXCEPT try {
     std::vector<anira_backend_id> backends;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         anira_backend_id id = ANIRA_BACKEND_ID_INIT;

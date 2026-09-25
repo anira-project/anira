@@ -355,8 +355,8 @@ export const anira_stage_ctx = {
     ticket: { offset: 24, size: 4 },
     entry: { offset: 28, size: 4 },
     frame: { offset: 32, size: 8, ptr: true },
-    reserved_ptr0: { offset: 40, size: 8, ptr: true },
-    reserved_ptr1: { offset: 48, size: 8, ptr: true },
+    engine_id: { offset: 40, size: 8, ptr: true },
+    provider_id: { offset: 48, size: 8, ptr: true },
     reserved_ptr2: { offset: 56, size: 8, ptr: true },
   },
 } as const

@@ -42,7 +42,7 @@ Creating and adding an engine
     anira_custom_engine_destroy(engine);          /* the pipeline keeps its own reference */
 
     uint32_t row = 0;                                  /* the entry the engine serves */
-    anira_model_config_add_model_path_custom(cfg, "com.example.myengine", "model.bin", &row, &err);
+    anira_model_config_add_model_path_engine_id(cfg, "com.example.myengine", "model.bin", &row, &err);
 
 Two calls, two jobs:
 
@@ -71,7 +71,7 @@ with that prefix a host may create an engine under (a 2.x model file's ``"CUSTOM
 it, and like every custom id it needs an engine on the pipeline). Adding is legal before or
 after ``anira_pipeline_add_inference``; a handler copies the pipeline at
 ``anira_handler_create``, so an engine added afterwards does not reach that handler. A model entry that names the id
-(``anira_model_config_add_model_path_custom``, ``anira_model_config_add_model_bytes_custom``;
+(``anira_model_config_add_model_path_engine_id``, ``anira_model_config_add_model_bytes_engine_id``;
 ``"engine": "com.example.myengine"`` in a model file) is a plan of the handler like a built-in
 engine's entry; several such entries on one model configuration are several plans, which
 ``anira_handler_set_plan`` switches between, resolved by entry, never by the 2.x backend they
@@ -444,7 +444,9 @@ engine's, and say what the handler is: ``ANIRA_PREPARE_EXCLUSIVE`` in
 (above). Where a custom engine appears, the engine-provider pair is ``ANIRA_ENGINE_NONE`` with
 the id and the plan's provider beside it (``provider``, or ``provider_id`` for a custom one):
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
-``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, ``anira_backend_id`` among
+``anira_stage_ctx.engine`` and ``provider`` in the stage's phases with the id and the name
+through ``anira_stage_engine_id`` and ``anira_stage_provider_id``, ``anira_edge_info.to_engine``
+with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
 ``ANIRA_ENGINE_NONE``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
 extension rows name the engine by its id.
@@ -555,7 +557,7 @@ times) and a **visible report**, the pipeline's capabilities:
 The rows' strings point into the pipeline's engines and the context's store: valid until the
 pipeline is destroyed and until the context's next probe. ``anira_handler_create`` asks the
 same question for every candidate's provider of the engine, so what the report lists is what a
-handler runs on. In C++ the query is ``Engine::available(const InitInfo&)`` (the base answers
+handler runs on. In C++ the query is ``Engine::query(const InitInfo&)`` (the base answers
 every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
 (:cpp:class:`anira::PipelineCapabilities`).
 
@@ -736,7 +738,7 @@ place of the function pointers, split as the C lifecycle is, exactly like
 (``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
 ``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves beyond the
 default one in ``providers()`` (all read once, when its C engine is
-created at its first registration), may override ``available(const InitInfo&)`` (the query,
+created at its first registration), may override ``query(const InitInfo&)`` (the query,
 the base answers every bit) and ``init(const InitInfo&)`` (the base does
 nothing), and its ``load(const EngineLoadInfo&)`` returns a
 ``std::unique_ptr<Engine::Loaded>``, the loaded model, whose ``prepare(const PrepareInfo&)``

@@ -741,11 +741,11 @@ anira_status ANIRA_CALL anira_model_config_add_model_bytes(anira_model_config* c
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_model_config_add_model_path_custom(anira_model_config* config,
-                                                                 const char* engine_id,
-                                                                 const char* utf8_path,
-                                                                 uint32_t* out_index,
-                                                                 anira_error* err) ANIRA_NOEXCEPT
+anira_status ANIRA_CALL anira_model_config_add_model_path_engine_id(anira_model_config* config,
+                                                                    const char* engine_id,
+                                                                    const char* utf8_path,
+                                                                    uint32_t* out_index,
+                                                                    anira_error* err) ANIRA_NOEXCEPT
     try {
     ANIRA_CAPI_REQUIRE(config != nullptr,
                        err,
@@ -765,16 +765,16 @@ anira_status ANIRA_CALL anira_model_config_add_model_path_custom(anira_model_con
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_model_config_add_model_bytes_custom(anira_model_config* config,
-                                                                  const char* engine_id,
-                                                                  const void* bytes,
-                                                                  size_t size,
-                                                                  anira_bytes_ownership ownership,
-                                                                  anira_bytes_release_fn release,
-                                                                  void* ctx,
-                                                                  uint32_t* out_index,
-                                                                  anira_error* err) ANIRA_NOEXCEPT
-    try {
+anira_status ANIRA_CALL
+    anira_model_config_add_model_bytes_engine_id(anira_model_config* config,
+                                                 const char* engine_id,
+                                                 const void* bytes,
+                                                 size_t size,
+                                                 anira_bytes_ownership ownership,
+                                                 anira_bytes_release_fn release,
+                                                 void* ctx,
+                                                 uint32_t* out_index,
+                                                 anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(config != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -1024,12 +1024,28 @@ anira_status ANIRA_CALL anira_model_config_set_default_engine(anira_model_config
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_model_config_set_default_engine_custom(anira_model_config* config,
-                                                                     const char* engine_id)
+anira_status ANIRA_CALL anira_model_config_set_default_engine_id(anira_model_config* config,
+                                                                 const char* engine_id)
     ANIRA_NOEXCEPT try {
     if (config == nullptr || !custom_engine_id(engine_id)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     config->m_default_engine = ANIRA_ENGINE_NONE;
     config->m_default_engine_id = engine_id;
+    return ANIRA_OK;
+} catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_model_config_set_default_provider(anira_model_config* config,
+                                                                anira_provider provider,
+                                                                const char* provider_id)
+    ANIRA_NOEXCEPT try {
+    if (config == nullptr || !anira::capi::known_provider(provider)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    // One spelling per provider, as the entry's pin: a custom name beside DEFAULT only.
+    if (provider_id != nullptr && (provider != ANIRA_PROVIDER_DEFAULT || !non_empty(provider_id))) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    config->m_default_provider = provider;
+    config->m_default_provider_id = provider_id != nullptr ? provider_id : "";
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -1265,6 +1281,18 @@ const char* ANIRA_CALL anira_model_config_default_engine_id(const anira_model_co
     return config == nullptr || config->m_default_engine_id.empty()
                ? nullptr
                : config->m_default_engine_id.c_str();
+}
+
+anira_provider ANIRA_CALL anira_model_config_default_provider(const anira_model_config* config)
+    ANIRA_NOEXCEPT {
+    return config == nullptr ? ANIRA_PROVIDER_DEFAULT : config->m_default_provider;
+}
+
+const char* ANIRA_CALL anira_model_config_default_provider_id(const anira_model_config* config)
+    ANIRA_NOEXCEPT {
+    return config == nullptr || config->m_default_provider_id.empty()
+               ? nullptr
+               : config->m_default_provider_id.c_str();
 }
 
 anira_model_state ANIRA_CALL anira_model_config_state(const anira_model_config* config)

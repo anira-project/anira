@@ -348,7 +348,7 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipel
  * when the last reference dies (the handle, the pipelines, their handlers, the loaded
  * models), after every unload. A refused call creates nothing and never calls release.
  * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
- *        by (anira_model_config_add_model_path_custom), which
+ *        by (anira_model_config_add_model_path_engine_id), which
  *        anira_backend_id.engine_id, the plan report and every message about the
  *        engine carry; it must contain a '.', and the prefix "anira." is anira's own,
  *        with one exception: "anira.v2.custom", the id anira/compat/v2.hpp creates a

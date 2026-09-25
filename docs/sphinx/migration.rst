@@ -91,7 +91,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        id and registered with ``anira::Pipeline::register_engine(impl)`` or
        ``anira::stage::Inference(cfg).engine(impl)``)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
-       (``anira_model_config_add_model_path_custom``).
+       (``anira_model_config_add_model_path_engine_id``).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
      - ``cfg.add_model_bytes(engine, bytes, ownership, release, ctx)`` with a
        ``std::span<const std::byte>`` (``anira_model_config_add_model_bytes``);
@@ -160,9 +160,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
        (the first streamable tensor).
    * - ``anira::InferenceHandler::set_inference_backend`` (the starting backend)
-     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``) selects the
-       starting plan; switching at run time is ``anira_handler_set_plan`` over the plan report
-       (``set_inference_backend`` on the 2.x handler).
+     - ``cfg.default_engine(engine)`` (``anira_model_config_set_default_engine``), with
+       ``cfg.default_provider(provider)`` beside it for an engine with several providers,
+       selects the starting plan; switching at run time is ``anira_handler_set_plan`` over the
+       plan report (``set_inference_backend`` on the 2.x handler).
 
 .. _migration-runtime:
 
@@ -403,8 +404,8 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        (``Engine::Loaded`` is deleted there); ``release(user_data)`` once, with the last
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
    * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
-     - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_stage_ctx``,
-       ``anira_backend_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
+     - ``ANIRA_ENGINE_NONE`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
+       a stage reads it with ``anira_stage_engine_id``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
        C handler runs it like every added id, on the engine added under it (the one id with
        the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
        adds it for a 2.x custom backend); the bridge keeps serving it without an engine until

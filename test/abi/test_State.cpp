@@ -2482,10 +2482,10 @@ TEST(AbiState, AnInt32StatePair) {
 constexpr uint32_t k_file_hop = 64;      // the file's window (min = max = 64, no overlap)
 constexpr double k_file_rate = 48000.0;  // the host's rate; a contract file carries none
 
-/// The engines of this build the file names, in the order of anira_enabled_backends.
+/// The engines of this build the file names, in the order of anira_enabled_engines.
 std::vector<anira_engine> file_engines() {
     std::vector<anira_engine> out;
-    for (const anira::BackendId& id : anira::enabled_backends()) {
+    for (const anira::BackendId& id : anira::enabled_engines()) {
         const auto engine = static_cast<anira_engine>(id.engine);
         if (engine == ANIRA_ENGINE_LIBTORCH || engine == ANIRA_ENGINE_ONNXRUNTIME ||
             engine == ANIRA_ENGINE_EXECUTORCH || engine == ANIRA_ENGINE_TFLITE ||

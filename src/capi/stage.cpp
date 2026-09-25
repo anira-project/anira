@@ -274,6 +274,26 @@ anira_status ctx_tensor(const anira_stage_ctx* ctx,
     return ANIRA_OK;
 }
 
+// The pair's names of the chunk's plan: the record's two id slots, which make_ctx filled from
+// the session's table. No slot to check, so the only refusals are a NULL ctx, a ctx without a
+// frame and a NULL out (recorded).
+anira_status ctx_id(const anira_stage_ctx* ctx,
+                    const char** out,
+                    bool engine,
+                    [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
+    if (out != nullptr) { *out = nullptr; }
+    const StageFrame* frame = frame_of(ctx);
+    if (frame == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (out == nullptr) {
+        if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
+            ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi, "%s: the stage: NULL out", entry);
+        }
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    *out = engine ? ctx->engine_id : ctx->provider_id;
+    return ANIRA_OK;
+}
+
 }  // namespace
 
 // ==== the ring accessors ======================================================================
@@ -398,6 +418,16 @@ anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ctx* ctx,
                                                   anira_tensor* out)
     ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
     return ctx_tensor(ctx, /*input=*/false, slot, out, __func__);
+}
+
+anira_status ANIRA_CALL anira_stage_engine_id(const anira_stage_ctx* ctx,
+                                              const char** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_id(ctx, out, /*engine=*/true, __func__);
+}
+
+anira_status ANIRA_CALL anira_stage_provider_id(const anira_stage_ctx* ctx,
+                                                const char** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return ctx_id(ctx, out, /*engine=*/false, __func__);
 }
 
 // ==== the default bodies ======================================================================
@@ -642,6 +672,14 @@ anira_stage_ctx StageProcessor::make_ctx(anira_phase phase,
                                      : static_cast<uint32_t>(ANIRA_ENGINE_NONE);
     ctx.provider = plan < plans.size() ? static_cast<uint32_t>(plans[plan].m_provider)
                                        : static_cast<uint32_t>(ANIRA_PROVIDER_DEFAULT);
+    // The pair's names for anira_stage_engine_id / _provider_id: the session's own strings,
+    // which live as long as its table; NULL for a built-in engine and a provider of the enum.
+    if (plan < plans.size()) {
+        const std::string& engine_id = plans[plan].m_engine_id;
+        const std::string& provider_id = plans[plan].m_provider_id;
+        ctx.engine_id = engine_id.empty() ? nullptr : engine_id.c_str();
+        ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
+    }
     ctx.variant = 0;
     ctx.num_inputs = static_cast<uint32_t>(m_input_shapes.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_shapes.size());

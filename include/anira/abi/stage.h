@@ -370,8 +370,18 @@ typedef struct anira_stage_ctx {
      * never dereferences it and never writes it.
      */
     ANIRA_PTR(const void, frame);
-    ANIRA_PTR(void, reserved_ptr0);  /**< NULL. */
-    ANIRA_PTR(void, reserved_ptr1);  /**< NULL. */
+    /**
+     * anira's own: what anira_stage_engine_id reads (the plan's custom engine id, NULL for a
+     * built-in engine). Valid for the duration of the callback. A stage reads it through the
+     * accessor and never writes it.
+     */
+    ANIRA_PTR(const char, engine_id);
+    /**
+     * anira's own: what anira_stage_provider_id reads (the plan's custom provider name, NULL
+     * for a provider of the enum). Valid for the duration of the callback. A stage reads it
+     * through the accessor and never writes it.
+     */
+    ANIRA_PTR(const char, provider_id);
     ANIRA_PTR(void, reserved_ptr2);  /**< NULL. */
 } anira_stage_ctx;
 
@@ -526,6 +536,40 @@ ANIRA_API anira_status ANIRA_CALL anira_stage_input_tensor(const anira_stage_ctx
 ANIRA_API anira_status ANIRA_CALL anira_stage_output_tensor(const anira_stage_ctx* ctx,
                                                             uint32_t slot,
                                                             anira_tensor* out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+
+/**
+ * @brief Fills out with the custom engine id of the plan the chunk was submitted under, the id
+ * anira_plan_info.engine_id carries for that plan: the reverse-URI id of a custom engine
+ * (anira_stage_ctx.engine is ANIRA_ENGINE_NONE beside it), NULL for a built-in engine
+ * (the engine field names it). The same answer in every phase of a chunk. The string is
+ * anira's, valid for the duration of the callback.
+ * @param ctx The context the phase callback received.
+ * @param out Receives the id; NULL for a built-in engine and whenever the status is not
+ *        ANIRA_OK.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx, a ctx without a frame or a
+ *         NULL out (the NULL out is recorded).
+ * @par Thread contract
+ * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_stage_engine_id(const anira_stage_ctx* ctx,
+                                                        const char** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
+
+/**
+ * @brief The provider twin of anira_stage_engine_id: the custom provider name of the plan the
+ * chunk was submitted under (anira_plan_info.provider_id; anira_stage_ctx.provider is
+ * ANIRA_PROVIDER_DEFAULT beside it), NULL for a provider of the enum (the provider field
+ * names it).
+ * @param ctx The context the phase callback received.
+ * @param out Receives the name; NULL for a provider of the enum and whenever the status is not
+ *        ANIRA_OK.
+ * @return As anira_stage_engine_id.
+ * @par Thread contract
+ * [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_stage_provider_id(const anira_stage_ctx* ctx,
+                                                          const char** out) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief The init function of a stage: called once per registration (per carrier), by the first

@@ -82,7 +82,7 @@ TensorSpec streamed(std::string_view name, int64_t time = 512, int64_t channels 
 
 /// An engine this build does not carry, if there is one.
 std::optional<anira_engine> missing_engine() {
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     for (anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
                                 ANIRA_ENGINE_LIBTORCH,
                                 ANIRA_ENGINE_TFLITE,
@@ -998,7 +998,7 @@ TEST(AbiPrepare, StructuralRulesAtCreate) {
 #if defined(USE_LIBTORCH) || defined(USE_ONNXRUNTIME)
 TEST(AbiPrepare, AModelThatDoesNotLoadIsReportedAtPrepare) {
     const Context context;
-    const std::vector<anira::BackendId> enabled = anira::enabled_backends();
+    const std::vector<anira::BackendId> enabled = anira::enabled_engines();
     ASSERT_FALSE(enabled.empty());
     const auto first_engine = static_cast<anira_engine>(enabled.front().engine);
     {

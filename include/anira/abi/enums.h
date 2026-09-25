@@ -614,8 +614,7 @@ typedef enum anira_pad_policy {
  * reserved for later anira engines. A custom engine (anira_custom_engine_create, added
  * to a pipeline with anira_pipeline_add_engine) has no value of its own: wherever the
  * pair travels it is ANIRA_ENGINE_NONE with its engine_id (anira_backend_id,
- * anira_plan_info; a stage reads the id off the plan report, since anira_stage_ctx
- * carries the pair's values alone).
+ * anira_plan_info; a stage reads it with anira_stage_engine_id).
  */
 typedef enum anira_engine {
     /**

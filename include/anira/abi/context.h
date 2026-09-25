@@ -70,14 +70,17 @@ typedef struct anira_backend_id {
 
 /**
  * @brief One row of the edge registry: whether a tensor in domain from_domain can reach the
- * backend (to_engine, to_provider, or to_provider_id for a provider the enum does not
- * name), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for
- * the duration of the enumerating call.
+ * backend (to_engine, or to_engine_id for a custom engine; to_provider, or
+ * to_provider_id for a provider the enum does not name), how (edge_class), how sure the
+ * probe is (rung), and why not (reason). Valid for the duration of the enumerating call.
  */
 typedef struct anira_edge_info {
     uint32_t struct_size;  /**< sizeof(anira_edge_info) of the caller's header. */
     uint32_t from_domain;  /**< anira_domain of the tensor. */
-    uint32_t to_engine;  /**< anira_engine of the backend. */
+    /**
+     * anira_engine of the backend; ANIRA_ENGINE_NONE beside a to_engine_id.
+     */
+    uint32_t to_engine;
     /**
      * anira_provider of the backend; ANIRA_PROVIDER_DEFAULT beside a to_provider_id.
      */
@@ -99,11 +102,18 @@ typedef struct anira_edge_info {
      * a caller whose header ends before it reads the rows without it.
      */
     const char* to_provider_id;
+    /**
+     * NULL for a built-in engine; the id of a custom engine of the pipeline
+     * (anira_pipeline_capabilities_edge), the engine's own string, valid while the pipeline
+     * holds the engine. A tail field: a caller whose header ends before it reads the rows
+     * without it.
+     */
+    const char* to_engine_id;
 } anira_edge_info;
 /**
  * @brief No edge.
  */
-#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL)
+#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_DEFAULT, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL)
 
 /**
  * @brief Creates a context over this copy's core: reconciles the config into the core (see the
@@ -282,9 +292,9 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabiliti
  * [thread-safe]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_enabled_backends(uint32_t element_size,
-                                                         uint32_t* count,
-                                                         anira_backend_id* out) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_enabled_engines(uint32_t element_size,
+                                                        uint32_t* count,
+                                                        anira_backend_id* out) ANIRA_NOEXCEPT;
 
 /**
  * @brief The size in bytes of a tensor's byte image under the edges this context probed

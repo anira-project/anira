@@ -1989,7 +1989,7 @@ public:
                                 : std::span<const char* const>{};
     }
     std::span<const char* const> providers() const noexcept override { return m_providers; }
-    std::uint64_t available(const anira::InitInfo& info) const override {
+    std::uint64_t query(const anira::InitInfo& info) const override {
         ++m_queried;
         m_query_context = info.context();
         if (m_query_throws) { throw anira::Error(ANIRA_ERROR_DEVICE, "no device here"); }

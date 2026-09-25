@@ -566,13 +566,13 @@ TEST(AbiContext, TheDrainThreadDeliversAndTheLastContextFlushes) {
 TEST(AbiContext, EnabledBackendsAreTheCompiledSet) {
     const std::vector<anira_engine> expected = compiled_engines();
     uint32_t count = 0;
-    EXPECT_EQ(anira_enabled_backends(sizeof(anira_backend_id), nullptr, nullptr),
+    EXPECT_EQ(anira_enabled_engines(sizeof(anira_backend_id), nullptr, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_enabled_backends(sizeof(anira_backend_id), &count, nullptr), ANIRA_OK);
+    EXPECT_EQ(anira_enabled_engines(sizeof(anira_backend_id), &count, nullptr), ANIRA_OK);
     EXPECT_EQ(count, expected.size());
     std::vector<anira_backend_id> rows(expected.size() + 1);
     count = static_cast<uint32_t>(rows.size());
-    EXPECT_EQ(anira_enabled_backends(sizeof(anira_backend_id), &count, rows.data()), ANIRA_OK);
+    EXPECT_EQ(anira_enabled_engines(sizeof(anira_backend_id), &count, rows.data()), ANIRA_OK);
     EXPECT_EQ(count, expected.size());
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_EQ(rows[i].struct_size, sizeof(anira_backend_id));
@@ -582,7 +582,7 @@ TEST(AbiContext, EnabledBackendsAreTheCompiledSet) {
     }
     if (expected.size() > 1) {
         count = 1;
-        EXPECT_EQ(anira_enabled_backends(sizeof(anira_backend_id), &count, rows.data()),
+        EXPECT_EQ(anira_enabled_engines(sizeof(anira_backend_id), &count, rows.data()),
                   ANIRA_INCOMPLETE);
         EXPECT_EQ(count, expected.size());
     }
@@ -594,12 +594,12 @@ TEST(AbiContext, EnabledBackendsAreTheCompiledSet) {
     std::vector<Wide> wide(expected.size() + 1,
                            Wide{.m_id = ANIRA_BACKEND_ID_INIT, .m_sentinel = 0xABCDU});
     count = static_cast<uint32_t>(wide.size());
-    EXPECT_EQ(anira_enabled_backends(sizeof(Wide), &count, &wide[0].m_id), ANIRA_OK);
+    EXPECT_EQ(anira_enabled_engines(sizeof(Wide), &count, &wide[0].m_id), ANIRA_OK);
     for (size_t i = 0; i < expected.size(); ++i) {
         EXPECT_EQ(wide[i].m_id.engine, static_cast<uint32_t>(expected[i]));
         EXPECT_EQ(wide[i].m_sentinel, 0xABCDU);
     }
-    EXPECT_EQ(anira_enabled_backends(2, &count, rows.data()), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_enabled_engines(2, &count, rows.data()), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 namespace {
@@ -713,6 +713,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(edges[i].to_engine, backends[i].engine);
         EXPECT_EQ(edges[i].to_provider, backends[i].provider);
         EXPECT_EQ(edges[i].to_provider_id, backends[i].provider_id) << "the row's own pointer";
+        EXPECT_EQ(edges[i].to_engine_id, nullptr) << "a built-in engine has no id";
         EXPECT_EQ(edges[i].available, 1U);
         EXPECT_NE(edges[i].reason, nullptr);
         const bool cpu = backends[i].provider_id == nullptr &&
