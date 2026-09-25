@@ -1233,7 +1233,9 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
 // candidates of one engine (coreml, a custom name, the default provider) the handler starts on
 // the first plan of the default engine on the default provider, of any engine without a default
 // engine; a default provider no plan runs on starts as without one (the first plan of the
-// default engine) and logs a warning naming it; the config reads the pair back.
+// default engine) and logs the default engine's warning naming the pair and the plan it starts
+// on; one no entry could run (each pinned elsewhere) is CONFIG at create; the config reads the
+// pair back.
 TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
     anira_drain_log();
     RecordCollector collector;
@@ -1285,8 +1287,33 @@ TEST(AbiEngine, TheDefaultProviderPicksTheInitialPlan) {
     EXPECT_EQ(initial_plan(on_cuda), 0U) << "no plan on cuda: as without a default provider";
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_TRUE(collector.has("runs on default_provider 'cuda' here", "native"));
+    const std::string asked = std::string("no plan runs default_engine '") + k_gain_id +
+                              "' on default_provider 'cuda' here; the handler starts on plan 0 (" +
+                              k_gain_id + " on coreml)";
+    EXPECT_TRUE(collector.has(asked.c_str(), "native")) << asked;
 #endif
+
+    // What the configuration alone decides is refused at create, as a default engine naming no
+    // entry is: every entry of the default engine pinned to another provider.
+    {
+        ModelConfig pinned = gain_model();
+        pinned.model_provider(0, ANIRA_PROVIDER_COREML)
+            .default_engine(std::string_view(k_gain_id))
+            .default_provider(ANIRA_PROVIDER_DEFAULT, "com.example.npu");
+        Pipe pipe;
+        ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+            << pipe.m_err.message;
+        pipe.add_inference(pinned, gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+        anira_handler* handler = nullptr;
+        EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(handler, nullptr);
+        const std::string message = pipe.m_err.message;
+        EXPECT_NE(message.find(std::string("default_provider 'com.example.npu' runs no model "
+                                           "entry of default_engine '") +
+                               k_gain_id + "': each is pinned to another provider"),
+                  std::string::npos)
+            << message;
+    }
 
     // The C refusals of the setter, and the JSON round trip of the key.
     EXPECT_EQ(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_CUDA, nullptr),

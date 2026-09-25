@@ -796,6 +796,38 @@ bool names_default_provider(const anira_model_config& model, const anira::capi::
            key.m_provider_id == model.m_default_provider_id;
 }
 
+// The one record of a default no plan of the table runs (the default engine's entry is not a
+// plan here, or none of the plans is on the default provider): the pair asked for and the plan
+// the handler starts on instead. A fallback, never a refusal: validate refused what the
+// configuration alone decides (a default naming no entry it could run), and whether a plan
+// runs it here is the candidates' and the context's.
+void warn_default_fallback([[maybe_unused]] const anira_model_config& model,
+                           [[maybe_unused]] const anira::capi::PlanKey& start,
+                           [[maybe_unused]] uint32_t initial) {
+    std::string asked;
+    if (has_default_engine(model)) {
+        asked = "default_engine '" +
+                anira::capi::engine_label(model.m_default_engine, model.m_default_engine_id) + "'";
+    }
+    if (has_default_provider(model)) {
+        if (!asked.empty()) { asked += " on "; }
+        asked +=
+            "default_provider '" +
+            anira::capi::provider_label(model.m_default_provider, model.m_default_provider_id) +
+            "'";
+    }
+    const anira::capi::ModelEntry& row = model.m_models[start.m_row];
+    [[maybe_unused]] const std::string starts =
+        anira::capi::engine_label(row.m_engine, row.m_engine_id) + " on " +
+        anira::capi::provider_label(start.m_provider, start.m_provider_id);
+    ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                      "anira_handler_prepare: no plan runs %s here; the handler starts on plan "
+                      "%u (%s)",
+                      asked.c_str(),
+                      static_cast<unsigned int>(initial),
+                      starts.c_str());
+}
+
 // The 2.x backend of a surviving row. validate kept the rows this build has an adapter for; a
 // row without one here is a defect of that check, not of the configuration.
 anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_t row_index) {
@@ -1070,9 +1102,7 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
 // provider_id, and a registered engine's row reports the flags of its descriptor; the initial
 // plan is the first of the default engine's (of any engine without one) on the default
 // provider, else the first of the default engine's, else 0, selected on the fresh session
-// before it is prepared: no chunk exists that could be stamped with it. A default provider no
-// such plan runs on is a warning, never a refusal: whether a provider has a plan depends on
-// the candidates and on what the context reports usable, not on the configuration alone.
+// before it is prepared: no chunk exists that could be stamped with it.
 void build_plans(anira_handler& handler,
                  const anira_model_config& model,
                  const anira::capi::Derived& derived,
@@ -1120,21 +1150,9 @@ void build_plans(anira_handler& handler,
         }
     }
     const uint32_t initial = on_provider.value_or(of_engine.value_or(0));
-    if (has_default_provider(model) && !on_provider.has_value()) {
-        [[maybe_unused]] const std::string which =
-            has_default_engine(model)
-                ? "no plan of default_engine '" +
-                      anira::capi::engine_label(model.m_default_engine, model.m_default_engine_id) +
-                      "'"
-                : std::string("no plan");
-        [[maybe_unused]] const std::string provider =
-            anira::capi::provider_label(model.m_default_provider, model.m_default_provider_id);
-        ANIRA_LOG_WARNING(anira::log_group::k_capi,
-                          "anira_handler_prepare: %s runs on default_provider '%s' here; the "
-                          "handler starts on plan %u",
-                          which.c_str(),
-                          provider.c_str(),
-                          static_cast<unsigned int>(initial));
+    if ((has_default_engine(model) && !of_engine.has_value()) ||
+        (has_default_provider(model) && !on_provider.has_value())) {
+        warn_default_fallback(model, derived.m_plans[initial], initial);
     }
     if (!handler.m_manager->set_plan(initial)) {
         throw StatusError(

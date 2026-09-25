@@ -1417,11 +1417,18 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_add_output(anira_model_conf
                                                                 const anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
- * @brief The engine the handler starts on; whether it names an entry is checked at prepare. An
- * engine with several plans (one entry under several providers, or several entries)
- * starts on the first of its plans on the default provider
- * (anira_model_config_set_default_provider), and on the first of its plans in plan-table
- * order when no default provider is set or none of its plans runs on it.
+ * @brief The engine the handler starts on: its first plan in plan-table order, on the default
+ * provider when one is set (anira_model_config_set_default_provider), so an engine with
+ * several plans (one entry under several providers, or several entries) starts on the
+ * pinned provider. One rule for both defaults (this one and
+ * anira_model_config_set_default_provider): what the configuration alone decides is
+ * checked at anira_handler_create and at prepare, ANIRA_ERROR_CONFIG for a default
+ * engine that names no model entry ("default_engine 'x' names no model entry") and for a
+ * default provider no entry of the default engine could run (every one pinned to another
+ * provider); whether a plan runs the default here is the candidates' and the context's,
+ * and when none does the handler starts on the default engine's first plan, else on plan
+ * 0, with one Warning at anira_handler_prepare naming what was asked and the plan it
+ * starts on; never a refusal. anira_handler_get_plan says which plan runs.
  * @param config The config.
  * @param engine A built-in engine, or ANIRA_ENGINE_NONE = plan 0, the first plan of the table
  *        (default).
@@ -1451,10 +1458,13 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_default_engine_id(anira
  * the first plan in plan-table order whose engine is the default engine (any engine
  * without one) and whose provider is this one, so a default engine with several plans
  * (one entry under several providers, or several entries) starts on the pinned provider
- * rather than on the first of its plans. A plan table without such a plan (the provider
- * is not a candidate, or not usable here) starts as without a default provider, and
- * anira_handler_prepare logs a warning naming the provider; it is never refused.
- * anira_handler_get_plan says which plan runs.
+ * rather than on the first of its plans. The rule of
+ * anira_model_config_set_default_engine holds for both defaults: ANIRA_ERROR_CONFIG at
+ * anira_handler_create when every entry of the default engine (every entry without one)
+ * is pinned to another provider ("default_provider 'x' runs no model entry ..."; a
+ * neutral entry may run on it); when no plan runs on it here (not a candidate, not
+ * usable here) the handler starts as without it, with the one Warning at
+ * anira_handler_prepare.
  * @param config The config.
  * @param provider A provider of the enum, or ANIRA_PROVIDER_DEFAULT beside a provider_id;
  *        DEFAULT with a NULL provider_id sets none (default).

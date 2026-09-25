@@ -599,6 +599,38 @@ void check_rows(const anira_model_config& model,
                          "' names no model entry");
         }
     }
+    // The default provider, what the configuration alone decides: an entry of the default
+    // engine (any entry without one) that may run on it, a neutral entry or one pinned to it.
+    // Whether a plan runs on it here is the candidates' and the context's, and falls back at
+    // prepare as the default engine's does.
+    if (model.m_default_provider != ANIRA_PROVIDER_DEFAULT ||
+        !model.m_default_provider_id.empty()) {
+        const bool any_engine =
+            model.m_default_engine == ANIRA_ENGINE_NONE && model.m_default_engine_id.empty();
+        bool found = false;
+        for (const ModelEntry& row : model.m_models) {
+            const bool of_engine =
+                any_engine || (model.m_default_engine_id.empty()
+                                   ? (row.m_engine == model.m_default_engine && !row.is_custom())
+                                   : row.m_engine_id == model.m_default_engine_id);
+            const bool neutral =
+                row.m_provider == ANIRA_PROVIDER_DEFAULT && row.m_provider_id.empty();
+            const bool pinned_to_it = row.m_provider == model.m_default_provider &&
+                                      row.m_provider_id == model.m_default_provider_id;
+            found = found || (of_engine && (neutral || pinned_to_it));
+        }
+        if (!found) {
+            config_error(
+                "default_provider '" +
+                provider_label(model.m_default_provider, model.m_default_provider_id) +
+                "' runs no model entry" +
+                (any_engine
+                     ? std::string()
+                     : " of default_engine '" +
+                           engine_label(model.m_default_engine, model.m_default_engine_id) + "'") +
+                ": each is pinned to another provider");
+        }
+    }
 }
 
 // A spec with its dynamic Time extent resolved, for the layout helpers.

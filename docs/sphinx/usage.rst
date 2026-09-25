@@ -257,10 +257,16 @@ is part of the build is decided at prepare, not here, so one config serves every
   ANIRA_PROVIDER_DEFAULT, "com.example.npu")``; ``anira_model_config_set_default_provider``)
   the provider beside it: the handler starts on the first plan in plan-table order of the
   default engine (of any engine without one) on the default provider, and on the first plan of
-  the default engine when no default provider is set. A default provider no plan of the table
-  runs on (not a candidate, not usable here) is a warning at prepare, never a refusal: the
-  handler starts as without it. In a model file ``"default_engine"`` and ``"default_provider"``
-  spell the pair as an entry does.
+  the default engine when no default provider is set. One rule holds for both defaults. What
+  the configuration alone decides is ``ANIRA_ERROR_CONFIG`` at ``anira_handler_create``: a
+  default engine that names no model entry, a default provider no entry of the default engine
+  could run (every one pinned to another provider; a neutral entry may run on any). Whether a
+  plan runs the default *here* is the candidates' and the context's: when none does (the engine
+  is not in this build or not a candidate, the provider not a candidate or not usable here),
+  the handler starts on the default engine's first plan, else on plan 0, and
+  ``anira_handler_prepare`` logs one Warning naming what was asked and the plan it starts on;
+  never a refusal. In a model file ``"default_engine"`` and ``"default_provider"`` spell the
+  pair as an entry does.
 - **State.** ``state(ANIRA_MODEL_STATEFUL)`` declares a model that carries state across
   inferences (RNNs, LSTMs, RAVE): its inferences then run strictly in submission order and
   never concurrently. A model with a declared State pair (section 1.1) runs this way whatever

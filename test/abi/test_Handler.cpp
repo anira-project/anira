@@ -39,6 +39,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -569,16 +570,27 @@ TEST(AbiHandler, SetPlanSwitchesLikeSetInferenceBackend) {
         EXPECT_EQ(anira_handler_get_plan(handler.m_handler), expected);
     }
 
-    // A default engine the build lacks names an entry but no plan: plan 0.
+    // A default engine the build lacks names an entry but no plan: plan 0, and one Warning
+    // naming what was asked and the plan the handler starts on (the default provider's rule).
     const std::optional<anira_engine> missing = missing_engine();
     if (missing.has_value()) {
+        anira_drain_log();
+        RecordCollector collector;
+        const Context warning_context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
         anira::ModelConfig model = gain_with_custom();
         model.default_engine(*missing);
         const std::vector<anira_backend_id> candidates = custom_candidates();
-        Handler handler(context, model, candidates);
+        Handler handler(warning_context, model, candidates);
         ASSERT_EQ(handler.prepare(file_contract(k_gain_contract_json, k_block)), ANIRA_OK)
             << handler.m_err.message;
         EXPECT_EQ(anira_handler_get_plan(handler.m_handler), 0U);
+        anira_drain_log();
+#ifdef ENABLE_LOGGING
+        const std::string asked = std::string("no plan runs default_engine '") +
+                                  anira::capi::engine_word(*missing) +
+                                  "' here; the handler starts on plan 0 (";
+        EXPECT_TRUE(collector.has(asked.c_str(), "native")) << asked;
+#endif
     }
 }
 

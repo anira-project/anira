@@ -1570,8 +1570,10 @@ public:
         return *this;
     }
     /// The provider the handler starts on beside the default engine: the first plan of the
-    /// default engine (of any engine without one) on this provider; a plan table without one
-    /// starts as without a default provider, with a warning. A provider of the enum, or a
+    /// default engine (of any engine without one) on this provider. The default engine's rule
+    /// holds: ANIRA_ERROR_CONFIG at create when no entry could run on it (each pinned to another
+    /// provider); a plan table without such a plan starts as without it, with one Warning at
+    /// prepare (anira_model_config_set_default_provider). A provider of the enum, or a
     /// custom name in the engine's own vocabulary with ANIRA_PROVIDER_DEFAULT beside it;
     /// DEFAULT with an empty name sets none.
     ModelConfig& default_provider(anira_provider provider, std::string_view provider_id = {}) {
