@@ -15,6 +15,10 @@
 #   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
 #                         the v2 C++ umbrella and anira.hpp in one TU, both orders
+#   anira_header_compat   anira/compat/v2.hpp alone as C++20 under the strict flags, the
+#                         shim's API exercised at compile time (nothing runs)
+#   anira_header_compat_with_v2
+#                         the v2 C++ umbrella, anira.hpp and the shim in one TU, both orders
 #   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
 #                         calling every [callback-safe] tensor entry and the nonblocking Hard
 #                         entries over host tensors, under -Werror=function-effects on clang
@@ -175,6 +179,32 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
     target_compile_options(anira_header_cxx20 PRIVATE -Werror=function-effects)
 endif()
 
+# ---- the compat gate: anira/compat/v2.hpp alone as C++20 --------------------------------------
+# The 2.x source-compatible face the way a 2.x consumer compiles it: anira's include directories,
+# no anira define, the strict flags and C++20, -Wshadow / -Wshadow-field as for anira.hpp above.
+# header_compat.cpp exercises the shim at compile time; nothing runs. -Werror=function-effects
+# under the same compilers as the cxx20 gate: a shim function that carries ANIRA_NONBLOCKING and
+# allocates, locks or calls an unattributed function is a compiler error there (a function
+# without the attribute is not analysed, so the flag is never wrong).
+if(_abi_on_device)
+    add_library(anira_header_compat OBJECT header_compat.cpp)
+else()
+    add_library(anira_header_compat OBJECT EXCLUDE_FROM_ALL header_compat.cpp)
+    anira_abi_build_test(anira_header_compat)
+endif()
+anira_abi_consumer_target(anira_header_compat CXX 20)
+if(NOT _abi_strict_flags MATCHES "/W4")
+    target_compile_options(anira_header_compat PRIVATE -Wshadow)
+    if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        target_compile_options(anira_header_compat PRIVATE -Wshadow-field)
+    endif()
+endif()
+if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_CXX_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_CXX_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(anira_header_compat PRIVATE -Werror=function-effects)
+endif()
+
 # ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
 # test_rt_contract.c holds ANIRA_NONBLOCKING functions calling every [callback-safe] entry of
 # the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the header gates (C11, the strict flags, no anira
@@ -199,7 +229,7 @@ endif()
 # ---- the umbrellas in one TU -------------------------------------------------------------
 # header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
 # drivers select; header_cxx20_with_v2.inc does the same for <anira/anira.h> and
-# <anira/anira.hpp>. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
+# <anira/anira.hpp>, header_compat_with_v2.inc for <anira/anira.h> and the compat shim. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
 # GCC's "redefined") or a name both declare in namespace anira is what these gates are for.
 if(NOT _abi_on_device)
     add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
@@ -210,6 +240,10 @@ if(NOT _abi_on_device)
         header_cxx20_with_v2.cpp header_cxx20_with_v2_reverse.cpp)
     anira_abi_umbrella_target(anira_header_cxx20_with_v2)
     anira_abi_build_test(anira_header_cxx20_with_v2)
+    add_library(anira_header_compat_with_v2 OBJECT EXCLUDE_FROM_ALL
+        header_compat_with_v2.cpp header_compat_with_v2_reverse.cpp)
+    anira_abi_umbrella_target(anira_header_compat_with_v2)
+    anira_abi_build_test(anira_header_compat_with_v2)
 endif()
 
 # ---- gate 3: the Tier-1 layout table -----------------------------------------------------

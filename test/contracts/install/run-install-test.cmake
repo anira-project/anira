@@ -2,7 +2,8 @@
 #
 # Installs the just-built anira into a throwaway prefix, then configures, builds
 # and runs the separate find_package(anira) consumers of test/install against it:
-# `consumer` (anira alone) and, when ONNX Runtime is part of the package,
+# `consumer` (anira alone), `consumer_compat` (a 2.x-shaped consumer through the
+# header-only anira/compat/v2.hpp) and, when ONNX Runtime is part of the package,
 # `consumer_engine` (calls the engine itself through anira::onnxruntime) plus its
 # plugin-shaped twin, whose export table must carry no engine symbol. The
 # consumer project itself asserts that the engine header is unreachable without
@@ -83,6 +84,13 @@ if(_exe STREQUAL "")
 endif()
 message(STATUS "[install-test] running ${_exe}")
 _step("run" "${_exe}")
+
+_find_built(consumer_compat _compat_exe)
+if(_compat_exe STREQUAL "")
+    message(FATAL_ERROR "install-test: consumer_compat executable not found under ${_consumer_build}")
+endif()
+message(STATUS "[install-test] running ${_compat_exe}")
+_step("run consumer_compat" "${_compat_exe}")
 
 # The engine-calling consumer exists only when the package carries ONNX Runtime.
 _find_built(consumer_engine _engine_exe)

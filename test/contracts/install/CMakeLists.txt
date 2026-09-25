@@ -14,6 +14,11 @@ find_package(anira REQUIRED)
 add_executable(consumer main.cpp)
 target_link_libraries(consumer PRIVATE anira::anira)
 
+# 1b. A 2.x-shaped consumer through the header-only compat shim (anira/compat/v2.hpp over
+#     anira.hpp and the C entries), anira::anira alone.
+add_executable(consumer_compat main_compat.cpp)
+target_link_libraries(consumer_compat PRIVATE anira::anira)
+
 if(ANIRA_WITH_ONNXRUNTIME)
     # 2. A consumer that calls an engine itself. It includes onnxruntime_cxx_api.h and
     #    links anira::onnxruntime next to anira::anira — the very ONNX Runtime anira
@@ -63,7 +68,7 @@ endif()
 # imported SHARED targets in the link closure — anira.dll, tanh_core.dll and, for the
 # engine consumers, onnxruntime.dll through anira::onnxruntime.
 if(WIN32)
-    foreach(_consumer consumer consumer_engine consumer_engine_module)
+    foreach(_consumer consumer consumer_compat consumer_engine consumer_engine_module)
         if(TARGET ${_consumer})
             add_custom_command(TARGET ${_consumer} POST_BUILD
                 COMMAND ${CMAKE_COMMAND}

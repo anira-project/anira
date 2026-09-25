@@ -561,7 +561,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_create(anira_context* context,
  * counting as a user of the core, drops the handler's reference on its context and its
  * share of the stage and engine carriers (the release function of a stage or an engine
  * fires here when this handler held the last one). The driver thread must have stopped
- * calling the Hard entries.
+ * calling the Hard entries. A plugin must destroy its handlers, then its contexts,
+ * before its host unloads it (its instance teardown or module-exit entry point), and
+ * never from its own static destructors or DllMain, which run inside the unload under
+ * the loader lock.
  * @param handler The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]
@@ -573,34 +576,36 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * @brief The blocking quiescence point, and the one call no other handler entry may overlap:
  * validates the variant against the contract (geometry, the explicit budget, the warm-up
  * mode, the miss policy against the anchor, the ring dtypes by canonical name, the
- * contract's extensions), checks every plan's provider against what its engine serves
- * now (a built-in engine's runtime, a custom engine's query; ANIRA_ERROR_NOT_SUPPORTED
- * as at anira_handler_create, so a context probed again since the create is seen), runs
- * the stage's init when it has not run yet (once per registration, before any model
- * loads), loads the model of every candidate with an entry, warms up as the contract
- * says, sizes the rings for the contract's block range and the latency, builds the plan
- * report, selects the plan of the variant's default engine when that engine has a plan
- * (else plan 0), logs the report (Info records of the group anira.capi: the counts and
- * the selected plan, then one record per plan, per slot and per consumed extension)
- * re-arms the real-time latches, logging the count of failures suppressed since the last
- * prepare or reset, and last calls the stage's prepare function, when the pipeline has a
- * stage with one, with an anira_prepare_info (the handler, the report, the entry count,
- * a template of the model end of every slot and the canonical names) and keeps the
- * prepared pointer it hands back for this handler (a status other than ANIRA_OK fails
- * this call with it, and unprepare is not called for a refused prepare). A second
- * prepare replaces the previous session whole: the stage's unprepare of the previous
- * prepare runs once the old session is released, before the new prepare. A failed
- * prepare leaves the handler unprepared, the previous prepare's unprepare called all the
- * same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
- * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
- * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
- * output's channel count or ring dtype differs from the anchored input's,
- * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
- * that names no Streamed tensor, or one that differs from its spec's dtype while the
- * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
- * field), and a stage whose filled pre_process, post_process or reset carries no
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
- * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * contract's extensions), checks every plan's provider against what its engine serves (a
+ * built-in engine's runtime as the context reports it now, so a context probed again
+ * since the create is seen; a custom engine's query as it answered at
+ * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at
+ * anira_handler_create), runs the stage's init when it has not run yet (once per
+ * registration, before any model loads), loads the model of every candidate with an
+ * entry, warms up as the contract says, sizes the rings for the contract's block range
+ * and the latency, builds the plan report, selects the plan of the variant's default
+ * engine when that engine has a plan (else plan 0), logs the report (Info records of the
+ * group anira.capi: the counts and the selected plan, then one record per plan, per slot
+ * and per consumed extension) re-arms the real-time latches, logging the count of
+ * failures suppressed since the last prepare or reset, and last calls the stage's
+ * prepare function, when the pipeline has a stage with one, with an anira_prepare_info
+ * (the handler, the report, the entry count, a template of the model end of every slot
+ * and the canonical names) and keeps the prepared pointer it hands back for this handler
+ * (a status other than ANIRA_OK fails this call with it, and unprepare is not called for
+ * a refused prepare). A second prepare replaces the previous session whole: the stage's
+ * unprepare of the previous prepare runs once the old session is released, before the
+ * new prepare. A failed prepare leaves the handler unprepared, the previous prepare's
+ * unprepare called all the same. Refused in this pre-release: an Async contract,
+ * ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an
+ * explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an
+ * output or when a streamed output's channel count or ring dtype differs from the
+ * anchored input's, ANIRA_MISS_CALLBACK without a function
+ * (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one
+ * that differs from its spec's dtype while the stage does not fill the phase that moves
+ * that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process,
+ * post_process or reset carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags,
+ * since under a Hard contract those three phases run on the driving thread
+ * (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.

@@ -23,7 +23,8 @@
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
- * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file);
+ * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file;
+ * anira::v2::JsonConfigLoader of anira/compat/v2.hpp is the 2.x loader over them);
  * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>: a handle without
  * geometry, patched with hard_geometry, which hard() reads back into a Hard;
  * ContextConfig::log_sink takes the raw (anira_log_fn, void*) pair; ModelConfig::anchor takes
@@ -1950,6 +1951,12 @@ private:
  * @brief An anira_context with its lifetime: a refcounted handle over this copy's core,
  * created from a ContextConfig (section 4). Two contexts in one copy are two views of one
  * core with two log sinks.
+ *
+ * A plugin destroys its handlers, then its contexts, before its host unloads it (its instance
+ * teardown or module-exit entry point), and never from its own static destructors, which run
+ * inside the unload under the loader lock. On ELF and Mach-O a library unloaded with an
+ * inference still running aborts with a message on stderr after a bounded wait (see
+ * anira_shutdown and the usage guide's section on teardown).
  */
 class Context {
 public:
@@ -2020,7 +2027,9 @@ inline uint32_t num_inference_threads() noexcept {
     return anira_num_inference_threads();
 }
 
-/// anira_shutdown: effective only when no Context and no handler exist in this copy.
+/// anira_shutdown: effective only when no Context and no handler exist in this copy, so a
+/// plugin's module-exit entry point destroys its handlers and contexts first (never its static
+/// destructors: they run inside the unload).
 inline anira_status shutdown() noexcept {
     return anira_shutdown();
 }
@@ -2994,7 +3003,8 @@ public:
     /// the engine carry, fixed for the object's life as anira_custom_engine_create fixes a C
     /// engine's. It is checked when the object's C engine is created, at its first
     /// registration: an id without a '.' or with the prefix "anira." is
-    /// ANIRA_ERROR_INVALID_ARGUMENT there. The engines of one Pipeline have distinct ids; two
+    /// ANIRA_ERROR_INVALID_ARGUMENT there (anira.v2.custom excepted: the id of a 2.x custom
+    /// backend, anira/compat/v2.hpp). The engines of one Pipeline have distinct ids; two
     /// objects may carry one id on two Pipelines (two instances of a plugin, each with its own
     /// engine) and never share a loaded model.
     explicit Engine(std::string id) : m_id(std::move(id)) {}
@@ -3038,8 +3048,9 @@ public:
     /// candidate's provider of the engine is checked against the answer (a declared provider
     /// the answer clears is ANIRA_ERROR_NOT_SUPPORTED, "declares provider 'x' but its query
     /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
-    /// engine's rows beside the context's. The base answers every bit: every declared
-    /// provider is usable. It may throw, as init may: the status fails the calling entry.
+    /// engine's rows beside the context's. A handler's prepare uses the answer its create got
+    /// and never calls query, whatever thread it runs on. The base answers every bit: every
+    /// declared provider is usable. It may throw, as init may: the status fails the calling entry.
     virtual std::uint64_t query(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches
@@ -3511,11 +3522,12 @@ public:
     /// an error, and an entry whose id no engine of the pipeline has is
     /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create.
     /// @throws Error ANIRA_ERROR_INVALID_ARGUMENT for a null engine (before the C call), an
-    /// id without a '.' or with the prefix "anira.", or a flags() bit anira/abi/enums.h does
-    /// not define (the C engine's create refuses them, and nothing is created);
-    /// ANIRA_ERROR_INVALID_STATE when this pipeline already has an engine with the id, this
-    /// object or another. A refused call keeps no reference the call created: a C engine the
-    /// call created is dropped again, and Engine::release answers it.
+    /// id without a '.' or with the prefix "anira." (anira.v2.custom excepted: the id of a 2.x
+    /// custom backend, anira/compat/v2.hpp), or a flags() bit anira/abi/enums.h does not define
+    /// (the C engine's create refuses them, and nothing is created); ANIRA_ERROR_INVALID_STATE when
+    /// this pipeline already has an engine with the id, this object or another. A refused call
+    /// keeps no reference the call created: a C engine the call created is dropped again, and
+    /// Engine::release answers it.
     Pipeline& register_engine(const std::shared_ptr<Engine>& implementation) {
         if (implementation == nullptr) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT,

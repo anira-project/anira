@@ -21,6 +21,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "validate.h"
@@ -80,6 +81,23 @@ private:
     std::vector<const char*> m_provider_pointers;
     mutable std::mutex m_init_mutex;
     mutable bool m_initialised = false;
+};
+
+/// The answers of a handler's custom-engine queries, one per engine id: the bitmask over the
+/// engine's providers list its query returned. anira_handler_create asks the queries (the
+/// main thread, the query slot's thread contract) and keeps what they answered with the
+/// handler; anira_handler_prepare, which any control thread may call, checks the plans
+/// against these answers and never calls a query (providers.h, QueryUse).
+struct QueryAnswers {
+    std::vector<std::pair<std::string, uint64_t>> m_answers;
+
+    /// The kept answer of the engine with this id; nullptr when it was never asked.
+    const uint64_t* find(std::string_view id) const noexcept {
+        for (const auto& [engine_id, available] : m_answers) {
+            if (engine_id == id) { return &available; }
+        }
+        return nullptr;
+    }
 };
 
 /// What a pipeline's engines (anira_pipeline::m_engines, in the order they were added) mean

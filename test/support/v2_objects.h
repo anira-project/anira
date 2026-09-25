@@ -21,7 +21,7 @@
 namespace anira_test {
 
 /// The 2.x InferenceConfig of a bundled model and contract file over this build's engines, one
-/// candidate each on the default provider, plus the custom row anira.v2.custom and the candidate
+/// candidate each on ANIRA_PROVIDER_CPU, plus the custom row anira.v2.custom and the candidate
 /// that keeps it (ANIRA_ENGINE_CUSTOM with its id) when with_custom: the row a 2.x session runs on
 /// the 2.x pass-through (the roundtrip it builds for a CUSTOM row without a backend). Path entries
 /// are copied into the InferenceConfig, so the handles may die afterwards.
