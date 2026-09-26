@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -2172,19 +2173,115 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     EXPECT_EQ(gain.m_handler.get_latency(0), 600U);
 }
 
-// Case 17: a block size that is not a whole number of samples, or none, and a rate of 0 are
-// refused (2.x scaled a fractional block to the other streams).
-TEST(AbiCompat, AFractionalHostConfigIsRefused) {
+// Case 17: a block size of none and a rate of 0 are refused; a fractional block size is not
+// (2.x took it as a float, the shim passes it through to the double Hard geometry).
+TEST(AbiCompat, ANonPositiveHostConfigIsRefused) {
     const Arguments args = gain_custom_arguments();
     v2::InferenceConfig config = make_shim(args);
     v2::PrePostProcessor pp(config);
     v2::InferenceHandler handler(pp, config, shim_context_config());
-    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.5F, 48000.F)); }),
-              ANIRA_ERROR_CONFIG);
     EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(0.F, 48000.F)); }),
               ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(-512.F, 48000.F)); }),
+              ANIRA_ERROR_CONFIG);
     EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 0.F)); }), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.5F, 48000.F)); }), ANIRA_OK);
     EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F)); }), ANIRA_OK);
+}
+
+/// The decoder shape of a control-rate model: one latent sample in, k_upsample audio samples
+/// out, each the latent value (the RAVE decoder of the JUCE example, in miniature).
+constexpr size_t k_upsample = 8;
+struct UpsampleKernel {
+    void operator()(const Io& io) const noexcept {
+        for (size_t i = 0; i < io.m_out_size[0]; ++i) {
+            io.m_out[0][i] = io.m_in[0][i / k_upsample];
+        }
+    }
+};
+
+Arguments upsample_arguments() {
+    Arguments args;
+    args.m_rows = {{v2::CUSTOM, "placeholder"}};
+    args.m_shapes = {{{{1, 1, 1}}, {{1, 1, static_cast<int64_t>(k_upsample)}}}};
+    args.m_in_channels = {1};
+    args.m_out_channels = {1};
+    args.m_in_sizes = {1};
+    args.m_out_sizes = {k_upsample};
+    return args;
+}
+
+/// The samples of a stream whose block is `block` that the host moves in call k (1-based): the
+/// whole ones accumulated since call k - 1, floor(k b) - floor((k - 1) b) -- the accounting of
+/// LatencyCalculator. `block` is a double: the host's own count, not the float the 2.x
+/// HostConfig rounds it to.
+size_t whole_samples_of_call(double block, size_t k) {
+    const auto upto = [block](size_t calls) {
+        return static_cast<size_t>(std::floor(static_cast<double>(calls) * block + 1e-9));
+    };
+    return upto(k) - upto(k - 1);
+}
+
+// Case 31: a fractional host block on a control-rate reference (the latent input of a
+// decoder, prepared with samplesPerBlock / 2048.f in the JUCE example): the 2.x class and the
+// shim, prepared with the same HostConfig, agree on the latency, the available samples and
+// every output sample over 96 calls (24 and 32 latent samples), the host moving a latent
+// sample only once a whole one has accumulated (0 or 1 per call) and popping its audio block
+// of 2 (0.25 x 8) or 8/3 (1/3 x 8: 2 or 3) samples per call.
+TEST(AbiCompat, AFractionalBlockMatchesTheOracle) {
+    for (const double block : {0.25, 1.0 / 3.0}) {
+        SCOPED_TRACE(block);
+        KernelPair<UpsampleKernel> pair(upsample_arguments(), UpsampleKernel{});
+        // 100 latent samples per second: 5 ms of inference is half a hop, the pool keeps up.
+        pair.m_old_handler.prepare(anira::HostConfig(static_cast<float>(block), 100.F));
+        pair.m_handler.prepare(v2::HostConfig(static_cast<float>(block), 100.F));
+        const std::vector<unsigned> latency = pair.m_handler.get_latency_vector();
+        ASSERT_EQ(latency, pair.m_old_handler.get_latency_vector());
+        ASSERT_EQ(latency.size(), 1U);
+        EXPECT_GT(latency[0], 0U);
+        ASSERT_EQ(pair.m_handler.get_available_samples(0),
+                  pair.m_old_handler.get_available_samples(0));
+
+        size_t pushed = 0;
+        size_t popped = 0;
+        size_t latent_out = 0;
+        for (size_t k = 1; k <= 96; ++k) {
+            const size_t num_in = whole_samples_of_call(block, k);
+            const size_t num_out = whole_samples_of_call(block * k_upsample, k);
+            ASSERT_LE(num_in, 1U);
+            const float latent = static_cast<float>(pushed + 1);
+            const std::array<const float*, 1> in_ch{&latent};
+            std::vector<float> out_new(num_out + 1, -1.F);
+            std::vector<float> out_old(num_out + 1, -1.F);
+            const std::array<float*, 1> new_ch{out_new.data()};
+            const std::array<float*, 1> old_ch{out_old.data()};
+            pushed += num_in;
+            popped += num_out;
+            // Settled: every inference the call submitted has landed in the output ring.
+            const size_t settled = latency[0] + k_upsample * pushed - popped;
+            EXPECT_EQ(pair.m_handler.process(in_ch.data(), num_in, new_ch.data(), num_out), num_out)
+                << "call " << k;
+            EXPECT_EQ(pair.m_old_handler.process(in_ch.data(), num_in, old_ch.data(), num_out),
+                      num_out)
+                << "call " << k;
+            wait_ring(pair.m_handler, settled);
+            wait_ring(pair.m_old_handler, settled);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
+            EXPECT_EQ(out_new, out_old) << "call " << k;
+            EXPECT_EQ(out_new[num_out], -1.F) << "nothing past the block";
+            latent_out +=
+                static_cast<size_t>(std::count_if(out_new.begin(),
+                                                  out_new.begin() + static_cast<ptrdiff_t>(num_out),
+                                                  [](float value) { return value > 0.F; }));
+            EXPECT_EQ(pair.m_handler.get_available_samples(0),
+                      pair.m_old_handler.get_available_samples(0))
+                << "call " << k;
+        }
+        EXPECT_EQ(pushed, block == 0.25 ? 24U : 32U);
+        // Every latent value was inferred, and the stream carried them out behind the latency.
+        EXPECT_EQ(pair.m_engine.m_calls.load(), static_cast<int>(pushed));
+        EXPECT_EQ(latent_out, popped - latency[0]);
+    }
 }
 
 // Case 18: a reference tensor that is out of range or not streamable is refused.
