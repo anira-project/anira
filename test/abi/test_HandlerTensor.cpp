@@ -1940,7 +1940,7 @@ TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) 
 // settled ring cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and
 // the miss policy's zeros in the block.
 TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
-    FractionalRig rig;
+    const FractionalRig rig;
     ASSERT_NE(rig.get(), nullptr);
     size_t moved = 0;
     size_t missed = 0;

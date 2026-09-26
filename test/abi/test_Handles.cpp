@@ -951,14 +951,17 @@ TEST(AbiContract, TheGeometryRules) {
         double m_rate;
         const char* m_message;
     };
-    for (const Refusal& r : {Refusal{nan, 1.0, 1.0, "block_min nan must be finite and > 0"},
-                             Refusal{1.0, inf, 1.0, "block_max inf must be finite and > 0"},
-                             Refusal{-0.5, 1.0, 1.0, "block_min -0.5 must be finite and > 0"},
-                             Refusal{0.0, 512.0, 1.0, "block_min 0 must be finite and > 0"},
-                             Refusal{0.5, 0.0, 1.0, "block_max 0 must be finite and > 0"},
-                             Refusal{0.5, 0.25, 1.0, "block_min 0.5 exceeds block_max 0.25"},
-                             Refusal{1.0, 1.0, -1.0, "rate -1 must not be negative"},
-                             Refusal{0.0, 0.0, nan, "rate nan must not be negative"}}) {
+    const auto refusal = [](double min, double max, double rate, const char* message) {
+        return Refusal{.m_min = min, .m_max = max, .m_rate = rate, .m_message = message};
+    };
+    for (const Refusal& r : {refusal(nan, 1.0, 1.0, "block_min nan must be finite and > 0"),
+                             refusal(1.0, inf, 1.0, "block_max inf must be finite and > 0"),
+                             refusal(-0.5, 1.0, 1.0, "block_min -0.5 must be finite and > 0"),
+                             refusal(0.0, 512.0, 1.0, "block_min 0 must be finite and > 0"),
+                             refusal(0.5, 0.0, 1.0, "block_max 0 must be finite and > 0"),
+                             refusal(0.5, 0.25, 1.0, "block_min 0.5 exceeds block_max 0.25"),
+                             refusal(1.0, 1.0, -1.0, "rate -1 must not be negative"),
+                             refusal(0.0, 0.0, nan, "rate nan must not be negative")}) {
         SCOPED_TRACE(r.m_message);
         anira_contract* refused = nullptr;
         err = ANIRA_ERROR_INIT;

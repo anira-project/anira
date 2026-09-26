@@ -2189,6 +2189,8 @@ TEST(AbiCompat, ANonPositiveHostConfigIsRefused) {
     EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F)); }), ANIRA_OK);
 }
 
+namespace {
+
 /// The decoder shape of a control-rate model: one latent sample in, k_upsample audio samples
 /// out, each the latent value (the RAVE decoder of the JUCE example, in miniature).
 constexpr size_t k_upsample = 8;
@@ -2222,6 +2224,8 @@ size_t whole_samples_of_call(double block, size_t k) {
     return upto(k) - upto(k - 1);
 }
 
+}  // namespace
+
 // Case 31: a fractional host block on a control-rate reference (the latent input of a
 // decoder, prepared with samplesPerBlock / 2048.f in the JUCE example): the 2.x class and the
 // shim, prepared with the same HostConfig, agree on the latency, the available samples and
@@ -2249,7 +2253,7 @@ TEST(AbiCompat, AFractionalBlockMatchesTheOracle) {
             const size_t num_in = whole_samples_of_call(block, k);
             const size_t num_out = whole_samples_of_call(block * k_upsample, k);
             ASSERT_LE(num_in, 1U);
-            const float latent = static_cast<float>(pushed + 1);
+            const auto latent = static_cast<float>(pushed + 1);
             const std::array<const float*, 1> in_ch{&latent};
             std::vector<float> out_new(num_out + 1, -1.F);
             std::vector<float> out_old(num_out + 1, -1.F);

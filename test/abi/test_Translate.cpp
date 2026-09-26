@@ -1131,11 +1131,16 @@ TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
         int64_t m_hop;
         anira::LatencyCalculator::Rational m_hops;
     };
-    for (const Case& c : {Case{1.0 / 3.0, 1, {1, 3}},
-                          Case{0.25, 1, {1, 4}},
-                          Case{1.0 / 3.0, 4, {1, 12}},
-                          Case{0.25, 4, {1, 16}},
-                          Case{2.0 / 3.0, 4, {1, 6}}}) {
+    const auto fraction = [](double block, int64_t hop, int64_t denominator) {
+        return Case{.m_block = block,
+                    .m_hop = hop,
+                    .m_hops = {.m_numerator = 1, .m_denominator = denominator}};
+    };
+    for (const Case& c : {fraction(1.0 / 3.0, 1, 3),
+                          fraction(0.25, 1, 4),
+                          fraction(1.0 / 3.0, 4, 12),
+                          fraction(0.25, 4, 16),
+                          fraction(2.0 / 3.0, 4, 6)}) {
         SCOPED_TRACE(c.m_block);
         SCOPED_TRACE(c.m_hop);
         ModelConfig model;
