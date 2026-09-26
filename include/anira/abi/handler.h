@@ -38,12 +38,19 @@
  * success), or a failure. The delivered counts come back through a nullable size_t* delivered,
  * a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each
  * Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read: the request is
- * shape[1] of the output tensor. A Buffer spec under a Hard contract is
- * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_prepare: a Buffer tensor is a per-job payload and
- * arrives with the Async contract; a persistent side input under a Hard contract is the Static
- * role. A Static tensor has one description everywhere: the whole tensor in the spec's shape
- * and dtype, any dtype, a Channel axis of any extent included. The handler holds its value in a
- * store of its own, zeroed at anira_handler_create and untouched by prepare and by reset:
+ * shape[1] of the output tensor. The count of one call on a Streamed slot is what the Hard
+ * contract's geometry sized the latency and the rings for: block_max samples of the anchor at
+ * most, scaled by its hop to the hop of every other stream. A block b may be fractional on a
+ * stream (a fractional geometry, or a time ratio): the host then moves a sample only once a
+ * whole one has accumulated, floor(k * b) samples by its k-th call, so one call carries
+ * floor(b) or ceil(b) of them (0 or 1 under 0.25, the 1 on every fourth call). Nothing refuses
+ * a larger count; the rings are not sized for it, and a pop the stream cannot cover is a miss
+ * (ANIRA_MISSED). A Buffer spec under a Hard contract is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_prepare: a Buffer tensor is a per-job payload and arrives with the Async
+ * contract; a persistent side input under a Hard contract is the Static role. A Static tensor
+ * has one description everywhere: the whole tensor in the spec's shape and dtype, any dtype, a
+ * Channel axis of any extent included. The handler holds its value in a store of its own,
+ * zeroed at anira_handler_create and untouched by prepare and by reset:
  * anira_handler_set_static_input writes an input, which every inference submitted afterwards
  * sees whole (it is materialised into the model's input tensor ahead of the stage's
  * pre_process); anira_handler_get_static_output reads the value the latest collected inference

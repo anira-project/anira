@@ -34,6 +34,7 @@
 
 #include <anira/anira.hpp>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -1831,6 +1832,152 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
             }
         }
     }
+}
+
+// ---- a fractional geometry ---------------------------------------------------------------------
+
+/// The samples of a stream whose block is `block` that the host moves by its call k, the whole
+/// ones accumulated: floor(k b), the accounting LatencyCalculator sizes the latency and the
+/// rings for.
+size_t moved_by_call(double block, size_t k) {
+    return static_cast<size_t>(std::floor(static_cast<double>(k) * block + 1e-9));
+}
+
+/// A mono pass-through on a control-rate stream (hop 1) under the geometry 0.25, 0.25 at
+/// 100 Hz, on the pass-through engine of the pipeline (no gate: the calls settle by waiting).
+struct FractionalRig {
+    FractionalRig() : m_context(2), m_handler(m_context, model(), m_candidates) {
+        anira::ContractHandle contract =
+            anira_test::explicit_contract(1, k_control_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+        contract.hard_geometry(k_fraction, k_fraction, k_control_rate);
+        EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
+    }
+
+    static ModelConfig model() {
+        ModelConfig model;
+        model.add_model_path(anira_test::k_custom, "custom-processor");
+        for (const bool input : {true, false}) {
+            TensorSpec spec(input ? "latent_in" : "latent_out",
+                            ANIRA_DTYPE_F32,
+                            ANIRA_ROLE_STREAMED);
+            spec.axis(0, ANIRA_AXIS_BATCH, 1)
+                .axis(1, ANIRA_AXIS_CHANNEL, 1)
+                .axis(2, ANIRA_AXIS_TIME, 1)
+                .window(1, 1, 0);
+            if (input) {
+                model.input(spec);
+            } else {
+                model.output(spec);
+            }
+        }
+        return model;
+    }
+
+    /// One call of `count` samples in and `count` out (the input its stream positions + 1).
+    Outcome call(size_t count, size_t position, std::array<float, 2>& out) {
+        std::array<float, 2> in{static_cast<float>(position + 1), static_cast<float>(position + 2)};
+        out.fill(k_untouched);
+        const std::array<int64_t, 2> shape{1, static_cast<int64_t>(count)};
+        anira_tensor in_tensor{};
+        anira_tensor out_tensor{};
+        anira_tensor_init_host(&in_tensor, in.data(), ANIRA_DTYPE_F32, 2, shape.data());
+        anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, shape.data());
+        Outcome outcome;
+        outcome.m_status =
+            anira_handler_process(get(), &in_tensor, 0, &out_tensor, 0, &outcome.m_delivered);
+        return outcome;
+    }
+
+    anira_handler* get() const { return m_handler.m_handler; }
+
+    static constexpr double k_fraction = 0.25;
+    static constexpr double k_control_rate = 100.0;  // 1 ms of budget is a tenth of a hop
+
+private:
+    anira_test::Context m_context;
+    std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
+                                                .engine = ANIRA_ENGINE_CUSTOM,
+                                                .provider = ANIRA_PROVIDER_CPU,
+                                                .engine_id = anira_test::k_custom}};
+    anira_test::Handler m_handler;
+};
+
+// A host that moves a sample only once a whole one has accumulated -- floor(k b) by call k, so
+// 0 or 1 per call under the block 0.25, the 1 on every fourth -- is never starved: every call
+// delivers the count it asks for, and the stream comes out whole, late by the latency.
+TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) {
+    FractionalRig rig;
+    ASSERT_NE(rig.get(), nullptr);
+    const size_t latency = anira_handler_get_latency(rig.get(), 0);
+    std::vector<float> stream;
+    size_t moved = 0;
+    for (size_t k = 1; k <= 64; ++k) {
+        const size_t count = moved_by_call(FractionalRig::k_fraction, k) - moved;
+        ASSERT_LE(count, 1U) << "call " << k;
+        EXPECT_EQ(count, k % 4 == 0 ? 1U : 0U) << "call " << k;
+        std::array<float, 2> out{};
+        const Outcome outcome = rig.call(count, moved, out);
+        EXPECT_EQ(outcome.m_status, ANIRA_OK) << "call " << k;
+        EXPECT_EQ(outcome.m_delivered, count) << "call " << k;
+        moved += count;
+        if (count == 1) { stream.push_back(out[0]); }
+        EXPECT_EQ(out[1], k_untouched) << "nothing past the block";
+        // Settled: the inference of the sample, if the call completed one, is in the ring.
+        anira_test::wait_for_available(rig.get(), latency);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
+    }
+    ASSERT_EQ(stream.size(), 16U);
+    for (size_t i = 0; i < stream.size(); ++i) {
+        const float expected = i < latency ? 0.F : static_cast<float>(i - latency + 1);
+        EXPECT_EQ(stream[i], expected) << "sample " << i;
+    }
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "nothing was refused";
+}
+
+// A host that pops more than has accumulated -- a whole sample on every call under the block
+// 0.25, while its input moves by the rule -- is not refused (the rings are sized for floor or
+// ceil of the block, and a count above it is not checked, as for a whole block): a pop the
+// settled ring cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and
+// the miss policy's zeros in the block.
+TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
+    FractionalRig rig;
+    ASSERT_NE(rig.get(), nullptr);
+    size_t moved = 0;
+    size_t missed = 0;
+    for (size_t k = 1; k <= 16; ++k) {
+        const size_t count = moved_by_call(FractionalRig::k_fraction, k) - moved;
+        const size_t before = anira_test::available(rig.get());
+        std::array<float, 2> in{static_cast<float>(moved + 1), 0.F};
+        const std::array<int64_t, 2> in_shape{1, static_cast<int64_t>(count)};
+        anira_tensor in_tensor{};
+        anira_tensor_init_host(&in_tensor, in.data(), ANIRA_DTYPE_F32, 2, in_shape.data());
+        ASSERT_EQ(anira_handler_push_data(rig.get(), &in_tensor, 0), ANIRA_OK);
+        moved += count;
+        // Settled: the pushed sample's inference is in the ring before the pop asks.
+        anira_test::wait_for_available(rig.get(), before + count);
+        ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
+        const bool covered = before + count >= 1;
+
+        std::array<float, 2> out{};
+        out.fill(k_untouched);
+        const std::array<int64_t, 2> out_shape{1, 1};
+        anira_tensor out_tensor{};
+        anira_tensor_init_host(&out_tensor, out.data(), ANIRA_DTYPE_F32, 2, out_shape.data());
+        size_t delivered = k_unset;
+        const anira_status status = anira_handler_pop_data(rig.get(), &out_tensor, 0, &delivered);
+        if (covered) {
+            EXPECT_EQ(status, ANIRA_OK) << "call " << k;
+            EXPECT_EQ(delivered, 1U) << "call " << k;
+        } else {
+            ++missed;
+            EXPECT_EQ(status, ANIRA_MISSED) << "call " << k;
+            EXPECT_EQ(delivered, 0U) << "call " << k;
+            EXPECT_EQ(out[0], 0.F) << "call " << k;
+        }
+        EXPECT_EQ(out[1], k_untouched) << "nothing past the block";
+    }
+    EXPECT_GT(missed, 0U) << "four pops for every accumulated sample outrun the stream";
+    EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "a miss is not a refusal";
 }
 
 }  // namespace
