@@ -230,11 +230,14 @@ anira::HostConfig make_host_config(const anira_contract& contract,
             "contract: an Async contract has no 2.x counterpart; it arrives with "
             "the 3.x runtime");
     }
-    if (hard->m_block_max == 0 || !(hard->m_rate > 0.0)) {
+    if (!(hard->m_block_max > 0.0) || !(hard->m_rate > 0.0)) {
         config_error("contract: Hard geometry missing (block_max " +
                      std::to_string(hard->m_block_max) + ", rate " + std::to_string(hard->m_rate) +
                      "); set it with anira_contract_hard_set_geometry before preparing");
     }
+    // The 2.x HostConfig holds a float until the core takes the geometry natively (PR 10b): a
+    // fractional block keeps about seven digits, and LatencyCalculator::rationalize (1e-6
+    // relative) recovers the rational the host meant from them (1/3 and 1/4 exactly).
     return make_host_config(model,
                             static_cast<float>(hard->m_block_max),
                             static_cast<float>(hard->m_rate),

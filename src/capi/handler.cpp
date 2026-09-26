@@ -1633,7 +1633,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
     // has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
-        static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
+        hard.m_block_max / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
     // The declared host-end domain per slot (validate refused a name that is no tensor's and,
     // in this pre-release, any domain but host memory): what the slot rows report, and the

@@ -3839,14 +3839,14 @@
           "returns": "anira_status",
           "params": [
             {
-              "type": "uint32_t",
+              "type": "double",
               "name": "block_min",
-              "doc": "Smallest block the host callback delivers, in Time-axis elements of the anchor tensor."
+              "doc": "Smallest block the host callback delivers, in Time-axis elements of the anchor tensor; may be fractional (0.25: one element every fourth callback)."
             },
             {
-              "type": "uint32_t",
+              "type": "double",
               "name": "block_max",
-              "doc": "Largest; block_min == block_max is the fixed-block host."
+              "doc": "Largest; block_min == block_max is the fixed-block host. May be fractional like block_min."
             },
             {
               "type": "double",
@@ -3867,8 +3867,8 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "Creates a Hard (real-time) contract with the stream geometry; the fixed-block host earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss, wait_ratio 0, PERMISSIVE edge cost. A geometry of 0, 0, 0 is legal here and completed by hard_set_geometry or refused at prepare.",
-          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max, a negative rate, or a NULL out."
+          "doc": "Creates a Hard (real-time) contract with the stream geometry; the fixed-block host earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here) or both finite and > 0 with block_min <= block_max; block_min < block_max allows every smaller block. A block need not be whole: a fractional block (for a model with no stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a stream only once a whole one has accumulated: after its k-th call it has pushed and popped floor(k * b) elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a block that is NaN, infinite or negative, one block 0 and the other not, block_min > block_max, a negative rate, or a NULL out; the message names the value."
         },
         {
           "kind": "function",
@@ -3903,14 +3903,14 @@
               "doc": "A Hard contract."
             },
             {
-              "type": "uint32_t",
+              "type": "double",
               "name": "block_min",
-              "doc": "See anira_contract_create_hard."
+              "doc": "See anira_contract_create_hard; may be fractional."
             },
             {
-              "type": "uint32_t",
+              "type": "double",
               "name": "block_max",
-              "doc": "See anira_contract_create_hard."
+              "doc": "See anira_contract_create_hard; may be fractional."
             },
             {
               "type": "double",
@@ -3921,8 +3921,8 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "Patches the stream geometry, e.g. of a contract loaded from a file (section 8).",
-          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max or a negative rate."
+          "doc": "Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under the rules of anira_contract_create_hard; a refusal leaves the geometry as it was.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or negative, one block 0 and the other not, block_min > block_max, or a negative rate."
         },
         {
           "kind": "function",
@@ -6372,14 +6372,14 @@
               "doc": "A Hard contract."
             },
             {
-              "type": "uint32_t*",
+              "type": "double*",
               "name": "block_min",
-              "doc": "Receives the smallest block."
+              "doc": "Receives the smallest block as stored, a fractional one included."
             },
             {
-              "type": "uint32_t*",
+              "type": "double*",
               "name": "block_max",
-              "doc": "Receives the largest block."
+              "doc": "Receives the largest block as stored."
             },
             {
               "type": "double*",
