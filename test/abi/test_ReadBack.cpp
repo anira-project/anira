@@ -62,7 +62,7 @@ struct Model {
 
 struct Contract {
     // A Hard contract with a geometry, an Async one, or one loaded from JSON text.
-    Contract(uint32_t block_min, uint32_t block_max, double rate) {
+    Contract(double block_min, double block_max, double rate) {
         EXPECT_EQ(anira_contract_create_hard(block_min, block_max, rate, &m_contract, &m_err),
                   ANIRA_OK);
     }
@@ -539,13 +539,13 @@ TEST(AbiReadBack, ALoadedModelFileAnswersTheSame) {
 
 TEST(AbiReadBack, HardContractAnswersEverySetter) {
     const Contract hard(64, 512, 48000.0);
-    uint32_t block_min = 0;
-    uint32_t block_max = 0;
+    double block_min = 0.0;
+    double block_max = 0.0;
     double rate = 0.0;
     EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &block_min, &block_max, &rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 64u);
-    EXPECT_EQ(block_max, 512u);
+    EXPECT_EQ(block_min, 64.0);
+    EXPECT_EQ(block_max, 512.0);
     EXPECT_EQ(rate, 48000.0);
     // The defaults of a fresh Hard contract.
     anira_budget_kind budget = ANIRA_BUDGET_EXPLICIT;
@@ -584,8 +584,8 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     ASSERT_EQ(anira_contract_set_edge_cost(hard.m_contract, ANIRA_EDGE_COST_STRICT), ANIRA_OK);
     EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &block_min, &block_max, &rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 128u);
-    EXPECT_EQ(block_max, 1024u);
+    EXPECT_EQ(block_min, 128.0);
+    EXPECT_EQ(block_max, 1024.0);
     EXPECT_EQ(rate, 44100.0);
     EXPECT_EQ(anira_contract_hard_budget(hard.m_contract, &budget, &budget_ms), ANIRA_OK);
     EXPECT_EQ(budget, ANIRA_BUDGET_EXPLICIT);
@@ -718,7 +718,7 @@ TEST(AbiReadBack, TheHardFamilyIsWrongContractOnAsync) {
     const char* canonical = "untouched";
     anira_dtype dtype = ANIRA_DTYPE_I8;
     const anira_contract* c = async_contract.m_contract;
-    EXPECT_EQ(anira_contract_hard_geometry(c, &u, &u, &d), ANIRA_ERROR_WRONG_CONTRACT);
+    EXPECT_EQ(anira_contract_hard_geometry(c, &d, &d, &d), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_hard_budget(c, &budget, &d), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_hard_warmup(c, &warmup, &u), ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_hard_on_miss(c, &policy), ANIRA_ERROR_WRONG_CONTRACT);
@@ -754,12 +754,12 @@ TEST(AbiReadBack, TheNullAnswersOfTheContract) {
     anira_miss_fn fn = &decline_miss;
     void* user_data = &u;
     // A NULL handle first, then a NULL out-parameter: INVALID_ARGUMENT before the kind.
-    EXPECT_EQ(anira_contract_hard_geometry(nullptr, &u, &u, &d), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, nullptr, &u, &d),
+    EXPECT_EQ(anira_contract_hard_geometry(nullptr, &d, &d, &d), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, nullptr, &d, &d),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &u, nullptr, &d),
+    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &d, nullptr, &d),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &u, &u, nullptr),
+    EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &d, &d, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_budget(nullptr, &budget, &d), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_budget(hard.m_contract, nullptr, &d),
@@ -797,13 +797,13 @@ TEST(AbiReadBack, TheNullAnswersOfTheContract) {
 TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
     const Contract hard(anira_test::k_contract_hard_v3);
     ASSERT_EQ(hard.m_status, ANIRA_OK) << hard.m_err.message;
-    uint32_t block_min = 0;
-    uint32_t block_max = 0;
+    double block_min = 0.0;
+    double block_max = 0.0;
     double rate = 0.0;
     EXPECT_EQ(anira_contract_hard_geometry(hard.m_contract, &block_min, &block_max, &rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 512u);
-    EXPECT_EQ(block_max, 512u);
+    EXPECT_EQ(block_min, 512.0);
+    EXPECT_EQ(block_max, 512.0);
     EXPECT_EQ(rate, 48000.0);
     anira_budget_kind budget = ANIRA_BUDGET_EXPLICIT;
     double budget_ms = -1.0;

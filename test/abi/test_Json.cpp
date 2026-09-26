@@ -629,13 +629,56 @@ TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
     EXPECT_EQ(contract, nullptr);
 }
 
+// The geometry keys take any number: a fractional block reads back as the double the text
+// spells (the shortest round-trip form of 1/3 included), an integer as itself.
+TEST(AbiJsonContract, FractionalGeometry) {
+    static constexpr const char* k_text =
+        R"({"hard": {"block_min": 0.3333333333333333, "block_max": 0.25, "rate": 93.75}})";
+    anira_contract* contract = nullptr;
+    anira_error err = ANIRA_ERROR_INIT;
+    // block_min above block_max: refused, naming both values.
+    EXPECT_EQ(anira_contract_from_json(k_text, std::strlen(k_text), &contract, &err),
+              ANIRA_ERROR_JSON);
+    EXPECT_NE(std::strstr(err.message, "block_min 0.333333 exceeds block_max 0.25"), nullptr)
+        << err.message;
+    EXPECT_EQ(contract, nullptr);
+
+    static constexpr const char* k_fractional =
+        R"({"hard": {"block_min": 0.25, "block_max": 0.3333333333333333, "rate": 93.75}})";
+    ASSERT_EQ(anira_contract_from_json(k_fractional, std::strlen(k_fractional), &contract, &err),
+              ANIRA_OK)
+        << err.message;
+    double block_min = 0.0;
+    double block_max = 0.0;
+    double rate = 0.0;
+    ASSERT_EQ(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate), ANIRA_OK);
+    EXPECT_EQ(block_min, 0.25);
+    EXPECT_EQ(block_max, 1.0 / 3.0);
+    EXPECT_EQ(rate, 93.75);
+    anira_contract_destroy(contract);
+
+    static constexpr const char* k_whole = R"({"hard": {"block_min": 1, "block_max": 512}})";
+    contract = nullptr;
+    ASSERT_EQ(anira_contract_from_json(k_whole, std::strlen(k_whole), &contract, &err), ANIRA_OK)
+        << err.message;
+    ASSERT_EQ(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate), ANIRA_OK);
+    EXPECT_EQ(block_min, 1.0);
+    EXPECT_EQ(block_max, 512.0);
+    anira_contract_destroy(contract);
+}
+
 TEST(AbiJsonContract, Rejections) {
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"hard": {}, "async": {}})", "exactly one root"},
         {R"({"edge_cost": "strict"})", "exactly one root"},
         {R"({"hard": {"budget": "guess"}})", "hard.budget"},
         {R"({"hard": {"warmup": {"fixed": -1}}})", "hard.warmup.fixed"},
-        {R"({"hard": {"block_min": 9, "block_max": 1}})", "block_min exceeds"},
+        {R"({"hard": {"block_min": 9, "block_max": 1}})", "block_min 9 exceeds block_max 1"},
+        {R"({"hard": {"block_min": 0.5, "block_max": 0.25}})",
+         "block_min 0.5 exceeds block_max 0.25"},
+        {R"({"hard": {"block_min": -1, "block_max": 1}})", "block_min -1 must be finite and > 0"},
+        {R"({"hard": {"block_max": 0.25}})", "block_min 0 must be finite and > 0"},
+        {R"({"hard": {"block_min": "1/4", "block_max": 1}})", "hard.block_min"},
         {R"({"async": {"lanes": "two"}})", "async.lanes"},
         {R"({"async": {"deadline_ms": 1, "colour": 2}})", "async.colour"},
     };

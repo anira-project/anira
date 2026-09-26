@@ -17,8 +17,9 @@
  * stem; nothing else is written and nothing is allocated, so every function but prepare() is
  * legal on the driver thread.
  *
- * A slot the call does not carry (a count of 0) is an empty tensor: the caller's pointers of
- * that slot are not read, so they may be NULL or unset, and its planes are set to NULL, so a
+ * A slot the call does not carry (a count of 0, or a NULL channel array) is an empty tensor:
+ * the caller's pointers of that slot are not read, so they may be NULL or unset, and its planes
+ * are set to NULL, so a
  * miss function (ANIRA_MISS_CALLBACK), which is handed these arrays as they are, never finds
  * the pointers of an earlier call in a slot this call left out.
  */
@@ -148,17 +149,20 @@ public:
     const anira_tensor* outputs() const noexcept ANIRA_NONBLOCKING { return m_outputs.data(); }
 
 private:
-    /// One store of shape[1] and, for a count above 0, one store per channel. `channels` is
-    /// read only then.
+    /// One store of shape[1] and, for a count above 0 over a channel array, one store per
+    /// channel. `channels` is read only then: a NULL array is a slot the call does not carry,
+    /// whatever its count (the 2.x single forms hand over per-slot arrays whose other slots may
+    /// be NULL), so it is empty rather than a dereference of NULL.
     static void present_slot(anira_tensor& tensor,
                              std::vector<void*>& planes,
                              const float* const* channels,
                              size_t num_samples) noexcept ANIRA_NONBLOCKING {
-        tensor.shape[1] = static_cast<int64_t>(num_samples);
-        if (num_samples == 0) {
+        if (num_samples == 0 || channels == nullptr) {
+            tensor.shape[1] = 0;
             std::ranges::fill(planes, nullptr);
             return;
         }
+        tensor.shape[1] = static_cast<int64_t>(num_samples);
         for (size_t channel = 0; channel < planes.size(); ++channel) {
             // A plane is a void*: nothing writes through an input's (ANIRA_TENSOR_READ_ONLY),
             // and an output's channels came in without the const.

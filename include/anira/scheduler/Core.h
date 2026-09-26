@@ -39,6 +39,10 @@ namespace anira {
 /// tanh-lib's.
 class LogDrainLoop;
 
+namespace detail {
+struct UnloadHook;
+}  // namespace detail
+
 /// The real-time latch a session records its failures into (include/anira/utils/RtLatch.h).
 struct RtLatch;
 
@@ -69,10 +73,18 @@ struct RtLatch;
  * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
  * thread of anira's is alive at that point.
  *
- * On ELF and Mach-O platforms a library-unload hook additionally calls shutdown() as a
- * backstop for hosts that unload a plugin while an instance is still alive. Windows offers
- * no safe equivalent (nothing that runs at DLL detach may wait for a thread), so a plugin
- * that wants that protection there calls shutdown() from its module-exit entry point
+ * A plugin destroys its handlers before its host unloads it, from its instance teardown or
+ * its module-exit entry point, and never from its own static destructors, which run inside the
+ * unload under the loader lock. On ELF and Mach-O platforms a library-unload hook additionally
+ * calls shutdown() as a backstop for hosts that unload a plugin while an instance is still
+ * alive: an idle pool is joined; with an inference in flight (InferenceThread::
+ * get_num_in_flight()) the hook tells the pool's threads to stop and waits a bounded time
+ * (two seconds) for the inferences, and when one is still running — it can never finish while
+ * the unload holds the loader lock (a runtime that takes it mid-inference, LibTorch's first
+ * inference on a thread among them) — writes a message to stderr and aborts instead of hanging.
+ * At process exit the hook waits without a bound, as no loader lock is held there. Windows
+ * offers no safe equivalent (nothing that runs at DLL detach may wait for a thread), so a
+ * plugin that wants that protection there calls shutdown() from its module-exit entry point
  * (CLAP `deinit`, VST3 `ExitDll`) — see the troubleshooting guide.
  *
  * @par Configuration
@@ -175,9 +187,11 @@ public:
      * With the default lifecycle the pool is already gone once the last session was
      * released, so this is a backstop for hosts that unload a plugin's library while an
      * instance is still alive. On ELF/Mach-O it is called automatically from a
-     * library-unload hook; on Windows nothing that runs at DLL detach may wait for a
-     * thread, so call it from your module-exit entry point (CLAP `deinit`, VST3 `ExitDll`)
-     * — those run before the host unloads the library and outside the loader lock.
+     * library-unload hook, which first gives the inferences in flight a bounded wait and
+     * aborts with a message when one is still running (see the class description); on
+     * Windows nothing that runs at DLL detach may wait for a thread, so call it from your
+     * module-exit entry point (CLAP `deinit`, VST3 `ExitDll`) — those run before the host
+     * unloads the library and outside the loader lock.
      *
      * @note Not real-time safe (joins threads). Logs an error if sessions are still
      *       registered — a host that unloads live instances is a host bug; the sessions'
@@ -529,7 +543,8 @@ public:
      * The thread is not started automatically — call start() on the returned object
      * to begin processing. The caller must also call stop() (or simply destroy the
      * object) before program exit — and, for a plugin, before its library is unloaded:
-     * the unload hook joins only the core's own pool.
+     * the unload hook joins only the core's own pool (it waits for an inference in flight
+     * on such a thread too, and aborts with a message when one is still running).
      *
      * This is purely additive: the auto-managed thread pool sized via the configuration's
      * thread count (anira_context_config_set_threads, CoreConfig::m_num_threads on the 2.x
@@ -583,6 +598,11 @@ private:
      * release_core_if_idle().
      */
     struct State;
+
+    /// The body of the library-unload hook (Core.cpp, ELF and Mach-O): it tells the pool's
+    /// threads to stop and waits a bounded time for the inferences in flight before
+    /// shutdown() joins them.
+    friend struct detail::UnloadHook;
 
     /**
      * @brief Returns the core, creating it on first use

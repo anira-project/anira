@@ -54,7 +54,17 @@ ANIRA_API uint64_t ANIRA_CALL anira_now_ns(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKIN
  * queue, for a static embedding that is about to be unloaded (called from clap_deinit or
  * ExitDll). Idempotent, never creates the core, and effective only when no context and
  * no handler exist in this copy: otherwise nothing happens, so one client of a shared
- * library cannot silence another's sessions.
+ * library cannot silence another's sessions. A plugin must destroy its handlers, then
+ * its contexts, before its host unloads it (its instance teardown or module-exit entry
+ * point), and never from its own static destructors or DllMain, which run inside the
+ * unload under the loader lock. On ELF and Mach-O the library-unload hook is the
+ * backstop for a host that unloads with a handler alive: it joins an idle pool; with an
+ * inference in flight it tells the threads to stop, waits up to two seconds for the
+ * inferences, and when one is still running (it can never finish while the unload holds
+ * the loader lock) writes 'anira: the library is being unloaded while an inference is
+ * still running (N in flight); ...' to stderr and aborts instead of hanging. At process
+ * exit it waits without a bound. Windows has no such hook: destroy the handlers and call
+ * this from the module-exit entry point.
  * @return ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a
  *         handler lives.
  * @par Thread contract
@@ -66,7 +76,8 @@ ANIRA_API anira_status ANIRA_CALL anira_shutdown(void) ANIRA_NOEXCEPT;
 /**
  * @brief Frees the core when nothing uses it: no context, no handler, no pool thread, no
  * user-driven inference thread and, on WebAssembly, no inference loop still running.
- * Never blocks; the unload hook's call.
+ * Never blocks; the unload hook's call, after it stopped the pool (see anira_shutdown
+ * for an unload with an inference in flight).
  * @return Nonzero when the core was freed.
  * @par Thread contract
  * [main-thread]

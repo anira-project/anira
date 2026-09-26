@@ -11,6 +11,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
@@ -1119,6 +1120,74 @@ TEST(AbiTranslate, TheHostsOwnGeometryMayBeFractional) {
     EXPECT_EQ(anira::v3compat::to_host_config(model.native(), 0.F, 48000.F, false, host, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "buffer_size and sample_rate must be positive");
+}
+
+// A fractional Hard geometry reaches the 2.x HostConfig as the nearest float, and the latency
+// calculation recovers from it exactly the rational the host meant: 1/3 and 1/4 of an anchor
+// sample, and the same blocks on an anchor hop of 4 (1/12 and 1/16 of a hop).
+TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
+    struct Case {
+        double m_block;
+        int64_t m_hop;
+        anira::LatencyCalculator::Rational m_hops;
+    };
+    const auto fraction = [](double block, int64_t hop, int64_t denominator) {
+        return Case{.m_block = block,
+                    .m_hop = hop,
+                    .m_hops = {.m_numerator = 1, .m_denominator = denominator}};
+    };
+    for (const Case& c : {fraction(1.0 / 3.0, 1, 3),
+                          fraction(0.25, 1, 4),
+                          fraction(1.0 / 3.0, 4, 12),
+                          fraction(0.25, 4, 16),
+                          fraction(2.0 / 3.0, 4, 6)}) {
+        SCOPED_TRACE(c.m_block);
+        SCOPED_TRACE(c.m_hop);
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("latent", c.m_hop));
+        model.output(streamed("out", c.m_hop));
+        Hard hard = explicit_hard();
+        hard.block_min = c.m_block;
+        hard.block_max = c.m_block;
+        hard.rate = 100.0;
+        const ContractHandle contract(hard);
+        EXPECT_EQ(contract.hard().block_max, c.m_block) << "the double is stored as it is";
+        anira::HostConfig host;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
+                  ANIRA_OK)
+            << err.message;
+        EXPECT_EQ(host.m_buffer_size, static_cast<float>(c.m_block));
+        EXPECT_FALSE(host.m_allow_smaller_buffers);
+        const Outcome outcome = bridge(model, contract);
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        const anira::LatencyCalculator::Rational hops =
+            anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
+        EXPECT_EQ(hops.m_numerator, c.m_hops.m_numerator);
+        EXPECT_EQ(hops.m_denominator, c.m_hops.m_denominator);
+    }
+}
+
+// A flexible window pinned from a fractional block_max: the block scaled by the time ratio is
+// a fractional hop, refused by the rule of the integer geometry, which names the rational
+// block the calculation recovered.
+TEST(AbiTranslate, AFractionalBlockMaxGivesAFractionalFlexibleHop) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    model.input(streamed("latent", 1));
+    model.output(TensorSpec("out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
+                     .axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
+                     .window(1, ANIRA_UNBOUNDED, 0)
+                     .time_ratio(2, 1));
+    Hard hard = explicit_hard();
+    hard.block_min = 0.25;
+    hard.block_max = 0.25;
+    hard.rate = 100.0;
+    const Outcome outcome = bridge(model, hard);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "tensor 'out'");
+    expect_contains(outcome.m_message, "gives a fractional hop for block_max 1/4");
 }
 
 TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {

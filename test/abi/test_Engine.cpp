@@ -309,6 +309,10 @@ struct GainEngine {
     uint32_t m_query_struct_size = 0;
     const anira_context* m_query_context = nullptr;
     int m_queried_after_init = 0;  ///< a query that ran after init (none is expected)
+    /// The thread the query must run on (the handlers' creating thread), when set, and the
+    /// queries that ran on another one.
+    std::thread::id m_query_thread;
+    std::atomic<int> m_queried_off_thread{0};
 };
 
 /// Whether `loaded` is a pointer load handed back that unload has not received (the counts,
@@ -357,6 +361,10 @@ anira_status ANIRA_CALL gain_query(const anira_init_info* info,
                                    void* user_data,
                                    uint64_t* out_available) {
     auto* engine = static_cast<GainEngine*>(user_data);
+    if (engine->m_query_thread != std::thread::id{} &&
+        std::this_thread::get_id() != engine->m_query_thread) {
+        engine->m_queried_off_thread.fetch_add(1);
+    }
     ++engine->m_queried;
     if (engine->m_inited > 0) { ++engine->m_queried_after_init; }
     if (info == nullptr || out_available == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
@@ -1542,6 +1550,67 @@ TEST(AbiEngine, TheQuerySaysWhichDeclaredProvidersAreUsableHere) {
     EXPECT_NE(std::strstr(refused.m_err.message, "'org.example.gain' refused query"), nullptr)
         << refused.m_err.message;
     EXPECT_EQ(gain.m_queried_after_init, 0);
+}
+
+// The query runs on the main thread only: anira_handler_create asks it and the handler keeps
+// the answer, and anira_handler_prepare checks the plans against that answer without calling
+// the query, whatever thread it runs on. Two handlers created here on an engine that lists
+// the CPU path (so the CPU plan is checked against the query's bit), then prepared at once on
+// two other threads, three times over: the query ran twice, both times on this thread, and a
+// prepare never adds a call (the count is a plain int: TSan reports a query that runs on two
+// prepare threads at once). A bit cleared after create does not reach a prepare.
+TEST(AbiEngine, TheQueryRunsAtCreateAndPrepareReusesItsAnswer) {
+    constexpr int k_handlers = 2;
+    constexpr int k_rounds = 3;
+    const Context context(2);
+    const anira::ContractHandle contract = explicit_contract();
+    static constexpr std::array<const char*, 1> k_cpu{"cpu"};
+    GainEngine gain;
+    gain.m_query_thread = std::this_thread::get_id();
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, k_cpu)), ANIRA_OK)
+        << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    model.max_instances(k_handlers);
+    pipe.add_inference(model, gain_candidates({{ANIRA_PROVIDER_CPU, nullptr}}));
+    std::array<anira_handler*, k_handlers> handlers{};
+    for (anira_handler*& handler : handlers) {
+        ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    }
+    EXPECT_EQ(gain.m_queried, k_handlers) << "one query per create";
+
+    // Cleared now: a prepare that asked the query again would refuse the CPU plan.
+    gain.m_available = 0;
+    for (int round = 0; round < k_rounds; ++round) {
+        std::array<anira_status, k_handlers> statuses{};
+        std::array<anira_error, k_handlers> errs{};
+        std::vector<std::thread> threads;
+        threads.reserve(k_handlers);
+        for (int i = 0; i < k_handlers; ++i) {
+            errs.at(i) = ANIRA_ERROR_INIT;
+            threads.emplace_back([&, i] {
+                statuses.at(i) =
+                    anira_handler_prepare(handlers.at(i), contract.native(), &errs.at(i));
+            });
+        }
+        for (std::thread& thread : threads) { thread.join(); }
+        for (int i = 0; i < k_handlers; ++i) {
+            EXPECT_EQ(statuses.at(i), ANIRA_OK) << "round " << round << ": " << errs.at(i).message;
+        }
+    }
+    EXPECT_EQ(gain.m_queried, k_handlers) << "a prepare called the query";
+    EXPECT_EQ(gain.m_queried_off_thread.load(), 0) << "the query ran off the main thread";
+    EXPECT_EQ(gain.m_queried_after_init, 0);
+    EXPECT_EQ(gain.m_inited, 1);
+    for (anira_handler* handler : handlers) { ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2)); }
+    for (anira_handler* handler : handlers) { anira_handler_destroy(handler); }
+
+    // A handler created now asks the query again, on this thread, and gets the cleared bit.
+    anira_handler* refused = nullptr;
+    EXPECT_EQ(pipe.create_handler(context, &refused), ANIRA_ERROR_NOT_SUPPORTED);
+    EXPECT_EQ(refused, nullptr);
+    EXPECT_EQ(gain.m_queried, k_handlers + 1);
+    EXPECT_EQ(gain.m_queried_off_thread.load(), 0);
 }
 
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the

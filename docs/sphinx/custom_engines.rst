@@ -153,7 +153,8 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   without a list serves the CPU path without a bit). It runs before ``init`` and any number of times, on the main thread, at
   ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
   ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
-  lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
+  lock. ``anira_handler_prepare`` never calls it: the handler keeps the answer its create got
+  and checks the plans against that again, so a prepare on another thread does not run it. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
   ``NULL``: every listed provider is usable.
 
 Three levels, three pointers, three lifetimes: ``user_data`` lives with the engine object,
@@ -991,7 +992,11 @@ application ships its own engine runtime").
 .. note::
     Subclassing :cpp:class:`anira::BackendBase` is the 2.x runtime's way of adding an engine,
     and stays with the 2.x :cpp:class:`anira::InferenceHandler` until the runtime cut-over;
-    :doc:`migration` maps each of its virtuals onto the descriptor above. The engines anira
+    :doc:`migration` maps each of its virtuals onto the descriptor above. A 2.x custom backend
+    becomes an :cpp:class:`anira::Engine` constructed with ``anira::v2::k_custom_engine_id``
+    (``"anira.v2.custom"``, the id a 2.x ``CUSTOM`` row names); ``anira::v2::PassthroughEngine``
+    of ``anira/compat/v2.hpp`` is the 2.x base body, ``BackendBase::process``, as such an
+    engine. The engines anira
     ships are implemented as adapters of the same descriptor shape (``src/engines/``, internal),
     which is where to look for how a real engine binds by name, checks the shapes it was
     handed, splits what one load shares from what one executor owns, and stages its buffers.

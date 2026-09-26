@@ -28,6 +28,18 @@
 #include <utility>
 #include <vector>
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <time.h>  // NOLINT(modernize-deprecated-headers) POSIX: clock_gettime, CLOCK_THREAD_CPUTIME_ID
+#endif
+
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
 #include "engines/LegacyAdapter.h"
@@ -51,6 +63,7 @@ using anira::engine::Prepared;
 using anira::engine::PrepareRequest;
 using anira::engine::SlotBinding;
 using anira::engine::Source;
+using anira::engine::StopSignal;
 using anira::engine::TensorInfo;
 
 constexpr size_t k_block = 512;
@@ -126,10 +139,13 @@ anira_init_info init_info() {
 
 /// What every executor of a RecordingLoaded records: the calls, whether two calls ever ran at
 /// once on one executor, the calls per shared slot, the calls out of range, the resets and the
-/// flags of the last call.
+/// flags of the last call. A closed gate (m_open false) holds every call inside process, after
+/// it counted itself in m_entered, until the gate opens.
 struct Recording {
     static constexpr uint32_t k_max_instances = 8;
 
+    std::atomic<bool> m_open{true};
+    std::atomic<uint32_t> m_entered{0};
     std::atomic<uint32_t> m_calls{0};
     std::atomic<uint32_t> m_overlaps{0};
     std::atomic<uint32_t> m_out_of_range{0};
@@ -153,6 +169,10 @@ public:
     anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override {
         static_cast<void>(chunk);
         if (m_in_use.exchange(true)) { m_recording->m_overlaps.fetch_add(1); }
+        m_recording->m_entered.fetch_add(1);
+        while (!m_recording->m_open.load()) {
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
         std::this_thread::sleep_for(m_recording->m_hold);
         m_recording->m_last_flags.store(ctx.flags);
         if ((ctx.flags & ANIRA_ENGINE_CALL_EXCLUSIVE) != 0U) {
@@ -344,6 +364,47 @@ std::vector<anira_tensor> descriptors_over(std::vector<anira::BufferF>& buffers)
     return tensors;
 }
 
+// The CPU time the calling thread has consumed so far.
+std::chrono::nanoseconds thread_cpu_time() {
+#if defined(_WIN32)
+    FILETIME creation{};
+    FILETIME exit{};
+    FILETIME kernel{};
+    FILETIME user{};
+    GetThreadTimes(GetCurrentThread(), &creation, &exit, &kernel, &user);
+    const auto ticks = [](const FILETIME& time) {
+        return (static_cast<uint64_t>(time.dwHighDateTime) << 32U) | time.dwLowDateTime;
+    };
+    // FILETIME counts 100 ns ticks.
+    return std::chrono::nanoseconds(static_cast<int64_t>((ticks(kernel) + ticks(user)) * 100));
+#else
+    timespec now{};
+    // NOLINTNEXTLINE(misc-include-cleaner) glibc defines the clock ids in <bits/time.h>
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now);
+    return std::chrono::seconds(now.tv_sec) + std::chrono::nanoseconds(now.tv_nsec);
+#endif
+}
+
+// Polls `done` every millisecond until it holds or `timeout` ran out; whether it held.
+template <typename Done>
+bool wait_until(Done&& done, std::chrono::milliseconds timeout = std::chrono::seconds(5)) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() > deadline) { return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
+}
+
+// The stop signal of a test thread: stopping while `flag` is set.
+StopSignal stop_signal_over(const std::atomic<bool>& flag) {
+    return StopSignal{.m_stopping =
+                          [](const void* context) noexcept {
+                              return static_cast<const std::atomic<bool>*>(context)->load();
+                          },
+                      .m_context = &flag};
+}
+
 }  // namespace
 
 // ============================================================================================
@@ -451,6 +512,92 @@ TEST(Adapter, AnExclusiveSessionRunsOnItsOwnExecutorAndResetsWhenAsked) {
     const std::unique_ptr<Prepared> shared_none = shared_session(loaded);
     EXPECT_EQ(shared_none->run(ctx, nullptr, false), ANIRA_ERROR_INVALID_STATE)
         << "no shared slot to claim";
+}
+
+// A shared call that finds every slot busy backs off instead of spinning: a second thread
+// waits 200 ms for the one slot a gated call holds, on a fraction of a core, and runs on the
+// slot once the holder left it.
+TEST(Adapter, TheClaimLoopWaitsForABusySlotWithoutBurningACore) {
+    RecordingLoaded loaded;
+    loaded.load(gain_model(1));
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Recording& recording = loaded.m_recording;
+    recording.m_open.store(false);
+    const anira_engine_ctx ctx{};
+
+    std::atomic<anira_status> held{ANIRA_ERROR_UNKNOWN};
+    std::thread holder([&]() { held.store(session->run(ctx, nullptr, false)); });
+    ASSERT_TRUE(wait_until([&]() { return recording.m_entered.load() == 1; }));
+
+    std::atomic<anira_status> waited{ANIRA_ERROR_UNKNOWN};
+    std::chrono::nanoseconds cpu{};
+    std::chrono::nanoseconds wall{};
+    std::thread waiter([&]() {
+        const std::chrono::nanoseconds cpu_before = thread_cpu_time();
+        const auto before = std::chrono::steady_clock::now();
+        waited.store(session->run(ctx, nullptr, false));
+        wall = std::chrono::steady_clock::now() - before;
+        cpu = thread_cpu_time() - cpu_before;
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    EXPECT_EQ(recording.m_entered.load(), 1U) << "the waiter claimed the held slot";
+    recording.m_open.store(true);
+    holder.join();
+    waiter.join();
+
+    EXPECT_EQ(held.load(), ANIRA_OK);
+    EXPECT_EQ(waited.load(), ANIRA_OK);
+    EXPECT_EQ(recording.m_calls.load(), 2U);
+    EXPECT_EQ(recording.m_per_instance.at(0).load(), 2U);
+    EXPECT_EQ(recording.m_overlaps.load(), 0U);
+    // A spinning waiter consumes its whole wall time as CPU time; the backoff sleeps 100 us
+    // per pass, so the waiter uses a few percent of it. A quarter leaves room for a loaded
+    // runner and the sanitizers.
+    EXPECT_GE(wall, std::chrono::milliseconds(150));
+    EXPECT_LT(cpu * 4, wall) << "the waiter used " << cpu.count() << " ns of CPU time in "
+                             << wall.count() << " ns";
+}
+
+// A shared call that waits for a slot gives up once its thread is told to stop, while the
+// holder is still inside the engine: ANIRA_ERROR_INVALID_STATE, no engine call, and the
+// holder's call completes on its own afterwards.
+TEST(Adapter, TheClaimLoopGivesUpWhenItsThreadIsToldToStop) {
+    RecordingLoaded loaded;
+    loaded.load(gain_model(1));
+    const std::unique_ptr<Prepared> session = shared_session(loaded);
+    Recording& recording = loaded.m_recording;
+    recording.m_open.store(false);
+    const anira_engine_ctx ctx{};
+
+    std::atomic<anira_status> held{ANIRA_ERROR_UNKNOWN};
+    std::thread holder([&]() { held.store(session->run(ctx, nullptr, false)); });
+    ASSERT_TRUE(wait_until([&]() { return recording.m_entered.load() == 1; }));
+
+    std::atomic<bool> stop{false};
+    std::atomic<bool> returned{false};
+    std::atomic<anira_status> waited{ANIRA_ERROR_UNKNOWN};
+    std::thread waiter([&]() {
+        waited.store(session->run(ctx, nullptr, false, stop_signal_over(stop)));
+        returned.store(true);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(returned.load()) << "the waiter left before it was told to stop";
+    stop.store(true);
+    EXPECT_TRUE(wait_until([&]() { return returned.load(); }, std::chrono::seconds(1)))
+        << "the waiter did not give up within a second of the stop";
+    EXPECT_EQ(recording.m_calls.load(), 0U) << "the holder is still inside the engine";
+    EXPECT_EQ(recording.m_entered.load(), 1U) << "the waiter reached the engine";
+    EXPECT_EQ(waited.load(), ANIRA_ERROR_INVALID_STATE);
+
+    recording.m_open.store(true);
+    holder.join();
+    waiter.join();
+    EXPECT_EQ(held.load(), ANIRA_OK);
+    EXPECT_EQ(recording.m_calls.load(), 1U);
+
+    // A free slot is claimed whatever the signal says: the stop ends a wait, not a call.
+    EXPECT_EQ(session->run(ctx, nullptr, false, stop_signal_over(stop)), ANIRA_OK);
+    EXPECT_EQ(recording.m_calls.load(), 2U);
 }
 
 // ============================================================================================

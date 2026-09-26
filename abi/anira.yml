@@ -1564,16 +1564,16 @@ headers:
         name: anira_contract_create_hard
         returns: anira_status
         params:
-          - {type: uint32_t, name: block_min, doc: "Smallest block the host callback delivers, in Time-axis elements of the anchor tensor."}
-          - {type: uint32_t, name: block_max, doc: "Largest; block_min == block_max is the fixed-block host."}
+          - {type: double, name: block_min, doc: "Smallest block the host callback delivers, in Time-axis elements of the anchor tensor; may be fractional (0.25: one element every fourth callback)."}
+          - {type: double, name: block_max, doc: "Largest; block_min == block_max is the fixed-block host. May be fractional like block_min."}
           - {type: double, name: rate, doc: "Anchor elements per second (48000 for audio)."}
           - {type: anira_contract**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Creates a Hard (real-time) contract with the stream geometry; the fixed-block host earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss, wait_ratio 0, PERMISSIVE edge cost. A geometry of 0, 0, 0 is legal here and completed by hard_set_geometry or refused at prepare."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max, a negative rate, or a NULL out."
+        doc: "Creates a Hard (real-time) contract with the stream geometry; the fixed-block host earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here) or both finite and > 0 with block_min <= block_max; block_min < block_max allows every smaller block. A block need not be whole: a fractional block (for a model with no stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a stream only once a whole one has accumulated: after its k-th call it has pushed and popped floor(k * b) elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call)."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a block that is NaN, infinite or negative, one block 0 and the other not, block_min > block_max, a negative rate, or a NULL out; the message names the value."
       - kind: function
         name: anira_contract_create_async
         returns: anira_status
@@ -1590,14 +1590,14 @@ headers:
         returns: anira_status
         params:
           - {type: anira_contract*, name: contract, doc: "A Hard contract."}
-          - {type: uint32_t, name: block_min, doc: "See anira_contract_create_hard."}
-          - {type: uint32_t, name: block_max, doc: "See anira_contract_create_hard."}
+          - {type: double, name: block_min, doc: "See anira_contract_create_hard; may be fractional."}
+          - {type: double, name: block_max, doc: "See anira_contract_create_hard; may be fractional."}
           - {type: double, name: rate, doc: "See anira_contract_create_hard."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Patches the stream geometry, e.g. of a contract loaded from a file (section 8)."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max or a negative rate."
+        doc: "Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under the rules of anira_contract_create_hard; a refusal leaves the geometry as it was."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or negative, one block 0 and the other not, block_min > block_max, or a negative rate."
       - kind: function
         name: anira_contract_hard_set_budget
         returns: anira_status
@@ -2707,8 +2707,8 @@ headers:
         returns: anira_status
         params:
           - {type: const anira_contract*, name: contract, doc: "A Hard contract."}
-          - {type: uint32_t*, name: block_min, doc: "Receives the smallest block."}
-          - {type: uint32_t*, name: block_max, doc: "Receives the largest block."}
+          - {type: double*, name: block_min, doc: "Receives the smallest block as stored, a fractional one included."}
+          - {type: double*, name: block_max, doc: "Receives the largest block as stored."}
           - {type: double*, name: rate, doc: "Receives the rate."}
         thread: main-thread
         status: promised
@@ -2932,7 +2932,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Drops the user's reference: flushes the real-time log queue when this was the last user of the core, unregisters the context's log sink and waits for its in-flight calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the caller whatever the internal count (a handler that added a reference keeps the memory alive). Joins nothing. A destroy issued from inside the context's own sink is refused with one Error record and nothing happens."
+        doc: "Drops the user's reference: flushes the real-time log queue when this was the last user of the core, unregisters the context's log sink and waits for its in-flight calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the caller whatever the internal count (a handler that added a reference keeps the memory alive). Joins nothing. A destroy issued from inside the context's own sink is refused with one Error record and nothing happens. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock."
       - kind: function
         name: anira_context_probe
         returns: anira_status
@@ -3086,7 +3086,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions."
+        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock. On ELF and Mach-O the library-unload hook is the backstop for a host that unloads with a handler alive: it joins an idle pool; with an inference in flight it tells the threads to stop, waits up to two seconds for the inferences, and when one is still running (it can never finish while the unload holds the loader lock) writes 'anira: the library is being unloaded while an inference is still running (N in flight); ...' to stderr and aborts instead of hanging. At process exit it waits without a bound. Windows has no such hook: destroy the handlers and call this from the module-exit entry point."
         return_doc: "ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a handler lives."
       - kind: function
         name: anira_release_core_if_idle
@@ -3095,7 +3095,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Frees the core when nothing uses it: no context, no handler, no pool thread, no user-driven inference thread and, on WebAssembly, no inference loop still running. Never blocks; the unload hook's call."
+        doc: "Frees the core when nothing uses it: no context, no handler, no pool thread, no user-driven inference thread and, on WebAssembly, no inference loop still running. Never blocks; the unload hook's call, after it stopped the pool (see anira_shutdown for an unload with an inference in flight)."
         return_doc: "Nonzero when the core was freed."
       - kind: function
         name: anira_has_core
@@ -3823,7 +3823,8 @@ headers:
       ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create. Which of an engine's declared
       providers are usable here is its query's answer (anira_engine_query_fn, a tail slot of
       the descriptor, the engine's own GetAvailableProviders): anira_handler_create checks
-      every candidate's provider of the engine against it, and
+      every candidate's provider of the engine against it (and keeps the answer, which
+      anira_handler_prepare checks the plans against again without a query), and
       anira_pipeline_capabilities_backends / _edge report the engine's rows beside the
       context's, so a custom engine's capabilities are declared, measured and visible as a
       built-in engine's are.
@@ -4024,7 +4025,7 @@ headers:
           - {type: void*, name: user_data, doc: "The descriptor's user_data."}
           - {type: uint64_t*, name: out_available, doc: "Receives a bitmask over the descriptor's providers list: bit i set means providers[i] is usable here, now; a bit beyond num_providers is ignored. The mask covers the listed providers alone: ANIRA_PROVIDER_CPU is served without a bit only by a descriptor without a list, and is a listed provider like any other in a list that names it. Under the default candidate set a plan on a provider whose bit is clear is dropped; a named candidate on it is refused."}
         thread: main-thread
-        doc: "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
+        doc: "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread only: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. anira_handler_prepare, which may run on another thread, never calls it: the handler keeps the answer its create got and checks the plans against that again. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
       - kind: struct
         name: anira_engine_desc
         tier: 2
@@ -4049,7 +4050,7 @@ headers:
           - {name: providers, type: const char* const*, doc: "The providers the engine serves, as strings, copied: exactly the listed ones (ANIRA_PROVIDER_CPU only if the list has \"cpu\"); NULL with a count of 0 serves ANIRA_PROVIDER_CPU alone. The enum's JSON spellings name a provider of the enum (\"cpu\", \"cuda\", \"webgpu\", \"vulkan\", \"directml\", \"coreml\", \"xnnpack\"); the words \"default\" and \"none\" are refused (ANIRA_ERROR_INVALID_ARGUMENT at anira_custom_engine_create); any other string is a custom provider in the engine's own vocabulary, ANIRA_PROVIDER_CUSTOM with that name wherever the pair travels (a reverse-URI name is the convention, not a rule). A candidate naming a provider the list lacks is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create; load may still refuse one it cannot serve at run time. Under the default candidate set a neutral entry of the engine runs on the CPU path when the engine serves it, else on the first listed provider. A tail field: a caller whose header ends before it serves ANIRA_PROVIDER_CPU alone."}
           - {name: num_providers, type: uint32_t, doc: "The length of providers."}
           - {name: reserved, type: uint32_t, doc: "0."}
-          - {name: query, type: anira_engine_query_fn, doc: "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; at anira_handler_create and at anira_pipeline_capabilities_backends / _edge, before init and any number of times. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."}
+          - {name: query, type: anira_engine_query_fn, doc: "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; called on the main thread, at anira_handler_create and by the capabilities entries (anira_pipeline_capabilities_backends / _edge), before init and any number of times; anira_handler_prepare uses the answer create got. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."}
         init:
           name: ANIRA_ENGINE_DESC_INIT
           value: "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL"
@@ -4091,7 +4092,14 @@ headers:
       (a success), or a failure. The delivered counts come back through a nullable size_t*
       delivered, a pure out parameter written on every return: zeroed first, then on ANIRA_OK
       shape[1] of each Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read:
-      the request is shape[1] of the output tensor.
+      the request is shape[1] of the output tensor. The count of one call on a Streamed slot is
+      what the Hard contract's geometry sized the latency and the rings for: block_max samples
+      of the anchor at most, scaled by its hop to the hop of every other stream. A block b may be
+      fractional on a stream (a fractional geometry, or a time ratio): the host then moves a
+      sample only once a whole one has accumulated, floor(k * b) samples by its k-th call, so
+      one call carries floor(b) or ceil(b) of them (0 or 1 under 0.25, the 1 on every fourth
+      call). Nothing refuses a larger count; the rings are not sized for it, and a pop the
+      stream cannot cover is a miss (ANIRA_MISSED).
       A Buffer spec under a Hard contract is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_prepare:
       a Buffer tensor is a per-job payload and arrives with the Async contract; a persistent
       side input under a Hard contract is the Static role. A Static tensor has one
@@ -4340,7 +4348,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), then calls the stage's unprepare for this handler when its prepare succeeded (no phase call runs afterwards), frees the plan report, stops counting as a user of the core, drops the handler's reference on its context and its share of the stage and engine carriers (the release function of a stage or an engine fires here when this handler held the last one). The driver thread must have stopped calling the Hard entries."
+        doc: "Destroys a handler: releases its session (in-flight inferences are drained, the thread pool joins with the last session of this copy, which is why the call must not run under a loader lock), then calls the stage's unprepare for this handler when its prepare succeeded (no phase call runs afterwards), frees the plan report, stops counting as a user of the core, drops the handler's reference on its context and its share of the stage and engine carriers (the release function of a stage or an engine fires here when this handler held the last one). The driver thread must have stopped calling the Hard entries. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock."
 
       - kind: function
         name: anira_handler_prepare
@@ -4352,7 +4360,7 @@ headers:
         thread: main-thread & !processing
         status: promised
         since: "0.2"
-        doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), checks every plan's provider against what its engine serves now (a built-in engine's runtime, a custom engine's query; ANIRA_ERROR_NOT_SUPPORTED as at anira_handler_create, so a context probed again since the create is seen), runs the stage's init when it has not run yet (once per registration, before any model loads), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the stage's prepare function, when the pipeline has a stage with one, with an anira_prepare_info (the handler, the report, the entry count, a template of the model end of every slot and the canonical names) and keeps the prepared pointer it hands back for this handler (a status other than ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare). A second prepare replaces the previous session whole: the stage's unprepare of the previous prepare runs once the old session is released, before the new prepare. A failed prepare leaves the handler unprepared, the previous prepare's unprepare called all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while the stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process, post_process or reset carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag)."
+        doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), checks every plan's provider against what its engine serves (a built-in engine's runtime as the context reports it now, so a context probed again since the create is seen; a custom engine's query as it answered at anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at anira_handler_create), runs the stage's init when it has not run yet (once per registration, before any model loads), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the stage's prepare function, when the pipeline has a stage with one, with an anira_prepare_info (the handler, the report, the entry count, a template of the model end of every slot and the canonical names) and keeps the prepared pointer it hands back for this handler (a status other than ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare). A second prepare replaces the previous session whole: the stage's unprepare of the previous prepare runs once the old session is released, before the new prepare. A failed prepare leaves the handler unprepared, the previous prepare's unprepare called all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while the stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process, post_process or reset carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag)."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned."
 
       - kind: function

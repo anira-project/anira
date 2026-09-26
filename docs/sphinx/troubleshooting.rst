@@ -225,12 +225,23 @@ never destroyed while the library is loaded (calling into anira is valid at any 
 even from late-running static destructors) and is reclaimed at unload.
 
 **Solutions**:
-    1. **Host unloads with a live instance** (a host bug, but it happens): on Linux
-       and macOS a library-unload hook calls the core's shutdown
-       automatically. On Windows nothing that runs at ``DLL_PROCESS_DETACH`` may join a
-       thread (loader lock), so call ``anira_shutdown()`` from your module-exit entry
-       point — CLAP ``deinit``, VST3 ``ExitDll`` — as ``examples/clap-audio-plugin``
-       does. It is idempotent and cheap when there is nothing to do, and it refuses
+    1. **Host unloads with a live instance** (a host bug, but it happens): a plugin must
+       destroy its handlers (then its contexts) before its host unloads it, from its
+       instance teardown or its module-exit entry point — CLAP ``deinit``, VST3
+       ``ExitDll`` — and never from its own static destructors or ``DllMain``, which run
+       inside the unload under the loader lock (see :ref:`usage-teardown`). On Linux and
+       macOS a library-unload hook is the backstop: it joins an idle pool as the last
+       handler's destroy would. When an inference is still in flight it waits up to two
+       seconds for it; an inference still running then can never finish during the unload
+       (a runtime that needs the loader lock mid-inference, such as LibTorch's first
+       inference on a thread, or an engine that does not return), so the hook writes
+       ``anira: the library is being unloaded while an inference is still running ...``
+       to stderr and aborts, instead of hanging the host for good. At process exit the
+       hook waits without a bound and the process exits normally. On Windows nothing that
+       runs at ``DLL_PROCESS_DETACH`` may join a thread (loader lock), so call
+       ``anira_shutdown()`` from your module-exit entry point, as
+       ``examples/clap-audio-plugin`` does, after destroying the handlers. It is
+       idempotent and cheap when there is nothing to do, and it refuses
        (``ANIRA_ERROR_INVALID_STATE``, nothing happens) while a context or a handler of
        this copy of anira still exists.
     2. **You manage inference threads yourself** (``CoreConfig(0)`` +
@@ -251,7 +262,8 @@ even from late-running static destructors) and is reclaimed at unload.
 
 The scenario is covered by anira's host-shaped ``test/contracts/unload`` test, which loads a
 plugin-shaped module from an executable that does not link anira, unloads it and
-checks that it was really unmapped.
+checks that it was really unmapped; its death tests unload with an inference in flight and
+expect the hook's message and abort, and exit with one in flight and expect a normal exit.
 
 .. note::
     If you continue to experience issues feel free to file an issue on the [GitHub repository](https://github.com/anira-project/anira/issues).

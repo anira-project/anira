@@ -442,22 +442,32 @@ ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANI
 /**
  * @brief Creates a Hard (real-time) contract with the stream geometry; the fixed-block host
  * earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on
- * miss, wait_ratio 0, PERMISSIVE edge cost. A geometry of 0, 0, 0 is legal here and
- * completed by hard_set_geometry or refused at prepare.
+ * miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left
+ * unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here) or
+ * both finite and > 0 with block_min <= block_max; block_min < block_max allows every
+ * smaller block. A block need not be whole: a fractional block (for a model with no
+ * stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0) is
+ * taken as the rational the latency calculation recovers from it (1e-6 relative,
+ * denominator at most 2^20), and the host moves an element of a stream only once a whole
+ * one has accumulated: after its k-th call it has pushed and popped floor(k * b)
+ * elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of them
+ * (0 or 1 for 0.25, the 1 on every fourth call).
  * @param block_min Smallest block the host callback delivers, in Time-axis elements of the
- *        anchor tensor.
- * @param block_max Largest; block_min == block_max is the fixed-block host.
+ *        anchor tensor; may be fractional (0.25: one element every fourth callback).
+ * @param block_max Largest; block_min == block_max is the fixed-block host. May be fractional
+ *        like block_min.
  * @param rate Anchor elements per second (48000 for audio).
  * @param out Receives the handle on success.
  * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max, a negative rate,
- *         or a NULL out.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a block that is NaN, infinite or
+ *         negative, one block 0 and the other not, block_min > block_max, a negative rate, or a
+ *         NULL out; the message names the value.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(uint32_t block_min,
-                                                             uint32_t block_max,
+ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double block_min,
+                                                             double block_max,
                                                              double rate,
                                                              anira_contract** out,
                                                              anira_error* err) ANIRA_NOEXCEPT;
@@ -476,20 +486,22 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_async(anira_contract** o
                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8).
+ * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under
+ * the rules of anira_contract_create_hard; a refusal leaves the geometry as it was.
  * @param contract A Hard contract.
- * @param block_min See anira_contract_create_hard.
- * @param block_max See anira_contract_create_hard.
+ * @param block_min See anira_contract_create_hard; may be fractional.
+ * @param block_max See anira_contract_create_hard; may be fractional.
  * @param rate See anira_contract_create_hard.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
- *         ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max or a negative rate.
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or
+ *         negative, one block 0 and the other not, block_min > block_max, or a negative rate.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
-                                                                   uint32_t block_min,
-                                                                   uint32_t block_max,
+                                                                   double block_min,
+                                                                   double block_max,
                                                                    double rate) ANIRA_NOEXCEPT;
 
 /**
@@ -2064,8 +2076,8 @@ ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const 
  * @brief The geometry as anira_contract_create_hard or anira_contract_hard_set_geometry stored
  * it; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
  * @param contract A Hard contract.
- * @param block_min Receives the smallest block.
- * @param block_max Receives the largest block.
+ * @param block_min Receives the smallest block as stored, a fractional one included.
+ * @param block_max Receives the largest block as stored.
  * @param rate Receives the rate.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a NULL out-parameter.
@@ -2074,8 +2086,8 @@ ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const 
  * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
-                                                               uint32_t* block_min,
-                                                               uint32_t* block_max,
+                                                               double* block_min,
+                                                               double* block_max,
                                                                double* rate) ANIRA_NOEXCEPT;
 
 /**
