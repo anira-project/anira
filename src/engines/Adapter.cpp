@@ -114,15 +114,31 @@ anira_status Loaded::claim_and_run(Prepared& prepared,
     // thread blocked inside an engine, and the pool's join must not wait for this one too.
     detail::Backoff backoff;
     while (true) {
-        for (uint32_t i = 0; i < m_num_instances; ++i) {
-            if (m_busy[i].exchange(true)) { continue; }
-            const detail::ProcessingGuard guard(m_busy[i]);
-            call.instance = i;
+        uint32_t instance = 0;
+        if (try_claim(instance)) {
+            const detail::ProcessingGuard guard(m_busy[instance]);
+            call.instance = instance;
             return prepared.process(call, chunk);
         }
         if (stop.stopping()) { return ANIRA_ERROR_INVALID_STATE; }
         backoff.pause();
     }
+}
+
+bool Loaded::try_claim(uint32_t& instance) noexcept {
+    for (uint32_t i = 0; i < m_num_instances; ++i) {
+        if (m_busy[i].load(std::memory_order::seq_cst) ||
+            m_busy[i].exchange(true, std::memory_order::seq_cst)) {
+            continue;
+        }
+        instance = i;
+        return true;
+    }
+    return false;
+}
+
+void Loaded::release(uint32_t instance) noexcept {
+    m_busy[instance].store(false, std::memory_order::seq_cst);
 }
 
 // ---- Prepared -------------------------------------------------------------------------------
@@ -143,6 +159,16 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
         return process(call, chunk);
     }
     return m_loaded->claim_and_run(*this, call, chunk, stop);
+}
+
+anira_status Prepared::run_claimed(const anira_engine_ctx& ctx,
+                                   ChunkBuffers* chunk,
+                                   uint32_t instance) noexcept {
+    if (!m_loaded->m_loaded) { return ANIRA_ERROR_INVALID_STATE; }
+    anira_engine_ctx call = ctx;
+    call.loaded = m_loaded->engine_loaded();
+    call.instance = instance;
+    return process(call, chunk);
 }
 
 // ---- ExecutorLoaded -------------------------------------------------------------------------

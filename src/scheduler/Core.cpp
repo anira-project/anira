@@ -41,6 +41,7 @@
 #include "../engines/Adapters.h"
 #include "../engines/LegacyAdapter.h"
 #include "../utils/StatusError.h"
+#include "InstanceWaitList.h"
 #include "LogDrainLoop.h"
 
 namespace anira {
@@ -152,6 +153,9 @@ struct Core::State {
         engine::Model m_model;
         const void* m_carrier = nullptr;
         std::shared_ptr<engine::Loaded> m_loaded;
+        /// The jobs that wait for a free shared instance of m_loaded, handed to every plan slot
+        /// on the entry with the loaded model (SessionElement::PlanSlot::m_waiting).
+        std::shared_ptr<InstanceWaitList> m_waiting;
     };
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
 };
@@ -322,9 +326,10 @@ bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions
 }
 
 // Stops the threads of `pool` from index `first` on and joins them. Every one is told first,
-// then joined (the destructors join): a thread that waits for a free instance of a loaded
-// model gives up once told (engine::Loaded::claim_and_run), so a join never waits on it while
-// another thread of the pool holds the instance inside an engine.
+// then joined (the destructors join): no thread waits for a free instance of a loaded model
+// (a job whose model is busy waits on the model's InstanceWaitList, not on a thread), and a
+// thread that holds an instance takes no more waiting jobs once told (it gives each up), so a
+// join waits for the inferences inside an engine and nothing else.
 void stop_and_join(std::vector<std::unique_ptr<InferenceThread>>& pool, size_t first = 0) {
     for (size_t i = first; i < pool.size(); ++i) { pool[i]->request_stop(); }
     pool.erase(pool.begin() + static_cast<ptrdiff_t>(first), pool.end());
@@ -772,7 +777,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
-            slot.m_loaded = acquire_loaded_locked(state, request, inference_config, pool_size);
+            acquire_loaded_locked(state, request, inference_config, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
@@ -853,10 +858,11 @@ std::shared_ptr<engine::BuiltinEngine> Core::find_or_make_builtin_engine(State& 
     return object;
 }
 
-std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
-                                                            const engine::PlanRequest& request,
-                                                            InferenceConfig& inference_config,
-                                                            size_t pool_size) {
+void Core::acquire_loaded_locked(State& state,
+                                 const engine::PlanRequest& request,
+                                 InferenceConfig& inference_config,
+                                 size_t pool_size,
+                                 SessionElement::PlanSlot& slot) {
     switch (request.m_source) {
         case engine::Source::Legacy: {
             // A caller's 2.x backend: this session's alone, loaded through the adapter.
@@ -867,13 +873,15 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
             }
             auto loaded = std::make_shared<engine::LegacyLoaded>(*request.m_backend);
             loaded->load(request.m_model);
-            return loaded;
+            slot.m_loaded = std::move(loaded);
+            return;
         }
         case engine::Source::Roundtrip: {
             // The 2.x default processor over this session's configuration: its own.
             auto loaded = std::make_shared<engine::LegacyLoaded>(inference_config);
             loaded->load(request.m_model);
-            return loaded;
+            slot.m_loaded = std::move(loaded);
+            return;
         }
         case engine::Source::BuiltIn:
         case engine::Source::Registered: break;
@@ -883,7 +891,9 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
     const void* const carrier = request.m_carrier.get();
     for (const State::PoolEntry& entry : state.m_loaded_models) {
         if (entry.m_carrier == carrier && entry.m_model == request.m_model) {
-            return entry.m_loaded;
+            slot.m_loaded = entry.m_loaded;
+            slot.m_waiting = entry.m_waiting;
+            return;
         }
     }
     std::shared_ptr<engine::Loaded> loaded;
@@ -918,9 +928,13 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
     init.context = request.m_context;
     loaded->init(init);
     loaded->load(request.m_model);
-    state.m_loaded_models.push_back(
-        State::PoolEntry{.m_model = request.m_model, .m_carrier = carrier, .m_loaded = loaded});
-    return loaded;
+    auto waiting = std::make_shared<InstanceWaitList>();
+    state.m_loaded_models.push_back(State::PoolEntry{.m_model = request.m_model,
+                                                     .m_carrier = carrier,
+                                                     .m_loaded = loaded,
+                                                     .m_waiting = waiting});
+    slot.m_loaded = std::move(loaded);
+    slot.m_waiting = std::move(waiting);
 }
 
 void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {

@@ -1111,12 +1111,14 @@ bool wait_until(Done&& done, std::chrono::milliseconds timeout) {
 
 }  // namespace
 
-// A pool stop does not wait for a thread that waits for a busy instance. One instance, two
-// threads: the gate holds the first inference inside the engine and the second thread waits
-// in the claim loop for the instance. Core::shutdown (the library-unload hook's backstop, the
-// one pool stop a live handler allows) tells every thread first: the waiting one gives up at
-// once (its chunk fails: zeros, ANIRA_ERROR_ENGINE on the latch, one log record), and the stop
-// returns as soon as the holder's inference does. The handler is destroyed cleanly after.
+// A pool stop does not wait for the jobs that wait for a busy instance. One instance, two
+// threads: the gate holds the first inference inside the engine and the second job waits on
+// the model's wait list while its thread goes back to the queue. Core::shutdown (the
+// library-unload hook's backstop, the one pool stop a live handler allows) tells every thread
+// first: the idle one leaves at once, and the holder, done with its inference, gives the
+// waiting job up (its chunk fails: zeros, ANIRA_ERROR_ENGINE on the latch, one log record)
+// instead of running it, so the stop returns as soon as the holder's inference does. The
+// handler is destroyed cleanly after.
 TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     const Context context(2);
     anira::ModelConfig model = gain_with_custom();
@@ -1135,7 +1137,7 @@ TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     RecordCollector collector;
 
     // Two blocks, two inferences: the first holds the instance behind the closed gate, the
-    // second's thread waits for it.
+    // second waits on the wait list.
     gate.m_open.store(false);
     for (size_t k = 1; k <= 2; ++k) {
         const std::vector<float> in = ramp(k);
@@ -1145,7 +1147,7 @@ TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     }
     ASSERT_TRUE(
         wait_until([&gate]() { return gate.m_entered.load() == 1; }, std::chrono::seconds(5)));
-    // The idle thread polls the queue every 100 us at most: after 200 ms it waits in the claim.
+    // The idle thread polls the queue every 100 us at most: after 200 ms the job waits.
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
     EXPECT_EQ(gate.m_entered.load(), 1) << "one instance, one inference inside the engine";
 
@@ -1158,7 +1160,7 @@ TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     // which the stop holds while it joins.
     EXPECT_TRUE(wait_until([]() { return anira::InferenceThread::get_num_loop_active() == 1U; },
                            std::chrono::seconds(2)))
-        << "the waiting thread did not leave at the stop";
+        << "the idle thread did not leave at the stop";
     EXPECT_EQ(gate.m_calls.load(), 0) << "the holder is still inside the engine";
     EXPECT_FALSE(stopped.load()) << "the stop joins the holder, whose inference still runs";
 

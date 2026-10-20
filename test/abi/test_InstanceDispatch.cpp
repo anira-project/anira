@@ -6,12 +6,19 @@
 // instance, fed several blocks at once so that its jobs overlap) and B (another stateless
 // model, one instance, fed one block at a time). The measurement is B's completion delay, the
 // time from the push of its block to the end of its inference inside its engine, with A
-// loaded against B alone, and A's throughput; printed for both wait strategies.
+// loaded against B alone, and A's throughput; printed for both wait strategies. With the
+// instance-aware dispatch (a job whose model is busy waits on the model's wait list, not on a
+// thread) B's delay with A loaded stays within twice its delay alone; on the dispatch before it
+// every thread waited for A's instance with a job of A in hand and B's job sat behind them
+// (5 ms alone, 25 ms loaded under spin-backoff, 35 ms under blocking).
+#include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
+#include <anira/abi/thread.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -137,6 +144,7 @@ Measurement measure(anira_wait_strategy wait) {
     SleepingEngine engine_b;
     const anira::ModelConfig model = one_instance_model();
     std::vector<std::unique_ptr<Handler>> a_handlers;
+    a_handlers.reserve(k_a_handlers);
     for (size_t i = 0; i < k_a_handlers; ++i) {
         a_handlers.push_back(std::make_unique<Handler>(context,
                                                        model,
@@ -213,18 +221,54 @@ Measurement measure(anira_wait_strategy wait) {
     return result;
 }
 
-}  // namespace
-
-// The head-of-line measurement under ANIRA_WAIT_SPIN_BACKOFF; prints the numbers.
-TEST(AbiInstanceDispatch, MeasuresAnotherModelsDelayBehindASlowModelSpinBackoff) {
-    const Measurement result = measure(ANIRA_WAIT_SPIN_BACKOFF);
+/// The bound: B's median delay with A loaded within twice its median delay alone.
+void expect_not_held_up(const Measurement& result) {
     EXPECT_GT(result.m_b_alone_median_ms, 0.0);
     EXPECT_GT(result.m_a_inferences_per_s, 0.0);
+    EXPECT_LT(result.m_b_loaded_median_ms, 2.0 * result.m_b_alone_median_ms)
+        << "B's job waited behind A's: the threads held A's jobs while A's instance was busy";
 }
 
-// The same under ANIRA_WAIT_BLOCKING.
-TEST(AbiInstanceDispatch, MeasuresAnotherModelsDelayBehindASlowModelBlocking) {
-    const Measurement result = measure(ANIRA_WAIT_BLOCKING);
-    EXPECT_GT(result.m_b_alone_median_ms, 0.0);
-    EXPECT_GT(result.m_a_inferences_per_s, 0.0);
+}  // namespace
+
+// The head-of-line measurement under ANIRA_WAIT_SPIN_BACKOFF: B is not held up behind A.
+TEST(AbiInstanceDispatch, AnotherModelsJobIsNotHeldUpBehindASlowModelSpinBackoff) {
+    expect_not_held_up(measure(ANIRA_WAIT_SPIN_BACKOFF));
+}
+
+// The same under ANIRA_WAIT_BLOCKING: an instance given back wakes nobody (the thread that
+// gives it back runs the waiting job itself), and B's job is still not held up.
+TEST(AbiInstanceDispatch, AnotherModelsJobIsNotHeldUpBehindASlowModelBlocking) {
+    expect_not_held_up(measure(ANIRA_WAIT_BLOCKING));
+}
+
+// The jobs on a wait list are counted like queued ones: a handler destroyed while its jobs
+// wait for the instance another of its jobs holds inside the engine returns once that
+// inference is done, and the waiting jobs are skipped (their session is uninitialised by the
+// release) by the thread that holds the instance, never run on the engine and never stranded.
+TEST(AbiInstanceDispatch, AReleasedSessionsWaitingJobsAreSkippedNotStranded) {
+    const Context context(k_threads);
+    SleepingEngine engine;
+    engine.m_sleep_us = 0;
+    Handler handler(context, one_instance_model(), k_custom_only, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    ASSERT_GE(anira_test::session_of(handler.m_handler)->m_num_structs, 3U);
+
+    // Three blocks: the first holds the instance behind the closed gate, the other two wait.
+    engine.m_open.store(false);
+    for (int block = 0; block < 3; ++block) { push_block(handler.m_handler); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_EQ(engine.m_calls.load(), 0);
+
+    std::atomic<bool> destroyed{false};
+    std::thread destroyer([&handler, &destroyed]() {
+        handler.destroy();
+        destroyed.store(true);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    EXPECT_FALSE(destroyed.load()) << "the release waits for the inference inside the engine";
+    engine.m_open.store(true);
+    destroyer.join();
+    EXPECT_TRUE(destroyed.load());
+    EXPECT_EQ(engine.m_calls.load(), 1) << "the two waiting jobs never reached the engine";
 }
