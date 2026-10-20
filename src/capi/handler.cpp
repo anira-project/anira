@@ -11,9 +11,11 @@
 //
 // One face over the copy path (InferenceManager's tensor stems): the Hard entries take host
 // tensors, one per slot. They validate every descriptor (anira::tensor_run::check_host_tensor,
-// src/scheduler/TensorRun.h), hand the arrays to the stems as they are and report the counts
-// the stems return. A host that holds float channel pointers presents them itself, as one
-// planar tensor over its pointer array (anira_tensor_init_host_planar).
+// src/scheduler/TensorRun.h) and its count against the declared block (one host block of
+// block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
+// cut to its tail), hand the arrays to the stems as they are and report the counts the stems
+// return. A host that holds float channel pointers presents them itself, as one planar tensor
+// over its pointer array (anira_tensor_init_host_planar).
 //
 // The stems move Streamed slots. A Static slot has no ring: its value lives in the
 // handler's static port (port.h), a whole tensor in the spec's shape and dtype, written
@@ -47,6 +49,7 @@
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -195,12 +198,38 @@ bool both_slots(const anira_handler& handler,
 
 // ==== the host tensors ========================================================================
 
+// The count of a well-formed host block against its slot's stream port: one host block of the
+// geometry's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
+// rings were sized for. A larger block is refused before anything moves, never cut to its
+// tail. A compare against prepare's figure: no allocation, no lock. Recorded and logged like
+// every other refusal, naming the slot and the bound.
+anira_status block_count_status(anira_handler& handler,
+                                const anira::capi::StreamPort& port,
+                                const anira_tensor& tensor,
+                                bool input,
+                                [[maybe_unused]] uint32_t slot,
+                                [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
+    if (std::cmp_less_equal(tensor.shape[1], port.m_max_samples)) { return ANIRA_OK; }
+    if (!handler.m_rt.record(ANIRA_ERROR_INVALID_ARGUMENT)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
+                           "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
+                           "host block of the geometry's block_max (%zu on this stream); nothing "
+                           "moved. Declare the largest block the host passes as block_max",
+                           entry,
+                           input ? "input" : "output",
+                           slot,
+                           slot_name(handler, input, slot),
+                           static_cast<long long>(tensor.shape[1]),
+                           port.m_max_samples);
+    return ANIRA_ERROR_INVALID_ARGUMENT;
+}
+
 // One host tensor of a tensor form against its slot's stream port: the check the manager's
 // stems leave to their caller (anira::tensor_run::check_host_tensor: a status only, no
-// allocation, no log, the order rank, domain, flags, shape, dtype, memory and strides). A
-// refusal is recorded last-wins like every other and logged on the kind's first occurrence,
-// naming the slot. Every caller asked the port first (input_slot, output_slot,
-// side_tensors_status): `slot` has a stream port.
+// allocation, no log, the order rank, domain, flags, shape, dtype, memory and strides), then
+// its count against the block (block_count_status). A refusal is recorded last-wins like every
+// other and logged on the kind's first occurrence, naming the slot. Every caller asked the port
+// first (input_slot, output_slot, side_tensors_status): `slot` has a stream port.
 anira_status slot_tensor_status(anira_handler& handler,
                                 const anira_tensor& tensor,
                                 bool input,
@@ -213,7 +242,10 @@ anira_status slot_tensor_status(anira_handler& handler,
     const uint32_t channels = port->m_channels;
     const anira_status status =
         anira::tensor_run::check_host_tensor(tensor, dtype, channels, /*output=*/!input);
-    if (status == ANIRA_OK || !handler.m_rt.record(status)) { return status; }
+    if (status == ANIRA_OK) {
+        return block_count_status(handler, *port, tensor, input, slot, entry);
+    }
+    if (!handler.m_rt.record(status)) { return status; }
     [[maybe_unused]] const char* side = input ? "input" : "output";
     switch (status) {
         case ANIRA_ERROR_CONFIG:
@@ -595,6 +627,25 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
 }
 
 // ==== prepare's pieces ========================================================================
+
+// The host block in hops, rho = B / R, as the latency calculation takes it
+// (LatencyCalculator's constructor): the geometry's block_max over the reference stream's
+// samples per hop, the reduced fraction rationalize() recovers from the float.
+anira::LatencyCalculator::Rational block_in_hops(const anira::HostConfig& host,
+                                                 const anira::InferenceConfig& config) {
+    const auto reference_size = static_cast<double>(host.get_reference_size(config));
+    return anira::LatencyCalculator::rationalize(static_cast<double>(host.m_buffer_size) /
+                                                 reference_size);
+}
+
+// One host block in samples of a stream with `hop` samples per hop: ceil(rho * hop), the
+// block the send ring holds besides the adaptation leftover (LatencyCalculator), so floor(b)
+// and ceil(b) of a fractional block b both fit. 0 for a slot without a stream.
+size_t host_block_samples(const anira::LatencyCalculator::Rational& block_hops, size_t hop) {
+    const int64_t numerator = block_hops.m_numerator * static_cast<int64_t>(hop);
+    return static_cast<size_t>((numerator + block_hops.m_denominator - 1) /
+                               block_hops.m_denominator);
+}
 
 // What the manager calls once per missed block under ANIRA_MISS_CALLBACK, on the thread that
 // drives the call: it forwards the arrays the copy path was handed, as they are, to the host's
@@ -1604,29 +1655,31 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_num_entries = stage_processor->num_entries();
 
     // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
-    // block must carry (the resolved ring dtype) and the channel count of a host block; then
-    // the empty tensors of the single-tensor forms. A Static slot has no ring and no host
-    // block: its entry of either array stays the empty tensor, and its tensors are checked
-    // against the static port's value. A State slot has neither a ring nor a value: its entry
-    // is an empty tensor nothing ever replaces.
+    // block must carry (the resolved ring dtype), the channel count of a host block and the
+    // most samples it may carry (one host block of block_max on the slot's stream); then the
+    // empty tensors of the single-tensor forms. A Static slot has no ring and no host block:
+    // its entry of either array stays the empty tensor, and its tensors are checked against the
+    // static port's value. A State slot has neither a ring nor a value: its entry is an empty
+    // tensor nothing ever replaces.
     const anira::InferenceConfig& prepared = handler.m_inference_config;
+    const anira::LatencyCalculator::Rational block_hops = block_in_hops(host, prepared);
     for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
         if (stream == nullptr) { continue; }
+        const size_t hop = prepared.get_preprocess_input_size()[slot];
         stream->m_ring_dtype = ring_dtypes.m_inputs[slot];
         stream->m_channels =
-            prepared.get_preprocess_input_size()[slot] > 0
-                ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot])
-                : 1U;
+            hop > 0 ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot]) : 1U;
+        stream->m_max_samples = host_block_samples(block_hops, hop);
     }
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
         if (stream == nullptr) { continue; }
+        const size_t hop = prepared.get_postprocess_output_size()[slot];
         stream->m_ring_dtype = ring_dtypes.m_outputs[slot];
         stream->m_channels =
-            prepared.get_postprocess_output_size()[slot] > 0
-                ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot])
-                : 1U;
+            hop > 0 ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot]) : 1U;
+        stream->m_max_samples = host_block_samples(block_hops, hop);
     }
     handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
     handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);

@@ -362,7 +362,8 @@ minted again. On an Async handle it throws ``anira::Error`` with
   geometry left at zero is valid for the same reason). The blocks are doubles: both 0 (unset)
   or both finite and above 0 with ``block_min <= block_max``; anything else is
   ``ANIRA_ERROR_INVALID_ARGUMENT`` with a message naming the value. A block may be fractional
-  (see *Fractional blocks* below).
+  (see *Fractional blocks* below). ``block_max`` is also the most one call may carry: declare
+  the largest block the host passes, since a Hard entry refuses a larger one.
 - **Budget.** ``ANIRA_BUDGET_EXPLICIT`` with ``budget_value``, a ``std::chrono`` duration
   holding the measured worst-case inference time per inference at the pinned window, or
   ``ANIRA_BUDGET_MEASURED`` (the default) to derive it during warmup. An inference that
@@ -502,9 +503,12 @@ fourth carries 1; the host keeps the running count itself:
     anira_handler_process(handler, &latent_in, 0, &params_out, 0, &delivered);
 
 The latency is computed for the worst case, the sample arriving on the last call of its
-accumulation (the latency guide, :doc:`latency`). Nothing refuses a call that carries more than
-the geometry allows (for a whole block no more than for a fractional one): the rings are not
-sized for it, and a pop the stream cannot cover returns ``ANIRA_MISSED``.
+accumulation (the latency guide, :doc:`latency`). ``ceil(b)`` is the most one call may carry,
+on a whole block (``block_max`` scaled to the stream) as on a fractional one, and it is
+enforced: a Hard entry handed more on any Streamed slot, pushed or popped, refuses the call
+with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves and records it in ``rt_error``,
+where the ring would only have kept the tail. A pop within the bound that the stream cannot
+cover returns ``ANIRA_MISSED``.
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
@@ -1501,9 +1505,12 @@ writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a ra
 ``ANIRA_TENSOR_READ_ONLY`` on an output, ``shape[0]`` other than the slot's channel count, a
 negative ``shape[1]``, and with samples: NULL memory, a plane count other than ``shape[0]``, a
 NULL plane, a negative stride, a stride of ``0`` on an axis longer than 1 unless every stride
-is ``0``, a channel that does not start on a multiple of the element size), a flag bit this
-library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the checks run in the order rank,
-domain, flags, shape, dtype, memory and strides, the input before the output. ``delivered``
+is ``0``, a channel that does not start on a multiple of the element size), and so is a
+``shape[1]`` above one host block of ``block_max`` on the slot's stream (``ceil`` of the block,
+*Fractional blocks* in section 1.3: a call carries one declared block at most, never cut to
+its tail), a flag bit this library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the
+checks run in the order rank, domain, flags, shape, dtype, memory and strides, then the count
+against the block, the input before the output. ``delivered``
 is a nullable pure out parameter (an array of ``num_outputs`` counts in the multi forms),
 written on every return: zeroed first, then ``shape[1]`` of each Streamed output on
 ``ANIRA_OK`` and ``0`` on ``ANIRA_MISSED`` and on a failure (a carried Static output of a multi

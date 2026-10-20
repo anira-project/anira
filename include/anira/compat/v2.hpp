@@ -405,7 +405,7 @@ struct HostConfig {
         , m_tensor_index(tensor_index)
         , m_tensor_is_input(tensor_is_input) {}
 
-    float m_buffer_size = 0;                     ///< the host's largest block, a whole number
+    float m_buffer_size = 0;                     ///< the host's largest block: no call carries more
     float m_sample_rate = 0;                     ///< Hz
     bool m_allow_smaller_buffers = false;        ///< blocks below m_buffer_size may come
     size_t m_tensor_index = k_first_streamable;  ///< the reference tensor's index
@@ -1969,7 +1969,9 @@ struct Context {
  * prepare); a prepare with the settings of the last one only resets the stream, one with another
  * geometry loads the models again, one with another reference tensor rebuilds the C handler; the
  * single forms carry their one slot per side and nothing else (2.x resent what the last call
- * left in the other slots); push_data never waits, pop_data with a deadline polls on a handler
+ * left in the other slots); a block above the HostConfig buffer size (ceil of it, scaled to each
+ * stream) is refused, nothing moves and rt_error() reports ANIRA_ERROR_INVALID_ARGUMENT (2.x kept
+ * its tail); push_data never waits, pop_data with a deadline polls on a handler
  * without a blocking ratio, and set_non_realtime is never refused (a wait without an inference
  * loop fails the call instead, which rt_error() reports); set_inference_backend of a backend
  * without a plan keeps the selection and logs; get_num_inference_threads is the pool size, 0 until

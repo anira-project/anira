@@ -519,7 +519,8 @@ rest of this page is the way forward, and the header lets that happen one class 
 
 **Behaviour that differs** is listed per class in :ref:`migration-compat-config`; in short:
 nothing loads before ``prepare``, and a ``prepare`` with other settings loads again; the
-single forms carry one slot per side; ``push_data`` never waits;
+single forms carry one slot per side; a block above the ``HostConfig`` buffer size is refused;
+``push_data`` never waits;
 ``pop_data`` with a deadline polls on a handler without a blocking ratio;
 ``set_non_realtime`` is never refused (a waiting call without an inference loop fails instead);
 ``set_inference_backend`` of a backend without a plan logs and keeps the selection;
@@ -693,6 +694,13 @@ What differs from 2.x:
   ``ANIRA_ERROR_INVALID_ARGUMENT`` (2.x threw ``std::invalid_argument`` or asserted).
 - **The single forms** carry their one slot per side and nothing else; 2.x resent what the last
   call had left in the other slots.
+- **A block above the buffer size** is refused: a ``process``, ``push_data`` or ``pop_data`` call
+  that carries more than ``m_buffer_size`` samples of the reference stream (``ceil`` of it, scaled
+  to every other stream by its hop) moves nothing, delivers 0 and leaves
+  ``ANIRA_ERROR_INVALID_ARGUMENT`` in ``rt_error()``, as every Hard entry of the C handler does
+  (section 1.3 of the usage guide, *Fractional blocks*). 2.x took any count and kept the tail of a
+  push larger than its ring. Prepare with the largest block the host passes, with
+  ``m_allow_smaller_buffers`` for the smaller ones.
 - **Waits:** ``push_data`` never waits (2.x waited under ``set_non_realtime``); ``pop_data`` with
   a deadline polls on a handler without a blocking ratio (2.x neither waited nor collected);
   ``set_non_realtime(true)`` is never refused, and without an inference loop each waiting call

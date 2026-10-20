@@ -286,6 +286,7 @@ public:
         m_positions.assign(handler->m_num_inputs, 0);
 
         std::vector<unsigned int> latencies;
+        latencies.reserve(handler->m_num_outputs);
         for (uint32_t i = 0; i < handler->m_num_outputs; ++i) {
             latencies.push_back(anira_handler_get_latency(handler, i));
         }

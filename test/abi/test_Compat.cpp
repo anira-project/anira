@@ -2189,6 +2189,42 @@ TEST(AbiCompat, ANonPositiveHostConfigIsRefused) {
     EXPECT_EQ(status_of([&] { handler.prepare(v2::HostConfig(512.F, 48000.F)); }), ANIRA_OK);
 }
 
+// Case 32, a deviation: a block above the HostConfig buffer size is refused through the shim,
+// as every Hard entry refuses a call above the declared block. process, push_data and pop_data
+// of one sample more move nothing (no ring changes, 0 is delivered, the output memory is left
+// alone) and rt_error() reports ANIRA_ERROR_INVALID_ARGUMENT; 2.x took the block, and the 2.x
+// class beside it still does (its path is untouched). The buffer size itself passes.
+TEST(AbiCompat, ABlockAboveTheBufferSizeIsRefused) {
+    Pair pair(gain_custom_arguments());
+    pair.prepare();
+    pair.set_gain(1.F);
+    constexpr size_t k_above = anira_test::k_block + 1;
+    std::vector<float> in(k_above, 1.F);
+    std::vector<float> out(k_above, -1.F);
+    const std::array<const float*, 1> in_ch{in.data()};
+    const std::array<float*, 1> out_ch{out.data()};
+
+    const size_t available = pair.m_handler.get_available_samples(0);
+    EXPECT_EQ(pair.m_handler.process(in_ch.data(), k_above, out_ch.data(), k_above), 0U);
+    EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_ERROR_INVALID_ARGUMENT);
+    pair.m_handler.push_data(in_ch.data(), k_above);
+    EXPECT_EQ(pair.m_handler.pop_data(out_ch.data(), k_above), 0U);
+    EXPECT_EQ(pair.m_handler.get_available_samples(0), available) << "nothing moved";
+    for (const float value : out) { EXPECT_EQ(value, -1.F) << "nothing was written"; }
+
+    const size_t old_available = pair.m_old_handler.get_available_samples(0);
+    pair.m_old_handler.push_data(in_ch.data(), k_above);
+    wait_ring(pair.m_old_handler, old_available + anira_test::k_block);
+    EXPECT_FALSE(::testing::Test::HasFatalFailure()) << "the 2.x class took the block";
+
+    EXPECT_EQ(pair.m_handler.process(in_ch.data(),
+                                     anira_test::k_block,
+                                     out_ch.data(),
+                                     anira_test::k_block),
+              anira_test::k_block)
+        << "the buffer size passes";
+}
+
 namespace {
 
 /// The decoder shape of a control-rate model: one latent sample in, k_upsample audio samples

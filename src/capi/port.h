@@ -313,6 +313,11 @@ private:
 struct StreamPort {
     uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
     anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry
+    /// The most samples a host block of the slot may carry, shape[1]: one host block of the
+    /// geometry's block_max on the slot's stream, ceil(rho * P) with rho the block in hops and
+    /// P the slot's samples per hop (LatencyCalculator), what the latency and the rings were
+    /// sized for. 0 before prepare.
+    size_t m_max_samples = 0;
     /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
     /// by StageProcessor::bind and valid while that session lives; NULL before.
     anira_ring* m_ring = nullptr;

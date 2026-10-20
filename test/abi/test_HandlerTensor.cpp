@@ -1935,10 +1935,10 @@ TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) 
 }
 
 // A host that pops more than has accumulated -- a whole sample on every call under the block
-// 0.25, while its input moves by the rule -- is not refused (the rings are sized for floor or
-// ceil of the block, and a count above it is not checked, as for a whole block): a pop the
-// settled ring cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and
-// the miss policy's zeros in the block.
+// 0.25, while its input moves by the rule -- is not refused (one sample is ceil of the block,
+// the most a call may carry, AHostBlockAboveTheDeclaredBlockIsRefused): a pop the settled ring
+// cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and the miss
+// policy's zeros in the block.
 TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
     const FractionalRig rig;
     ASSERT_NE(rig.get(), nullptr);
@@ -1978,6 +1978,249 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
     }
     EXPECT_GT(missed, 0U) << "four pops for every accumulated sample outrun the stream";
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "a miss is not a refusal";
+}
+
+// ---- the block bound ---------------------------------------------------------------------------
+
+/// A mono pass-through on one stream of `hop` samples per hop under the geometry
+/// block_min..block_max at `rate`, at the debug level (the refusal's record is collected), on
+/// the pass-through engine of the pipeline. bound() is one host block of block_max on the
+/// stream, ceil(block_max / hop * hop): the most samples one call may carry.
+struct BoundRig {
+    BoundRig(int64_t hop, double block_min, double block_max, double rate)
+        : m_context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG)
+        , m_handler(m_context, model(hop), m_candidates)
+        , m_bound(static_cast<size_t>(std::ceil(block_max))) {
+        anira::ContractHandle contract =
+            anira_test::explicit_contract(1, rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+        contract.hard_geometry(block_min, block_max, rate);
+        EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
+        m_session = anira_test::session_of(get());
+    }
+
+    static ModelConfig model(int64_t hop) {
+        ModelConfig model;
+        model.add_model_path(anira_test::k_custom, "custom-processor");
+        for (const bool input : {true, false}) {
+            TensorSpec spec(input ? "audio_in" : "audio_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+            spec.axis(0, ANIRA_AXIS_BATCH, 1)
+                .axis(1, ANIRA_AXIS_CHANNEL, 1)
+                .axis(2, ANIRA_AXIS_TIME, hop)
+                .window(hop, hop, 0);
+            if (input) {
+                model.input(spec);
+            } else {
+                model.output(spec);
+            }
+        }
+        return model;
+    }
+
+    anira_handler* get() const { return m_handler.m_handler; }
+    size_t bound() const { return m_bound; }
+
+    /// The samples waiting in the send ring and in the receive ring, read off the session:
+    /// nothing collects.
+    std::array<size_t, 2> levels() const {
+        return {m_session->m_send_buffer[0].get_available_samples(0),
+                m_session->m_receive_buffer[0].get_available_samples(0)};
+    }
+
+private:
+    anira_test::Context m_context;
+    std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
+                                                .engine = ANIRA_ENGINE_CUSTOM,
+                                                .provider = ANIRA_PROVIDER_CPU,
+                                                .engine_id = anira_test::k_custom}};
+    anira_test::Handler m_handler;
+    size_t m_bound;
+    std::shared_ptr<anira::SessionElement> m_session;
+};
+
+/// A mono host block of `count` samples over `memory` (at least `count` floats; an output
+/// block is filled with k_untouched first, so a write shows).
+anira_tensor mono_block(std::vector<float>& memory, size_t count) {
+    const std::array<int64_t, 2> shape{1, static_cast<int64_t>(count)};
+    anira_tensor tensor{};
+    anira_tensor_init_host(&tensor, memory.data(), ANIRA_DTYPE_F32, 2, shape.data());
+    return tensor;
+}
+
+/// Every Hard entry that moves a Streamed slot, handed `count` samples on its input, its
+/// output or both, against `rig`: each is refused with ANIRA_ERROR_INVALID_ARGUMENT when the
+/// count is above the bound, before anything moves (the rings stay where they were and the
+/// output memory is untouched, every delivered count is 0), and rt_error records it.
+void expect_every_entry_refuses(const BoundRig& rig, size_t count) {
+    anira_handler* h = rig.get();
+    const size_t bound = rig.bound();
+    std::vector<float> big(count, 1.0F);
+    std::vector<float> fits(bound, 1.0F);
+    std::vector<float> out(count, k_untouched);
+    const anira_tensor big_in = mono_block(big, count);
+    const anira_tensor fit_in = mono_block(fits, bound);
+    const anira_tensor big_out = mono_block(out, count);
+    std::vector<float> fit_memory(bound, k_untouched);
+    const anira_tensor fit_out = mono_block(fit_memory, bound);
+    const std::array<size_t, 2> before = rig.levels();
+
+    const auto expect_refused = [&](anira_status status, const char* entry) {
+        EXPECT_EQ(status, ANIRA_ERROR_INVALID_ARGUMENT) << entry << " of " << count << " samples";
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT) << entry;
+        EXPECT_EQ(rig.levels(), before) << entry << ": nothing moved";
+        for (const float value : out) { EXPECT_EQ(value, k_untouched) << entry; }
+        for (const float value : fit_memory) { EXPECT_EQ(value, k_untouched) << entry; }
+    };
+
+    size_t delivered = k_unset;
+    expect_refused(anira_handler_push_data(h, &big_in, 0), "push_data");
+    expect_refused(anira_handler_push_data_multi(h, &big_in, 1), "push_data_multi");
+    expect_refused(anira_handler_pop_data(h, &big_out, 0, &delivered), "pop_data");
+    EXPECT_EQ(delivered, 0U);
+    delivered = k_unset;
+    expect_refused(anira_handler_pop_data_multi(h, &big_out, 1, &delivered), "pop_data_multi");
+    EXPECT_EQ(delivered, 0U);
+    delivered = k_unset;
+    expect_refused(anira_handler_process(h, &big_in, 0, &fit_out, 0, &delivered),
+                   "process, the input");
+    EXPECT_EQ(delivered, 0U);
+    delivered = k_unset;
+    expect_refused(anira_handler_process(h, &fit_in, 0, &big_out, 0, &delivered),
+                   "process, the output");
+    EXPECT_EQ(delivered, 0U);
+    delivered = k_unset;
+    expect_refused(anira_handler_process_multi(h, &big_in, 1, &fit_out, 1, &delivered),
+                   "process_multi, the input");
+    expect_refused(anira_handler_process_multi(h, &fit_in, 1, &big_out, 1, &delivered),
+                   "process_multi, the output");
+    EXPECT_EQ(delivered, 0U);
+    delivered = k_unset;
+    expect_refused(
+        anira_handler_process_wait(h, &big_in, 0, &fit_out, 0, &delivered, ANIRA_WAIT_FOREVER),
+        "process_wait");
+    expect_refused(anira_handler_process_multi_wait(h,
+                                                    &fit_in,
+                                                    1,
+                                                    &big_out,
+                                                    1,
+                                                    &delivered,
+                                                    ANIRA_WAIT_FOREVER),
+                   "process_multi_wait");
+    expect_refused(anira_handler_pop_data_wait(h, &big_out, 0, &delivered, ANIRA_WAIT_FOREVER),
+                   "pop_data_wait");
+    expect_refused(
+        anira_handler_pop_data_multi_wait(h, &big_out, 1, &delivered, ANIRA_WAIT_FOREVER),
+        "pop_data_multi_wait");
+    EXPECT_EQ(delivered, 0U);
+}
+
+/// The bound itself passes on every side and the stream stays whole: a push of the bound, then
+/// (settled) a pop of the bound, then the waiting twin of an in-place process of the bound
+/// (which returns with its own inference collected). Every popped sample is the pass-through's,
+/// the latency's zeros first, and nothing is written past the block. `pushed` and `popped`
+/// count the stream's samples so far.
+void expect_the_bound_passes(const BoundRig& rig, size_t& pushed, size_t& popped) {
+    anira_handler* h = rig.get();
+    const size_t bound = rig.bound();
+    const size_t latency = anira_handler_get_latency(h, 0);
+    // The input ramp from stream position `first`, one guard float past the block.
+    const auto ramp = [bound](size_t first) {
+        std::vector<float> block(bound + 1, k_untouched);
+        for (size_t i = 0; i < bound; ++i) { block[i] = static_cast<float>(first + i + 1); }
+        return block;
+    };
+    const auto expect_stream = [&](const std::vector<float>& out, const char* call) {
+        for (size_t i = 0; i < bound; ++i) {
+            const size_t sample = popped + i;
+            const float expected =
+                sample < latency ? 0.F : static_cast<float>(sample - latency + 1);
+            EXPECT_EQ(out[i], expected) << call << ", sample " << sample;
+        }
+        EXPECT_EQ(out[bound], k_untouched) << call << ": nothing past the block";
+    };
+
+    const size_t level = anira_test::available(h);  // settled on entry
+    std::vector<float> in = ramp(pushed);
+    const anira_tensor in_tensor = mono_block(in, bound);
+    EXPECT_EQ(anira_handler_push_data(h, &in_tensor, 0), ANIRA_OK);
+    pushed += bound;
+    anira_test::wait_for_available(h, level + bound);
+    ASSERT_FALSE(::testing::Test::HasFatalFailure());
+
+    std::vector<float> out(bound + 1, k_untouched);
+    const anira_tensor out_tensor = mono_block(out, bound);
+    size_t delivered = k_unset;
+    EXPECT_EQ(anira_handler_pop_data(h, &out_tensor, 0, &delivered), ANIRA_OK);
+    EXPECT_EQ(delivered, bound);
+    expect_stream(out, "pop_data");
+    popped += bound;
+
+    std::vector<float> io = ramp(pushed);
+    const anira_tensor io_tensor = mono_block(io, bound);
+    delivered = k_unset;
+    EXPECT_EQ(
+        anira_handler_process_wait(h, &io_tensor, 0, &io_tensor, 0, &delivered, ANIRA_WAIT_FOREVER),
+        ANIRA_OK);
+    EXPECT_EQ(delivered, bound);
+    expect_stream(io, "process_wait");
+    pushed += bound;
+    popped += bound;
+}
+
+// A call carries one host block of the declared block_max at most, ceil of the block on a
+// stream whose block is fractional: one sample more is ANIRA_ERROR_INVALID_ARGUMENT on every
+// Hard entry that moves a Streamed slot, on its push side and on its pop side, before anything
+// moves. The bound itself passes, the refusal is recorded in rt_error (last-wins) and logged
+// once, and the calls within the bound that follow it work: the stream goes on where it was.
+// Twice: under the integer geometry 1..8 on a hop of 8 (bound 8) and under the fractional
+// 0.25 on a hop of 1 (bound 1, ceil(0.25)).
+TEST(AbiHandlerTensor, AHostBlockAboveTheDeclaredBlockIsRefused) {
+    struct Geometry {
+        int64_t m_hop;
+        double m_block_min;
+        double m_block_max;
+        double m_rate;
+        size_t m_bound;
+    };
+    for (const Geometry geometry : {Geometry{.m_hop = 8,
+                                             .m_block_min = 1.0,
+                                             .m_block_max = 8.0,
+                                             .m_rate = 800.0,
+                                             .m_bound = 8},
+                                    Geometry{.m_hop = 1,
+                                             .m_block_min = 0.25,
+                                             .m_block_max = 0.25,
+                                             .m_rate = 100.0,
+                                             .m_bound = 1}}) {
+        SCOPED_TRACE("block_max " + std::to_string(geometry.m_block_max));
+        anira_drain_log();
+        RecordCollector collector;
+        const BoundRig rig(geometry.m_hop,
+                           geometry.m_block_min,
+                           geometry.m_block_max,
+                           geometry.m_rate);
+        ASSERT_NE(rig.get(), nullptr);
+        ASSERT_EQ(rig.bound(), geometry.m_bound);
+        anira_handler* h = rig.get();
+        size_t pushed = 0;
+        size_t popped = 0;
+        expect_the_bound_passes(rig, pushed, popped);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "the bound is not refused";
+
+        expect_every_entry_refuses(rig, geometry.m_bound + 1);
+        expect_every_entry_refuses(rig, 4 * geometry.m_bound);
+        anira_drain_log();
+#ifdef ENABLE_LOGGING
+        EXPECT_EQ(anira_test::count_records(collector, "more than one host block", "rt"), 1U)
+            << "one record for the kind, the rest counted";
+#endif
+
+        // Within the bound again: the stream goes on (the refusals moved nothing), and
+        // rt_error keeps the refusal until a reset.
+        expect_the_bound_passes(rig, pushed, popped);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT) << "last-wins";
+        anira_handler_reset(h);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
 }
 
 }  // namespace
