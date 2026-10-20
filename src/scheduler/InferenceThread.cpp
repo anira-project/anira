@@ -30,7 +30,8 @@ namespace {
 // — see InferenceThread.h. Natively this is also the active count.
 std::atomic<unsigned int> s_num_loop_active{0};
 // Process-wide count of inferences in flight: a thread holds one from the dequeue of a job
-// to its end (process_dequeued_inference), idle threads none. The unload hook waits on it.
+// to its end (process_dequeued_inference), idle threads none, and a job on a wait list one from
+// its push until a thread takes it (until it is run or given up). The unload hook waits on it.
 std::atomic<unsigned int> s_num_in_flight{0};
 // The instance argument of a job run without a claimed shared instance: an exclusive
 // session's, a 2.x backend's, or a call that claims nothing for another reason (the
@@ -243,8 +244,9 @@ bool InferenceThread::execute() {
 void InferenceThread::process_dequeued_inference() {
     // In flight from the dequeue until this thread is done with the job and with every waiting
     // job it takes after it (declared first: it ends last, after the jobs' references were
-    // dropped). A job this thread puts on a wait list leaves it: it is in flight again on the
-    // thread that takes it. The unload hook waits on this count.
+    // dropped). A job this thread puts on a wait list counts on its own while it waits (counted
+    // before the push, given back by the thread that takes it, which is in flight itself), so
+    // the unload hook's wait covers it until it is run or given up.
     s_num_in_flight.fetch_add(1, std::memory_order::acq_rel);
     struct InFlight {
         InFlight() = default;
@@ -290,6 +292,7 @@ void InferenceThread::process_dequeued_inference() {
         // it; a job taken here holds its own session).
         const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
         active->fetch_add(1, std::memory_order::seq_cst);
+        s_num_in_flight.fetch_add(1, std::memory_order::acq_rel);
         waiting->push(std::move(job));
         const bool taken = (claimed || loaded->try_claim(hold.m_instance)) &&
                            take_waiting(*waiting, *loaded, hold.m_instance, job);
@@ -343,7 +346,11 @@ bool InferenceThread::take_waiting(InstanceWaitList& waiting,
                                    uint32_t& instance,
                                    InferenceData& job) noexcept {
     while (true) {
-        if (waiting.pop(job)) { return true; }
+        if (waiting.pop(job)) {
+            // The job's own count while it waited: this thread, in flight itself, carries it on.
+            s_num_in_flight.fetch_sub(1, std::memory_order::acq_rel);
+            return true;
+        }
         // Nothing waits: give the instance back, then look once more. A job pushed after the
         // pop above whose own claim failed because this thread still held the instance is seen
         // here (the release and the look are sequentially consistent, as are the push and the

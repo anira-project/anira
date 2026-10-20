@@ -190,8 +190,9 @@ public:
      *
      * A thread holds one from the moment it dequeued a job until it is done with it and with
      * every job waiting for the same model's instance it ran after it: the hooks and the
-     * engine calls, or the skips of stale or uninitialised jobs. A job put on a wait list is
-     * not in flight until a thread takes it; idle threads waiting for work count nothing. Every
+     * engine calls, or the skips of stale or uninitialised jobs. A job on a wait list (its
+     * model's instances were busy) counts as well, from its push until a thread takes it to
+     * run it or, at a stop, to give it up; idle threads waiting for work count nothing. Every
      * thread that runs jobs keeps it (the pool and user-created threads, and a host driving
      * execute() itself): two atomic updates per job, none on the audio thread. The library-unload
      * hook waits on it (Core::shutdown()'s backstop at dlclose); the counter has static storage

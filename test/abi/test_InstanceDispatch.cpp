@@ -19,6 +19,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
+#include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
@@ -281,6 +282,37 @@ TEST(AbiInstanceDispatch, AReleasedSessionsWaitingJobsAreSkippedNotStranded) {
     destroyer.join();
     EXPECT_TRUE(destroyed.load());
     EXPECT_EQ(engine.m_calls.load(), 1) << "the two waiting jobs never reached the engine";
+}
+
+// A job that waits for an instance counts as in flight for the library-unload hook
+// (InferenceThread::get_num_in_flight) until a thread takes it: one instance held behind the
+// closed gate and two jobs waiting are three in flight, though one thread alone is busy.
+TEST(AbiInstanceDispatch, WaitingJobsCountAsInFlight) {
+    const Context context(k_threads);
+    SleepingEngine engine;
+    engine.m_sleep_us = 0;
+    Handler handler(context, one_instance_model(), k_custom_only, {}, engine.engine());
+    const anira_test::DestroyFirst destroy_first(handler, &engine);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    ASSERT_GE(anira_test::session_of(handler.m_handler)->m_num_structs, 3U);
+    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 0U);
+
+    engine.m_open.store(false);
+    for (int block = 0; block < 3; ++block) { push_block(handler.m_handler); }
+    const auto deadline = Clock::now() + std::chrono::seconds(anira_test::k_wait_s);
+    while (anira::InferenceThread::get_num_in_flight() < 3U && Clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 3U)
+        << "the held inference and the two waiting jobs";
+    EXPECT_EQ(engine.m_calls.load(), 0);
+
+    engine.m_open.store(true);
+    EXPECT_TRUE(wait_for_calls(engine, 3));
+    while (anira::InferenceThread::get_num_in_flight() > 0U && Clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 0U);
 }
 
 // The default of max_instances is ANIRA_INSTANCES_AUTO: stored as the sentinel (the read-back

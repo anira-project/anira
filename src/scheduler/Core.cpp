@@ -237,9 +237,9 @@ void UnloadHook::run() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing != nullptr && !s_process_exiting.load(std::memory_order_acquire)) {
         // An unload: every pool thread is told to stop first, so no new inference starts and a
-        // thread waiting for a free instance gives up; then the inferences in flight get the
-        // bounded wait. At exit no loader lock is held, so the join below waits for them
-        // whatever they take, as it always did.
+        // thread that holds an instance gives the jobs waiting for it up (they count as in
+        // flight until then); then the inferences in flight get the bounded wait. At exit no loader
+        // lock is held, so the join below waits for them whatever they take, as it always did.
         Core::State& state = *static_cast<Core::State*>(existing);
         {
             const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
