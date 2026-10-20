@@ -1477,6 +1477,36 @@ size_t run_gain_block(Handler& handler,
     return delivered;
 }
 
+/// The Static output of one gain-shaped block, compared across the two sides without a race.
+/// The value a multi call hands back is what that call had collected: the previous inference's,
+/// or its own when it completed within the call, which depends on timing on either side. So each
+/// side's call value must be one of the two, and the sides are compared on what each processor
+/// holds once run_gain_block has waited for the block's own inference (the settled value).
+/// `previous` is the settled value before the block and becomes the one after it.
+template <class ShimPp, class OldPp>
+void expect_same_static(ShimPp& pp,
+                        OldPp& old_pp,
+                        float c_call,
+                        float v_call,
+                        float& previous,
+                        size_t k) {
+    const float before = previous;
+    const float c_settled = pp.get_output(1, 0);
+    const float v_settled = old_pp.get_output(1, 0);
+    previous = c_settled;
+    EXPECT_EQ(c_settled, v_settled) << "block " << k << ": the settled Static outputs";
+    // A form without a Static element (in-place, separate, the push/pop pair) leaves the call
+    // value as the caller set it, on both sides: nothing to check beyond the settled value.
+    constexpr float k_untouched = -1.F;
+    if (c_call == k_untouched && v_call == k_untouched) { return; }
+    EXPECT_TRUE(c_call == before || c_call == c_settled)
+        << "block " << k << ": the shim's call answered " << c_call << ", neither the previous "
+        << before << " nor the settled " << c_settled;
+    EXPECT_TRUE(v_call == before || v_call == v_settled)
+        << "block " << k << ": the 2.x call answered " << v_call << ", neither the previous "
+        << before << " nor the settled " << v_settled;
+}
+
 /// The gain oracle's rows: every engine of oracle_engines() (LiteRT is left out, as in
 /// test_Handler: its gain export lists the outputs in another order, which a configuration
 /// without tensor names binds wrongly on both sides) and the CUSTOM row.
@@ -1777,6 +1807,7 @@ TEST_P(AbiCompatForm, GainMatchesOnEveryPlan) {
     pair.prepare();
     pair.set_gain(0.5F);
     size_t k = 1;
+    float previous_static = pair.m_pp.get_output(1, 0);
     for (const auto& [old_backend_value, backend] : oracle_backends()) {
         SCOPED_TRACE(static_cast<uint32_t>(backend));
         pair.m_old_handler.set_inference_backend(old_backend_value);
@@ -1794,7 +1825,7 @@ TEST_P(AbiCompatForm, GainMatchesOnEveryPlan) {
             EXPECT_EQ(n_c, n_v) << "block " << k;
             EXPECT_EQ(n_c, anira_test::k_block) << "block " << k;
             anira_test::expect_same_block(c, v, k);
-            EXPECT_EQ(c_static, v_static) << "block " << k;
+            expect_same_static(pair.m_pp, pair.m_old_pp, c_static, v_static, previous_static, k);
         }
     }
     EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
@@ -1851,6 +1882,9 @@ TEST(AbiCompat, ACustomEngineMatchesACustomBackend) {
     KernelPair<GainKernel> pair(gain_custom_arguments(), GainKernel{});
     pair.prepare();
     EXPECT_EQ(pair.m_handler.get_inference_backend(), v2::CUSTOM);
+    // The kernel's Static output is the gain of its inference (expect_same_static: a fast
+    // runner saw the shim's call at block 17's gain and the 2.x call still at block 16's).
+    float previous_static = pair.m_pp.get_output(1, 0);
     for (size_t k = 1; k <= 20; ++k) {
         const float gain = 0.25F * static_cast<float>(k % 5);
         std::vector<float> c;
@@ -1863,7 +1897,8 @@ TEST(AbiCompat, ACustomEngineMatchesACustomBackend) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         EXPECT_EQ(n_c, n_v);
         anira_test::expect_same_block(c, v, k);
-        EXPECT_EQ(c_static, v_static) << "block " << k;
+        expect_same_static(pair.m_pp, pair.m_old_pp, c_static, v_static, previous_static, k);
+        EXPECT_EQ(previous_static, gain) << "block " << k << ": the kernel's Static output";
     }
     EXPECT_GT(pair.m_engine.m_calls.load(), 0);
     EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
@@ -2534,6 +2569,7 @@ TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
     EXPECT_EQ(plans[0].provider, ANIRA_PROVIDER_CUSTOM);
     EXPECT_STREQ(plans[0].provider_id, "com.example.npu");
     EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+    float previous_static = pp.get_output(1, 0);
     for (size_t k = 1; k <= 8; ++k) {
         std::vector<float> c;
         std::vector<float> v;
@@ -2544,7 +2580,7 @@ TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
         run_gain_block(old_handler, Form::Multi, k, 0.5F, v, v_static);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         anira_test::expect_same_block(c, v, k);
-        EXPECT_EQ(c_static, v_static);
+        expect_same_static(pp, old_pp, c_static, v_static, previous_static, k);
     }
 }
 
