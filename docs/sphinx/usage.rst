@@ -289,9 +289,16 @@ is part of the build is decided at prepare, not here, so one config serves every
   never concurrently. A model with a declared State pair (section 1.1) runs this way whatever
   it says here.
 - **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
-  parallel instances of a stateless model (default 1): the shared call slots of its loaded
-  model, one inference at a time on each, claimed by the calls of every handler that runs the
-  model. An inference thread takes a job only when a slot of its model is free: a job that
+  parallel instances of a stateless model: the shared call slots of its loaded model, one
+  inference at a time on each, claimed by the calls of every handler that runs the model. The
+  default, ``ANIRA_INSTANCES_AUTO``, is as many instances as the context's inference pool has
+  threads (at least 1; 1 when the host brings its own threads), resolved when the handler is
+  prepared; an explicit count wins, clamped to the pool's size, and the read-back
+  (``max_instances()``) and the JSON (the key left out) keep the sentinel. Each instance is a
+  full copy of the model in memory (one engine executor over it: an ONNX Runtime session, an
+  interpreter, a module), so a large model may set ``max_instances(1)`` to keep one; the
+  latency counts on the instances (:doc:`latency`, :math:`n`), so fewer instances can mean
+  more latency for a model whose inference takes longer than a hop. An inference thread takes a job only when a slot of its model is free: a job that
   finds every slot busy waits on the model's own list, and the thread goes back to the queue
   and serves the jobs of other models meanwhile, so one busy model never holds up another
   model's jobs; the thread that holds a slot runs the model's waiting jobs, oldest first,

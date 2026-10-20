@@ -2135,7 +2135,7 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
     EXPECT_EQ(loaded->m_path, k_cxx_never_opened)
         << "the engine reads the row; anira never opens it";
     EXPECT_EQ(loaded->m_num_bytes, 0U) << "a path row has no bytes";
-    EXPECT_EQ(loaded->m_instances, 1U);
+    EXPECT_EQ(loaded->m_instances, 2U) << "max_instances left to the pool: its two threads";
     EXPECT_EQ(loaded->m_input_names, (std::vector<std::string>{"in"}));
     EXPECT_EQ(loaded->m_output_names, (std::vector<std::string>{"out"}));
     ASSERT_EQ(loaded->m_inputs.size(), 1U);
@@ -2674,7 +2674,7 @@ TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) 
         ASSERT_EQ(engine->m_loads.size(), 1U) << "one loaded model for two equal handlers";
         ASSERT_EQ(engine->m_counts.size(), 2U) << "a Prepared per handler";
         const std::shared_ptr<EngineLoadCounts> shared = engine->last_load();
-        EXPECT_EQ(shared->m_instances, 1U);
+        EXPECT_EQ(shared->m_instances, 2U) << "max_instances left to the pool: its two threads";
         EXPECT_FALSE(engine->m_counts[0]->m_exclusive);
         EXPECT_FALSE(engine->m_counts[1]->m_exclusive);
         std::vector<float> in;

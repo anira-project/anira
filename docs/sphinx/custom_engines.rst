@@ -249,7 +249,8 @@ what it keeps and never keeps the pointers):
   load twice.
 - ``instances``: the **shared call slots** of this loaded model, the ``process`` calls that
   may run at once on them, each on its own instance below this count (``ctx->instance``): the
-  model's ``max_instances`` for a stateless model, clamped to the size of the inference-thread
+  model's ``max_instances`` for a stateless model (``ANIRA_INSTANCES_AUTO``, the default,
+  resolved to the size of the inference-thread pool, at least 1), clamped to the size of the
   pool when anira runs one; ``0`` for a model declared ``ANIRA_MODEL_STATEFUL`` or with a
   declared State pair, whose handlers are **exclusive** (``ANIRA_PREPARE_EXCLUSIVE`` at their
   ``prepare``, below) and run on what their ``prepare`` builds, never on a shared slot. Which

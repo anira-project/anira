@@ -40,7 +40,7 @@ For a session with reference stream size :math:`R` (see the usage guide, section
      - the fraction of a host block a ``_wait`` entry waits for results; the credit applies to the latency whether or not the host calls one
    * - :math:`n`
      - ``num_parallel_processors``
-     - the parallelism of the session
+     - the parallelism of the session: ``max_instances``, by default the inference pool's thread count
    * - :math:`H`
      - largest streamable hop
      - the stream on which the host block is finest; the unit of the ``allow_smaller_buffers`` grid

@@ -19,6 +19,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
+#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -34,6 +35,7 @@
 #include <thread>
 #include <vector>
 
+#include "engines/Adapter.h"  // IWYU pragma: keep (the complete engine::Loaded)
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -221,6 +223,14 @@ Measurement measure(anira_wait_strategy wait) {
     return result;
 }
 
+/// The shared instances of the loaded model the handler's current plan runs on.
+uint32_t loaded_instances(const anira_handler* handler) {
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(handler);
+    if (session == nullptr) { return UINT32_MAX; }
+    const uint32_t plan = session->m_current_plan.load();
+    return session->m_plans[plan].m_loaded->num_instances();
+}
+
 /// The bound: B's median delay with A loaded within twice its median delay alone.
 void expect_not_held_up(const Measurement& result) {
     EXPECT_GT(result.m_b_alone_median_ms, 0.0);
@@ -271,4 +281,65 @@ TEST(AbiInstanceDispatch, AReleasedSessionsWaitingJobsAreSkippedNotStranded) {
     destroyer.join();
     EXPECT_TRUE(destroyed.load());
     EXPECT_EQ(engine.m_calls.load(), 1) << "the two waiting jobs never reached the engine";
+}
+
+// The default of max_instances is ANIRA_INSTANCES_AUTO: stored as the sentinel (the read-back
+// and the JSON leave it unresolved, the key is left out), resolved when the handler is
+// prepared to the context's pool size, so a stateless model gets as many instances as the
+// pool has threads, as 2.x's default did.
+TEST(AbiInstanceDispatch, MaxInstancesLeftToThePoolIsThePoolsThreadCount) {
+    const Context context(k_threads);
+    const anira::ModelConfig model = gain_with_custom();
+    EXPECT_EQ(model.max_instances(), ANIRA_INSTANCES_AUTO);
+    EXPECT_EQ(model.to_json().find("max_instances"), std::string::npos)
+        << "the sentinel is the key left out";
+    EXPECT_EQ(anira::ModelConfig::from_json(model.to_json()).max_instances(), ANIRA_INSTANCES_AUTO);
+    Handler handler(context, model, k_custom_only);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(loaded_instances(handler.m_handler), k_threads);
+}
+
+// Two handlers that leave the count to the pool resolve it alike and share one loaded model.
+TEST(AbiInstanceDispatch, TwoHandlersLeftToThePoolShareOneLoadedModel) {
+    const Context context(k_threads);
+    SleepingEngine engine;
+    engine.m_sleep_us = 0;
+    const anira::ModelConfig model = gain_with_custom();
+    Handler first(context, model, k_custom_only, {}, engine.engine());
+    Handler second(context, model, k_custom_only, {}, engine.engine());
+    ASSERT_EQ(first.prepare(explicit_contract()), ANIRA_OK) << first.m_err.message;
+    ASSERT_EQ(second.prepare(explicit_contract()), ANIRA_OK) << second.m_err.message;
+    const std::shared_ptr<anira::SessionElement> a = anira_test::session_of(first.m_handler);
+    const std::shared_ptr<anira::SessionElement> b = anira_test::session_of(second.m_handler);
+    ASSERT_NE(a, nullptr);
+    ASSERT_NE(b, nullptr);
+    EXPECT_EQ(a->m_plans[a->m_current_plan.load()].m_loaded,
+              b->m_plans[b->m_current_plan.load()].m_loaded);
+    EXPECT_EQ(loaded_instances(first.m_handler), k_threads);
+}
+
+// An explicit count wins (within the pool's size); a stateful model has no shared instance.
+TEST(AbiInstanceDispatch, AnExplicitCountWinsAndAStatefulModelHasNoSharedInstance) {
+    const Context context(k_threads);
+    anira::ModelConfig two = gain_with_custom();
+    two.max_instances(2);
+    EXPECT_EQ(two.max_instances(), 2U);
+    EXPECT_NE(two.to_json().find("\"max_instances\": 2"), std::string::npos) << two.to_json();
+    Handler explicit_two(context, two, k_custom_only);
+    ASSERT_EQ(explicit_two.prepare(explicit_contract()), ANIRA_OK) << explicit_two.m_err.message;
+    EXPECT_EQ(loaded_instances(explicit_two.m_handler), 2U);
+
+    anira::ModelConfig stateful = gain_with_custom();
+    stateful.state(ANIRA_MODEL_STATEFUL);
+    Handler exclusive(context, stateful, k_custom_only);
+    ASSERT_EQ(exclusive.prepare(explicit_contract()), ANIRA_OK) << exclusive.m_err.message;
+    EXPECT_EQ(loaded_instances(exclusive.m_handler), 0U);
+}
+
+// Without a pool (the host brings its own threads) the count left to the pool is 1.
+TEST(AbiInstanceDispatch, MaxInstancesLeftToThePoolIsOneWithoutAPool) {
+    const Context context(0);
+    Handler handler(context, gain_with_custom(), k_custom_only);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(loaded_instances(handler.m_handler), 1U);
 }

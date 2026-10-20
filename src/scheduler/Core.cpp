@@ -736,8 +736,21 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // The pool is built at registration (the last step), so clamp against the size it
     // will have. An empty pool means the caller brings its own threads: no clamp. The
     // instance count of every requested model takes the same clamp: no loaded model
-    // runs more calls at once than the pool has threads.
+    // runs more calls at once than the pool has threads. ANIRA_INSTANCES_AUTO (a model
+    // config that names no count, the default) is resolved first, silently, to the pool's
+    // size, at least 1 (1 without a pool): before the session is built (its pending queue is
+    // sized from the count) and before the requests meet the pool's keys, so two handlers
+    // that leave the count to the pool share one loaded model.
     const size_t pool_size = prospective_pool_size_locked(state, config);
+    const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
+    if (inference_config.m_num_parallel_processors == ANIRA_INSTANCES_AUTO) {
+        inference_config.m_num_parallel_processors = resolved_auto;
+    }
+    for (engine::PlanRequest& request : requests) {
+        if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
+            request.m_model.m_instances = resolved_auto;
+        }
+    }
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "Session %d requested more parallel processors than threads are "

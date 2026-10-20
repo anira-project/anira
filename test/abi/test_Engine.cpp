@@ -1119,7 +1119,7 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
     EXPECT_EQ(kept.m_row, 0U);
     EXPECT_EQ(kept.m_path, k_never_opened) << "the engine reads the row; anira never opens it";
     EXPECT_EQ(kept.m_engine_id, k_gain_id);
-    EXPECT_EQ(kept.m_instances, 1U);
+    EXPECT_EQ(kept.m_instances, 2U) << "max_instances left to the pool: its two threads";
     ASSERT_EQ(kept.m_inputs.size(), 1U);
     ASSERT_EQ(kept.m_outputs.size(), 1U);
     EXPECT_EQ(kept.m_input_names, (std::vector<std::string>{"in"}));

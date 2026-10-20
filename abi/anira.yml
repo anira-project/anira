@@ -649,6 +649,10 @@ headers:
         value: "0xffffffffu"
         doc: "num_threads sentinel: the library's default pool size; 0 means bring your own threads."
       - kind: define
+        name: ANIRA_INSTANCES_AUTO
+        value: "0xffffffffu"
+        doc: "max_instances sentinel and default: as many shared instances of a stateless model as the context's inference pool has threads (at least 1; 1 when the host brings its own threads), resolved when a handler is prepared. Every instance is a full copy of the model in memory."
+      - kind: define
         name: ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK
         value: "1u"
         doc: "Log flag: switch the platform sink (stderr, logcat, os_log) off while this context lives."
@@ -1998,7 +2002,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Creates an empty model config: no models, no tensors, default engine NONE (= plan 0, the first plan of the table), STATELESS, max_instances 1, anchor = the first Streamed input."
+        doc: "Creates an empty model config: no models, no tensors, default engine NONE (= plan 0, the first plan of the table), STATELESS, max_instances ANIRA_INSTANCES_AUTO, anchor = the first Streamed input."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out."
       - kind: function
         name: anira_model_config_add_model_path
@@ -2243,11 +2247,11 @@ headers:
         returns: anira_status
         params:
           - {type: anira_model_config*, name: config, doc: "The config."}
-          - {type: uint32_t, name: max_instances, doc: "Memory ceiling of loaded model instances; >= 1; default 1."}
+          - {type: uint32_t, name: max_instances, doc: "Memory ceiling of loaded model instances; >= 1, or ANIRA_INSTANCES_AUTO (the default): the inference pool's thread count."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The ceiling within which the planner allocates lanes and pool instances (v2's num_parallel_processors)."
+        doc: "The ceiling within which the planner allocates lanes and pool instances (v2's num_parallel_processors). Each instance is a full copy of the model in memory; set 1 to keep one. A stateful model (or one with a declared State pair) has no shared instance whatever it says: each of its handlers runs on its own."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for 0."
       - kind: function
         name: anira_model_config_set_anchor
@@ -2652,8 +2656,8 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The instance limit anira_model_config_set_max_instances stored."
-        return_doc: "The limit, at least 1; 0 for NULL."
+        doc: "The instance limit anira_model_config_set_max_instances stored, unresolved: ANIRA_INSTANCES_AUTO when never set (the handler resolves it to the pool's thread count when it is prepared; anira_engine_load_info.instances reports the resolved count)."
+        return_doc: "The limit, at least 1, or ANIRA_INSTANCES_AUTO; 0 for NULL."
       - kind: function
         name: anira_model_config_anchor
         returns: const char*
@@ -3857,7 +3861,7 @@ headers:
       pipelines they were created from; two engine objects never share, even under one id with
       the same callbacks. The shared
       call slots of a loaded model are its instances (anira_engine_load_info.instances, the
-      model's max_instances): a process call of a handler whose model is stateless claims one
+      model's max_instances, ANIRA_INSTANCES_AUTO resolved to the pool's thread count): a process call of a handler whose model is stateless claims one
       of them, and no two calls run at once on one instance. A model declared
       ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0 shared
       slots: its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their prepare; their
@@ -3912,7 +3916,7 @@ headers:
           - {name: output_names, type: const char* const*, doc: "num_outputs strings, likewise."}
           - {name: num_inputs, type: uint32_t, doc: "The tensors of the model's input list, State tensors included."}
           - {name: num_outputs, type: uint32_t, doc: "The tensors of the model's output list, State tensors included."}
-          - {name: instances, type: uint32_t, doc: "The shared call slots of this loaded model: the process calls that may run at once on them, each on its own instance below this count (anira_engine_ctx.instance), the model's max_instances for a stateless model; 0 for a model declared ANIRA_MODEL_STATEFUL or with a declared State pair, whose handlers are exclusive and run on what their prepare builds (ANIRA_PREPARE_EXCLUSIVE), never on a shared slot."}
+          - {name: instances, type: uint32_t, doc: "The shared call slots of this loaded model: the process calls that may run at once on them, each on its own instance below this count (anira_engine_ctx.instance), the model's max_instances for a stateless model (ANIRA_INSTANCES_AUTO resolved to the inference pool's thread count, at least 1), at most the pool's thread count; 0 for a model declared ANIRA_MODEL_STATEFUL or with a declared State pair, whose handlers are exclusive and run on what their prepare builds (ANIRA_PREPARE_EXCLUSIVE), never on a shared slot."}
           - {name: provider, type: uint32_t, doc: "anira_provider: the provider this load is for, ANIRA_PROVIDER_CUSTOM beside a provider_id. A provider is part of the loaded model: two providers of one model load twice; a load that cannot serve the one it is asked for returns ANIRA_ERROR_NOT_SUPPORTED."}
           - {name: provider_id, type: const char*, doc: "NULL for a provider the enum names; the name of a custom provider in the engine's vocabulary (provider ANIRA_PROVIDER_CUSTOM; an entry of the descriptor's providers list), valid until the callback returns."}
           - {name: option_keys, type: const char* const*, doc: "num_options option names: the provider options of this backend, the set of the context config's \"provider_options\" extension for the engine on this provider, handed to an engine whose descriptor lists \"context:provider_options\" (a set for an engine that does not list it is refused at anira_handler_create); NULL with a count of 0 for none. A tail field: the options are part of the loaded model, two contexts with different options for one backend load twice."}

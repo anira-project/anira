@@ -1038,8 +1038,8 @@ typedef void (ANIRA_CALL* anira_bytes_release_fn)(const void* bytes, void* ctx);
 
 /**
  * @brief Creates an empty model config: no models, no tensors, default engine NONE (= plan 0,
- * the first plan of the table), STATELESS, max_instances 1, anchor = the first Streamed
- * input.
+ * the first plan of the table), STATELESS, max_instances ANIRA_INSTANCES_AUTO, anchor =
+ * the first Streamed input.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -1456,9 +1456,12 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_state(anira_model_confi
 
 /**
  * @brief The ceiling within which the planner allocates lanes and pool instances (v2's
- * num_parallel_processors).
+ * num_parallel_processors). Each instance is a full copy of the model in memory; set 1
+ * to keep one. A stateful model (or one with a declared State pair) has no shared
+ * instance whatever it says: each of its handlers runs on its own.
  * @param config The config.
- * @param max_instances Memory ceiling of loaded model instances; >= 1; default 1.
+ * @param max_instances Memory ceiling of loaded model instances; >= 1, or ANIRA_INSTANCES_AUTO
+ *        (the default): the inference pool's thread count.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for 0.
  * @par Thread contract
  * [main-thread]
@@ -1977,9 +1980,12 @@ ANIRA_API anira_model_state ANIRA_CALL anira_model_config_state(const anira_mode
                                                                 ANIRA_NOEXCEPT;
 
 /**
- * @brief The instance limit anira_model_config_set_max_instances stored.
+ * @brief The instance limit anira_model_config_set_max_instances stored, unresolved:
+ * ANIRA_INSTANCES_AUTO when never set (the handler resolves it to the pool's thread
+ * count when it is prepared; anira_engine_load_info.instances reports the resolved
+ * count).
  * @param config The config.
- * @return The limit, at least 1; 0 for NULL.
+ * @return The limit, at least 1, or ANIRA_INSTANCES_AUTO; 0 for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
