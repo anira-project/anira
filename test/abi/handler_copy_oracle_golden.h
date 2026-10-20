@@ -28,6 +28,18 @@
 // which a masked comparison of the two files showed when the change was made; the eight
 // transcripts without a Static slot are untouched.
 //
+// Recorded again a second time (a4b9e0f), when the C ABI started refusing a Hard call that
+// carries more than the declared block on a stream (INVALID_ARGUMENT, nothing moves; the 2.x
+// core keeps the tail). Six scenarios passed 13, 20 or 40 samples per call against a block of
+// 8 on purpose and were rewritten to stay within their declared block, keeping each one's
+// intent (test_HandlerCopyOracle.cpp names every rewrite); their thirteen transcripts were
+// recorded again and nothing else: the text outside those literals is byte for byte the
+// previous file, and each rewritten transcript matches the previous recording up to its
+// first rewritten call. The referee of the new recordings is the 2.x path itself, not this
+// file: AbiHandlerCopyOracle.MatchesTheV2CopyPath runs every script, call for call, through
+// the 2.x copy face (InferenceManager over the twin configs) and requires the same transcript.
+// test/scheduler/copy_path_oracle_golden.h, the 2.x golden, was not touched.
+//
 // Reading a transcript. The first line is what prepare left: the latencies, the ring
 // capacities, the inference structs, the samples waiting per channel in every send and receive
 // ring ("-" for a Static slot, which has no ring). A call is "#<n> <entry> <arguments>
