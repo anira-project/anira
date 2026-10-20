@@ -23,7 +23,8 @@
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
- * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file);
+ * example; use ModelConfig::from_file, ContextConfig::from_file, ContractHandle::from_file;
+ * anira::v2::JsonConfigLoader of anira/compat/v2.hpp is the 2.x loader over them);
  * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>: a handle without
  * geometry, patched with hard_geometry, which hard() reads back into a Hard;
  * ContextConfig::log_sink takes the raw (anira_log_fn, void*) pair; ModelConfig::anchor takes
@@ -2994,7 +2995,8 @@ public:
     /// the engine carry, fixed for the object's life as anira_custom_engine_create fixes a C
     /// engine's. It is checked when the object's C engine is created, at its first
     /// registration: an id without a '.' or with the prefix "anira." is
-    /// ANIRA_ERROR_INVALID_ARGUMENT there. The engines of one Pipeline have distinct ids; two
+    /// ANIRA_ERROR_INVALID_ARGUMENT there (anira.v2.custom excepted: the id of a 2.x custom
+    /// backend, anira/compat/v2.hpp). The engines of one Pipeline have distinct ids; two
     /// objects may carry one id on two Pipelines (two instances of a plugin, each with its own
     /// engine) and never share a loaded model.
     explicit Engine(std::string id) : m_id(std::move(id)) {}
@@ -3511,11 +3513,12 @@ public:
     /// an error, and an entry whose id no engine of the pipeline has is
     /// ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create.
     /// @throws Error ANIRA_ERROR_INVALID_ARGUMENT for a null engine (before the C call), an
-    /// id without a '.' or with the prefix "anira.", or a flags() bit anira/abi/enums.h does
-    /// not define (the C engine's create refuses them, and nothing is created);
-    /// ANIRA_ERROR_INVALID_STATE when this pipeline already has an engine with the id, this
-    /// object or another. A refused call keeps no reference the call created: a C engine the
-    /// call created is dropped again, and Engine::release answers it.
+    /// id without a '.' or with the prefix "anira." (anira.v2.custom excepted: the id of a 2.x
+    /// custom backend, anira/compat/v2.hpp), or a flags() bit anira/abi/enums.h does not define
+    /// (the C engine's create refuses them, and nothing is created); ANIRA_ERROR_INVALID_STATE when
+    /// this pipeline already has an engine with the id, this object or another. A refused call
+    /// keeps no reference the call created: a C engine the call created is dropped again, and
+    /// Engine::release answers it.
     Pipeline& register_engine(const std::shared_ptr<Engine>& implementation) {
         if (implementation == nullptr) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT,

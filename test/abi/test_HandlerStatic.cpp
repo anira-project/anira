@@ -22,9 +22,11 @@
 #include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -170,6 +172,7 @@ public:
     bool ready() const { return m_session != nullptr; }
     anira_handler* get() const { return m_handler.m_handler; }
     anira_test::GateEngine& gate() { return m_gate; }
+    const anira::SessionElement& session() const { return *m_session; }
 
     /// Opens the gate until every submitted inference is collected.
     void settle() {
@@ -229,6 +232,55 @@ TEST(AbiHandlerStatic, ATwoChannelStaticTensorTravelsWhole) {
     run_through(rig, values_of(20.0F));
     EXPECT_EQ(stored_output(rig.get()), values_of(20.0F));
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK);
+}
+
+// anira_handler_get_available_samples collects the completed inferences before it answers, for a
+// slot without a ring too: on the Static slot it answers 0 and the value the finished inference
+// produced is in the store afterwards (it once returned 0 before collecting, which left the
+// store stale for a host that polled a Static output through it). The Streamed slot answers its
+// ring as collected.
+TEST(AbiHandlerStatic, AvailableSamplesOnAStaticSlotCollectsFirst) {
+    GateRig rig;
+    ASSERT_TRUE(rig.ready());
+    anira_handler* handler = rig.get();
+    const size_t latency = anira_test::available(handler);
+    const StaticValues zeros{};
+    EXPECT_EQ(stored_output(handler), zeros);
+
+    const StaticValues values = values_of(30.0F);
+    const anira_tensor tensor = whole_f32(values.data(), k_static_shape);
+    ASSERT_EQ(anira_handler_set_static_input(handler, 1, &tensor), ANIRA_OK);
+    ASSERT_TRUE(ANIRA_SUCCEEDED(rig.stream_block()));
+    // Let the inference finish without any call that collects: the gate opens, and the test
+    // waits on the session's own flags until every submitted struct is done.
+    const anira::SessionElement& session = rig.session();
+    ASSERT_FALSE(session.m_time_stamps.empty()) << "the block submitted an inference";
+    rig.gate().m_open.store(true);
+    const auto start = std::chrono::steady_clock::now();
+    const auto done = [&session] {
+        return std::ranges::all_of(session.m_inference_queue, [](const auto& entry) {
+            return entry->m_free.load() || entry->m_done_atomic.load();
+        });
+    };
+    while (!done()) {
+        ASSERT_LT(std::chrono::steady_clock::now() - start,
+                  std::chrono::seconds(anira_test::k_wait_s))
+            << "the inference did not finish";
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
+    }
+    EXPECT_FALSE(session.m_time_stamps.empty()) << "finished, not collected yet";
+    EXPECT_EQ(stored_output(handler), zeros) << "nothing collected the value yet";
+
+    size_t available = k_unset;
+    EXPECT_EQ(anira_handler_get_available_samples(handler, 1, 0, &available), ANIRA_OK);
+    EXPECT_EQ(available, 0U) << "a Static slot has no ring";
+    EXPECT_TRUE(session.m_time_stamps.empty()) << "the call collected";
+    EXPECT_EQ(stored_output(handler), values_of(30.0F)) << "the new value is visible";
+
+    available = k_unset;
+    EXPECT_EQ(anira_handler_get_available_samples(handler, 0, 0, &available), ANIRA_OK);
+    EXPECT_EQ(available, latency) << "the Streamed ring holds its latency again";
+    EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
 }
 
 // A second Static tensor, of another shape, travels whole beside the first.

@@ -1,8 +1,10 @@
 // End-to-end tests for one-sided streaming: a generator (no streamable input,
 // pulled by output demand) and an analyser (no streamable output, results read
-// as latest-completed values). No model files -- deterministic custom backends.
-// Also covers the push-side collection of issue #99. The cases that read the 2.x session's
-// struct pool (Core::get_sessions) are test/scheduler/test_OneSidedStreamingInternals.cpp.
+// as latest-completed values). No model files -- deterministic custom engines, one kernel each.
+// Also covers the push-side collection of issue #99. The TU is a 2.x host: it compiles against
+// anira/compat/v2.hpp alone, so it runs over the C handler (the 2.x class keeps its twin of the
+// struct-pool cases, which read Core::get_sessions, in
+// test/scheduler/test_OneSidedStreamingInternals.cpp).
 //
 // Timing contract the waits rely on: with blocking_ratio == 0 the pull that
 // submits an inference never pops that inference's own result (the calculated
@@ -10,31 +12,25 @@
 // fill *after* each pull makes the next pull deterministic regardless of
 // worker-thread scheduling.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
 
 #include <algorithm>
+#include <anira/anira.hpp>
+#include <anira/compat/v2.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <functional>
 #include <memory>
-#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
 
-using namespace anira;
+using namespace anira::v2;
 
 namespace {
 
@@ -46,7 +42,7 @@ InferenceConfig make_config(std::vector<TensorShape> shapes,
                             float blocking_ratio = 0.f,
                             unsigned int num_parallel = 2) {
     return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
         std::move(shapes),
         std::move(spec),
         10.f,  // max_inference_time
@@ -65,33 +61,67 @@ InferenceConfig generator_config(bool session_exclusive = false, float blocking_
                        session_exclusive ? 1U : 2U);
 }
 
+// A 2.x custom backend as an anira::Engine under anira.v2.custom (the id the CUSTOM row names):
+// load keeps nothing, the Loaded hands every handler a Prepared that runs the kernel over the
+// call's tensors and counts. The kernel runs on an inference thread, outside the host's
+// real-time extent.
+template <class Kernel>
+class KernelEngine : public anira::Engine {
+public:
+    KernelEngine() : anira::Engine(k_custom_engine_id) {}
+
+    std::unique_ptr<anira::Engine::Loaded> load(const anira::EngineLoadInfo& /*info*/) override {
+        return std::make_unique<Loaded>(*this);
+    }
+
+    Kernel m_kernel;
+    std::atomic<int> m_calls{0};
+
+private:
+    class Prepared : public anira::Engine::Prepared {
+    public:
+        explicit Prepared(KernelEngine& owner) : m_owner(owner) {}
+        anira_status process(anira::EngineContext& ctx) noexcept override {
+            m_owner.m_kernel(ctx);
+            m_owner.m_calls.fetch_add(1);
+            return ANIRA_OK;
+        }
+
+    private:
+        KernelEngine& m_owner;
+    };
+    class Loaded : public anira::Engine::Loaded {
+    public:
+        explicit Loaded(KernelEngine& owner) : m_owner(owner) {}
+        std::unique_ptr<anira::Engine::Prepared> prepare(
+            const anira::PrepareInfo& /*info*/) override {
+            return std::make_unique<Prepared>(m_owner);
+        }
+
+    private:
+        KernelEngine& m_owner;
+    };
+};
+
 // Fills every output sample with the value of parameter 0, so the streamed output
 // carries the parameter that was current when the inference was submitted.
-class ParamFillGeneratorBackend : public BackendBase {
-public:
-    explicit ParamFillGeneratorBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
+struct ParamFillKernel {
+    void operator()(const anira::EngineContext& ctx) noexcept {
         // The very first inference may stall for longer than the others (a cold start,
         // a page fault, a preempted worker): m_first_sleep_us applies to it alone.
         int const sleep_us =
             m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
         if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
-        float const value = input[0].get_sample(0, 0);  // parameter 0
-        for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
-            float* write_ptr = output[0].get_write_pointer(ch);
-            for (size_t s = 0; s < output[0].get_num_samples(); ++s) { write_ptr[s] = value; }
-        }
-        m_calls.fetch_add(1);
+        float const value = ctx.inputs()[0].data_f32()[0];  // parameter 0
+        float* out = ctx.outputs()[0].data_f32();
+        std::fill_n(out, ctx.outputs()[0].num_elements(), value);
     }
 
-    std::atomic<int> m_calls{0};
     std::atomic<int> m_started{0};
     int m_sleep_us = 0;
     int m_first_sleep_us = 0;
 };
+using ParamFillGeneratorEngine = KernelEngine<ParamFillKernel>;
 
 // Analyser: a 2048-sample audio stream in plus one control parameter in, one
 // non-streamable scalar out.
@@ -101,44 +131,33 @@ InferenceConfig analyser_config() {
 }
 
 // Writes mean(audio window) + parameter into the scalar output.
-class MeanPlusParamAnalyserBackend : public BackendBase {
-public:
-    explicit MeanPlusParamAnalyserBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
+struct MeanPlusParamKernel {
+    void operator()(const anira::EngineContext& ctx) const noexcept {
         double sum = 0.0;
-        size_t const n = input[0].get_num_samples();
-        for (size_t s = 0; s < n; ++s) { sum += static_cast<double>(input[0].get_sample(0, s)); }
+        const float* audio = ctx.inputs()[0].data_f32();
+        size_t const n = ctx.inputs()[0].num_elements();
+        for (size_t s = 0; s < n; ++s) { sum += static_cast<double>(audio[s]); }
         float const mean = n > 0 ? static_cast<float>(sum / static_cast<double>(n)) : 0.f;
-        output[0].set_sample(0, 0, mean + input[1].get_sample(0, 0));
-        m_calls.fetch_add(1);
+        ctx.outputs()[0].data_f32()[0] = mean + ctx.inputs()[1].data_f32()[0];
     }
-
-    std::atomic<int> m_calls{0};
 };
+using MeanPlusParamAnalyserEngine = KernelEngine<MeanPlusParamKernel>;
 
-// Two-sided passthrough twin (2048 in / 2048 out); counts calls, delegates the
-// copy to the default CUSTOM roundtrip.
+// Two-sided passthrough twin (2048 in / 2048 out); the engine counts calls, the kernel is the
+// pass-through copy.
 InferenceConfig two_sided_config() {
     return make_config(std::vector<TensorShape>{TensorShape({{1, 1, k_hop}}, {{1, 1, k_hop}})},
                        ProcessingSpec({1}, {1}, {k_hop}, {k_hop}));
 }
 
-class CountingCopyBackend : public BackendBase {
-public:
-    explicit CountingCopyBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 std::shared_ptr<SessionElement> session) override {
-        BackendBase::process(input, output, session);
-        m_calls.fetch_add(1);
+struct CopyKernel {
+    void operator()(const anira::EngineContext& ctx) const noexcept {
+        std::copy_n(ctx.inputs()[0].data_f32(),
+                    ctx.outputs()[0].num_elements(),
+                    ctx.outputs()[0].data_f32());
     }
-
-    std::atomic<int> m_calls{0};
 };
+using CountingCopyEngine = KernelEngine<CopyKernel>;
 
 // Model of the generator demand rule -- the spec these tests assert against.
 // One inference is submitted per k_hop demanded reference-output samples, and it
@@ -184,14 +203,14 @@ std::vector<size_t> block_sizes(bool smaller, size_t max_block, size_t num_block
 // Drives a generator handler through the given blocks with the multi-tensor
 // process() overload and asserts every output sample against the model.
 void drive_generator_with_process(InferenceHandler& handler,
-                                  ParamFillGeneratorBackend& backend,
+                                  ParamFillGeneratorEngine& engine,
                                   GeneratorModel& model,
                                   const std::vector<size_t>& blocks,
                                   float param_offset,
                                   size_t& global_index) {
-    // The backend counter is cumulative across prepare()/reset() cycles; the model
+    // The engine counter is cumulative across prepare()/reset() cycles; the model
     // counts from this drive's start.
-    int const calls_baseline = backend.m_calls.load();
+    int const calls_baseline = engine.m_calls.load();
     for (size_t block = 0; block < blocks.size(); ++block) {
         size_t const n = blocks[block];
         float const param = param_offset + static_cast<float>(block);
@@ -227,7 +246,7 @@ void drive_generator_with_process(InferenceHandler& handler,
             << block << ": submitted inferences did not complete in time";
         ASSERT_EQ(handler.get_available_samples(0, 0), model.expected_ring_fill())
             << "block " << block << ": unexpected ring fill (submission schedule differs)";
-        ASSERT_EQ(static_cast<size_t>(backend.m_calls.load() - calls_baseline),
+        ASSERT_EQ(static_cast<size_t>(engine.m_calls.load() - calls_baseline),
                   model.m_submitted.size())
             << "block " << block << ": inference count differs from the demand rule";
     }
@@ -252,8 +271,8 @@ TEST_P(OneSidedStreamingTest, GeneratorProcessProducesParamAfterLatency) {
     bool const smaller = GetParam();
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -262,7 +281,7 @@ TEST_P(OneSidedStreamingTest, GeneratorProcessProducesParamAfterLatency) {
 
     size_t global_index = 0;
     drive_generator_with_process(handler,
-                                 backend,
+                                 engine,
                                  model,
                                  block_sizes(smaller, 512, 40),
                                  1.f,
@@ -273,8 +292,8 @@ TEST_P(OneSidedStreamingTest, GeneratorPushPopEquivalent) {
     bool const smaller = GetParam();
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
@@ -305,22 +324,22 @@ TEST_P(OneSidedStreamingTest, GeneratorPushPopEquivalent) {
             [&] { return handler.get_available_samples(0, 0) >= model.expected_ring_fill(); }));
         ASSERT_EQ(handler.get_available_samples(0, 0), model.expected_ring_fill());
     }
-    ASSERT_EQ(static_cast<size_t>(backend.m_calls.load()), model.m_submitted.size());
+    ASSERT_EQ(static_cast<size_t>(engine.m_calls.load()), model.m_submitted.size());
 }
 
 TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
     bool const smaller = GetParam();
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
     size_t global_index = 0;
     drive_generator_with_process(handler,
-                                 backend,
+                                 engine,
                                  model,
                                  block_sizes(smaller, 512, 10),
                                  1.f,
@@ -349,7 +368,7 @@ TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
 
     GeneratorModel model_after;
     model_after.m_latency = model.m_latency;
-    int const calls_before = backend.m_calls.load();
+    int const calls_before = engine.m_calls.load();
     size_t global_after = 0;
     // The expectation model starts from zero demand again; stale results are
     // ignored, so the output must follow the fresh schedule (zeros for the first
@@ -382,22 +401,22 @@ TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
             return handler.get_available_samples(0, 0) >= model_after.expected_ring_fill();
         }));
     }
-    EXPECT_GT(backend.m_calls.load(), calls_before) << "post-reset pulls must submit again.";
+    EXPECT_GT(engine.m_calls.load(), calls_before) << "post-reset pulls must submit again.";
 }
 
 TEST_P(OneSidedStreamingTest, GeneratorPrepareReentry) {
     bool const smaller = GetParam();
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
     size_t global_index = 0;
     drive_generator_with_process(handler,
-                                 backend,
+                                 engine,
                                  model,
                                  block_sizes(smaller, 512, 10),
                                  1.f,
@@ -410,7 +429,7 @@ TEST_P(OneSidedStreamingTest, GeneratorPrepareReentry) {
     model2.m_latency = handler.get_latency(0);
     size_t global2 = 0;
     drive_generator_with_process(handler,
-                                 backend,
+                                 engine,
                                  model2,
                                  block_sizes(smaller, 256, 30),
                                  500.f,
@@ -420,27 +439,26 @@ TEST_P(OneSidedStreamingTest, GeneratorPrepareReentry) {
 TEST(OneSidedStreamingStandalone, GeneratorStatefulSessionExclusive) {
     InferenceConfig config = generator_config(/*session_exclusive=*/true);
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     GeneratorModel model;
     model.m_latency = handler.get_latency(0);
     size_t global_index = 0;
     drive_generator_with_process(handler,
-                                 backend,
+                                 engine,
                                  model,
                                  block_sizes(false, 512, 40),
                                  1.f,
                                  global_index);
 }
 
-#ifndef ANIRA_WITH_RTSAN
 TEST(OneSidedStreamingStandalone, GeneratorNonRealtimeIsDeterministic) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
     handler.set_non_realtime(true);
 
@@ -473,9 +491,8 @@ TEST(OneSidedStreamingStandalone, GeneratorNonRealtimeIsDeterministic) {
         global_index += n;
         model.m_popped += n;
     }
-    ASSERT_EQ(static_cast<size_t>(backend.m_calls.load()), model.m_submitted.size());
+    ASSERT_EQ(static_cast<size_t>(engine.m_calls.load()), model.m_submitted.size());
 }
-#endif  // ANIRA_WITH_RTSAN
 
 // -----------------------------------------------------------------------------
 // Analyser
@@ -485,8 +502,8 @@ TEST_P(OneSidedStreamingTest, AnalyserProcessLatestCompleted) {
     bool const smaller = GetParam();
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
-    MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    MeanPlusParamAnalyserEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, smaller));
 
     EXPECT_EQ(handler.get_latency(0), 0u) << "A non-streamable output has no stream latency.";
@@ -540,14 +557,14 @@ TEST_P(OneSidedStreamingTest, AnalyserProcessLatestCompleted) {
         EXPECT_EQ(handler.get_available_samples(0, 0), 0u)
             << "A non-streamable output owns no ring samples.";
     }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), fed.size() / k_hop);
+    EXPECT_EQ(static_cast<size_t>(engine.m_calls.load()), fed.size() / k_hop);
 }
 
 TEST(OneSidedStreamingStandalone, AnalyserResetKeepsLatestValue) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
-    MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    MeanPlusParamAnalyserEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     pp_processor.set_input(2.f, 1, 0);
@@ -573,8 +590,8 @@ TEST(OneSidedStreamingStandalone, AnalyserResetKeepsLatestValue) {
 TEST(OneSidedStreamingStandalone, TwoSidedPushEveryBlockPopEveryBlock) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
-    CountingCopyBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    CountingCopyEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
@@ -609,10 +626,81 @@ TEST(OneSidedStreamingStandalone, TwoSidedPushEveryBlockPopEveryBlock) {
         }
         global_index += n;
     }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), fed.size() / k_hop)
+    EXPECT_EQ(static_cast<size_t>(engine.m_calls.load()), fed.size() / k_hop)
         << "Push-side collection must not change the submission schedule.";
 }
 
+// -----------------------------------------------------------------------------
+// The two struct-pool cases, through the handler (their white-box halves, which read the 2.x
+// session's struct pool, are test/scheduler/test_OneSidedStreamingInternals.cpp)
+// -----------------------------------------------------------------------------
+
+TEST(OneSidedStreamingStandalone, GeneratorPushDataNeverSubmits) {
+    InferenceConfig config = generator_config();
+    PrePostProcessor pp_processor(config);
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
+    handler.prepare(HostConfig(512, 48000, false));
+
+    unsigned int const latency = handler.get_latency(0);
+
+    std::vector<float> params{5.f, 0.f, 0.f, 0.f};
+    std::array<const float*, 1> param_channels{params.data()};
+    for (int i = 0; i < 64; ++i) { handler.push_data(param_channels.data(), 4, 0); }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    EXPECT_EQ(engine.m_calls.load(), 0)
+        << "push_data on a generator must only store parameters, never submit.";
+    EXPECT_EQ(handler.get_available_samples(0, 0), static_cast<size_t>(latency))
+        << "Only the latency pre-fill may be in the ring.";
+    EXPECT_EQ(pp_processor.get_input(0, 0), 5.f) << "the parameters were stored";
+
+    // One full hop of demand submits exactly one inference.
+    std::vector<float> out(k_hop, -1.f);
+    std::array<float*, 1> out_channels{out.data()};
+    size_t const received = handler.pop_data(out_channels.data(), k_hop, 0);
+    EXPECT_EQ(received, k_hop);
+    EXPECT_TRUE(wait_for([&] { return engine.m_calls.load() == 1; }))
+        << "The first hop of demand must submit exactly one inference.";
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+}
+
+TEST(OneSidedStreamingStandalone, AnalyserPushOnlyNeverStalls) {
+    // Issue #99: a push-only host (mic in, probability out via get_output) stalled
+    // permanently once all inference structs were used, because completed
+    // inferences were only collected on the pop side.
+    InferenceConfig config = analyser_config();
+    PrePostProcessor pp_processor(config);
+    MeanPlusParamAnalyserEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
+    handler.prepare(HostConfig(512, 48000, false));
+
+    float const param = 10.f;
+    pp_processor.set_input(param, 1, 0);
+
+    // The handler's entries are the session's inference structs.
+    size_t const num_structs = anira_handler_num_entries(handler.native());
+    ASSERT_GE(num_structs, 1u);
+
+    size_t const windows = 8 * num_structs + 4;
+    for (size_t window = 0; window < windows; ++window) {
+        for (size_t block = 0; block < k_hop / 512; ++block) {
+            std::vector<float> audio(512, static_cast<float>(window));
+            std::array<const float*, 1> audio_channels{audio.data()};
+            handler.push_data(audio_channels.data(), 512, 0);
+        }
+        // Stay push-only: poll by pushing zero samples (a pure collection point).
+        float const expected = static_cast<float>(window) + param;
+        ASSERT_TRUE(wait_for([&] {
+            std::array<const float*, 1> empty_channels{nullptr};
+            handler.push_data(empty_channels.data(), 0, 0);
+            return pp_processor.get_output(0, 0) == expected;
+        })) << "window "
+            << window << ": push-only pipeline stalled (issue #99)";
+    }
+    EXPECT_EQ(static_cast<size_t>(engine.m_calls.load()), windows)
+        << "Every window must have been inferred; a stall stops at the entry count.";
+}
 // -----------------------------------------------------------------------------
 // Misuse hardening and prepare() error paths
 // -----------------------------------------------------------------------------
@@ -622,8 +710,8 @@ TEST(OneSidedStreamingStandalone, GeneratorInPlaceOverloadIsHarmless) {
     // well; the count is clamped to the tensor size instead of writing past it.
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     std::vector<float> buffer(512, 0.5f);
@@ -641,16 +729,17 @@ TEST(OneSidedStreamingStandalone, GeneratorInPlaceOverloadIsHarmless) {
 TEST(OneSidedStreamingStandalone, PrepareCustomLatencyIndexOutOfRangeThrows) {
     InferenceConfig config = two_sided_config();
     PrePostProcessor pp_processor(config);
-    InferenceHandler handler(pp_processor, config, CoreConfig(2));
-    EXPECT_THROW(handler.prepare(HostConfig(512, 48000), 128U, /*tensor_index=*/99),
-                 std::invalid_argument);
+    InferenceHandler handler(pp_processor, config, ContextConfig(2));
+    try {
+        handler.prepare(HostConfig(512, 48000), 128U, /*tensor_index=*/99);
+        ADD_FAILURE() << "an out-of-range index was accepted";
+    } catch (const anira::Error& error) { EXPECT_EQ(error.status, ANIRA_ERROR_INVALID_ARGUMENT); }
 }
 
-#ifndef ANIRA_WITH_RTSAN
 namespace {
 // Drives a blocking generator (blocking_ratio 1, a `host_block`-sample host block, so a
 // deadline of host_block / 48000 s derived from the reference output) for `blocks` blocks
-// with a backend that sleeps `sleep_us` per inference, `first_sleep_us` for its very
+// with an engine that sleeps `sleep_us` per inference, `first_sleep_us` for its very
 // first one, and checks every delivered sample.
 //
 // A starved pop (0 samples) is tolerated as long as process() demonstrably waited for
@@ -675,10 +764,10 @@ void drive_blocking_generator(int first_sleep_us,
     InferenceConfig config = generator_config(/*session_exclusive=*/false,
                                               /*blocking_ratio=*/1.f);
     PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    backend.m_first_sleep_us = first_sleep_us;
-    backend.m_sleep_us = sleep_us;
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    ParamFillGeneratorEngine engine;
+    engine.m_kernel.m_first_sleep_us = first_sleep_us;
+    engine.m_kernel.m_sleep_us = sleep_us;
+    InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
     handler.prepare(HostConfig(static_cast<float>(host_block), 48000, false));
     size_t const latency = handler.get_latency(0);
 
@@ -748,7 +837,7 @@ TEST(OneSidedStreamingStandalone, GeneratorBlockingDeadlineUsesReference) {
     // params tensor's value count for a generator -- giving a deadline of
     // 4/48000 s (83 us) instead of one host block (4096/48000 s = 85 ms here).
     //
-    // The backend sleeps 1 ms per inference: longer than the buggy deadline, far
+    // The engine sleeps 1 ms per inference: longer than the buggy deadline, far
     // shorter than the correct one, so every pop is expected to succeed. A CI runner
     // (iOS simulator, loaded macOS VM) can still stall a worker for longer than any
     // fixed margin; drive_blocking_generator tolerates that.
@@ -780,4 +869,3 @@ TEST(OneSidedStreamingStandalone, GeneratorStarvedBlockingPopIsRetriedWithFullDe
     EXPECT_GT(starved, 0) << "a 500 ms stall must starve the first pop of a 341 ms deadline";
     RecordProperty("starved_pops", starved);
 }
-#endif  // ANIRA_WITH_RTSAN

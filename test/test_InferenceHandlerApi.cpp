@@ -2,28 +2,24 @@
 // reach: the multi-tensor pointer-of-pointers forms of process/push_data/pop_data,
 // the deadline-bounded pop_data, the per-tensor and vector prepare() forms, and
 // the small delegating accessors. A deterministic CUSTOM backend keeps this
-// independent of any engine or model file.
+// independent of any engine or model file. The TU is a 2.x host: it compiles against
+// anira/compat/v2.hpp alone and runs over the C handler.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
+#include <anira/abi/status.h>
 
+#include <anira/anira.hpp>
+#include <anira/compat/v2.hpp>
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
 
-using namespace anira;
+using namespace anira::v2;
 
 namespace {
 
@@ -34,7 +30,7 @@ constexpr float k_sample_rate = 48000.F;
 // exercises the whole streaming path.
 InferenceConfig single_tensor_config() {
     return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
         std::vector<TensorShape>{TensorShape({{1, 1, k_block}}, {{1, 1, k_block}})},
         ProcessingSpec({1}, {1}, {k_block}, {k_block}),
         10.F,   // max_inference_time
@@ -48,7 +44,7 @@ InferenceConfig single_tensor_config() {
 // have more than one entry to distinguish.
 InferenceConfig two_output_config() {
     return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
         std::vector<TensorShape>{
             TensorShape({{1, 1, k_block}}, {{1, 1, k_block}, {1, 1, k_block}})},
         ProcessingSpec({1}, {1, 1}, {k_block}, {k_block, k_block}),
@@ -74,13 +70,13 @@ protected:
         : m_config(std::move(config)), m_pp_processor(m_config) {}
 
     InferenceHandler& prepared_handler() {
-        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, CoreConfig(2));
+        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, ContextConfig(2));
         m_handler->prepare(HostConfig(k_block, k_sample_rate));
         return *m_handler;
     }
 
     InferenceHandler& unprepared_handler() {
-        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, CoreConfig(2));
+        m_handler = std::make_unique<InferenceHandler>(m_pp_processor, m_config, ContextConfig(2));
         return *m_handler;
     }
 
@@ -109,8 +105,8 @@ TEST_F(HandlerTest, LatencyAccessorsAgree) {
 TEST_F(HandlerTest, BackendAccessorRoundTrip) {
     InferenceHandler& handler = prepared_handler();
 
-    handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    EXPECT_EQ(handler.get_inference_backend(), anira::InferenceBackend::CUSTOM);
+    handler.set_inference_backend(InferenceBackend::CUSTOM);
+    EXPECT_EQ(handler.get_inference_backend(), InferenceBackend::CUSTOM);
 }
 
 TEST_F(HandlerTest, ThreadCountAndLogDrainAndNonRealtimeAreReachable) {
@@ -239,18 +235,20 @@ TEST_F(TwoOutputHandlerTest, PrepareWithCustomLatencyVector) {
 TEST_F(HandlerTest, PrepareRejectsAnOutOfRangeTensorIndex) {
     InferenceHandler& handler = unprepared_handler();
 
-    EXPECT_THROW(handler.prepare(HostConfig(k_block, k_sample_rate), 256, /*tensor_index=*/1),
-                 std::invalid_argument);
+    try {
+        handler.prepare(HostConfig(k_block, k_sample_rate), 256, /*tensor_index=*/1);
+        ADD_FAILURE() << "an out-of-range index was accepted";
+    } catch (const anira::Error& error) { EXPECT_EQ(error.status, ANIRA_ERROR_INVALID_ARGUMENT); }
 }
 
 // The custom-processor constructor takes a fourth argument, so it does not go
 // through the fixture's handler factories.
 TEST_F(HandlerTest, CustomProcessorConstructor) {
-    BackendBase backend(m_config);
-    InferenceHandler handler(m_pp_processor, m_config, backend, CoreConfig(2));
+    PassthroughEngine engine;
+    InferenceHandler handler(m_pp_processor, m_config, engine, ContextConfig(2));
     handler.prepare(HostConfig(k_block, k_sample_rate));
 
     std::vector<float> channel(k_block, 0.5F);
     EXPECT_NO_THROW(pump(handler, channel, 2));
-    EXPECT_EQ(handler.get_inference_backend(), anira::InferenceBackend::CUSTOM);
+    EXPECT_EQ(handler.get_inference_backend(), InferenceBackend::CUSTOM);
 }

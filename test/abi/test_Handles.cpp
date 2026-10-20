@@ -190,7 +190,7 @@ TEST(AbiModelConfig, DefaultsAndEntries) {
 }
 
 // An entry is neutral until it is pinned to a provider: the enum's, or a custom name beside
-// DEFAULT; DEFAULT alone unpins; the refusals name the argument.
+// ANIRA_PROVIDER_CUSTOM; NONE unpins; the refusals name the argument.
 TEST(AbiModelConfig, ProviderPinAndItsRefusals) {
     Model m;
     uint32_t index = 0;
