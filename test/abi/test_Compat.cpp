@@ -54,6 +54,7 @@
 #include "../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../support/log_record_collector.h"
+#include "../support/rtsan_disabled.h"
 #include "../support/v2_documents.h"
 #include "fixtures.h"
 #include "float_face.h"
@@ -1356,15 +1357,25 @@ TEST(AbiCompat, AThrowingProcessorFailsItsChunk) {
     run_blocks(4);
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
 
+    // A throw allocates its exception, which RealtimeSanitizer reports inside the nonblocking
+    // call that runs the processor (anira_handler_get_available_samples collects, and so runs
+    // post_process, on this thread): the throw is the case under test, so the blocks that
+    // throw run with RealtimeSanitizer off on this thread, and the ones before stay checked.
     pp.m_throw_other.store(true);
-    run_blocks(4);
+    {
+        const anira_test::RtsanDisabled throwing;
+        run_blocks(4);
+    }
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_ENGINE);
     pp.m_throw_other.store(false);
 
     anira_handler_reset(handler.m_handler);
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK) << "reset clears it";
     pp.m_throw_error.store(true);
-    run_blocks(4);
+    {
+        const anira_test::RtsanDisabled throwing;
+        run_blocks(4);
+    }
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_CONFIG);
     pp.m_throw_error.store(false);
 }
@@ -2024,7 +2035,14 @@ TEST(AbiCompat, NonRealtimeIsDeterministic) {
             return out;
         };
         const std::vector<float> c = pull(pair.m_handler);
-        const std::vector<float> v = pull(pair.m_old_handler);
+        std::vector<float> v;
+        {
+            // The live 2.x class declares process ANIRA_NONBLOCKING and, in non-realtime mode,
+            // sleeps until its inference is done (the mismatch the 2.x class is known for); the
+            // shim's waiting forms carry no such attribute and stay checked above.
+            const anira_test::RtsanDisabled the_v2_class_waits;
+            v = pull(pair.m_old_handler);
+        }
         anira_test::expect_same_block(c, v, k);
     }
     EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
