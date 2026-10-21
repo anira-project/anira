@@ -1542,6 +1542,8 @@ public:
     }
     /// As set; a model with a declared State pair runs as ANIRA_MODEL_STATEFUL anyway.
     anira_model_state state() const noexcept { return anira_model_config_state(m_config); }
+    /// As set: a count, or ANIRA_INSTANCES_AUTO (the default, the pool's thread count once a
+    /// handler is prepared).
     uint32_t max_instances() const noexcept { return anira_model_config_max_instances(m_config); }
     /// The anchor's canonical name as set; empty for the default.
     std::string_view anchor() const noexcept {
@@ -1640,6 +1642,9 @@ public:
                       "anira_model_config_set_state");
         return *this;
     }
+    /// The shared instances of a stateless model, at least 1, or ANIRA_INSTANCES_AUTO (the
+    /// default): as many as the inference pool has threads. Each is a full copy of the model in
+    /// memory; 1 keeps one.
     ModelConfig& max_instances(uint32_t value) {
         detail::check(anira_model_config_set_max_instances(m_config, value),
                       "anira_model_config_set_max_instances");
@@ -1951,6 +1956,12 @@ private:
  * @brief An anira_context with its lifetime: a refcounted handle over this copy's core,
  * created from a ContextConfig (section 4). Two contexts in one copy are two views of one
  * core with two log sinks.
+ *
+ * A plugin destroys its handlers, then its contexts, before its host unloads it (its instance
+ * teardown or module-exit entry point), and never from its own static destructors, which run
+ * inside the unload under the loader lock. On ELF and Mach-O a library unloaded with an
+ * inference still running aborts with a message on stderr after a bounded wait (see
+ * anira_shutdown and the usage guide's section on teardown).
  */
 class Context {
 public:
@@ -2021,7 +2032,9 @@ inline uint32_t num_inference_threads() noexcept {
     return anira_num_inference_threads();
 }
 
-/// anira_shutdown: effective only when no Context and no handler exist in this copy.
+/// anira_shutdown: effective only when no Context and no handler exist in this copy, so a
+/// plugin's module-exit entry point destroys its handlers and contexts first (never its static
+/// destructors: they run inside the unload).
 inline anira_status shutdown() noexcept {
     return anira_shutdown();
 }
@@ -3040,8 +3053,9 @@ public:
     /// candidate's provider of the engine is checked against the answer (a declared provider
     /// the answer clears is ANIRA_ERROR_NOT_SUPPORTED, "declares provider 'x' but its query
     /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
-    /// engine's rows beside the context's. The base answers every bit: every declared
-    /// provider is usable. It may throw, as init may: the status fails the calling entry.
+    /// engine's rows beside the context's. A handler's prepare uses the answer its create got
+    /// and never calls query, whatever thread it runs on. The base answers every bit: every
+    /// declared provider is usable. It may throw, as init may: the status fails the calling entry.
     virtual std::uint64_t query(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches

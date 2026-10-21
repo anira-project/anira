@@ -55,7 +55,9 @@ namespace anira::v3compat {
  * Static or Buffer tensor) and the output latencies become the ProcessingSpec; the contract's
  * explicit budget, FIXED warmup count and wait ratio become max_inference_time, warm_up and
  * blocking_ratio; a STATEFUL model config becomes session_exclusive_processor;
- * max_instances becomes num_parallel_processors.
+ * max_instances becomes num_parallel_processors (ANIRA_INSTANCES_AUTO stays the sentinel,
+ * which the core resolves to the inference pool's thread count when the session is
+ * created; a 2.x caller that reads the count before reads 0xffffffff).
  *
  * @param model The model config.
  * @param contract A Hard contract with an explicit budget and a FIXED or NONE warmup.

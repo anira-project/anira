@@ -1060,7 +1060,6 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     std::vector<int64_t> latencies;
     bool sizes_given = false;
     bool warm_up_given = false;
-    bool instances_given = false;
 
     for (const auto& [key, value] : inference->items()) {
         const std::string path = child(base, key.c_str());
@@ -1169,7 +1168,6 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
         } else if (key == "num_parallel_processors") {
             cfg.m_max_instances = require_u32(value, path);
             if (cfg.m_max_instances == 0) { fail_json(path, "must be at least 1"); }
-            instances_given = true;
         } else if (key == "session_exclusive_processor") {
             cfg.m_state = require_bool(value, path) ? ANIRA_MODEL_STATEFUL : ANIRA_MODEL_STATELESS;
         } else {
@@ -1287,14 +1285,13 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     static_cast<void>(sizes_given);
     static_cast<void>(has_contract_key);
     // The keys a 2.x file may leave out took the InferenceConfig constructor's defaults: a
-    // fixed warm-up count (0) and half the hardware threads as parallel processors. The
-    // upgrade writes them, so the bridge to the 2.x runtime yields the same configuration.
+    // fixed warm-up count (0), which the upgrade writes, so the bridge to the 2.x runtime
+    // yields the same configuration, and half the hardware threads as parallel processors,
+    // which was 2.x's way of saying as many as the default pool has threads: a count left out
+    // stays ANIRA_INSTANCES_AUTO, the pool's thread count once the handler is prepared.
     if (!warm_up_given) {
         hard.m_warmup = ANIRA_WARMUP_FIXED;
         hard.m_warmup_iterations = anira::InferenceConfig::Defaults::k_warm_up;
-    }
-    if (!instances_given) {
-        cfg.m_max_instances = anira::InferenceConfig::Defaults::m_num_parallel_processors;
     }
     hard.m_on_miss = ANIRA_MISS_ZEROS;  // the 2.x runtime delivered zeros on a miss
     legacy->m_kind = hard;
@@ -1399,7 +1396,10 @@ Json model_to_json(const anira_model_config& cfg) {
         root["default_provider"] = anira::capi::provider_word(cfg.m_default_provider);
     }
     root["state"] = word_of(cfg.m_state, k_states);
-    root["max_instances"] = cfg.m_max_instances;
+    // ANIRA_INSTANCES_AUTO is the key left out, as a context's ANIRA_THREADS_AUTO is.
+    if (cfg.m_max_instances != ANIRA_INSTANCES_AUTO) {
+        root["max_instances"] = cfg.m_max_instances;
+    }
     if (!cfg.m_anchor.empty()) { root["anchor"] = cfg.m_anchor; }
     Json inputs = Json::array();
     for (const anira_tensor_spec& spec : cfg.m_inputs) {

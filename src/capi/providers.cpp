@@ -1,5 +1,5 @@
-// What a backend's engine serves here (providers.h): the one path anira_handler_create and
-// the pipeline's capabilities entries take for every kind of engine.
+// What a backend's engine serves here (providers.h): the one path anira_handler_create,
+// anira_handler_prepare and the pipeline's capabilities entries take for every kind of engine.
 #include "providers.h"
 
 #include <anira/CoreConfig.h>
@@ -104,17 +104,7 @@ ServedProviders served_by_builtin(const anira_context& context, anira_engine eng
     return served;
 }
 
-ServedProviders served_by_custom(const anira_context& context, const EngineCarrier& engine) {
-    ServedProviders served;
-    served.m_kind = ServedProviders::Kind::Custom;
-    served.m_label = engine.id();
-    // A descriptor without a list serves the CPU path alone; one with a list exactly what it
-    // lists, the CPU path only when it lists "cpu".
-    const bool listless = engine.providers().empty();
-    if (listless) { served.m_declared.push_back(cpu_path()); }
-    for (const std::string& word : engine.providers()) {
-        served.m_declared.push_back(declared_provider(word));
-    }
+uint64_t query_engine(const anira_context& context, const EngineCarrier& engine) {
     uint64_t available = 0;
     const anira_status status = engine.query(query_info(context), available);
     if (status != ANIRA_OK) {
@@ -129,6 +119,29 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
         message += ")";
         throw StatusError(status, message);
     }
+    return available;
+}
+
+uint64_t ask_query(const anira_context& context,
+                   const EngineCarrier& engine,
+                   QueryAnswers& answers) {
+    if (const uint64_t* kept = answers.find(engine.id())) { return *kept; }
+    const uint64_t available = query_engine(context, engine);
+    answers.m_answers.emplace_back(engine.id(), available);
+    return available;
+}
+
+ServedProviders served_by_custom(const EngineCarrier& engine, uint64_t available) {
+    ServedProviders served;
+    served.m_kind = ServedProviders::Kind::Custom;
+    served.m_label = engine.id();
+    // A descriptor without a list serves the CPU path alone; one with a list exactly what it
+    // lists, the CPU path only when it lists "cpu".
+    const bool listless = engine.providers().empty();
+    if (listless) { served.m_declared.push_back(cpu_path()); }
+    for (const std::string& word : engine.providers()) {
+        served.m_declared.push_back(declared_provider(word));
+    }
     if (listless) { served.m_available.push_back(cpu_path()); }
     for (size_t i = 0; i < engine.providers().size() && i < 64; ++i) {
         if ((available & (uint64_t{1} << i)) != 0) {
@@ -140,10 +153,24 @@ ServedProviders served_by_custom(const anira_context& context, const EngineCarri
 
 ServedProviders served_providers(const anira_context& context,
                                  const anira_pipeline& pipeline,
-                                 const ModelEntry& row) {
+                                 const ModelEntry& row,
+                                 QueryAnswers& answers,
+                                 QueryUse use) {
     if (row.is_custom()) {
         for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
-            if (engine->id() == row.m_engine_id) { return served_by_custom(context, *engine); }
+            if (engine->id() != row.m_engine_id) { continue; }
+            if (use == QueryUse::Ask) {
+                return served_by_custom(*engine, ask_query(context, *engine, answers));
+            }
+            const uint64_t* kept = answers.find(engine->id());
+            if (kept == nullptr) {
+                // create asked the query of every engine whose plans the check reaches, and
+                // prepare reaches the same plans.
+                throw StatusError(ANIRA_ERROR_INTERNAL,
+                                  "providers: custom engine '" + engine->id() +
+                                      "' has no query answer from anira_handler_create");
+            }
+            return served_by_custom(*engine, *kept);
         }
         // validate refused a custom id no engine of the pipeline has.
         throw StatusError(
@@ -191,7 +218,7 @@ std::string unserved_message(const ServedProviders& served,
 CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipeline) {
     CustomRows rows;
     for (const std::shared_ptr<const EngineCarrier>& engine : pipeline.m_engines) {
-        const ServedProviders served = served_by_custom(context, *engine);
+        const ServedProviders served = served_by_custom(*engine, query_engine(context, *engine));
         for (const anira::engine::ProviderInfo& info : served.m_available) {
             // The strings are the carrier's: its id, and the declared word of a custom
             // provider (the list's own string, at a stable address while the carrier lives).
