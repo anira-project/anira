@@ -39,6 +39,7 @@
 #include "engines/Adapter.h"  // IWYU pragma: keep (the complete engine::Loaded)
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/InstanceWaitList.h"
 
 namespace {
 
@@ -299,10 +300,19 @@ TEST(AbiInstanceDispatch, WaitingJobsCountAsInFlight) {
 
     engine.m_open.store(false);
     for (int block = 0; block < 3; ++block) { push_block(handler.m_handler); }
+    // A thread that parks a job counts itself and the job until it returns to the queue, so
+    // the count runs one high per parking thread for a moment, and an early read of 3 can be
+    // the holder, a parking thread and one parked job. Settled means both jobs on the model's
+    // wait list: then no job is left in the queue and the holder is inside the engine, so the
+    // count only falls, to 3, and stays.
+    const anira::InstanceWaitList& waiting =
+        *anira_test::session_of(handler.m_handler)->m_plans[0].m_waiting;
     const auto deadline = Clock::now() + std::chrono::seconds(anira_test::k_wait_s);
-    while (anira::InferenceThread::get_num_in_flight() < 3U && Clock::now() < deadline) {
+    while ((waiting.num_waiting() != 2U || anira::InferenceThread::get_num_in_flight() != 3U) &&
+           Clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
+    EXPECT_EQ(waiting.num_waiting(), 2U) << "the two jobs behind the held instance";
     EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 3U)
         << "the held inference and the two waiting jobs";
     EXPECT_EQ(engine.m_calls.load(), 0);

@@ -80,7 +80,10 @@ public:
 
     /// Whether a job waits: a sequentially consistent read of the count push() and pop() keep,
     /// the read of the release-then-look step of InferenceThread::take_waiting.
-    bool has_waiting() const noexcept { return m_count.load(std::memory_order::seq_cst) > 0; }
+    bool has_waiting() const noexcept { return num_waiting() > 0; }
+
+    /// How many jobs wait: the count push() and pop() keep, read sequentially consistent.
+    uint32_t num_waiting() const noexcept { return m_count.load(std::memory_order::seq_cst); }
 
 private:
     void lock() noexcept {
