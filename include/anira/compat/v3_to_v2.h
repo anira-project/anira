@@ -93,9 +93,10 @@ ANIRA_API anira_status to_core_config(const anira_context_config* config,
 /**
  * @brief The 2.x HostConfig of a Hard contract's geometry and a model config's anchor.
  *
- * block_max and rate become the host buffer size and sample rate, block_min < block_max
- * allows smaller buffers, and the anchor names the reference tensor (the first Streamed input,
- * else output, when none is set).
+ * block_max and rate become the host buffer size and sample rate (a fractional block_max as
+ * the nearest float, from which the latency calculation recovers the rational the host meant),
+ * block_min < block_max allows smaller buffers, and the anchor names the reference tensor (the
+ * first Streamed input, else output, when none is set).
  *
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument; ANIRA_ERROR_CONFIG
  * when the geometry is missing (block_max 0 or rate 0) or a spec breaks a rule;

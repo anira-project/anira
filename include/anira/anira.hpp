@@ -884,8 +884,11 @@ private:
 
 /// The real-time stream: host geometry, budget, warmup, miss policy, wait ratio.
 struct Hard {
-    uint32_t block_min = 0;
-    uint32_t block_max = 0;
+    /// The block range in elements of the anchor tensor: both 0 (unset) or both finite and
+    /// > 0, a fractional block included (0.25: one element every fourth call; the rules of
+    /// anira_contract_create_hard). An integer converts: `.block_max = 512`.
+    double block_min = 0;
+    double block_max = 0;
     double rate = 0;
     anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
     std::chrono::nanoseconds budget_value{};  ///< Explicit only
@@ -1065,8 +1068,10 @@ public:
 
     // -- the setters, for a contract that exists only as a handle (loaded, legacy) --
 
-    /// Patches a Hard contract's stream geometry, e.g. of one loaded from a file.
-    ContractHandle& hard_geometry(uint32_t block_min, uint32_t block_max, double rate) {
+    /// Patches a Hard contract's stream geometry, e.g. of one loaded from a file; a block may
+    /// be fractional (anira_contract_create_hard). @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
+    /// for a geometry the rules refuse, Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle.
+    ContractHandle& hard_geometry(double block_min, double block_max, double rate) {
         detail::check(anira_contract_hard_set_geometry(m_contract, block_min, block_max, rate),
                       "anira_contract_hard_set_geometry");
         return *this;
@@ -1951,6 +1956,12 @@ private:
  * @brief An anira_context with its lifetime: a refcounted handle over this copy's core,
  * created from a ContextConfig (section 4). Two contexts in one copy are two views of one
  * core with two log sinks.
+ *
+ * A plugin destroys its handlers, then its contexts, before its host unloads it (its instance
+ * teardown or module-exit entry point), and never from its own static destructors, which run
+ * inside the unload under the loader lock. On ELF and Mach-O a library unloaded with an
+ * inference still running aborts with a message on stderr after a bounded wait (see
+ * anira_shutdown and the usage guide's section on teardown).
  */
 class Context {
 public:
@@ -2021,7 +2032,9 @@ inline uint32_t num_inference_threads() noexcept {
     return anira_num_inference_threads();
 }
 
-/// anira_shutdown: effective only when no Context and no handler exist in this copy.
+/// anira_shutdown: effective only when no Context and no handler exist in this copy, so a
+/// plugin's module-exit entry point destroys its handlers and contexts first (never its static
+/// destructors: they run inside the unload).
 inline anira_status shutdown() noexcept {
     return anira_shutdown();
 }
@@ -3040,8 +3053,9 @@ public:
     /// candidate's provider of the engine is checked against the answer (a declared provider
     /// the answer clears is ANIRA_ERROR_NOT_SUPPORTED, "declares provider 'x' but its query
     /// reports it unavailable here"), and at Pipeline::capabilities, which reports the
-    /// engine's rows beside the context's. The base answers every bit: every declared
-    /// provider is usable. It may throw, as init may: the status fails the calling entry.
+    /// engine's rows beside the context's. A handler's prepare uses the answer its create got
+    /// and never calls query, whatever thread it runs on. The base answers every bit: every
+    /// declared provider is usable. It may throw, as init may: the status fails the calling entry.
     virtual std::uint64_t query(const InitInfo& /*info*/) const { return ~std::uint64_t{0}; }
 
     /// Called once per C engine of this object, by the first anira_handler_prepare that reaches

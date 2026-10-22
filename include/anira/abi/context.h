@@ -153,7 +153,10 @@ ANIRA_API anira_status ANIRA_CALL anira_context_create(const anira_context_confi
  * calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the
  * caller whatever the internal count (a handler that added a reference keeps the memory
  * alive). Joins nothing. A destroy issued from inside the context's own sink is refused
- * with one Error record and nothing happens.
+ * with one Error record and nothing happens. A plugin must destroy its handlers, then
+ * its contexts, before its host unloads it (its instance teardown or module-exit entry
+ * point), and never from its own static destructors or DllMain, which run inside the
+ * unload under the loader lock.
  * @param context The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]

@@ -38,14 +38,24 @@
  * success), or a failure. The delivered counts come back through a nullable size_t* delivered,
  * a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each
  * Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read: the request is
- * shape[1] of the output tensor. A Buffer spec under a Hard contract is
- * ANIRA_ERROR_NOT_SUPPORTED at anira_handler_prepare: a Buffer tensor is a per-job payload and
- * arrives with the Async contract; a persistent side input under a Hard contract is the Static
- * role. A Static tensor has one description everywhere: the whole tensor in the spec's shape
- * and dtype, any dtype, a Channel axis of any extent included. The handler holds its value in a
- * store of its own, zeroed at anira_handler_create and untouched by prepare and by reset:
- * anira_handler_set_static_input writes an input, which every inference submitted afterwards
- * sees whole (it is materialised into the model's input tensor ahead of the stage's
+ * shape[1] of the output tensor. The count of one call on a Streamed slot is what the Hard
+ * contract's geometry sized the latency and the rings for: block_max samples of the anchor at
+ * most, scaled by its hop to the hop of every other stream. A block b may be fractional on a
+ * stream (a fractional geometry, or a time ratio): the host then moves a sample only once a
+ * whole one has accumulated, floor(k * b) samples by its k-th call, so one call carries
+ * floor(b) or ceil(b) of them (0 or 1 under 0.25, the 1 on every fourth call). ceil(b) is an
+ * enforced upper bound: a Streamed tensor whose shape[1] is above it, on the push side or the
+ * pop side of any Hard entry, is refused with ANIRA_ERROR_INVALID_ARGUMENT before anything
+ * moves (no ring is touched, nothing is submitted), recorded in anira_handler_rt_error, never
+ * cut to its tail; a host declares the largest block it passes as block_max. A count within the
+ * bound that the stream cannot cover is a miss (ANIRA_MISSED). A Buffer spec under a Hard
+ * contract is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_prepare: a Buffer tensor is a per-job
+ * payload and arrives with the Async contract; a persistent side input under a Hard contract is
+ * the Static role. A Static tensor has one description everywhere: the whole tensor in the
+ * spec's shape and dtype, any dtype, a Channel axis of any extent included. The handler holds
+ * its value in a store of its own, zeroed at anira_handler_create and untouched by prepare and
+ * by reset: anira_handler_set_static_input writes an input, which every inference submitted
+ * afterwards sees whole (it is materialised into the model's input tensor ahead of the stage's
  * pre_process); anira_handler_get_static_output reads the value the latest collected inference
  * produced (captured from the model's output tensor behind the stage's post_process; a chunk
  * that completed as zeros, dropped or failed, captures nothing). Both work from create on,
@@ -561,7 +571,10 @@ ANIRA_API anira_status ANIRA_CALL anira_handler_create(anira_context* context,
  * counting as a user of the core, drops the handler's reference on its context and its
  * share of the stage and engine carriers (the release function of a stage or an engine
  * fires here when this handler held the last one). The driver thread must have stopped
- * calling the Hard entries.
+ * calling the Hard entries. A plugin must destroy its handlers, then its contexts,
+ * before its host unloads it (its instance teardown or module-exit entry point), and
+ * never from its own static destructors or DllMain, which run inside the unload under
+ * the loader lock.
  * @param handler The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]
@@ -573,34 +586,36 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * @brief The blocking quiescence point, and the one call no other handler entry may overlap:
  * validates the variant against the contract (geometry, the explicit budget, the warm-up
  * mode, the miss policy against the anchor, the ring dtypes by canonical name, the
- * contract's extensions), checks every plan's provider against what its engine serves
- * now (a built-in engine's runtime, a custom engine's query; ANIRA_ERROR_NOT_SUPPORTED
- * as at anira_handler_create, so a context probed again since the create is seen), runs
- * the stage's init when it has not run yet (once per registration, before any model
- * loads), loads the model of every candidate with an entry, warms up as the contract
- * says, sizes the rings for the contract's block range and the latency, builds the plan
- * report, selects the plan of the variant's default engine when that engine has a plan
- * (else plan 0), logs the report (Info records of the group anira.capi: the counts and
- * the selected plan, then one record per plan, per slot and per consumed extension)
- * re-arms the real-time latches, logging the count of failures suppressed since the last
- * prepare or reset, and last calls the stage's prepare function, when the pipeline has a
- * stage with one, with an anira_prepare_info (the handler, the report, the entry count,
- * a template of the model end of every slot and the canonical names) and keeps the
- * prepared pointer it hands back for this handler (a status other than ANIRA_OK fails
- * this call with it, and unprepare is not called for a refused prepare). A second
- * prepare replaces the previous session whole: the stage's unprepare of the previous
- * prepare runs once the old session is released, before the new prepare. A failed
- * prepare leaves the handler unprepared, the previous prepare's unprepare called all the
- * same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
- * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
- * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
- * output's channel count or ring dtype differs from the anchored input's,
- * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
- * that names no Streamed tensor, or one that differs from its spec's dtype while the
- * stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
- * field), and a stage whose filled pre_process, post_process or reset carries no
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
- * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+ * contract's extensions), checks every plan's provider against what its engine serves (a
+ * built-in engine's runtime as the context reports it now, so a context probed again
+ * since the create is seen; a custom engine's query as it answered at
+ * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at
+ * anira_handler_create), runs the stage's init when it has not run yet (once per
+ * registration, before any model loads), loads the model of every candidate with an
+ * entry, warms up as the contract says, sizes the rings for the contract's block range
+ * and the latency, builds the plan report, selects the plan of the variant's default
+ * engine when that engine has a plan (else plan 0), logs the report (Info records of the
+ * group anira.capi: the counts and the selected plan, then one record per plan, per slot
+ * and per consumed extension) re-arms the real-time latches, logging the count of
+ * failures suppressed since the last prepare or reset, and last calls the stage's
+ * prepare function, when the pipeline has a stage with one, with an anira_prepare_info
+ * (the handler, the report, the entry count, a template of the model end of every slot
+ * and the canonical names) and keeps the prepared pointer it hands back for this handler
+ * (a status other than ANIRA_OK fails this call with it, and unprepare is not called for
+ * a refused prepare). A second prepare replaces the previous session whole: the stage's
+ * unprepare of the previous prepare runs once the old session is released, before the
+ * new prepare. A failed prepare leaves the handler unprepared, the previous prepare's
+ * unprepare called all the same. Refused in this pre-release: an Async contract,
+ * ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an
+ * explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an
+ * output or when a streamed output's channel count or ring dtype differs from the
+ * anchored input's, ANIRA_MISS_CALLBACK without a function
+ * (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one
+ * that differs from its spec's dtype while the stage does not fill the phase that moves
+ * that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process,
+ * post_process or reset carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags,
+ * since under a Hard contract those three phases run on the driving thread
+ * (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
  * @param contract A Hard contract, copied; the handle may be destroyed when the call returns.
  * @param err Nullable.
@@ -778,11 +793,13 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  * carried by no Hard entry, and an in_slot or out_slot that names a Static or a State
  * tensor is refused (a generator with Static input 0 calls
  * anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is
- * validated before anything is pushed, so a refusal pushes nothing. A block whose
- * inference has not completed is an on_miss event: the contract's policy fills out
- * (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block,
- * ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of the
- * input block when in_slot is the anchored input's slot and zeros past it; any other
+ * validated before anything is pushed, so a refusal pushes nothing. Each tensor carries
+ * one host block of the geometry's block_max at most, ceil(b) samples of the block b on
+ * its slot's stream (the header doc): a larger shape[1] is refused, never cut to its
+ * tail. A block whose inference has not completed is an on_miss event: the contract's
+ * policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered
+ * block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of
+ * the input block when in_slot is the anchored input's slot and zeros past it; any other
  * slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and the call
  * returns ANIRA_MISSED, a success: the memory is valid and the stream stays
  * time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in
@@ -823,11 +840,13 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  *         slot's channel count, a negative shape[1], and with shape[1] above 0: NULL memory, a
  *         plane count other than shape[0], a NULL plane, a negative stride, a stride of 0 on an
  *         axis longer than 1 unless every stride is 0, a channel that does not start on a
- *         multiple of the element size; ANIRA_ERROR_NOT_SUPPORTED for a flag bit this library
- *         does not know; ANIRA_ERROR_CONFIG for a dtype other than the slot's;
+ *         multiple of the element size; and a shape[1] above one host block of block_max on the
+ *         slot's stream (ceil of the block); ANIRA_ERROR_NOT_SUPPORTED for a flag bit this
+ *         library does not know; ANIRA_ERROR_CONFIG for a dtype other than the slot's;
  *         ANIRA_ERROR_NOT_PREPARED before a successful prepare. A tensor is checked in the
- *         order rank, domain, flags, shape, dtype, memory and strides, in before out. Every
- *         failure but the NULL handler is recorded in anira_handler_rt_error.
+ *         order rank, domain, flags, shape, dtype, memory and strides, then its count against
+ *         the block, in before out. Every failure but the NULL handler is recorded in
+ *         anira_handler_rt_error.
  * @par Thread contract
  * [driver-thread] ANIRA_NONBLOCKING
  * @since ABI 0.2

@@ -158,7 +158,9 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``anira::Hard{.block_min, .block_max, .rate}`` (``anira_contract_create_hard``) or
        ``contract.hard_geometry(block_min, block_max, rate)``
        (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
-       against ``block_min == block_max``.
+       against ``block_min == block_max``. The blocks are doubles, so a fractional
+       ``buffer_size`` (the ``samplesPerBlock / 2048.f`` idiom of a control-rate model) is a
+       fractional geometry: ``contract.hard_geometry(samples_per_block / 2048.0, ...)``.
    * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
      - ``cfg.anchor(canonical)`` with the tensor's canonical name
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
@@ -468,8 +470,8 @@ rest of this page is the way forward, and the header lets that happen one class 
    * - ``set_inference_backend`` / ``get_inference_backend``
      - Present, wait-free, before ``prepare`` too.
    * - ``prepare(HostConfig)``
-     - Present; a fractional block size and a reference tensor that is not streamable are
-       refused.
+     - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
+       reference tensor that is not streamable is refused.
    * - ``prepare(HostConfig, custom_latency, tensor_index)``, ``prepare(HostConfig, vector)``
      - Present: the declared stream latency of the Hard contract
        (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
@@ -516,10 +518,9 @@ rest of this page is the way forward, and the header lets that happen one class 
   file loads through ``anira::ModelConfig::from_file``).
 
 **Behaviour that differs** is listed per class in :ref:`migration-compat-config`; in short:
-nothing loads before ``prepare``, and a ``prepare`` with other settings loads again; a
-fractional block size is refused (anchor on the stream the block is measured on, e.g. the audio
-output, and pass that stream's block: the ``samplesPerBlock / 2048.f`` idiom of the bridge
-below does not carry over); the single forms carry one slot per side; ``push_data`` never waits;
+nothing loads before ``prepare``, and a ``prepare`` with other settings loads again; the
+single forms carry one slot per side; a block above the ``HostConfig`` buffer size is refused;
+``push_data`` never waits;
 ``pop_data`` with a deadline polls on a handler without a blocking ratio;
 ``set_non_realtime`` is never refused (a waiting call without an inference loop fails instead);
 ``set_inference_backend`` of a backend without a plan logs and keeps the selection;
@@ -530,7 +531,8 @@ leniency, resolves relative paths against the document's directory and keeps row
 this build lacks; the ``ContextConfig`` thread count defaults to ``k_threads_auto``, and a
 document without a log level reads Warning; the engine code of ``PassthroughEngine`` and every
 2.x custom engine is the host's, so a handler must be destroyed before the module that holds it
-unloads.
+unloads, and never from that module's static destructors (:ref:`usage-teardown`: a library
+unloaded with an inference still running aborts with a message on Linux and macOS).
 
 .. _migration-compat-config:
 
@@ -646,7 +648,7 @@ What differs from 2.x:
 - **The engine code is the host's.** The header is compiled into the host, so the
   ``PassthroughEngine`` and every 2.x custom engine run code of the module that includes it,
   where 2.x ran its pass-through inside libanira: destroy the handler before that module
-  unloads.
+  unloads, never from its static destructors (:ref:`usage-teardown`).
 
 ``anira::v2::InferenceHandler`` is the 2.x handler over the C handler of
 ``anira/abi/handler.h``: its constructors take the processor, the configuration and a
@@ -682,14 +684,23 @@ What differs from 2.x:
   ``prepare`` (``ANIRA_ERROR_NO_SUCH_FILE``, ``ANIRA_ERROR_MODEL_LOAD``). A ``prepare`` with the
   settings of the last one only resets the stream; another geometry prepares again and loads the
   models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
-  the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size`` is
-  ``ANIRA_ERROR_CONFIG``: anchor on the stream the block is measured on instead.
+  the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size``
+  works as in 2.x (``samplesPerBlock / 2048.f`` for a control-rate reference): it becomes the
+  Hard geometry as it is (``block_min`` is half of it when smaller blocks come and it is one
+  sample or less); a block that is not finite and above 0 is ``ANIRA_ERROR_CONFIG``.
 - **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
   contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
   Warning as in 2.x; an index out of range, or a figure on a non-streamable output, is
   ``ANIRA_ERROR_INVALID_ARGUMENT`` (2.x threw ``std::invalid_argument`` or asserted).
 - **The single forms** carry their one slot per side and nothing else; 2.x resent what the last
   call had left in the other slots.
+- **A block above the buffer size** is refused: a ``process``, ``push_data`` or ``pop_data`` call
+  that carries more than ``m_buffer_size`` samples of the reference stream (``ceil`` of it, scaled
+  to every other stream by its hop) moves nothing, delivers 0 and leaves
+  ``ANIRA_ERROR_INVALID_ARGUMENT`` in ``rt_error()``, as every Hard entry of the C handler does
+  (section 1.3 of the usage guide, *Fractional blocks*). 2.x took any count and kept the tail of a
+  push larger than its ring. Prepare with the largest block the host passes, with
+  ``m_allow_smaller_buffers`` for the smaller ones.
 - **Waits:** ``push_data`` never waits (2.x waited under ``set_non_realtime``); ``pop_data`` with
   a deadline polls on a handler without a blocking ratio (2.x neither waited nor collected);
   ``set_non_realtime(true)`` is never refused, and without an inference loop each waiting call
@@ -756,7 +767,9 @@ the reason; the same four functions exist over the C handles with a status and a
 const anira_engine* candidates, uint32_t num_candidates, anira::InferenceConfig&,
 anira_error*)`` and so on). ``to_host_config(cfg, buffer_size, sample_rate, allow_smaller)``
 takes the host's own geometry, which may be fractional (a plugin that prepares a 2048-sample
-decoder with ``samplesPerBlock / 2048.f``).
+decoder with ``samplesPerBlock / 2048.f``); the contract forms carry a fractional geometry
+the same way, as the nearest float of the double (the latency calculation recovers the
+rational the host meant from it, 1/3 and 1/4 exactly).
 
 **What becomes what.**
 

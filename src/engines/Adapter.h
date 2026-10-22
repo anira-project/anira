@@ -147,6 +147,19 @@ struct PrepareRequest {
     const anira_prepare_info* m_info = nullptr;
 };
 
+/// Whether the thread that runs a call is being stopped, asked by the claim loop of a shared
+/// call (Loaded::claim_and_run) whenever no instance was free. The inference thread passes
+/// its own stop flag (InferenceThread::should_exit); the default never stops.
+struct StopSignal {
+    bool (*m_stopping)(const void* context) noexcept = nullptr;
+    const void* m_context = nullptr;
+
+    /// True once the thread was told to stop; false without a query.
+    [[nodiscard]] bool stopping() const noexcept {
+        return m_stopping != nullptr && m_stopping(m_context);
+    }
+};
+
 /// One call slot of a loaded model: the engine's executor, what one process call runs on, never
 /// two at once. The built-in engines' file-local Instance classes implement it over the object
 /// their loaded model shares (a session over ONNX Runtime's environment, an interpreter over
@@ -373,13 +386,18 @@ protected:
 private:
     friend class Prepared;
     /// Inference thread, a shared session's call: claims a free slot of the model (the first
-    /// whose busy flag was clear, spinning until one is; the flag is released on every path
-    /// out), writes its index into the call and runs the prepared's process on it. Without a
-    /// claim (claims_instances() false) the call runs at once with instance 0.
-    /// ANIRA_ERROR_INVALID_STATE, and no engine call, on a model without a shared slot.
+    /// whose busy flag was clear; the flag is released on every path out), writes its index
+    /// into the call and runs the prepared's process on it. While every slot is busy it waits
+    /// with the backoff of the inference thread's loop (src/utils/Backoff.h: spins, pause
+    /// hints, then a yield and a 100 us sleep per pass), and gives up once `stop` says the
+    /// thread is being stopped, so a pool's join never waits on a thread that waits for a
+    /// slot another thread holds. Without a claim (claims_instances() false) the call runs at
+    /// once with instance 0. ANIRA_ERROR_INVALID_STATE, and no engine call, on a model without
+    /// a shared slot and when it gave up.
     anira_status claim_and_run(Prepared& prepared,
                                anira_engine_ctx& call,
-                               ChunkBuffers* chunk) noexcept;
+                               ChunkBuffers* chunk,
+                               StopSignal stop) noexcept;
 
     Model m_model;
     Bindings m_bindings;
@@ -406,9 +424,13 @@ public:
     /// exclusive session's call carries ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claims no
     /// slot, is reset first when `reset_first` and runs on what this session keeps; a shared
     /// session's call goes through the loaded model's claim loop, which writes the claimed
-    /// slot's index into the call. Returns process's status; ANIRA_ERROR_INVALID_STATE, and no
-    /// engine call, over a model that was never loaded.
-    anira_status run(const anira_engine_ctx& ctx, ChunkBuffers* chunk, bool reset_first) noexcept;
+    /// slot's index into the call, and gives up waiting for one once `stop` says the thread is
+    /// being stopped. Returns process's status; ANIRA_ERROR_INVALID_STATE, and no engine call,
+    /// over a model that was never loaded and for a shared call that gave up.
+    anira_status run(const anira_engine_ctx& ctx,
+                     ChunkBuffers* chunk,
+                     bool reset_first,
+                     StopSignal stop = {}) noexcept;
 
     /// Whether this session's calls run exclusively (ANIRA_PREPARE_EXCLUSIVE at its prepare).
     bool exclusive() const noexcept { return m_exclusive; }

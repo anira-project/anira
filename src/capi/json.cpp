@@ -760,9 +760,10 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
     for (const auto& [key, value] : node.items()) {
         const std::string key_path = child(path, key.c_str());
         if (key == "block_min") {
-            hard.m_block_min = require_u32(value, key_path);
+            // Any number: a fractional block is legal (geometry_refusal below).
+            hard.m_block_min = require_number(value, key_path);
         } else if (key == "block_max") {
-            hard.m_block_max = require_u32(value, key_path);
+            hard.m_block_max = require_number(value, key_path);
         } else if (key == "rate") {
             hard.m_rate = require_number(value, key_path);
             if (hard.m_rate < 0.0) { fail_json(key_path, "must not be negative"); }
@@ -828,7 +829,9 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             fail_json(key_path, "unknown hard contract key");
         }
     }
-    if (hard.m_block_min > hard.m_block_max) { fail_json(path, "block_min exceeds block_max"); }
+    const std::string refusal =
+        anira::capi::geometry_refusal(hard.m_block_min, hard.m_block_max, hard.m_rate);
+    if (!refusal.empty()) { fail_json(path, refusal); }
 }
 
 void load_async_v3(const Json& node,

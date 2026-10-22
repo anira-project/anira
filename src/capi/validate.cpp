@@ -3,6 +3,7 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -238,19 +239,23 @@ void check_spec(const anira_tensor_spec& spec,
 
     // Window pinning: a fixed window is used as is; a flexible one covers one host block per
     // inference (block_max scaled by the tensor's time ratio, plus the context), clamped to
-    // [window_min, window_max]; without a geometry the smallest window.
+    // [window_min, window_max]; without a geometry the smallest window. A fractional block_max
+    // is the rational the latency calculation recovers from it; the hop must be whole.
     if (streamed) {
         int64_t used = spec.m_window_min;
-        if (spec.m_window_max != spec.m_window_min && hard != nullptr && hard->m_block_max > 0) {
+        if (spec.m_window_max != spec.m_window_min && hard != nullptr && hard->m_block_max > 0.0) {
             const int64_t num = spec.m_ratio_den == 0 ? 1 : spec.m_ratio_num;
             const int64_t den = spec.m_ratio_den == 0 ? 1 : spec.m_ratio_den;
-            const auto block = static_cast<int64_t>(hard->m_block_max);
-            if ((block * num) % den != 0) {
-                config_error(where + "time ratio " + std::to_string(num) + "/" +
-                             std::to_string(den) + " gives a fractional hop for block_max " +
-                             std::to_string(block));
+            const anira::LatencyCalculator::Rational block =
+                anira::LatencyCalculator::rationalize(hard->m_block_max);
+            if ((block.m_numerator * num) % (block.m_denominator * den) != 0) {
+                config_error(
+                    where + "time ratio " + std::to_string(num) + "/" + std::to_string(den) +
+                    " gives a fractional hop for block_max " + std::to_string(block.m_numerator) +
+                    (block.m_denominator == 1 ? std::string()
+                                              : "/" + std::to_string(block.m_denominator)));
             }
-            used = block * num / den + spec.m_overlap;
+            used = block.m_numerator * num / (block.m_denominator * den) + spec.m_overlap;
             used = std::max(used, spec.m_window_min);
             if (spec.m_window_max != ANIRA_UNBOUNDED) { used = std::min(used, spec.m_window_max); }
         }
@@ -269,10 +274,9 @@ void check_contract(const anira_contract& contract,
             "contract: an Async contract has no 2.x counterpart; it arrives with "
             "the 3.x runtime");
     }
-    if (hard->m_block_min > hard->m_block_max) {
-        config_error("contract: block_min " + std::to_string(hard->m_block_min) +
-                     " exceeds block_max " + std::to_string(hard->m_block_max));
-    }
+    const std::string refusal =
+        geometry_refusal(hard->m_block_min, hard->m_block_max, hard->m_rate);
+    if (!refusal.empty()) { config_error("contract: " + refusal); }
     if (hard->m_budget == ANIRA_BUDGET_EXPLICIT && !(hard->m_budget_ms > 0.0)) {
         config_error("contract: an explicit budget must be positive (got " +
                      std::to_string(hard->m_budget_ms) + " ms)");

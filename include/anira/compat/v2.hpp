@@ -383,11 +383,12 @@ struct ContextConfig {
 /**
  * @brief The 2.x HostConfig: the host's block size and sample rate in samples of the reference
  * stream, whether smaller blocks come, and which tensor is the reference stream
- * (k_first_streamable: the first Streamed input, else the first Streamed output). The handler's
- * prepare refuses a fractional m_buffer_size (ANIRA_ERROR_CONFIG): a host that scaled its block
- * to another stream anchors on that stream instead (m_tensor_index, m_tensor_is_input) and
- * passes its own block. The session's arithmetic of 2.x (resolve_reference,
- * get_reference_size, get_relative_buffer_size, get_relative_sample_rate) is not declared.
+ * (k_first_streamable: the first Streamed input, else the first Streamed output). The
+ * m_buffer_size may be fractional, as in 2.x (a control-rate model prepared with
+ * samplesPerBlock / 2048.f): it becomes the Hard geometry as it is, and the host moves a
+ * sample of a stream only once a whole one has accumulated (anira_contract_create_hard). The
+ * session's arithmetic of 2.x (resolve_reference, get_reference_size,
+ * get_relative_buffer_size, get_relative_sample_rate) is not declared.
  */
 struct HostConfig {
     static constexpr size_t k_first_streamable = static_cast<size_t>(-1);
@@ -404,7 +405,7 @@ struct HostConfig {
         , m_tensor_index(tensor_index)
         , m_tensor_is_input(tensor_is_input) {}
 
-    float m_buffer_size = 0;                     ///< the host's largest block, a whole number
+    float m_buffer_size = 0;                     ///< the host's largest block: no call carries more
     float m_sample_rate = 0;                     ///< Hz
     bool m_allow_smaller_buffers = false;        ///< blocks below m_buffer_size may come
     size_t m_tensor_index = k_first_streamable;  ///< the reference tensor's index
@@ -1968,7 +1969,9 @@ struct Context {
  * prepare); a prepare with the settings of the last one only resets the stream, one with another
  * geometry loads the models again, one with another reference tensor rebuilds the C handler; the
  * single forms carry their one slot per side and nothing else (2.x resent what the last call
- * left in the other slots); push_data never waits, pop_data with a deadline polls on a handler
+ * left in the other slots); a block above the HostConfig buffer size (ceil of it, scaled to each
+ * stream) is refused, nothing moves and rt_error() reports ANIRA_ERROR_INVALID_ARGUMENT (2.x kept
+ * its tail); push_data never waits, pop_data with a deadline polls on a handler
  * without a blocking ratio, and set_non_realtime is never refused (a wait without an inference
  * loop fails the call instead, which rt_error() reports); set_inference_backend of a backend
  * without a plan keeps the selection and logs; get_num_inference_threads is the pool size, 0 until
@@ -2010,6 +2013,8 @@ public:
                      const ContextConfig& context_config = ContextConfig())
         : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
     /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
+    /// A plugin destroys its handlers before its host unloads it, never from its own static
+    /// destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
     /// The backend the next block runs on; before prepare the request is kept and applied at
@@ -2032,12 +2037,13 @@ public:
     }
 
     /// Prepares for the host's stream: the configuration's legacy contract with the host
-    /// geometry (m_buffer_size whole, block_min 1 when smaller blocks come), the reference
-    /// tensor as the model's anchor. The settings of the last successful prepare only reset the
+    /// geometry (block_max m_buffer_size, a fractional one included; block_min 1 when smaller
+    /// blocks come, half the block when it is one sample or less), the reference tensor as the
+    /// model's anchor. The settings of the last successful prepare only reset the
     /// stream (the models stay loaded); another geometry prepares again and loads the models
     /// again; another reference tensor rebuilds the C handler. The selected backend is applied
-    /// again. @throws Error: ANIRA_ERROR_CONFIG for a fractional or non-positive block size or
-    /// rate, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
+    /// again. @throws Error: ANIRA_ERROR_CONFIG for a block size or rate that is not finite and
+    /// above 0, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
     /// else the status of anira_handler_prepare (a model that does not load, a rule of the
     /// configuration); the handler is then unprepared.
     void prepare(HostConfig new_audio_config) { prepare_with(new_audio_config, {}); }
@@ -2434,12 +2440,10 @@ private:
 
     void prepare_with(const HostConfig& host, const std::map<std::string, uint32_t>& latencies) {
         const float block = host.m_buffer_size;
-        if (!(block > 0.F) || std::floor(block) != block || !std::isfinite(block)) {
+        if (!(block > 0.F) || !std::isfinite(block)) {
             detail::fail(ANIRA_ERROR_CONFIG,
                          "HostConfig: m_buffer_size " + detail::json_number(block) +
-                             " is not a whole number of samples above 0; a host whose block is "
-                             "measured on another stream anchors on that stream instead "
-                             "(m_tensor_index, m_tensor_is_input) and passes its own block");
+                             " is not a number of samples above 0");
         }
         if (!(host.m_sample_rate > 0.F) || !std::isfinite(host.m_sample_rate)) {
             detail::fail(ANIRA_ERROR_CONFIG,
@@ -2469,8 +2473,16 @@ private:
             m_anchor = wanted;
         }
         anira::Hard hard = m_config.hard();
-        const auto frames = static_cast<uint32_t>(block);
-        hard.block_min = host.m_allow_smaller_buffers ? 1 : frames;
+        // The float as it is: the geometry is a double, and the latency calculation recovers
+        // the rational the host meant from either. The translation reads only whether
+        // block_min is below block_max, so a block of one sample or less says that smaller
+        // blocks come with half of itself.
+        const auto frames = static_cast<double>(block);
+        if (host.m_allow_smaller_buffers) {
+            hard.block_min = frames > 1.0 ? 1.0 : frames / 2.0;
+        } else {
+            hard.block_min = frames;
+        }
         hard.block_max = frames;
         hard.rate = host.m_sample_rate;
         hard.latencies = latencies;

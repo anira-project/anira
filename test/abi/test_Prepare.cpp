@@ -311,14 +311,17 @@ TEST(AbiPrepare, LatencyRulesAreConfigAtPrepare) {
     EXPECT_EQ(latencies[0], 4096U) << "index-aligned with the output list";
     EXPECT_EQ(latencies[1], computed_1);
 
-    // The priming: the receive ring of slot 0 holds 4096 zeros before any block ran.
+    // The priming: the receive ring of slot 0 holds 4096 zeros before any block ran, popped
+    // the way a host pops, one declared block (k_block) per call.
     EXPECT_EQ(anira_test::available(handler.m_handler, 0), 4096U);
     std::vector<float> primed(4096, -1.0F);
-    const std::array<float*, 1> ch{primed.data()};
-    const anira_tensor out = anira_test::planar_f32(ch.data(), 1, primed.size());
-    size_t delivered = 0;
-    EXPECT_EQ(anira_handler_pop_data(handler.m_handler, &out, 0, &delivered), ANIRA_OK);
-    EXPECT_EQ(delivered, 4096U);
+    for (size_t offset = 0; offset < primed.size(); offset += k_block) {
+        const std::array<float*, 1> ch{primed.data() + offset};
+        const anira_tensor out = anira_test::planar_f32(ch.data(), 1, k_block);
+        size_t delivered = 0;
+        EXPECT_EQ(anira_handler_pop_data(handler.m_handler, &out, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(delivered, k_block);
+    }
     expect_all(primed, 0.0F, "the priming of the declared latency");
 }
 
