@@ -53,7 +53,8 @@ using anira_test::k_custom;
 using Clock = std::chrono::steady_clock;
 
 constexpr uint32_t k_threads = 4;
-constexpr int k_sleep_us = 5000;  // every inference of both engines
+constexpr int k_sleep_us = 5000;     // every inference of B (and of the other tests' engines)
+constexpr int k_a_sleep_us = 20000;  // every inference of A in the measurement
 constexpr int k_rounds = 12;
 constexpr size_t k_a_handlers = 3;          // A's sessions, all on one loaded model
 constexpr size_t k_a_blocks_per_round = 3;  // per A session and round: 9 jobs of A at once
@@ -64,10 +65,12 @@ int64_t now_ns() {
 }
 
 /// A custom engine whose every inference sleeps m_sleep_us, then passes through and stamps its
-/// end (m_last_done_ns, steady clock).
+/// end (m_last_done_ns, steady clock). With a peer it records, as its inference starts, how many
+/// inferences the peer had completed (m_calls counts at the end of every call).
 class SleepingEngine final : public anira_test::GateEngine {
 public:
     anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        if (m_peer != nullptr) { m_peer_done_at_start.store(m_peer->m_calls.load()); }
         std::this_thread::sleep_for(std::chrono::microseconds(m_sleep_us));
         const anira_status status = anira_test::passthrough(ctx);
         m_last_done_ns.store(now_ns());
@@ -76,6 +79,8 @@ public:
 
     int m_sleep_us = k_sleep_us;
     std::atomic<int64_t> m_last_done_ns{0};
+    const SleepingEngine* m_peer = nullptr;
+    std::atomic<int> m_peer_done_at_start{0};
 };
 
 const std::vector<anira_backend_id> k_custom_only{{.struct_size = sizeof(anira_backend_id),
@@ -137,6 +142,10 @@ struct Measurement {
     double m_b_loaded_median_ms = 0.0;
     double m_b_loaded_max_ms = 0.0;
     double m_a_inferences_per_s = 0.0;
+    /// Per round with A loaded: how many of the round's A inferences had completed when B's
+    /// inference started (its median and maximum over the rounds).
+    double m_a_done_before_b_median = 0.0;
+    double m_a_done_before_b_max = 0.0;
 };
 
 /// The rig: B alone for k_rounds blocks, then k_rounds rounds of A's k_a_handlers *
@@ -146,6 +155,8 @@ Measurement measure(anira_wait_strategy wait) {
     const Context context(k_threads, wait);
     SleepingEngine engine_a;
     SleepingEngine engine_b;
+    engine_a.m_sleep_us = k_a_sleep_us;
+    engine_b.m_peer = &engine_a;
     const anira::ModelConfig model = one_instance_model();
     std::vector<std::unique_ptr<Handler>> a_handlers;
     a_handlers.reserve(k_a_handlers);
@@ -179,6 +190,7 @@ Measurement measure(anira_wait_strategy wait) {
     }
 
     std::vector<double> loaded;
+    std::vector<double> a_done_before_b;
     int64_t a_busy_ns = 0;
     int a_inferences = 0;
     for (int round = 0; round < k_rounds; ++round) {
@@ -192,6 +204,8 @@ Measurement measure(anira_wait_strategy wait) {
         push_block(b);
         EXPECT_TRUE(wait_for_calls(engine_b, b_calls + 1));
         loaded.push_back(static_cast<double>(engine_b.m_last_done_ns.load() - pushed) / 1e6);
+        a_done_before_b.push_back(
+            static_cast<double>(engine_b.m_peer_done_at_start.load() - a_calls));
         const int a_round = static_cast<int>(k_a_handlers * k_a_blocks_per_round);
         EXPECT_TRUE(wait_for_calls(engine_a, a_calls + a_round));
         a_busy_ns += engine_a.m_last_done_ns.load() - a_pushed;
@@ -207,14 +221,21 @@ Measurement measure(anira_wait_strategy wait) {
     result.m_a_inferences_per_s =
         a_busy_ns > 0 ? static_cast<double>(a_inferences) * 1e9 / static_cast<double>(a_busy_ns)
                       : 0.0;
+    result.m_a_done_before_b_median = median_ms(a_done_before_b);
+    result.m_a_done_before_b_max = max_ms(a_done_before_b);
     std::printf(
-        "[instance dispatch] %s, %u threads, %d us per inference, %zu jobs of A per round: "
+        "[instance dispatch] %s, %u threads, A %d us / B %d us per inference, %zu jobs of A per "
+        "round: "
+        "A inferences done when B started: median %.0f (max %.0f); "
         "B alone median %.2f ms (max %.2f), B with A loaded median %.2f ms (max %.2f), "
         "ratio %.2f; A %.1f inferences/s\n",
         wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin-backoff",
         k_threads,
+        k_a_sleep_us,
         k_sleep_us,
         k_a_handlers * k_a_blocks_per_round,
+        result.m_a_done_before_b_median,
+        result.m_a_done_before_b_max,
         result.m_b_alone_median_ms,
         result.m_b_alone_max_ms,
         result.m_b_loaded_median_ms,
@@ -233,11 +254,20 @@ uint32_t loaded_instances(const anira_handler* handler) {
     return session->m_plans[plan].m_loaded->num_instances();
 }
 
-/// The bound: B's median delay with A loaded within twice its median delay alone.
+/// The bound, counted rather than timed (a timed bound, B's delay within twice its delay alone,
+/// failed on loaded macOS runners where a 5 ms sleep took 8 to 17 ms): how many of the round's
+/// nine A inferences had completed when B's inference started. Not held up, the threads park A's
+/// jobs on its wait list and one takes B's while A's first inference still runs: none. Held up,
+/// every thread waits for A's one instance with an A job in hand, and B's job is taken only by a
+/// thread that got rid of its A job, after at least one of A's inferences completed (measured on
+/// the old dispatch: a median of 1 under ANIRA_WAIT_SPIN_BACKOFF, where moodycamel's queue hands
+/// B's job out before the later A jobs, and 6 under ANIRA_WAIT_BLOCKING). A's inferences take
+/// 20 ms, so a thread would have to be starved for longer than that to see one complete before B
+/// starts. The median over the rounds must be 0.
 void expect_not_held_up(const Measurement& result) {
     EXPECT_GT(result.m_b_alone_median_ms, 0.0);
     EXPECT_GT(result.m_a_inferences_per_s, 0.0);
-    EXPECT_LT(result.m_b_loaded_median_ms, 2.0 * result.m_b_alone_median_ms)
+    EXPECT_EQ(result.m_a_done_before_b_median, 0.0)
         << "B's job waited behind A's: the threads held A's jobs while A's instance was busy";
 }
 
