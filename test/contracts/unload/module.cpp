@@ -14,8 +14,15 @@
 #include <anira/scheduler/Core.h>
 
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <thread>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 #include "../../../extras/models/model_files.h"
 #include "module_api.h"
@@ -60,10 +67,59 @@ anira_status ANIRA_CALL passthrough_process(const anira_engine_ctx* ctx,
     return ANIRA_OK;
 }
 
-// A new pass-through engine object under k_custom_engine; nullptr when the create fails.
-anira_custom_engine* make_passthrough() {
+// The inferences of the engines below that reached their process, and how long the slow one
+// takes per call.
+std::atomic<int> s_entered{0};
+std::atomic<int> s_slow_ms{0};
+
+// An inference that never ends on its own: it sleeps until the process dies.
+anira_status ANIRA_CALL stalling_process(const anira_engine_ctx* /*ctx*/,
+                                         void* /*prepared*/,
+                                         void* /*user_data*/) {
+    s_entered.fetch_add(1);
+    while (true) { std::this_thread::sleep_for(std::chrono::milliseconds(1)); }
+}
+
+// An inference that needs the loader lock again and again (what LibTorch's first inference on a
+// thread does once, through __cxa_thread_atexit): on glibc dlopen takes dl_load_lock, which a
+// dlclose holds while the unload hook runs, so this call stops inside dlopen for good once the
+// unload has begun. RTLD_NOLOAD on libc: nothing is loaded and no reference of the module is
+// taken. Elsewhere it stalls like stalling_process.
+anira_status ANIRA_CALL loader_lock_process([[maybe_unused]] const anira_engine_ctx* ctx,
+                                            [[maybe_unused]] void* prepared,
+                                            [[maybe_unused]] void* user_data) {
+#if defined(__linux__)
+    s_entered.fetch_add(1);
+    while (true) {
+        if (void* libc = dlopen("libc.so.6", RTLD_NOW | RTLD_NOLOAD)) { dlclose(libc); }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+#else
+    return stalling_process(ctx, prepared, user_data);
+#endif
+}
+
+// The pass-through after s_slow_ms of sleep.
+anira_status ANIRA_CALL slow_process(const anira_engine_ctx* ctx, void* prepared, void* user_data) {
+    s_entered.fetch_add(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(s_slow_ms.load()));
+    return passthrough_process(ctx, prepared, user_data);
+}
+
+// The process of an engine of unloadtest_create_engine; nullptr for an unknown behaviour.
+anira_engine_process_fn engine_process_of(int behaviour) {
+    switch (behaviour) {
+        case UNLOADTEST_ENGINE_STALLING: return stalling_process;
+        case UNLOADTEST_ENGINE_LOADER_LOCK: return loader_lock_process;
+        case UNLOADTEST_ENGINE_SLOW: return slow_process;
+        default: return nullptr;
+    }
+}
+
+// A new engine object over `process` under k_custom_engine; nullptr when the create fails.
+anira_custom_engine* make_engine(anira_engine_process_fn process) {
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    desc.process = passthrough_process;
+    desc.process = process;
     anira_custom_engine* engine = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_custom_engine_create(k_custom_engine, &desc, &engine, &err) != ANIRA_OK) {
@@ -104,10 +160,10 @@ anira_tensor_spec* make_spec(const char* name) {
     return spec;
 }
 
-// What an instance runs: the module's pass-through on the custom row, the first enabled engine
+// What an instance runs: an engine of this module on the custom row, the first enabled engine
 // at a path that does not exist (a model that never loads), or the bundled gain model on a
 // built-in engine of this build.
-enum class Kind { PassThrough, MissingModel, BuiltIn };
+enum class Kind { Custom, MissingModel, BuiltIn };
 
 // The bundled gain model (extras/models/model-pool/gain.model.json: one entry per built-in
 // engine, a 512-sample stream and a Static gain, the paths relative to the file); nullptr when
@@ -163,10 +219,11 @@ void destroy_instance(Instance* instance) {
     delete instance;
 }
 
-// A context (2 pool threads, SpinBackoff, Warning) and a handler over the model of the kind;
-// nullptr, with nothing left behind, when a step fails.
-Instance* make_instance(Kind kind) {
-    const bool custom = kind == Kind::PassThrough;
+// A context (2 pool threads, SpinBackoff, Warning) and a handler over the model of the kind,
+// the custom row on an engine over `process`; nullptr, with nothing left behind, when a step
+// fails.
+Instance* make_instance(Kind kind, anira_engine_process_fn process = passthrough_process) {
+    const bool custom = kind == Kind::Custom;
     auto* instance = new Instance();
     anira_error err = ANIRA_ERROR_INIT;
     bool ok =
@@ -183,7 +240,7 @@ Instance* make_instance(Kind kind) {
         if (ok && custom) {
             // The custom row's engine, added before the handler copies the pipeline; the
             // pipeline holds the object, so the handle goes right away.
-            anira_custom_engine* engine = make_passthrough();
+            anira_custom_engine* engine = make_engine(process);
             ok = engine != nullptr && anira_pipeline_add_engine(pipeline, engine, &err) == ANIRA_OK;
             anira_custom_engine_destroy(engine);
         }
@@ -252,7 +309,7 @@ extern "C" {
 
 void* unloadtest_create(void) {
     try {
-        return make_instance(Kind::PassThrough);
+        return make_instance(Kind::Custom);
     } catch (...) { return nullptr; }
 }
 
@@ -269,6 +326,26 @@ void* unloadtest_create_builtin(void) {
         return nullptr;
     }
     return instance;
+}
+
+void* unloadtest_create_engine(int behaviour, int slow_ms) {
+    s_slow_ms.store(slow_ms);
+    const anira_engine_process_fn process = engine_process_of(behaviour);
+    if (process == nullptr) { return nullptr; }
+    Instance* instance = nullptr;
+    try {
+        instance = make_instance(Kind::Custom, process);
+    } catch (...) { return nullptr; }
+    if (instance == nullptr) { return nullptr; }
+    if (prepare_instance(*instance) != ANIRA_OK) {
+        destroy_instance(instance);
+        return nullptr;
+    }
+    return instance;
+}
+
+int unloadtest_engine_entered(void) {
+    return s_entered.load();
 }
 
 void unloadtest_prepare(void* instance) {

@@ -25,12 +25,12 @@ jobs:
     strategy:
       matrix:
         name: [Linux-x86_64]
-        os: [ubuntu-latest]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.15
-      - uses: tanh-lab/ci-actions/clang-format-check@v0.3.15
+      - uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.16
+      - uses: tanh-lab/ci-actions/clang-format-check@v0.3.16
         with:
           SOURCES: "src/ include/ test/ examples/"
 
@@ -45,7 +45,7 @@ jobs:
     name: clang_format result
     needs: format
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |
@@ -56,7 +56,7 @@ jobs:
     name: clang_check result
     needs: tooling-config
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

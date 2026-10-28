@@ -4,6 +4,7 @@
 #include <anira/abi/enums.h>
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -18,6 +19,11 @@
 #endif
 
 namespace anira {
+
+namespace engine {
+class Loaded;  // src/engines/Adapter.h: the loaded model whose shared instances a job claims
+}  // namespace engine
+class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting for an instance
 
 /**
  * @brief Thread class for executing neural network inference operations.
@@ -41,6 +47,13 @@ namespace anira {
  * ConsumerToken's sticky sub-queue rotation is a many-consumer throughput
  * optimization that can intermittently miss items enqueued via producer
  * tokens (lost inference tasks, see issue #77).
+ *
+ * Dispatch is instance-aware: a job whose plan runs on a shared instance of a loaded model is
+ * run only once an instance is claimed for it. A thread that dequeues such a job while every
+ * instance of the model is busy puts the job on the model's wait list (InstanceWaitList) and
+ * goes back to the queue, so no thread ever waits with a job in hand and the jobs of other
+ * models are not held up behind a busy one; the thread that holds an instance runs the model's
+ * waiting jobs, oldest first, before it gives the instance back.
  */
 class ANIRA_API InferenceThread {
 public:
@@ -72,6 +85,9 @@ public:
      * Attempts to dequeue and process one inference request from the queue.
      * This method is designed to be called repeatedly in a loop and provides
      * efficient processing with automatic backoff when no work is available.
+     * A request whose model has no free instance is put on the model's wait list and the call
+     * returns at once; a call that ran a request on an instance also runs the requests waiting
+     * for that model before it returns, so one call may process several.
      *
      * The method handles:
      * - Dequeuing inference data from the concurrent queue
@@ -112,11 +128,24 @@ public:
     bool start();
 
     /**
+     * @brief Asks run_loop() to return, without waiting for it: should_exit() is true from
+     * here on.
+     *
+     * A pool asks every thread first and joins them after (stop()). No thread waits for a free
+     * instance of a loaded model (a job whose model is busy waits on the model's wait list),
+     * and a thread that holds an instance gives every waiting job it takes from there on up
+     * instead of running it (zeros, and ANIRA_ERROR_ENGINE on the session's latch), so a join
+     * waits for the inferences already inside an engine and nothing more.
+     */
+    void request_stop();
+
+    /**
      * @brief Stops the thread: asks run_loop() to return and, natively, joins it.
      */
     void stop();
 
-    /// True once stop() was called; run_loop() polls this.
+    /// True once request_stop() or stop() was called; run_loop() polls this, and a thread that
+    /// holds an instance of a loaded model reads it before every waiting job it takes.
     bool should_exit() const;
 
     /// True from start() until run_loop() has returned (native) / until stop() (web).
@@ -157,6 +186,21 @@ public:
     static unsigned int get_num_loop_active();
 
     /**
+     * @brief Number of inferences in flight in the process right now.
+     *
+     * A thread holds one from the moment it dequeued a job until it is done with it and with
+     * every job waiting for the same model's instance it ran after it: the hooks and the
+     * engine calls, or the skips of stale or uninitialised jobs. A job on a wait list (its
+     * model's instances were busy) counts as well, from its push until a thread takes it to
+     * run it or, at a stop, to give it up; idle threads waiting for work count nothing. Every
+     * thread that runs jobs keeps it (the pool and user-created threads, and a host driving
+     * execute() itself): two atomic updates per job, none on the audio thread. The library-unload
+     * hook waits on it (Core::shutdown()'s backstop at dlclose); the counter has static storage
+     * duration like the thread counters. Wait-free.
+     */
+    static unsigned int get_num_in_flight() noexcept;
+
+    /**
      * @brief True while at least one thread is inside run_loop(), on every platform.
      *
      * The relaxed read of the same count get_num_loop_active() reports (the auto-managed
@@ -186,10 +230,12 @@ private:
      * @param signalled Set to true right after the struct's done signal is published (on
      * success and on a failed inference alike), so the caller's last-resort handler never
      * signals a struct twice
+     * @param instance What inference() runs the chunk on (see there)
      */
     void do_inference(const std::shared_ptr<SessionElement>& session,
                       const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct,
-                      bool& signalled);
+                      bool& signalled,
+                      uint32_t instance);
 
     /**
      * @brief The engine call of one chunk
@@ -199,6 +245,10 @@ private:
      * ANIRA_TICKET_INVALID under the Hard contract, no flags) and runs the plan's prepared
      * handle on it: exactly one plan runs per call, the one of @p plan, the index the chunk
      * was stamped with in Core::pre_process; the session's m_current_plan is not read here.
+     * A shared session's call runs on the instance process_dequeued_inference() claimed for
+     * the job (Prepared::run_claimed); a waiting job a thread told to stop gave up fails with
+     * ANIRA_ERROR_INVALID_STATE without an engine call; every other call (an exclusive
+     * session's, a 2.x backend's) runs through Prepared::run.
      * On a session-exclusive session the chunk's dispatch stamp is compared with the
      * plan's engine generation: a difference is the plan's first inference of a new stream
      * (after prepare, after a reset), so the adapter resets its engine's own state right
@@ -210,11 +260,14 @@ private:
      * @param session Shared pointer to the SessionElement containing the plan table
      * @param plan The plan the chunk was submitted under (ThreadSafeStruct::m_plan)
      * @param chunk The chunk: its descriptors, its buffers, its stamps
+     * @param instance The shared instance claimed for the chunk; UINT32_MAX for a call that
+     * claims none; UINT32_MAX - 1 for a waiting job given up at a stop
      * @return What the adapter returned: ANIRA_OK, or the status that fails the chunk
      */
     anira_status inference(const std::shared_ptr<SessionElement>& session,
                            uint32_t plan,
-                           SessionElement::ThreadSafeStruct& chunk);
+                           SessionElement::ThreadSafeStruct& chunk,
+                           uint32_t instance);
 
     /**
      * @brief Implements exponential backoff strategy for CPU optimization
@@ -244,19 +297,81 @@ private:
 #endif
 
     /**
-     * @brief Processes the inference request currently held in m_inference_data
+     * @brief Dispatches the inference request currently held in m_inference_data
      *
-     * Shared by both wait strategies after a successful dequeue: skips the
-     * request if it is stale (its session's generation was bumped by a wait-free
-     * reset) or its session is momentarily uninitialized (a prepare/release drain
-     * is in progress), otherwise runs do_inference(). Skip paths still publish
-     * the completion signal, and for session-exclusive tasks end the task's turn
-     * on the dispatch chain. The session's active-inference count is released on
-     * every exit path, and a last-resort handler completes a struct that was not
-     * signalled yet with zeros (never signalling one twice), ends its turn on the
-     * chain and records ANIRA_ERROR_ENGINE on the session's latch.
+     * Shared by both wait strategies after a successful dequeue. A request whose plan runs on
+     * a shared instance of a loaded model (wait_list_of()) is run only with an instance
+     * claimed (engine::Loaded::try_claim): when every instance is busy the request goes on the
+     * model's wait list and this returns; when older requests of the model wait, the oldest
+     * runs first and this one queues behind it. Holding an instance, the thread runs the
+     * request, then the model's waiting requests one after the other (take_waiting()), and
+     * gives the instance back when none waits; a waiting request taken after should_exit()
+     * turned true is given up (its chunk fails as zeros) instead of run. Every other request
+     * runs at once (process_job()).
      */
     void process_dequeued_inference();
+
+    /**
+     * @brief The wait list of the model a request runs on, if its plan claims a shared instance
+     *
+     * The plan slot's InstanceWaitList, with the loaded model in @p loaded, for a live request
+     * (not stale, its session initialized) whose plan's prepared handle claims an instance
+     * (engine::Prepared::claims_instance); nullptr for every other request, which needs no
+     * instance.
+     */
+    InstanceWaitList* wait_list_of(const InferenceData& job, engine::Loaded*& loaded);
+
+    /**
+     * @brief The next waiting request of a model, for the thread that holds @p instance of it
+     *
+     * Pops the oldest waiting request into @p job and keeps the instance. When none waits, gives
+     * the instance back and looks again: a request pushed meanwhile whose own claim failed
+     * against this thread's instance is seen, the instance claimed again (into @p instance) and
+     * the request taken, unless another thread claimed the instance first (it takes it then).
+     *
+     * @return True with a request in @p job and @p instance claimed; false with nothing claimed
+     */
+    static bool take_waiting(InstanceWaitList& waiting,
+                             engine::Loaded& loaded,
+                             uint32_t& instance,
+                             InferenceData& job) noexcept;
+
+    /**
+     * @brief A shared instance of a loaded model this thread holds while it serves the model's
+     * waiting requests, and the next of them
+     *
+     * process_job() fills it (take_waiting()) right before its request stops counting for its
+     * session's drain, so the model and its wait list, which that session's plan slot holds,
+     * are alive for the step whatever the release of the session does after it; the request
+     * taken holds its own session.
+     */
+    struct InstanceHold {
+        InstanceWaitList* m_waiting = nullptr;
+        engine::Loaded* m_loaded = nullptr;
+        uint32_t m_instance = 0;  ///< the instance held
+        InferenceData m_next;     ///< the next waiting request, when m_taken
+        bool m_taken = false;     ///< whether m_next holds a request and m_instance is still held
+    };
+
+    /**
+     * @brief Processes one request
+     *
+     * Skips the request if it is stale (its session's generation was bumped by a wait-free
+     * reset) or its session is momentarily uninitialized (a prepare/release drain is in
+     * progress), otherwise runs do_inference() on @p instance. Skip paths still publish the
+     * completion signal, and for session-exclusive tasks end the task's turn on the dispatch
+     * chain. The session's active-inference count is released and @p job emptied on every
+     * exit path, and a last-resort handler completes a struct that was not signalled yet with
+     * zeros (never signalling one twice), ends its turn on the chain and records
+     * ANIRA_ERROR_ENGINE on the session's latch.
+     *
+     * @param job The request; empty on return
+     * @param instance What inference() runs the chunk on (see there)
+     * @param hold The instance this thread holds for the request, or nullptr: on every exit
+     * path, before the request stops counting, the next waiting request of the model is taken
+     * into it (InstanceHold::m_taken) or the instance given back
+     */
+    void process_job(InferenceData& job, uint32_t instance, InstanceHold* hold);
 
     /**
      * @brief Hands the session's next pending stateful task to the pool.

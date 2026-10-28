@@ -39,6 +39,10 @@ namespace anira {
 /// tanh-lib's.
 class LogDrainLoop;
 
+namespace detail {
+struct UnloadHook;
+}  // namespace detail
+
 /// The real-time latch a session records its failures into (include/anira/utils/RtLatch.h).
 struct RtLatch;
 
@@ -69,10 +73,18 @@ struct RtLatch;
  * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
  * thread of anira's is alive at that point.
  *
- * On ELF and Mach-O platforms a library-unload hook additionally calls shutdown() as a
- * backstop for hosts that unload a plugin while an instance is still alive. Windows offers
- * no safe equivalent (nothing that runs at DLL detach may wait for a thread), so a plugin
- * that wants that protection there calls shutdown() from its module-exit entry point
+ * A plugin destroys its handlers before its host unloads it, from its instance teardown or
+ * its module-exit entry point, and never from its own static destructors, which run inside the
+ * unload under the loader lock. On ELF and Mach-O platforms a library-unload hook additionally
+ * calls shutdown() as a backstop for hosts that unload a plugin while an instance is still
+ * alive: an idle pool is joined; with an inference in flight (InferenceThread::
+ * get_num_in_flight()) the hook tells the pool's threads to stop and waits a bounded time
+ * (two seconds) for the inferences, and when one is still running — it can never finish while
+ * the unload holds the loader lock (a runtime that takes it mid-inference, LibTorch's first
+ * inference on a thread among them) — writes a message to stderr and aborts instead of hanging.
+ * At process exit the hook waits without a bound, as no loader lock is held there. Windows
+ * offers no safe equivalent (nothing that runs at DLL detach may wait for a thread), so a
+ * plugin that wants that protection there calls shutdown() from its module-exit entry point
  * (CLAP `deinit`, VST3 `ExitDll`) — see the troubleshooting guide.
  *
  * @par Configuration
@@ -175,9 +187,11 @@ public:
      * With the default lifecycle the pool is already gone once the last session was
      * released, so this is a backstop for hosts that unload a plugin's library while an
      * instance is still alive. On ELF/Mach-O it is called automatically from a
-     * library-unload hook; on Windows nothing that runs at DLL detach may wait for a
-     * thread, so call it from your module-exit entry point (CLAP `deinit`, VST3 `ExitDll`)
-     * — those run before the host unloads the library and outside the loader lock.
+     * library-unload hook, which first gives the inferences in flight a bounded wait and
+     * aborts with a message when one is still running (see the class description); on
+     * Windows nothing that runs at DLL detach may wait for a thread, so call it from your
+     * module-exit entry point (CLAP `deinit`, VST3 `ExitDll`) — those run before the host
+     * unloads the library and outside the loader lock.
      *
      * @note Not real-time safe (joins threads). Logs an error if sessions are still
      *       registered — a host that unloads live instances is a host bug; the sessions'
@@ -529,7 +543,8 @@ public:
      * The thread is not started automatically — call start() on the returned object
      * to begin processing. The caller must also call stop() (or simply destroy the
      * object) before program exit — and, for a plugin, before its library is unloaded:
-     * the unload hook joins only the core's own pool.
+     * the unload hook joins only the core's own pool (it waits for an inference in flight
+     * on such a thread too, and aborts with a message when one is still running).
      *
      * This is purely additive: the auto-managed thread pool sized via the configuration's
      * thread count (anira_context_config_set_threads, CoreConfig::m_num_threads on the 2.x
@@ -583,6 +598,11 @@ private:
      * release_core_if_idle().
      */
     struct State;
+
+    /// The body of the library-unload hook (Core.cpp, ELF and Mach-O): it tells the pool's
+    /// threads to stop and waits a bounded time for the inferences in flight before
+    /// shutdown() joins them.
+    friend struct detail::UnloadHook;
 
     /**
      * @brief Returns the core, creating it on first use
@@ -887,16 +907,18 @@ private:
         ANIRA_BLOCKING;
 
     /**
-     * @brief The loaded model of one plan request, acquired for a session
+     * @brief The loaded model of one plan request and its wait list, acquired for a session
      *
      * Called with the lifecycle lock held, from create_session(). A built-in or registered
      * engine's model is shared: the pool entry whose record equals the request's and whose
-     * carrier is the request's is returned, else a new loaded model is made, its engine
+     * carrier is the request's is handed out, else a new loaded model is made, its engine
      * initialised (a registered engine's init slot, once per engine object, with the facts
      * of the core in effect and the request's context), loaded once and entered into the
-     * pool. Exclusivity is no part of the key: a stateful model is loaded once for every
-     * session that runs it, with no shared slot (the record says so). A 2.x backend and the
-     * roundtrip get a fresh legacy loaded model per session, never pooled.
+     * pool with a new InstanceWaitList, the jobs that wait for a free instance of it (shared
+     * by every session on the entry, like the loaded model). Exclusivity is no part of the key: a
+     * stateful model is loaded once for every session that runs it, with no shared slot (the record
+     * says so). A 2.x backend and the roundtrip get a fresh legacy loaded model per session, never
+     * pooled.
      *
      * @param state The core's state
      * @param request The plan's request (its model's log level is the one in effect)
@@ -905,15 +927,18 @@ private:
      * @param pool_size The size the inference-thread pool will have once this session's
      * configuration is applied (0: the caller brings its own threads), what the init record
      * of a registered engine names
-     * @return The plan's loaded model
+     * @param slot The plan's slot: its m_loaded is set to the loaded model, its m_waiting to
+     * the pool entry's wait list (null for a 2.x backend and the roundtrip, which are never
+     * pooled and claim no instance); nothing is set on a throw
      * @throws anira::StatusError what the engine's init and load throw (MODEL_LOAD,
      * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
      * for
      */
-    static std::shared_ptr<engine::Loaded> acquire_loaded_locked(State& state,
-                                                                 const engine::PlanRequest& request,
-                                                                 InferenceConfig& inference_config,
-                                                                 size_t pool_size);
+    static void acquire_loaded_locked(State& state,
+                                      const engine::PlanRequest& request,
+                                      InferenceConfig& inference_config,
+                                      size_t pool_size,
+                                      SessionElement::PlanSlot& slot);
 
     /**
      * @brief Releases the loaded models of a session's plan table

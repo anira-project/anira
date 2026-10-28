@@ -668,9 +668,11 @@ public:
         static constexpr unsigned k_warm_up = 0;
         static constexpr bool k_session_exclusive_processor = false;
         static constexpr float k_blocking_ratio = 0.F;
-        /// Half the hardware threads, at least 1. A function where 2.x had a static member: a
-        /// header has no out-of-line definition, and an inline variable would be bound
-        /// STB_GNU_UNIQUE by GCC, which pins a plugin in memory.
+        /// Half the hardware threads, at least 1: the count 2.x wrote, and what the shim reads
+        /// back for a model that leaves the count to the pool (the constructors' default,
+        /// ANIRA_INSTANCES_AUTO; the library's default pool has as many threads). A function
+        /// where 2.x had a static member: a header has no out-of-line definition, and an
+        /// inline variable would be bound STB_GNU_UNIQUE by GCC, which pins a plugin in memory.
         static unsigned num_parallel_processors() noexcept {
             const unsigned hardware = std::thread::hardware_concurrency();
             return hardware / 2 > 0 ? hardware / 2 : 1;
@@ -688,7 +690,7 @@ public:
                     unsigned warm_up = Defaults::k_warm_up,
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,
-                    unsigned num_parallel_processors = Defaults::num_parallel_processors()) {
+                    unsigned num_parallel_processors = ANIRA_INSTANCES_AUTO) {
         m_document = document_of(std::move(model_data),
                                  std::move(tensor_shape),
                                  std::move(processing_spec),
@@ -706,7 +708,7 @@ public:
                     unsigned warm_up = Defaults::k_warm_up,
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,
-                    unsigned num_parallel_processors = Defaults::num_parallel_processors())
+                    unsigned num_parallel_processors = ANIRA_INSTANCES_AUTO)
         : InferenceConfig(std::move(model_data),
                           std::move(tensor_shape),
                           ProcessingSpec(),
@@ -808,7 +810,8 @@ public:
     unsigned m_warm_up = 0;                      ///< the legacy contract's fixed warm-up count
     bool m_session_exclusive_processor = false;  ///< the model's state is STATEFUL
     float m_blocking_ratio = 0;                  ///< the legacy contract's wait ratio
-    unsigned m_num_parallel_processors = 0;      ///< the model's max_instances; 1 when exclusive
+    unsigned m_num_parallel_processors = 0;      ///< the model's max_instances (2.x's default for
+                                                 ///< ANIRA_INSTANCES_AUTO); 1 when exclusive
 
     /// The configurations anira 3 holds: the model files (ModelConfig::to_json), the three
     /// legacy scalars, the borrowed bytes by pointer and size.
@@ -1076,8 +1079,11 @@ private:
         doc += detail::json_number(blocking_ratio);
         doc += R"(,"session_exclusive_processor":)";
         doc += session_exclusive_processor ? "true" : "false";
-        doc += R"(,"num_parallel_processors":)";
-        doc += std::to_string(num_parallel_processors);
+        // A count left to the pool is the key left out: the upgrade keeps ANIRA_INSTANCES_AUTO.
+        if (num_parallel_processors != ANIRA_INSTANCES_AUTO) {
+            doc += R"(,"num_parallel_processors":)";
+            doc += std::to_string(num_parallel_processors);
+        }
         doc += "}}";
         return doc;
     }
@@ -1262,8 +1268,14 @@ private:
         m_blocking_ratio = static_cast<float>(legacy.wait_ratio);
         m_session_exclusive_processor = model.state() == ANIRA_MODEL_STATEFUL;
         // 2.x ran a session-exclusive configuration on one processor whatever the count said;
-        // a document may leave the count out, which the upgrade fills with the default.
-        m_num_parallel_processors = m_session_exclusive_processor ? 1 : model.max_instances();
+        // a count left to the pool (ANIRA_INSTANCES_AUTO, what a document without the key
+        // upgrades to) reads back as 2.x's default count.
+        const uint32_t instances = model.max_instances();
+        m_num_parallel_processors =
+            m_session_exclusive_processor
+                ? 1
+                : (instances == ANIRA_INSTANCES_AUTO ? Defaults::num_parallel_processors()
+                                                     : instances);
     }
 
     std::optional<anira::ModelConfig> m_model;
@@ -2010,6 +2022,8 @@ public:
                      const ContextConfig& context_config = ContextConfig())
         : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
     /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
+    /// A plugin destroys its handlers before its host unloads it, never from its own static
+    /// destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
     /// The backend the next block runs on; before prepare the request is kept and applied at
