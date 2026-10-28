@@ -22,6 +22,8 @@ Instance stacks
 
 .. js:autofunction:: enterInstance
 
+.. js:autofunction:: installThreadLocalBlock
+
 Status and errors
 -----------------
 
@@ -44,6 +46,10 @@ Workers
 .. js:autofunction:: setupInferenceWorker
 
 .. js:autofunction:: waitForWorkerMessage
+
+.. js:autofunction:: request
+
+.. js:autofunction:: nextRequestId
 
 Helpers
 -------

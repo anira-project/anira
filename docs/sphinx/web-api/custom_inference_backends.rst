@@ -84,7 +84,9 @@ path). ``engineFlags`` carries the descriptor flags JavaScript cannot write itse
 ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``, ``ANIRA_ENGINE_FLAG_STATE_ALIAS`` (:doc:`../custom_engines`
 says what each promises). A registered engine has no providers list, so it serves
 ``ANIRA_PROVIDER_CPU`` alone; ``hookMask`` adds ``ANIRA_EM_ENGINE_HOOK_RESET`` for an engine
-that keeps per-stream state of an exclusive handler.
+that keeps per-stream state of an exclusive handler. ``ANIRA_EM_ENGINE_HOOK_QUERY`` is refused
+here (a query runs on the main thread, and a registered engine has no providers list to answer
+for); see the lower level below.
 
 Engines registered after a Worker started reach it too: ``registerJSEngine`` stops that
 Worker's thread, sends the registration, awaits the engine's ``init()`` and starts the thread

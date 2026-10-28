@@ -30,8 +30,10 @@ address everywhere and a pointer is passed between threads as a number. The main
 created by ``AniraWeb.create()``. Every other instance (each inference Worker, the worklet) runs
 on a stack and a thread-local block of its own: the main thread allocates both
 (``_anira_em_alloc_thread_stack``), the instance's first C call installs them
-(``_anira_em_init_instance``), so the ``thread_local`` variables of anira and tanh-lib are
-per instance, as they are per thread natively. Setup crosses threads by ``postMessage``; the
+(``_anira_em_init_instance``), so the ``thread_local`` variables of anira, tanh-lib and the
+runtime are per instance, as they are per thread natively. The main instance installs a block
+of its own the same way (the module has no ``main()``, so none exists at instantiation, and
+the runtime's exception state lives there). Setup crosses threads by ``postMessage``; the
 real-time path uses only the shared memory and its atomics.
 
 JavaScript Reaches anira Through the C ABI
@@ -62,9 +64,15 @@ the hook of the instance that runs the C call, so
   Worker that dequeued the job,
 * a stage's ``init``, ``prepare``, ``unprepare`` and ``release`` run on the main thread.
 
-The same ``js_key`` therefore names one object per instance: :js:meth:`AniraWeb.addJSStage`
+Every request to a Worker or the worklet carries a request id its reply and its error echo,
+so concurrent requests on one target never answer or fail each other. The same ``js_key``
+therefore names one object per instance: :js:meth:`AniraWeb.addJSStage`
 puts the main-thread object into the main registry and has every Worker construct the class
-for its own registry; the worklet constructs it from its ``stageClasses``. A hook that throws
+for its own registry; the worklet constructs it from its ``stageClasses``. A stage released
+on the main thread (its last carrier died) is dropped from every instance's registry. What an
+instance could never serve is refused at registration: a stage with main-thread bits and no
+main-thread object, an engine with the query bit, a worklet configured without the stage its
+handler's pipeline runs there. A hook that throws
 is caught in its trampoline, reported once with ``console.error``, and fails the call
 (``ANIRA_ERROR_UNKNOWN`` for a stage, ``ANIRA_ERROR_ENGINE`` for an engine): the chunk
 delivers zeros and the handler's real-time error is latched, as for a failing C callback.
@@ -111,8 +119,11 @@ Audio Worklet Thread
 The worklet streams through a prepared handler: one ``_anira_handler_process`` per render
 quantum over planar input and output tensors it builds once. The handler's Hard contract
 declares ``block_min = block_max =`` the render quantum (128 frames); a call above the declared
-block is refused, so when the browser changes the quantum the worklet reports it
-(``onQuantumChange``) and the host re-prepares the handler with the new block. The worklet
+block is refused, so the worklet builds its tensors at configure for the declared
+quantum and, when the browser renders another one, outputs silence and reports it
+(``onQuantumChange``): the host re-prepares the handler with the new block, then the worklet
+rebuilds its tensors in its message handler, never in ``process()``, which allocates
+nothing. The worklet
 never waits unless asked to (``waitMs``, ``_anira_handler_process_wait``). See
 :doc:`custom_audio_worklets`.
 
@@ -130,8 +141,10 @@ Lifecycle and Cleanup
 ---------------------
 
 C objects are freed by their ``_destroy`` entries, never by the garbage collector. Tear down in
-the reverse order of creation: stop the Workers (``await worker.stop()``, which also destroys
-the thread and frees its stack), close the audio node, then ``_anira_handler_destroy``,
+the reverse order of creation: dispose the worklet (``await aniraWeb.disposeAudioWorklet(node)``:
+the worklet frees its tensors and stops calling into the module, then its stack is freed),
+stop the Workers (``await worker.stop()``, which destroys the thread and frees the Worker's
+stack once the Worker said it destroyed its engines), then ``_anira_handler_destroy``,
 ``_anira_pipeline_destroy``, ``_anira_contract_destroy``, ``_anira_model_config_destroy``,
 ``_anira_context_destroy`` and ``_anira_context_config_destroy``. A JavaScript stage's
 ``release`` runs when its last carrier dies, a JavaScript engine's C object when the pipeline

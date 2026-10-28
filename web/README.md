@@ -30,6 +30,7 @@ import {
   anira_budget_kind,
   anira_log_drain,
   anira_wait_strategy,
+  anira_warmup_mode,
   ONNXRUNTIME_WEB_ENGINE_ID,
 } from '@anira-project/anira'
 
@@ -73,13 +74,14 @@ const audioContext = new AudioContext({ sampleRate: 48000 })
 const handler = created((err) => m._anira_handler_create(context, pipeline, out, err))
 const contract = created((err) => m._anira_contract_create_hard(128, 128, audioContext.sampleRate, out, err))
 m._anira_contract_hard_set_budget(contract, anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 2.0)
+m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
 callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
 
 const worker = await anira.spinUpInferenceWorker(context)
 await anira.registerAudioWorkletForContext(audioContext)
 const node = await anira.configureAudioWorklet(audioContext, handler, { inputChannels: 2, outputChannels: 2 })
 sourceNode.connect(node).connect(audioContext.destination)
-// later: await worker.stop(), then the _destroy calls in reverse order
+// later: await anira.disposeAudioWorklet(node), await worker.stop(), then the _destroy calls
 ```
 
 The full walkthrough — the stop protocol, the quantum change, the built-in ONNX Runtime path

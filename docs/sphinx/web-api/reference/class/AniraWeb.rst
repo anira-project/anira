@@ -9,4 +9,4 @@ with ``await AniraWeb.create()``; see :doc:`../../basic_usage`.
 
 .. js:autoclass:: AniraWeb.AniraWeb
    :short-name:
-   :members: create, module, heap, memory, setLogHook, registerJSEngine, unregisterJSEngine, addJSStage, removeJSStage, getActiveWorkers, spinUpInferenceWorker, registerAudioWorkletForContext, configureAudioWorklet
+   :members: create, module, heap, memory, setLogHook, registerJSEngine, unregisterJSEngine, addJSStage, removeJSStage, getActiveWorkers, spinUpInferenceWorker, registerAudioWorkletForContext, configureAudioWorklet, disposeAudioWorklet

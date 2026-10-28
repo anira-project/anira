@@ -14,7 +14,9 @@ Class AniraAudioWorkletBase
 
    The audio worklet of anira: one ``_anira_handler_process`` per render quantum over planar
    host tensors (``_anira_tensor_init_host_planar``, shape ``[channels, quantum]``) that it
-   builds once and rebuilds only when the quantum or a channel count changes. It is wired to
+   builds at configure for the declared quantum; ``process()`` allocates nothing, a quantum
+   other than the declared one is silence and is reported to main (``'quantumChanged'``), and
+   the blocks are rebuilt on ``'setQuantum'`` and freed on ``'dispose'``. It is wired to
    the main thread by :js:meth:`AniraWeb.configureAudioWorklet`: the configure handshake
    instantiates the module in the worklet on its own stack and thread-local block, constructs
    the JavaScript stage named in the message from :js:attr:`stageClasses`, fills
@@ -25,8 +27,8 @@ Class AniraAudioWorkletBase
 
       The worklet's state once the configure handshake completed: the module instance
       (``anira``: ``module``, ``heap``, ``hooks``, ``memory``), ``handlerPtr``, ``ioConfig``,
-      the two ``PlanarBlock`` records ``input`` and ``output`` and ``deliveredPtr``.
-      ``null`` until then.
+      ``quantum``, the two ``PlanarBlock`` records ``input`` and ``output``, ``deliveredPtr``
+      and its view ``delivered``. ``null`` until then, and again after a dispose.
 
    .. js:attribute:: stageClasses
       :type: WorkletStageClassMap
@@ -44,12 +46,13 @@ Class AniraAudioWorkletBase
 
    .. js:method:: processAudioBlock(inputs, outputs, state, quantum, parameters)
 
-      The real-time path, invoked from ``process()`` once per render quantum. The default
-      rebuilds the blocks if the quantum changed (and posts ``'quantumChanged'`` to main),
-      copies the host input channels into the input block, calls ``_anira_handler_process``
-      (``_anira_handler_process_wait`` when ``ioConfig.waitMs`` is above 0) with the
-      configured slots, and copies the delivered samples of the output block to the host
-      outputs; a failed status outputs silence.
+      The real-time path, invoked from ``process()`` once per render quantum of the declared
+      size. The default copies the host input channels into the input block, calls
+      ``_anira_handler_process`` (``_anira_handler_process_wait`` when ``ioConfig.waitMs`` is
+      above 0) with the
+      configured slots, and copies what the call filled (``samplesToCopy``: the whole quantum on
+      ``ANIRA_MISSED``) of the output block to the host outputs; a failed status outputs
+      silence. It allocates nothing.
 
       :param inputs: Host input channels (the worklet ``process`` argument).
       :type inputs: Float32Array[][]
@@ -60,7 +63,7 @@ Class AniraAudioWorkletBase
       :param parameters: ``AudioParam`` values for this quantum, keyed by parameter name.
       :type parameters: Record<string, Float32Array>
 
-   .. js:method:: buildPlanarBlock(state, channels, quantum)
+   .. js:method:: buildPlanarBlock(anira, channels, quantum)
 
       A planar host block of ``channels`` x ``quantum`` float32 samples in the heap: the
       channel buffers, the array of their pointers, the ``int64_t[2]`` shape and the
@@ -69,6 +72,6 @@ Class AniraAudioWorkletBase
 
       :returns: ``PlanarBlock``
 
-   .. js:method:: freePlanarBlock(state, block)
+   .. js:method:: freePlanarBlock(anira, block)
 
       Free what :js:meth:`buildPlanarBlock` allocated.

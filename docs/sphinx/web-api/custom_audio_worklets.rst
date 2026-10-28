@@ -48,11 +48,12 @@ it and name its processor:
 The Tensor Process
 ------------------
 
-The worklet builds a ``PlanarBlock`` per direction with ``buildPlanarBlock(state, channels,
+The worklet builds a ``PlanarBlock`` per direction with ``buildPlanarBlock(anira, channels,
 quantum)``: one heap buffer per channel, the array of their pointers, an ``int64_t[2]`` shape
 ``[channels, quantum]`` and an ``anira_tensor`` filled by ``_anira_tensor_init_host_planar``, with
-a ``Float32Array`` view per channel. It rebuilds them only when the quantum or a channel count
-changes; per quantum the default ``processAudioBlock`` does
+a ``Float32Array`` view per channel, at configure, for the declared quantum (the ``quantum``
+option, 128 by default). ``process()`` allocates nothing; per quantum the default
+``processAudioBlock`` does
 
 .. code-block:: typescript
 
@@ -61,16 +62,26 @@ changes; per quantum the default ``processAudioBlock`` does
    )
 
 and copies ``heap.readU32(deliveredPtr)`` samples of every output channel to the node (silence
-on a failed status). Nothing allocates on the audio thread outside a rebuild. A subclass that
+on a failed status, the whole quantum on ``ANIRA_MISSED``, which carries the miss policy's
+fill although its delivered count is 0: ``samplesToCopy``). A subclass that
 streams more slots builds more blocks in ``onConfigured`` and calls
 ``_anira_handler_process_multi`` in its own ``processAudioBlock``.
 
 The handler's Hard contract declares ``block_min = block_max =`` the render quantum (128
 frames by default). A larger call is refused, so when the browser hands the worklet another
-quantum, the worklet rebuilds its blocks and posts ``'quantumChanged'``; the host's
+quantum, the worklet outputs silence and posts ``'quantumChanged'`` once; the host's
 ``onQuantumChange`` re-prepares the handler with that block
-(``_anira_contract_hard_set_geometry`` and ``_anira_handler_prepare``), and the worklet outputs
-silence until then.
+(``_anira_contract_hard_set_geometry`` and ``_anira_handler_prepare``), and then main sends
+``'setQuantum'``, on which the worklet rebuilds its blocks in its message handler.
+
+``aniraWeb.disposeAudioWorklet(node)`` frees what configure allocated: the worklet frees its
+blocks and stops calling into the module (``process()`` outputs silence), then the worklet
+instance's stack and thread-local block are freed. Call it before destroying the handler;
+``configureAudioWorklet(ctx, handler, { node })`` configures a node again, disposing it first.
+
+A JavaScript stage with pre/post/reset bits must be constructed in the worklet that streams its
+handler: pass ``stageKey`` or ``pipelinePtr`` (the pipeline the handler was created from);
+``configureAudioWorklet`` refuses to leave a registered stage of that kind unnamed.
 
 The worklet never waits for an inference by default. ``waitMs`` opts in to
 ``_anira_handler_process_wait``, which waits up to that many milliseconds for each quantum's

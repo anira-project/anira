@@ -81,5 +81,8 @@ a stage with main-thread bits passes its main-thread object as ``stage``:
    })
 
 ``addJSStage`` is ``_anira_em_pipeline_add_js_stage(pipeline, jsKey, hookMask, stageFlags, err)``
-plus the registrations; call it before ``_anira_handler_create``. A pipeline holds at most one
+plus the registrations; call it before ``_anira_handler_create``. A mask with an init, prepare,
+unprepare or release bit needs the main-thread object (``stage``): ``addJSStage`` refuses it
+otherwise. A stage released on the main thread (its last carrier died) is dropped from every
+instance; ``removeJSStage(jsKey)`` drops it explicitly. A pipeline holds at most one
 stage: a second is ``ANIRA_ERROR_INVALID_STATE``.

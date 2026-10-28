@@ -25,6 +25,7 @@ calls as in :doc:`../usage`; a typed TypeScript API over them follows. The steps
      anira_budget_kind,
      anira_log_drain,
      anira_wait_strategy,
+     anira_warmup_mode,
      ONNXRUNTIME_WEB_ENGINE_ID,
    } from '@anira-project/anira'
 
@@ -105,7 +106,8 @@ its id, add it to the pipeline) and has every Worker construct the class and awa
 
 The worklet calls the handler once per render quantum, so the Hard contract declares that
 block: ``block_min = block_max = 128`` at the context's sample rate. A call above the declared
-block is refused; when the browser changes the quantum, re-prepare (step 5).
+block is refused; when the browser changes the quantum, re-prepare (step 5). A refused call
+throws an :js:class:`AniraError` from ``callWithError`` with the entry's message.
 
 .. code-block:: typescript
 
@@ -116,6 +118,8 @@ block is refused; when the browser changes the quantum, re-prepare (step 5).
      m._anira_contract_create_hard(128, 128, audioContext.sampleRate, out, err)
    )
    m._anira_contract_hard_set_budget(contract, anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 2.0)
+   // The default warm-up (UNTIL_STABLE) is refused by this runtime: none, or a fixed count.
+   m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
    callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
 
 4. An Inference Worker
@@ -138,6 +142,7 @@ on the wake word. Spin up more for more inferences in flight.
    const node = await anira.configureAudioWorklet(audioContext, handler, {
      inputChannels: 2,
      outputChannels: 2,
+     quantum: 128, // the declared block: the worklet builds its tensors for it now
      onQuantumChange: (quantum) => {
        m._anira_contract_hard_set_geometry(contract, quantum, quantum, audioContext.sampleRate)
        callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
@@ -145,9 +150,13 @@ on the wake word. Spin up more for more inferences in flight.
    })
    source.connect(node).connect(audioContext.destination)
 
-The worklet instance builds planar host tensors of ``[2, 128]`` once and makes one
-``_anira_handler_process`` per quantum; the output is the model's, delayed by the handler's
-latency (``_anira_handler_get_latency(handler, 0)`` samples).
+The worklet instance builds planar host tensors of ``[2, 128]`` at configure and makes one
+``_anira_handler_process`` per quantum, allocating nothing in ``process()``; the output is the
+model's, delayed by the handler's latency (``_anira_handler_get_latency(handler, 0)``
+samples). A missed quantum carries the miss policy's fill (BYPASS by default). When the
+browser renders another quantum the worklet outputs silence and reports it once:
+``onQuantumChange`` re-prepares the handler (resolve a promise when that is asynchronous),
+then the worklet rebuilds its tensors for the new quantum, outside its ``process()``.
 
 6. Stop and Teardown
 --------------------
@@ -155,7 +164,8 @@ latency (``_anira_handler_get_latency(handler, 0)`` samples).
 .. code-block:: typescript
 
    node.disconnect()
-   await worker.stop() // _stop, poll _has_exited, _destroy, free the Worker's stack
+   await anira.disposeAudioWorklet(node) // the worklet frees its tensors, then its stack goes
+   await worker.stop() // _stop, poll _has_exited, _destroy, 'destroyed', free the Worker's stack
    m._anira_handler_destroy(handler)
    m._anira_pipeline_destroy(pipeline)
    m._anira_contract_destroy(contract)
@@ -166,9 +176,12 @@ latency (``_anira_handler_get_latency(handler, 0)`` samples).
    heap.free(out)
    stopLogPump()
 
-``worker.stop()`` requests the exit (``_anira_inference_thread_stop``) and resolves once the
+``worker.stop()`` requests the exit (``_anira_inference_thread_stop``), waits until the
 Worker has left its loop, which the main thread sees through
-``_anira_inference_thread_has_exited``; destroying the thread before that is refused.
+``_anira_inference_thread_has_exited`` (destroying the thread before that is refused), and
+frees the Worker's stack once the Worker says it destroyed its engines.
+``disposeAudioWorklet(node)`` comes before ``_anira_handler_destroy``: the worklet must stop
+calling the handler first.
 
 Running on the Built-in ONNX Runtime
 ------------------------------------
