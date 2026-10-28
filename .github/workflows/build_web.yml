@@ -112,18 +112,22 @@ jobs:
         working-directory: web
         run: npm run examples
 
-      # The built package in headless Chromium (served with COOP/COEP). web/test/browser: a
-      # JavaScript engine on an inference Worker that doubles its input times a Static gain, a
-      # Hard handler of block 128, an OfflineAudioContext rendered through the default worklet,
-      # which serves the gain (changed mid-render); the output must be the input times 2 * gain
-      # after the handler's latency, then the Worker stops and the worklet is disposed. The
-      # example's check page: the same render through its own worklet and JavaScript stage.
-      - name: browser test (headless Chromium)
+      # The built package in headless Chromium and Firefox (served with COOP/COEP).
+      # web/test/browser/index.html: a JavaScript engine on an inference Worker that doubles its
+      # input times a Static gain, a Hard handler of block 128, an OfflineAudioContext rendered
+      # through the default worklet, which serves the gain (changed mid-render where the browser
+      # can suspend an offline render); the output must be the input times 2 * gain after the
+      # handler's latency, then the Worker stops and the worklet is disposed. ort.html: an ONNX
+      # model on the default Worker's ONNX Runtime Web engine. The example's check page: the
+      # same render through its own worklet and JavaScript stage. A load the browser refuses
+      # (Firefox's file:/// security error) fails the step too.
+      - name: browser test (headless Chromium and Firefox)
         working-directory: web
         run: |
           npm install --no-save playwright@1.49.1
-          npx playwright install --with-deps chromium
-          node test/browser/run.mjs
+          npx playwright install --with-deps chromium firefox
+          node test/browser/run.mjs chromium
+          node test/browser/run.mjs firefox
 
   # The queue's required status for this workflow.
   result:

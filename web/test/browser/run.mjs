@@ -1,9 +1,10 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
-// isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in
-// headless Chromium (Playwright) and prints its checks: test/browser/ (the package as built) and
-// the custom-worklet example's check page (as its own Vite build bundled it). Exit code 0 when
-// every check passed. usage: node test/browser/run.mjs [chromium|firefox]   (after npm run
-// build and npm run examples, from web/; CI runs chromium, the default)
+// isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a
+// headless browser (Playwright) and prints its checks: test/browser/index.html and ort.html
+// (the package as built) and the custom-worklet example's check page (as its own Vite build
+// bundled it). Exit code 0 when every check passed and the browser refused no load.
+// usage: node test/browser/run.mjs [chromium|firefox]
+//   (after npm run build and npm run examples, from web/; CI runs both browsers)
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -60,7 +61,15 @@ try {
   for (const pathname of pages) {
     console.log(`-- ${pathname}`)
     const page = await browser.newPage()
-    page.on('console', (message) => console.log(`page: ${message.text()}`))
+    page.on('console', (message) => {
+      console.log(`page: ${message.text()}`)
+      // A load the browser refused, such as Firefox's "Security Error: Content at ... may not
+      // load or link to file:///...", fails the page even when its checks pass.
+      if (/Security Error|may not load or link to/.test(message.text())) {
+        console.log('FAILED: the browser refused a load (above)')
+        failed += 1
+      }
+    })
     page.on('pageerror', (error) => console.log(`page error: ${error.message}`))
     await page.goto(`http://127.0.0.1:${port}/${pathname}`)
     await page.waitForFunction(() => window.anira_test_result, null, { timeout: 120000 })
