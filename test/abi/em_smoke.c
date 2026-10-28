@@ -340,6 +340,9 @@ static void check_pipeline(void) {
     anira_tensor out_tensor;
     anira_tensor_init_host(&in_tensor, in, ANIRA_DTYPE_F32, 2, shape);
     anira_tensor_init_host(&out_tensor, out, ANIRA_DTYPE_F32, 2, shape);
+    /* The output of a block is the input of `latency` samples ago, doubled: every block from
+       the lag on is one the JavaScript engine processed. */
+    const uint32_t lag = latency / SMOKE_BLOCK;
     int matched = 0;
     for (uint32_t block = 0; block < SMOKE_BLOCKS; ++block) {
         for (uint32_t i = 0; i < SMOKE_BLOCK; ++i) { in[i] = (float)(block + 1u); }
@@ -347,9 +350,7 @@ static void check_pipeline(void) {
         check_status(anira_handler_process(handler, &in_tensor, 0, &out_tensor, 0, &delivered),
                      NULL,
                      "anira_handler_process");
-        /* The output of this block is the input of `latency` samples ago, doubled. */
-        const uint32_t lag = latency / SMOKE_BLOCK;
-        if (block >= lag + 1u && delivered == SMOKE_BLOCK &&
+        if (block >= lag && delivered == SMOKE_BLOCK &&
             out[0] == 2.0f * (float)(block + 1u - lag) &&
             out[SMOKE_BLOCK - 1u] == 2.0f * (float)(block + 1u - lag)) {
             ++matched;
@@ -357,7 +358,9 @@ static void check_pipeline(void) {
         while (anira_inference_thread_execute(thread) != 0u) {}
     }
     printf("blocks doubled by the JavaScript engine: %d of %u\n", matched, SMOKE_BLOCKS);
-    check(matched > 0, "the JavaScript engine's output reached the host");
+    check(
+        matched >= (int)(SMOKE_BLOCKS - lag),
+        "every block from the handler's latency on is the input doubled by the JavaScript engine");
     check(smoke_count("process") >= SMOKE_BLOCKS - 1u, "the engine's process crossed per block");
     check(smoke_count("pre") >= SMOKE_BLOCKS - 1u, "the stage's pre_process crossed per block");
     check(smoke_count("post") >= SMOKE_BLOCKS - 2u, "the stage's post_process crossed per block");
