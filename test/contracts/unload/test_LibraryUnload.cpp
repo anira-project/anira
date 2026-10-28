@@ -307,7 +307,8 @@ void start_watchdog(std::chrono::seconds limit) {
 
 // The message the unload hook writes before it aborts.
 constexpr const char* k_abort_message =
-    "anira: the library is being unloaded while an inference is still running \\(1 in flight\\)";
+    "anira: the library is being unloaded while an inference is still running \\(1 in flight, "
+    "[0-9]+ inference threads not stopped\\)";
 
 // Where the hook's abort can be observed: a POSIX loader that really unloads the module
 // (the hook runs at dlclose). Windows has no such hook (the CRT runs a static destructor from

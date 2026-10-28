@@ -59,12 +59,13 @@ ANIRA_API uint64_t ANIRA_CALL anira_now_ns(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKIN
  * point), and never from its own static destructors or DllMain, which run inside the
  * unload under the loader lock. On ELF and Mach-O the library-unload hook is the
  * backstop for a host that unloads with a handler alive: it joins an idle pool; with an
- * inference in flight it tells the threads to stop, waits up to two seconds for the
- * inferences, and when one is still running (it can never finish while the unload holds
- * the loader lock) writes 'anira: the library is being unloaded while an inference is
- * still running (N in flight); ...' to stderr and aborts instead of hanging. At process
- * exit it waits without a bound. Windows has no such hook: destroy the handlers and call
- * this from the module-exit entry point.
+ * inference in flight it tells the threads to stop, waits up to two seconds for them to
+ * leave their loops and for the inferences, and when one is still running (it can never
+ * finish while the unload holds the loader lock) writes 'anira: the library is being
+ * unloaded while an inference is still running (N in flight, M inference threads not
+ * stopped); ...' to stderr and aborts instead of hanging. At process exit it waits
+ * without a bound. Windows has no such hook: destroy the handlers and call this from the
+ * module-exit entry point.
  * @return ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a
  *         handler lives.
  * @par Thread contract

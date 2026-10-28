@@ -2345,6 +2345,6 @@ On Linux and macOS a library-unload hook is the backstop for a host that unloads
 
 .. code-block:: text
 
-    anira: the library is being unloaded while an inference is still running (1 in flight); destroy every anira handler, or call anira_shutdown(), before unloading. Aborting instead of hanging.
+    anira: the library is being unloaded while an inference is still running (1 in flight, 1 inference threads not stopped); destroy every anira handler, or call anira_shutdown(), before unloading. Aborting instead of hanging.
 
 and aborts the process. The hook also runs when the process exits (returns from ``main``, calls ``exit``); there no loader lock is held, so it waits for the inferences in flight without a bound and joins, and a program that exits with an inference running exits normally. On Windows the unload runs under the loader lock in ``DllMain``, where no thread may be waited for: nothing joins there, so the rule above is the only protection (see :ref:`plugin-library-unload`).
