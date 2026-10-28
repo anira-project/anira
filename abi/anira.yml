@@ -1500,11 +1500,11 @@ headers:
         params:
           - {type: anira_tensor_spec*, name: spec, doc: "The spec."}
           - {type: int64_t, name: num, doc: "This tensor advances num elements ..."}
-          - {type: int64_t, name: den, doc: "... per den anchor elements; (0, 0) = derive (default)."}
+          - {type: int64_t, name: den, doc: "... per den anchor elements; (0, 0) = derive (default): a fixed window's ratio from its hop, a flexible window's 1/1."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The tensor's Time advance relative to the anchor tensor."
+        doc: "The tensor's Time advance relative to the anchor tensor. A flexible window is pinned at prepare from the anchor hop, the anchor elements one inference consumes, chosen once for the whole model: the tensor's hop is the anchor hop times this ratio, so the anchor hop is a multiple of den (the ratio reduced); a ratio of 0 is ANIRA_ERROR_CONFIG at prepare."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value or den == 0 with num != 0."
       - kind: function
         name: anira_tensor_spec_set_latency

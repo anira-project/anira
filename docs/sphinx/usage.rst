@@ -145,7 +145,9 @@ temporary is passed straight into the model config (section 1.2) rather than bou
 Two more setters cover the rarer cases: ``latency(elements)`` declares an output's internal
 delay along the Time axis so that the reported latency accounts for it, and
 ``time_ratio(num, den)`` declares a tensor whose Time axis advances at a rate other than the
-anchor's (``(0, 0)``, the default, derives it).
+anchor's (``(0, 0)``, the default, derives it from a fixed window's hop; a flexible window
+without a ratio advances with the anchor, 1/1). How a flexible window is pinned is the
+contract's part (section 1.3, *Flexible windows*).
 
 1.2. Model configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -375,6 +377,22 @@ minted again. On an Async handle it throws ``anira::Error`` with
   ``ANIRA_ERROR_INVALID_ARGUMENT`` with a message naming the value. A block may be fractional
   (see *Fractional blocks* below). ``block_max`` is also the most one call may carry: declare
   the largest block the host passes, since a Hard entry refuses a larger one.
+- **Flexible windows.** The geometry pins every flexible window (``window_min < window_max``)
+  at prepare. One inference consumes the same span of the stream on every tensor, so anira
+  chooses one **anchor hop**, the anchor elements one inference consumes, for the whole
+  model: the anchor, every streamed tensor with a declared time ratio and every flexible
+  window advance that hop times their ratio (1/1 for a flexible window without one), and a
+  fixed window without a declared ratio keeps its own hop. A time ratio ``num/den`` makes the
+  anchor hop a multiple of ``den`` (reduced), and each window bounds it. Of the hops that
+  leave every such tensor a whole hop within its window, anira takes the largest at or below
+  ``block_max`` (rounded down; one inference per block when the block is one, several when it
+  is above the hop), else the smallest above it (one inference every few blocks), and without
+  a geometry the smallest. A model whose audio input is flexible and whose latent output
+  runs at ``time_ratio(1, 2048)`` gets an anchor hop of 2048 under a block of 3000 (one or two
+  inferences per call), of 4096 under a block of 4096, and of 2048 under a block of 512 (one
+  inference every fourth call). A fixed anchor window is the anchor hop whatever the block,
+  a fractional one included (*Fractional blocks* below). What no hop satisfies is ``ANIRA_ERROR_CONFIG``, naming the tensor,
+  the hops it needs and the hops the tensors before it allow.
 - **Budget.** ``ANIRA_BUDGET_EXPLICIT`` with ``budget_value``, a ``std::chrono`` duration
   holding the measured worst-case inference time per inference at the pinned window, or
   ``ANIRA_BUDGET_MEASURED`` (the default) to derive it during warmup. An inference that
@@ -520,6 +538,12 @@ enforced: a Hard entry handed more on any Streamed slot, pushed or popped, refus
 with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves and records it in ``rt_error``,
 where the ring would only have kept the tail. A pop within the bound that the stream cannot
 cover returns ``ANIRA_MISSED``.
+
+A flexible window under a fractional block is pinned like any other (*Flexible windows*
+above): the block is below every whole anchor hop, so it gets the smallest the windows and
+time ratios allow, and the model runs once every few calls. A latent input with the window
+``[1, unbounded]`` under the block 0.25 runs on one frame every fourth call, and an output at
+``time_ratio(2, 1)`` beside it gets a window of 2.
 
 An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``, ``on_late``,
 ``priority``, ``lanes``, ``max_in_flight``, ``delivery``) describes jobs without a real-time
