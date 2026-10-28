@@ -9,6 +9,8 @@ on:
   workflow_dispatch:
   merge_group:
   pull_request:
+  # on_tag.yml gates publish_npm on this workflow.
+  workflow_call:
 
 concurrency:
   group: build-web-${{ github.ref }}
