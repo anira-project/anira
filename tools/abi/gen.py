@@ -6,11 +6,14 @@ validates it against the header conventions of docs/anira-v3-architecture.md
 (section 6a) and emits, deterministically and without any other tool:
 
   include/anira/abi/<file>.h              the C11 headers (never edit by hand); a header with
-                                          `draft: true` is include/anira/abi/draft/<name>.h
+                                          `draft: true` is include/anira/abi/draft/<name>.h, a
+                                          header with `platform: emscripten` is
+                                          include/anira/<file>, its body under __EMSCRIPTEN__
   web/src/abi/enums.ts                    the TypeScript mirror of enums and defines
   web/src/abi/layout.ts                   size, align and member offsets of the Tier-1 records
   abi/symbols-<major>.txt                 the promised entry points, sorted
   abi/symbols-draft.txt                   the draft entry points, sorted
+  abi/symbols-emscripten.txt              the entry points of the Emscripten platform header, sorted
   web/src/abi/exports_wasm.txt            the Emscripten export list (_-prefixed)
   src/capi/generated/status_strings.inc   ANIRA_STATUS_TEXT(name, "text") per status
   src/capi/generated/struct_sizes.inc     ANIRA_STRUCT_SIZE(id, type) per record anira_sizeof answers
@@ -92,6 +95,12 @@ FORCE32_RE = re.compile(r"^ANIRA_[A-Z0-9_]+_FORCE32$")
 MEMBER_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 DRAFT_FILE_RE = re.compile(r"^draft/[a-z0-9_]+\.h$")
 DRAFT_GUARD_PREFIX = "ANIRA_ABI_DRAFT_"
+# A platform header (`platform: <name>`) is a companion of the ABI for one target: it lives
+# beside the umbrellas (include/anira/<file>), its body is compiled only under the target's
+# macro (an empty header elsewhere), and its entry points have a symbol list of their own,
+# outside symbols-<major>.txt, the link probe and the layout test.
+PLATFORMS = {"emscripten": "__EMSCRIPTEN__"}
+PLATFORM_FILE_RE = re.compile(r"^anira_[a-z0-9_]+\.h$")
 STRUCT_ID_ENUM = "anira_struct_id"
 TS_WIDTH = 90  # web/.prettierrc printWidth: a longer generated line would be re-wrapped by prettier
 
@@ -365,6 +374,20 @@ def validate(reg: dict) -> None:
             for inc in h.get("includes", []):
                 if inc.startswith("draft/"):
                     err(f"{file}: includes the draft header {inc}; only a draft header may")
+        if "platform" in h:
+            if h["platform"] not in PLATFORMS:
+                err(f"{file}: platform must be one of {sorted(PLATFORMS)}")
+            if h.get("draft"):
+                err(f"{file}: a platform header is never a draft header")
+            if not PLATFORM_FILE_RE.match(file):
+                err(f"{file}: a platform header is named anira_<name>.h")
+            if "guard" not in h:
+                err(f"{file}: a platform header names its guard (guard:)")
+    platform_files = {h["file"] for h in headers if "platform" in h}
+    for h in headers:
+        for inc in h.get("includes", []):
+            if inc in platform_files:
+                err(f"{h['file']}: includes the platform header {inc}; nothing may")
 
     enum_names: set[str] = set()
     struct_names: set[str] = set()
@@ -442,6 +465,8 @@ def validate(reg: dict) -> None:
         where = f"{h['file']}:{ent.get('name', kind)}"
         if h.get("draft") and kind in ("enum", "struct", "union", "handles"):
             err(f"{where}: a draft header declares functions, callbacks, typedefs and defines only")
+        if "platform" in h and kind in ("enum", "struct", "union", "handles"):
+            err(f"{where}: a platform header declares functions, callbacks, typedefs and defines only")
         if kind == "enum":
             name = ent["name"]
             if not TYPE_RE.match(name):
@@ -856,12 +881,18 @@ def emit_define(ent: dict) -> str:
     return "\n".join(out)
 
 
+def header_path(header: dict) -> str:
+    """The include path of a header: anira/abi/<file>, or anira/<file> for a platform header."""
+    return f"anira/{header['file']}" if "platform" in header else f"anira/abi/{header['file']}"
+
+
 def emit_header(reg: dict, header: dict) -> str:
     file = header["file"]
     guard = header.get("guard") or "ANIRA_ABI_" + re.sub(r"[^A-Z0-9]", "_", file.upper())
+    platform_macro = PLATFORMS.get(header.get("platform"))
     out = [
         "/*",
-        f" * anira/abi/{file} -- generated from abi/anira.yml by tools/abi/gen.py.",
+        f" * {header_path(header)} -- generated from abi/anira.yml by tools/abi/gen.py.",
         " * Do not edit: change the registry and run `python3 tools/abi/gen.py --repo . --write`.",
         " */",
         f"#ifndef {guard}",
@@ -879,6 +910,10 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append('extern "C" {')
     out.append("#endif")
     out.append("")
+    if platform_macro:
+        # Elsewhere the header is an empty companion: it compiles and declares nothing.
+        out.append(f"#ifdef {platform_macro}")
+        out.append("")
     # C names and C spellings in a header the C++ tidy config also sees: typedef (not
     # using), type names inside ANIRA_INIT / ANIRA_PTR that no parentheses can wrap.
     out.append(f"// NOLINTBEGIN({NOLINT_CHECKS})")
@@ -917,6 +952,9 @@ def emit_header(reg: dict, header: dict) -> str:
         out.append("")
     out.append(f"// NOLINTEND({NOLINT_CHECKS})")
     out.append("")
+    if platform_macro:
+        out.append(f"#endif /* {platform_macro} */")
+        out.append("")
     out.append("#ifdef __cplusplus")
     out.append("}")
     out.append("#endif")
@@ -967,9 +1005,15 @@ def emit_enums_ts(reg: dict) -> str:
 
 
 def symbol_lists(reg: dict) -> tuple[list[str], list[str]]:
-    promised = sorted(e["name"] for _, e in entities(reg, "function") if e.get("status") == "promised")
-    draft = sorted(e["name"] for _, e in entities(reg, "function") if e.get("status") == "draft")
+    """(promised, draft) of the ABI headers; a platform header's names are platform_symbols'."""
+    promised = sorted(e["name"] for h, e in entities(reg, "function") if e.get("status") == "promised" and "platform" not in h)
+    draft = sorted(e["name"] for h, e in entities(reg, "function") if e.get("status") == "draft" and "platform" not in h)
     return promised, draft
+
+
+def platform_symbols(reg: dict, platform: str) -> list[str]:
+    """The entry points of the platform headers of one platform, sorted."""
+    return sorted(e["name"] for h, e in entities(reg, "function") if h.get("platform") == platform)
 
 
 def emit_layout_test(reg: dict) -> str:
@@ -985,7 +1029,8 @@ def emit_layout_test(reg: dict) -> str:
         "",
     ]
     for header in reg["headers"]:
-        out.append(f"#include <anira/abi/{header['file']}>")
+        if "platform" not in header:
+            out.append(f"#include <anira/abi/{header['file']}>")
     out.append("")
     for _, ent in entities(reg, "enum"):
         out.append(f'_Static_assert(sizeof({ent["name"]}) == 4, "{ent["name"]} is a 32-bit enum");')
@@ -1064,7 +1109,8 @@ def emit_link_probe(reg: dict) -> str:
         "",
     ]
     for header in reg["headers"]:
-        out.append(f"#include <anira/abi/{header['file']}>")
+        if "platform" not in header:
+            out.append(f"#include <anira/abi/{header['file']}>")
     names = promised + draft
     out += [
         "",
@@ -1198,12 +1244,14 @@ def generate(reg: dict) -> dict[str, str]:
     major = int(reg.get("abi_file_major", 0))
     files: dict[str, str] = {}
     for header in reg["headers"]:
-        files[f"include/anira/abi/{header['file']}"] = emit_header(reg, header)
+        files[f"include/{header_path(header)}"] = emit_header(reg, header)
     files["web/src/abi/enums.ts"] = emit_enums_ts(reg)
     promised, draft = symbol_lists(reg)
+    emscripten = platform_symbols(reg, "emscripten")
     files[f"abi/symbols-{major}.txt"] = "".join(f"{n}\n" for n in promised)
     files["abi/symbols-draft.txt"] = "".join(f"{n}\n" for n in draft)
-    files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft)
+    files["abi/symbols-emscripten.txt"] = "".join(f"{n}\n" for n in emscripten)
+    files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft + emscripten)
     files["web/src/abi/layout.ts"] = emit_layout_ts(reg)
     files["src/capi/generated/status_strings.inc"] = emit_status_strings(reg)
     files["src/capi/generated/struct_sizes.inc"] = emit_struct_sizes(reg)

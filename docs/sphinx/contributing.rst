@@ -291,7 +291,15 @@ followed by an explicit ``reserved``. A header with ``draft: true`` lives under
 symbol lists and its declaration into a promised header without renaming it; a draft function
 is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
 addition, while a changed arm of a frozen union (an appended one included), a changed
-signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. The
+signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
+with ``platform: emscripten`` is a companion of the ABI for one target (``file:
+anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
+its body sits inside ``#ifdef __EMSCRIPTEN__`` (elsewhere it is an empty header, so a native
+consumer may include it), it declares functions, callbacks, typedefs and defines only, and no
+header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
+export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
+or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any
+other, and ``abi/anira.json`` records the key. The
 generator refuses a member name repeated within one C scope (the fields of a struct, the arms
 of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
 ``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may

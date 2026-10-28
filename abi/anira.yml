@@ -20,7 +20,12 @@
 # function type (for ANIRA_PTR slots), `padding_free: true` on a Tier-2 struct asserts in
 # test_layout.c that the record has no implicit padding on any target (a descriptor a setter
 # copies within struct_size), and a header with `draft: true` lives under draft/ and holds
-# status: draft functions only.
+# status: draft functions only. A header with `platform: emscripten` is a companion for one
+# target: `file: anira_<name>.h` lands in include/anira/ beside the umbrellas, with its own
+# `guard:`; its body is compiled only under __EMSCRIPTEN__ (an empty header elsewhere), it
+# declares functions, callbacks, typedefs and defines only, nothing may include it, and its
+# names go to abi/symbols-emscripten.txt and the wasm export list, never to
+# symbols-<major>.txt, the link probe or the layout test.
 #
 # Content transcribed from the architecture document's C blocks; where the document
 # left a value implicit (the Tier-1 struct ids 4..6) the choice is stated in the doc
