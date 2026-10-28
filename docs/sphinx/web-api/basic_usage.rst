@@ -158,6 +158,24 @@ browser renders another quantum the worklet outputs silence and reports it once:
 ``onQuantumChange`` re-prepares the handler (resolve a promise when that is asynchronous),
 then the worklet rebuilds its tensors for the new quantum, outside its ``process()``.
 
+A control of the model, such as a gain, is a Static input: add it to the model config
+(``{ name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] }`` in ``inputs``,
+here slot 1), have the worklet serve it and write it from the main thread:
+
+.. code-block:: typescript
+
+   const node = await anira.configureAudioWorklet(audioContext, handler, {
+     inputChannels: 2,
+     outputChannels: 2,
+     staticInputs: [1],
+     modelConfigPtr: model,
+   })
+   node.setStaticInput(1, [1.0])
+   slider.oninput = () => node.setStaticInput(1, [Number(slider.value)])
+
+The worklet pushes a changed value before its next quantum's call, never torn
+(:doc:`custom_audio_worklets`, "Static Inputs").
+
 6. Stop and Teardown
 --------------------
 

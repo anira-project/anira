@@ -3,8 +3,9 @@ Custom Audio Worklets
 
 The default worklet that ships with Anira Web streams one input slot and one output slot of a
 prepared handler: per render quantum it copies the node's input channels into a planar host
-tensor, makes one ``_anira_handler_process`` call and copies the delivered samples out. A custom
-worklet extends :js:class:`AniraAudioWorkletBase` when you need more.
+tensor, makes one ``_anira_handler_process`` call and copies the delivered samples out. It also
+serves the model's Static inputs (`Static Inputs`_). A custom worklet extends
+:js:class:`AniraAudioWorkletBase` when you need more.
 
 When You Need a Custom Worklet
 ------------------------------
@@ -13,8 +14,9 @@ When You Need a Custom Worklet
   constructs it from its ``stageClasses`` (:doc:`custom_pre_post_processing`);
 * more than one streamed slot, or a slot other than the first (``inputSlot`` / ``outputSlot``
   cover one each);
-* ``AudioParam`` values written to a Static input (``_anira_handler_set_static_input``) per
-  quantum;
+* a Static input driven by an ``AudioParam`` with automation: the worklet declares its own
+  ``parameterDescriptors`` and writes the value in ``processAudioBlock`` (a value set from the
+  main thread needs no custom worklet: `Static Inputs`_);
 * one-time setup in the worklet (views, extra tensors): override ``onConfigured``.
 
 Skeleton
@@ -87,6 +89,44 @@ The worklet never waits for an inference by default. ``waitMs`` opts in to
 ``_anira_handler_process_wait``, which waits up to that many milliseconds for each quantum's
 inference: legal, but a wait on the audio thread trades a dropout for latency only when the
 inference Workers are known to be fast enough.
+
+Static Inputs
+-------------
+
+Every worklet, the default one and every subclass, serves the Static inputs ``configureAudioWorklet``
+lists, and the main thread writes them through the node:
+
+.. code-block:: typescript
+
+   const node = await anira.configureAudioWorklet(audioContext, handler, {
+     staticInputs: [1], // input slot 1 of the model config: a Static input
+     modelConfigPtr: model, // its spec sizes the buffer (dtype and shape)
+   })
+   node.setStaticInput(1, [0.5]) // plain numbers, one per element
+   node.setStaticInput(1, new Float32Array([0.25])) // or the slot's bytes, any dtype
+
+Each slot gets a block in the shared heap: a sequence word, the value, the worklet's copy and a
+host tensor over that copy in the spec's dtype and shape. ``setStaticInput`` makes the word odd,
+writes the value and makes it even again. Before each quantum's process call the worklet reads
+the word, copies the value and reads the word again; only when both reads are the same even
+number, and the number changed since its last push, does it hand the copy to
+``_anira_handler_set_static_input``, which applies it from the next submitted inference on.
+Otherwise the handler keeps the last good value and the next quantum tries again: a value is
+never pushed torn, and the worklet never waits for the writer. ``process()`` allocates nothing
+for it; ``disposeAudioWorklet`` frees the blocks.
+
+``setStaticInput`` takes the whole tensor: a typed array or ``DataView`` of exactly the slot's byte
+size (any dtype, the bytes as they are), or plain numbers, one per element, for float32/64,
+int8/16/32, uint8/16/32 and bool8. A slot the node does not serve or a size that does not fit
+throws and writes nothing. A value for the first inference is pushed before the first quantum's
+call, so write it right after ``configureAudioWorklet``; before the worklet streams, the host may
+also call ``_anira_handler_set_static_input`` itself (the store survives ``prepare``). Once the
+worklet streams, it is the handler's driving thread and the only caller of
+``_anira_handler_set_static_input``. The push runs in ``process()`` ahead of
+``processAudioBlock``: a subclass that overrides ``process()`` itself calls
+``state.staticInputs?.pull()`` first. An ``AudioParam`` per slot is not possible (a processor's
+parameters are fixed by its class's static ``parameterDescriptors``), and a port message would
+allocate on the audio thread.
 
 The Worklet's Instance
 ----------------------

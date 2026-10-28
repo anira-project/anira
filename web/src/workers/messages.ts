@@ -1,4 +1,5 @@
 import type { AniraLogRecord } from '../runtime/hooks'
+import type { StaticInputBlock } from './static-inputs'
 
 // -------------------------------
 // ------ General Messages -------
@@ -166,6 +167,8 @@ export type AudioWorkletConfigureMessage = {
   /** The JavaScript stage whose pre_process, post_process and reset run in the worklet. */
   stage?: { jsKey: number; className: string }
   ioConfig: AudioWorkletIOConfig
+  /** The Static input blocks the worklet serves, allocated by main (`staticInputs`). */
+  staticInputs: StaticInputBlock[]
 }
 
 /**

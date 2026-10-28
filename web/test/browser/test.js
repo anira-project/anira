@@ -1,8 +1,10 @@
 // The browser test of the built package (web/dist), run by run.mjs in headless Chromium: the
-// main instance, a JavaScript engine that doubles on an inference Worker, a Hard handler of
-// block 128, and an OfflineAudioContext rendered through the anira worklet node. The output
-// must be the input doubled after the handler's latency; then the Worker is stopped (its
-// has_exited stop) and the worklet disposed. The verdict is window.anira_test_result.
+// main instance, a JavaScript engine on an inference Worker that doubles its input times a
+// Static gain, a Hard handler of block 128, and an OfflineAudioContext rendered through the
+// anira worklet node, which serves the gain (node.setStaticInput, changed mid-render). The
+// output must be the input times 2 * gain after the handler's latency, each block with the gain
+// of the quantum that submitted it; then the Worker is stopped (its has_exited stop) and the
+// worklet disposed. The verdict is window.anira_test_result.
 import {
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   AniraWeb,
@@ -17,6 +19,10 @@ import {
 const RATE = 48000
 const QUANTUM = 128
 const QUANTA = 64
+// The quantum from which on the gain is GAIN_AFTER (the render suspends there to write it).
+const CHANGE_QUANTUM = 32
+const GAIN_BEFORE = 1
+const GAIN_AFTER = 0.25
 const ENGINE_ID = 'org.anira-test.double'
 
 const run = async () => {
@@ -73,6 +79,7 @@ const run = async () => {
         ],
         window: { min: QUANTUM, max: QUANTUM },
       },
+      { name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] },
     ],
     outputs: [
       {
@@ -132,7 +139,17 @@ const run = async () => {
     inputChannels: 1,
     outputChannels: 1,
     waitMs: 500,
+    staticInputs: [1],
+    modelConfigPtr: model,
   })
+  let refused = ''
+  try {
+    node.setStaticInput(1, [1, 2])
+  } catch (error) {
+    refused = error.name
+  }
+  check(refused === 'RangeError', `a value of the wrong size is refused (${refused})`)
+  node.setStaticInput(1, [GAIN_BEFORE])
   const input = audio.createBuffer(1, QUANTUM * QUANTA, RATE)
   const samples = input.getChannelData(0)
   for (let i = 0; i < samples.length; i++)
@@ -141,17 +158,39 @@ const run = async () => {
   source.buffer = input
   source.connect(node).connect(audio.destination)
   source.start(0)
+  audio.suspend((CHANGE_QUANTUM * QUANTUM) / RATE).then(() => {
+    node.setStaticInput(1, new Float32Array([GAIN_AFTER]))
+    return audio.resume()
+  })
   const rendered = (await audio.startRendering()).getChannelData(0)
 
+  // Each input block carries the gain of the quantum that submitted it; the suspension lands on
+  // the boundary of CHANGE_QUANTUM, or one quantum later where the time rounds up.
+  const blockError = (block, gain) => {
+    let worst = 0
+    for (let j = block * QUANTUM; j < (block + 1) * QUANTUM; j++) {
+      if (j + latency >= rendered.length) break
+      worst = Math.max(worst, Math.abs(rendered[j + latency] - 2 * gain * samples[j]))
+    }
+    return worst
+  }
   let worst = 0
-  for (let i = latency; i < rendered.length; i++) {
-    worst = Math.max(worst, Math.abs(rendered[i] - 2 * samples[i - latency]))
+  let changedAt = -1
+  for (let block = 0; (block + 1) * QUANTUM + latency <= rendered.length; block++) {
+    const before = blockError(block, GAIN_BEFORE)
+    const after = blockError(block, GAIN_AFTER)
+    if (changedAt === -1 && after < before) changedAt = block
+    worst = Math.max(worst, changedAt === -1 ? before : after)
   }
   const energy = rendered.reduce((sum, x) => sum + x * x, 0)
   check(energy > 1, `the worklet rendered audio (energy ${energy.toFixed(2)})`)
   check(
     worst < 1e-6,
-    `the output is the input doubled after ${latency} samples (worst error ${worst})`
+    `the output is the input times 2 * gain after ${latency} samples (worst error ${worst})`
+  )
+  check(
+    changedAt === CHANGE_QUANTUM || changedAt === CHANGE_QUANTUM + 1,
+    `the gain written mid-render applies from quantum ${changedAt} (written at ${CHANGE_QUANTUM})`
   )
 
   await worker.stop()

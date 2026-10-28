@@ -2,6 +2,7 @@ import { ANIRA_DTYPE_F32 } from '../abi/enums'
 import { anira_tensor } from '../abi/layout'
 import { createAniraWasm, type AniraModule } from '../runtime/createAniraWasm'
 import { samplesToCopy } from './delivery'
+import { StaticInputReader } from './static-inputs'
 import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
   AudioWorkletConfigureMessage,
@@ -59,6 +60,8 @@ export type AniraWorkletState = {
   /** A `size_t` the process call writes the delivered sample count to, and a view on it. */
   deliveredPtr: number
   delivered: Uint32Array
+  /** The served Static inputs (`staticInputs` of configureAudioWorklet), pulled per quantum. */
+  staticInputs: StaticInputReader | null
 }
 
 /** Class name to JavaScript stage class: the stages whose pre/post/reset run here. */
@@ -72,7 +75,9 @@ export type WorkletStageClassMap = Record<string, new (env: JSStageEnv) => JSSta
  * (`'quantumChanged'`), which re-prepares the handler for it and then has the worklet rebuild
  * its blocks (`'setQuantum'`, outside `process()`). `'dispose'` frees the blocks; the worklet
  * calls into the module no more afterwards and main frees its stack. Subclasses name their
- * JavaScript stages in `stageClasses`.
+ * JavaScript stages in `stageClasses`. Before each quantum's process call the worklet pushes
+ * the served Static inputs that main changed (`node.setStaticInput`), so every subclass
+ * serves them too.
  */
 export class AniraAudioWorkletBase extends AudioWorkletProcessor {
   protected aniraState: AniraWorkletState | null = null
@@ -173,6 +178,19 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
       output: this.buildPlanarBlock(anira, message.ioConfig.outputChannels, quantum),
       deliveredPtr,
       delivered: new Uint32Array(anira.memory.buffer, deliveredPtr, 1),
+      staticInputs:
+        message.staticInputs.length === 0
+          ? null
+          : new StaticInputReader(
+              anira.memory.buffer,
+              message.staticInputs,
+              (slot, tensor) =>
+                anira.module._anira_handler_set_static_input(
+                  message.handlerPtr,
+                  slot,
+                  tensor
+                )
+            ),
     }
     this.reportedQuantum = quantum
     this.aniraState = state
@@ -340,6 +358,8 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
       return true
     }
 
+    // The Static inputs main changed since the last push, before the call that reads them.
+    state.staticInputs?.pull()
     this.processAudioBlock(inputs, outputs, state, quantum, parameters)
     return true
   }

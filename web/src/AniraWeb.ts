@@ -42,6 +42,12 @@ import type {
   UnregisterStageMessage,
 } from './workers/messages'
 import { request } from './workers/messages'
+import {
+  allocStaticInputBlock,
+  freeStaticInputBlock,
+  StaticInputWriter,
+  type StaticInputBlock,
+} from './workers/static-inputs'
 
 export type AniraWebOptions = {
   /** A pre-allocated shared memory; defaults to a fresh 8192-page (512 MiB) one. */
@@ -114,6 +120,17 @@ export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
    * pre/post/reset bits, is the one the worklet runs (`stageKey` names it explicitly).
    */
   pipelinePtr?: number
+  /**
+   * The Static input slots the worklet serves: `node.setStaticInput(slot, values)` writes one
+   * from the main thread, and the worklet pushes it (`anira_handler_set_static_input`) before
+   * its next process call. Needs `modelConfigPtr`. Default none.
+   */
+  staticInputs?: number[]
+  /**
+   * The model config the handler's pipeline was built from: the specs of `staticInputs`, which
+   * size their buffers (dtype and shape).
+   */
+  modelConfigPtr?: number
   /** Overrides merged on top of the derived `AudioWorkletNode` options. */
   audioWorkletNodeOptions?: AudioWorkletNodeOptions
   /**
@@ -122,6 +139,22 @@ export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
    * done); the worklet then rebuilds its tensors for it and outputs silence until then.
    */
   onQuantumChange?: (quantum: number) => void | Promise<void>
+}
+
+/**
+ * The node `configureAudioWorklet` returns: an `AudioWorkletNode` that also writes the Static
+ * inputs its worklet serves.
+ */
+export interface AniraAudioWorkletNode extends AudioWorkletNode {
+  /**
+   * Write Static input `slot` (one of the configure's `staticInputs`), the whole tensor: a typed
+   * array or `DataView` of exactly the spec's byte size (any dtype), or plain numbers, one per
+   * element, for float32/64, int8/16/32, uint8/16/32 and bool8. The worklet pushes the value
+   * before its next quantum; a write it overlaps is never pushed torn, the previous value stays
+   * until the next quantum reads a whole one. Throws, writing nothing, on a slot not served or a
+   * size that does not fit.
+   */
+  setStaticInput(slot: number, values: ArrayBufferView | ArrayLike<number>): void
 }
 
 type EngineEntry = { jsKey: number; descriptor: JSEngineDescriptor }
@@ -139,6 +172,8 @@ type WorkerEntry = {
 type WorkletEntry = {
   stack: InstanceStack
   stageKey: number | undefined
+  staticInputs: StaticInputBlock[]
+  writers: Map<number, StaticInputWriter>
 }
 
 /** The stage phases that run on the main thread, and those that run in the worklet. */
@@ -541,14 +576,16 @@ export class AniraWeb {
    * the configure handshake. The worklet instance gets its own stack and thread-local block and
    * builds its planar host tensors for `quantum` now; `process()` allocates nothing. When the
    * browser renders another quantum the worklet outputs silence and reports it:
-   * `onQuantumChange` re-prepares the handler, then the worklet rebuilds its tensors. Free the
-   * node's resources with `disposeAudioWorklet` before destroying the handler.
+   * `onQuantumChange` re-prepares the handler, then the worklet rebuilds its tensors. The
+   * `staticInputs` slots get a buffer each in the shared heap, written by
+   * `node.setStaticInput`. Free the node's resources with `disposeAudioWorklet` before
+   * destroying the handler.
    */
   async configureAudioWorklet(
     audioContext: BaseAudioContext,
     handlerPtr: number,
     options: ConfigureAudioWorkletOptions = {}
-  ): Promise<AudioWorkletNode> {
+  ): Promise<AniraAudioWorkletNode> {
     const ioConfig: AudioWorkletIOConfig = {
       inputNodeIndex: options.inputNodeIndex ?? 0,
       outputNodeIndex: options.outputNodeIndex ?? 0,
@@ -568,6 +605,15 @@ export class AniraWeb {
         'Invalid AudioWorklet IO config: channel counts and the quantum must be > 0'
       )
     }
+    const staticSlots = options.staticInputs ?? []
+    if (staticSlots.length > 0 && options.modelConfigPtr === undefined) {
+      throw new Error(
+        'configureAudioWorklet: staticInputs needs modelConfigPtr, the specs that size them'
+      )
+    }
+    if (new Set(staticSlots).size !== staticSlots.length) {
+      throw new Error('configureAudioWorklet: staticInputs lists a slot twice')
+    }
     const stageEntry = this.workletStage(options)
     const stage: AudioWorkletConfigureMessage['stage'] = stageEntry && {
       jsKey: stageEntry.jsKey,
@@ -575,11 +621,11 @@ export class AniraWeb {
     }
 
     const wasmBinary = await this.ensureWasmBinary()
-    let node = options.node
+    let node = options.node as AniraAudioWorkletNode | undefined
     if (node) {
       await this.disposeAudioWorklet(node)
     } else {
-      node = new AudioWorkletNode(
+      const created = new AudioWorkletNode(
         audioContext,
         options.nodeName ?? 'inference-processor',
         {
@@ -588,7 +634,10 @@ export class AniraWeb {
           outputChannelCount: [ioConfig.outputChannels],
           ...options.audioWorkletNodeOptions,
         }
-      )
+      ) as AniraAudioWorkletNode
+      created.setStaticInput = (slot, values) =>
+        this.writeStaticInput(created, slot, values)
+      node = created
       node.port.start()
       this.forwardLogs(node.port)
       const port = node.port
@@ -610,6 +659,17 @@ export class AniraWeb {
         })()
       })
     }
+    const staticInputs: StaticInputBlock[] = []
+    try {
+      for (const slot of staticSlots) {
+        staticInputs.push(
+          allocStaticInputBlock(this.module, this.heap, options.modelConfigPtr!, slot)
+        )
+      }
+    } catch (error) {
+      for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
+      throw error
+    }
     const stack = allocInstanceStack(this.module)
     try {
       await request<AudioWorkletConfigureMessage>(
@@ -623,16 +683,42 @@ export class AniraWeb {
           handlerPtr,
           stage,
           ioConfig,
+          staticInputs,
         },
         'ready'
       )
     } catch (error) {
       // The worklet instance never ran on the stack, or gave it up on the failure.
       freeInstanceStack(this.module, stack)
+      for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
       throw error
     }
-    this.worklets.set(node, { stack, stageKey: stage?.jsKey })
+    const buffer = this.memory.buffer
+    this.worklets.set(node, {
+      stack,
+      stageKey: stage?.jsKey,
+      staticInputs,
+      writers: new Map(
+        staticInputs.map((block) => [block.slot, new StaticInputWriter(buffer, block)])
+      ),
+    })
     return node
+  }
+
+  private writeStaticInput(
+    node: AudioWorkletNode,
+    slot: number,
+    values: ArrayBufferView | ArrayLike<number>
+  ): void {
+    const entry = this.worklets.get(node)
+    if (!entry) throw new Error('setStaticInput: the node is not configured')
+    const writer = entry.writers.get(slot)
+    if (!writer) {
+      throw new RangeError(
+        `setStaticInput: the worklet does not serve input slot ${slot}; list it in staticInputs`
+      )
+    }
+    writer.write(values)
   }
 
   /**
@@ -675,7 +761,7 @@ export class AniraWeb {
   /**
    * Free what `configureAudioWorklet` allocated for `node`: the worklet frees its tensors and
    * stops calling into the module (it outputs silence from then on), then the worklet
-   * instance's stack and thread-local block are freed here. Call it before destroying the
+   * instance's stack and thread-local block and the Static input buffers are freed here. Call it before destroying the
    * handler the node streams through; a node not configured here is ignored.
    */
   async disposeAudioWorklet(node: AudioWorkletNode): Promise<void> {
@@ -683,6 +769,7 @@ export class AniraWeb {
     if (!entry) return
     await request<DisposeMessage>(node.port, { type: 'dispose' }, 'disposed')
     freeInstanceStack(this.module, entry.stack)
+    for (const block of entry.staticInputs) freeStaticInputBlock(this.heap, block)
     this.worklets.delete(node)
   }
 }
