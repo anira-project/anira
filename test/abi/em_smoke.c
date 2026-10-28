@@ -110,17 +110,24 @@ static void check_instance_tls(void) {
 /* A throwing hook is caught in the trampoline and fails the call; nothing unwinds into C. */
 static void check_throwing_hook(void) {
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    check(anira_em_stage_desc_init(NULL, 0, ANIRA_EM_HOOK_PRE) == ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_stage_desc_init(NULL, 0, ANIRA_EM_HOOK_PRE, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_stage_desc_init refuses a NULL desc");
-    check(anira_em_stage_desc_init(&desc, 0, 512u) == ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_stage_desc_init(&desc, 0, 512u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_stage_desc_init refuses an undefined bit");
-    check_status(anira_em_stage_desc_init(&desc, SMOKE_THROWING_KEY, ANIRA_EM_HOOK_PRE),
+    check_status(anira_em_stage_desc_init(&desc, SMOKE_THROWING_KEY, ANIRA_EM_HOOK_PRE, 0),
                  NULL,
                  "anira_em_stage_desc_init");
     check(desc.pre_process != NULL && desc.post_process == NULL && desc.release != NULL,
           "one slot per bit, the release slot always");
-    check((desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0,
-          "a pre_process bit promises ANIRA_STAGE_FLAG_REALTIME_PRE_POST");
+    check(desc.flags == 0u, "no promise unless one is stated");
+    desc.release(desc.user_data);
+    check_status(anira_em_stage_desc_init(&desc,
+                                          SMOKE_THROWING_KEY,
+                                          ANIRA_EM_HOOK_PRE,
+                                          ANIRA_STAGE_FLAG_REALTIME_PRE_POST),
+                 NULL,
+                 "anira_em_stage_desc_init with a promise");
+    check(desc.flags == ANIRA_STAGE_FLAG_REALTIME_PRE_POST, "the stated promise, as given");
     anira_stage_ctx ctx;
     memset(&ctx, 0, sizeof ctx);
     check(desc.pre_process(&ctx, NULL, desc.user_data) == ANIRA_ERROR_UNKNOWN,
@@ -152,11 +159,15 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     static const char* const k_providers[2] = {"cpu", "org.anira-test.never-usable"};
     anira_error err = ANIRA_ERROR_INIT;
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u) == ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_engine_desc_init refuses an undefined bit");
-    check_status(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, ANIRA_EM_ENGINE_HOOK_QUERY),
+    check_status(anira_em_engine_desc_init(&desc,
+                                           SMOKE_QUERY_KEY,
+                                           ANIRA_EM_ENGINE_HOOK_QUERY,
+                                           ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL),
                  NULL,
                  "anira_em_engine_desc_init");
+    check(desc.flags == ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, "the engine's flags, as given");
     check(desc.process != NULL && desc.query != NULL && desc.reset == NULL && desc.init == NULL &&
               desc.release != NULL,
           "process always, query per bit, the release slot always, init never");
@@ -240,11 +251,15 @@ static void check_pipeline(void) {
                                                     ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_INIT |
                                                     ANIRA_EM_HOOK_PREPARE |
                                                     ANIRA_EM_HOOK_UNPREPARE | ANIRA_EM_HOOK_RELEASE,
+                                                ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
                                                 &err),
                  &err,
                  "anira_em_pipeline_add_js_stage");
-    check(anira_em_pipeline_add_js_stage(pipeline, SMOKE_STAGE_KEY, ANIRA_EM_HOOK_PRE, &err) ==
-              ANIRA_ERROR_INVALID_STATE,
+    check(anira_em_pipeline_add_js_stage(pipeline,
+                                         SMOKE_STAGE_KEY,
+                                         ANIRA_EM_HOOK_PRE,
+                                         ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
+                                         &err) == ANIRA_ERROR_INVALID_STATE,
           "a second JavaScript stage is refused");
     check_query_engine(pipeline, context);
 

@@ -200,7 +200,10 @@ void* tls_block(void* stack_base, size_t bytes) noexcept {
 }
 
 // Fills a stage descriptor of trampolines over a new record; throws std::bad_alloc only.
-void fill_stage_desc(anira_stage_desc& desc, uint32_t js_key, uint32_t hook_mask) {
+void fill_stage_desc(anira_stage_desc& desc,
+                     uint32_t js_key,
+                     uint32_t hook_mask,
+                     uint32_t stage_flags) {
     auto record = std::make_unique<HookRecord>();
     record->m_js_key = js_key;
     record->m_hook_mask = hook_mask;
@@ -214,18 +217,16 @@ void fill_stage_desc(anira_stage_desc& desc, uint32_t js_key, uint32_t hook_mask
     if ((hook_mask & ANIRA_EM_HOOK_UNPREPARE) != 0) { desc.unprepare = &stage_unprepare; }
     if ((hook_mask & ANIRA_EM_HOOK_INIT) != 0) { desc.init = &stage_init; }
     desc.release = &stage_release;
-    // The bit is the hook's real-time promise for its phase: JavaScript cannot write the flags.
-    if ((hook_mask & (ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST | ANIRA_EM_HOOK_RESET)) != 0) {
-        desc.flags |= ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
-    }
-    if ((hook_mask & (ANIRA_EM_HOOK_BEFORE | ANIRA_EM_HOOK_AFTER)) != 0) {
-        desc.flags |= ANIRA_STAGE_FLAG_REALTIME_HOOKS;
-    }
+    // The caller's stated promise, as given: anira_pipeline_add_stage judges the bits.
+    desc.flags = stage_flags;
     desc.user_data = record.release();
 }
 
 // Fills an engine descriptor of trampolines over a new record; throws std::bad_alloc only.
-void fill_engine_desc(anira_engine_desc& desc, uint32_t js_key, uint32_t hook_mask) {
+void fill_engine_desc(anira_engine_desc& desc,
+                      uint32_t js_key,
+                      uint32_t hook_mask,
+                      uint32_t engine_flags) {
     auto record = std::make_unique<HookRecord>();
     record->m_js_key = js_key;
     record->m_hook_mask = hook_mask;
@@ -234,6 +235,8 @@ void fill_engine_desc(anira_engine_desc& desc, uint32_t js_key, uint32_t hook_ma
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_RESET) != 0) { desc.reset = &engine_reset; }
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_QUERY) != 0) { desc.query = &engine_query; }
     desc.release = &engine_release;
+    // As given: anira_custom_engine_create judges the bits.
+    desc.flags = engine_flags;
     desc.user_data = record.release();
 }
 
@@ -245,17 +248,19 @@ uint32_t ANIRA_CALL anira_em_hooks_version(void) ANIRA_NOEXCEPT {
 
 anira_status ANIRA_CALL anira_em_stage_desc_init(anira_stage_desc* desc,
                                                  uint32_t js_key,
-                                                 uint32_t hook_mask) ANIRA_NOEXCEPT try {
+                                                 uint32_t hook_mask,
+                                                 uint32_t stage_flags) ANIRA_NOEXCEPT try {
     if (desc == nullptr || (hook_mask & ~k_stage_hooks) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    fill_stage_desc(*desc, js_key, hook_mask);
+    fill_stage_desc(*desc, js_key, hook_mask, stage_flags);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_em_pipeline_add_js_stage(anira_pipeline* pipeline,
                                                        uint32_t js_key,
                                                        uint32_t hook_mask,
+                                                       uint32_t stage_flags,
                                                        anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE((hook_mask & ~k_stage_hooks) == 0,
                        err,
@@ -265,7 +270,7 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_stage(anira_pipeline* pipeline,
                        hook_mask,
                        k_stage_hooks);
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    fill_stage_desc(desc, js_key, hook_mask);
+    fill_stage_desc(desc, js_key, hook_mask, stage_flags);
     // A refused addition never calls release: until it succeeds the record is ours.
     std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(desc.user_data));
     const anira_status added = anira_pipeline_add_stage(pipeline, &desc, err);
@@ -275,11 +280,12 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_stage(anira_pipeline* pipeline,
 
 anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* desc,
                                                   uint32_t js_key,
-                                                  uint32_t hook_mask) ANIRA_NOEXCEPT try {
+                                                  uint32_t hook_mask,
+                                                  uint32_t engine_flags) ANIRA_NOEXCEPT try {
     if (desc == nullptr || (hook_mask & ~k_engine_hooks) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    fill_engine_desc(*desc, js_key, hook_mask);
+    fill_engine_desc(*desc, js_key, hook_mask, engine_flags);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -297,11 +303,10 @@ anira_status ANIRA_CALL anira_em_pipeline_register_js_engine(anira_pipeline* pip
                        hook_mask,
                        k_engine_hooks);
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    fill_engine_desc(desc, js_key, hook_mask);
+    fill_engine_desc(desc, js_key, hook_mask, engine_flags);
     // A refused create never calls release: until it succeeds the record is ours.
     std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(desc.user_data));
     if (engine_id != nullptr) { record->m_engine_id = engine_id; }
-    desc.flags = engine_flags;
     anira_custom_engine* engine = nullptr;
     const anira_status created = anira_custom_engine_create(engine_id, &desc, &engine, err);
     if (created != ANIRA_OK) { return created; }
