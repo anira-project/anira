@@ -86,10 +86,14 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
       if (message.type !== 'configure') return
       try {
         await this.configure(message)
-        this.port.postMessage({ type: 'ready' } satisfies ReadyResponse)
+        this.port.postMessage({
+          type: 'ready',
+          requestId: message.requestId,
+        } satisfies ReadyResponse)
       } catch (error) {
         this.port.postMessage({
           type: 'error',
+          requestId: message.requestId,
           message: error instanceof Error ? error.message : String(error),
         } satisfies ErrorResponse)
       }

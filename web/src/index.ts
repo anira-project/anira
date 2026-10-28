@@ -7,11 +7,12 @@ export * from './backends'
 export * from './workers/inferenceWorkerHandler'
 export * from './helpers'
 
-export { waitForWorkerMessage } from './workers/messages'
+export { nextRequestId, request, waitForWorkerMessage } from './workers/messages'
 export type {
   AudioWorkletConfigureMessage,
   AudioWorkletIOConfig,
   DestroyMessage,
+  DestroyedResponse,
   EngineRegisteredResponse,
   EngineUnregisteredResponse,
   ErrorResponse,

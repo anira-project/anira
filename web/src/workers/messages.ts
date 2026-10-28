@@ -4,13 +4,19 @@ import type { AniraLogRecord } from '../runtime/hooks'
 // ------ General Messages -------
 // -------------------------------
 
+// Every request of the main thread carries a `requestId`, which its reply (and an error it
+// causes) echoes, so a reply is matched to its request and an error of one request never
+// rejects another in flight on the same target.
+
 /** Enter the loop: the Worker calls `_anira_inference_thread_run_loop` until stopped. */
 export type StartMessage = {
   type: 'start'
 }
 
+/** Destroy the Worker's engines and close it; answered by `'destroyed'`. */
 export type DestroyMessage = {
   type: 'destroy'
+  requestId: number
 }
 
 // -------------------------------
@@ -19,11 +25,19 @@ export type DestroyMessage = {
 
 export type ReadyResponse = {
   type: 'ready'
+  requestId: number
+}
+
+/** The Worker destroyed its engines and calls into the module no more. */
+export type DestroyedResponse = {
+  type: 'destroyed'
+  requestId: number
 }
 
 /** A failed request; `message` says why. */
 export type ErrorResponse = {
   type: 'error'
+  requestId: number
   message: string
 }
 
@@ -39,6 +53,7 @@ export type LogRecordMessage = {
 
 export type InitInferenceWorkerMessage = {
   type: 'initInferenceWorker'
+  requestId: number
   wasmMemory: WebAssembly.Memory
   wasmBinary?: ArrayBuffer
   /** The Worker instance's stack and thread-local block (`allocInstanceStack`). */
@@ -55,6 +70,7 @@ export type InitInferenceWorkerMessage = {
  */
 export type RegisterEngineMessage = {
   type: 'registerEngine'
+  requestId: number
   jsKey: number
   className: string
   engineId: string
@@ -64,38 +80,45 @@ export type RegisterEngineMessage = {
 
 export type EngineRegisteredResponse = {
   type: 'engineRegistered'
+  requestId: number
   jsKey: number
 }
 
 export type UnregisterEngineMessage = {
   type: 'unregisterEngine'
+  requestId: number
   jsKey: number
 }
 
 export type EngineUnregisteredResponse = {
   type: 'engineUnregistered'
+  requestId: number
   jsKey: number
 }
 
 /** A JavaScript stage for the Worker's registry (its before/after_inference hooks). */
 export type RegisterStageMessage = {
   type: 'registerStage'
+  requestId: number
   jsKey: number
   className: string
 }
 
 export type StageRegisteredResponse = {
   type: 'stageRegistered'
+  requestId: number
   jsKey: number
 }
 
 export type UnregisterStageMessage = {
   type: 'unregisterStage'
+  requestId: number
   jsKey: number
 }
 
 export type StageUnregisteredResponse = {
   type: 'stageUnregistered'
+  requestId: number
   jsKey: number
 }
 
@@ -129,6 +152,7 @@ export type AudioWorkletIOConfig = {
 
 export type AudioWorkletConfigureMessage = {
   type: 'configure'
+  requestId: number
   wasmMemory: WebAssembly.Memory
   wasmBinary: ArrayBuffer
   stackBase: number
@@ -153,29 +177,50 @@ export type QuantumChangedMessage = {
 // ---------------------------------
 
 /**
- * Resolve once `worker` posts a message whose `data.type` matches `messageType` (and, when
- * given, whose `data.jsKey` matches `jsKey`); reject on an `'error'` message. The listener is
- * removed as soon as either arrives; other messages are left for other listeners.
+ * Resolve once `worker` posts a message whose `data.type` matches `messageType` and whose
+ * `data.requestId` is `requestId`; reject on an `'error'` message of that request. The listener
+ * is removed as soon as either arrives; other messages, the replies and errors of other
+ * requests included, are left for other listeners.
  */
 export const waitForWorkerMessage = (
   worker: Pick<Worker, 'addEventListener' | 'removeEventListener'>,
   messageType: string,
-  jsKey?: number
+  requestId: number
 ): Promise<void> => {
   return new Promise<void>((resolve, reject) => {
     const listener = (
-      e: MessageEvent<{ type: string; jsKey?: number; message?: string }>
+      e: MessageEvent<{ type: string; requestId?: number; message?: string }>
     ) => {
+      if (e.data.requestId !== requestId) return
       if (e.data.type === 'error') {
         worker.removeEventListener('message', listener)
         reject(new Error(e.data.message))
         return
       }
       if (e.data.type !== messageType) return
-      if (jsKey !== undefined && e.data.jsKey !== jsKey) return
       worker.removeEventListener('message', listener)
       resolve()
     }
     worker.addEventListener('message', listener)
   })
+}
+
+let lastRequestId = 0
+
+/** A request id unique in this realm (the main thread posts every request). */
+export const nextRequestId = (): number => ++lastRequestId
+
+/**
+ * Post `message` with a fresh request id to `target` and wait for its `replyType` reply (or its
+ * error). The listener is attached before the post, so a fast reply is never missed.
+ */
+export const request = async <M extends { requestId: number }>(
+  target: Pick<Worker, 'addEventListener' | 'removeEventListener' | 'postMessage'>,
+  message: Omit<M, 'requestId'>,
+  replyType: string
+): Promise<void> => {
+  const requestId = nextRequestId()
+  const reply = waitForWorkerMessage(target, replyType, requestId)
+  target.postMessage({ ...message, requestId })
+  await reply
 }

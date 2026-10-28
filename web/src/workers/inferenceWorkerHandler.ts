@@ -3,6 +3,7 @@ import type { JSBackend, JSBackendEnv } from '../backends/JSBackend'
 import { createAniraWasm, type AniraModule } from '../runtime/createAniraWasm'
 import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
+  DestroyedResponse,
   EngineRegisteredResponse,
   EngineUnregisteredResponse,
   ErrorResponse,
@@ -66,7 +67,10 @@ export const setupInferenceWorker = (
         anira.hooks.log = (record) =>
           postMessage({ type: 'log', record } satisfies LogRecordMessage)
         threadPtr = message.threadPtr
-        postMessage({ type: 'ready' } satisfies ReadyResponse)
+        postMessage({
+          type: 'ready',
+          requestId: message.requestId,
+        } satisfies ReadyResponse)
         return
       }
 
@@ -92,6 +96,7 @@ export const setupInferenceWorker = (
         }
         postMessage({
           type: 'engineRegistered',
+          requestId: message.requestId,
           jsKey: message.jsKey,
         } satisfies EngineRegisteredResponse)
         return
@@ -104,6 +109,7 @@ export const setupInferenceWorker = (
         a.hooks.engines.delete(message.jsKey)
         postMessage({
           type: 'engineUnregistered',
+          requestId: message.requestId,
           jsKey: message.jsKey,
         } satisfies EngineUnregisteredResponse)
         return
@@ -122,6 +128,7 @@ export const setupInferenceWorker = (
         }
         postMessage({
           type: 'stageRegistered',
+          requestId: message.requestId,
           jsKey: message.jsKey,
         } satisfies StageRegisteredResponse)
         return
@@ -131,6 +138,7 @@ export const setupInferenceWorker = (
         requireModule(anira).hooks.stages.delete(message.jsKey)
         postMessage({
           type: 'stageUnregistered',
+          requestId: message.requestId,
           jsKey: message.jsKey,
         } satisfies StageUnregisteredResponse)
         return
@@ -146,6 +154,11 @@ export const setupInferenceWorker = (
       case 'destroy': {
         for (const engine of engines.values()) engine.destroy()
         engines.clear()
+        // From here on this instance calls into the module no more: main frees its stack.
+        postMessage({
+          type: 'destroyed',
+          requestId: message.requestId,
+        } satisfies DestroyedResponse)
         close()
         return
       }
@@ -158,6 +171,9 @@ export const setupInferenceWorker = (
     } catch (error) {
       postMessage({
         type: 'error',
+        // 'start' is no request: an error there has no reply to fail and goes to every
+        // listener's filter as request 0.
+        requestId: 'requestId' in e.data ? e.data.requestId : 0,
         message: error instanceof Error ? error.message : String(error),
       } satisfies ErrorResponse)
     }

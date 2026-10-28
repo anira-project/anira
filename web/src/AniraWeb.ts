@@ -28,7 +28,7 @@ import type {
   UnregisterEngineMessage,
   UnregisterStageMessage,
 } from './workers/messages'
-import { waitForWorkerMessage } from './workers/messages'
+import { request } from './workers/messages'
 
 export type AniraWebOptions = {
   /** A pre-allocated shared memory; defaults to a fresh 8192-page (512 MiB) one. */
@@ -220,11 +220,11 @@ export class AniraWeb {
     await Promise.all(
       this.workers.map((w) =>
         this.whileStopped(w, async () => {
-          w.worker.postMessage({
-            type: 'unregisterEngine',
-            jsKey,
-          } satisfies UnregisterEngineMessage)
-          await waitForWorkerMessage(w.worker, 'engineUnregistered', jsKey)
+          await request<UnregisterEngineMessage>(
+            w.worker,
+            { type: 'unregisterEngine', jsKey },
+            'engineUnregistered'
+          )
         })
       )
     )
@@ -269,11 +269,11 @@ export class AniraWeb {
     await Promise.all(
       this.workers.map((w) =>
         this.whileStopped(w, async () => {
-          w.worker.postMessage({
-            type: 'unregisterStage',
-            jsKey,
-          } satisfies UnregisterStageMessage)
-          await waitForWorkerMessage(w.worker, 'stageUnregistered', jsKey)
+          await request<UnregisterStageMessage>(
+            w.worker,
+            { type: 'unregisterStage', jsKey },
+            'stageUnregistered'
+          )
         })
       )
     )
@@ -287,27 +287,29 @@ export class AniraWeb {
     w: WorkerEntry,
     { jsKey, descriptor }: EngineEntry
   ): Promise<void> {
-    w.worker.postMessage({
-      type: 'registerEngine',
-      jsKey,
-      className: descriptor.className,
-      engineId: descriptor.engineId,
-      modelConfigPtr: descriptor.modelConfigPtr,
-      modelIndex: descriptor.modelIndex ?? 0,
-    } satisfies RegisterEngineMessage)
-    await waitForWorkerMessage(w.worker, 'engineRegistered', jsKey)
+    await request<RegisterEngineMessage>(
+      w.worker,
+      {
+        type: 'registerEngine',
+        jsKey,
+        className: descriptor.className,
+        engineId: descriptor.engineId,
+        modelConfigPtr: descriptor.modelConfigPtr,
+        modelIndex: descriptor.modelIndex ?? 0,
+      },
+      'engineRegistered'
+    )
   }
 
   private async sendStage(
     w: WorkerEntry,
     { jsKey, descriptor }: StageEntry
   ): Promise<void> {
-    w.worker.postMessage({
-      type: 'registerStage',
-      jsKey,
-      className: descriptor.className,
-    } satisfies RegisterStageMessage)
-    await waitForWorkerMessage(w.worker, 'stageRegistered', jsKey)
+    await request<RegisterStageMessage>(
+      w.worker,
+      { type: 'registerStage', jsKey, className: descriptor.className },
+      'stageRegistered'
+    )
   }
 
   /** A Worker handles messages only outside its loop: stop it, run `action`, restart it. */
@@ -363,16 +365,18 @@ export class AniraWeb {
     this.forwardLogs(worker)
 
     try {
-      const ready = waitForWorkerMessage(worker, 'ready')
-      worker.postMessage({
-        type: 'initInferenceWorker',
-        wasmMemory: this.memory,
-        wasmBinary: this.wasmBinary ?? undefined,
-        stackBase: stack.base,
-        stackBytes: stack.bytes,
-        threadPtr: thread.pointer,
-      } satisfies InitInferenceWorkerMessage)
-      await ready
+      await request<InitInferenceWorkerMessage>(
+        worker,
+        {
+          type: 'initInferenceWorker',
+          wasmMemory: this.memory,
+          wasmBinary: this.wasmBinary ?? undefined,
+          stackBase: stack.base,
+          stackBytes: stack.bytes,
+          threadPtr: thread.pointer,
+        },
+        'ready'
+      )
 
       const pending: WorkerEntry = {
         worker,
@@ -401,8 +405,9 @@ export class AniraWeb {
 
   private async stopWorker(entry: WorkerEntry, stack: InstanceStack): Promise<void> {
     await entry.thread.stop()
-    entry.worker.postMessage({ type: 'destroy' } satisfies DestroyMessage)
     entry.thread.destroy()
+    // The stack is the Worker instance's until it says it calls into the module no more.
+    await request<DestroyMessage>(entry.worker, { type: 'destroy' }, 'destroyed')
     freeInstanceStack(this.module, stack)
     const index = this.workers.indexOf(entry)
     if (index !== -1) this.workers.splice(index, 1)
@@ -473,18 +478,20 @@ export class AniraWeb {
         options.onQuantumChange?.((e.data as QuantumChangedMessage).quantum)
       }
     })
-    const ready = waitForWorkerMessage(node.port, 'ready')
-    node.port.postMessage({
-      type: 'configure',
-      wasmMemory: this.memory,
-      wasmBinary,
-      stackBase: stack.base,
-      stackBytes: stack.bytes,
-      handlerPtr,
-      stage,
-      ioConfig,
-    } satisfies AudioWorkletConfigureMessage)
-    await ready
+    await request<AudioWorkletConfigureMessage>(
+      node.port,
+      {
+        type: 'configure',
+        wasmMemory: this.memory,
+        wasmBinary,
+        stackBase: stack.base,
+        stackBytes: stack.bytes,
+        handlerPtr,
+        stage,
+        ioConfig,
+      },
+      'ready'
+    )
     return node
   }
 }
