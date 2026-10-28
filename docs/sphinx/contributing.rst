@@ -294,8 +294,9 @@ addition, while a changed arm of a frozen union (an appended one included), a ch
 signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
 with ``platform: emscripten`` is a companion of the ABI for one target (``file:
 anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
-its body sits inside ``#ifdef __EMSCRIPTEN__`` (elsewhere it is an empty header, so a native
-consumer may include it), it declares functions, callbacks, typedefs and defines only, and no
+its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)`` (elsewhere it is an
+empty header, so a native consumer may include it, and the reference documents it from any
+host), it declares functions, callbacks, typedefs and defines only, and no
 header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
 export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
 or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any

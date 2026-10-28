@@ -339,6 +339,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/engine.cpp
     src/capi/tensor.cpp
 )
+# anira/anira_em.h, the Emscripten companion (registry `platform: emscripten`): the trampolines
+# into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
+# empty on every other binary format, so the TU exists on Wasm alone.
+if(TANH_BINARY_FORMAT STREQUAL "Wasm")
+    target_sources(${PROJECT_NAME} PRIVATE src/platform/emscripten/em_hooks.cpp)
+endif()
 
 # Shared between the anira target and the isolated ExecuTorch object target below —
 # the two must agree on every USE_* define (they shape the anira class layouts).

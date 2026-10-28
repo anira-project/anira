@@ -896,7 +896,9 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_flags(anira_conte
                                                                      uint32_t flags) ANIRA_NOEXCEPT;
 
 /**
- * @brief The context's log sink; ignored on Wasm, where anira_em_set_log_hook is the sink.
+ * @brief The context's log sink, on every target: on WebAssembly a C sink compiled into the
+ * module receives the records like any other, and anira_em_set_log_hook
+ * (anira/anira_em.h) adds the JavaScript hook beside it.
  * @param config The config.
  * @param callback The sink, or NULL for none.
  * @param user_data Passed to callback.

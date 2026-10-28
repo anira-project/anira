@@ -911,8 +911,9 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append("#endif")
     out.append("")
     if platform_macro:
-        # Elsewhere the header is an empty companion: it compiles and declares nothing.
-        out.append(f"#ifdef {platform_macro}")
+        # Elsewhere the header is an empty companion: it compiles and declares nothing. Doxygen
+        # (PREDEFINED DOXYGEN=1 in docs/doxygen/Doxyfile.in) sees the body on every host.
+        out.append(f"#if defined({platform_macro}) || defined(DOXYGEN)")
         out.append("")
     # C names and C spellings in a header the C++ tidy config also sees: typedef (not
     # using), type names inside ANIRA_INIT / ANIRA_PTR that no parentheses can wrap.
@@ -953,7 +954,7 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append(f"// NOLINTEND({NOLINT_CHECKS})")
     out.append("")
     if platform_macro:
-        out.append(f"#endif /* {platform_macro} */")
+        out.append(f"#endif /* {platform_macro} || DOXYGEN */")
         out.append("")
     out.append("#ifdef __cplusplus")
     out.append("}")
