@@ -105,6 +105,17 @@ jobs:
         working-directory: web
         run: npm test
 
+      # The built package in headless Chromium (web/test/browser, served with COOP/COEP): a
+      # JavaScript engine that doubles on an inference Worker, a Hard handler of block 128, an
+      # OfflineAudioContext rendered through the anira worklet node; the output must be the input
+      # doubled after the handler's latency, then the Worker stops and the worklet is disposed.
+      - name: browser test (headless Chromium)
+        working-directory: web
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium
+          node test/browser/run.mjs
+
   # The queue's required status for this workflow.
   result:
     name: web result
