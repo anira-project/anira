@@ -56,15 +56,16 @@
  * extension the engine may read through load's record) resolved to equal tensors, on the same
  * provider, whichever pipelines they were created from; two engine objects never share, even
  * under one id with the same callbacks. The shared call slots of a loaded model are its
- * instances (anira_engine_load_info.instances, the model's max_instances): a process call of a
- * handler whose model is stateless claims one of them, and no two calls run at once on one
- * instance. A model declared ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once
- * too, with 0 shared slots: its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their
- * prepare; their inferences run one at a time and in order, under the dispatch gate), their
- * calls carry ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claim no shared slot and run on what
- * their prepare built. The engine binds by name where its side has names: the load record
- * carries the name each slot binds to (the entry's tensors record, else the canonical name),
- * and an engine that cannot bind a slot refuses load. process runs on an inference thread, in
+ * instances (anira_engine_load_info.instances, the model's max_instances, ANIRA_INSTANCES_AUTO
+ * resolved to the pool's thread count): a process call of a handler whose model is stateless
+ * claims one of them, and no two calls run at once on one instance. A model declared
+ * ANIRA_MODEL_STATEFUL or with a declared State pair is loaded once too, with 0 shared slots:
+ * its handlers are exclusive (ANIRA_PREPARE_EXCLUSIVE at their prepare; their inferences run
+ * one at a time and in order, under the dispatch gate), their calls carry
+ * ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claim no shared slot and run on what their
+ * prepare built. The engine binds by name where its side has names: the load record carries the
+ * name each slot binds to (the entry's tensors record, else the canonical name), and an engine
+ * that cannot bind a slot refuses load. process runs on an inference thread, in
  * ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage context (Tier
  * 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call): the
  * instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays in
@@ -141,9 +142,10 @@ typedef struct anira_engine_load_info {
     /**
      * The shared call slots of this loaded model: the process calls that may run at once on
      * them, each on its own instance below this count (anira_engine_ctx.instance), the model's
-     * max_instances for a stateless model; 0 for a model declared ANIRA_MODEL_STATEFUL or with
-     * a declared State pair, whose handlers are exclusive and run on what their prepare builds
-     * (ANIRA_PREPARE_EXCLUSIVE), never on a shared slot.
+     * max_instances for a stateless model (ANIRA_INSTANCES_AUTO resolved to the inference
+     * pool's thread count, at least 1), at most the pool's thread count; 0 for a model declared
+     * ANIRA_MODEL_STATEFUL or with a declared State pair, whose handlers are exclusive and run
+     * on what their prepare builds (ANIRA_PREPARE_EXCLUSIVE), never on a shared slot.
      */
     uint32_t instances;
     /**

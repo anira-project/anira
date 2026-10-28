@@ -712,7 +712,11 @@ public:
     unsigned int m_warm_up;                   ///< Number of warm-up inferences to perform
     bool m_session_exclusive_processor;       ///< Whether to use exclusive processor sessions
     float m_blocking_ratio;                   ///< Blocking ratio for real-time control (0.0-1.0)
-    unsigned int m_num_parallel_processors;   ///< Number of parallel inference processors
+    unsigned int m_num_parallel_processors;   ///< Number of parallel inference processors;
+                                              ///< 0xffffffff (ANIRA_INSTANCES_AUTO, from a 3.x
+                                              ///< model config that sets no count) until the
+                                              ///< core resolves it to the pool's thread count
+                                              ///< when the session is created
 
     /**
      * @brief Equality comparison operator

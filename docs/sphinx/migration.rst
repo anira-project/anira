@@ -50,8 +50,9 @@ Where the 2.x API stands in this pre-release
   ``hybridnn_model_config(batches)``, ``rnn_model_config(chunk)``) for the benchmark sweeps
   alone, which vary the shapes with the host buffer. A project that included the old headers
   (the nn-inference-template, for one) loads the files instead. The files set no instance
-  ceiling, so one processor per engine runs (the 2.x statics ran half the hardware threads);
-  a configuration that wants parallel instances says so with ``max_instances``. The
+  ceiling, so the count is the pool's (``ANIRA_INSTANCES_AUTO``: as many instances as the
+  inference pool has threads; the 2.x statics ran half the hardware threads, the default
+  pool's size); a configuration that wants fewer says so with ``max_instances``. The
   per-model CMake variables the old headers were compiled with (``GUITARLSTM_MODELS_PATH_*``,
   ``STEERABLENAFX_MODELS_PATH_*``, ``STATEFULLSTM_MODELS_PATH_*``, ``SIMPLEGAIN_MODEL_PATH``,
   ``RAVE_MODEL_DIR``, ``*_JSON_CONFIG_PATH``) are gone with them; ``ANIRA_EXTRAS_MODELS_DIR``,
@@ -797,8 +798,9 @@ rational the host meant from it, 1/3 and 1/4 exactly).
      - ``max_inference_time``; ``warm_up = n`` / ``0``; ``blocking_ratio``.
    * - ``state(ANIRA_MODEL_STATEFUL)``; ``max_instances``
      - ``session_exclusive_processor``; ``num_parallel_processors`` (a config that sets no
-       ``max_instances`` runs one processor per engine; the 2.x constructor default was half
-       the hardware threads, which the upgrade of a 2.x document keeps).
+       ``max_instances`` carries ``ANIRA_INSTANCES_AUTO``, which the core resolves to the
+       inference pool's thread count; the 2.x constructor default was half the hardware
+       threads, the size of the default pool).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
@@ -931,8 +933,8 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
    * - ``processing_spec.internal_model_latency``
      - ``outputs[].latency``.
    * - ``num_parallel_processors``
-     - ``max_instances``; absent, the 2.x default (half the hardware threads, at least 1),
-       which is what the 2.x constructor used.
+     - ``max_instances``; absent, ``ANIRA_INSTANCES_AUTO`` (as many as the inference pool has
+       threads), what the 2.x default of half the hardware threads meant for the default pool.
    * - ``session_exclusive_processor``
      - ``"state": "stateful"``.
    * - ``max_inference_time``, ``warm_up``, ``blocking_ratio``

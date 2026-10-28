@@ -2,9 +2,10 @@
  * The backoff of anira's polling loops, private to the library: a few immediate retries, then
  * retries with a CPU pause hint between them, then a yield and a 100 us sleep before every
  * further retry. The inference thread's wait for work (InferenceThread::exponential_backoff,
- * ANIRA_WAIT_SPIN_BACKOFF) and the engine room's wait for a free instance of a loaded model
- * (engine::Loaded::claim_and_run) poll with it. Inference threads only: the last phase sleeps,
- * so the audio thread never waits here.
+ * ANIRA_WAIT_SPIN_BACKOFF), the engine room's wait for a free instance of a loaded model
+ * (engine::Loaded::claim_and_run, for a caller that runs a shared call directly) and the spin
+ * lock of the scheduler's wait lists (InstanceWaitList) poll with it. Inference threads only: the
+ * last phase sleeps, so the audio thread never waits here.
  */
 #ifndef ANIRA_UTILS_BACKOFF_H
 #define ANIRA_UTILS_BACKOFF_H

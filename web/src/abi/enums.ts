@@ -360,6 +360,7 @@ export const ANIRA_DYNAMIC = -1n
 export const ANIRA_UNBOUNDED = -1n
 export const ANIRA_FOURCC = (a: number, b: number, c: number, d: number): number => (a | (b << 8) | (c << 16) | (d << 24)) >>> 0
 export const ANIRA_THREADS_AUTO = 4294967295
+export const ANIRA_INSTANCES_AUTO = 4294967295
 export const ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK = 1
 export const ANIRA_LOG_FLAG_TRACE_FAILURES = 2
 export const ANIRA_AXIS_INSERT = 4294967295

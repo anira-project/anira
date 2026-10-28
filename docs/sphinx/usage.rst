@@ -289,13 +289,24 @@ is part of the build is decided at prepare, not here, so one config serves every
   never concurrently. A model with a declared State pair (section 1.1) runs this way whatever
   it says here.
 - **Instances.** ``max_instances(n)`` is the ceiling within which the planner allocates
-  parallel instances of a stateless model (default 1): the shared call slots of its loaded
-  model, one inference at a time on each, claimed by the calls of every handler that runs the
-  model. A call that finds every slot busy waits on its inference thread with the backoff of
-  ``ANIRA_WAIT_SPIN_BACKOFF`` (a few spins, then a yield and a 100 µs sleep per retry), and
-  gives up when the pool stops: its chunk delivers zeros and records ``ANIRA_ERROR_ENGINE``,
-  so a stop never waits for a thread that waits for a slot. A stateful model has none; each
-  of its handlers runs on what its own prepare built (section 3.2).
+  parallel instances of a stateless model: the shared call slots of its loaded model, one
+  inference at a time on each, claimed by the calls of every handler that runs the model. The
+  default, ``ANIRA_INSTANCES_AUTO``, is as many instances as the context's inference pool has
+  threads (at least 1; 1 when the host brings its own threads), resolved when the handler is
+  prepared; an explicit count wins, clamped to the pool's size, and the read-back
+  (``max_instances()``) and the JSON (the key left out) keep the sentinel. Each instance is a
+  full copy of the model in memory (one engine executor over it: an ONNX Runtime session, an
+  interpreter, a module), so a large model may set ``max_instances(1)`` to keep one; the
+  latency counts on the instances (:doc:`latency`, :math:`n`), so fewer instances can mean
+  more latency for a model whose inference takes longer than a hop. An inference thread takes a job only when a slot of its model is free: a job that
+  finds every slot busy waits on the model's own list, and the thread goes back to the queue
+  and serves the jobs of other models meanwhile, so one busy model never holds up another
+  model's jobs; the thread that holds a slot runs the model's waiting jobs, oldest first,
+  before it gives the slot back, under either wait strategy and without polling. When the pool
+  stops, a thread that holds a slot gives the jobs still waiting for it up: their chunks
+  deliver zeros and record ``ANIRA_ERROR_ENGINE``, so a stop waits for the inferences already
+  inside an engine and nothing more. A stateful model has none; each of its handlers runs on
+  what its own prepare built (section 3.2).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
   Hard contract's block range and rate are counted in its Time-axis elements, and every other
   streamed tensor's time ratio is stated against it. The default (an empty name) is the first

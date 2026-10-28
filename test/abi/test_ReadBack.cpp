@@ -259,7 +259,8 @@ TEST(AbiReadBack, ConfigScalars) {
     EXPECT_EQ(anira_test::default_engine(model.m_config),
               (anira_test::EngineRead{ANIRA_OK, ANIRA_ENGINE_NONE, ""}));
     EXPECT_EQ(anira_model_config_state(model.m_config), ANIRA_MODEL_STATELESS);
-    EXPECT_EQ(anira_model_config_max_instances(model.m_config), 1u);
+    EXPECT_EQ(anira_model_config_max_instances(model.m_config), ANIRA_INSTANCES_AUTO)
+        << "never set: left to the pool, stored unresolved";
     EXPECT_EQ(anira_model_config_anchor(model.m_config), nullptr);
 
     ASSERT_EQ(anira_model_config_set_default_engine(model.m_config,
@@ -1062,7 +1063,7 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
     EXPECT_EQ(built.default_engine().kind, ANIRA_ENGINE_CUSTOM);
     EXPECT_EQ(built.default_engine().id, "org.example.engine");
     EXPECT_EQ(built.state(), ANIRA_MODEL_STATEFUL);
-    EXPECT_EQ(built.max_instances(), 1u);
+    EXPECT_EQ(built.max_instances(), ANIRA_INSTANCES_AUTO);
     EXPECT_TRUE(built.anchor().empty()) << "the default";
     const std::optional<anira::ext::Entry> built_entry = built.model_ext<anira::ext::Entry>(0);
     ASSERT_TRUE(built_entry.has_value());

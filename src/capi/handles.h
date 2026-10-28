@@ -214,7 +214,10 @@ struct anira_model_config {
     anira_provider m_default_provider = ANIRA_PROVIDER_NONE;
     std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
-    uint32_t m_max_instances = 1;
+    /// The shared instances of a stateless model: a count of at least 1, or
+    /// ANIRA_INSTANCES_AUTO (the default), which Core::create_session resolves to the inference
+    /// pool's thread count when the handler is prepared.
+    uint32_t m_max_instances = ANIRA_INSTANCES_AUTO;
     std::string m_anchor;  ///< canonical name of the clock tensor; empty = the first streamed
     anira::capi::ExtBag m_ext;
     std::unique_ptr<anira_contract> m_legacy_contract;  ///< after a version 2 JSON upgrade

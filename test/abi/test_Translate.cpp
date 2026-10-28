@@ -528,7 +528,17 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
         {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}},
     };
     const anira::ProcessingSpec processing_spec = {{1, 1}, {1, 1}, {512, 0}, {512, 0}};
-    const anira::InferenceConfig expected(model_data, tensor_shape, processing_spec, 5.f, 1);
+    // The count the 2.x file leaves out is the pool's (ANIRA_INSTANCES_AUTO, what 2.x's default
+    // of half the hardware threads meant): the bridge carries the sentinel, the core resolves it.
+    const anira::InferenceConfig expected(
+        model_data,
+        tensor_shape,
+        processing_spec,
+        5.f,
+        1,
+        anira::InferenceConfig::Defaults::k_session_exclusive_processor,
+        anira::InferenceConfig::Defaults::k_blocking_ratio,
+        ANIRA_INSTANCES_AUTO);
     anira_test::expect_inference_config_eq(outcome.m_config, expected);
 }
 #endif

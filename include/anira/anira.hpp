@@ -1547,6 +1547,8 @@ public:
     }
     /// As set; a model with a declared State pair runs as ANIRA_MODEL_STATEFUL anyway.
     anira_model_state state() const noexcept { return anira_model_config_state(m_config); }
+    /// As set: a count, or ANIRA_INSTANCES_AUTO (the default, the pool's thread count once a
+    /// handler is prepared).
     uint32_t max_instances() const noexcept { return anira_model_config_max_instances(m_config); }
     /// The anchor's canonical name as set; empty for the default.
     std::string_view anchor() const noexcept {
@@ -1645,6 +1647,9 @@ public:
                       "anira_model_config_set_state");
         return *this;
     }
+    /// The shared instances of a stateless model, at least 1, or ANIRA_INSTANCES_AUTO (the
+    /// default): as many as the inference pool has threads. Each is a full copy of the model in
+    /// memory; 1 keeps one.
     ModelConfig& max_instances(uint32_t value) {
         detail::check(anira_model_config_set_max_instances(m_config, value),
                       "anira_model_config_set_max_instances");

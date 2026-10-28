@@ -907,16 +907,18 @@ private:
         ANIRA_BLOCKING;
 
     /**
-     * @brief The loaded model of one plan request, acquired for a session
+     * @brief The loaded model of one plan request and its wait list, acquired for a session
      *
      * Called with the lifecycle lock held, from create_session(). A built-in or registered
      * engine's model is shared: the pool entry whose record equals the request's and whose
-     * carrier is the request's is returned, else a new loaded model is made, its engine
+     * carrier is the request's is handed out, else a new loaded model is made, its engine
      * initialised (a registered engine's init slot, once per engine object, with the facts
      * of the core in effect and the request's context), loaded once and entered into the
-     * pool. Exclusivity is no part of the key: a stateful model is loaded once for every
-     * session that runs it, with no shared slot (the record says so). A 2.x backend and the
-     * roundtrip get a fresh legacy loaded model per session, never pooled.
+     * pool with a new InstanceWaitList, the jobs that wait for a free instance of it (shared
+     * by every session on the entry, like the loaded model). Exclusivity is no part of the key: a
+     * stateful model is loaded once for every session that runs it, with no shared slot (the record
+     * says so). A 2.x backend and the roundtrip get a fresh legacy loaded model per session, never
+     * pooled.
      *
      * @param state The core's state
      * @param request The plan's request (its model's log level is the one in effect)
@@ -925,15 +927,18 @@ private:
      * @param pool_size The size the inference-thread pool will have once this session's
      * configuration is applied (0: the caller brings its own threads), what the init record
      * of a registered engine names
-     * @return The plan's loaded model
+     * @param slot The plan's slot: its m_loaded is set to the loaded model, its m_waiting to
+     * the pool entry's wait list (null for a 2.x backend and the roundtrip, which are never
+     * pooled and claim no instance); nothing is set on a throw
      * @throws anira::StatusError what the engine's init and load throw (MODEL_LOAD,
      * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
      * for
      */
-    static std::shared_ptr<engine::Loaded> acquire_loaded_locked(State& state,
-                                                                 const engine::PlanRequest& request,
-                                                                 InferenceConfig& inference_config,
-                                                                 size_t pool_size);
+    static void acquire_loaded_locked(State& state,
+                                      const engine::PlanRequest& request,
+                                      InferenceConfig& inference_config,
+                                      size_t pool_size,
+                                      SessionElement::PlanSlot& slot);
 
     /**
      * @brief Releases the loaded models of a session's plan table

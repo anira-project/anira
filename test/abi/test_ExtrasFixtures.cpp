@@ -103,7 +103,9 @@ void expect_matches(const anira::InferenceConfig& cfg, const Oracle& oracle) {
     EXPECT_FLOAT_EQ(cfg.m_max_inference_time, oracle.m_max_ms);
     EXPECT_EQ(cfg.m_warm_up, oracle.m_warm_up);
     EXPECT_EQ(cfg.m_session_exclusive_processor, oracle.m_stateful);
-    EXPECT_EQ(cfg.m_num_parallel_processors, 1U) << "the files set no instance ceiling";
+    // The files set no instance ceiling: the pool's thread count, resolved by the core; a
+    // session-exclusive configuration runs on one processor whatever the count says.
+    EXPECT_EQ(cfg.m_num_parallel_processors, oracle.m_stateful ? 1U : ANIRA_INSTANCES_AUTO);
 }
 
 /// Loads, bridges and checks one model against its oracle; skips when this build has no

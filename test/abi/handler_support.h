@@ -319,9 +319,9 @@ inline void add_passthrough(anira_pipeline* pipeline) {
 /// run(), then counts. Declared BEFORE the Handler that adds it, so the handler, and every
 /// inference thread inside process, is gone before the object dies; a DestroyFirst declared
 /// after the Handler opens the gate before the handler's destroy drains the in-flight work.
-/// A closed gate holds one inference thread per shared slot of the loaded model inside process
-/// and parks the others in the claim of a slot; a test that needs N calls inside process at
-/// once sets max_instances(N).
+/// A closed gate holds one inference thread per shared slot of the loaded model inside process;
+/// the jobs beyond them wait on the model's wait list (their threads go back to the queue); a
+/// test that needs N calls inside process at once sets max_instances(N).
 class GateEngine {
 public:
     GateEngine() = default;

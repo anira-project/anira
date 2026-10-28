@@ -1,14 +1,14 @@
 [
  {
   "name": "Linux-x86_64-no_inference_engines",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-shared",
   "pr": false,
   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=OFF -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=OFF"
  },
  {
   "name": "Linux-x86_64-shared",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-shared",
   "pr": true,
   "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
@@ -16,7 +16,7 @@
  },
  {
   "name": "Linux-x86_64-static",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-static",
   "pr": true,
   "assert_grep": "disabling ANIRA_WITH_LIBTORCH",
@@ -94,14 +94,14 @@
  },
  {
   "name": "Linux-x86_64-tflite-shared",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-shared",
   "pr": true,
   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
  },
  {
   "name": "Linux-x86_64-tflite-static",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-static",
   "pr": false,
   "args": "-DANIRA_WITH_LIBTORCH=OFF -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=OFF -DANIRA_WITH_EXECUTORCH=OFF -DANIRA_WITH_TFLITE=ON"
@@ -131,7 +131,7 @@
  },
  {
   "name": "Linux-x86_64-gcc",
-  "os": "ubuntu-latest",
+  "os": "ubuntu-24.04",
   "preset": "ci-tests-gcc",
   "pr": false,
   "assert_grep": "disabling ANIRA_WITH_EXECUTORCH",
