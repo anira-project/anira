@@ -209,6 +209,47 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     check(smoke_count("query") >= 1u, "the engine's query crossed at the capabilities call");
 }
 
+/* A pre_process hook without ANIRA_STAGE_FLAG_REALTIME_PRE_POST: under a Hard contract it runs
+   on the driving thread, so prepare refuses the stage instead of trusting a promise nobody made. */
+static void check_unpromised_stage(anira_context* context, const anira_contract* contract) {
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_model_config* model = smoke_model(&err);
+    anira_pipeline* pipeline = NULL;
+    check_status(anira_pipeline_create(&pipeline, &err), &err, "anira_pipeline_create");
+    const anira_model_config* variants[1] = {model};
+    anira_backend_id candidate;
+    memset(&candidate, 0, sizeof candidate);
+    candidate.struct_size = sizeof candidate;
+    candidate.engine = ANIRA_ENGINE_CUSTOM;
+    candidate.provider = ANIRA_PROVIDER_CPU;
+    candidate.engine_id = SMOKE_ENGINE_ID;
+    check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
+                 &err,
+                 "anira_pipeline_add_inference");
+    check_status(anira_em_pipeline_register_js_engine(pipeline,
+                                                      SMOKE_ENGINE_ID,
+                                                      SMOKE_ENGINE_KEY,
+                                                      0,
+                                                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                      &err),
+                 &err,
+                 "anira_em_pipeline_register_js_engine");
+    check_status(
+        anira_em_pipeline_add_js_stage(pipeline, SMOKE_STAGE_KEY, ANIRA_EM_HOOK_PRE, 0, &err),
+        &err,
+        "anira_em_pipeline_add_js_stage without a promise");
+    anira_handler* handler = NULL;
+    check_status(anira_handler_create(context, pipeline, &handler, &err),
+                 &err,
+                 "anira_handler_create");
+    err = ANIRA_ERROR_INIT;
+    check(anira_handler_prepare(handler, contract, &err) == ANIRA_ERROR_CONFIG,
+          "a Hard prepare refuses a pre_process hook without ANIRA_STAGE_FLAG_REALTIME_PRE_POST");
+    anira_handler_destroy(handler);
+    anira_pipeline_destroy(pipeline);
+    anira_model_config_destroy(model);
+}
+
 /* A JavaScript stage and a JavaScript engine (output = 2 x input) on one Hard handler. */
 static void check_pipeline(void) {
     anira_error err = ANIRA_ERROR_INIT;
@@ -322,6 +363,7 @@ static void check_pipeline(void) {
     check(smoke_count("unprepare") == 1u, "the stage's unprepare crossed at anira_handler_destroy");
     anira_pipeline_destroy(pipeline);
     check(smoke_count("release") == 1u, "the stage's release crossed with the last carrier");
+    check_unpromised_stage(context, contract);
     anira_contract_destroy(contract);
     anira_model_config_destroy(model);
     anira_context_destroy(context);
