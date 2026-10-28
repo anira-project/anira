@@ -1,6 +1,7 @@
 import { ANIRA_DTYPE_F32 } from '../abi/enums'
 import { anira_tensor } from '../abi/layout'
 import { createAniraWasm, type AniraModule } from '../runtime/createAniraWasm'
+import { samplesToCopy } from './delivery'
 import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
   AudioWorkletConfigureMessage,
@@ -234,7 +235,8 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
             ioConfig.outputSlot,
             deliveredPtr
           )
-    const delivered = (status | 0) < 0 ? 0 : anira.heap.readU32(deliveredPtr)
+    // A missed quantum holds the miss policy's fill although `delivered` is 0 (a success).
+    const delivered = samplesToCopy(status, anira.heap.readU32(deliveredPtr), quantum)
 
     if (!outputNode) return
     for (let ch = 0; ch < outputNode.length; ch++) {

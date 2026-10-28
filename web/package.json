@@ -39,6 +39,7 @@
   ],
   "scripts": {
     "build": "tsc && vite build",
+    "test": "node --experimental-strip-types --no-warnings --import ./test/resolve-ts.mjs --test test/*.test.ts",
     "dev": "vite build --watch",
     "format": "prettier . --write"
   },
