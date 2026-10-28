@@ -6,6 +6,13 @@ import { Heap } from './Heap'
 export const DEFAULT_INSTANCE_STACK_BYTES = 4 * 1024 * 1024
 
 /**
+ * The smallest instance stack `allocInstanceStack` hands out. Below it an instance would run
+ * anira's calls on a stack too small for them (and 0 would make the C side allocate its
+ * default while the region's top here sat at its base).
+ */
+export const MIN_INSTANCE_STACK_BYTES = 64 * 1024
+
+/**
  * The stack and thread-local block of one module instance that is not the main one: one
  * region from `anira_em_alloc_thread_stack`, the stack first, the block above its top.
  */
@@ -14,11 +21,20 @@ export type InstanceStack = {
   bytes: number
 }
 
-/** Allocate an instance's stack on the main instance (`anira_em_alloc_thread_stack`). */
+/**
+ * Allocate an instance's stack on the main instance (`anira_em_alloc_thread_stack`), `bytes`
+ * rounded up to 16; a size below `MIN_INSTANCE_STACK_BYTES` (or not a finite number) is refused
+ * with a `RangeError`.
+ */
 export const allocInstanceStack = (
   module: AniraWasmInstance,
   bytes: number = DEFAULT_INSTANCE_STACK_BYTES
 ): InstanceStack => {
+  if (!Number.isFinite(bytes) || bytes < MIN_INSTANCE_STACK_BYTES) {
+    throw new RangeError(
+      `anira: an instance stack of ${bytes} bytes is below the minimum of ${MIN_INSTANCE_STACK_BYTES}`
+    )
+  }
   const rounded = Math.ceil(bytes / 16) * 16
   const base = Heap.unsigned(module._anira_em_alloc_thread_stack(rounded))
   if (base === 0)
