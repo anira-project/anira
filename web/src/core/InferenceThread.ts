@@ -91,6 +91,6 @@ export class InferenceThread {
 
   /** The thread object's pointer as a Worker receives it. */
   get pointer(): number {
-    return Heap.u32(this.ptr)
+    return Heap.unsigned(this.ptr)
   }
 }

@@ -1011,3 +1011,51 @@ check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"``, a 
 other than ``0`` to ``0`` and ``drain`` to ``"manual"``, each with a warning: the core
 cannot run threads on the web, they are created from JavaScript via
 ``AniraWeb.spinUpInferenceWorker()``.
+
+.. _migration-web:
+
+Anira Web: from the 2.x TypeScript classes
+------------------------------------------
+
+The 3.x package (``@anira-project/anira`` 3.0.0-alpha.2, on the ``next`` dist-tag) no longer
+wraps the 2.x C++ classes: ``src/emscripten-wrappers/`` and the TypeScript classes over it are
+gone, and the module exports the C ABI (``_anira_*``) and ``anira/anira_em.h`` (``_anira_em_*``)
+alone. Until a typed TypeScript API lands, a 2.x page is ported to raw calls on
+``aniraWeb.module`` (:doc:`web-api/basic_usage` has the whole setup):
+
+- ``aniraWeb.ModelData``, ``TensorShape``, ``ProcessingSpec`` and ``InferenceConfig`` become one
+  model config: ``_anira_model_config_from_json`` with the 3.x model file (a 2.x JSON document
+  is read too, :ref:`migration-json`), or the ``_anira_model_config_*`` builders. A model the
+  built-in ONNX Runtime runs is an entry of model bytes (``_anira_model_config_add_model_bytes``);
+  one a JavaScript engine runs names the engine's id.
+- ``aniraWeb.HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
+  ``_anira_contract_create_hard(128, 128, sampleRate)``, the render quantum as the declared
+  block; the 2.x ``maxBufferSize`` and variable block sizes go, and a changed quantum is a
+  re-prepare (``onQuantumChange``).
+- ``aniraWeb.InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
+  ``_anira_pipeline_create`` / ``_anira_pipeline_add_inference``, ``_anira_handler_create`` and
+  ``_anira_handler_prepare``; the plan is chosen by the entries and candidates
+  (``_anira_handler_set_plan`` switches). ``setInput`` / ``getOutput`` on a non-streamed tensor
+  become ``_anira_handler_set_static_input`` / ``_anira_handler_get_static_output``.
+- ``inferenceHandler.process(float**, ...)`` in the worklet becomes the tensor process of
+  :js:class:`AniraAudioWorkletBase` (one ``_anira_handler_process`` per quantum over planar host
+  tensors); ``BufferF``, ``RingBuffer`` and the ``Vector*`` classes have no successor: tensors
+  are heap memory described by ``anira_tensor`` records (``layout.anira_tensor``), and a stage
+  reads its rings with ``_anira_ring_*``.
+- ``JSPrePostProcessor`` and ``registerPrePostProcessor`` become a :js:class:`JSStage` added with
+  :js:meth:`AniraWeb.addJSStage`: the method names stay (``preProcess``, ``postProcess``,
+  ``beforeInference``, ``afterInference``), they receive the ``anira_stage_ctx`` pointer instead
+  of buffer vectors, and the hook bits and the real-time promise (``stageFlags``) are stated.
+- ``JSBackendBase`` and ``registerProcessor(backend, className)`` become a :js:class:`JSBackend`
+  subclass and :js:meth:`AniraWeb.registerJSEngine` (``{ engineId, className, modelConfigPtr }``);
+  ``process(inputVecPtr, outputVecPtr)`` becomes ``process(ctx, prepared)`` over the
+  ``anira_engine_ctx``, and ``InferenceBackend.CUSTOM`` becomes the engine id in the entry.
+- ``spinUpInferenceWorker()`` takes the ``anira_context`` whose core the Worker's thread serves;
+  ``configureAudioWorklet(ctx, handler, pp, name, io)`` becomes
+  ``configureAudioWorklet(ctx, handlerPtr, { nodeName, stageKey, inputChannels, ... })``. The
+  Worker's ``'stopped'`` message is gone: ``worker.stop()`` polls
+  ``_anira_inference_thread_has_exited``.
+- ``aniraWeb.malloc``, ``free``, ``getHeapF32``, ``getHeapU32``, ``stackRestore`` and
+  ``allocWasmString`` move to ``aniraWeb.heap`` (:js:class:`Heap`) and ``aniraWeb.module``;
+  ``getAniraVersion`` and ``drainAniraLog`` take the module; ``randomSample``, ``fillBuffer``
+  and ``pushBufferToRingbuffer`` are gone with the buffer classes.

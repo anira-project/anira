@@ -20,7 +20,7 @@ export const allocInstanceStack = (
   bytes: number = DEFAULT_INSTANCE_STACK_BYTES
 ): InstanceStack => {
   const rounded = Math.ceil(bytes / 16) * 16
-  const base = Heap.u32(module._anira_em_alloc_thread_stack(rounded))
+  const base = Heap.unsigned(module._anira_em_alloc_thread_stack(rounded))
   if (base === 0)
     throw new Error(`anira: could not allocate a ${rounded}-byte instance stack`)
   return { base, bytes: rounded }
@@ -44,7 +44,7 @@ export const enterInstance = (module: AniraWasmInstance, stack: InstanceStack): 
   if (status < 0) {
     throw new AniraError(
       status,
-      `anira_em_init_instance: ${module.UTF8ToString(Heap.u32(module._anira_status_string(status)))}`
+      `anira_em_init_instance: ${module.UTF8ToString(Heap.unsigned(module._anira_status_string(status)))}`
     )
   }
 }

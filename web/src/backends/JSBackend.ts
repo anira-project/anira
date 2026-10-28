@@ -70,12 +70,13 @@ export class JSBackend implements JSEngine {
     const out: EngineTensor[] = []
     for (let i = 0; i < count; i++) {
       const ptr = array + i * anira_tensor.size
-      const data = Heap.u32(module._anira_tensor_data_f32(ptr))
+      const data = Heap.unsigned(module._anira_tensor_data_f32(ptr))
       out.push({
         ptr,
         dtype: heap.readU32(ptr + anira_tensor.fields.dtype.offset),
         f32Index: data >>> 2,
-        numElements: data === 0 ? 0 : Heap.u32(module._anira_tensor_num_elements(ptr)),
+        numElements:
+          data === 0 ? 0 : Heap.unsigned(module._anira_tensor_num_elements(ptr)),
       })
     }
     return out

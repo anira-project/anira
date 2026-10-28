@@ -308,7 +308,7 @@ export class ONNXRuntimeWebBackend extends JSBackend {
     if (!modelConfigPtr) {
       throw new Error('ONNXRuntimeWebBackend: registered without a model config')
     }
-    const pathPtr = Heap.u32(
+    const pathPtr = Heap.unsigned(
       module._anira_model_config_model_path(modelConfigPtr, modelIndex)
     )
     if (pathPtr !== 0) {

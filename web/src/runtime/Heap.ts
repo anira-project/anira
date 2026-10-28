@@ -7,7 +7,7 @@ import type { AniraWasmInstance } from './createAniraWasm'
  *
  * The `>>> 0` rule: a wasm32 export returns a pointer, a `size_t` or a `uint32_t` as a signed
  * 32-bit value, so a value at or above 2^31 arrives negative. Every such value read from an
- * export goes through `Heap.u32()` (or `>>> 0`) before it is used as an address or a count.
+ * export goes through `Heap.unsigned()` (or `>>> 0`) before it is used as an address or a count.
  */
 export class Heap {
   readonly module: AniraWasmInstance
@@ -27,7 +27,7 @@ export class Heap {
   }
 
   /** A value an export returned as a signed 32-bit integer, as the unsigned one it is. */
-  static u32(value: number): number {
+  static unsigned(value: number): number {
     return value >>> 0
   }
 
@@ -70,7 +70,7 @@ export class Heap {
 
   /** `bytes` of zeroed heap memory; throws when the allocation fails. */
   malloc(bytes: number): number {
-    const ptr = Heap.u32(this.module._malloc(bytes))
+    const ptr = Heap.unsigned(this.module._malloc(bytes))
     if (ptr === 0) throw new Error(`anira: malloc(${bytes}) failed`)
     this.u8.fill(0, ptr, ptr + bytes)
     return ptr

@@ -992,10 +992,17 @@ def emit_enums_ts(reg: dict) -> str:
                 continue
             out.append(f"  {v['name']}: {int_value(v['value'])},")
         out.append("} as const")
+        # The value type shares the constant's name; documentation tools that index one object
+        # per path (sphinx-js over TypeDoc, excludeInternal) see the constant alone.
+        out.append("/** @internal */")
         out.append(f"export type {ent['name']} = (typeof {ent['name']})[keyof typeof {ent['name']}]")
         out.append("")
     for _, ent in entities(reg, "define"):
-        if "ts" in ent:
+        if "ts" in ent and re.fullmatch(r"-?\d+n", str(ent["ts"])):
+            # A 64-bit sentinel: typed `bigint`, not its literal type, which documentation
+            # tools that serialize types as JSON (sphinx-js) cannot write.
+            out.append(f"export const {ent['name']}: bigint = {ent['ts']}")
+        elif "ts" in ent:
             out.append(f"export const {ent['name']} = {ent['ts']}")
         elif not ent.get("params"):
             lit = ts_literal(ent["value"])

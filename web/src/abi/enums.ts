@@ -32,6 +32,7 @@ export const anira_status = {
   ANIRA_ERROR_EXTENSION_VERSION: -22,
   ANIRA_ERROR_INTERNAL: -100,
 } as const
+/** @internal */
 export type anira_status = (typeof anira_status)[keyof typeof anira_status]
 
 export const anira_dtype_code = {
@@ -43,6 +44,7 @@ export const anira_dtype_code = {
   ANIRA_DTYPE_COMPLEX: 5,
   ANIRA_DTYPE_BOOL: 6,
 } as const
+/** @internal */
 export type anira_dtype_code = (typeof anira_dtype_code)[keyof typeof anira_dtype_code]
 
 export const anira_domain = {
@@ -60,6 +62,7 @@ export const anira_domain = {
   ANIRA_DOMAIN_D3D12: 11,
   ANIRA_DOMAIN_FRAME: 12,
 } as const
+/** @internal */
 export type anira_domain = (typeof anira_domain)[keyof typeof anira_domain]
 
 export const anira_sync_kind = {
@@ -73,6 +76,7 @@ export const anira_sync_kind = {
   ANIRA_SYNC_MTL_SHARED_EVENT: 7,
   ANIRA_SYNC_D3D12_FENCE: 8,
 } as const
+/** @internal */
 export type anira_sync_kind = (typeof anira_sync_kind)[keyof typeof anira_sync_kind]
 
 export const anira_tensor_flags = {
@@ -81,6 +85,7 @@ export const anira_tensor_flags = {
   ANIRA_TENSOR_HOST_COHERENT: 4,
   ANIRA_TENSOR_PLANAR: 8,
 } as const
+/** @internal */
 export type anira_tensor_flags = (typeof anira_tensor_flags)[keyof typeof anira_tensor_flags]
 
 export const anira_struct_id = {
@@ -97,6 +102,7 @@ export const anira_struct_id = {
   ANIRA_STRUCT_BACKEND_ID: 11,
   ANIRA_STRUCT_ENGINE_CTX: 12,
 } as const
+/** @internal */
 export type anira_struct_id = (typeof anira_struct_id)[keyof typeof anira_struct_id]
 
 export const anira_container = {
@@ -110,6 +116,7 @@ export const anira_container = {
   ANIRA_CONTAINER_MTL_TEXTURE: 7,
   ANIRA_CONTAINER_HOST: 8,
 } as const
+/** @internal */
 export type anira_container = (typeof anira_container)[keyof typeof anira_container]
 
 export const anira_pixel_format = {
@@ -121,6 +128,7 @@ export const anira_pixel_format = {
   ANIRA_PIXEL_BGRA8: 875708738,
   ANIRA_PIXEL_XRGB8: 875713112,
 } as const
+/** @internal */
 export type anira_pixel_format = (typeof anira_pixel_format)[keyof typeof anira_pixel_format]
 
 export const anira_color_matrix = {
@@ -128,12 +136,14 @@ export const anira_color_matrix = {
   ANIRA_COLOR_BT709: 1,
   ANIRA_COLOR_BT2020: 2,
 } as const
+/** @internal */
 export type anira_color_matrix = (typeof anira_color_matrix)[keyof typeof anira_color_matrix]
 
 export const anira_color_range = {
   ANIRA_RANGE_LIMITED: 0,
   ANIRA_RANGE_FULL: 1,
 } as const
+/** @internal */
 export type anira_color_range = (typeof anira_color_range)[keyof typeof anira_color_range]
 
 export const anira_axis_tag = {
@@ -145,6 +155,7 @@ export const anira_axis_tag = {
   ANIRA_AXIS_FEATURE: 5,
   ANIRA_AXIS_ANY: 6,
 } as const
+/** @internal */
 export type anira_axis_tag = (typeof anira_axis_tag)[keyof typeof anira_axis_tag]
 
 export const anira_role = {
@@ -153,18 +164,21 @@ export const anira_role = {
   ANIRA_ROLE_STATIC: 2,
   ANIRA_ROLE_STATE: 3,
 } as const
+/** @internal */
 export type anira_role = (typeof anira_role)[keyof typeof anira_role]
 
 export const anira_contract_kind = {
   ANIRA_CONTRACT_HARD: 1,
   ANIRA_CONTRACT_ASYNC: 2,
 } as const
+/** @internal */
 export type anira_contract_kind = (typeof anira_contract_kind)[keyof typeof anira_contract_kind]
 
 export const anira_budget_kind = {
   ANIRA_BUDGET_MEASURED: 0,
   ANIRA_BUDGET_EXPLICIT: 1,
 } as const
+/** @internal */
 export type anira_budget_kind = (typeof anira_budget_kind)[keyof typeof anira_budget_kind]
 
 export const anira_warmup_mode = {
@@ -172,6 +186,7 @@ export const anira_warmup_mode = {
   ANIRA_WARMUP_FIXED: 1,
   ANIRA_WARMUP_UNTIL_STABLE: 2,
 } as const
+/** @internal */
 export type anira_warmup_mode = (typeof anira_warmup_mode)[keyof typeof anira_warmup_mode]
 
 export const anira_miss_policy = {
@@ -180,12 +195,14 @@ export const anira_miss_policy = {
   ANIRA_MISS_ZEROS: 2,
   ANIRA_MISS_CALLBACK: 3,
 } as const
+/** @internal */
 export type anira_miss_policy = (typeof anira_miss_policy)[keyof typeof anira_miss_policy]
 
 export const anira_late_policy = {
   ANIRA_LATE_FINISH: 0,
   ANIRA_LATE_DROP: 1,
 } as const
+/** @internal */
 export type anira_late_policy = (typeof anira_late_policy)[keyof typeof anira_late_policy]
 
 export const anira_priority = {
@@ -193,42 +210,49 @@ export const anira_priority = {
   ANIRA_PRIORITY_INTERACTIVE: 1,
   ANIRA_PRIORITY_BATCH: 2,
 } as const
+/** @internal */
 export type anira_priority = (typeof anira_priority)[keyof typeof anira_priority]
 
 export const anira_delivery = {
   ANIRA_DELIVERY_POLLED: 0,
   ANIRA_DELIVERY_IMMEDIATE: 1,
 } as const
+/** @internal */
 export type anira_delivery = (typeof anira_delivery)[keyof typeof anira_delivery]
 
 export const anira_edge_cost = {
   ANIRA_EDGE_COST_PERMISSIVE: 0,
   ANIRA_EDGE_COST_STRICT: 1,
 } as const
+/** @internal */
 export type anira_edge_cost = (typeof anira_edge_cost)[keyof typeof anira_edge_cost]
 
 export const anira_ownership = {
   ANIRA_OWNERSHIP_BORROWED: 0,
   ANIRA_OWNERSHIP_OWNED: 1,
 } as const
+/** @internal */
 export type anira_ownership = (typeof anira_ownership)[keyof typeof anira_ownership]
 
 export const anira_exec_policy = {
   ANIRA_EXEC_WORKER: 0,
   ANIRA_EXEC_USER_DRIVEN: 1,
 } as const
+/** @internal */
 export type anira_exec_policy = (typeof anira_exec_policy)[keyof typeof anira_exec_policy]
 
 export const anira_gl_threads = {
   ANIRA_GL_CALLER_THREAD: 0,
   ANIRA_GL_SHARED_CONTEXT: 1,
 } as const
+/** @internal */
 export type anira_gl_threads = (typeof anira_gl_threads)[keyof typeof anira_gl_threads]
 
 export const anira_wait_strategy = {
   ANIRA_WAIT_SPIN_BACKOFF: 0,
   ANIRA_WAIT_BLOCKING: 1,
 } as const
+/** @internal */
 export type anira_wait_strategy = (typeof anira_wait_strategy)[keyof typeof anira_wait_strategy]
 
 export const anira_log_level = {
@@ -237,12 +261,14 @@ export const anira_log_level = {
   ANIRA_LOG_WARNING: 2,
   ANIRA_LOG_ERROR: 3,
 } as const
+/** @internal */
 export type anira_log_level = (typeof anira_log_level)[keyof typeof anira_log_level]
 
 export const anira_log_drain = {
   ANIRA_LOG_DRAIN_THREAD: 0,
   ANIRA_LOG_DRAIN_MANUAL: 1,
 } as const
+/** @internal */
 export type anira_log_drain = (typeof anira_log_drain)[keyof typeof anira_log_drain]
 
 export const anira_edge_class = {
@@ -251,6 +277,7 @@ export const anira_edge_class = {
   ANIRA_EDGE_HOST_COPY: 2,
   ANIRA_EDGE_UNAVAILABLE: 3,
 } as const
+/** @internal */
 export type anira_edge_class = (typeof anira_edge_class)[keyof typeof anira_edge_class]
 
 export const anira_probe_rung = {
@@ -258,18 +285,21 @@ export const anira_probe_rung = {
   ANIRA_RUNG_IDENTITY: 1,
   ANIRA_RUNG_FUNCTIONAL: 2,
 } as const
+/** @internal */
 export type anira_probe_rung = (typeof anira_probe_rung)[keyof typeof anira_probe_rung]
 
 export const anira_model_state = {
   ANIRA_MODEL_STATELESS: 0,
   ANIRA_MODEL_STATEFUL: 1,
 } as const
+/** @internal */
 export type anira_model_state = (typeof anira_model_state)[keyof typeof anira_model_state]
 
 export const anira_bytes_ownership = {
   ANIRA_BYTES_COPY: 0,
   ANIRA_BYTES_BORROW: 1,
 } as const
+/** @internal */
 export type anira_bytes_ownership = (typeof anira_bytes_ownership)[keyof typeof anira_bytes_ownership]
 
 export const anira_ticket_status = {
@@ -279,12 +309,14 @@ export const anira_ticket_status = {
   ANIRA_TICKET_DROPPED: 3,
   ANIRA_TICKET_FAILED: 4,
 } as const
+/** @internal */
 export type anira_ticket_status = (typeof anira_ticket_status)[keyof typeof anira_ticket_status]
 
 export const anira_pad_policy = {
   ANIRA_PAD_REJECT: 0,
   ANIRA_PAD_ZEROS: 1,
 } as const
+/** @internal */
 export type anira_pad_policy = (typeof anira_pad_policy)[keyof typeof anira_pad_policy]
 
 export const anira_engine = {
@@ -296,6 +328,7 @@ export const anira_engine = {
   ANIRA_ENGINE_TFLITE: 5,
   ANIRA_ENGINE_CUSTOM: 2147483646,
 } as const
+/** @internal */
 export type anira_engine = (typeof anira_engine)[keyof typeof anira_engine]
 
 export const anira_provider = {
@@ -309,6 +342,7 @@ export const anira_provider = {
   ANIRA_PROVIDER_XNNPACK: 7,
   ANIRA_PROVIDER_CUSTOM: 2147483646,
 } as const
+/** @internal */
 export type anira_provider = (typeof anira_provider)[keyof typeof anira_provider]
 
 export const anira_phase = {
@@ -326,6 +360,7 @@ export const anira_phase = {
   ANIRA_PHASE_UNLOAD: 11,
   ANIRA_PHASE_QUERY: 12,
 } as const
+/** @internal */
 export type anira_phase = (typeof anira_phase)[keyof typeof anira_phase]
 
 export const anira_binding = {
@@ -333,6 +368,7 @@ export const anira_binding = {
   ANIRA_BINDING_NAME: 1,
   ANIRA_BINDING_ENGINE: 2,
 } as const
+/** @internal */
 export type anira_binding = (typeof anira_binding)[keyof typeof anira_binding]
 
 export const ANIRA_FAILED = (s: number): boolean => (s | 0) < 0
@@ -356,8 +392,8 @@ export const ANIRA_DTYPE_I32 = 0x00012000
 export const ANIRA_DTYPE_I64 = 0x00014000
 export const ANIRA_DTYPE_BOOL8 = 0x00010806
 export const ANIRA_MAX_RANK = 8
-export const ANIRA_DYNAMIC = -1n
-export const ANIRA_UNBOUNDED = -1n
+export const ANIRA_DYNAMIC: bigint = -1n
+export const ANIRA_UNBOUNDED: bigint = -1n
 export const ANIRA_FOURCC = (a: number, b: number, c: number, d: number): number => (a | (b << 8) | (c << 16) | (d << 24)) >>> 0
 export const ANIRA_THREADS_AUTO = 4294967295
 export const ANIRA_INSTANCES_AUTO = 4294967295
