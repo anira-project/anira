@@ -32,7 +32,9 @@ Add the package to your project with the package manager of your choice:
 
 The package ships its WebAssembly artifacts under ``@anira-project/anira/dist/wasm/``
 (``AniraWeb.wasm`` and the Emscripten-generated ``AniraWeb.js`` glue
-file). When bundling, make sure the ``.wasm`` file is copied to a path
+file, and ``ort-wasm-simd-threaded.wasm``, onnxruntime-web's binary, which the
+``ONNXRuntimeWebBackend`` engine fetches when it initialises; nothing loads it otherwise).
+When bundling, make sure the ``.wasm`` file is copied to a path
 your runtime can fetch — most modern bundlers (Vite, webpack 5, Rollup
 with the right plugins, esbuild) already understand the
 ``new URL('./file.wasm', import.meta.url)`` references emitted by the

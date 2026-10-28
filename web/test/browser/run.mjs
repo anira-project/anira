@@ -45,7 +45,11 @@ const server = http.createServer((request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const { port } = server.address()
 
-const pages = ['test/browser/index.html', 'examples/custom-worklet/dist/check.html']
+const pages = [
+  'test/browser/index.html',
+  'test/browser/ort.html',
+  'examples/custom-worklet/dist/check.html',
+]
 
 const browserName = process.argv[2] ?? 'chromium'
 const browserType = { chromium, firefox }[browserName]
