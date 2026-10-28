@@ -8,6 +8,7 @@ export * from './workers/inferenceWorkerHandler'
 export * from './helpers'
 
 export { nextRequestId, request, waitForWorkerMessage } from './workers/messages'
+export type { StaticInputBlock } from './workers/static-inputs'
 export type {
   AudioWorkletConfigureMessage,
   AudioWorkletIOConfig,

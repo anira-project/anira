@@ -151,17 +151,26 @@ const run = async () => {
   check(refused === 'RangeError', `a value of the wrong size is refused (${refused})`)
   node.setStaticInput(1, [GAIN_BEFORE])
   const input = audio.createBuffer(1, QUANTUM * QUANTA, RATE)
-  const samples = input.getChannelData(0)
+  // Kept in a buffer of its own: Firefox detaches an AudioBuffer's channel arrays once a
+  // source node plays it.
+  const samples = new Float32Array(QUANTUM * QUANTA)
   for (let i = 0; i < samples.length; i++)
     samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / RATE)
+  input.copyToChannel(samples, 0)
   const source = audio.createBufferSource()
   source.buffer = input
   source.connect(node).connect(audio.destination)
   source.start(0)
-  audio.suspend((CHANGE_QUANTUM * QUANTUM) / RATE).then(() => {
-    node.setStaticInput(1, new Float32Array([GAIN_AFTER]))
-    return audio.resume()
-  })
+  // Firefox's OfflineAudioContext cannot suspend: there the gain stays.
+  let suspended = true
+  try {
+    audio.suspend((CHANGE_QUANTUM * QUANTUM) / RATE).then(() => {
+      node.setStaticInput(1, new Float32Array([GAIN_AFTER]))
+      return audio.resume()
+    })
+  } catch {
+    suspended = false
+  }
   const rendered = (await audio.startRendering()).getChannelData(0)
 
   // Each input block carries the gain of the quantum that submitted it; the suspension lands on
@@ -188,10 +197,17 @@ const run = async () => {
     worst < 1e-6,
     `the output is the input times 2 * gain after ${latency} samples (worst error ${worst})`
   )
-  check(
-    changedAt === CHANGE_QUANTUM || changedAt === CHANGE_QUANTUM + 1,
-    `the gain written mid-render applies from quantum ${changedAt} (written at ${CHANGE_QUANTUM})`
-  )
+  if (suspended) {
+    check(
+      changedAt === CHANGE_QUANTUM || changedAt === CHANGE_QUANTUM + 1,
+      `the gain written mid-render applies from quantum ${changedAt} (written at ${CHANGE_QUANTUM})`
+    )
+  } else {
+    check(
+      changedAt === -1,
+      'skipped: the mid-render write (OfflineAudioContext.suspend unsupported)'
+    )
+  }
 
   await worker.stop()
   check(
@@ -214,4 +230,6 @@ const run = async () => {
 
 run()
   .then((result) => (window.anira_test_result = result))
-  .catch((error) => (window.anira_test_result = { error: String(error?.stack ?? error) }))
+  .catch(
+    (error) => (window.anira_test_result = { error: `${error}\n${error?.stack ?? ''}` })
+  )

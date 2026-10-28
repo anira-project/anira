@@ -44,41 +44,38 @@ literals or closures per call, no ``postMessage``, views created once.
 An Example: Input Gain Before the Model
 ---------------------------------------
 
-.. code-block:: typescript
+``InputGainStage`` of the custom-worklet example (``web/examples/custom-worklet/``,
+:doc:`custom_audio_worklets`) scales the model's audio input by the model's Static input
+``gain``, ramping from the previous block's gain across the block. ``preProcess`` composes
+anira's default body (which pops the input ring into the model's audio tensor and leaves every
+Static input materialised), then reads both tensors with ``_anira_stage_input_tensor`` into a
+record it does not allocate per call: ``prepare`` allocated it, with the ramp's state, for this
+handler, and ``prepared`` points at it in every phase. ``reset`` forgets the ramp. The context's
+fields are read through ``layout`` offsets, never by an object per call:
 
-   // gain-stage.ts
-   import { anira_status, type JSStage, type JSStageEnv } from '@anira-project/anira'
-
-   export class InputGainStage implements JSStage {
-     constructor(private readonly env: JSStageEnv) {}
-
-     preProcess(ctx: number): number {
-       // Pop the rings into the model tensors the default way, then scale them.
-       const status = this.env.module._anira_stage_default_pre_process(ctx)
-       if (status < 0) return status
-       // ... read the model input with _anira_stage_input_tensor and scale it ...
-       return anira_status.ANIRA_OK
-     }
-   }
+.. literalinclude:: ../../../web/examples/custom-worklet/gain-stage.ts
+   :language: typescript
 
 The worklet constructs it from its ``stageClasses`` (:doc:`custom_audio_worklets`); a stage with
-before/after bits is also listed in the worker file (``setupInferenceWorker(engines, { InputGainStage })``);
-a stage with main-thread bits passes its main-thread object as ``stage``:
+before/after bits is also listed in the worker file (``setupInferenceWorker(engines, { InputGainStage })``).
+With prepare and unprepare bits it passes its main-thread object as ``stage``:
 
 .. code-block:: typescript
-
-   import { ANIRA_EM_HOOK_PRE, ANIRA_STAGE_FLAG_REALTIME_PRE_POST } from '@anira-project/anira'
 
    const stageKey = await anira.addJSStage(pipeline, {
      className: 'InputGainStage',
-     hookMask: ANIRA_EM_HOOK_PRE,
+     hookMask: ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_PREPARE | ANIRA_EM_HOOK_UNPREPARE,
      stageFlags: ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
+     stage: new InputGainStage({ module: anira.module, heap: anira.heap }),
    })
    // ... _anira_handler_create, the contract, _anira_handler_prepare ...
    const node = await anira.configureAudioWorklet(audioContext, handler, {
      nodeName: 'gain-stage-processor',
      stageKey,
+     staticInputs: [GAIN_SLOT],
+     modelConfigPtr: model,
    })
+   node.setStaticInput(GAIN_SLOT, [0.5])
 
 ``addJSStage`` is ``_anira_em_pipeline_add_js_stage(pipeline, jsKey, hookMask, stageFlags, err)``
 plus the registrations; call it before ``_anira_handler_create``. A mask with an init, prepare,

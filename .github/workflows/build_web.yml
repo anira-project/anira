@@ -105,10 +105,19 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The built package in headless Chromium (web/test/browser, served with COOP/COEP): a
-      # JavaScript engine that doubles on an inference Worker, a Hard handler of block 128, an
-      # OfflineAudioContext rendered through the anira worklet node; the output must be the input
-      # doubled after the handler's latency, then the Worker stops and the worklet is disposed.
+      # The custom-worklet example (web/examples/custom-worklet) against the built package: tsc
+      # with strict over its files and the package's types, then its Vite build (the worklet
+      # bundled into one script), which the browser test runs.
+      - name: build the examples
+        working-directory: web
+        run: npm run examples
+
+      # The built package in headless Chromium (served with COOP/COEP). web/test/browser: a
+      # JavaScript engine on an inference Worker that doubles its input times a Static gain, a
+      # Hard handler of block 128, an OfflineAudioContext rendered through the default worklet,
+      # which serves the gain (changed mid-render); the output must be the input times 2 * gain
+      # after the handler's latency, then the Worker stops and the worklet is disposed. The
+      # example's check page: the same render through its own worklet and JavaScript stage.
       - name: browser test (headless Chromium)
         working-directory: web
         run: |

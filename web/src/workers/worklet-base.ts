@@ -17,6 +17,39 @@ import type {
   StageUnregisteredResponse,
 } from './messages'
 
+// The names of AudioWorkletGlobalScope this file and a worklet built on it use; TypeScript's
+// DOM lib declares none of them (https://github.com/microsoft/TypeScript/issues/28308).
+declare global {
+  interface AudioWorkletProcessor {
+    readonly port: MessagePort
+    process(
+      inputs: Float32Array[][],
+      outputs: Float32Array[][],
+      parameters: Record<string, Float32Array>
+    ): boolean
+  }
+
+  var AudioWorkletProcessor: {
+    prototype: AudioWorkletProcessor
+    new (options?: AudioWorkletNodeOptions): AudioWorkletProcessor
+  }
+
+  interface AudioParamDescriptor {
+    name: string
+    defaultValue?: number
+    minValue?: number
+    maxValue?: number
+    automationRate?: AutomationRate
+  }
+
+  function registerProcessor(
+    name: string,
+    processorCtor: (new (options?: AudioWorkletNodeOptions) => AudioWorkletProcessor) & {
+      parameterDescriptors?: AudioParamDescriptor[]
+    }
+  ): void
+}
+
 // AudioWorkletGlobalScope has no `performance` object
 // (https://github.com/WebAudio/web-audio-api/issues/2413), but the Emscripten
 // runtime implements clock_time_get via `performance.now()`. Any wasm code

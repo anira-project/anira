@@ -19,33 +19,64 @@ When You Need a Custom Worklet
   main thread needs no custom worklet: `Static Inputs`_);
 * one-time setup in the worklet (views, extra tensors): override ``onConfigured``.
 
-Skeleton
---------
+A Complete Example
+------------------
 
-.. code-block:: typescript
+``web/examples/custom-worklet/`` in the repository is a complete page: a JavaScript stage that
+applies the model's Static input ``gain`` before the model, run in a worklet of its own, a
+JavaScript engine on an inference Worker standing in for the model (it doubles its input), and
+the gain written from the main thread. CI type-checks it against the built package
+(``npm run examples``: ``tsc`` with ``strict``, then the Vite build) and renders its check page
+(``check.ts``, an ``OfflineAudioContext`` with the gain changed mid-render) in headless
+Chromium. Run it with ``npx vite --config examples/custom-worklet/vite.config.ts`` from ``web/``
+after ``npm run build``.
 
-   // my-worklet.ts
-   import { AniraAudioWorkletBase } from '@anira-project/anira/workers/worklet-base'
-   import { InputGainStage } from './gain-stage'
+The worklet file names the stage classes the worklet may construct and registers the
+processor; ``configureAudioWorklet`` asks for it by ``nodeName``:
 
-   class MyWorklet extends AniraAudioWorkletBase {
-     protected override stageClasses = { InputGainStage }
-   }
+.. literalinclude:: ../../../web/examples/custom-worklet/my-worklet.ts
+   :language: typescript
 
-   registerProcessor('my-processor', MyWorklet)
+The stage, ``InputGainStage``, is the subject of :doc:`custom_pre_post_processing`. Its
+``preProcess`` runs here, inside the worklet's ``_anira_handler_process`` call, so it promises
+real-time behaviour (``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``); its ``prepare`` runs on the main
+thread and allocates the per-handler memory ``preProcess`` and ``reset`` use:
 
-Bundle the file into one self-contained script (``addModule`` cannot resolve imports), register
-it and name its processor:
+.. literalinclude:: ../../../web/examples/custom-worklet/gain-stage.ts
+   :language: typescript
 
-.. code-block:: typescript
+The inference Worker's file lists the engine classes it constructs:
 
-   await anira.registerAudioWorkletForContext(audioContext, new URL('./my-worklet.js', import.meta.url))
-   const node = await anira.configureAudioWorklet(audioContext, handler, {
-     nodeName: 'my-processor',
-     stageKey, // from addJSStage
-     inputChannels: 2,
-     outputChannels: 2,
-   })
+.. literalinclude:: ../../../web/examples/custom-worklet/inference-worker.ts
+   :language: typescript
+
+``main.ts`` builds everything in order: the module and its log, the context and the model config
+(slot 1 is the Static input ``gain``), the pipeline with the engine and the stage (the stage's
+js_key comes back from ``addJSStage``), the handler with a Hard contract of one render quantum
+at the context's rate, the inference Worker, then the worklet: its processor, the stage it
+constructs (``stageKey``) and the Static input it serves (``staticInputs``). The teardown
+disposes the worklet before it stops the Worker and destroys the handler:
+
+.. literalinclude:: ../../../web/examples/custom-worklet/main.ts
+   :language: typescript
+
+Bundling and Serving
+~~~~~~~~~~~~~~~~~~~~
+
+``addModule`` loads one script, which cannot import another at run time, so the worklet is
+bundled into one self-contained ES module: with Vite, ``import url from './my-worklet.ts?worker&url'``
+in ``main.ts`` and a single-file worker output. The module's memory is a shared
+``WebAssembly.Memory``, which only a cross-origin isolated page (``crossOriginIsolated``) may
+create, so the server sends ``Cross-Origin-Opener-Policy: same-origin`` and
+``Cross-Origin-Embedder-Policy: require-corp`` with every response; the example's config sets
+both for ``vite`` and ``vite preview``:
+
+.. literalinclude:: ../../../web/examples/custom-worklet/vite.config.ts
+   :language: typescript
+
+TypeScript's DOM lib does not declare the worklet scope's ``registerProcessor`` and
+``AudioWorkletProcessor``; ``@anira-project/anira/workers/worklet-base`` declares both for
+the files that import it.
 
 The Tensor Process
 ------------------
