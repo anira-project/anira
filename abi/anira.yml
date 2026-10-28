@@ -1506,11 +1506,11 @@ headers:
         params:
           - {type: anira_tensor_spec*, name: spec, doc: "The spec."}
           - {type: int64_t, name: num, doc: "This tensor advances num elements ..."}
-          - {type: int64_t, name: den, doc: "... per den anchor elements; (0, 0) = derive (default)."}
+          - {type: int64_t, name: den, doc: "... per den anchor elements; (0, 0) = derive (default): a fixed window's ratio from its hop, a flexible window's 1/1."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The tensor's Time advance relative to the anchor tensor."
+        doc: "The tensor's Time advance relative to the anchor tensor. A flexible window is pinned at prepare from the anchor hop, the anchor elements one inference consumes, chosen once for the whole model: the tensor's hop is the anchor hop times this ratio, so the anchor hop is a multiple of den (the ratio reduced); a ratio of 0 is ANIRA_ERROR_CONFIG at prepare."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value or den == 0 with num != 0."
       - kind: function
         name: anira_tensor_spec_set_latency
@@ -3096,7 +3096,7 @@ headers:
         thread: main-thread & !loader-lock
         status: promised
         since: "0.2"
-        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock. On ELF and Mach-O the library-unload hook is the backstop for a host that unloads with a handler alive: it joins an idle pool; with an inference in flight it tells the threads to stop, waits up to two seconds for the inferences, and when one is still running (it can never finish while the unload holds the loader lock) writes 'anira: the library is being unloaded while an inference is still running (N in flight); ...' to stderr and aborts instead of hanging. At process exit it waits without a bound. Windows has no such hook: destroy the handlers and call this from the module-exit entry point."
+        doc: "Stops and joins the core's inference threads and its log drain thread and flushes the queue, for a static embedding that is about to be unloaded (called from clap_deinit or ExitDll). Idempotent, never creates the core, and effective only when no context and no handler exist in this copy: otherwise nothing happens, so one client of a shared library cannot silence another's sessions. A plugin must destroy its handlers, then its contexts, before its host unloads it (its instance teardown or module-exit entry point), and never from its own static destructors or DllMain, which run inside the unload under the loader lock. On ELF and Mach-O the library-unload hook is the backstop for a host that unloads with a handler alive: it joins an idle pool; with an inference in flight it tells the threads to stop, waits up to two seconds for them to leave their loops and for the inferences, and when one is still running (it can never finish while the unload holds the loader lock) writes 'anira: the library is being unloaded while an inference is still running (N in flight, M inference threads not stopped); ...' to stderr and aborts instead of hanging. At process exit it waits without a bound. Windows has no such hook: destroy the handlers and call this from the module-exit entry point."
         return_doc: "ANIRA_OK (also without a core); ANIRA_ERROR_INVALID_STATE while a context or a handler lives."
       - kind: function
         name: anira_release_core_if_idle

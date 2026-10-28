@@ -190,26 +190,38 @@ void watch_process_exit() {
 // How long the unload hook waits for the inferences in flight before it gives up on them.
 constexpr std::chrono::milliseconds k_unload_wait_for_inferences{2000};
 
-// The unload hook's wait: until no inference is in flight (InferenceThread::
-// get_num_in_flight(), an atomic the inference threads keep), polling every millisecond, which
-// touches nothing the loader lock guards. When one is still running at the bound it never
-// will be while the hook holds the unload: a thread waiting for the loader lock that the
-// dlclose holds, or an engine that does not return. Joining it would hang the host for good,
-// returning would unmap the code under it, so the hook writes the rule to stderr (not through
-// anira's log queue or sinks, which may be gone or be what is stuck) and aborts.
-void wait_for_inferences_or_abort() {
+// The unload hook's wait: until every thread of the pool has left its loop and no inference is
+// in flight (InferenceThread::get_num_in_flight(), an atomic the inference threads keep),
+// polling every millisecond, which touches nothing the loader lock guards. The loop exit is
+// what makes the join below safe: a pool thread checks its stop flag and then dequeues, two
+// steps, so a thread that passed the check just before the hook told it to stop still takes one
+// more job, which counts as in flight only from its dequeue, possibly after the hook first
+// looked; it leaves its loop only once that job is done. When a thread or an inference is still
+// running at the bound it never will be while the hook holds the unload: a thread waiting for
+// the loader lock that the dlclose holds, or an engine that does not return. Joining it would
+// hang the host for good, returning would unmap the code under it, so the hook writes the rule
+// to stderr (not through anira's log queue or sinks, which may be gone or be what is stuck) and
+// aborts.
+void wait_for_inferences_or_abort(const std::vector<const InferenceThread*>& pool) {
     const auto deadline = std::chrono::steady_clock::now() + k_unload_wait_for_inferences;
+    const auto threads_in_loop = [&pool]() {
+        return static_cast<unsigned int>(std::ranges::count_if(
+            pool,
+            [](const InferenceThread* thread) { return thread->is_in_loop(); }));
+    };
     unsigned int in_flight = InferenceThread::get_num_in_flight();
-    while (in_flight > 0) {
+    unsigned int running = threads_in_loop();
+    while (in_flight > 0 || running > 0) {
         if (std::chrono::steady_clock::now() >= deadline) {
             std::array<char, 384> message{};
             const int length = std::snprintf(
                 message.data(),
                 message.size(),
                 "anira: the library is being unloaded while an inference is still running "
-                "(%u in flight); destroy every anira handler, or call anira_shutdown(), before "
-                "unloading. Aborting instead of hanging.\n",
-                in_flight);
+                "(%u in flight, %u inference threads not stopped); destroy every anira handler, "
+                "or call anira_shutdown(), before unloading. Aborting instead of hanging.\n",
+                in_flight,
+                running);
             if (length > 0) {
                 const auto size = std::min(static_cast<size_t>(length), message.size() - 1);
                 static_cast<void>(::write(STDERR_FILENO, message.data(), size));
@@ -218,6 +230,7 @@ void wait_for_inferences_or_abort() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         in_flight = InferenceThread::get_num_in_flight();
+        running = threads_in_loop();
     }
 }
 #endif
@@ -238,16 +251,21 @@ void UnloadHook::run() {
     if (existing != nullptr && !s_process_exiting.load(std::memory_order_acquire)) {
         // An unload: every pool thread is told to stop first, so no new inference starts and a
         // thread that holds an instance gives the jobs waiting for it up (they count as in
-        // flight until then); then the inferences in flight get the bounded wait. At exit no loader
-        // lock is held, so the join below waits for them whatever they take, as it always did.
+        // flight until then); then the threads and the inferences in flight get the bounded wait.
+        // At exit no loader lock is held, so the join below waits for them whatever they take,
+        // as it always did. The threads are kept by the pool, which only shutdown() below
+        // empties, so their pointers outlive the wait.
         Core::State& state = *static_cast<Core::State*>(existing);
+        std::vector<const InferenceThread*> pool;
         {
             const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+            pool.reserve(state.m_thread_pool.size());
             for (const std::unique_ptr<InferenceThread>& thread : state.m_thread_pool) {
                 thread->request_stop();
+                pool.push_back(thread.get());
             }
         }
-        wait_for_inferences_or_abort();
+        wait_for_inferences_or_abort(pool);
     }
     Core::shutdown();
     Core::release_core_if_idle();

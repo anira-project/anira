@@ -332,10 +332,15 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec
                                                                int64_t overlap) ANIRA_NOEXCEPT;
 
 /**
- * @brief The tensor's Time advance relative to the anchor tensor.
+ * @brief The tensor's Time advance relative to the anchor tensor. A flexible window is pinned
+ * at prepare from the anchor hop, the anchor elements one inference consumes, chosen
+ * once for the whole model: the tensor's hop is the anchor hop times this ratio, so the
+ * anchor hop is a multiple of den (the ratio reduced); a ratio of 0 is
+ * ANIRA_ERROR_CONFIG at prepare.
  * @param spec The spec.
  * @param num This tensor advances num elements ...
- * @param den ... per den anchor elements; (0, 0) = derive (default).
+ * @param den ... per den anchor elements; (0, 0) = derive (default): a fixed window's ratio
+ *        from its hop, a flexible window's 1/1.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value or den == 0 with num
  *         != 0.
  * @par Thread contract

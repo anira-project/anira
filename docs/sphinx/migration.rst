@@ -850,10 +850,11 @@ are the C handler's (:doc:`usage` sections 3.1 and 3.2).
 reference only; passing a temporary does not compile.
 
 **Windows.** A flexible window (``window_min < window_max``) is pinned when
-``to_inference_config`` runs: one host block per inference (``block_max`` scaled by the
-tensor's time ratio, plus the overlap), clamped to the window range; without a geometry on the
-contract, the smallest window. When a spec's window is flexible, set the geometry before the
-call, or build the ``InferenceConfig`` at prepare. With fixed windows, which every bundled
+``to_inference_config`` runs, by the rule of the usage guide (section 1.3, *Flexible
+windows*): one anchor hop for the whole model, the largest every window and time ratio allow
+at or below ``block_max``, else the smallest above it; without a geometry on the contract, the
+smallest. When a spec's window is flexible, set the geometry before the call, or build the
+``InferenceConfig`` at prepare. With fixed windows, which every bundled
 fixture uses, the order does not matter.
 
 .. _migration-json:
