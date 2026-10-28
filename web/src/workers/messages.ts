@@ -148,6 +148,11 @@ export type AudioWorkletIOConfig = {
    * (`anira_handler_process_wait`); 0 never waits.
    */
   waitMs: number
+  /**
+   * The render quantum the worklet builds its tensors for at configure: the handler's declared
+   * Hard block (`block_min = block_max`), 128 frames by default.
+   */
+  quantum: number
 }
 
 export type AudioWorkletConfigureMessage = {
@@ -171,6 +176,40 @@ export type QuantumChangedMessage = {
   type: 'quantumChanged'
   quantum: number
 }
+
+/**
+ * Rebuild the worklet's tensors for `quantum`, once the handler was re-prepared for it; the
+ * worklet allocates here, never in `process()`. Answered by `'quantumSet'`.
+ */
+export type SetQuantumMessage = {
+  type: 'setQuantum'
+  requestId: number
+  quantum: number
+}
+
+export type QuantumSetResponse = {
+  type: 'quantumSet'
+  requestId: number
+}
+
+/**
+ * Free the worklet's tensors and stop calling into the module; answered by `'disposed'`, after
+ * which main frees the worklet instance's stack.
+ */
+export type DisposeMessage = {
+  type: 'dispose'
+  requestId: number
+}
+
+export type DisposedResponse = {
+  type: 'disposed'
+  requestId: number
+}
+
+export type AudioWorkletMessage =
+  | AudioWorkletConfigureMessage
+  | SetQuantumMessage
+  | DisposeMessage
 
 // ---------------------------------
 // ------ Utility Functions --------

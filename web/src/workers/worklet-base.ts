@@ -6,9 +6,12 @@ import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
   AudioWorkletConfigureMessage,
   AudioWorkletIOConfig,
+  AudioWorkletMessage,
+  DisposedResponse,
   ErrorResponse,
   LogRecordMessage,
   QuantumChangedMessage,
+  QuantumSetResponse,
   ReadyResponse,
 } from './messages'
 
@@ -48,10 +51,13 @@ export type AniraWorkletState = {
   anira: AniraModule
   handlerPtr: number
   ioConfig: AudioWorkletIOConfig
-  input: PlanarBlock | null
-  output: PlanarBlock | null
-  /** A `size_t` the process call writes the delivered sample count to. */
+  /** The render quantum the blocks are built for: the handler's declared Hard block. */
+  quantum: number
+  input: PlanarBlock
+  output: PlanarBlock
+  /** A `size_t` the process call writes the delivered sample count to, and a view on it. */
   deliveredPtr: number
+  delivered: Uint32Array
 }
 
 /** Class name to JavaScript stage class: the stages whose pre/post/reset run here. */
@@ -59,37 +65,62 @@ export type WorkletStageClassMap = Record<string, new (env: JSStageEnv) => JSSta
 
 /**
  * The audio worklet of anira: one `anira_handler_process` per render quantum, over planar
- * input and output tensors built once and rebuilt only when the quantum or a channel count
- * changes. The handler's Hard contract declares `block_min = block_max = quantum` (128 by
- * default); a quantum the browser changes is reported to main (`'quantumChanged'`), which
- * re-prepares the handler, since a call above the declared block is refused (the quantum
- * outputs silence until then). Subclasses name their JavaScript stages in `stageClasses`.
+ * input and output tensors built at configure for the declared quantum (the handler's Hard
+ * contract has `block_min = block_max = quantum`, 128 by default). `process()` allocates
+ * nothing: a quantum other than the declared one is silence and is reported to main once
+ * (`'quantumChanged'`), which re-prepares the handler for it and then has the worklet rebuild
+ * its blocks (`'setQuantum'`, outside `process()`). `'dispose'` frees the blocks; the worklet
+ * calls into the module no more afterwards and main frees its stack. Subclasses name their
+ * JavaScript stages in `stageClasses`.
  */
 export class AniraAudioWorkletBase extends AudioWorkletProcessor {
   protected aniraState: AniraWorkletState | null = null
   /** The stage classes this worklet can run; override in a subclass. */
   protected stageClasses: WorkletStageClassMap = {}
+  private disposed = false
+  private reportedQuantum = 0
+  // Posted as is on a quantum change: process() builds no object.
+  private readonly quantumMessage: QuantumChangedMessage = {
+    type: 'quantumChanged',
+    quantum: 0,
+  }
 
   private clearOutputs(outputs: Float32Array[][]): void {
-    for (const outputNode of outputs) {
-      for (const channel of outputNode) {
-        channel.fill(0)
-      }
+    for (let n = 0; n < outputs.length; n++) {
+      const outputNode = outputs[n]
+      for (let ch = 0; ch < outputNode.length; ch++) outputNode[ch].fill(0)
     }
   }
 
   constructor(options?: AudioWorkletNodeOptions) {
     super(options)
 
-    this.port.onmessage = async (e: MessageEvent<AudioWorkletConfigureMessage>) => {
+    this.port.onmessage = async (e: MessageEvent<AudioWorkletMessage>) => {
       const message = e.data
-      if (message.type !== 'configure') return
       try {
-        await this.configure(message)
-        this.port.postMessage({
-          type: 'ready',
-          requestId: message.requestId,
-        } satisfies ReadyResponse)
+        switch (message.type) {
+          case 'configure':
+            await this.configure(message)
+            this.port.postMessage({
+              type: 'ready',
+              requestId: message.requestId,
+            } satisfies ReadyResponse)
+            return
+          case 'setQuantum':
+            this.setQuantum(message.quantum)
+            this.port.postMessage({
+              type: 'quantumSet',
+              requestId: message.requestId,
+            } satisfies QuantumSetResponse)
+            return
+          case 'dispose':
+            this.dispose()
+            this.port.postMessage({
+              type: 'disposed',
+              requestId: message.requestId,
+            } satisfies DisposedResponse)
+            return
+        }
       } catch (error) {
         this.port.postMessage({
           type: 'error',
@@ -101,6 +132,9 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
   }
 
   private async configure(message: AudioWorkletConfigureMessage): Promise<void> {
+    // A re-configure of this node gives up the previous instance's blocks first.
+    this.dispose()
+    this.disposed = false
     const anira = await createAniraWasm(message.wasmMemory, {
       wasmBinary: message.wasmBinary,
       stack: { base: message.stackBase, bytes: message.stackBytes },
@@ -119,15 +153,45 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
         new Stage({ module: anira.module, heap: anira.heap })
       )
     }
-    this.aniraState = {
+    const quantum = message.ioConfig.quantum
+    const deliveredPtr = anira.heap.malloc(4)
+    const state: AniraWorkletState = {
       anira,
       handlerPtr: message.handlerPtr,
       ioConfig: message.ioConfig,
-      input: null,
-      output: null,
-      deliveredPtr: anira.heap.malloc(4),
+      quantum,
+      input: this.buildPlanarBlock(anira, message.ioConfig.inputChannels, quantum),
+      output: this.buildPlanarBlock(anira, message.ioConfig.outputChannels, quantum),
+      deliveredPtr,
+      delivered: new Uint32Array(anira.memory.buffer, deliveredPtr, 1),
     }
-    await this.onConfigured(this.aniraState)
+    this.reportedQuantum = quantum
+    this.aniraState = state
+    await this.onConfigured(state)
+  }
+
+  /** Rebuild the blocks for `quantum`, after main re-prepared the handler for it. */
+  private setQuantum(quantum: number): void {
+    const state = this.aniraState
+    if (!state) throw new Error('setQuantum before configure')
+    const { anira, ioConfig } = state
+    this.freePlanarBlock(anira, state.input)
+    this.freePlanarBlock(anira, state.output)
+    state.input = this.buildPlanarBlock(anira, ioConfig.inputChannels, quantum)
+    state.output = this.buildPlanarBlock(anira, ioConfig.outputChannels, quantum)
+    state.quantum = quantum
+    this.reportedQuantum = quantum
+  }
+
+  /** Free the blocks; process() outputs silence and calls into the module no more. */
+  private dispose(): void {
+    const state = this.aniraState
+    this.aniraState = null
+    this.disposed = true
+    if (!state) return
+    this.freePlanarBlock(state.anira, state.input)
+    this.freePlanarBlock(state.anira, state.output)
+    state.anira.heap.free(state.deliveredPtr)
   }
 
   protected async onConfigured(_state: AniraWorkletState) {
@@ -136,11 +200,11 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
 
   /** A planar host block of `channels` x `quantum` float32 samples, in the heap. */
   protected buildPlanarBlock(
-    state: AniraWorkletState,
+    anira: AniraModule,
     channels: number,
     quantum: number
   ): PlanarBlock {
-    const { heap, module } = state.anira
+    const { heap, module } = anira
     const bytesPerChannel = quantum * Float32Array.BYTES_PER_ELEMENT
     const data = heap.malloc(bytesPerChannel * channels)
     const planes = heap.malloc(channels * 4)
@@ -150,7 +214,7 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     for (let ch = 0; ch < channels; ch++) {
       heap.writeU32(planes + ch * 4, data + ch * bytesPerChannel)
       views.push(
-        new Float32Array(state.anira.memory.buffer, data + ch * bytesPerChannel, quantum)
+        new Float32Array(anira.memory.buffer, data + ch * bytesPerChannel, quantum)
       )
     }
     heap.writeI64(shape, BigInt(channels))
@@ -166,40 +230,27 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     return { tensor, planes, shape, data, channels, quantum, views }
   }
 
-  protected freePlanarBlock(state: AniraWorkletState, block: PlanarBlock | null): void {
-    if (!block) return
-    const { heap } = state.anira
+  protected freePlanarBlock(anira: AniraModule, block: PlanarBlock): void {
+    const { heap } = anira
     heap.free(block.tensor)
     heap.free(block.shape)
     heap.free(block.planes)
     heap.free(block.data)
   }
 
-  /** Rebuild the blocks when the quantum or a channel count changed; true when they did. */
-  private ensureBlocks(state: AniraWorkletState, quantum: number): boolean {
-    const { ioConfig } = state
-    if (
-      state.input?.quantum === quantum &&
-      state.output?.quantum === quantum &&
-      state.input.channels === ioConfig.inputChannels &&
-      state.output.channels === ioConfig.outputChannels
-    ) {
-      return false
-    }
-    const previous = state.input?.quantum
-    this.freePlanarBlock(state, state.input)
-    this.freePlanarBlock(state, state.output)
-    state.input = this.buildPlanarBlock(state, ioConfig.inputChannels, quantum)
-    state.output = this.buildPlanarBlock(state, ioConfig.outputChannels, quantum)
-    if (previous !== undefined && previous !== quantum) {
-      this.port.postMessage({
-        type: 'quantumChanged',
-        quantum,
-      } satisfies QuantumChangedMessage)
-    }
-    return true
+  /** Report a quantum other than the declared one to main, once per new value. */
+  private reportQuantum(quantum: number): void {
+    if (quantum === this.reportedQuantum) return
+    this.reportedQuantum = quantum
+    this.quantumMessage.quantum = quantum
+    this.port.postMessage(this.quantumMessage)
   }
 
+  /**
+   * The real-time path, once per quantum of the declared size: copy the node's input channels
+   * into the input block, one Hard process call, copy what it filled to the node. Allocates
+   * nothing.
+   */
   protected processAudioBlock(
     inputs: Float32Array[][],
     outputs: Float32Array[][],
@@ -207,16 +258,13 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     quantum: number,
     _parameters: Record<string, Float32Array>
   ): void {
-    const { ioConfig, anira, handlerPtr, deliveredPtr } = state
-    this.ensureBlocks(state, quantum)
-    const input = state.input!
-    const output = state.output!
+    const { ioConfig, anira, handlerPtr, deliveredPtr, input, output } = state
     const inputNode = inputs[ioConfig.inputNodeIndex]
     const outputNode = outputs[ioConfig.outputNodeIndex]
 
     for (let ch = 0; ch < input.channels; ch++) {
-      const source = inputNode?.[ch]
-      if (source) input.views[ch].set(source.subarray(0, quantum))
+      const source = inputNode === undefined ? undefined : inputNode[ch]
+      if (source !== undefined && source.length === quantum) input.views[ch].set(source)
       else input.views[ch].fill(0)
     }
 
@@ -240,18 +288,19 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
             deliveredPtr
           )
     // A missed quantum holds the miss policy's fill although `delivered` is 0 (a success).
-    const delivered = samplesToCopy(status, anira.heap.readU32(deliveredPtr), quantum)
+    const count = samplesToCopy(status, state.delivered[0], quantum)
 
-    if (!outputNode) return
+    if (outputNode === undefined) return
     for (let ch = 0; ch < outputNode.length; ch++) {
       const destination = outputNode[ch]
-      if (ch < output.channels && delivered > 0) {
-        destination.set(
-          output.views[ch].subarray(0, Math.min(delivered, destination.length))
-        )
-        destination.fill(0, delivered)
-      } else {
+      if (ch >= output.channels || count === 0) {
         destination.fill(0)
+      } else if (count === quantum) {
+        destination.set(output.views[ch])
+      } else {
+        const view = output.views[ch]
+        for (let i = 0; i < count; i++) destination[i] = view[i]
+        destination.fill(0, count)
       }
     }
   }
@@ -261,18 +310,28 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     outputs: Float32Array[][],
     parameters: Record<string, Float32Array>
   ): boolean {
-    if (!this.aniraState) {
-      // AudioWorklet process() can run before the async configure handshake finishes.
+    const state = this.aniraState
+    if (state === null) {
+      // Before the configure handshake finished (keep running), or disposed (let it go).
       this.clearOutputs(outputs)
+      return !this.disposed
+    }
+
+    const outputNode = outputs[state.ioConfig.outputNodeIndex]
+    const inputNode = inputs[state.ioConfig.inputNodeIndex]
+    const quantum =
+      (outputNode !== undefined && outputNode.length > 0 && outputNode[0].length) ||
+      (inputNode !== undefined && inputNode.length > 0 && inputNode[0].length) ||
+      0
+    if (quantum === 0) return true
+    if (quantum !== state.quantum) {
+      // Not the declared block: silence until main re-prepared and setQuantum rebuilt.
+      this.clearOutputs(outputs)
+      this.reportQuantum(quantum)
       return true
     }
 
-    const outputNode = outputs[this.aniraState.ioConfig.outputNodeIndex]
-    const inputNode = inputs[this.aniraState.ioConfig.inputNodeIndex]
-    const quantum = outputNode?.[0]?.length || inputNode?.[0]?.length || 0
-    if (quantum === 0) return true
-
-    this.processAudioBlock(inputs, outputs, this.aniraState, quantum, parameters)
+    this.processAudioBlock(inputs, outputs, state, quantum, parameters)
     return true
   }
 }

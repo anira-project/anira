@@ -21,7 +21,9 @@ import type {
   DestroyMessage,
   InitInferenceWorkerMessage,
   LogRecordMessage,
+  DisposeMessage,
   QuantumChangedMessage,
+  SetQuantumMessage,
   RegisterEngineMessage,
   RegisterStageMessage,
   StartMessage,
@@ -85,15 +87,21 @@ export type InferenceWorker = {
 export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
   /** The processor name registered in the worklet file; default 'inference-processor'. */
   nodeName?: string
+  /**
+   * A node of an earlier `configureAudioWorklet` to configure again (another handler, other
+   * slots): it is disposed first and keeps its place in the graph. Omitted: a new node.
+   */
+  node?: AudioWorkletNode
   /** The js_key of a JavaScript stage (from addJSStage) whose pre/post/reset run here. */
   stageKey?: number
   /** Overrides merged on top of the derived `AudioWorkletNode` options. */
   audioWorkletNodeOptions?: AudioWorkletNodeOptions
   /**
-   * Called when the browser's render quantum changes: re-prepare the handler with a Hard
-   * contract of `block_min = block_max = quantum`; the worklet outputs silence until then.
+   * Called when the browser's render quantum differs from the declared `quantum`: re-prepare
+   * the handler with a Hard contract of `block_min = block_max = quantum` (and resolve once
+   * done); the worklet then rebuilds its tensors for it and outputs silence until then.
    */
-  onQuantumChange?: (quantum: number) => void
+  onQuantumChange?: (quantum: number) => void | Promise<void>
 }
 
 type EngineEntry = { jsKey: number; descriptor: JSEngineDescriptor }
@@ -103,6 +111,10 @@ type WorkerEntry = {
   handle: InferenceWorker
   thread: InferenceThread
   worker: Worker
+}
+
+type WorkletEntry = {
+  stack: InstanceStack
 }
 
 /**
@@ -119,6 +131,7 @@ export class AniraWeb {
   private readonly engines: EngineEntry[] = []
   private readonly stages: StageEntry[] = []
   private readonly workers: WorkerEntry[] = []
+  private readonly worklets = new Map<AudioWorkletNode, WorkletEntry>()
   private onLogRecord: ((record: AniraLogRecord) => void) | null = null
 
   /** Instantiate the module on a shared memory and return a ready-to-use `AniraWeb`. */
@@ -421,7 +434,7 @@ export class AniraWeb {
    * `AniraAudioWorkletBase` with its `stageClasses`).
    */
   async registerAudioWorkletForContext(
-    audioContext: AudioContext,
+    audioContext: BaseAudioContext,
     workletUrl?: string | URL
   ): Promise<void> {
     const url =
@@ -431,12 +444,15 @@ export class AniraWeb {
 
   /**
    * Construct an `AudioWorkletNode` that streams through `handlerPtr` (a prepared handler of a
-   * Hard contract with `block_min = block_max =` the render quantum, 128 by default) and
-   * complete the configure handshake. The worklet instance gets its own stack and thread-local
-   * block; it builds its planar host tensors itself.
+   * Hard contract with `block_min = block_max = quantum`, 128 frames by default) and complete
+   * the configure handshake. The worklet instance gets its own stack and thread-local block and
+   * builds its planar host tensors for `quantum` now; `process()` allocates nothing. When the
+   * browser renders another quantum the worklet outputs silence and reports it:
+   * `onQuantumChange` re-prepares the handler, then the worklet rebuilds its tensors. Free the
+   * node's resources with `disposeAudioWorklet` before destroying the handler.
    */
   async configureAudioWorklet(
-    audioContext: AudioContext,
+    audioContext: BaseAudioContext,
     handlerPtr: number,
     options: ConfigureAudioWorkletOptions = {}
   ): Promise<AudioWorkletNode> {
@@ -448,9 +464,16 @@ export class AniraWeb {
       inputSlot: options.inputSlot ?? 0,
       outputSlot: options.outputSlot ?? 0,
       waitMs: options.waitMs ?? 0,
+      quantum: options.quantum ?? 128,
     }
-    if (ioConfig.inputChannels <= 0 || ioConfig.outputChannels <= 0) {
-      throw new Error('Invalid AudioWorklet IO config: channel counts must be > 0')
+    if (
+      ioConfig.inputChannels <= 0 ||
+      ioConfig.outputChannels <= 0 ||
+      ioConfig.quantum <= 0
+    ) {
+      throw new Error(
+        'Invalid AudioWorklet IO config: channel counts and the quantum must be > 0'
+      )
     }
     let stage: AudioWorkletConfigureMessage['stage']
     if (options.stageKey !== undefined) {
@@ -460,38 +483,77 @@ export class AniraWeb {
     }
 
     const wasmBinary = await this.ensureWasmBinary()
-    const node = new AudioWorkletNode(
-      audioContext,
-      options.nodeName ?? 'inference-processor',
-      {
-        channelCount: ioConfig.inputChannels,
-        channelCountMode: 'explicit',
-        outputChannelCount: [ioConfig.outputChannels],
-        ...options.audioWorkletNodeOptions,
-      }
-    )
+    let node = options.node
+    if (node) {
+      await this.disposeAudioWorklet(node)
+    } else {
+      node = new AudioWorkletNode(
+        audioContext,
+        options.nodeName ?? 'inference-processor',
+        {
+          channelCount: ioConfig.inputChannels,
+          channelCountMode: 'explicit',
+          outputChannelCount: [ioConfig.outputChannels],
+          ...options.audioWorkletNodeOptions,
+        }
+      )
+      node.port.start()
+      this.forwardLogs(node.port)
+      const port = node.port
+      port.addEventListener('message', (e: MessageEvent<{ type: string }>) => {
+        if (e.data.type !== 'quantumChanged') return
+        const { quantum } = e.data as QuantumChangedMessage
+        // Re-prepare first (the host's), then let the worklet allocate for the new quantum.
+        void (async () => {
+          try {
+            await options.onQuantumChange?.(quantum)
+            await request<SetQuantumMessage>(
+              port,
+              { type: 'setQuantum', quantum },
+              'quantumSet'
+            )
+          } catch (error) {
+            console.error('anira: the quantum change failed:', error)
+          }
+        })()
+      })
+    }
     const stack = allocInstanceStack(this.module)
-    node.port.start()
-    this.forwardLogs(node.port)
-    node.port.addEventListener('message', (e: MessageEvent<{ type: string }>) => {
-      if (e.data.type === 'quantumChanged') {
-        options.onQuantumChange?.((e.data as QuantumChangedMessage).quantum)
-      }
-    })
-    await request<AudioWorkletConfigureMessage>(
-      node.port,
-      {
-        type: 'configure',
-        wasmMemory: this.memory,
-        wasmBinary,
-        stackBase: stack.base,
-        stackBytes: stack.bytes,
-        handlerPtr,
-        stage,
-        ioConfig,
-      },
-      'ready'
-    )
+    try {
+      await request<AudioWorkletConfigureMessage>(
+        node.port,
+        {
+          type: 'configure',
+          wasmMemory: this.memory,
+          wasmBinary,
+          stackBase: stack.base,
+          stackBytes: stack.bytes,
+          handlerPtr,
+          stage,
+          ioConfig,
+        },
+        'ready'
+      )
+    } catch (error) {
+      // The worklet instance never ran on the stack, or gave it up on the failure.
+      freeInstanceStack(this.module, stack)
+      throw error
+    }
+    this.worklets.set(node, { stack })
     return node
+  }
+
+  /**
+   * Free what `configureAudioWorklet` allocated for `node`: the worklet frees its tensors and
+   * stops calling into the module (it outputs silence from then on), then the worklet
+   * instance's stack and thread-local block are freed here. Call it before destroying the
+   * handler the node streams through; a node not configured here is ignored.
+   */
+  async disposeAudioWorklet(node: AudioWorkletNode): Promise<void> {
+    const entry = this.worklets.get(node)
+    if (!entry) return
+    await request<DisposeMessage>(node.port, { type: 'dispose' }, 'disposed')
+    freeInstanceStack(this.module, entry.stack)
+    this.worklets.delete(node)
   }
 }
