@@ -210,6 +210,7 @@ export type AudioWorkletMessage =
   | AudioWorkletConfigureMessage
   | SetQuantumMessage
   | DisposeMessage
+  | UnregisterStageMessage
 
 // ---------------------------------
 // ------ Utility Functions --------

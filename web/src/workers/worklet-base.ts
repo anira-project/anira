@@ -13,6 +13,7 @@ import type {
   QuantumChangedMessage,
   QuantumSetResponse,
   ReadyResponse,
+  StageUnregisteredResponse,
 } from './messages'
 
 // AudioWorkletGlobalScope has no `performance` object
@@ -112,6 +113,14 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
               type: 'quantumSet',
               requestId: message.requestId,
             } satisfies QuantumSetResponse)
+            return
+          case 'unregisterStage':
+            this.aniraState?.anira.hooks.stages.delete(message.jsKey)
+            this.port.postMessage({
+              type: 'stageUnregistered',
+              requestId: message.requestId,
+              jsKey: message.jsKey,
+            } satisfies StageUnregisteredResponse)
             return
           case 'dispose':
             this.dispose()

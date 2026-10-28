@@ -98,6 +98,11 @@ export class HookRegistry {
   readonly engines = new Map<number, JSEngine>()
   /** The JavaScript log sink of this instance (`anira_em_set_log_hook`). */
   log: ((record: AniraLogRecord) => void) | null = null
+  /**
+   * Called after a stage's release on this instance (the main thread: its last carrier died),
+   * once its entry is gone here, so the other instances' entries can go too (`AniraWeb` does).
+   */
+  onStageReleased: ((jsKey: number) => void) | null = null
   private module: AniraWasmInstance | null = null
   private heap: Heap | null = null
 
@@ -150,8 +155,12 @@ export class HookRegistry {
       case p.ANIRA_PHASE_INIT:
         return status(stage.init?.(a))
       case p.ANIRA_PHASE_RELEASE:
-        stage.release?.()
-        this.stages.delete(key)
+        try {
+          stage.release?.()
+        } finally {
+          this.stages.delete(key)
+          this.onStageReleased?.(key)
+        }
         return anira_status.ANIRA_OK
     }
     throw new Error(`JavaScript stage ${key}: phase ${phase} is not a stage phase`)

@@ -1,4 +1,15 @@
-import { ANIRA_EM_HOOK_AFTER, ANIRA_EM_HOOK_BEFORE } from './abi/enums'
+import {
+  ANIRA_EM_ENGINE_HOOK_QUERY,
+  ANIRA_EM_HOOK_AFTER,
+  ANIRA_EM_HOOK_BEFORE,
+  ANIRA_EM_HOOK_INIT,
+  ANIRA_EM_HOOK_POST,
+  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_HOOK_PREPARE,
+  ANIRA_EM_HOOK_RELEASE,
+  ANIRA_EM_HOOK_RESET,
+  ANIRA_EM_HOOK_UNPREPARE,
+} from './abi/enums'
 import { InferenceThread } from './core/InferenceThread'
 import { consoleLogSink } from './helpers'
 import {
@@ -52,7 +63,11 @@ export type JSEngineDescriptor = {
   className: string
   modelConfigPtr: number
   modelIndex?: number
-  /** ANIRA_EM_ENGINE_HOOK_* bits beyond process; default none. */
+  /**
+   * ANIRA_EM_ENGINE_HOOK_* bits beyond process; default none. `ANIRA_EM_ENGINE_HOOK_RESET` runs
+   * on the Workers; `ANIRA_EM_ENGINE_HOOK_QUERY` is refused here: a query runs on the main
+   * thread and a registered engine has no providers list to answer for.
+   */
   hookMask?: number
   /** ANIRA_ENGINE_FLAG_* bits: the engine's promises; default none. */
   engineFlags?: number
@@ -62,7 +77,7 @@ export type JSEngineDescriptor = {
  * A JavaScript stage for `addJSStage`. `className` names its class in the inference worker's
  * class map (for `beforeInference` / `afterInference`) and in the worklet's `stageClasses`
  * (for `preProcess`, `postProcess` and `reset`); `stage` is the main-thread object that runs
- * `init`, `prepare`, `unprepare` and `release`, when the mask has those bits.
+ * `init`, `prepare`, `unprepare` and `release`, and is required when the mask has those bits.
  */
 export type JSStageDescriptor = {
   className: string
@@ -94,6 +109,11 @@ export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
   node?: AudioWorkletNode
   /** The js_key of a JavaScript stage (from addJSStage) whose pre/post/reset run here. */
   stageKey?: number
+  /**
+   * The pipeline `handlerPtr` was created from: its JavaScript stage, when that stage has
+   * pre/post/reset bits, is the one the worklet runs (`stageKey` names it explicitly).
+   */
+  pipelinePtr?: number
   /** Overrides merged on top of the derived `AudioWorkletNode` options. */
   audioWorkletNodeOptions?: AudioWorkletNodeOptions
   /**
@@ -105,17 +125,29 @@ export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
 }
 
 type EngineEntry = { jsKey: number; descriptor: JSEngineDescriptor }
-type StageEntry = { jsKey: number; descriptor: JSStageDescriptor }
+type StageEntry = { jsKey: number; pipelinePtr: number; descriptor: JSStageDescriptor }
 
 type WorkerEntry = {
   handle: InferenceWorker
   thread: InferenceThread
   worker: Worker
+  /** The Worker's operations (registrations, the stop) run one after another. */
+  queue: Promise<void>
+  stopped: boolean
 }
 
 type WorkletEntry = {
   stack: InstanceStack
+  stageKey: number | undefined
 }
+
+/** The stage phases that run on the main thread, and those that run in the worklet. */
+const MAIN_THREAD_STAGE_HOOKS =
+  ANIRA_EM_HOOK_INIT |
+  ANIRA_EM_HOOK_PREPARE |
+  ANIRA_EM_HOOK_UNPREPARE |
+  ANIRA_EM_HOOK_RELEASE
+const WORKLET_STAGE_HOOKS = ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST | ANIRA_EM_HOOK_RESET
 
 /**
  * The runtime of anira on the web: the main module instance on its shared memory, the
@@ -154,6 +186,8 @@ export class AniraWeb {
 
   constructor(anira: AniraModule) {
     this.anira = anira
+    // A stage's release on main (its last carrier died) drops it from every instance.
+    anira.hooks.onStageReleased = (jsKey) => this.forgetStage(jsKey)
   }
 
   /** The raw exports: every `_anira_*` entry of the C ABI, `_malloc` and `_free`. */
@@ -200,6 +234,13 @@ export class AniraWeb {
     pipelinePtr: number,
     descriptor: JSEngineDescriptor
   ): Promise<number> {
+    if (((descriptor.hookMask ?? 0) & ANIRA_EM_ENGINE_HOOK_QUERY) !== 0) {
+      throw new Error(
+        `JavaScript engine '${descriptor.engineId}': ANIRA_EM_ENGINE_HOOK_QUERY runs on the main ` +
+          'thread and a registered engine has no providers list to answer for; build the ' +
+          'descriptor with _anira_em_engine_desc_init to give it one'
+      )
+    }
     const jsKey = this.nextKey++
     const { heap, module } = this.anira
     heap.withCString(descriptor.engineId, (id) =>
@@ -250,6 +291,12 @@ export class AniraWeb {
    * bit pass the returned js_key to `configureAudioWorklet`. Returns the stage's js_key.
    */
   async addJSStage(pipelinePtr: number, descriptor: JSStageDescriptor): Promise<number> {
+    if ((descriptor.hookMask & MAIN_THREAD_STAGE_HOOKS) !== 0 && !descriptor.stage) {
+      throw new Error(
+        `JavaScript stage '${descriptor.className}': its init/prepare/unprepare/release bits run ` +
+          'on the main thread, so the descriptor needs the main-thread object (stage)'
+      )
+    }
     const jsKey = this.nextKey++
     const { heap, module } = this.anira
     callWithError(heap, (err) =>
@@ -262,7 +309,7 @@ export class AniraWeb {
       )
     )
     if (descriptor.stage) this.anira.hooks.stages.set(jsKey, descriptor.stage)
-    const entry = { jsKey, descriptor }
+    const entry = { jsKey, pipelinePtr, descriptor }
     this.stages.push(entry)
     if (AniraWeb.runsOnWorkers(descriptor)) {
       await Promise.all(
@@ -272,24 +319,53 @@ export class AniraWeb {
     return jsKey
   }
 
-  /** Remove a JavaScript stage's objects from every instance; the C stage stays with its carriers. */
+  /**
+   * Remove a JavaScript stage's objects from every instance (main, the Workers, the worklets
+   * that run it); the C stage stays with its carriers. A stage's release on the main thread
+   * does the same by itself.
+   */
   async removeJSStage(jsKey: number): Promise<void> {
+    this.anira.hooks.stages.delete(jsKey)
+    await this.dropStageEverywhere(jsKey)
+  }
+
+  /** The release callback of the main registry: the stage is gone, drop it elsewhere too. */
+  private forgetStage(jsKey: number): void {
+    this.dropStageEverywhere(jsKey).catch((error) =>
+      console.error(`anira: dropping the released stage ${jsKey} failed:`, error)
+    )
+  }
+
+  private async dropStageEverywhere(jsKey: number): Promise<void> {
     const index = this.stages.findIndex((s) => s.jsKey === jsKey)
     if (index === -1) return
     const [entry] = this.stages.splice(index, 1)
-    this.anira.hooks.stages.delete(jsKey)
-    if (!AniraWeb.runsOnWorkers(entry.descriptor)) return
-    await Promise.all(
-      this.workers.map((w) =>
-        this.whileStopped(w, async () => {
-          await request<UnregisterStageMessage>(
-            w.worker,
-            { type: 'unregisterStage', jsKey },
-            'stageUnregistered'
+    const done: Promise<void>[] = []
+    if (AniraWeb.runsOnWorkers(entry.descriptor)) {
+      for (const w of this.workers) {
+        done.push(
+          this.whileStopped(w, () =>
+            request<UnregisterStageMessage>(
+              w.worker,
+              { type: 'unregisterStage', jsKey },
+              'stageUnregistered'
+            )
           )
-        })
+        )
+      }
+    }
+    for (const [node, worklet] of this.worklets) {
+      if (worklet.stageKey !== jsKey) continue
+      worklet.stageKey = undefined
+      done.push(
+        request<UnregisterStageMessage>(
+          node.port,
+          { type: 'unregisterStage', jsKey },
+          'stageUnregistered'
+        )
       )
-    )
+    }
+    await Promise.all(done)
   }
 
   private static runsOnWorkers(descriptor: JSStageDescriptor): boolean {
@@ -325,13 +401,25 @@ export class AniraWeb {
     )
   }
 
+  /** Run `op` after the Worker's earlier operations; skipped once the Worker was stopped. */
+  private enqueue(w: WorkerEntry, op: () => Promise<void>): Promise<void> {
+    const run = w.queue.then(() => (w.stopped ? undefined : op()))
+    w.queue = run.catch(() => {})
+    return run
+  }
+
   /** A Worker handles messages only outside its loop: stop it, run `action`, restart it. */
-  private async whileStopped(w: WorkerEntry, action: () => Promise<void>): Promise<void> {
-    await w.thread.stop()
-    await action()
-    await w.thread.start(() =>
-      w.worker.postMessage({ type: 'start' } satisfies StartMessage)
-    )
+  private whileStopped(w: WorkerEntry, action: () => Promise<void>): Promise<void> {
+    return this.enqueue(w, async () => {
+      await w.thread.stop()
+      try {
+        await action()
+      } finally {
+        await w.thread.start(() =>
+          w.worker.postMessage({ type: 'start' } satisfies StartMessage)
+        )
+      }
+    })
   }
 
   // ---- inference Workers ----
@@ -395,6 +483,8 @@ export class AniraWeb {
         worker,
         thread,
         handle: { worker, thread, stop: async () => {} },
+        queue: Promise.resolve(),
+        stopped: false,
       }
       for (const entry of this.engines) await this.sendEngine(pending, entry)
       for (const entry of this.stages) {
@@ -416,14 +506,17 @@ export class AniraWeb {
     }
   }
 
-  private async stopWorker(entry: WorkerEntry, stack: InstanceStack): Promise<void> {
-    await entry.thread.stop()
-    entry.thread.destroy()
-    // The stack is the Worker instance's until it says it calls into the module no more.
-    await request<DestroyMessage>(entry.worker, { type: 'destroy' }, 'destroyed')
-    freeInstanceStack(this.module, stack)
-    const index = this.workers.indexOf(entry)
-    if (index !== -1) this.workers.splice(index, 1)
+  private stopWorker(entry: WorkerEntry, stack: InstanceStack): Promise<void> {
+    return this.enqueue(entry, async () => {
+      entry.stopped = true
+      const index = this.workers.indexOf(entry)
+      if (index !== -1) this.workers.splice(index, 1)
+      await entry.thread.stop()
+      entry.thread.destroy()
+      // The stack is the Worker instance's until it says it calls into the module no more.
+      await request<DestroyMessage>(entry.worker, { type: 'destroy' }, 'destroyed')
+      freeInstanceStack(this.module, stack)
+    })
   }
 
   // ---- the audio worklet ----
@@ -475,11 +568,10 @@ export class AniraWeb {
         'Invalid AudioWorklet IO config: channel counts and the quantum must be > 0'
       )
     }
-    let stage: AudioWorkletConfigureMessage['stage']
-    if (options.stageKey !== undefined) {
-      const entry = this.stages.find((s) => s.jsKey === options.stageKey)
-      if (!entry) throw new Error(`no JavaScript stage under js_key ${options.stageKey}`)
-      stage = { jsKey: entry.jsKey, className: entry.descriptor.className }
+    const stageEntry = this.workletStage(options)
+    const stage: AudioWorkletConfigureMessage['stage'] = stageEntry && {
+      jsKey: stageEntry.jsKey,
+      className: stageEntry.descriptor.className,
     }
 
     const wasmBinary = await this.ensureWasmBinary()
@@ -539,8 +631,45 @@ export class AniraWeb {
       freeInstanceStack(this.module, stack)
       throw error
     }
-    this.worklets.set(node, { stack })
+    this.worklets.set(node, { stack, stageKey: stage?.jsKey })
     return node
+  }
+
+  /**
+   * The JavaScript stage whose pre/post/reset the worklet must run: `stageKey`'s, or the one of
+   * `pipelinePtr` with worklet bits. A stage with worklet bits the options leave unnamed is an
+   * error here, not a failing hook at the first quantum.
+   */
+  private workletStage(options: ConfigureAudioWorkletOptions): StageEntry | undefined {
+    const runsInWorklet = (e: StageEntry) =>
+      (e.descriptor.hookMask & WORKLET_STAGE_HOOKS) !== 0
+    if (options.stageKey !== undefined) {
+      const entry = this.stages.find((e) => e.jsKey === options.stageKey)
+      if (!entry) throw new Error(`no JavaScript stage under js_key ${options.stageKey}`)
+      if (
+        options.pipelinePtr !== undefined &&
+        entry.pipelinePtr !== options.pipelinePtr
+      ) {
+        throw new Error(
+          `the JavaScript stage ${entry.jsKey} belongs to another pipeline than pipelinePtr`
+        )
+      }
+      return entry
+    }
+    if (options.pipelinePtr !== undefined) {
+      return this.stages.find(
+        (e) => e.pipelinePtr === options.pipelinePtr && runsInWorklet(e)
+      )
+    }
+    const unnamed = this.stages.filter(runsInWorklet)
+    if (unnamed.length > 0) {
+      throw new Error(
+        `JavaScript stage(s) ${unnamed.map((e) => `${e.jsKey} ('${e.descriptor.className}')`).join(', ')} ` +
+          "run pre/post/reset in the worklet: pass the handler pipeline's pipelinePtr or the stageKey " +
+          'to configureAudioWorklet, so the worklet constructs the stage it streams through'
+      )
+    }
+    return undefined
   }
 
   /**
