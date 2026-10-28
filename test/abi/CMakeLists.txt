@@ -45,6 +45,10 @@
 #                         by em_smoke.pre.js, one instance, the queue driven by
 #                         anira_inference_thread_execute; it also holds the link's
 #                         thread-local block to its 1024-byte budget
+#   anira_em_smoke_thread a user-driven inference thread for real: em_smoke_thread.mjs runs
+#                         a second instance in a worker_threads Worker, with its own stack
+#                         and thread-local block, inside anira_inference_thread_run_loop
+#                         (the park on the wake word, the notify, the has_exited stop)
 
 set(_abi_headers export status version enums log tensor config context core thread lifecycle stage engine handler draft/tensor_platform)
 # The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
@@ -207,6 +211,31 @@ if(_abi_on_wasm)
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js")
     set_property(TARGET anira_em_smoke APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js" "${_smoke_exports}")
+    # The inference thread for real (decision 9.12): an ES module of the same library that
+    # em_smoke_thread.mjs instantiates twice on one memory, once in a worker_threads Worker
+    # that runs anira_inference_thread_run_loop (the park, the notify, the has_exited stop).
+    add_executable(anira_em_smoke_thread em_smoke_thread.c)
+    anira_abi_consumer_target(anira_em_smoke_thread C)
+    target_link_libraries(anira_em_smoke_thread PRIVATE anira::anira)
+    target_compile_options(anira_em_smoke_thread PRIVATE -matomics -mbulk-memory)
+    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX SUFFIX ".mjs")
+    target_link_options(anira_em_smoke_thread PRIVATE
+        --no-entry
+        -sENVIRONMENT=node
+        -sMODULARIZE=1
+        -sEXPORT_ES6=1
+        -sIMPORTED_MEMORY=1
+        -sSHARED_MEMORY=1
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "-sEXPORTED_FUNCTIONS=@${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt"
+        "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"stackRestore\"]")
+    set_property(TARGET anira_em_smoke_thread APPEND PROPERTY LINK_DEPENDS
+        "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt")
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -216,7 +245,9 @@ if(_abi_on_wasm)
             -DACTUAL=${CMAKE_CURRENT_BINARY_DIR}/layout-${ANIRA_ABI_MAJOR}.actual.txt
             -P ${anira_SOURCE_DIR}/cmake/abi-layout-check.cmake
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke>
-        DEPENDS anira_abi_layout anira_em_smoke
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke_thread.mjs"
+            $<TARGET_FILE:anira_em_smoke_thread>
+        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

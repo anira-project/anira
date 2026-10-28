@@ -54,9 +54,9 @@ jobs:
       - name: run the WebAssembly ABI gates under node
         run: cmake --build --preset wasm-abi --target anira_abi_wasm_gates
 
-      # Every promised, draft and Emscripten entry point (and _malloc, _free) is an export of
-      # the module, read from the typing emcc emitted. The 2.x wrappers' own exports are
-      # counted, not refused, until the wrapper archive leaves the link.
+      # The module exports exactly the promised, draft and Emscripten entry points (and
+      # _malloc, _free), read from the typing emcc emitted: a name of the lists missing from
+      # the link, or an export no list has, fails the job.
       - name: check the exports of AniraWeb against the symbol lists
         run: |
           set -euo pipefail
@@ -65,13 +65,17 @@ jobs:
           { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
             | sort -u > "$RUNNER_TEMP/expected.txt"
           missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          extra=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
           if [ -n "$missing" ]; then
             echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
             echo "$missing"
-            exit 1
           fi
-          others=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt" | wc -l)
-          echo "all $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists are exported; $others other exports (the 2.x wrappers)"
+          if [ -n "$extra" ]; then
+            echo "::error::AniraWeb.d.ts exports names no symbol list has:"
+            echo "$extra"
+          fi
+          [ -z "$missing" ] && [ -z "$extra" ]
+          echo "the module exports exactly the $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists"
 
       - name: setup node
         uses: actions/setup-node@v5

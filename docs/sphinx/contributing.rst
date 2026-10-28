@@ -382,9 +382,12 @@ as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm3
 the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
 of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
 through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
-thread-local block to 1024 bytes; the workflow then checks that ``web/wasm/AniraWeb.d.ts``
-exports every name of ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and
-``abi/symbols-emscripten.txt``. Locally: ``cmake --preset wasm-abi``, then the build and the
+thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
+which runs a second instance in a ``worker_threads`` Worker inside
+``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
+stop); the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
+``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
 Reproducing CI locally

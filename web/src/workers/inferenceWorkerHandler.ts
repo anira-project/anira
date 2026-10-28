@@ -1,234 +1,171 @@
-import { AniraWeb } from '../AniraWeb'
 import { ONNXRuntimeWebBackend } from '../backends/ONNXRuntimeWebBackend'
-import type { AniraWasmConfig } from '../factory'
-import { createFactory } from '../utils'
-import type { JSBackendBase } from '../backends'
-import type { JSPrePostProcessor } from '../wrappers'
+import type { JSBackend, JSBackendEnv } from '../backends/JSBackend'
+import { createAniraWasm, type AniraModule } from '../runtime/createAniraWasm'
+import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
+  EngineRegisteredResponse,
+  EngineUnregisteredResponse,
+  ErrorResponse,
   InferenceWorkerMessage,
-  PrePostProcessorRegisteredResponse,
-  PrePostProcessorUnregisteredResponse,
-  ProcessorRegisteredResponse,
-  ProcessorUnregisteredResponse,
-  ReadyRespose,
-  StoppedResponse,
+  LogRecordMessage,
+  ReadyResponse,
+  StageRegisteredResponse,
+  StageUnregisteredResponse,
 } from './messages'
-import { InferenceThread } from '../wrappers/system/InferenceThread'
+
+/** Class name to JavaScript engine class: what a `registerEngine` message may name. */
+export type EngineClassMap = Record<string, new (env: JSBackendEnv) => JSBackend>
 
 /**
- * Map from class name to class constructor.
- * The handler uses this to instantiate the correct subclass when
- * `className` is provided in a `registerProcessor` message.
+ * Class name to JavaScript stage class: the stages whose `beforeInference` /
+ * `afterInference` run on this Worker.
  */
-type ProcessorClassMap = Record<string, typeof JSBackendBase>
+export type StageClassMap = Record<string, new (env: JSStageEnv) => JSStage>
 
 /**
- * Map from class name to :js:class:`JSPrePostProcessor` subclass constructor.
- * The handler uses this to reconstruct the correct subclass when a
- * `registerPrePostProcessor` message names one, so its
- * ``beforeInference`` / ``afterInference`` overrides run on this worker.
- */
-type PrePostProcessorClassMap = Record<string, typeof JSPrePostProcessor>
-
-type AniraCreateFn = (
-  config?: AniraWasmConfig & Record<string, unknown>,
-  memory?: WebAssembly.Memory
-) => Promise<AniraWeb>
-
-/**
- * Set up the inference worker message handler.
- *
- * Call this at the top level of your worker file, passing any custom
- * processor subclasses the worker should know about. The second argument
- * takes :js:class:`JSPrePostProcessor` subclasses whose
- * ``beforeInference`` / ``afterInference`` hooks should run on this worker
- * (registered from the main thread via
- * :js:meth:`AniraWeb.registerPrePostProcessor`):
+ * Set up the inference worker message handler. Call it at the top level of your worker file,
+ * passing the JavaScript engine classes (beside the built-in `ONNXRuntimeWebBackend`) and the
+ * stage classes the Worker should know:
  *
  * ```ts
  * // my-inference-worker.ts
- * import { setupInferenceWorker } from './inferenceWorkerHandler'
- * import { CustomJSBackend } from '../custom-js-backend'
- * import { StatefulPrePostProcessor } from '../stateful-pre-post-processor'
+ * import { setupInferenceWorker } from '@anira-project/anira'
+ * import { MyEngine } from './my-engine'
+ * import { MyStage } from './my-stage'
  *
- * setupInferenceWorker({ CustomJSBackend }, { StatefulPrePostProcessor })
+ * setupInferenceWorker({ MyEngine }, { MyStage })
  * ```
+ *
+ * The protocol: `initInferenceWorker` instantiates the module on the shared memory and enters
+ * the Worker's stack (`anira_em_init_instance`), `registerEngine` / `registerStage` put an
+ * object into this instance's hook registry under its `js_key` (an engine's `init()` is awaited
+ * first), and `start` runs `_anira_inference_thread_run_loop` until main stops the thread,
+ * which main sees through `has_exited`. While the loop runs the Worker handles no message, so
+ * main stops the thread before it registers anything more.
  */
 export const setupInferenceWorker = (
-  customProcessorClasses: ProcessorClassMap = {},
-  customPrePostProcessorClasses: PrePostProcessorClassMap = {},
-  createAnira: AniraCreateFn = (config, memory) => AniraWeb.create(config, memory)
+  customEngineClasses: EngineClassMap = {},
+  stageClasses: StageClassMap = {}
 ) => {
-  const processorClasses: ProcessorClassMap = {
+  const engineClasses: EngineClassMap = {
     ONNXRuntimeWebBackend,
-    ...customProcessorClasses,
+    ...customEngineClasses,
   }
-  const prePostProcessorClasses: PrePostProcessorClassMap = {
-    ...customPrePostProcessorClasses,
-  }
-  let aniraWeb: AniraWeb
-  let thread: InferenceThread
-  const processorRegistry = new Map<number, JSBackendBase>()
-  const prePostRegistry = new Map<number, JSPrePostProcessor>()
+  let anira: AniraModule | null = null
+  let threadPtr = 0
+  const engines = new Map<number, JSBackend>()
 
-  self.onmessage = async (e: MessageEvent<InferenceWorkerMessage>) => {
-    switch (e.data.type) {
+  const handle = async (message: InferenceWorkerMessage): Promise<void> => {
+    switch (message.type) {
       case 'initInferenceWorker': {
-        const { threadPtr, wasmMemory, stackPtr } = e.data
-
-        aniraWeb = await createAnira(
-          {
-            processBuffers: (
-              processorPtr: number,
-              inputPtr: number,
-              outputPtr: number
-            ) => {
-              const processor = processorRegistry.get(processorPtr)
-              if (!processor) {
-                throw new Error(
-                  `JSProcessor with pointer ${processorPtr} is not registered in this worker. ` +
-                    `Call registerProcessor() before starting inference.`
-                )
-              }
-              processor.process(inputPtr, outputPtr)
-            },
-            // before_inference / after_inference fire here on the inference
-            // thread (phases 2 and 3). pre/post_process (phases 0/1) run on the
-            // audio worklet, never this worker, but are dispatched for symmetry
-            // with the worklet's handler.
-            processPrePost: (
-              prePostProcessorPtr: number,
-              inputPtr: number,
-              outputPtr: number,
-              backend: number,
-              phase: number
-            ) => {
-              const prePostProcessor = prePostRegistry.get(prePostProcessorPtr)
-              if (!prePostProcessor) {
-                throw new Error(
-                  `JSPrePostProcessor with pointer ${prePostProcessorPtr} is not registered in this worker. ` +
-                    `Call AniraWeb.registerPrePostProcessor() before starting inference.`
-                )
-              }
-              switch (phase) {
-                case 0:
-                  prePostProcessor.preProcess(inputPtr, outputPtr, backend)
-                  return
-                case 1:
-                  prePostProcessor.postProcess(inputPtr, outputPtr, backend)
-                  return
-                case 2:
-                  prePostProcessor.beforeInference(inputPtr, backend)
-                  return
-                case 3:
-                  prePostProcessor.afterInference(outputPtr, backend)
-                  return
-                default:
-                  throw new Error(`Unknown pre/post phase: ${phase}`)
-              }
-            },
-          },
-          wasmMemory
-        )
-        aniraWeb.stackRestore(stackPtr)
-
-        const t = aniraWeb.InferenceThread.fromPointer(threadPtr)
-        if (!t) return
-        thread = t
-
-        postMessage({ type: 'ready' } satisfies ReadyRespose)
-        break
+        anira = await createAniraWasm(message.wasmMemory, {
+          wasmBinary: message.wasmBinary,
+          stack: { base: message.stackBase, bytes: message.stackBytes },
+        })
+        // Records this instance's hook receives (a log call on this thread) go to main.
+        anira.hooks.log = (record) =>
+          postMessage({ type: 'log', record } satisfies LogRecordMessage)
+        threadPtr = message.threadPtr
+        postMessage({ type: 'ready' } satisfies ReadyResponse)
+        return
       }
 
-      case 'registerProcessor': {
-        const { processorPtr, className, inferenceConfigPtr } = e.data
-        if (!processorRegistry.has(processorPtr)) {
-          let instance: JSBackendBase
-          if (className && processorClasses[className]) {
-            const factory = createFactory(
-              aniraWeb.getWasmInstance(),
-              processorClasses[className]
-            )
-            instance = factory.fromPointer(processorPtr)
-          } else {
-            instance = aniraWeb.JSBackendBase.fromPointer(processorPtr)
-          }
-          if (inferenceConfigPtr) {
-            instance.inferenceConfigPtr = inferenceConfigPtr
-          }
-          await instance.init()
-          processorRegistry.set(processorPtr, instance)
+      case 'registerEngine': {
+        const a = requireModule(anira)
+        const Engine = engineClasses[message.className]
+        if (!Engine) {
+          throw new Error(
+            `no engine class '${message.className}' in this worker; pass it to setupInferenceWorker()`
+          )
+        }
+        if (!engines.has(message.jsKey)) {
+          const engine = new Engine({
+            module: a.module,
+            heap: a.heap,
+            engineId: message.engineId,
+            modelConfigPtr: message.modelConfigPtr,
+            modelIndex: message.modelIndex,
+          })
+          await engine.init()
+          engines.set(message.jsKey, engine)
+          a.hooks.engines.set(message.jsKey, engine)
         }
         postMessage({
-          type: 'processorRegistered',
-        } satisfies ProcessorRegisteredResponse)
-        break
+          type: 'engineRegistered',
+          jsKey: message.jsKey,
+        } satisfies EngineRegisteredResponse)
+        return
       }
 
-      case 'unregisterProcessor': {
-        const { processorPtr } = e.data
-        const instance = processorRegistry.get(processorPtr)
-        if (instance) {
-          instance.destroy()
-          processorRegistry.delete(processorPtr)
-        }
+      case 'unregisterEngine': {
+        const a = requireModule(anira)
+        engines.get(message.jsKey)?.destroy()
+        engines.delete(message.jsKey)
+        a.hooks.engines.delete(message.jsKey)
         postMessage({
-          type: 'processorUnregistered',
-        } satisfies ProcessorUnregisteredResponse)
-        break
+          type: 'engineUnregistered',
+          jsKey: message.jsKey,
+        } satisfies EngineUnregisteredResponse)
+        return
       }
 
-      case 'registerPrePostProcessor': {
-        const { prePostProcessorPtr, className } = e.data
-        if (!prePostRegistry.has(prePostProcessorPtr)) {
-          let instance: JSPrePostProcessor
-          if (className && prePostProcessorClasses[className]) {
-            const factory = createFactory(
-              aniraWeb.getWasmInstance(),
-              prePostProcessorClasses[className]
-            )
-            instance = factory.fromPointer(prePostProcessorPtr)
-          } else {
-            instance = aniraWeb.JSPrePostProcessor.fromPointer(prePostProcessorPtr)
-          }
-          // Arm the C++ before/after_inference JS callbacks for this processor.
-          // Until now the hooks short-circuit to the base no-op without crossing
-          // into JS; registering here signals that JS wants them.
-          instance.setInferenceHooks(true)
-          prePostRegistry.set(prePostProcessorPtr, instance)
+      case 'registerStage': {
+        const a = requireModule(anira)
+        const Stage = stageClasses[message.className]
+        if (!Stage) {
+          throw new Error(
+            `no stage class '${message.className}' in this worker; pass it to setupInferenceWorker()`
+          )
+        }
+        if (!a.hooks.stages.has(message.jsKey)) {
+          a.hooks.stages.set(message.jsKey, new Stage({ module: a.module, heap: a.heap }))
         }
         postMessage({
-          type: 'prePostProcessorRegistered',
-        } satisfies PrePostProcessorRegisteredResponse)
-        break
+          type: 'stageRegistered',
+          jsKey: message.jsKey,
+        } satisfies StageRegisteredResponse)
+        return
       }
 
-      case 'unregisterPrePostProcessor': {
-        const { prePostProcessorPtr } = e.data
-        const instance = prePostRegistry.get(prePostProcessorPtr)
-        if (instance) {
-          instance.setInferenceHooks(false)
-          // Do NOT destroy(): this is a view onto a C++ object owned by the main
-          // thread (created via aniraWeb.JSPrePostProcessor()) and shared across
-          // threads. The main thread frees it — see the lifecycle docs.
-          prePostRegistry.delete(prePostProcessorPtr)
-        }
+      case 'unregisterStage': {
+        requireModule(anira).hooks.stages.delete(message.jsKey)
         postMessage({
-          type: 'prePostProcessorUnregistered',
-        } satisfies PrePostProcessorUnregisteredResponse)
-        break
+          type: 'stageUnregistered',
+          jsKey: message.jsKey,
+        } satisfies StageUnregisteredResponse)
+        return
       }
 
       case 'start': {
-        thread.runLoop()
-        postMessage({ type: 'stopped' } satisfies StoppedResponse)
-        break
+        // Blocks this Worker until main stops the thread; the loop parks on the wake word
+        // while the queue is empty.
+        requireModule(anira).module._anira_inference_thread_run_loop(threadPtr)
+        return
       }
 
       case 'destroy': {
+        for (const engine of engines.values()) engine.destroy()
+        engines.clear()
         close()
-        break
+        return
       }
     }
   }
+
+  self.onmessage = async (e: MessageEvent<InferenceWorkerMessage>) => {
+    try {
+      await handle(e.data)
+    } catch (error) {
+      postMessage({
+        type: 'error',
+        message: error instanceof Error ? error.message : String(error),
+      } satisfies ErrorResponse)
+    }
+  }
+}
+
+const requireModule = (anira: AniraModule | null): AniraModule => {
+  if (!anira)
+    throw new Error('the inference worker received a request before initInferenceWorker')
+  return anira
 }

@@ -1,19 +1,24 @@
-import { AniraWeb } from '../AniraWeb'
-import type { InferenceHandler, JSPrePostProcessor } from '../wrappers'
+import { ANIRA_DTYPE_F32 } from '../abi/enums'
+import { anira_tensor } from '../abi/layout'
+import { createAniraWasm, type AniraModule } from '../runtime/createAniraWasm'
+import type { JSStage, JSStageEnv } from '../runtime/hooks'
 import type {
   AudioWorkletConfigureMessage,
   AudioWorkletIOConfig,
-  ReadyRespose,
+  ErrorResponse,
+  LogRecordMessage,
+  QuantumChangedMessage,
+  ReadyResponse,
 } from './messages'
 
 // AudioWorkletGlobalScope has no `performance` object
 // (https://github.com/WebAudio/web-audio-api/issues/2413), but the Emscripten
 // runtime implements clock_time_get via `performance.now()`. Any wasm code
-// path that reads a clock on the audio thread — e.g. the timed semaphore wait
-// used when InferenceConfig's blocking_ratio > 0 — would otherwise throw a
-// ReferenceError. Polyfill with a monotonic Date.now()-based clock (the same
-// fallback Emscripten's own -sAUDIO_WORKLET mode uses); the runtime assumes
-// the clock never goes backwards, so clamp against NTP steps.
+// path that reads a clock on the audio thread — e.g. the bounded wait of
+// anira_handler_process_wait — would otherwise throw a ReferenceError.
+// Polyfill with a monotonic Date.now()-based clock (the same fallback
+// Emscripten's own -sAUDIO_WORKLET mode uses); the runtime assumes the clock
+// never goes backwards, so clamp against NTP steps.
 if (typeof (globalThis as { performance?: unknown }).performance === 'undefined') {
   const timeOrigin = Date.now()
   let last = 0
@@ -23,23 +28,46 @@ if (typeof (globalThis as { performance?: unknown }).performance === 'undefined'
   }
 }
 
-export type AniraWorkletState = {
-  wasmMemory: WebAssembly.Memory
-  aniraWeb: AniraWeb
-  inferenceHandler: InferenceHandler
-  prePostProcessorPtr: number
-  inputBufferPtr: number
-  outputBufferPtr: number
-  inputDataBuffer: number
-  outputDataBuffer: number
-  ioConfig: AudioWorkletIOConfig
-  inputChannelViews: Float32Array[]
-  outputChannelViews: Float32Array[]
+/**
+ * One direction of the worklet's host block: a planar host tensor
+ * (`anira_tensor_init_host_planar`, shape `[channels, quantum]`) over one heap buffer per
+ * channel, and the `Float32Array` views the worklet copies through.
+ */
+export type PlanarBlock = {
+  tensor: number
+  planes: number
+  shape: number
+  data: number
+  channels: number
+  quantum: number
+  views: Float32Array[]
 }
 
+export type AniraWorkletState = {
+  anira: AniraModule
+  handlerPtr: number
+  ioConfig: AudioWorkletIOConfig
+  input: PlanarBlock | null
+  output: PlanarBlock | null
+  /** A `size_t` the process call writes the delivered sample count to. */
+  deliveredPtr: number
+}
+
+/** Class name to JavaScript stage class: the stages whose pre/post/reset run here. */
+export type WorkletStageClassMap = Record<string, new (env: JSStageEnv) => JSStage>
+
+/**
+ * The audio worklet of anira: one `anira_handler_process` per render quantum, over planar
+ * input and output tensors built once and rebuilt only when the quantum or a channel count
+ * changes. The handler's Hard contract declares `block_min = block_max = quantum` (128 by
+ * default); a quantum the browser changes is reported to main (`'quantumChanged'`), which
+ * re-prepares the handler, since a call above the declared block is refused (the quantum
+ * outputs silence until then). Subclasses name their JavaScript stages in `stageClasses`.
+ */
 export class AniraAudioWorkletBase extends AudioWorkletProcessor {
   protected aniraState: AniraWorkletState | null = null
-  protected prePostRegistry = new Map<number, JSPrePostProcessor>()
+  /** The stage classes this worklet can run; override in a subclass. */
+  protected stageClasses: WorkletStageClassMap = {}
 
   private clearOutputs(outputs: Float32Array[][]): void {
     for (const outputNode of outputs) {
@@ -55,223 +83,171 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     this.port.onmessage = async (e: MessageEvent<AudioWorkletConfigureMessage>) => {
       const message = e.data
       if (message.type !== 'configure') return
-
-      const {
-        inferenceHandlerPtr,
-        prePostProcessorPtr,
-        inputBufferPtr,
-        outputBufferPtr,
-        inputDataBuffer,
-        outputDataBuffer,
-        wasmMemory,
-        wasmBinary,
-        stackPtr,
-        ioConfig,
-      } = message
-
-      const aniraWeb = await AniraWeb.create(
-        {
-          wasmBinary,
-          processPrePost: (
-            prePostProcessorPtr: number,
-            inputPtr: number,
-            outputPtr: number,
-            backend: number,
-            phase: number
-          ) => {
-            const prePostProcessor = this.prePostRegistry.get(prePostProcessorPtr)
-            if (prePostProcessor) {
-              // pre/post_process (phases 0/1) fire here on the audio worklet.
-              // before/after_inference (phases 2/3) fire on the inference
-              // worker instead, but are dispatched for symmetry with the
-              // inference worker's handler.
-              switch (phase) {
-                case 0:
-                  prePostProcessor.preProcess(inputPtr, outputPtr, backend)
-                  return
-                case 1:
-                  prePostProcessor.postProcess(inputPtr, outputPtr, backend)
-                  return
-                case 2:
-                  prePostProcessor.beforeInference(inputPtr, backend)
-                  return
-                case 3:
-                  prePostProcessor.afterInference(outputPtr, backend)
-                  return
-                default:
-                  throw new Error(`Unknown pre/post phase: ${phase}`)
-              }
-            }
-
-            throw new Error(
-              `JSPrePostProcessor with pointer ${prePostProcessorPtr} is not registered. ` +
-                `Call this.prePostRegistry.set(prePostProcessorPtr, prePostProcessor) before processing.`
-            )
-          },
-        },
-        wasmMemory
-      )
-      aniraWeb.stackRestore(stackPtr)
-      const inferenceHandler = aniraWeb.InferenceHandler.fromPointer(inferenceHandlerPtr)
-      if (!inferenceHandler) {
-        console.error('Failed to create inference handler from pointer')
-        return
+      try {
+        await this.configure(message)
+        this.port.postMessage({ type: 'ready' } satisfies ReadyResponse)
+      } catch (error) {
+        this.port.postMessage({
+          type: 'error',
+          message: error instanceof Error ? error.message : String(error),
+        } satisfies ErrorResponse)
       }
-
-      const bytesPerChannel = ioConfig.maxBufferSize * Float32Array.BYTES_PER_ELEMENT
-      const inputChannelViews: Float32Array[] = []
-      const outputChannelViews: Float32Array[] = []
-      for (let i = 0; i < ioConfig.inputChannels; i++) {
-        inputChannelViews.push(
-          new Float32Array(
-            wasmMemory.buffer,
-            inputDataBuffer + i * bytesPerChannel,
-            ioConfig.maxBufferSize
-          )
-        )
-      }
-      for (let i = 0; i < ioConfig.outputChannels; i++) {
-        outputChannelViews.push(
-          new Float32Array(
-            wasmMemory.buffer,
-            outputDataBuffer + i * bytesPerChannel,
-            ioConfig.maxBufferSize
-          )
-        )
-      }
-
-      this.aniraState = {
-        wasmMemory,
-        aniraWeb,
-        inferenceHandler,
-        prePostProcessorPtr,
-        inputBufferPtr,
-        outputBufferPtr,
-        inputDataBuffer,
-        outputDataBuffer,
-        ioConfig,
-        inputChannelViews,
-        outputChannelViews,
-      }
-
-      await this.onConfigured(this.aniraState)
-      this.port.postMessage({ type: 'ready' } satisfies ReadyRespose)
     }
+  }
+
+  private async configure(message: AudioWorkletConfigureMessage): Promise<void> {
+    const anira = await createAniraWasm(message.wasmMemory, {
+      wasmBinary: message.wasmBinary,
+      stack: { base: message.stackBase, bytes: message.stackBytes },
+    })
+    anira.hooks.log = (record) =>
+      this.port.postMessage({ type: 'log', record } satisfies LogRecordMessage)
+    if (message.stage) {
+      const Stage = this.stageClasses[message.stage.className]
+      if (!Stage) {
+        throw new Error(
+          `no stage class '${message.stage.className}' in this worklet; add it to stageClasses`
+        )
+      }
+      anira.hooks.stages.set(
+        message.stage.jsKey,
+        new Stage({ module: anira.module, heap: anira.heap })
+      )
+    }
+    this.aniraState = {
+      anira,
+      handlerPtr: message.handlerPtr,
+      ioConfig: message.ioConfig,
+      input: null,
+      output: null,
+      deliveredPtr: anira.heap.malloc(4),
+    }
+    await this.onConfigured(this.aniraState)
   }
 
   protected async onConfigured(_state: AniraWorkletState) {
     // Hook for subclasses that need one-time setup after configure.
   }
 
-  /**
-   * Copy a slice of `inputNode` channels into a contiguous range of
-   * `inputChannelViews`. Missing source channels are zero-filled.
-   */
-  protected copyAudioInputsToChannels(
-    inputNode: Float32Array[] | undefined,
+  /** A planar host block of `channels` x `quantum` float32 samples, in the heap. */
+  protected buildPlanarBlock(
     state: AniraWorkletState,
-    bufferSize: number,
-    channelOffset = 0,
-    channelCount = state.inputChannelViews.length - channelOffset
-  ): void {
-    const views = state.inputChannelViews
-    const provided = inputNode?.length ?? 0
-    const copyCount = Math.min(provided, channelCount)
-    for (let ch = 0; ch < copyCount; ch++) {
-      views[channelOffset + ch].set(inputNode![ch], 0)
+    channels: number,
+    quantum: number
+  ): PlanarBlock {
+    const { heap, module } = state.anira
+    const bytesPerChannel = quantum * Float32Array.BYTES_PER_ELEMENT
+    const data = heap.malloc(bytesPerChannel * channels)
+    const planes = heap.malloc(channels * 4)
+    const shape = heap.malloc(16)
+    const tensor = heap.malloc(anira_tensor.size)
+    const views: Float32Array[] = []
+    for (let ch = 0; ch < channels; ch++) {
+      heap.writeU32(planes + ch * 4, data + ch * bytesPerChannel)
+      views.push(
+        new Float32Array(state.anira.memory.buffer, data + ch * bytesPerChannel, quantum)
+      )
     }
-    for (let ch = copyCount; ch < channelCount; ch++) {
-      views[channelOffset + ch].fill(0, 0, bufferSize)
-    }
+    heap.writeI64(shape, BigInt(channels))
+    heap.writeI64(shape + 8, BigInt(quantum))
+    module._anira_tensor_init_host_planar(
+      tensor,
+      planes,
+      channels,
+      ANIRA_DTYPE_F32,
+      2,
+      shape
+    )
+    return { tensor, planes, shape, data, channels, quantum, views }
   }
 
-  /**
-   * Copy a contiguous range of `outputChannelViews` back into `outputNode`.
-   * No-op if no output node is connected or no samples were produced.
-   */
-  protected copyAudioOutputsFromChannels(
-    outputNode: Float32Array[] | undefined,
-    state: AniraWorkletState,
-    samplesProcessed: number,
-    channelOffset = 0,
-    channelCount = state.outputChannelViews.length - channelOffset
-  ): void {
-    if (!outputNode?.length || samplesProcessed <= 0) return
-    const views = state.outputChannelViews
-    const count = Math.min(outputNode.length, channelCount)
-    for (let ch = 0; ch < count; ch++) {
-      const src = views[channelOffset + ch]
-      const dst = outputNode[ch]
-      const n = Math.min(samplesProcessed, dst.length, state.ioConfig.maxBufferSize)
-      for (let i = 0; i < n; i++) {
-        dst[i] = src[i]
-      }
-    }
+  protected freePlanarBlock(state: AniraWorkletState, block: PlanarBlock | null): void {
+    if (!block) return
+    const { heap } = state.anira
+    heap.free(block.tensor)
+    heap.free(block.shape)
+    heap.free(block.planes)
+    heap.free(block.data)
   }
 
-  /**
-   * Build the `float***` pointer structure that `processMulti` expects, by
-   * slicing the existing `inputBufferPtr` / `outputBufferPtr` (both already
-   * `float**`s of channel pointers laid out contiguously by
-   * `configureAudioWorklet`).
-   *
-   * `channelsPerTensor` describes how the contiguous channel range is split
-   * across tensors — e.g. `[2, 1]` means tensor 0 owns channels 0–1 and
-   * tensor 1 owns channel 2. Also allocates a `size_t[numTensors]` array
-   * for per-tensor sample counts.
-   */
-  protected buildMultiTensorPointers(
-    direction: 'input' | 'output',
-    channelsPerTensor: number[]
-  ): { tensorPtrs: number; numSamplesPtr: number } {
-    const state = this.aniraState
-    if (!state) {
-      throw new Error('buildMultiTensorPointers called before configure')
+  /** Rebuild the blocks when the quantum or a channel count changed; true when they did. */
+  private ensureBlocks(state: AniraWorkletState, quantum: number): boolean {
+    const { ioConfig } = state
+    if (
+      state.input?.quantum === quantum &&
+      state.output?.quantum === quantum &&
+      state.input.channels === ioConfig.inputChannels &&
+      state.output.channels === ioConfig.outputChannels
+    ) {
+      return false
     }
-    const { aniraWeb } = state
-    const baseBufferPtr =
-      direction === 'input' ? state.inputBufferPtr : state.outputBufferPtr
-    const heapU32 = aniraWeb.getHeapU32()
-    const numTensors = channelsPerTensor.length
-
-    const tensorPtrs = aniraWeb.malloc(numTensors * 4)
-    let channelOffset = 0
-    for (let i = 0; i < numTensors; i++) {
-      heapU32[tensorPtrs / 4 + i] = baseBufferPtr + channelOffset * 4
-      channelOffset += channelsPerTensor[i]
+    const previous = state.input?.quantum
+    this.freePlanarBlock(state, state.input)
+    this.freePlanarBlock(state, state.output)
+    state.input = this.buildPlanarBlock(state, ioConfig.inputChannels, quantum)
+    state.output = this.buildPlanarBlock(state, ioConfig.outputChannels, quantum)
+    if (previous !== undefined && previous !== quantum) {
+      this.port.postMessage({
+        type: 'quantumChanged',
+        quantum,
+      } satisfies QuantumChangedMessage)
     }
-    const numSamplesPtr = aniraWeb.malloc(numTensors * 4)
-    return { tensorPtrs, numSamplesPtr }
+    return true
   }
 
   protected processAudioBlock(
     inputs: Float32Array[][],
     outputs: Float32Array[][],
     state: AniraWorkletState,
-    bufferSize: number,
+    quantum: number,
     _parameters: Record<string, Float32Array>
   ): void {
-    const { inferenceHandler, inputBufferPtr, outputBufferPtr, ioConfig } = state
+    const { ioConfig, anira, handlerPtr, deliveredPtr } = state
+    this.ensureBlocks(state, quantum)
+    const input = state.input!
+    const output = state.output!
     const inputNode = inputs[ioConfig.inputNodeIndex]
     const outputNode = outputs[ioConfig.outputNodeIndex]
 
-    if (outputNode && outputNode.length > 0) {
-      for (let ch = 0; ch < outputNode.length; ch++) {
-        outputNode[ch].fill(0)
-      }
+    for (let ch = 0; ch < input.channels; ch++) {
+      const source = inputNode?.[ch]
+      if (source) input.views[ch].set(source.subarray(0, quantum))
+      else input.views[ch].fill(0)
     }
 
-    this.copyAudioInputsToChannels(inputNode, state, bufferSize)
+    const status =
+      ioConfig.waitMs > 0
+        ? anira.module._anira_handler_process_wait(
+            handlerPtr,
+            input.tensor,
+            ioConfig.inputSlot,
+            output.tensor,
+            ioConfig.outputSlot,
+            deliveredPtr,
+            ioConfig.waitMs
+          )
+        : anira.module._anira_handler_process(
+            handlerPtr,
+            input.tensor,
+            ioConfig.inputSlot,
+            output.tensor,
+            ioConfig.outputSlot,
+            deliveredPtr
+          )
+    const delivered = (status | 0) < 0 ? 0 : anira.heap.readU32(deliveredPtr)
 
-    const samplesProcessed = inferenceHandler.process(
-      inputBufferPtr,
-      bufferSize,
-      outputBufferPtr,
-      bufferSize,
-      0
-    )
-
-    this.copyAudioOutputsFromChannels(outputNode, state, samplesProcessed)
+    if (!outputNode) return
+    for (let ch = 0; ch < outputNode.length; ch++) {
+      const destination = outputNode[ch]
+      if (ch < output.channels && delivered > 0) {
+        destination.set(
+          output.views[ch].subarray(0, Math.min(delivered, destination.length))
+        )
+        destination.fill(0, delivered)
+      } else {
+        destination.fill(0)
+      }
+    }
   }
 
   process(
@@ -287,14 +263,10 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
 
     const outputNode = outputs[this.aniraState.ioConfig.outputNodeIndex]
     const inputNode = inputs[this.aniraState.ioConfig.inputNodeIndex]
-    const requestedBufferSize = outputNode?.[0]?.length || inputNode?.[0]?.length || 0
-    const bufferSize = Math.min(
-      requestedBufferSize,
-      this.aniraState.ioConfig.maxBufferSize
-    )
-    if (bufferSize === 0) return true
+    const quantum = outputNode?.[0]?.length || inputNode?.[0]?.length || 0
+    if (quantum === 0) return true
 
-    this.processAudioBlock(inputs, outputs, this.aniraState, bufferSize, parameters)
+    this.processAudioBlock(inputs, outputs, this.aniraState, quantum, parameters)
     return true
   }
 }

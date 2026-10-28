@@ -1,14 +1,11 @@
-import { JSBackendBase } from './JSBackendBase'
-import { BufferF } from '../wrappers/utils/BufferF'
-import { VectorBufferF } from '../wrappers/Vectors'
-import { InferenceConfig } from '../wrappers/InferenceConfig'
-import { ModelData } from '../wrappers/ModelData'
+import { anira_status } from '../abi/enums'
+import { Heap } from '../runtime/Heap'
+import { JSBackend } from './JSBackend'
 
 // onnxruntime-web 1.19.2 doesn't expose this WASM module factory via its
 // package `exports` field. The Vite config aliases this specifier to
 // node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs.
 import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
-import { createInferenceBackend } from '../wrappers'
 
 // Shared ORT WASM module — loaded once and reused across all backend instances
 // to avoid accumulating WebAssembly.Memory allocations (causes OOM on Safari).
@@ -107,12 +104,18 @@ interface TensorMeta {
   flatSize: number
 }
 
+/** The engine id the ONNX Runtime Web engine is registered under. */
+export const ONNXRUNTIME_WEB_ENGINE_ID = 'org.anira.onnxruntime-web'
+
 /**
- * ONNX Runtime Web backend implementation.
- * Loads the ORT WASM module directly for synchronous inference in the
- * process() callback, mirroring the native ONNX Runtime adapter (src/engines/OnnxRuntimeAdapter.cpp).
+ * ONNX Runtime Web as a JavaScript engine of anira (`org.anira.onnxruntime-web`, registered
+ * with `_anira_em_pipeline_register_js_engine`). It loads the ORT WASM module directly for
+ * synchronous inference in `process()`, mirroring the native ONNX Runtime adapter
+ * (src/engines/OnnxRuntimeAdapter.cpp): one float32 ORT tensor per model tensor of the call,
+ * shaped by the session's metadata (a single dynamic dimension resolved from the element
+ * count), the outputs copied back into the call's tensors.
  */
-export class ONNXRuntimeWebBackend extends JSBackendBase {
+export class ONNXRuntimeWebBackend extends JSBackend {
   private ort: OrtWasmModule | null = null
   private sessionHandle: number = 0
   private runOptionsHandle: number = 0
@@ -120,48 +123,13 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
   private outputMeta: TensorMeta[] = []
 
   /**
-   * Async initialization: loads the ORT WASM module, creates an inference
-   * session from the model binary stored in anira's shared WASM memory.
-   * Called automatically by the worker handler after processor registration.
+   * Loads the ORT WASM module and creates a session from the model entry the engine was
+   * registered with: its bytes (`anira_model_config_model_bytes`) or the URL in its path
+   * (`anira_model_config_model_path`), fetched. Awaited by the Worker before it reports the
+   * engine registered.
    */
-  async init(): Promise<void> {
-    const m = this.wasmInstance
-    const inferenceBackend = createInferenceBackend(m)
-    const configPtr = this.inferenceConfigPtr
-    if (!configPtr) {
-      throw new Error(
-        'ONNXRuntimeWebBackend: no inferenceConfigPtr – was the backend registered correctly?'
-      )
-    }
-
-    // --- Extract model binary from anira WASM memory ---
-    const config = this.wrapPointer(InferenceConfig, configPtr)
-    const customBackend = inferenceBackend.CUSTOM
-    const modelDataPtr = config.getModelData(customBackend)
-    if (!modelDataPtr) {
-      throw new Error('ONNXRuntimeWebBackend: no model data for CUSTOM backend')
-    }
-
-    const modelData = this.wrapPointer(ModelData, modelDataPtr)
-    let modelBytes: Uint8Array
-
-    if (modelData.isBinary()) {
-      const modelBinaryPtr = modelData.getDataPtr()
-      const modelSize = modelData.getSize()
-      modelBytes = new Uint8Array(m.HEAPU32.buffer, modelBinaryPtr, modelSize).slice()
-    } else {
-      const pathPtr = modelData.getDataPtr()
-      const pathLen = modelData.getSize()
-      const pathBytes = new Uint8Array(m.HEAPU32.buffer, pathPtr, pathLen).slice()
-      const modelUrl = new TextDecoder().decode(pathBytes)
-      const response = await fetch(modelUrl)
-      if (!response.ok) {
-        throw new Error(
-          `ONNXRuntimeWebBackend: failed to fetch model from ${modelUrl}: ${response.status}`
-        )
-      }
-      modelBytes = new Uint8Array(await response.arrayBuffer())
-    }
+  override async init(): Promise<void> {
+    const modelBytes = await this.readModel()
 
     // --- Load ORT WASM module (shared singleton to avoid repeated memory allocs) ---
     ortModulePromise ??= ortWasmFactory({ numThreads: 1 }) as Promise<OrtWasmModule>
@@ -193,16 +161,8 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
     ort._OrtReleaseSessionOptions(sessionOpts)
 
     if (this.sessionHandle === 0) {
-      const ptrSize = ort.PTR_SIZE
-      const errStack = ort.stackSave()
-      const errBuf = ort.stackAlloc(2 * ptrSize)
-      ort._OrtGetLastError(errBuf, errBuf + ptrSize)
-      const errCode = Number(ort.getValue(errBuf, ptrSize === 4 ? 'i32' : 'i64'))
-      const errMsgPtr = Number(ort.getValue(errBuf + ptrSize, '*'))
-      const errMsg = errMsgPtr ? ort.UTF8ToString(errMsgPtr) : ''
-      ort.stackRestore(errStack)
       throw new Error(
-        `ONNXRuntimeWebBackend: _OrtCreateSession failed (code=${errCode}): ${errMsg}`
+        `ONNXRuntimeWebBackend: _OrtCreateSession failed: ${this.lastError()}`
       )
     }
 
@@ -229,67 +189,38 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
 
     this.inputMeta = this.queryMetadata(ort, 0, inputCount)
     this.outputMeta = this.queryMetadata(ort, inputCount, outputCount)
-
-    // --- Warm-up inference (non-fatal, matches C++ behaviour) ---
-    // Skip warm-up when any input has dynamic dims — we can't construct a
-    // valid concrete shape without actual buffer data.
-    const hasDynamicDims = this.inputMeta.some((m) => m.dims.includes(-1))
-    if (!hasDynamicDims) {
-      const warmUp = config.getWarmUp()
-      for (let i = 0; i < warmUp; i++) {
-        try {
-          const inputs = this.createZeroInputs()
-          const outputs = this.runOrt(inputs)
-          for (const t of outputs) if (t !== 0) ort._OrtReleaseTensor(t)
-        } catch {
-          break
-        }
-      }
-    }
   }
 
-  override process(inputVecPtr: number, outputVecPtr: number): void {
-    if (!this.ort || !this.sessionHandle) {
-      super.process(inputVecPtr, outputVecPtr)
-      return
-    }
-
-    const heapF32 = this.wasmInstance.HEAPF32
+  override process(ctx: number, _prepared: number): number {
     const ort = this.ort
-    const inputVec = this.wrapPointer(VectorBufferF, inputVecPtr)
-    const outputVec = this.wrapPointer(VectorBufferF, outputVecPtr)
+    if (!ort || !this.sessionHandle) return anira_status.ANIRA_ERROR_INVALID_STATE
 
-    const numInputBufs = inputVec.size()
-    const numOutputBufs = outputVec.size()
+    const heapF32 = this.env.heap.f32
+    const inputs = this.inputs(ctx)
+    const outputs = this.outputs(ctx)
+    if (inputs.some((t) => t.f32Index === 0) || outputs.some((t) => t.f32Index === 0)) {
+      // A tensor that is not host float32: this engine reads and writes float32 alone.
+      return anira_status.ANIRA_ERROR_NOT_SUPPORTED
+    }
 
     const inputTensors: number[] = []
     const allocs: number[] = []
 
     try {
-      // --- Build input tensors from anira buffers ---
-      for (let i = 0; i < Math.min(numInputBufs, this.inputMeta.length); i++) {
+      // --- Build input tensors from the call's tensors ---
+      for (let i = 0; i < Math.min(inputs.length, this.inputMeta.length); i++) {
         const meta = this.inputMeta[i]
-        const buf = this.wrapPointer(BufferF, inputVec.get(i))
-        const channels = buf.getNumChannels()
-        const samples = buf.getNumSamples()
-        const totalFloats = channels * samples
-        const byteLen = totalFloats * 4
+        const input = inputs[i]
+        const byteLen = input.numElements * 4
 
         const dataOff = ort._malloc(byteLen)
         allocs.push(dataOff)
+        new Float32Array(ort.HEAPU8.buffer, dataOff, input.numElements).set(
+          heapF32.subarray(input.f32Index, input.f32Index + input.numElements)
+        )
 
-        // Copy channel data linearly into ORT memory
-        for (let ch = 0; ch < channels; ch++) {
-          const readPtr = buf.getReadPointer(ch)
-          const inputOff = readPtr >> 2
-          const ortF32 = new Float32Array(ort.HEAPU8.buffer, dataOff, totalFloats)
-          for (let s = 0; s < samples; s++) {
-            ortF32[ch * samples + s] = heapF32[inputOff + s]
-          }
-        }
-
-        // Resolve dynamic dims (-1) from actual buffer dimensions
-        const concreteDims = this.resolveDynamicDims(meta.dims, totalFloats)
+        // Resolve dynamic dims (-1) from the tensor's element count
+        const concreteDims = this.resolveDynamicDims(meta.dims, input.numElements)
 
         const stack = ort.stackSave()
         const dimsOff = ort.stackAlloc(concreteDims.length * ort.PTR_SIZE)
@@ -315,16 +246,16 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
       }
 
       // --- Run inference ---
-      const outputs = this.runOrt(inputTensors)
+      const results = this.runOrt(inputTensors)
 
-      // --- Copy outputs to anira buffers ---
+      // --- Copy outputs into the call's tensors ---
       const ptrSize = ort.PTR_SIZE
       for (
         let i = 0;
-        i < Math.min(numOutputBufs, this.outputMeta.length, outputs.length);
+        i < Math.min(outputs.length, this.outputMeta.length, results.length);
         i++
       ) {
-        const outTensor = outputs[i]
+        const outTensor = results[i]
         if (outTensor === 0) continue
 
         const stack = ort.stackSave()
@@ -339,22 +270,15 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
         const dataPtr = Number(ort.getValue(info + ptrSize, '*'))
         ort.stackRestore(stack)
 
-        const outBuf = this.wrapPointer(BufferF, outputVec.get(i))
-        const outCh = outBuf.getNumChannels()
-        const outSamp = outBuf.getNumSamples()
-        const totalOut = outCh * outSamp
-
-        const ortF32 = new Float32Array(ort.HEAPU8.buffer, dataPtr, totalOut)
-        for (let ch = 0; ch < outCh; ch++) {
-          const writePtr = outBuf.getWritePointer(ch)
-          const writeOff = writePtr >> 2
-          for (let s = 0; s < outSamp; s++) {
-            heapF32[writeOff + s] = ortF32[ch * outSamp + s]
-          }
-        }
+        const output = outputs[i]
+        heapF32.set(
+          new Float32Array(ort.HEAPU8.buffer, dataPtr, output.numElements),
+          output.f32Index
+        )
 
         ort._OrtReleaseTensor(outTensor)
       }
+      return anira_status.ANIRA_OK
     } finally {
       for (const t of inputTensors) ort._OrtReleaseTensor(t)
       for (const a of allocs) ort._free(a)
@@ -376,7 +300,60 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
     this.ort = null
     this.inputMeta = []
     this.outputMeta = []
-    super.destroy()
+  }
+
+  /** The model of the entry this engine was registered with, as bytes. */
+  private async readModel(): Promise<Uint8Array> {
+    const { module, heap, modelConfigPtr, modelIndex } = this.env
+    if (!modelConfigPtr) {
+      throw new Error('ONNXRuntimeWebBackend: registered without a model config')
+    }
+    const pathPtr = Heap.u32(
+      module._anira_model_config_model_path(modelConfigPtr, modelIndex)
+    )
+    if (pathPtr !== 0) {
+      const modelUrl = heap.cString(pathPtr)
+      const response = await fetch(modelUrl)
+      if (!response.ok) {
+        throw new Error(
+          `ONNXRuntimeWebBackend: failed to fetch model from ${modelUrl}: ${response.status}`
+        )
+      }
+      return new Uint8Array(await response.arrayBuffer())
+    }
+    // A bytes entry: the config owns them; copy out of the shared memory.
+    const out = heap.malloc(8)
+    try {
+      const status = module._anira_model_config_model_bytes(
+        modelConfigPtr,
+        modelIndex,
+        out,
+        out + 4
+      )
+      if ((status | 0) < 0) {
+        throw new Error(
+          `ONNXRuntimeWebBackend: model entry ${modelIndex} has neither a path nor bytes`
+        )
+      }
+      const bytes = heap.readU32(out)
+      const size = heap.readU32(out + 4)
+      return heap.u8.slice(bytes, bytes + size)
+    } finally {
+      heap.free(out)
+    }
+  }
+
+  private lastError(): string {
+    const ort = this.ort!
+    const ptrSize = ort.PTR_SIZE
+    const errStack = ort.stackSave()
+    const errBuf = ort.stackAlloc(2 * ptrSize)
+    ort._OrtGetLastError(errBuf, errBuf + ptrSize)
+    const errCode = Number(ort.getValue(errBuf, ptrSize === 4 ? 'i32' : 'i64'))
+    const errMsgPtr = Number(ort.getValue(errBuf + ptrSize, '*'))
+    const errMsg = errMsgPtr ? ort.UTF8ToString(errMsgPtr) : ''
+    ort.stackRestore(errStack)
+    return `(code=${errCode}) ${errMsg}`
   }
 
   // ---- private helpers ----
@@ -462,43 +439,6 @@ export class ONNXRuntimeWebBackend extends JSBackendBase {
     }
 
     return result
-  }
-
-  private createZeroInputs(): number[] {
-    const ort = this.ort!
-    const tensors: number[] = []
-
-    for (const meta of this.inputMeta) {
-      // For warm-up, replace dynamic dims (-1) with 1
-      const concreteDims = meta.dims.map((d) => (d === -1 ? 1 : d))
-      const flatSize = concreteDims.reduce((a, b) => a * b, 1)
-      const byteLen = flatSize * 4
-      const dataOff = ort._malloc(byteLen)
-      ort.HEAPU8.fill(0, dataOff, dataOff + byteLen)
-
-      const stack = ort.stackSave()
-      const dimsOff = ort.stackAlloc(concreteDims.length * ort.PTR_SIZE)
-      for (let d = 0; d < concreteDims.length; d++) {
-        ort.setValue(
-          dimsOff + d * ort.PTR_SIZE,
-          concreteDims[d],
-          ort.PTR_SIZE === 4 ? 'i32' : 'i64'
-        )
-      }
-      const tensor = ort._OrtCreateTensor(
-        1,
-        dataOff,
-        byteLen,
-        dimsOff,
-        concreteDims.length,
-        1
-      )
-      ort.stackRestore(stack)
-
-      tensors.push(tensor)
-    }
-
-    return tensors
   }
 
   private runOrt(inputTensors: number[]): number[] {
