@@ -884,8 +884,11 @@ private:
 
 /// The real-time stream: host geometry, budget, warmup, miss policy, wait ratio.
 struct Hard {
-    uint32_t block_min = 0;
-    uint32_t block_max = 0;
+    /// The block range in elements of the anchor tensor: both 0 (unset) or both finite and
+    /// > 0, a fractional block included (0.25: one element every fourth call; the rules of
+    /// anira_contract_create_hard). An integer converts: `.block_max = 512`.
+    double block_min = 0;
+    double block_max = 0;
     double rate = 0;
     anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
     std::chrono::nanoseconds budget_value{};  ///< Explicit only
@@ -1065,8 +1068,10 @@ public:
 
     // -- the setters, for a contract that exists only as a handle (loaded, legacy) --
 
-    /// Patches a Hard contract's stream geometry, e.g. of one loaded from a file.
-    ContractHandle& hard_geometry(uint32_t block_min, uint32_t block_max, double rate) {
+    /// Patches a Hard contract's stream geometry, e.g. of one loaded from a file; a block may
+    /// be fractional (anira_contract_create_hard). @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
+    /// for a geometry the rules refuse, Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle.
+    ContractHandle& hard_geometry(double block_min, double block_max, double rate) {
         detail::check(anira_contract_hard_set_geometry(m_contract, block_min, block_max, rate),
                       "anira_contract_hard_set_geometry");
         return *this;

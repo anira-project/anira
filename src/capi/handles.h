@@ -102,8 +102,10 @@ struct ModelEntry {
 /// member initializers only once the enclosing class is complete, which would leave
 /// std::variant without a default constructor.
 struct HardContract {
-    uint32_t m_block_min = 0;
-    uint32_t m_block_max = 0;
+    /// The geometry, in elements of the anchor tensor: both 0 (unset) or both finite and > 0,
+    /// fractional ones included (geometry_refusal).
+    double m_block_min = 0.0;
+    double m_block_max = 0.0;
     double m_rate = 0.0;
     anira_budget_kind m_budget = ANIRA_BUDGET_MEASURED;
     double m_budget_ms = 0.0;
@@ -129,6 +131,12 @@ struct HardContract {
     /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
     std::map<std::string, uint32_t> m_latencies;
 };
+
+/// The geometry rules of anira_contract_create_hard, shared by the two C setters, the JSON
+/// loader and the validator: the blocks both 0 (the unset geometry) or both finite and > 0,
+/// block_min <= block_max, a rate of 0 or more. The first broken rule as a message naming the
+/// value (without a "contract: " prefix), or the empty string when the geometry is legal.
+std::string geometry_refusal(double block_min, double block_max, double rate);
 
 /// The Async half of a contract.
 struct AsyncContract {

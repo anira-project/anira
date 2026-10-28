@@ -6,8 +6,11 @@
 #include <anira/abi/version.h>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <iterator>
 #include <memory>
@@ -142,6 +145,35 @@ std::shared_ptr<anira::capi::BytesCarrier> make_carrier(const void* bytes,
 
 }  // namespace
 
+namespace anira::capi {
+
+std::string geometry_refusal(double block_min, double block_max, double rate) {
+    // %g names NaN, inf and every fraction a host can have meant (0.25, 0.333333).
+    const auto g = [](double value) {
+        std::array<char, 32> text{};
+        static_cast<void>(std::snprintf(text.data(), text.size(), "%g", value));
+        return std::string(text.data());
+    };
+    const bool unset = block_min == 0.0 && block_max == 0.0;
+    if (!unset) {
+        if (!(std::isfinite(block_min) && block_min > 0.0)) {
+            return "block_min " + g(block_min) + " must be finite and > 0 (block_max " +
+                   g(block_max) + "; both 0 leave the geometry unset)";
+        }
+        if (!(std::isfinite(block_max) && block_max > 0.0)) {
+            return "block_max " + g(block_max) + " must be finite and > 0 (block_min " +
+                   g(block_min) + "; both 0 leave the geometry unset)";
+        }
+        if (block_min > block_max) {
+            return "block_min " + g(block_min) + " exceeds block_max " + g(block_max);
+        }
+    }
+    if (!(rate >= 0.0)) { return "rate " + g(rate) + " must not be negative"; }
+    return {};
+}
+
+}  // namespace anira::capi
+
 // ==== registry ==============================================================================
 
 anira_status ANIRA_CALL anira_registered_ext_kinds(uint32_t* count, const char** out) ANIRA_NOEXCEPT
@@ -270,19 +302,18 @@ void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANIRA_NOEXCEP
 
 // ==== contract ==============================================================================
 
-anira_status ANIRA_CALL anira_contract_create_hard(uint32_t block_min,
-                                                   uint32_t block_max,
+anira_status ANIRA_CALL anira_contract_create_hard(double block_min,
+                                                   double block_max,
                                                    double rate,
                                                    anira_contract** out,
                                                    anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "contract: NULL out");
-    ANIRA_CAPI_REQUIRE(block_min <= block_max,
+    const std::string refusal = anira::capi::geometry_refusal(block_min, block_max, rate);
+    ANIRA_CAPI_REQUIRE(refusal.empty(),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "contract: block_min %u > block_max %u",
-                       static_cast<unsigned>(block_min),
-                       static_cast<unsigned>(block_max));
-    ANIRA_CAPI_REQUIRE(rate >= 0.0, err, ANIRA_ERROR_INVALID_ARGUMENT, "contract: negative rate");
+                       "contract: %s",
+                       refusal.c_str());
     auto contract = std::make_unique<anira_contract>();
     anira::capi::HardContract hard;
     hard.m_block_min = block_min;
@@ -303,13 +334,19 @@ anira_status ANIRA_CALL anira_contract_create_async(anira_contract** out,
 } catch (...) { return translate_exception(err, __func__); }
 
 anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
-                                                         uint32_t block_min,
-                                                         uint32_t block_max,
+                                                         double block_min,
+                                                         double block_max,
                                                          double rate) ANIRA_NOEXCEPT try {
     if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     anira::capi::HardContract* hard = contract->hard();
     if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
-    if (block_min > block_max || rate < 0.0) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    // No anira_error to fill: the message reaches the boundary trace only.
+    const std::string refusal = anira::capi::geometry_refusal(block_min, block_max, rate);
+    ANIRA_CAPI_REQUIRE(refusal.empty(),
+                       nullptr,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "contract: %s",
+                       refusal.c_str());
     hard->m_block_min = block_min;
     hard->m_block_max = block_max;
     hard->m_rate = rate;
@@ -1320,8 +1357,8 @@ const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const anira_mode
 // ---- contract ----
 
 anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
-                                                     uint32_t* block_min,
-                                                     uint32_t* block_max,
+                                                     double* block_min,
+                                                     double* block_max,
                                                      double* rate) ANIRA_NOEXCEPT try {
     if (contract == nullptr || block_min == nullptr || block_max == nullptr || rate == nullptr) {
         return ANIRA_ERROR_INVALID_ARGUMENT;

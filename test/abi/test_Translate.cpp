@@ -11,6 +11,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/compat/v3_to_v2.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
@@ -53,6 +54,16 @@ TensorSpec streamed(std::string_view name, int64_t time = 512, int64_t channels 
     return spec;
 }
 
+/// A streamed float32 spec [time] with a flexible window over a dynamic Time extent.
+TensorSpec flexible(std::string_view name,
+                    int64_t window_min,
+                    int64_t window_max = ANIRA_UNBOUNDED,
+                    int64_t overlap = 0) {
+    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC).window(window_min, window_max, overlap);
+    return spec;
+}
+
 /// A static float32 scalar.
 TensorSpec scalar(std::string_view name) {
     TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
@@ -76,6 +87,15 @@ Hard explicit_hard() {
     hard.budget_value = std::chrono::milliseconds(5);
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = 0;
+    return hard;
+}
+
+/// explicit_hard() at a fixed host block, in anchor elements, at 48 kHz.
+Hard geometry(double block) {
+    Hard hard = explicit_hard();
+    hard.block_min = block;
+    hard.block_max = block;
+    hard.rate = 48000;
     return hard;
 }
 
@@ -324,8 +344,8 @@ TEST(AbiTranslate, ADynamicTimeExtentResolvesToTheWindow) {
     EXPECT_EQ(outcome.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{1, 1, 1024}}));
 }
 
-// A flexible window covers one host block per inference: block_max scaled by the time
-// ratio, plus the context, clamped to [window_min, window_max].
+// A flexible window covers one host block per inference when the anchor hop can be the block:
+// block_max scaled by the time ratio, plus the context, within [window_min, window_max].
 TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
@@ -345,11 +365,13 @@ TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     EXPECT_EQ(pinned.m_config.get_preprocess_input_size(), (std::vector<size_t>{512}));
     EXPECT_EQ(pinned.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{512}}));
 
-    // Without a geometry the smallest window is used.
+    // Without a geometry the smallest anchor hop is used: the input's smallest window, and the
+    // output (time ratio 1/1, a flexible window's default) follows that hop of 192.
     const Outcome smallest = bridge(model);
     ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
     EXPECT_EQ(smallest.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{256}}));
     EXPECT_EQ(smallest.m_config.get_preprocess_input_size(), (std::vector<size_t>{192}));
+    EXPECT_EQ(smallest.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{192}}));
 
     // window_max caps the pinned window.
     ModelConfig capped;
@@ -363,28 +385,139 @@ TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     EXPECT_EQ(clamped.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{300}}));
 }
 
-TEST(AbiTranslate, ATimeRatioScalesTheFlexibleHopAndMustDivide) {
+// A flexible window follows the anchor hop scaled by its time ratio. The anchor's fixed window
+// is the anchor hop whatever the block: under the block 1024 one inference runs every second
+// call, and the output still gets its whole sample per inference.
+TEST(AbiTranslate, ATimeRatioScalesTheAnchorHopIntoTheFlexibleWindow) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in", 2048));
-    model.output(TensorSpec("out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
-                     .axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
-                     .window(1, ANIRA_UNBOUNDED, 0)
-                     .time_ratio(1, 2048));
-    Hard hard = explicit_hard();
-    hard.block_min = 2048;
-    hard.block_max = 2048;
-    hard.rate = 48000;
-    const Outcome outcome = bridge(model, hard);
-    ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_postprocess_output_size(), (std::vector<size_t>{1}));
+    model.output(flexible("out", 1).time_ratio(1, 2048));
+    for (const double block : {2048.0, 1024.0, 4096.0}) {
+        SCOPED_TRACE(block);
+        const Outcome outcome = bridge(model, geometry(block));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{2048}));
+        EXPECT_EQ(outcome.m_config.get_postprocess_output_size(), (std::vector<size_t>{1}));
+    }
+}
 
-    hard.block_max = 1024;
-    hard.block_min = 1024;
-    const Outcome fractional = bridge(model, hard);
-    EXPECT_EQ(fractional.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(fractional.m_message, "tensor 'out'");
-    expect_contains(fractional.m_message, "fractional hop");
+// The anchor hop is chosen once for the whole model: the largest that every tensor's window and
+// time ratio allow at or below the host block, else the smallest above it. A time ratio of
+// 1/2048 makes every anchor hop a multiple of 2048, so a block of 3000 runs 2048 per inference
+// (one or two inferences per call), and a block below the step, a fractional one included, the
+// step (one inference every few calls).
+TEST(AbiTranslate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    model.input(flexible("audio", 1));
+    model.output(flexible("latent", 1).time_ratio(1, 2048));
+    struct Case {
+        double m_block;
+        size_t m_anchor_hop;
+    };
+    for (const Case c : {Case{.m_block = 3000.0, .m_anchor_hop = 2048},
+                         Case{.m_block = 4096.0, .m_anchor_hop = 4096},
+                         Case{.m_block = 6000.0, .m_anchor_hop = 4096},
+                         Case{.m_block = 512.0, .m_anchor_hop = 2048},
+                         Case{.m_block = 0.25, .m_anchor_hop = 2048}}) {
+        SCOPED_TRACE(c.m_block);
+        const Outcome outcome = bridge(model, geometry(c.m_block));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        EXPECT_EQ(outcome.m_config.get_tensor_input_shape(),
+                  (anira::TensorShapeList{{static_cast<int64_t>(c.m_anchor_hop)}}));
+        EXPECT_EQ(outcome.m_config.get_postprocess_output_size(),
+                  (std::vector<size_t>{c.m_anchor_hop / 2048}));
+    }
+
+    // Without a geometry the smallest step.
+    const Outcome smallest = bridge(model);
+    ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
+    EXPECT_EQ(smallest.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{2048}}));
+
+    // window_max caps the hop below the block: the largest step within it.
+    ModelConfig capped;
+    capped.add_model_path(k_custom, "model.custom");
+    capped.input(flexible("audio", 1, 5000));
+    capped.output(flexible("latent", 1).time_ratio(1, 2048));
+    const Outcome clamped = bridge(capped, geometry(8192.0));
+    ASSERT_EQ(clamped.m_status, ANIRA_OK) << clamped.m_message;
+    EXPECT_EQ(clamped.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{4096}}));
+    EXPECT_EQ(clamped.m_config.get_postprocess_output_size(), (std::vector<size_t>{2}));
+}
+
+// A fixed anchor window is the anchor hop, and every flexible window follows it, the host block
+// aside: an output without a declared ratio at 1/1, a declared one scaled by it.
+TEST(AbiTranslate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
+    struct Case {
+        int64_t m_anchor;
+        int64_t m_num;
+        int64_t m_den;
+        double m_block;
+        int64_t m_window;
+    };
+    for (const Case c :
+         {Case{.m_anchor = 2048, .m_num = 0, .m_den = 0, .m_block = 512.0, .m_window = 2048},
+          Case{.m_anchor = 1, .m_num = 4, .m_den = 1, .m_block = 0.25, .m_window = 4},
+          Case{.m_anchor = 1, .m_num = 2048, .m_den = 1, .m_block = 0.25, .m_window = 2048}}) {
+        SCOPED_TRACE(c.m_num);
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("in", c.m_anchor));
+        model.output(flexible("out", 1).time_ratio(c.m_num, c.m_den));
+        const Outcome outcome = bridge(model, geometry(c.m_block));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        EXPECT_EQ(outcome.m_config.get_tensor_output_shape(),
+                  (anira::TensorShapeList{{c.m_window}}));
+    }
+}
+
+// What no anchor hop satisfies is refused, naming the tensor and what it needs against what the
+// tensors before it allow.
+TEST(AbiTranslate, NoAnchorHopFitsEveryTensor) {
+    const auto refused = [](const ModelConfig& model, std::string_view expected) {
+        const Outcome outcome = bridge(model, geometry(512.0));
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+        expect_contains(outcome.m_message, expected);
+    };
+
+    ModelConfig step;
+    step.add_model_path(k_custom, "model.custom");
+    step.input(streamed("in", 3));
+    step.output(flexible("out", 1).time_ratio(1, 2));
+    refused(step,
+            "tensor 'out': time ratio 1/2 and window [1, unbounded] need an anchor hop that is a "
+            "multiple of 2 in [2, unbounded], but tensor 'in' fixes the anchor hop at 3");
+
+    ModelConfig range;
+    range.add_model_path(k_custom, "model.custom");
+    range.input(streamed("in", 2048));
+    range.output(flexible("out", 4, 8));
+    refused(range,
+            "tensor 'out': time ratio 1/1 (a flexible window's default) and window [4, 8] need "
+            "an anchor hop in [4, 8], but tensor 'in' fixes the anchor hop at 2048");
+
+    ModelConfig several;
+    several.add_model_path(k_custom, "model.custom");
+    several.input(flexible("in", 1, 100));
+    several.input(flexible("aux", 1).time_ratio(1, 64));
+    several.output(flexible("out", 1).time_ratio(1, 128));
+    refused(several,
+            "tensor 'out': time ratio 1/128 and window [1, unbounded] need an anchor hop that is "
+            "a multiple of 128 in [128, unbounded], but tensors 'in', 'aux' allow an anchor hop "
+            "that is a multiple of 64 in [64, 100]");
+
+    ModelConfig whole;
+    whole.add_model_path(k_custom, "model.custom");
+    whole.input(flexible("in", 1));
+    whole.output(streamed("out", 3).time_ratio(2, 1));
+    refused(whole, "tensor 'out': time ratio 2/1 and window 3 admit no whole anchor hop");
+
+    ModelConfig zero;
+    zero.add_model_path(k_custom, "model.custom");
+    zero.input(streamed("in", 2048));
+    zero.output(flexible("out", 1).time_ratio(0, 5));
+    refused(zero, "tensor 'out': time ratio 0/5: a Streamed tensor advances with the anchor");
 }
 
 // A declared ratio must agree with the hops the fixed windows give (the RAVE encoder: 2048
@@ -1129,6 +1262,83 @@ TEST(AbiTranslate, TheHostsOwnGeometryMayBeFractional) {
     EXPECT_EQ(anira::v3compat::to_host_config(model.native(), 0.F, 48000.F, false, host, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "buffer_size and sample_rate must be positive");
+}
+
+// A fractional Hard geometry reaches the 2.x HostConfig as the nearest float, and the latency
+// calculation recovers from it exactly the rational the host meant: 1/3 and 1/4 of an anchor
+// sample, and the same blocks on an anchor hop of 4 (1/12 and 1/16 of a hop).
+TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
+    struct Case {
+        double m_block;
+        int64_t m_hop;
+        anira::LatencyCalculator::Rational m_hops;
+    };
+    const auto fraction = [](double block, int64_t hop, int64_t denominator) {
+        return Case{.m_block = block,
+                    .m_hop = hop,
+                    .m_hops = {.m_numerator = 1, .m_denominator = denominator}};
+    };
+    for (const Case& c : {fraction(1.0 / 3.0, 1, 3),
+                          fraction(0.25, 1, 4),
+                          fraction(1.0 / 3.0, 4, 12),
+                          fraction(0.25, 4, 16),
+                          fraction(2.0 / 3.0, 4, 6)}) {
+        SCOPED_TRACE(c.m_block);
+        SCOPED_TRACE(c.m_hop);
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("latent", c.m_hop));
+        model.output(streamed("out", c.m_hop));
+        Hard hard = explicit_hard();
+        hard.block_min = c.m_block;
+        hard.block_max = c.m_block;
+        hard.rate = 100.0;
+        const ContractHandle contract(hard);
+        EXPECT_EQ(contract.hard().block_max, c.m_block) << "the double is stored as it is";
+        anira::HostConfig host;
+        anira_error err = ANIRA_ERROR_INIT;
+        ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
+                  ANIRA_OK)
+            << err.message;
+        EXPECT_EQ(host.m_buffer_size, static_cast<float>(c.m_block));
+        EXPECT_FALSE(host.m_allow_smaller_buffers);
+        const Outcome outcome = bridge(model, contract);
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        const anira::LatencyCalculator::Rational hops =
+            anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
+        EXPECT_EQ(hops.m_numerator, c.m_hops.m_numerator);
+        EXPECT_EQ(hops.m_denominator, c.m_hops.m_denominator);
+    }
+}
+
+// A flexible window under a fractional block_max: the block scaled by the time ratio (half an
+// element of the output per call) is no window, so the window follows the anchor hop instead,
+// the anchor's fixed window of 1. The output at time ratio 2/1 gets a window of 2, one inference
+// every fourth call, which the latency calculation counts as a quarter of a hop per block.
+TEST(AbiTranslate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    model.input(streamed("latent", 1));
+    model.output(flexible("out", 1).time_ratio(2, 1));
+    Hard hard = explicit_hard();
+    hard.block_min = 0.25;
+    hard.block_max = 0.25;
+    hard.rate = 100.0;
+    const ContractHandle contract(hard);
+    const Outcome outcome = bridge(model, contract);
+    ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    EXPECT_EQ(outcome.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{2}}));
+    EXPECT_EQ(outcome.m_config.get_postprocess_output_size(), (std::vector<size_t>{2}));
+
+    anira::HostConfig host;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
+              ANIRA_OK)
+        << err.message;
+    const anira::LatencyCalculator::Rational hops =
+        anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
+    EXPECT_EQ(hops.m_numerator, 1);
+    EXPECT_EQ(hops.m_denominator, 4);
 }
 
 TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {

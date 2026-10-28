@@ -366,14 +366,15 @@ typedef enum anira_edge_cost     { ANIRA_EDGE_COST_PERMISSIVE = 0, ANIRA_EDGE_CO
 
 /* abi/config.h -- every entry [main-thread], may allocate; a rejected value is ANIRA_FAILED(status) + anira_error.message */
 typedef struct anira_contract anira_contract;
-anira_status anira_contract_create_hard (uint32_t block_min, uint32_t block_max, double rate, anira_contract** out, anira_error* err);
+anira_status anira_contract_create_hard (double block_min, double block_max, double rate, anira_contract** out, anira_error* err);
         /* stream geometry, what the host callback delivers: the range of n passed to anira_handler_process, in Time-axis elements
            of the anchor tensor; block_min == block_max is the fixed-block host and earns the tight latency, because the reported
            figure carries a buffer-adaptation term that depends on the block size and vanishes when the block divides the hop;
-           block_min < block_max reports the worst case across the range; rate = anchor elements per second (48000 for audio);
-           the anchor is the ModelConfig's anchor */
+           block_min < block_max reports the worst case across the range; a block may be fractional (a model with no stream at the
+           host rate), the host then moving an element once a whole one has accumulated; rate = anchor elements per second (48000
+           for audio); the anchor is the ModelConfig's anchor */
 anira_status anira_contract_create_async(anira_contract** out, anira_error* err);
-anira_status anira_contract_hard_set_geometry  (anira_contract*, uint32_t block_min, uint32_t block_max, double rate);   /* the host patches a file's geometry (section 8) */
+anira_status anira_contract_hard_set_geometry  (anira_contract*, double block_min, double block_max, double rate);   /* the host patches a file's geometry (section 8) */
 anira_status anira_contract_hard_set_budget    (anira_contract*, anira_budget_kind, double explicit_ms);  /* MEASURED (default): derived during warmup; explicit_ms read for EXPLICIT only */
 anira_status anira_contract_hard_set_warmup    (anira_contract*, anira_warmup_mode, uint32_t iterations); /* UNTIL_STABLE (default); iterations for FIXED only; NONE legal only with EXPLICIT */
 anira_status anira_contract_hard_set_on_miss   (anira_contract*, anira_miss_policy);                      /* BYPASS (default) requires shape-compatible I/O along the anchored Time axis */
@@ -398,7 +399,7 @@ void         anira_contract_destroy(anira_contract*);
 ```cpp
 // anira.hpp -- header-only, not ABI-stable; plain aggregates with designated initialisers, minted into an anira_contract at prepare()
 struct Hard {
-    uint32_t          block_min = 0;  uint32_t block_max = 0;   double rate = 0;
+    double            block_min = 0;  double block_max = 0;     double rate = 0;
     anira_budget_kind budget  = ANIRA_BUDGET_MEASURED;      std::chrono::nanoseconds budget_value{};   // Explicit only
     anira_warmup_mode warmup  = ANIRA_WARMUP_UNTIL_STABLE;  uint32_t warmup_iterations = 0;            // Fixed only
     anira_miss_policy on_miss = ANIRA_MISS_BYPASS;

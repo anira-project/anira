@@ -346,20 +346,27 @@ TEST_P(OneSidedStreamingTest, GeneratorResetReanchors) {
                                  global_index);
 
     // Re-anchor immediately after a submitting pull, without waiting: the stale
-    // in-flight result must be discarded, not delivered.
+    // in-flight result must be discarded, not delivered. A call carries one declared block
+    // (512) at most, so the pulls go on block by block until one of them submits (the
+    // model says which; within one hop of demand).
     {
         std::vector<float> params{100.f, 0.f, 0.f, 0.f};
-        std::vector<float> out(k_hop, -1.f);
+        std::vector<float> out(512, -1.f);
         std::array<const float*, 1> param_channels{params.data()};
         std::array<float*, 1> out_channels{out.data()};
         std::array<const float* const*, 1> input_tensors{param_channels.data()};
         std::array<float* const*, 1> output_tensors{out_channels.data()};
-        std::array<size_t, 1> num_input_samples{4};
-        std::array<size_t, 1> num_output_samples{k_hop};
-        handler.process(input_tensors.data(),
-                        num_input_samples.data(),
-                        output_tensors.data(),
-                        num_output_samples.data());
+        size_t const submitted = model.m_submitted.size();
+        for (size_t pull = 0; pull < k_hop / 512 && model.m_submitted.size() == submitted; ++pull) {
+            std::array<size_t, 1> num_input_samples{4};
+            std::array<size_t, 1> num_output_samples{512};
+            model.pull(512, 100.f);
+            handler.process(input_tensors.data(),
+                            num_input_samples.data(),
+                            output_tensors.data(),
+                            num_output_samples.data());
+        }
+        ASSERT_GT(model.m_submitted.size(), submitted) << "no pull submitted an inference";
     }
     handler.reset();
 
@@ -640,7 +647,9 @@ TEST(OneSidedStreamingStandalone, GeneratorPushDataNeverSubmits) {
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorEngine engine;
     InferenceHandler handler(pp_processor, config, engine, ContextConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
+    // The host's block is one hop: the pop below asks for a whole hop in one call, and a call
+    // carries one declared block at most.
+    handler.prepare(HostConfig(static_cast<float>(k_hop), 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
 
