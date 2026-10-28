@@ -130,10 +130,15 @@ static void check_throwing_hook(void) {
     check(desc.flags == ANIRA_STAGE_FLAG_REALTIME_PRE_POST, "the stated promise, as given");
     anira_stage_ctx ctx;
     memset(&ctx, 0, sizeof ctx);
-    check(desc.pre_process(&ctx, NULL, desc.user_data) == ANIRA_ERROR_UNKNOWN,
-          "a throwing stage hook fails its call with ANIRA_ERROR_UNKNOWN");
+    /* Three throws within a second: three failed calls, one console line (the report is
+       rate-limited; the log of this test shows it). */
+    for (int i = 0; i < 3; ++i) {
+        check(desc.pre_process(&ctx, NULL, desc.user_data) == ANIRA_ERROR_UNKNOWN,
+              "a throwing stage hook fails its call with ANIRA_ERROR_UNKNOWN");
+    }
     desc.release(desc.user_data);
-    check(smoke_count("thrown") == 1u, "the throwing hook ran once");
+    check(smoke_count("thrown") == 3u, "the throwing hook ran three times");
+    check(smoke_count("reported") == 1u, "one console report for the three throws");
 }
 
 static anira_model_config* smoke_model(anira_error* err) {

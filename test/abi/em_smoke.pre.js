@@ -17,7 +17,17 @@ Module.smoke = {
     query: 0,
     log: 0,
     thrown: 0,
+    reported: 0,
   },
+};
+
+// The console lines of the trampolines' throw reports (rate-limited: one per second at most).
+const consoleError = console.error;
+console.error = (...args) => {
+  if (typeof args[0] === 'string' && args[0].startsWith('anira: ')) {
+    Module.smoke.counts.reported += 1;
+  }
+  consoleError(...args);
 };
 
 // anira_phase (web/src/abi/enums.ts)

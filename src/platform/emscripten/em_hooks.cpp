@@ -30,9 +30,12 @@ using anira::capi::translate_exception;
 // the block and makes it the calling instance's __tls_base.
 extern "C" void __wasm_init_tls(void* block);  // NOLINT(bugprone-reserved-identifier)
 
-// The thunks. Each catches what the hook throws, reports it once on the console (not through the
-// anira log, which may be what threw) and returns the failure status the caller passes, so that
-// no JavaScript exception unwinds through a C frame. A hook that returns nothing is ANIRA_OK.
+// The thunks. Each catches what the hook throws, reports it on the console (not through the anira
+// log, which may be what threw) and returns the failure status the caller passes, so that no
+// JavaScript exception unwinds through a C frame. A hook that returns nothing is ANIRA_OK. The
+// report is rate-limited per instance, one console line per second at most with the count of the
+// throws in between: a hook that throws on every quantum must not flood the audio thread with
+// console output. Each thunk installs the shared reporter on its Module at its first throw.
 EM_JS_DEPS(anira_em_hooks, "$UTF8ToString");
 
 EM_JS(int,
@@ -42,9 +45,27 @@ EM_JS(int,
           try {
               return Module.anira.stage(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
           } catch (e) {
-              console.error("anira: the JavaScript stage hook (key " + (key >>> 0) + ", phase " +
-                                phase + ") threw:",
-                            e);
+              var report = Module.aniraReportThrow;
+              if (!report) {
+                  var state = {last: -1e9, suppressed: 0};
+                  report = Module.aniraReportThrow = function(what, e) {
+                      var now = Date.now();
+                      if (now - state.last < 1000) {
+                          state.suppressed++;
+                          return;
+                      }
+                      console.error(
+                          "anira: " + what + " threw" +
+                              (state.suppressed ? " (and " + state.suppressed +
+                                                      " more time(s) since the last report)"
+                                                : "") +
+                              ":",
+                          e);
+                      state.last = now;
+                      state.suppressed = 0;
+                  };
+              }
+              report("the JavaScript stage hook (key " + (key >>> 0) + ", phase " + phase + ")", e);
               return failure;
           }
       });
@@ -56,10 +77,30 @@ EM_JS(int,
           try {
               return Module.anira.engine(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
           } catch (e) {
-              console.error("anira: the JavaScript engine hook (" +
-                                (engine_id ? UTF8ToString(engine_id) : "key " + (key >>> 0)) +
-                                ", phase " + phase + ") threw:",
-                            e);
+              var report = Module.aniraReportThrow;
+              if (!report) {
+                  var state = {last: -1e9, suppressed: 0};
+                  report = Module.aniraReportThrow = function(what, e) {
+                      var now = Date.now();
+                      if (now - state.last < 1000) {
+                          state.suppressed++;
+                          return;
+                      }
+                      console.error(
+                          "anira: " + what + " threw" +
+                              (state.suppressed ? " (and " + state.suppressed +
+                                                      " more time(s) since the last report)"
+                                                : "") +
+                              ":",
+                          e);
+                      state.last = now;
+                      state.suppressed = 0;
+                  };
+              }
+              report("the JavaScript engine hook (" +
+                         (engine_id ? UTF8ToString(engine_id) : "key " + (key >>> 0)) + ", phase " +
+                         phase + ")",
+                     e);
               return failure;
           }
       });
@@ -67,7 +108,28 @@ EM_JS(int,
 EM_JS(void, anira_em_js_log, (uintptr_t record), {
     try {
         Module.anira.log(record >>> 0);
-    } catch (e) { console.error("anira: the JavaScript log hook threw:", e); }
+    } catch (e) {
+        var report = Module.aniraReportThrow;
+        if (!report) {
+            var state = {last: -1e9, suppressed: 0};
+            report = Module.aniraReportThrow = function(what, e) {
+                var now = Date.now();
+                if (now - state.last < 1000) {
+                    state.suppressed++;
+                    return;
+                }
+                console.error("anira: " + what + " threw" +
+                                  (state.suppressed ? " (and " + state.suppressed +
+                                                          " more time(s) since the last report)"
+                                                    : "") +
+                                  ":",
+                              e);
+                state.last = now;
+                state.suppressed = 0;
+            };
+        }
+        report("the JavaScript log hook", e);
+    }
 });
 
 namespace {
