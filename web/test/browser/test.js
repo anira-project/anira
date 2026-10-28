@@ -124,6 +124,22 @@ const run = async () => {
   callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
   const latency = m._anira_handler_get_latency(handler, 0) >>> 0
 
+  // The 2.x call (no context, or a worker in its place) is refused before any C call.
+  const refusals = []
+  for (const args of [[], [0], [new URL('./double-worker.js', import.meta.url)]]) {
+    refusals.push(
+      await anira.spinUpInferenceWorker(...args).then(
+        () => 'resolved',
+        (error) => error.name
+      )
+    )
+  }
+  check(
+    refusals.every((name) => name === 'TypeError') &&
+      anira.getActiveWorkers().length === 0,
+    `spinUpInferenceWorker without a context is a TypeError (${refusals.join(', ')})`
+  )
+
   const worker = await anira.spinUpInferenceWorker(
     context,
     new URL('./double-worker.js', import.meta.url)

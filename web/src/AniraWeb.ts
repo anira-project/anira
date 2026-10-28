@@ -478,7 +478,9 @@ export class AniraWeb {
    * registered JavaScript engine and Worker-side stage, then the loop. Spin up several to run
    * several inferences at once.
    *
-   * @param contextPtr - The `anira_context` whose core the thread serves.
+   * @param contextPtr - The `anira_context` whose core the thread serves; a missing or NULL
+   *   pointer (the 2.x call without arguments, or a Worker in its place) is a `TypeError`,
+   *   thrown before any C call.
    * @param workerOrUrl - A custom worker file (`setupInferenceWorker` with your classes), or a
    *   `Worker` to take over; the bundled default worker otherwise.
    */
@@ -486,6 +488,17 @@ export class AniraWeb {
     contextPtr: number,
     workerOrUrl?: Worker | URL
   ): Promise<InferenceWorker> {
+    if (
+      typeof contextPtr !== 'number' ||
+      !Number.isInteger(contextPtr) ||
+      contextPtr <= 0
+    ) {
+      throw new TypeError(
+        'spinUpInferenceWorker(contextPtr, workerOrUrl?): the first argument is the ' +
+          `anira_context the Worker's inference thread serves, not ${String(contextPtr)} ` +
+          '(3.x; the 2.x spinUpInferenceWorker(workerOrUrl?) took no context)'
+      )
+    }
     const thread = InferenceThread.create(this.anira, contextPtr)
     const stack = allocInstanceStack(this.module)
     let worker: Worker

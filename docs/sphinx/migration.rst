@@ -1051,7 +1051,9 @@ alone. Until a typed TypeScript API lands, a 2.x page is ported to raw calls on
   subclass and :js:meth:`AniraWeb.registerJSEngine` (``{ engineId, className, modelConfigPtr }``);
   ``process(inputVecPtr, outputVecPtr)`` becomes ``process(ctx, prepared)`` over the
   ``anira_engine_ctx``, and ``InferenceBackend.CUSTOM`` becomes the engine id in the entry.
-- ``spinUpInferenceWorker()`` takes the ``anira_context`` whose core the Worker's thread serves;
+- ``spinUpInferenceWorker()`` takes the ``anira_context`` whose core the Worker's thread serves
+  (``spinUpInferenceWorker(context, workerOrUrl?)``); the 2.x call without it, or with a worker
+  in its place, throws a ``TypeError`` naming the 3.x signature before any C call;
   ``configureAudioWorklet(ctx, handler, pp, name, io)`` becomes
   ``configureAudioWorklet(ctx, handlerPtr, { nodeName, stageKey, inputChannels, ... })``. The
   Worker's ``'stopped'`` message is gone: ``worker.stop()`` polls
