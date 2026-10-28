@@ -1845,15 +1845,18 @@ size_t moved_by_call(double block, size_t k) {
 
 /// A mono pass-through on a control-rate stream (hop 1) under the geometry 0.25, 0.25 at
 /// 100 Hz, on the pass-through engine of the pipeline (no gate: the calls settle by waiting).
+/// `flexible` gives both tensors the window [1, unbounded] over a dynamic Time extent instead
+/// of the fixed window 1.
 struct FractionalRig {
-    FractionalRig() : m_context(2), m_handler(m_context, model(), m_candidates) {
+    explicit FractionalRig(bool flexible = false)
+        : m_context(2), m_handler(m_context, model(flexible), m_candidates) {
         anira::ContractHandle contract =
             anira_test::explicit_contract(1, k_control_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
         contract.hard_geometry(k_fraction, k_fraction, k_control_rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
     }
 
-    static ModelConfig model() {
+    static ModelConfig model(bool flexible) {
         ModelConfig model;
         model.add_model_path(anira_test::k_custom, "custom-processor");
         for (const bool input : {true, false}) {
@@ -1862,8 +1865,8 @@ struct FractionalRig {
                             ANIRA_ROLE_STREAMED);
             spec.axis(0, ANIRA_AXIS_BATCH, 1)
                 .axis(1, ANIRA_AXIS_CHANNEL, 1)
-                .axis(2, ANIRA_AXIS_TIME, 1)
-                .window(1, 1, 0);
+                .axis(2, ANIRA_AXIS_TIME, flexible ? ANIRA_DYNAMIC : 1)
+                .window(1, flexible ? ANIRA_UNBOUNDED : 1, 0);
             if (input) {
                 model.input(spec);
             } else {
@@ -1905,9 +1908,7 @@ private:
 // A host that moves a sample only once a whole one has accumulated -- floor(k b) by call k, so
 // 0 or 1 per call under the block 0.25, the 1 on every fourth -- is never starved: every call
 // delivers the count it asks for, and the stream comes out whole, late by the latency.
-TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) {
-    FractionalRig rig;
-    ASSERT_NE(rig.get(), nullptr);
+void expect_whole_stream(FractionalRig& rig) {
     const size_t latency = anira_handler_get_latency(rig.get(), 0);
     std::vector<float> stream;
     size_t moved = 0;
@@ -1932,6 +1933,24 @@ TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) 
         EXPECT_EQ(stream[i], expected) << "sample " << i;
     }
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK) << "nothing was refused";
+}
+
+TEST(AbiHandlerTensor, AFractionalBlockMovesASampleOnceAWholeOneHasAccumulated) {
+    FractionalRig rig;
+    ASSERT_NE(rig.get(), nullptr);
+    expect_whole_stream(rig);
+}
+
+// A flexible window under the fractional block, which no window can follow (a quarter of a
+// sample per call), is pinned from the anchor hop instead: the smallest, 1, one inference every
+// fourth call. The handler prepares, reports the latency of the fixed window and moves the
+// stream whole.
+TEST(AbiHandlerTensor, AFlexibleWindowUnderAFractionalBlockRunsAtTheAnchorHop) {
+    const FractionalRig fixed;
+    FractionalRig rig(true);
+    ASSERT_NE(rig.get(), nullptr);
+    EXPECT_EQ(anira_handler_get_latency(rig.get(), 0), anira_handler_get_latency(fixed.get(), 0));
+    expect_whole_stream(rig);
 }
 
 // A host that pops more than has accumulated -- a whole sample on every call under the block
