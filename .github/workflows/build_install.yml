@@ -28,7 +28,7 @@ jobs:
   plan:
     name: plan (install)
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
@@ -146,7 +146,7 @@ jobs:
     name: install result
     needs: [build_install, build_install_macos]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

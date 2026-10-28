@@ -58,7 +58,7 @@ jobs:
     name: build_test result
     needs: build_test
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       # The PR tier's backend coverage lives or dies with these two rows staying

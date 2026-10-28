@@ -112,7 +112,7 @@ jobs:
   # Emits the tier's matrix include-list (job-level `if` cannot see `matrix`).
   plan:
     name: plan (mobile)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
@@ -136,7 +136,7 @@ jobs:
   # ---------------------------------------------------------------------------
   android:
     name: Android-${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: plan
     strategy:
       fail-fast: false
@@ -217,7 +217,7 @@ jobs:
     name: mobile result
     needs: [ios, android]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

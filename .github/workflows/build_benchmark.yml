@@ -23,7 +23,7 @@ jobs:
   plan:
     name: plan (benchmark)
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
@@ -100,7 +100,7 @@ jobs:
     name: benchmark result
     needs: [build_benchmark]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

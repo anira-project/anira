@@ -106,7 +106,7 @@ jobs:
     name: clang_tidy result
     needs: [tidy]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

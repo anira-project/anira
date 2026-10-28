@@ -23,7 +23,7 @@ jobs:
       # One build-only leg per platform family (the PR-tier presets), so PR and
       # queue runs restore warm compile caches from main's scope.
       warm_matrix: >-
-        [{"name":"Linux-x86_64","os":"ubuntu-latest","preset":"ci-tests-shared",
+        [{"name":"Linux-x86_64","os":"ubuntu-24.04","preset":"ci-tests-shared",
           "args":"-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},
          {"name":"Windows-x86_64","os":"windows-latest","preset":"windows-msvc-tests-shared","vcvars":"x64",
           "args":"-DANIRA_WITH_LIBTORCH=ON -DANIRA_WITH_ONNXRUNTIME=ON -DANIRA_WITH_LITERT=ON -DANIRA_WITH_EXECUTORCH=ON -DANIRA_WITH_TFLITE=OFF"},

@@ -35,8 +35,8 @@ jobs:
         # auto-disables LibTorch (shared-only upstream), so a *-static zip ships
         # ONNX Runtime + LiteRT only.
         include:
-          - { name: Linux-x86_64-shared,      os: ubuntu-latest,    preset: ci-tests-shared}
-          - { name: Linux-x86_64-static,      os: ubuntu-latest,    preset: ci-tests-static}
+          - { name: Linux-x86_64-shared,      os: ubuntu-24.04,    preset: ci-tests-shared}
+          - { name: Linux-x86_64-static,      os: ubuntu-24.04,    preset: ci-tests-static}
           - { name: Linux-aarch64-shared,     os: ubuntu-24.04-arm, preset: ci-tests-shared}
           - { name: Linux-aarch64-static,     os: ubuntu-24.04-arm, preset: ci-tests-static}
           - { name: Windows-x86_64-shared,    os: windows-latest,   preset: windows-msvc-tests-shared, vcvars: x64 }
@@ -148,7 +148,7 @@ jobs:
   build_release_android:
     needs: [build_test, build_test_mobile]
     name: Android
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
       ANDROID_PLATFORM: android-24
@@ -190,7 +190,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # creates the GitHub release
     needs:
@@ -215,7 +215,7 @@ jobs:
     name: npm publish
     if: startsWith(github.ref, 'refs/tags/')
     needs: [build_test, build_test_mobile]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # the npm OIDC trusted-publishing handshake

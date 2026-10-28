@@ -25,7 +25,7 @@ jobs:
   plan:
     name: plan (examples)
     if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.tier.outputs.matrix }}
     steps:
@@ -95,7 +95,7 @@ jobs:
     name: examples result
     needs: [build_examples]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |
