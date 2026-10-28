@@ -46,6 +46,19 @@ constexpr uint32_t k_given_up = UINT32_MAX - 1;
 // get_num_active_threads()).
 std::atomic<unsigned int> s_num_active_threads{0};
 #endif
+#if defined(__EMSCRIPTEN__) && defined(__wasm_atomics__)
+#define ANIRA_INFERENCE_WAKE_WORD 1
+// The wake word (notify_work()): bumped after every enqueue and at every stop, parked on by
+// run_loop()'s last backoff phase. In shared memory, so every instance bumps and waits on the
+// same word; the wasm wait and notify take its address as a 32-bit int.
+std::atomic<uint32_t> s_wake{0};
+static_assert(sizeof(std::atomic<uint32_t>) == sizeof(int32_t) &&
+                  std::atomic<uint32_t>::is_always_lock_free,
+              "the wake word is a plain 32-bit word in linear memory");
+// The bound of a park: a notify the thread misses costs it this, never a hang (the native
+// blocking loop's exit-check interval).
+constexpr int64_t k_park_timeout_ns = 5'000'000;
+#endif
 }  // namespace
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, anira_wait_strategy wait_strategy)
@@ -93,6 +106,7 @@ bool InferenceThread::start() {
 
 void InferenceThread::request_stop() {
     m_should_exit.store(true, std::memory_order::release);
+    notify_work();  // a parked Worker sees the flag now, not at the end of its park
 }
 
 void InferenceThread::stop() {
@@ -100,6 +114,7 @@ void InferenceThread::stop() {
     if (m_is_running.exchange(false, std::memory_order::acq_rel)) {
         s_num_active_threads.fetch_sub(1, std::memory_order::relaxed);
     }
+    notify_work();
 }
 
 bool InferenceThread::should_exit() const {
@@ -131,6 +146,16 @@ bool InferenceThread::any_loop_active() noexcept {
     // A relaxed read: the waits re-check between poll iterations, so a thread leaving the
     // loop is seen at the next check.
     return s_num_loop_active.load(std::memory_order::relaxed) > 0;
+}
+
+void InferenceThread::notify_work() noexcept {
+#ifdef ANIRA_INFERENCE_WAKE_WORD
+    // After the enqueue (or the stop flag): a parker that read the word before this increment
+    // and found the queue empty sees the word changed and does not sleep.
+    s_wake.fetch_add(1, std::memory_order::acq_rel);
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the builtin takes an int*
+    __builtin_wasm_memory_atomic_notify(reinterpret_cast<int*>(&s_wake), UINT32_MAX);
+#endif
 }
 
 bool InferenceThread::has_exited() const {
@@ -225,7 +250,24 @@ void InferenceThread::exponential_backoff(std::array<int, 2> iterations) {
     // waits with it too): immediate retries, paused ones, then a yield and a sleep per retry.
     detail::Backoff backoff(iterations[0], iterations[1]);
     while (!should_exit()) {
+#ifdef ANIRA_INFERENCE_WAKE_WORD
+        // Read before the dequeue: an enqueue after it bumps the word, so the park below
+        // returns at once instead of missing the job.
+        const uint32_t seen = s_wake.load(std::memory_order::acquire);
+#endif
         if (execute()) { return; }
+#ifdef ANIRA_INFERENCE_WAKE_WORD
+        // WebAssembly: the last phase parks on the wake word, bounded, instead of the yield and
+        // sleep (which spin on the clock in this libc). Only a Worker runs run_loop(): the
+        // worklet and the main thread, which may not wait, never get here.
+        if (backoff.in_last_phase()) {
+            // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast) the builtin's int*
+            __builtin_wasm_memory_atomic_wait32(reinterpret_cast<int*>(&s_wake),
+                                                static_cast<int>(seen),
+                                                k_park_timeout_ns);
+            continue;
+        }
+#endif
         backoff.pause();
     }
 }
@@ -475,7 +517,9 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
                                     "Dropping the inference and zero-filling its output.");
             session->complete_with_zeros(next);
             session->release_dispatch(next->m_dispatch_epoch);
+            return;
         }
+        notify_work();
     }
 }
 

@@ -1505,6 +1505,8 @@ bool Core::enqueue_inference_or_drop(
                                 "Could not enqueue next inference to global core job queue! "
                                 "Dropping the inference and zero-filling its output.");
         session->complete_with_zeros(thread_safe_struct);
+    } else {
+        InferenceThread::notify_work();
     }
     return enqueued;
 }
@@ -1593,6 +1595,8 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             }
         }
+        // The other sessions' jobs are back in the queue: a parked thread takes them now.
+        if (!inference_stack.empty()) { InferenceThread::notify_work(); }
 
         // seq_cst: pairs with the worker's seq_cst read of m_initialized, which the caller
         // stored false before this drain: a worker that read it true is counted until it
