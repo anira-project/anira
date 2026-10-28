@@ -32,11 +32,14 @@
  * stage) or ANIRA_ERROR_ENGINE (an engine), which fails the chunk the usual way (zeros, the
  * real-time error latched); no JavaScript exception unwinds through a C frame. The trampolines
  * keep {js_key, the engine id} in a small heap record as the descriptor's user_data and free it
- * in the descriptor's release, which is always set for that purpose. Every instance but the
- * main one runs on a stack and a thread-local block of its own: anira_em_alloc_thread_stack
- * allocates both, anira_em_init_instance installs the block as the first call of the new
- * instance, so every thread_local of anira and tanh-lib is per instance, as it is per thread
- * natively.
+ * in the descriptor's release, which is always set for that purpose. Every instance has a
+ * thread-local block of its own, and every instance but the main one a stack:
+ * anira_em_alloc_thread_stack allocates both, anira_em_init_instance installs the block as the
+ * instance's first call, so every thread_local of anira, tanh-lib and the runtime (Emscripten's
+ * exception state among them) is per instance, as it is per thread natively. A module without
+ * main() (AniraWeb, linked --no-entry) starts without a usable block on the main instance too:
+ * its C++ exceptions trap until one is installed, so the main instance makes the same call with
+ * a region of its own.
  */
 
 #include <stddef.h>
@@ -292,9 +295,12 @@ ANIRA_API void ANIRA_CALL anira_em_free_thread_stack(void* base) ANIRA_NOEXCEPT;
  * (__wasm_init_tls): its thread_local variables, anira's and tanh-lib's, start from
  * their initial values in that block, private to the instance. Without it a second
  * instance's thread-local block is the one at address 0, shared with every other
- * uninitialised instance. The first call of a new instance (a Worker's, the worklet's),
- * on that instance's thread, before any other entry; never on the main instance, whose
- * block exists from instantiation.
+ * uninitialised instance. The first call of every instance, on that instance's thread,
+ * before any other entry: a Worker's and the worklet's, with the region whose stack they
+ * run on, and the main instance's, with a region it allocates for the block (it keeps
+ * its own stack). A module linked without main() starts without a usable block, and
+ * Emscripten's exception state is thread-local: until this call a thrown and caught C++
+ * exception (any refused call) traps.
  * @param stack_base What anira_em_alloc_thread_stack returned.
  * @param bytes The size passed to anira_em_alloc_thread_stack (0 for the default).
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL stack_base.

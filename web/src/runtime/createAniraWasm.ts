@@ -2,7 +2,13 @@ import AniraWebFactory, { type MainModule } from '../../wasm/AniraWeb'
 import { ANIRA_EM_HOOKS_VERSION, anira_status } from '../abi/enums'
 import { Heap } from './Heap'
 import { HookRegistry } from './hooks'
-import { enterInstance, type InstanceStack } from './stacks'
+import {
+  allocInstanceStack,
+  enterInstance,
+  installThreadLocalBlock,
+  MIN_INSTANCE_STACK_BYTES,
+  type InstanceStack,
+} from './stacks'
 
 // Lazy-evaluated so the module can be imported in AudioWorkletGlobalScope
 // where URL may not be available. The URLs are only needed on the main thread.
@@ -77,6 +83,11 @@ export const createAniraWasm = async (
   })) as unknown as AniraWasmInstance
   if (options.stack) {
     enterInstance(out, options.stack)
+  } else {
+    // The main instance keeps its stack but needs a thread-local block of its own: the module
+    // has no main(), so none was installed, and C++ exceptions trap without one. The region
+    // lives as long as the instance.
+    installThreadLocalBlock(out, allocInstanceStack(out, MIN_INSTANCE_STACK_BYTES))
   }
   const moduleHooksVersion = out._anira_em_hooks_version() >>> 0
   if (moduleHooksVersion !== ANIRA_EM_HOOKS_VERSION) {

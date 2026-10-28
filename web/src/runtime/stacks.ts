@@ -56,7 +56,21 @@ export const freeInstanceStack = (
  */
 export const enterInstance = (module: AniraWasmInstance, stack: InstanceStack): void => {
   module.stackRestore(stack.base + stack.bytes)
-  const status = module._anira_em_init_instance(stack.base, stack.bytes) | 0
+  installThreadLocalBlock(module, stack)
+}
+
+/**
+ * Install the thread-local block of `region` as the calling instance's
+ * (`anira_em_init_instance`) and keep the instance's stack: what the main instance does with a
+ * region of its own. A module linked without `main()` starts with no usable block, and the
+ * runtime's exception state is thread-local, so until then every thrown and caught C++
+ * exception (any refused call) traps.
+ */
+export const installThreadLocalBlock = (
+  module: AniraWasmInstance,
+  region: InstanceStack
+): void => {
+  const status = module._anira_em_init_instance(region.base, region.bytes) | 0
   if (status < 0) {
     throw new AniraError(
       status,
