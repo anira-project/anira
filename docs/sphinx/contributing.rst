@@ -375,6 +375,17 @@ like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
 table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
 ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
 entry, a draft one included, needs its body in the same pull request, on Emscripten too.
+``build_web`` builds the ``wasm-abi`` preset (``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``,
+the one test option WebAssembly allows), whose gates run under node:
+``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
+as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
+of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
+through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
+thread-local block to 1024 bytes; the workflow then checks that ``web/wasm/AniraWeb.d.ts``
+exports every name of ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and
+``abi/symbols-emscripten.txt``. Locally: ``cmake --preset wasm-abi``, then the build and the
+target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~

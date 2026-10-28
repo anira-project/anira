@@ -13,6 +13,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
+#include <anira/anira_em.h>
 
 #include <cstddef>
 #include <cstdint>

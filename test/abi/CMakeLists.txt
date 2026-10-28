@@ -33,18 +33,33 @@
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
 # are members of ALL, since the device cannot drive the build tree.
-
-if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
-    # Gates 3 and 4 run under node from M2 (the umbrella); nothing here builds on Wasm yet.
-    return()
-endif()
+#
+# On WebAssembly (ANIRA_WITH_ABI_TESTS, the wasm-abi preset; no CTest there) the gates are
+# members of ALL and run under node (CMAKE_CROSSCOMPILING_EMULATOR, which Emscripten's
+# toolchain file sets), through the target anira_abi_wasm_gates that build_web runs:
+#   anira_header_c11 / anira_header_cxx17
+#                         gate 4 as above, anira/anira_em.h with its declarations compiled
+#   anira_abi_layout      gate 3: the printer as a node executable, its table diffed against
+#                         abi/layout-<major>.txt (the wasm32 column of the layout identity)
+#   anira_em_smoke        the trampolines of anira/anira_em.h against a hook object installed
+#                         by em_smoke.pre.js, one instance, the queue driven by
+#                         anira_inference_thread_execute; it also holds the link's
+#                         thread-local block to its 1024-byte budget
 
 set(_abi_headers export status version enums log tensor config context core thread lifecycle stage engine handler draft/tensor_platform)
+# The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
+# other target, so the per-file wrappers include them everywhere.
+set(_abi_platform_headers anira_em)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
 else()
     set(_abi_on_device FALSE)
+endif()
+if(TANH_BINARY_FORMAT STREQUAL "Wasm")
+    set(_abi_on_wasm TRUE)
+else()
+    set(_abi_on_wasm FALSE)
 endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC" OR CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     # C4201 (nameless struct/union): the ANIRA_PTR slots are anonymous unions, standard C11.
@@ -133,7 +148,15 @@ foreach(_h IN LISTS _abi_headers)
     list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
     list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
-if(_abi_on_device)
+foreach(_h IN LISTS _abi_platform_headers)
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
+        "#include <anira/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"
+        "#include <anira/${_h}.h>\nint anira_gate4_${_h}_cxx();\nint anira_gate4_${_h}_cxx() { return 0; }\n")
+    list(APPEND _gate4_c "${_gate4_dir}/only_${_h}.c")
+    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_h}.cpp")
+endforeach()
+if(_abi_on_device OR _abi_on_wasm)
     add_library(anira_header_c11 OBJECT header_c.c ${_gate4_c})
     add_library(anira_header_cxx17 OBJECT header_cxx17.cpp ${_gate4_cxx})
 else()
@@ -144,6 +167,60 @@ else()
 endif()
 anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
+
+# ---- the WebAssembly arm: gate 3 and the anira_em.h smoke under node -------------------------
+if(_abi_on_wasm)
+    if(NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        message(FATAL_ERROR "ANIRA_WITH_ABI_TESTS on WebAssembly runs its gates under node: "
+                            "CMAKE_CROSSCOMPILING_EMULATOR (Emscripten's toolchain file sets it) "
+                            "names no node executable")
+    endif()
+    # Gate 3: the printer alone, no library; the same table every native leg prints.
+    add_executable(anira_abi_layout generated/test_layout.c)
+    anira_abi_consumer_target(anira_abi_layout C)
+    target_link_options(anira_abi_layout PRIVATE -sENVIRONMENT=node)
+    # The smoke: C over the hook object em_smoke.pre.js installs, linked against the library
+    # the way AniraWeb is (shared memory, the C ABI's export list, the runtime methods the hook
+    # object reads the heap with).
+    set(_smoke_exports "${CMAKE_CURRENT_BINARY_DIR}/em_smoke_exports.txt")
+    file(READ "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt" _wasm_exports)
+    anira_abi_write_if_changed("${_smoke_exports}" "${_wasm_exports}_main\n")
+    add_executable(anira_em_smoke em_smoke.c)
+    anira_abi_consumer_target(anira_em_smoke C)
+    target_link_libraries(anira_em_smoke PRIVATE anira::anira)
+    # A shared-memory link takes objects built with the atomics and bulk-memory features only
+    # (anira's C++ carries them through CMAKE_CXX_FLAGS; this is C).
+    target_compile_options(anira_em_smoke PRIVATE -matomics -mbulk-memory)
+    set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_options(anira_em_smoke PRIVATE
+        -sENVIRONMENT=node
+        -sSHARED_MEMORY=1
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "-sEXPORTED_FUNCTIONS=@${_smoke_exports}"
+        "-sEXPORTED_RUNTIME_METHODS=[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\"]"
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js")
+    set_property(TARGET anira_em_smoke APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js" "${_smoke_exports}")
+    # Both gates under node, in one target build_web runs after the build.
+    add_custom_target(anira_abi_wasm_gates
+        COMMAND ${CMAKE_COMMAND}
+            "-DLAYOUT_RUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}"
+            -DLAYOUT_EXE=$<TARGET_FILE:anira_abi_layout>
+            -DEXPECTED=${anira_SOURCE_DIR}/abi/layout-${ANIRA_ABI_MAJOR}.txt
+            -DACTUAL=${CMAKE_CURRENT_BINARY_DIR}/layout-${ANIRA_ABI_MAJOR}.actual.txt
+            -P ${anira_SOURCE_DIR}/cmake/abi-layout-check.cmake
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke>
+        DEPENDS anira_abi_layout anira_em_smoke
+        COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
+        VERBATIM)
+    return()
+endif()
 
 # ---- gate 4: anira.hpp alone as C++20 ------------------------------------------------------
 # The header-only wrapper the way a consumer compiles it: anira's include directories, no

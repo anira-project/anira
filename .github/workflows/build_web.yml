@@ -41,10 +41,37 @@ jobs:
           which tsc
           tsc --version
 
+      # wasm-abi is wasm-release (the module the package ships) plus ANIRA_WITH_ABI_TESTS:
+      # the ABI gates that run under node, in the same build.
       - name: build wasm
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
-          PRESET: wasm-release
+          PRESET: wasm-abi
+
+      # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
+      # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
+      # emsdk's, the CMAKE_CROSSCOMPILING_EMULATOR of the configure.
+      - name: run the WebAssembly ABI gates under node
+        run: cmake --build --preset wasm-abi --target anira_abi_wasm_gates
+
+      # Every promised, draft and Emscripten entry point (and _malloc, _free) is an export of
+      # the module, read from the typing emcc emitted. The 2.x wrappers' own exports are
+      # counted, not refused, until the wrapper archive leaves the link.
+      - name: check the exports of AniraWeb against the symbol lists
+        run: |
+          set -euo pipefail
+          dts=web/wasm/AniraWeb.d.ts
+          grep -oE '^  _[A-Za-z0-9_]+\(' "$dts" | sed -E 's/^  _//; s/\($//' | sort -u > "$RUNNER_TEMP/exported.txt"
+          { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
+            | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
+            echo "$missing"
+            exit 1
+          fi
+          others=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt" | wc -l)
+          echo "all $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists are exported; $others other exports (the 2.x wrappers)"
 
       - name: setup node
         uses: actions/setup-node@v5

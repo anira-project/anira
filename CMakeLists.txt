@@ -18,6 +18,7 @@ option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" O
 option(ANIRA_WITH_EXAMPLES  "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL   "Add install targets" OFF)
 option(ANIRA_WITH_TESTS     "Add build tests" OFF)
+option(ANIRA_WITH_ABI_TESTS "Add the ABI gates alone (test/abi); the one test option WebAssembly allows, run under node" OFF)
 option(ANIRA_WITH_DOCS      "Build documentation" OFF)
 option(ANIRA_WITH_LOGGING   "Enable logging printouts" ON)
 option(ANIRA_WITH_RTSAN     "Enable RealtimeSanitizer (rtsan) checks (requires clang 20)" OFF)
@@ -439,6 +440,10 @@ endif()
 
 if (ANIRA_WITH_TESTS)
     add_subdirectory(test)
+elseif(ANIRA_WITH_ABI_TESTS)
+    # The gates of test/abi without the rest of the suite: on WebAssembly the layout printer
+    # and the anira_em.h smoke run under node (test/abi/CMakeLists.txt, its Wasm arm).
+    add_subdirectory(test/abi)
 endif()
 
 if (ANIRA_WITH_DOCS)

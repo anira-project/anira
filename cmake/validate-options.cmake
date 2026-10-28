@@ -115,7 +115,9 @@ endif()
 
 # WebAssembly (Emscripten): only the ONNX Runtime backend is supported and the
 # component targets do not apply. (EMSDK_VERSION, set by cmake/detect-emscripten.cmake
-# under ANIRA_BUILD_WASM, names the toolchain version; the format is the fact.)
+# under ANIRA_BUILD_WASM, names the toolchain version; the format is the fact.) The one
+# exception is ANIRA_WITH_ABI_TESTS: the gates of test/abi that run under node (the layout
+# table, the header gates, the anira_em.h smoke; the wasm-abi preset).
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     if(ANIRA_WITH_EXAMPLES)
         message(FATAL_ERROR "WebAssembly support is not compatible with examples. Set -DANIRA_WITH_EXAMPLES=OFF.")
