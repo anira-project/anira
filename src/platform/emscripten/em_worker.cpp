@@ -1,7 +1,9 @@
 // The Wasm Workers of InferenceThread::start on WebAssembly: see em_worker.h.
 #include "em_worker.h"
 
+#include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
+#include <emscripten/emscripten.h>
 #include <emscripten/wasm_worker.h>
 
 #include <atomic>
@@ -9,24 +11,95 @@
 #include <cstdint>
 #include <cstdlib>
 #include <string>
+#include <vector>
 
 namespace {
 
 constexpr size_t k_align = 16;
 
-// What the worker's bootstrap reads: the entry, its argument, the module to import first and
-// the word it stores 1 to once the entry returned. Freed with the worker's region.
+constexpr uint32_t k_booting = 0;
+constexpr uint32_t k_entered = 1;
+constexpr uint32_t k_cancelled = 2;
+
+// How often the reaper looks at the cancelled workers, and how long a cancelled worker may take
+// to finish its boot before it is terminated where it stands (its region then leaked).
+constexpr double k_reap_interval_ms = 100.0;
+constexpr double k_reap_timeout_ms = 10000.0;
+
+// What the worker's bootstrap reads: the entry, its argument, the module to import first, the
+// state the entry and a cancel race on, and the word the bootstrap stores 1 to once the entry
+// returned or was skipped. Owned by the main thread, freed with the worker's region; it outlives
+// the thread object of the entry's argument, which a cancelled worker never touches.
 struct Boot {
     void (*m_enter)(void*) = nullptr;
     void* m_arg = nullptr;
     std::string m_module_url;
-    std::atomic<int32_t>* m_left = nullptr;
+    std::atomic<uint32_t> m_state{k_booting};
+    std::atomic<int32_t> m_left{0};
 };
 
-// Called back by the bootstrap once the module and the registry's boot are done.
+// Called back by the bootstrap once the module and the registry's boot are done: the entry,
+// unless cancel_boot() won the race (then the argument may be gone already).
 void enter_booted(void* boot) {
-    const Boot& b = *static_cast<const Boot*>(boot);
+    Boot& b = *static_cast<Boot*>(boot);
+    uint32_t expected = k_booting;
+    if (!b.m_state.compare_exchange_strong(expected, k_entered, std::memory_order::acq_rel)) {
+        return;
+    }
     b.m_enter(b.m_arg);
+}
+
+// A main-thread timer for the reaper: a plain setTimeout that calls `fn(0)`. Not
+// emscripten_set_timeout: its callback ends in the runtime's maybeExit, which with no keepalive
+// left exits this module's runtime (ABORT), after which every later callback into C (a timer, a
+// worklet's creation) is dropped silently.
+EM_JS(void, anira_em_js_set_timeout, (uintptr_t fn, double ms), {
+    setTimeout(function() { getWasmTableEntry(fn)(0); }, ms);
+});
+
+void reap(void* user_data);
+
+void arm_reaper() {
+    anira_em_js_set_timeout(reinterpret_cast<uintptr_t>(&reap), k_reap_interval_ms);
+}
+
+// The cancelled workers that have not finished their boot yet, on the main thread.
+struct Cancelled {
+    anira::em::Worker m_worker;
+    double m_since = 0.0;
+};
+std::vector<Cancelled> s_cancelled;
+bool s_reaper_armed = false;
+
+// The one place a cancelled worker's memory goes: a main-thread timer, every 100 ms while any
+// remain. A worker that stored its left word is terminated (idle by then: its boot is over)
+// and its region and record freed; one still booting after 10 s is terminated where it stands
+// and its region left allocated, since it may be inside a C frame.
+void reap(void* /*user_data*/) {
+    s_reaper_armed = false;
+    const double now = emscripten_get_now();
+    std::vector<Cancelled> waiting;
+    for (Cancelled& c : s_cancelled) {
+        if (anira::em::has_left(c.m_worker)) {
+            anira::em::terminate_worker(c.m_worker, true);
+        } else if (now - c.m_since > k_reap_timeout_ms) {
+            ANIRA_LOG_WARNING(anira::log_group::k_scheduler,
+                              "inference thread: a cancelled Wasm Worker did not finish its boot "
+                              "(its module's import or an engine's init) within %.0f ms; it is "
+                              "terminated where it stands and its %zu-byte region is leaked, "
+                              "since it may be inside a C frame",
+                              k_reap_timeout_ms,
+                              anira::em::k_worker_stack_bytes);
+            anira::em::terminate_worker(c.m_worker, false);
+        } else {
+            waiting.push_back(c);
+        }
+    }
+    s_cancelled = std::move(waiting);
+    if (!s_cancelled.empty()) {
+        s_reaper_armed = true;
+        arm_reaper();
+    }
 }
 
 size_t round_up(size_t bytes, size_t align) {
@@ -81,7 +154,7 @@ void boot_worker(int boot) {
                             reinterpret_cast<uintptr_t>(&enter_booted),
                             b,
                             // NOLINTNEXTLINE(cppcoreguidelines-pro-type-reinterpret-cast)
-                            reinterpret_cast<int32_t*>(b->m_left));
+                            reinterpret_cast<int32_t*>(&b->m_left));
 }
 
 }  // namespace
@@ -92,27 +165,47 @@ static_assert(sizeof(std::atomic<int32_t>) == sizeof(int32_t) &&
                   std::atomic<int32_t>::is_always_lock_free,
               "the bootstrap stores to the word through Atomics.store");
 
-Worker start_worker(const std::string& module_url,
-                    void (*enter)(void*),
-                    void* arg,
-                    std::atomic<int32_t>* left) {
+Worker start_worker(const std::string& module_url, void (*enter)(void*), void* arg) {
     const size_t tls_align =
         __builtin_wasm_tls_align() > k_align ? __builtin_wasm_tls_align() : k_align;
     const size_t bytes = round_up(k_worker_stack_bytes + __builtin_wasm_tls_size(), tls_align);
     void* region = std::aligned_alloc(tls_align, bytes);
     if (region == nullptr) { return {}; }
-    auto* boot = new Boot{enter, arg, module_url, left};  // NOLINT(cppcoreguidelines-owning-memory)
+    auto* boot = new Boot();  // NOLINT(cppcoreguidelines-owning-memory)
+    boot->m_enter = enter;
+    boot->m_arg = arg;
+    boot->m_module_url = module_url;
     const emscripten_wasm_worker_t id = emscripten_create_wasm_worker(region, bytes);
     if (id == 0) {
         delete boot;        // NOLINT(cppcoreguidelines-owning-memory)
         std::free(region);  // NOLINT(cppcoreguidelines-no-malloc)
         return {};
     }
-    left->store(0, std::memory_order::release);
     emscripten_wasm_worker_post_function_vi(id,
                                             &boot_worker,
                                             static_cast<int>(reinterpret_cast<uintptr_t>(boot)));
     return Worker{id, region, boot};
+}
+
+bool cancel_boot(Worker& worker) {
+    if (worker.m_id == 0) { return false; }
+    auto& boot = *static_cast<Boot*>(worker.m_boot);
+    uint32_t expected = k_booting;
+    if (!boot.m_state.compare_exchange_strong(expected, k_cancelled, std::memory_order::acq_rel)) {
+        return false;
+    }
+    s_cancelled.push_back(Cancelled{worker, emscripten_get_now()});
+    worker = Worker{};
+    if (!s_reaper_armed) {
+        s_reaper_armed = true;
+        arm_reaper();
+    }
+    return true;
+}
+
+bool has_left(const Worker& worker) {
+    return worker.m_boot != nullptr &&
+           static_cast<const Boot*>(worker.m_boot)->m_left.load(std::memory_order::acquire) != 0;
 }
 
 void terminate_worker(Worker& worker, bool free_memory) {

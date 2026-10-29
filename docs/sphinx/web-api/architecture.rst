@@ -26,7 +26,11 @@ The context's inference Workers
    ``anira_inference_thread_start`` starts a Worker for a user-driven thread. A Worker starts
    only once the main thread yields to its event loop: :js:meth:`Context.ready` waits for every
    Worker to be inside its loop (``anira_em_inference_threads_in_loop``). The last context's
-   destroy stops the pool: each Worker leaves its loop and is terminated.
+   destroy stops the pool: each Worker leaves its loop and is terminated. A Worker still booting
+   (loading the glue, importing the worker module, awaiting its engines' ``init``) is not
+   terminated there, which a browser reports as an error: the stop cancels its boot, the Worker
+   finishes it without entering the loop, and a main-thread timer frees its memory once it is
+   done (one that never finishes is terminated after 10 s, its 4 MiB region left allocated).
 
 The audio thread
    :js:meth:`Handler.createAudioNode` creates a Wasm Audio Worklet node

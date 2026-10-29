@@ -39,7 +39,9 @@ class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting f
  * module's shared memory (src/platform/emscripten/em_worker.h), with a stack and thread-local
  * block of its own, which first imports the worker module (set_worker_module(): the
  * JavaScript engines and stages it defines) and then enters run_loop(); stop() waits for the
- * worker to leave the loop and terminates it. A host may instead drive the loop on a thread of
+ * worker to leave the loop and terminates it, or cancels the boot of a worker that has not
+ * entered it yet (em::cancel_boot: the worker finishes its boot, never enters, and the reaper
+ * frees its region). A host may instead drive the loop on a thread of
  * its own by calling run_loop() without start(), on every platform.
  *
  * Dequeueing is deliberately done without a moodycamel::ConsumerToken: the
@@ -143,8 +145,10 @@ public:
 
     /**
      * @brief Stops the thread: asks run_loop() to return and joins it. WebAssembly: waits for
-     * the Wasm Worker to leave the loop (a worker still importing its module never enters it)
-     * and terminates it; a loop a host drives itself is asked to return only.
+     * the Wasm Worker to leave the loop and terminates it; a worker still booting is cancelled
+     * instead (it never enters the loop, and is terminated and freed by the reaper once its
+     * boot is over, never in the middle of it); a loop a host drives itself is asked to return
+     * only.
      */
     void stop();
 
@@ -433,7 +437,8 @@ private:
     std::atomic<bool> m_has_exited{false};  ///< Set by run_loop() on return, cleared on entry
     std::atomic<bool> m_in_loop{false};     ///< Set on run_loop() entry, cleared on return
 #ifdef __EMSCRIPTEN__
-    /// The Wasm Worker's entry: the loop, unless stop() cancelled the worker first.
+    /// The Wasm Worker's entry: the loop (the bootstrap skips it when stop() cancelled the
+    /// worker during its boot).
     static void enter_worker(void* self);
 
     std::atomic<bool> m_should_exit{false};
@@ -441,13 +446,7 @@ private:
     std::string m_worker_module;      ///< What the Wasm Worker of start() imports first
     int m_worker_id = 0;              ///< The Wasm Worker of start(); 0: none
     void* m_worker_region = nullptr;  ///< Its stack and thread-local block
-    void* m_worker_boot = nullptr;    ///< Its bootstrap's record
-    /// The Wasm Worker's progress: booting until it enters the loop, then running; cancelled
-    /// when stop() came first (InferenceThread.cpp).
-    std::atomic<uint32_t> m_worker_state{0};
-    /// 1 once the Wasm Worker's entry returned and it runs no C code any more (stored by its
-    /// JavaScript): its region may go.
-    std::atomic<int32_t> m_worker_left{0};
+    void* m_worker_boot = nullptr;    ///< Its bootstrap's record: the cancel, the left word
 #else
     thl::core::Thread m_thread;  ///< The OS thread; its stop flag is should_exit()
 #endif

@@ -1,7 +1,7 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
 // isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a
 // headless browser (Playwright) and prints its checks: test/browser/index.html, ort.html,
-// config.html and streams.html (the package as built) and the check pages of the two examples, stage-and-engine
+// config.html, streams.html and boot-stop.html (the package as built) and the check pages of the two examples, stage-and-engine
 // and model-file (as their own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a page
 // fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
 // fetches those) the way a site serves its own. Then the stage-and-engine check page once more under
@@ -64,6 +64,7 @@ const allPages = [
   'test/browser/ort.html',
   'test/browser/config.html',
   'test/browser/streams.html',
+  'test/browser/boot-stop.html',
   'examples/stage-and-engine/dist/check.html',
   'examples/model-file/dist/check.html',
 ]
@@ -72,6 +73,8 @@ const browserType = { chromium, firefox }[browserName]
 if (!browserType) throw new Error(`no browser '${browserName}': chromium or firefox`)
 // live.html needs a live AudioContext that runs: headless Firefox keeps one suspended (no audio
 // output to run against), so the page runs in Chromium alone.
+// Pages on which any console error or uncaught exception fails (a stop must not log one).
+const strictPages = new Set(['test/browser/boot-stop.html'])
 const livePages = browserName === 'chromium' ? ['test/browser/live.html'] : []
 const pages =
   process.argv.length > 3 ? process.argv.slice(3) : [...allPages, ...livePages, 'dev']
@@ -109,9 +112,20 @@ try {
       if (/Security Error|may not load or link to/.test(message.text())) {
         console.log('FAILED: the browser refused a load (above)')
         failed += 1
+      } else if (strictPages.has(pathname) && message.type() === 'error') {
+        console.log('FAILED: a console error on a page that must log none (above)')
+        failed += 1
       }
     })
-    page.on('pageerror', (error) => console.log(`page error: ${error.message}`))
+    page.on('pageerror', (error) => {
+      console.log(`page error: ${error.message}`)
+      if (strictPages.has(pathname)) {
+        console.log(
+          'FAILED: an uncaught exception on a page that must throw none (above)'
+        )
+        failed += 1
+      }
+    })
     await page.goto(
       dev
         ? `${dev.resolvedUrls.local[0]}${DEV_PAGE}`

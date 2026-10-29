@@ -89,9 +89,12 @@ ANIRA_API anira_status ANIRA_CALL anira_inference_thread_start(anira_inference_t
 /**
  * @brief Requests the loop to exit and joins the thread anira_inference_thread_start started
  * (WebAssembly: waits for its Wasm Worker to leave the loop, then terminates it; a
- * Worker still importing its module is terminated at once). A loop the host runs itself
- * (anira_inference_thread_run_loop) is asked to return only; poll
- * anira_inference_thread_has_exited.
+ * Worker still booting, its module's import or its engines' init in flight, is never
+ * terminated there: the stop cancels its boot and returns, the Worker finishes the boot
+ * without entering the loop, and a main-thread timer frees its region once it is done,
+ * terminating one that has not finished within 10 s and leaving its region allocated). A
+ * loop the host runs itself (anira_inference_thread_run_loop) is asked to return only;
+ * poll anira_inference_thread_has_exited.
  * @param thread The object.
  * @par Thread contract
  * [main-thread]

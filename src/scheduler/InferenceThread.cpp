@@ -68,11 +68,6 @@ static_assert(sizeof(std::atomic<uint32_t>) == sizeof(int32_t) &&
 constexpr int64_t k_park_timeout_ns = 5'000'000;
 #endif
 #ifdef __EMSCRIPTEN__
-// m_worker_state of a Wasm Worker of start().
-constexpr uint32_t k_worker_none = 0;
-constexpr uint32_t k_worker_booting = 1;
-constexpr uint32_t k_worker_running = 2;
-constexpr uint32_t k_worker_cancelled = 3;
 // How long stop() waits for a worker inside an engine call to leave the loop before it
 // terminates the worker regardless.
 constexpr double k_worker_stop_timeout_ms = 5000.0;
@@ -117,11 +112,8 @@ bool InferenceThread::start() {
     // false→true transition alone.
     if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
     m_should_exit.store(false, std::memory_order::release);
-    m_worker_state.store(k_worker_booting, std::memory_order::release);
-    const em::Worker worker =
-        em::start_worker(m_worker_module, &enter_worker, this, &m_worker_left);
+    const em::Worker worker = em::start_worker(m_worker_module, &enter_worker, this);
     if (worker.m_id == 0) {
-        m_worker_state.store(k_worker_none, std::memory_order::release);
         m_is_running.store(false, std::memory_order::release);
         return false;
     }
@@ -133,15 +125,9 @@ bool InferenceThread::start() {
 }
 
 void InferenceThread::enter_worker(void* self) {
-    auto& thread = *static_cast<InferenceThread*>(self);
-    uint32_t expected = k_worker_booting;
-    // stop() came while the worker imported its module: it never enters.
-    if (!thread.m_worker_state.compare_exchange_strong(expected,
-                                                       k_worker_running,
-                                                       std::memory_order::acq_rel)) {
-        return;
-    }
-    thread.run_loop();
+    // Called only when the worker's boot was not cancelled (em::cancel_boot), and the cancel and
+    // this entry race on the bootstrap's record, which outlives this object.
+    static_cast<InferenceThread*>(self)->run_loop();
 }
 
 void InferenceThread::set_worker_module(std::string url) {
@@ -156,35 +142,28 @@ void InferenceThread::request_stop() {
 void InferenceThread::stop() {
     m_should_exit.store(true, std::memory_order::release);
     notify_work();
-    if (m_worker_id != 0) {
-        uint32_t expected = k_worker_booting;
-        // A worker still importing its module never enters the loop and is terminated where it
-        // waits; its region stays allocated, since it may be inside its first C frame.
-        bool free_memory = false;
-        if (!m_worker_state.compare_exchange_strong(expected,
-                                                    k_worker_cancelled,
-                                                    std::memory_order::acq_rel)) {
-            // Inside the loop: the flag and the notify bring it out once its current job is
-            // done, and its JavaScript says when it ran its last C code.
-            const double start = emscripten_get_now();
-            while (m_worker_left.load(std::memory_order::acquire) == 0) {
-                if (emscripten_get_now() - start > k_worker_stop_timeout_ms) {
-                    ANIRA_LOG_ERROR(log_group::k_scheduler,
-                                    "inference thread: the Wasm Worker did not leave its loop "
-                                    "within %.0f ms of the stop (an engine call that does not "
-                                    "return); it is terminated where it runs",
-                                    k_worker_stop_timeout_ms);
-                    break;
-                }
+    em::Worker worker{m_worker_id, m_worker_region, m_worker_boot};
+    m_worker_id = 0;
+    m_worker_region = nullptr;
+    m_worker_boot = nullptr;
+    // A worker still importing its module or initialising its engines is never terminated
+    // there: the cancel hands it to the reaper (em_worker.cpp), which frees its memory once it
+    // finished its boot without entering the loop.
+    if (worker.m_id != 0 && !em::cancel_boot(worker)) {
+        // Inside the loop: the flag and the notify bring it out once its current job is done,
+        // and its JavaScript says when it ran its last C code.
+        const double start = emscripten_get_now();
+        while (!em::has_left(worker)) {
+            if (emscripten_get_now() - start > k_worker_stop_timeout_ms) {
+                ANIRA_LOG_ERROR(log_group::k_scheduler,
+                                "inference thread: the Wasm Worker did not leave its loop "
+                                "within %.0f ms of the stop (an engine call that does not "
+                                "return); it is terminated where it runs",
+                                k_worker_stop_timeout_ms);
+                break;
             }
-            free_memory = m_worker_left.load(std::memory_order::acquire) != 0;
         }
-        em::Worker worker{m_worker_id, m_worker_region, m_worker_boot};
-        em::terminate_worker(worker, free_memory);
-        m_worker_id = 0;
-        m_worker_region = nullptr;
-        m_worker_boot = nullptr;
-        m_worker_state.store(k_worker_none, std::memory_order::release);
+        em::terminate_worker(worker, em::has_left(worker));
     }
     if (m_is_running.exchange(false, std::memory_order::acq_rel)) {
         s_num_active_threads.fetch_sub(1, std::memory_order::relaxed);
