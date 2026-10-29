@@ -8,7 +8,9 @@
 // the gain of its quantum after the handler's latency (the stage's 0.5 and the engine's 2 cancel).
 // Then the gain as a tensor slot written with setStaticInput on a second handler, and the teardown:
 // the nodes, the handlers and the context, which stops the pool. The verdict is
-// window.anira_test_result.
+// window.anira_test_result. First, before any of it: a warning reaches the console exactly once,
+// through the log hook while one is set (it replaces the platform sink, which the glue prints as
+// console.error), through the platform sink once the hook is removed.
 import {
   ANIRA_EM_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
@@ -20,6 +22,7 @@ import {
   ModelConfig,
   Pipeline,
   anira_status,
+  anira_wait_strategy,
 } from '../../dist/index.js'
 
 const RATE = 48000
@@ -32,6 +35,34 @@ const GAIN_AFTER = 0.25
 const CHANGE_QUANTUM = 32
 const ENGINE_ID = 'org.anira-test.pool-double'
 const STAGE = 'org.anira-test.half'
+
+// Counts the console lines that carry `marker`, whichever method printed them; installed before
+// the module, whose glue binds console.error for its stderr when it is instantiated.
+const consoleCounter = (marker) => {
+  const counts = { log: 0, info: 0, warn: 0, error: 0, debug: 0 }
+  for (const method of Object.keys(counts)) {
+    const original = console[method].bind(console)
+    console[method] = (...args) => {
+      if (args.some((arg) => String(arg).includes(marker))) counts[method] += 1
+      original(...args)
+    }
+  }
+  return {
+    total: () => Object.values(counts).reduce((sum, n) => sum + n, 0),
+    counts,
+  }
+}
+
+// A context whose config asks for a blocking wait, which the core coerces with one warning on
+// WebAssembly; no threads, destroyed right away (the next context's config takes effect whole).
+const BLOCKING_WARNING = 'ANIRA_WAIT_BLOCKING is not supported'
+const warnOnce = (abi) => {
+  const config = abi.anira_context_config_create()
+  abi.anira_context_config_set_threads(config, 0, anira_wait_strategy.ANIRA_WAIT_BLOCKING)
+  const context = abi.anira_context_create(config)
+  abi.anira_context_config_destroy(config)
+  abi.anira_context_destroy(context)
+}
 
 const render = async (audio, audioNode, samples) => {
   const input = audio.createBuffer(1, samples.length, RATE)
@@ -47,9 +78,26 @@ const run = async () => {
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   check(crossOriginIsolated, 'the page is cross-origin isolated (COOP/COEP)')
 
+  const counter = consoleCounter(BLOCKING_WARNING)
   const anira = await Anira.create()
-  anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
+  const hook = (record) => console.log(`[anira ${record.group}] ${record.message}`)
+  anira.setLogHook(hook)
   check(anira.version.length > 0, `the module is anira ${anira.version}`)
+
+  warnOnce(anira.abi)
+  check(
+    counter.total() === 1 && counter.counts.log === 1,
+    `with the log hook set a warning reaches the console once, through the hook ` +
+      `(${JSON.stringify(counter.counts)})`
+  )
+  anira.setLogHook(null)
+  warnOnce(anira.abi)
+  check(
+    counter.total() === 2 && counter.counts.log === 1,
+    `without the hook it reaches the console once, through the platform sink ` +
+      `(${JSON.stringify(counter.counts)})`
+  )
+  anira.setLogHook(hook)
 
   // The bindings throw a refused call as an AniraError with the entry's message.
   let thrown = null

@@ -100,6 +100,12 @@ void report_void_failure(const char* entry) noexcept;
 /// the logger, so this writes at most one line to stderr and never logs.
 void report_void_failure_quiet(const char* entry) noexcept;
 
+/// One hold on thl::Logger's platform sink being off (acquire) or its release: the sink is on
+/// while no one holds it off. The holders are the contexts whose config sets
+/// ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK and, on the web, the JavaScript log hook while it is
+/// set (anira_em_set_log_hook), which takes the platform sink's place there.
+void hold_platform_sink_off(bool acquire);
+
 /// The boundary trace switch (ANIRA_LOG_FLAG_TRACE_FAILURES): while set, every failed
 /// status of every entry emits one Error record whose message bytes are the anira_error
 /// message prefixed by the entry and the status text. Process-global; the context config

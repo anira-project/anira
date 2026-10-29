@@ -52,12 +52,11 @@ void apply_log_flags(anira_context& context, bool acquire) {
     if (context.m_flags_applied == acquire) { return; }
     context.m_flags_applied = acquire;
     const uint32_t flags = context.m_config.m_log_flags;
+    if ((flags & ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
+        anira::capi::hold_platform_sink_off(acquire);
+    }
     FlagCounts& counts = flag_counts();
     const std::scoped_lock<std::mutex> lock(counts.m_mutex);
-    if ((flags & ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK) != 0) {
-        counts.m_platform_sink_disabled += acquire ? 1 : -1;
-        anira::detail::set_platform_sink_enabled(counts.m_platform_sink_disabled == 0);
-    }
     if ((flags & ANIRA_LOG_FLAG_TRACE_FAILURES) != 0) {
         counts.m_trace_failures += acquire ? 1 : -1;
         anira::capi::set_trace_failures(counts.m_trace_failures > 0);
@@ -139,6 +138,13 @@ constexpr uint32_t k_edge_info_head = 7 * sizeof(uint32_t);
 }  // namespace
 
 namespace anira::capi {
+
+void hold_platform_sink_off(bool acquire) {
+    FlagCounts& counts = flag_counts();
+    const std::scoped_lock<std::mutex> lock(counts.m_mutex);
+    counts.m_platform_sink_disabled += acquire ? 1 : -1;
+    anira::detail::set_platform_sink_enabled(counts.m_platform_sink_disabled == 0);
+}
 
 void context_add_ref(anira_context* context) noexcept {
     if (context != nullptr) { context->m_refcount.fetch_add(1, std::memory_order_acq_rel); }

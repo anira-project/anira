@@ -90,7 +90,9 @@ export class Anira {
    * hook): the records logged here and those `drainLog` delivers here, the real-time records of
    * every thread among them (`anira_em_set_log_hook`). Records a Worker logs itself reach that
    * scope's registry, which writes them to the console unless the Worker's module sets
-   * `scopeRegistry().logHook`.
+   * `scopeRegistry().logHook`. While a hook is set it replaces the module's platform sink
+   * (stderr, printed as console.error), so each record reaches the console once, at its level;
+   * `null` restores the platform sink.
    */
   setLogHook(onRecord: ((record: LogRecord) => void) | null = consoleLogSink): void {
     scopeRegistry().logHook = onRecord

@@ -41,6 +41,10 @@ A failed call throws an :js:class:`AniraError` with the entry's message.
    :end-before: // [log]
    :dedent:
 
+The hook replaces the module's platform sink (its stderr, which the glue would print as
+``console.error``): each record reaches the console once, through the console method of its
+level (:doc:`../logging`).
+
 2. A Context
 ------------
 
