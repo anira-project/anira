@@ -176,7 +176,10 @@ The Worklet Scope
 
 The first node of an audio context starts the context's worklet thread, a node of *n*
 AudioParams registers the processor ``anira-node-n`` once per context, and the creation
-completes on the main thread's event loop (the promise resolves then). Before the first node,
+completes on the main thread's event loop (the promise resolves then). Any number of nodes may
+be created at once on one context (``Promise.all``, any interleaving, also while another node of
+the context is destroyed): they share the context's first-node setup, and each creation
+completes on its own. Before the first node,
 ``createAudioNode`` loads ``worklet-scope.js`` into the scope: the scope has no ``performance``,
 which the module's clock needs on the audio thread. A JavaScript stage's worklet phases run on
 the scope's registry, which anira boots over the worklet's instance at every create; the code

@@ -70,8 +70,33 @@ export type AniraAudioNode = {
   destroy(): void
 }
 
-// The audio contexts registered with the module (emscriptenRegisterAudioObject), once each.
-const contexts = new WeakMap<BaseAudioContext, number>()
+// The audio contexts registered with the module, once each: the worklet scope's clock loaded,
+// then emscriptenRegisterAudioObject. Memoised as the promise, set before its first await, so
+// the nodes of one context created at once share one registration: two registrations of one
+// context were two handles, and the second started a second worklet thread on the context's one
+// AudioWorkletGlobalScope, whose creation never completed (every node after it timed out).
+const contexts = new WeakMap<BaseAudioContext, Promise<number>>()
+
+/** @internal The handle of `audioContext` in the module, registered once (exported for the tests). */
+export const registeredContext = (
+  abi: Pick<AniraBindings, 'module'>,
+  audioContext: BaseAudioContext
+): Promise<number> => {
+  let context = contexts.get(audioContext)
+  if (context === undefined) {
+    context = (async () => {
+      // The worklet scope's clock, before the module's glue reaches the scope.
+      await audioContext.audioWorklet.addModule(
+        new URL('./worklet-scope.ts', import.meta.url)
+      )
+      return abi.module.emscriptenRegisterAudioObject(audioContext)
+    })()
+    contexts.set(audioContext, context)
+    // A failed registration is not kept: the next node tries again.
+    context.catch(() => contexts.delete(audioContext))
+  }
+  return context
+}
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -106,15 +131,7 @@ export const createAudioNode = async (
 ): Promise<AniraAudioNode> => {
   const { abi } = anira
   const m = abi.module
-  let context = contexts.get(audioContext)
-  if (context === undefined) {
-    // The worklet scope's clock, before the module's glue reaches the scope.
-    await audioContext.audioWorklet.addModule(
-      new URL('./worklet-scope.ts', import.meta.url)
-    )
-    context = m.emscriptenRegisterAudioObject(audioContext)
-    contexts.set(audioContext, context)
-  }
+  const context = await registeredContext(abi, audioContext)
   for (const url of options.workletModules ?? []) {
     await audioContext.audioWorklet.addModule(url)
   }
