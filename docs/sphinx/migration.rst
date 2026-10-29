@@ -727,7 +727,8 @@ The 2.x handler of ``<anira/anira.h>`` (:cpp:class:`anira::InferenceHandler` and
 stays public through the alpha releases and goes with the runtime cut-over, the transitional
 bridge below with it; the remaining 2.x headers become private in the release after that. From
 then on ``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor
-release after 3.0.0; no ``[[deprecated]]`` attribute marks it until then.
+release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+entity gains one before 3.0.0.
 
 .. _migration-bridge:
 

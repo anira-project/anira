@@ -42,6 +42,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "capi/port.h"
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -160,6 +161,25 @@ struct Oracle {
         anira_test::expect_inference_config_eq(m_c.m_handler->m_inference_config, m_config_2x);
         m_num_inputs = m_c.m_handler->m_num_inputs;
         m_num_outputs = m_c.m_handler->m_num_outputs;
+        if (m_num_outputs > 1) {
+            m_previous_gain_out = c_static_output(1);
+            EXPECT_EQ(m_previous_gain_out, m_pp.get_output(1, 0))
+                << "the Static outputs at prepare";
+        }
+    }
+
+    /// The C side's stored Static output of `slot`, read whole in the spec's shape: the value
+    /// of the latest collected inference. The gain model's gain_out holds one element.
+    float c_static_output(uint32_t slot) {
+        float value = -1.0F;
+        const anira::capi::StaticSlot* store = anira::capi::static_slot(h()->m_output_ports, slot);
+        EXPECT_NE(store, nullptr) << "output slot " << slot << " is not Static";
+        if (store == nullptr) { return value; }
+        EXPECT_EQ(store->num_elements(), 1U) << "output slot " << slot;
+        if (store->num_elements() != 1U) { return value; }
+        const anira_tensor tensor = anira_test::whole_f32(&value, store->shape());
+        EXPECT_EQ(anira_handler_get_static_output(h(), slot, &tensor), ANIRA_OK);
+        return value;
     }
 
     /// One block on both sides; c and v receive the outputs, n_c and n_v the counts. The
@@ -246,7 +266,23 @@ struct Oracle {
                 if (m_num_outputs > 1) {
                     EXPECT_EQ(c_delivered[1], 1U) << "block " << k;
                     EXPECT_EQ(v_num_out[1], 1U) << "block " << k;
-                    EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k;
+                    // A call's Static output is the latest inference collected when it ran: the
+                    // previous block's, or this block's when its collect ran within the call.
+                    // Each side collects on its own schedule, so only the settled values, read
+                    // once both have waited for the block, agree (test_Compat's
+                    // expect_same_static).
+                    const float before = m_previous_gain_out;
+                    const float c_settled = c_static_output(1);
+                    const float v_settled = m_pp.get_output(1, 0);
+                    EXPECT_EQ(c_settled, v_settled)
+                        << "block " << k << ": the settled Static outputs";
+                    EXPECT_TRUE(gain_out_c == before || gain_out_c == c_settled)
+                        << "block " << k << ": the C call answered " << gain_out_c
+                        << ", neither the previous " << before << " nor the settled " << c_settled;
+                    EXPECT_TRUE(gain_out_v == before || gain_out_v == v_settled)
+                        << "block " << k << ": the 2.x call answered " << gain_out_v
+                        << ", neither the previous " << before << " nor the settled " << v_settled;
+                    m_previous_gain_out = c_settled;
                 }
                 c = c_out;
                 v = v_out;
@@ -332,6 +368,7 @@ struct Oracle {
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
+    float m_previous_gain_out = 0.0F;  ///< the settled Static output after the last Multi block
     size_t m_next_block = 1;
 };
 
