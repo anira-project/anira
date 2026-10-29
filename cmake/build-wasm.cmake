@@ -73,6 +73,7 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   OUTPUT_NAME ${ANIRA_WASM_TARGET_NAME}
   LINK_FLAGS "${ANIRA_WASM_DEBUG_FLAGS} ${ANIRA_WASM_LINK_FLAGS}"
   RUNTIME_OUTPUT_DIRECTORY ${ANIRA_WASM_OUTPUT_FOLDER}
+  JOB_POOL_LINK anira_wasm_link
 )
 
 # The glue's one construct that has Vite's dev server inject its client (the pthread pool's

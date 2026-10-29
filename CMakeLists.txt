@@ -352,6 +352,10 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
         src/platform/emscripten/em_audio.cpp
         src/platform/emscripten/em_hooks.cpp
         src/platform/emscripten/em_worker.cpp)
+    # A Wasm executable that links the library (AniraWeb and the node gates of test/abi) peaks
+    # at about 4.9 GB while it links (anira_em_pool, measured on 2026-10-29); four at once ran a
+    # 16 GB CI runner out of memory. Those links join this Ninja pool, so at most two run at a time.
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS anira_wasm_link=2)
 endif()
 
 # Shared between the anira target and the isolated ExecuTorch object target below —

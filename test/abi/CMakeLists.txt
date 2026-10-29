@@ -195,7 +195,7 @@ if(_abi_on_wasm)
     # The link is AniraWeb's: -pthread, whose objects carry the atomics and bulk-memory
     # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS), Wasm Workers, which
     # InferenceThread::start creates, and the Wasm Audio Worklet of anira_em_audio_node_create.
-    set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX)
+    set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
     target_link_options(anira_em_smoke PRIVATE
         -pthread
         -sWASM_WORKERS
@@ -220,7 +220,7 @@ if(_abi_on_wasm)
     add_executable(anira_em_smoke_thread em_smoke_thread.c)
     anira_abi_consumer_target(anira_em_smoke_thread C)
     target_link_libraries(anira_em_smoke_thread PRIVATE anira::anira)
-    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX)
+    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
     target_link_options(anira_em_smoke_thread PRIVATE
         -pthread
         -sWASM_WORKERS
@@ -238,7 +238,7 @@ if(_abi_on_wasm)
     add_executable(anira_em_mutex em_mutex.c)
     anira_abi_consumer_target(anira_em_mutex C)
     target_link_libraries(anira_em_mutex PRIVATE anira::anira)
-    set_target_properties(anira_em_mutex PROPERTIES LINKER_LANGUAGE CXX)
+    set_target_properties(anira_em_mutex PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
     target_link_options(anira_em_mutex PRIVATE
         -pthread
         -sWASM_WORKERS
@@ -258,7 +258,7 @@ if(_abi_on_wasm)
     add_executable(anira_em_pool em_pool.c)
     anira_abi_consumer_target(anira_em_pool C)
     target_link_libraries(anira_em_pool PRIVATE anira::anira)
-    set_target_properties(anira_em_pool PROPERTIES LINKER_LANGUAGE CXX)
+    set_target_properties(anira_em_pool PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
     target_link_options(anira_em_pool PRIVATE
         -pthread
         -sWASM_WORKERS
