@@ -2,6 +2,7 @@
  * anira/anira_em.h -- generated from abi/anira.yml by tools/abi/gen.py.
  * Do not edit: change the registry and run `python3 tools/abi/gen.py --repo . --write`.
  */
+// clang-format off
 #ifndef ANIRA_ANIRA_EM_H
 #define ANIRA_ANIRA_EM_H
 
@@ -320,3 +321,4 @@ ANIRA_API anira_status ANIRA_CALL anira_em_init_instance(void* stack_base,
 #endif
 
 #endif /* ANIRA_ANIRA_EM_H */
+// clang-format on
