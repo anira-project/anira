@@ -13,7 +13,8 @@
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
                 "CMAKE_CXX_COMPILER": "clang++",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -162,7 +163,8 @@
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
                 "ANIRA_WITH_TFLITE": "OFF",
                 "ANIRA_WITH_LITERT": "ON",
-                "ANIRA_WITH_EXECUTORCH": "ON"
+                "ANIRA_WITH_EXECUTORCH": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "OFF"
             }
         },
         {
@@ -181,7 +183,8 @@
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
                 "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -200,7 +203,8 @@
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
                 "CMAKE_BUILD_TYPE": "Release",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
             }
         },
         {
