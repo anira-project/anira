@@ -1,5 +1,11 @@
+# clangd reads build/compile_commands.json. A `cmake -B build` tree writes it there; a
+# project with several trees under build/ (presets) links the tree configured last
+# there with tanh_link_compile_commands() (cmake/tanh/compile-commands.cmake).
+# Emscripten trees compile with em++, which adds the wasm target and the emsdk sysroot
+# itself: start clangd with --query-driver=**/em++ so it asks em++ for them. That is a
+# command-line flag only (it lets clangd run the compiler), never a key in this file.
 CompileFlags:
-  CompilationDatabase: build/desktop/Debug/
+  CompilationDatabase: build/
 
 Index:
   Background: Build
