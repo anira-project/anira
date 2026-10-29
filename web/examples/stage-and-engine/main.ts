@@ -130,11 +130,10 @@ export async function createGainExample(
     .connect(dry)
     .connect(new GainNode(audioContext, { gain: dryLevel }))
     .connect(output)
-  const applyLatency = () =>
-    dry.delayTime.setValueAtTime(
-      handler.latency() / audioContext.sampleRate,
-      audioContext.currentTime
-    )
+  // The value setter is setValueAtTime(value, currentTime), and reads back at once.
+  const applyLatency = () => {
+    dry.delayTime.value = handler.latency() / audioContext.sampleRate
+  }
   applyLatency()
   // After an output-device change: measure again (the probe; Chromium keeps the old device's
   // baseLatency) and re-prepare the running node, then re-read the latency.

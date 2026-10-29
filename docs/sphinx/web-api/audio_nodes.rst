@@ -48,10 +48,10 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    when the context is constructed), which ``measureRenderGeometry`` returns at once, rounded up
    to whole quanta. Gecko's ``baseLatency`` is 0 by its definition (no buffering between the graph
    and the audio subsystem), and its ``outputLatency`` is the output's delay, not the callback's
-   size; there a probe ``AudioWorklet`` watches ``process()`` calls for about 200 ms and takes the
-   longest run of back-to-back calls. The probe needs a running context, so
-   ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by quantum: its
-   burst is one quantum.
+   size; there a probe ``AudioWorklet`` watches ``process()`` calls for about 300 ms (after a
+   100 ms lead-in) and takes the longest run of back-to-back calls. The probe needs a running
+   context, so ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by
+   quantum: its burst is one quantum.
 
 The geometry is explicit: the page measures it and declares it.
 

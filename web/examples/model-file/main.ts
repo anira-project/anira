@@ -15,7 +15,7 @@ import {
   measureRenderGeometry,
 } from '@anira-project/anira'
 // [module]
-import type { AniraAudioNode } from '@anira-project/anira'
+import type { AniraAudioNode, RenderGeometry } from '@anira-project/anira'
 
 /** The model's Static input `gain`: input slot 1 of the config. */
 export const GAIN_SLOT = 1
@@ -32,6 +32,8 @@ export type ModelFileExample = {
   latency: () => number
   /** The gain's AudioParam: set, ramp or automate it. */
   gain: AudioParam
+  /** Re-prepare the running node at `geometry`, then delay the dry path by the new latency. */
+  applyGeometry: (geometry: RenderGeometry) => void
   /** Measure the context's geometry again and re-prepare: after the output device changed. */
   remeasure: () => Promise<void>
   teardown: () => void
@@ -102,10 +104,8 @@ export async function createModelFileExample(
     .connect(output)
   const applyLatency = () => {
     const latency = handler.latency() // samples
-    dry.delayTime.setValueAtTime(
-      latency / audioContext.sampleRate,
-      audioContext.currentTime
-    )
+    // The value setter is setValueAtTime(value, currentTime), and reads back at once.
+    dry.delayTime.value = latency / audioContext.sampleRate
     console.log(`latency: ${latency} samples`)
   }
   applyLatency()
@@ -115,12 +115,13 @@ export async function createModelFileExample(
   // After an output-device change the burst may differ (Chromium keeps the baseLatency of the
   // device the context was created on, so measure with the probe): re-prepare the running node
   // with the new geometry and re-read the latency for the dry path.
-  const remeasure = async () => {
-    const g = await measureRenderGeometry(audioContext, { probe: true })
+  const applyGeometry = (g: RenderGeometry) => {
     contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract) // holds the node off (silence) while the handler re-prepares
     applyLatency()
   }
+  const remeasure = async () =>
+    applyGeometry(await measureRenderGeometry(audioContext, { probe: true }))
   // [device]
 
   // [teardown]
@@ -142,6 +143,7 @@ export async function createModelFileExample(
     dry,
     latency: () => handler.latency(),
     gain: gainParam,
+    applyGeometry,
     remeasure,
     teardown,
   }

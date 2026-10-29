@@ -21,7 +21,7 @@ export type RenderGeometryOptions = {
    * context was created on. Default false.
    */
   probe?: boolean
-  /** How long the probe watches process() calls. Default 200 ms. */
+  /** How long the probe watches process() calls. Default 300 ms. */
   probeMs?: number
 }
 
@@ -34,10 +34,10 @@ type GeometrySource = {
 }
 
 const DEFAULT_QUANTUM = 128
-const PROBE_MS = 200
+const PROBE_MS = 300
 // The first calls after the probe connects are left out: a context that just started may catch
 // up in one longer run.
-const PROBE_SKIP_MS = 50
+const PROBE_SKIP_MS = 100
 
 /** The frames of one process() call: `renderQuantumSize` where the browser has it, else 128. */
 const quantumOf = (context: GeometrySource): number =>
@@ -148,9 +148,10 @@ const probeBurst = async (context: AudioContext, quantum: number, windowMs: numb
  * once, rounded up to whole quanta; a context created with renderSizeHint "hardware" has a burst
  * of one quantum there. Where `baseLatency` is 0 (Gecko: no buffering between the graph and the
  * audio subsystem by its definition, though its graph also renders a callback as several quanta)
- * a probe AudioWorklet on the context watches process() calls for about 200 ms and takes the
- * longest run of back-to-back calls (`longestRun`). The probe needs a running context: call
- * `await context.resume()` first. Measure again after the output device changed.
+ * a probe AudioWorklet on the context watches process() calls for about 300 ms (after a 100 ms
+ * lead-in it leaves out) and takes the longest run of back-to-back calls (`longestRun`). The
+ * probe needs a running context: call `await context.resume()` first. Measure again after the
+ * output device changed.
  */
 export const measureRenderGeometry = async (
   context: BaseAudioContext,
