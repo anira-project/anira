@@ -311,7 +311,7 @@ struct LogConfig {
  * @brief The 2.x ContextConfig (v2.3.0's name; the pre-release that preceded anira 3 called it
  * CoreConfig): a plain value with the 2.x fields, minted into an anira::ContextConfig when a
  * handler is built (to_context_config). The default thread count is k_threads_auto, the
- * sentinel anira resolves (half the hardware threads, at least 1; 0 on WebAssembly) where 2.x
+ * sentinel anira resolves (half the hardware threads, at least 1, on WebAssembly too) where 2.x
  * stored the resolved count: a host that read m_num_threads back to learn the count reads the
  * sentinel.
  */

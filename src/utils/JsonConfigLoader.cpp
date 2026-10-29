@@ -128,9 +128,10 @@ void anira::JsonConfigLoader::parse_core_config(const nlohmann::json& config) {
                 drain_json.is_string() ? drain_json.get<std::string>() : std::string();
             if (drain == "thread") {
 #ifdef __EMSCRIPTEN__
-                ANIRA_LOG_WARNING(anira::log_group::k_config,
-                                  "log.drain 'thread' is not supported on WebAssembly builds: "
-                                  "no thread can drain the log queue there. Using 'manual'.");
+                ANIRA_LOG_WARNING(
+                    anira::log_group::k_config,
+                    "log.drain 'thread' is not supported on WebAssembly builds: "
+                    "the JavaScript log sink runs on the main thread. Using 'manual'.");
                 m_core_config->m_log.m_drain = anira::LogDrain::Manual;
 #else
                 m_core_config->m_log.m_drain = anira::LogDrain::Thread;

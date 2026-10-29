@@ -487,9 +487,9 @@ anira_context_config Core::sanitize_config(anira_context_config context_config) 
     }
     if (context_config.m_log_drain != ANIRA_LOG_DRAIN_MANUAL) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: no "
-                          "thread can drain the log queue there. Using ANIRA_LOG_DRAIN_MANUAL - "
-                          "pump anira_drain_log() from the host.");
+                          "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: the "
+                          "JavaScript log sink runs on the main thread. Using "
+                          "ANIRA_LOG_DRAIN_MANUAL - pump anira_drain_log() from the host.");
         context_config.m_log_drain = ANIRA_LOG_DRAIN_MANUAL;
     }
 #endif

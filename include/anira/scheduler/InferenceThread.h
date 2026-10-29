@@ -71,7 +71,7 @@ public:
      * @param wait_strategy How run_loop() waits for new work when the queue is
      *                      empty (anira_wait_strategy: spin with backoff, or block on
      *                      the queue's semaphore). Ignored on WebAssembly builds,
-     *                      where JS Workers drive the loop cooperatively.
+     *                      where an idle Wasm Worker parks on the wake word.
      */
     InferenceThread(InferenceQueue& next_inference,
                     anira_wait_strategy wait_strategy = ANIRA_WAIT_SPIN_BACKOFF);
@@ -179,12 +179,11 @@ public:
      *
      * Native: threads inside run_loop() right now — the auto-managed pool once started
      * plus any user-created threads; the same number as get_num_loop_active().
-     * WebAssembly: externally driven threads between start() and stop(); counted there
-     * (start() runs synchronously on the main instance) rather than at run_loop() entry,
-     * so the count is already visible when AniraWeb.spinUpInferenceWorker() returns,
-     * before the worker asynchronously enters its loop. The counters have static storage
-     * duration — on WebAssembly that is shared memory, so every WASM instance sees the
-     * same value.
+     * WebAssembly: threads between start() and stop(); counted there (start() creates the
+     * Wasm Worker synchronously) rather than at run_loop() entry, so the count is already
+     * visible when start() returns, before the Worker imports its module and enters its
+     * loop. The counters have static storage duration, in the module's shared memory, so
+     * every thread sees the same value.
      */
     static unsigned int get_num_active_threads();
 

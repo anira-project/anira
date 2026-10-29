@@ -23,9 +23,10 @@
  * registry of the scope that runs the C call (the worklet for pre_process, post_process and
  * reset under a Hard contract, an inference Worker for before_inference, after_inference and
  * the engine's process, the main thread for init, prepare, unprepare, release and query) with
- * the stage's or engine's js_key (the package's keyOf of its name, the same in every scope),
- * the anira_phase of the call and two pointers into the shared memory, which JavaScript reads
- * through web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared
+ * the stage's or engine's js_key (the package's keyOf of its name: the 32-bit FNV-1a hash of
+ * its UTF-16 code units, the same in every scope; a registry refuses a second name whose key is
+ * taken), the anira_phase of the call and two pointers into the shared memory, which JavaScript
+ * reads through web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared
  * pointer in pre_process, post_process, before_inference, after_inference and reset; a the
  * anira_prepare_info and b the address of the out_prepared slot in prepare; a the prepared
  * pointer in unprepare; a the anira_init_info in init; both 0 in release. For an engine, a is

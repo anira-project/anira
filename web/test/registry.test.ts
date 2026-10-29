@@ -22,6 +22,30 @@ test('keyOf is FNV-1a over the name, unsigned, the same in every scope', () => {
   assert.ok(keyOf('org.example.a') >= 0)
 })
 
+test('two names with one key are refused; the same name may be defined again', () => {
+  // An FNV-1a 32 collision, found by a brute-force search over 'org.example.stage-<n>'.
+  const first = 'org.example.stage-241438'
+  const second = 'org.example.stage-2235000'
+  assert.equal(keyOf(first), keyOf(second))
+  const registry = new Registry()
+  const key = registry.defineStage(first, () => ({}))
+  assert.throws(
+    () => registry.defineStage(second, () => ({})),
+    (error: Error) => error.message.includes(first) && error.message.includes(second)
+  )
+  assert.throws(
+    () => {
+      registry.defineEngine(first, () => ({ process: () => {} }))
+      registry.defineEngine(second, () => ({ process: () => {} }))
+    },
+    (error: Error) => error.message.includes(first) && error.message.includes(second)
+  )
+  assert.equal(
+    registry.defineStage(first, () => ({})),
+    key
+  )
+})
+
 test('a stage is built once per scope and runs the phases it has', () => {
   const registry = new Registry()
   const module = fakeModule()

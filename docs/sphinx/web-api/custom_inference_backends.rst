@@ -33,6 +33,10 @@ can run here and runs on the main thread, so a page whose engine has one imports
 as well. Each Worker builds its own instance, so an engine object is never shared between
 threads.
 
+``process`` must be synchronous: the Worker's event loop does not run while it is in its loop, so
+an engine whose inference is a promise (onnxruntime-web's ``session.run()``, a WebGPU readback)
+cannot run there yet. :ref:`web-realms` says what an engine can reach once the Worker runs.
+
 Registering It
 --------------
 

@@ -47,8 +47,9 @@ What runs in JavaScript (a stage, an engine, the log) is reached through the tra
 ``anira/anira_em.h``: a JavaScript stage or engine is a C descriptor whose slots are trampolines
 compiled into anira. Each calls the registry of the scope that runs the C call,
 ``globalThis[Symbol.for('anira.registry')]``, with the instance's ``Module``, the stage's or
-engine's key, the ``anira_phase`` and two pointers. The key is :js:func:`~registry.keyOf` of the name, the
-same in every scope: a stage defined under one name on the main thread and in the worklet is one
+engine's key, the ``anira_phase`` and two pointers. The key is :js:func:`~registry.keyOf` of the name (the
+32-bit FNV-1a hash of its UTF-16 code units), the same in every scope; a registry refuses to
+define a second name whose key is taken, with an error naming both: a stage defined under one name on the main thread and in the worklet is one
 stage with one instance per scope, built over the scope's ``env`` (its bindings and its
 ``Module``). :js:func:`~registry.defineStage` and :js:func:`~registry.defineEngine` install the registry.
 
@@ -74,6 +75,50 @@ Where Each Phase Runs
 A stage whose phases span scopes is one module imported in each: ``web/examples/
 stage-and-engine/gain-stage.ts`` allocates its per-handler memory in ``prepare`` on the main
 thread and reads it in ``preProcess`` in the worklet, through the ``prepared`` pointer.
+
+.. _web-realms:
+
+What an Inference Worker and the Worklet Can See
+------------------------------------------------
+
+Every inference Worker and the AudioWorkletGlobalScope is a JavaScript realm of its own: its own
+globals, its own module graph, its own instance of the module's glue. Only the WebAssembly memory
+is shared. No closure, object or class of the main thread reaches a Worker or the worklet, so a
+stage or an engine is defined in the realm that runs it, by the module that realm imports (the
+context's worker module, a ``workletModules`` module), and a pool of *N* threads builds *N*
+instances of each engine: *N* model loads.
+
+A Worker runs the engines' ``init`` (which may be asynchronous: a fetch, a runtime to
+instantiate) and then enters the C loop, which blocks: it parks on ``memory.atomic.wait32`` while
+the queue is empty and calls ``process`` synchronously when work arrives. From then until the stop
+the Worker's event loop never runs again: no promise continuation, no ``onmessage``, no
+``setTimeout`` and no ``fetch`` completion. ``process`` is therefore synchronous; ``init`` may be
+``async``.
+
+Once the Workers run, what reaches a stage or an engine is what the shared memory carries:
+
+* the model's Static inputs (``setStaticInput``, an AudioParam of the node, a seqlock block per
+  tensor);
+* a stage's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by every
+  phase in every realm;
+* a block of the page's own in the WebAssembly heap (``anira.module._malloc``), coordinated with
+  ``Atomics``.
+
+A running inference Worker takes no ``postMessage``. The worklet realm has no ``fetch`` and no
+``performance`` (``createAudioNode`` loads a polyfill of ``performance.now`` for the module's
+clock).
+
+.. note::
+   None of this is new in 3.x. In 2.x ``setupInferenceWorker`` ran ``runLoop`` inside the Worker's
+   ``onmessage``, which blocked that Worker's event loop in the same way, ``JSBackendBase.process``
+   was synchronous, and the ONNX Runtime Web backend ran through onnxruntime-web's synchronous C
+   API (``_OrtRun``), as the 3.x engine does.
+
+.. warning::
+   **Asynchronous engines are not supported.** An inference that completes as a promise cannot
+   run in ``process``: onnxruntime-web's ``session.run()``, a WebGPU readback (``mapAsync``),
+   tfjs's ``data()``. They are planned for M3, with the Async contract: an engine that completes a
+   job later.
 
 The Bindings
 ------------
