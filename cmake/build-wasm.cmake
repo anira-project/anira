@@ -38,12 +38,19 @@ endif()
 # browser's main thread runs only once that thread yields, so a join there never returns.
 # INCOMING_MODULE_JS_API names every Module property the package passes at instantiation
 # (emsdk 6 reads neither wasmMemory nor wasmBinary by default).
+# The runtime of a library never exits: with -pthread and without the noExitRuntime symbol,
+# emsdk's keepRuntimeAlive() is `runtimeKeepaliveCounter > 0` alone (src/lib/libcore.js), and
+# the first callback into C that runs with no keepalive held (an emscripten_set_timeout) ends in
+# maybeExit, exit and ABORT, after which every callback into C is dropped silently. Including
+# noExitRuntime (true under EXIT_RUNTIME=0) makes keepRuntimeAlive() always true.
 set(ANIRA_WASM_LINK_FLAGS "\
   --no-entry \
   -pthread \
   -s WASM_WORKERS=1 \
   -s AUDIO_WORKLET=1 \
   -s INCOMING_MODULE_JS_API=wasmMemory,wasmBinary,locateFile,instantiateWasm,print,printErr \
+  -s EXIT_RUNTIME=0 \
+  -s DEFAULT_LIBRARY_FUNCS_TO_INCLUDE='[\"$noExitRuntime\"]' \
   --emit-tsd=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.d.ts \
   -s STACK_OVERFLOW_CHECK=0 \
   -s IMPORTED_MEMORY=1 \

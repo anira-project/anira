@@ -4,6 +4,7 @@
 #include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <emscripten/emscripten.h>
+#include <emscripten/eventloop.h>
 #include <emscripten/wasm_worker.h>
 
 #include <atomic>
@@ -49,18 +50,12 @@ void enter_booted(void* boot) {
     b.m_enter(b.m_arg);
 }
 
-// A main-thread timer for the reaper: a plain setTimeout that calls `fn(0)`. Not
-// emscripten_set_timeout: its callback ends in the runtime's maybeExit, which with no keepalive
-// left exits this module's runtime (ABORT), after which every later callback into C (a timer, a
-// worklet's creation) is dropped silently.
-EM_JS(void, anira_em_js_set_timeout, (uintptr_t fn, double ms), {
-    setTimeout(function() { getWasmTableEntry(fn)(0); }, ms);
-});
-
 void reap(void* user_data);
 
+// A main-thread timer. emscripten_set_timeout's callback ends in the runtime's maybeExit, which
+// leaves the runtime alive because the module links noExitRuntime (cmake/build-wasm.cmake).
 void arm_reaper() {
-    anira_em_js_set_timeout(reinterpret_cast<uintptr_t>(&reap), k_reap_interval_ms);
+    emscripten_set_timeout(&reap, k_reap_interval_ms, nullptr);
 }
 
 // The cancelled workers that have not finished their boot yet, on the main thread.
