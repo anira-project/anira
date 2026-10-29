@@ -83,7 +83,8 @@ jobs:
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
-      # SOURCES excludes src/emscripten-wrappers/ because those translation
+      # SOURCES excludes src/platform/ (the Emscripten companion,
+      # src/platform/emscripten/em_hooks.cpp) because its translation
       # units are only built by the wasm presets (Emscripten toolchain) and are
       # therefore absent from this build's compilation database — and test/contracts/install/ (an external consumer project that only compiles against an installed prefix),
       # a separate consumer project built against an *installed* anira: it has no

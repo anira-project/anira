@@ -4,7 +4,7 @@
 # that never builds on those legs is excluded EXPLICITLY here rather than
 # silently missing — the percentage means what it says.
 ignore:
-  - "src/emscripten-wrappers" # compiles only under Emscripten (build_web covers the build)
+  - "src/platform" # the Emscripten companion compiles only under Emscripten (build_web's node gates cover it)
   - "src/benchmark" # benchmark fixture — exercised by the benchmark jobs, not ctest
 
 # Codecov is a metric, never a gate. It reports and nothing else: no commit

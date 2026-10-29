@@ -1,7 +1,7 @@
 # Anira Web
 
 The WebAssembly + TypeScript distribution of [**anira**](https://github.com/anira-project/anira) — a real-time neural-network inference library for low-latency audio applications.
-Anira Web ships the same C++ library compiled to WebAssembly, wrapped in a TypeScript API that integrates with the Web Audio API.
+Anira Web is the same C++ library compiled to WebAssembly: the module exports anira's C ABI (`_anira_*`) and the Emscripten companion `anira/anira_em.h`, and the TypeScript runtime instantiates it on one shared memory in the main thread, the inference Workers and the audio worklet.
 
 📚 **Full documentation:**
 [anira-project.github.io/anira/web-api](https://anira-project.github.io/anira/web-api/index.html)
@@ -9,68 +9,83 @@ Anira Web ships the same C++ library compiled to WebAssembly, wrapped in a TypeS
 ## Install
 
 ```bash
-npm install @anira-project/anira
+npm install @anira-project/anira@next
 ```
 
-The package is published as ESM only and ships its WebAssembly
-artifacts under `@anira-project/anira/dist/wasm/`. Modern bundlers (Vite,
-webpack 5, Rollup, esbuild) already understand the
-`new URL('./file.wasm', import.meta.url)` references emitted by the
-package and will copy the asset automatically.
+`3.0.0-alpha.2` is published on the `next` dist-tag. The package is ESM only and ships its
+WebAssembly artifacts under `@anira-project/anira/dist/wasm/`. Modern bundlers (Vite,
+webpack 5, Rollup, esbuild) understand the `new URL('./file.wasm', import.meta.url)`
+references emitted by the package and copy the asset automatically.
 
 ## Quick example
 
-Loading an ONNX model and wiring it into a Web Audio graph:
+In this pre-release configs and handlers are built with the raw C calls (a typed TypeScript
+API follows); `onnxruntime-web` runs the model on an inference Worker:
 
 ```ts
-import { AniraWeb } from '@anira-project/anira'
+import {
+  AniraWeb,
+  callWithError,
+  startLogPump,
+  anira_budget_kind,
+  anira_log_drain,
+  anira_wait_strategy,
+  anira_warmup_mode,
+  ONNXRUNTIME_WEB_ENGINE_ID,
+} from '@anira-project/anira'
 
-const aniraWeb = await AniraWeb.create()
-await aniraWeb.spinUpInferenceWorker()
+const anira = await AniraWeb.create()
+const { module: m, heap } = anira
+anira.setLogHook()
+startLogPump(m)
+
+const out = heap.malloc(4)
+const created = (call: (err: number) => number) => {
+  callWithError(heap, call)
+  return heap.readU32(out)
+}
+
+const contextConfig = created((err) => m._anira_context_config_create(out, err))
+m._anira_context_config_set_threads(contextConfig, 0, anira_wait_strategy.ANIRA_WAIT_SPIN_BACKOFF)
+m._anira_context_config_set_log_drain(contextConfig, anira_log_drain.ANIRA_LOG_DRAIN_MANUAL, 10)
+const context = created((err) => m._anira_context_create(contextConfig, out, err))
+
+const json = JSON.stringify({
+  models: [{ engine: ONNXRUNTIME_WEB_ENGINE_ID, path: new URL('model.onnx', location.href).href }],
+  inputs: [{ name: 'in', dtype: 'float32', role: 'streamed',
+             axes: [['batch', 1], ['channel', 2], ['time', 512]], window: { min: 512, max: 512 } }],
+  outputs: [{ name: 'out', dtype: 'float32', role: 'streamed',
+              axes: [['batch', 1], ['channel', 2], ['time', 512]], window: { min: 512, max: 512 } }],
+})
+const model = heap.withCString(json, (s) =>
+  created((err) => m._anira_model_config_from_json(s, json.length, 0, out, err)))
+
+const pipeline = created((err) => m._anira_pipeline_create(out, err))
+const variants = heap.malloc(4)
+heap.writeU32(variants, model)
+callWithError(heap, (err) => m._anira_pipeline_add_inference(pipeline, variants, 1, 0, 0, err))
+await anira.registerJSEngine(pipeline, {
+  engineId: ONNXRUNTIME_WEB_ENGINE_ID,
+  className: 'ONNXRuntimeWebBackend',
+  modelConfigPtr: model,
+})
 
 const audioContext = new AudioContext({ sampleRate: 48000 })
+const handler = created((err) => m._anira_handler_create(context, pipeline, out, err))
+const contract = created((err) => m._anira_contract_create_hard(128, 128, audioContext.sampleRate, out, err))
+m._anira_contract_hard_set_budget(contract, anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 2.0)
+m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
+callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
 
-// Load the model
-const modelBuffer = await (await fetch('your-model.onnx')).arrayBuffer()
-const vectorModelData = aniraWeb.VectorModelData([
-  aniraWeb.ModelData(modelBuffer, aniraWeb.InferenceBackend.ONNX),
-])
-
-// Configure tensors and processing
-const tensorShape = aniraWeb.TensorShape(
-  aniraWeb.TensorShapeList([[1, 2, 512]]),
-  aniraWeb.TensorShapeList([[1, 2, 512]])
-)
-const processingSpec = aniraWeb.ProcessingSpec(
-  aniraWeb.VectorSizeT([2]),
-  aniraWeb.VectorSizeT([2]),
-  aniraWeb.VectorSizeT([512]),
-  aniraWeb.VectorSizeT([512])
-)
-const inferenceConfig = aniraWeb.InferenceConfig(
-  vectorModelData,
-  aniraWeb.VectorTensorShape([tensorShape]),
-  processingSpec,
-  5 // max inference time in ms
-)
-
-// Set up the inference handler
-const ppProcessor = aniraWeb.PrePostProcessor(inferenceConfig)
-const inferenceHandler = aniraWeb.InferenceHandler(ppProcessor, inferenceConfig)
-inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.ONNX)
-inferenceHandler.prepare(aniraWeb.HostConfig(128, 48000))
-
-// Wire it into Web Audio
-await aniraWeb.registerAudioWorkletForContext(audioContext)
-const node = await aniraWeb.configureAudioWorklet(
-  audioContext,
-  inferenceHandler,
-  ppProcessor
-)
+const worker = await anira.spinUpInferenceWorker(context)
+await anira.registerAudioWorkletForContext(audioContext)
+const node = await anira.configureAudioWorklet(audioContext, handler, { inputChannels: 2, outputChannels: 2 })
 sourceNode.connect(node).connect(audioContext.destination)
+// later: await anira.disposeAudioWorklet(node), await worker.stop(), then the _destroy calls
 ```
 
-The full walkthrough — including non-streamable control parameters, the optional `onnxruntime-web` JS-side path, and lifecycle / cleanup — is on the [Basic Usage](https://anira-project.github.io/anira/web-api/basic_usage.html)
+The full walkthrough — the stop protocol, the quantum change, the built-in ONNX Runtime path
+and the teardown — is on the [Basic Usage](https://anira-project.github.io/anira/web-api/basic_usage.html)
 page.
 
 ## Documentation
@@ -78,14 +93,15 @@ page.
 - [Basic Usage](https://anira-project.github.io/anira/web-api/basic_usage.html)
   — minimal end-to-end setup.
 - [Architecture](https://anira-project.github.io/anira/web-api/architecture.html)
-  — the three-thread model (main + audio worklet + inference workers),
-  the JS ↔ WASM bridge, and the lifecycle / cleanup story.
+  — the module instances on one memory, the hook object and the trampolines,
+  the inference Workers and their stop protocol, the lifecycle / cleanup story.
 - [Custom Audio Worklets](https://anira-project.github.io/anira/web-api/custom_audio_worklets.html)
-  — multi-tensor I/O, custom buffer sizes, `AudioParam` integration.
+  — the tensor process per render quantum, JavaScript stages in the worklet,
+  more slots, `AudioParam` integration.
 - [Custom Pre- and Post-Processing](https://anira-project.github.io/anira/web-api/custom_pre_post_processing.html)
-  — running JS before / after each inference call.
+  — a JavaScript stage (`addJSStage`): its hook bits and its stated real-time promise.
 - [Custom Inference Backends](https://anira-project.github.io/anira/web-api/custom_inference_backends.html)
-  — replacing the WASM-side runtime with a JavaScript backend.
+  — a JavaScript engine (`registerJSEngine`) run by the inference Workers.
 - [API Reference](https://anira-project.github.io/anira/web-api/reference/index.html)
   — auto-generated class and function reference.
 

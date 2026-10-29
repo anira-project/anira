@@ -208,6 +208,16 @@
             }
         },
         {
+            "name": "wasm-abi",
+            "displayName": "Wasm ABI gates",
+            "description": "wasm-release plus the ABI gates that run under node (layout, header gates, the anira_em.h smoke)",
+            "inherits": "wasm-release",
+            "binaryDir": "${sourceDir}/build/wasm/Abi",
+            "cacheVariables": {
+                "ANIRA_WITH_ABI_TESTS": "ON"
+            }
+        },
+        {
             "name": "docs",
             "displayName": "Documentation",
             "description": "Build C++ (Doxygen+Breathe) and Anira Web (TypeDoc+sphinx-js) docs via Sphinx",
@@ -563,6 +573,12 @@
             "configurePreset": "wasm-release",
             "configuration": "Release",
             "description": "Build AniraWeb WASM module (release)"
+        },
+        {
+            "name": "wasm-abi",
+            "configurePreset": "wasm-abi",
+            "configuration": "Release",
+            "description": "Build AniraWeb and the ABI gates that run under node"
         },
         {
             "name": "docs",

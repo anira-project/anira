@@ -1,249 +1,463 @@
-import { JSBackendBase } from './backends'
-import { ONNXRuntimeWebBackend } from './backends/ONNXRuntimeWebBackend'
+import {
+  ANIRA_EM_ENGINE_HOOK_QUERY,
+  ANIRA_EM_HOOK_AFTER,
+  ANIRA_EM_HOOK_BEFORE,
+  ANIRA_EM_HOOK_INIT,
+  ANIRA_EM_HOOK_POST,
+  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_HOOK_PREPARE,
+  ANIRA_EM_HOOK_RELEASE,
+  ANIRA_EM_HOOK_RESET,
+  ANIRA_EM_HOOK_UNPREPARE,
+} from './abi/enums'
+import { InferenceThread } from './core/InferenceThread'
+import { consoleLogSink } from './helpers'
 import {
   createAniraWasm,
   getWasmUrl,
-  type AniraWasmConfig,
+  type AniraModule,
   type AniraWasmInstance,
-} from './factory'
-import { createFactory, type Factory } from './utils'
+} from './runtime/createAniraWasm'
+import type { Heap } from './runtime/Heap'
+import type { AniraLogRecord, JSStage } from './runtime/hooks'
+import { callWithError } from './runtime/Status'
+import {
+  allocInstanceStack,
+  freeInstanceStack,
+  type InstanceStack,
+} from './runtime/stacks'
 import type {
   AudioWorkletConfigureMessage,
   AudioWorkletIOConfig,
   DestroyMessage,
   InitInferenceWorkerMessage,
-  RegisterPrePostProcessorMessage,
-  RegisterProcessorMessage,
-  UnregisterPrePostProcessorMessage,
-  UnregisterProcessorMessage,
+  LogRecordMessage,
+  DisposeMessage,
+  QuantumChangedMessage,
+  SetQuantumMessage,
+  RegisterEngineMessage,
+  RegisterStageMessage,
   StartMessage,
+  UnregisterEngineMessage,
+  UnregisterStageMessage,
 } from './workers/messages'
-import { waitForWorkerMessage } from './workers/messages'
+import { request } from './workers/messages'
 import {
-  BufferF,
-  HostConfig,
-  InferenceConfig,
-  InferenceHandler,
-  JSPrePostProcessor,
-  ModelData,
-  PrePostProcessor,
-  ProcessingSpec,
-  RingBuffer,
-  TensorShape,
-  TensorShapeList,
-  VectorBufferF,
-  VectorFloat,
-  VectorInt64T,
-  VectorModelData,
-  VectorRingBuffer,
-  VectorSizeT,
-  VectorTensorShape,
-  VectorUnsignedInt,
-  VectorVectorInt64,
-  createInferenceBackend,
-  type InferenceBackendValues,
-} from './wrappers'
-import { resolvePtr, type PossiblePointer } from './wrappers/BaseWrapper'
-import { InferenceThread } from './wrappers/system/InferenceThread'
+  allocStaticInputBlock,
+  freeStaticInputBlock,
+  StaticInputWriter,
+  type StaticInputBlock,
+} from './workers/static-inputs'
 
-export type ConfigureAudioWorkletIOOptions = Partial<AudioWorkletIOConfig> & {
+export type AniraWebOptions = {
+  /** A pre-allocated shared memory; defaults to a fresh 8192-page (512 MiB) one. */
+  memory?: WebAssembly.Memory
+  /** The module binary, when it is not fetched from the package's URL. */
+  wasmBinary?: ArrayBuffer
+  /** The packed ABI version the caller's raw calls were written against (see createAniraWasm). */
+  abiVersion?: number
+}
+
+/**
+ * A JavaScript engine for `registerJSEngine`: `className` names its class in the inference
+ * worker's class map (`setupInferenceWorker`), `engineId` its reverse-URI id, which the model
+ * entries name (`ANIRA_ENGINE_CUSTOM` with that id), and `modelConfigPtr` / `modelIndex` the
+ * entry its `init()` reads.
+ */
+export type JSEngineDescriptor = {
+  engineId: string
+  className: string
+  modelConfigPtr: number
+  modelIndex?: number
   /**
-   * Overrides for the underlying `AudioWorkletNode` constructor options.
-   *
-   * By default, the Web Audio node topology is derived from `inputChannels` /
-   * `outputChannels` (i.e. `channelCount`, `channelCountMode: 'explicit'`, and
-   * `outputChannelCount`). When anira's internal buffer shape does not match
-   * the Web Audio channel layout (e.g. extra scratch channels for auxiliary
-   * tensors), pass overrides here. Provided fields are merged on top of the
-   * library defaults.
+   * ANIRA_EM_ENGINE_HOOK_* bits beyond process; default none. `ANIRA_EM_ENGINE_HOOK_RESET` runs
+   * on the Workers; `ANIRA_EM_ENGINE_HOOK_QUERY` is refused here: a query runs on the main
+   * thread and a registered engine has no providers list to answer for.
    */
-  audioWorkletNodeOptions?: AudioWorkletNodeOptions
+  hookMask?: number
+  /** ANIRA_ENGINE_FLAG_* bits: the engine's promises; default none. */
+  engineFlags?: number
 }
 
-export type ProcessorDescriptor = {
-  backend: JSBackendBase
+/**
+ * A JavaScript stage for `addJSStage`. `className` names its class in the inference worker's
+ * class map (for `beforeInference` / `afterInference`) and in the worklet's `stageClasses`
+ * (for `preProcess`, `postProcess` and `reset`); `stage` is the main-thread object that runs
+ * `init`, `prepare`, `unprepare` and `release`, and is required when the mask has those bits.
+ */
+export type JSStageDescriptor = {
   className: string
-}
-
-export type PrePostProcessorDescriptor = {
-  prePostProcessor: JSPrePostProcessor
-  className: string
+  /** ANIRA_EM_HOOK_* bits: the phases that cross into JavaScript. */
+  hookMask: number
+  /**
+   * ANIRA_STAGE_FLAG_* bits: the stage's real-time promise, stated, never derived from the
+   * mask. A Hard contract refuses a pre/post/reset stage without
+   * ANIRA_STAGE_FLAG_REALTIME_PRE_POST at prepare.
+   */
+  stageFlags: number
+  stage?: JSStage
 }
 
 export type InferenceWorker = {
   worker: Worker
-  registerProcessor: (descriptor: ProcessorDescriptor) => Promise<void>
-  unregisterProcessor: (backend: JSBackendBase) => Promise<void>
-  registerPrePostProcessor: (descriptor: PrePostProcessorDescriptor) => Promise<void>
-  unregisterPrePostProcessor: (prePostProcessor: JSPrePostProcessor) => Promise<void>
+  thread: InferenceThread
+  /** Stops the thread, destroys it, closes the Worker and frees its stack. */
   stop: () => Promise<void>
 }
 
+export type ConfigureAudioWorkletOptions = Partial<AudioWorkletIOConfig> & {
+  /** The processor name registered in the worklet file; default 'inference-processor'. */
+  nodeName?: string
+  /**
+   * A node of an earlier `configureAudioWorklet` to configure again (another handler, other
+   * slots): it is disposed first and keeps its place in the graph. Omitted: a new node.
+   */
+  node?: AudioWorkletNode
+  /** The js_key of a JavaScript stage (from addJSStage) whose pre/post/reset run here. */
+  stageKey?: number
+  /**
+   * The pipeline `handlerPtr` was created from: its JavaScript stage, when that stage has
+   * pre/post/reset bits, is the one the worklet runs (`stageKey` names it explicitly).
+   */
+  pipelinePtr?: number
+  /**
+   * The Static input slots the worklet serves: `node.setStaticInput(slot, values)` writes one
+   * from the main thread, and the worklet pushes it (`anira_handler_set_static_input`) before
+   * its next process call. Needs `modelConfigPtr`. Default none.
+   */
+  staticInputs?: number[]
+  /**
+   * The model config the handler's pipeline was built from: the specs of `staticInputs`, which
+   * size their buffers (dtype and shape).
+   */
+  modelConfigPtr?: number
+  /** Overrides merged on top of the derived `AudioWorkletNode` options. */
+  audioWorkletNodeOptions?: AudioWorkletNodeOptions
+  /**
+   * Called when the browser's render quantum differs from the declared `quantum`: re-prepare
+   * the handler with a Hard contract of `block_min = block_max = quantum` (and resolve once
+   * done); the worklet then rebuilds its tensors for it and outputs silence until then.
+   */
+  onQuantumChange?: (quantum: number) => void | Promise<void>
+}
+
+/**
+ * The node `configureAudioWorklet` returns: an `AudioWorkletNode` that also writes the Static
+ * inputs its worklet serves.
+ */
+export interface AniraAudioWorkletNode extends AudioWorkletNode {
+  /**
+   * Write Static input `slot` (one of the configure's `staticInputs`), the whole tensor: a typed
+   * array or `DataView` of exactly the spec's byte size (any dtype), or plain numbers, one per
+   * element, for float32/64, int8/16/32, uint8/16/32 and bool8. The worklet pushes the value
+   * before its next quantum; a write it overlaps is never pushed torn, the previous value stays
+   * until the next quantum reads a whole one. Throws, writing nothing, on a slot not served or a
+   * size that does not fit.
+   */
+  setStaticInput(slot: number, values: ArrayBufferView | ArrayLike<number>): void
+}
+
+type EngineEntry = { jsKey: number; descriptor: JSEngineDescriptor }
+type StageEntry = { jsKey: number; pipelinePtr: number; descriptor: JSStageDescriptor }
+
+type WorkerEntry = {
+  handle: InferenceWorker
+  thread: InferenceThread
+  worker: Worker
+  /** The Worker's operations (registrations, the stop) run one after another. */
+  queue: Promise<void>
+  stopped: boolean
+}
+
+type WorkletEntry = {
+  stack: InstanceStack
+  stageKey: number | undefined
+  staticInputs: StaticInputBlock[]
+  writers: Map<number, StaticInputWriter>
+}
+
+/** The stage phases that run on the main thread, and those that run in the worklet. */
+const MAIN_THREAD_STAGE_HOOKS =
+  ANIRA_EM_HOOK_INIT |
+  ANIRA_EM_HOOK_PREPARE |
+  ANIRA_EM_HOOK_UNPREPARE |
+  ANIRA_EM_HOOK_RELEASE
+const WORKLET_STAGE_HOOKS = ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST | ANIRA_EM_HOOK_RESET
+
+/**
+ * The runtime of anira on the web: the main module instance on its shared memory, the
+ * JavaScript engines and stages it registers through `anira/anira_em.h`, the inference
+ * Workers that run user-driven inference threads, and the audio worklet. Configs, pipelines,
+ * contexts and handlers are built with the raw `_anira_*` exports of `module` (a typed API
+ * follows); offsets of the records come from `abi/layout.ts`, never by hand.
+ */
 export class AniraWeb {
-  protected wasmInstance: AniraWasmInstance
-  protected memory: WebAssembly.Memory
-  protected wasmBinary: ArrayBuffer | null = null
-  private registeredProcessors: ProcessorDescriptor[] = []
-  private registeredPrePostProcessors: PrePostProcessorDescriptor[] = []
-  private activeWorkers: InferenceWorker[] = []
+  readonly anira: AniraModule
+  private wasmBinary: ArrayBuffer | null = null
+  private nextKey = 1
+  private readonly engines: EngineEntry[] = []
+  private readonly stages: StageEntry[] = []
+  private readonly workers: WorkerEntry[] = []
+  private readonly worklets = new Map<AudioWorkletNode, WorkletEntry>()
+  private onLogRecord: ((record: AniraLogRecord) => void) | null = null
 
-  InferenceBackend: InferenceBackendValues
-  Buffer: Factory<typeof BufferF>
-  HostConfig: Factory<typeof HostConfig>
-  InferenceConfig: Factory<typeof InferenceConfig>
-  InferenceHandler: Factory<typeof InferenceHandler>
-  JSBackendBase: Factory<typeof JSBackendBase>
-  ONNXRuntimeWebBackend: Factory<typeof ONNXRuntimeWebBackend>
-  JSPrePostProcessor: Factory<typeof JSPrePostProcessor>
-  ModelData: Factory<typeof ModelData>
-  PrePostProcessor: Factory<typeof PrePostProcessor>
-  ProcessingSpec: Factory<typeof ProcessingSpec>
-  RingBuffer: Factory<typeof RingBuffer>
-  TensorShape: Factory<typeof TensorShape>
-  InferenceThread: Factory<typeof InferenceThread>
-  VectorBufferF: Factory<typeof VectorBufferF>
-  VectorFloat: Factory<typeof VectorFloat>
-  VectorInt64T: Factory<typeof VectorInt64T>
-  VectorModelData: Factory<typeof VectorModelData>
-  VectorRingBuffer: Factory<typeof VectorRingBuffer>
-  VectorSizeT: Factory<typeof VectorSizeT>
-  VectorTensorShape: Factory<typeof VectorTensorShape>
-  VectorUnsignedInt: Factory<typeof VectorUnsignedInt>
-  VectorVectorInt64: Factory<typeof VectorVectorInt64>
-  TensorShapeList: Factory<typeof TensorShapeList>
-
-  private static async initWasm(
-    config?: AniraWasmConfig & Record<string, unknown>,
-    memory?: WebAssembly.Memory
-  ) {
-    const wasmMemory =
-      memory ??
+  /** Instantiate the module on a shared memory and return a ready-to-use `AniraWeb`. */
+  static async create(options: AniraWebOptions = {}): Promise<AniraWeb> {
+    const memory =
+      options.memory ??
       new WebAssembly.Memory({
         initial: 8192,
         maximum: 8192,
         shared: true,
       })
-    const wasmInstance = await createAniraWasm(wasmMemory, config ?? {})
-    return { wasmInstance, wasmMemory }
+    const anira = await createAniraWasm(memory, {
+      wasmBinary: options.wasmBinary,
+      abiVersion: options.abiVersion,
+    })
+    const web = new AniraWeb(anira)
+    if (options.wasmBinary) web.wasmBinary = options.wasmBinary
+    return web
+  }
+
+  constructor(anira: AniraModule) {
+    this.anira = anira
+    // A stage's release on main (its last carrier died) drops it from every instance.
+    anira.hooks.onStageReleased = (jsKey) => this.forgetStage(jsKey)
+  }
+
+  /** The raw exports: every `_anira_*` entry of the C ABI, `_malloc` and `_free`. */
+  get module(): AniraWasmInstance {
+    return this.anira.module
+  }
+
+  get heap(): Heap {
+    return this.anira.heap
+  }
+
+  get memory(): WebAssembly.Memory {
+    return this.anira.memory
+  }
+
+  // ---- logging ----
+
+  /**
+   * Route the log to `onRecord` (the console when omitted; `null` removes the hook): the
+   * records of this instance's JavaScript log hook (`anira_em_set_log_hook`) and those the
+   * Workers and the worklet forward. Pump the real-time queue with `startLogPump`.
+   */
+  setLogHook(onRecord: ((record: AniraLogRecord) => void) | null = consoleLogSink): void {
+    this.onLogRecord = onRecord
+    this.anira.hooks.log = onRecord
+    this.module._anira_em_set_log_hook(onRecord ? 1 : 0)
+  }
+
+  private forwardLogs(target: Pick<Worker, 'addEventListener'>): void {
+    target.addEventListener('message', (e: MessageEvent<{ type: string }>) => {
+      if (e.data.type === 'log') this.onLogRecord?.((e.data as LogRecordMessage).record)
+    })
+  }
+
+  // ---- JavaScript engines and stages ----
+
+  /**
+   * Register a JavaScript engine on `pipelinePtr` (`anira_em_pipeline_register_js_engine`)
+   * and on every inference Worker (each constructs the class and awaits its `init()`); Workers
+   * spun up later get it too. Register before `anira_handler_create` (a handler copies the
+   * pipeline) and await it before `anira_handler_prepare`. Returns the engine's js_key.
+   */
+  async registerJSEngine(
+    pipelinePtr: number,
+    descriptor: JSEngineDescriptor
+  ): Promise<number> {
+    if (((descriptor.hookMask ?? 0) & ANIRA_EM_ENGINE_HOOK_QUERY) !== 0) {
+      throw new Error(
+        `JavaScript engine '${descriptor.engineId}': ANIRA_EM_ENGINE_HOOK_QUERY runs on the main ` +
+          'thread and a registered engine has no providers list to answer for; build the ' +
+          'descriptor with _anira_em_engine_desc_init to give it one'
+      )
+    }
+    const jsKey = this.nextKey++
+    const { heap, module } = this.anira
+    heap.withCString(descriptor.engineId, (id) =>
+      callWithError(heap, (err) =>
+        module._anira_em_pipeline_register_js_engine(
+          pipelinePtr,
+          id,
+          jsKey,
+          descriptor.hookMask ?? 0,
+          descriptor.engineFlags ?? 0,
+          err
+        )
+      )
+    )
+    const entry = { jsKey, descriptor }
+    this.engines.push(entry)
+    await Promise.all(
+      this.workers.map((w) => this.whileStopped(w, () => this.sendEngine(w, entry)))
+    )
+    return jsKey
   }
 
   /**
-   * Instantiate the WASM module and return a ready-to-use ``AniraWeb``.
-   * This is the standard entry point — see :doc:`../../basic_usage`.
-   *
-   * @param config - Optional Emscripten module overrides plus an
-   *   ``processPrePost`` hook for users running their own JS pre/post
-   *   dispatch outside the registry. Most callers pass nothing.
-   * @param memory - Optional pre-allocated shared
-   *   ``WebAssembly.Memory``. Used when reusing memory across
-   *   multiple ``AniraWeb`` instances; defaults to a fresh 8192-page
-   *   shared memory.
+   * Remove a JavaScript engine from every Worker (its `destroy()` runs there). The C engine
+   * stays with the pipeline and the handlers that hold it: destroy or re-prepare them first,
+   * since a later inference on it fails.
    */
-  static async create(
-    config?: AniraWasmConfig & Record<string, unknown>,
-    memory?: WebAssembly.Memory
-  ): Promise<AniraWeb> {
-    const init = await AniraWeb.initWasm(config, memory)
-    return new AniraWeb(init.wasmInstance, init.wasmMemory)
-  }
-
-  constructor(module: AniraWasmInstance, memory: WebAssembly.Memory) {
-    this.wasmInstance = module
-    this.memory = memory
-
-    this.InferenceBackend = createInferenceBackend(module)
-    this.Buffer = createFactory(module, BufferF)
-    this.HostConfig = createFactory(module, HostConfig)
-    this.InferenceConfig = createFactory(module, InferenceConfig)
-    this.InferenceHandler = createFactory(module, InferenceHandler)
-    this.JSBackendBase = createFactory(module, JSBackendBase)
-    this.ONNXRuntimeWebBackend = createFactory(module, ONNXRuntimeWebBackend)
-    this.JSPrePostProcessor = createFactory(module, JSPrePostProcessor)
-    this.ModelData = createFactory(module, ModelData)
-    this.PrePostProcessor = createFactory(module, PrePostProcessor)
-    this.ProcessingSpec = createFactory(module, ProcessingSpec)
-    this.RingBuffer = createFactory(module, RingBuffer)
-    this.TensorShape = createFactory(module, TensorShape)
-    this.InferenceThread = createFactory(module, InferenceThread)
-    this.VectorBufferF = createFactory(module, VectorBufferF)
-    this.VectorFloat = createFactory(module, VectorFloat)
-    this.VectorInt64T = createFactory(module, VectorInt64T)
-    this.VectorModelData = createFactory(module, VectorModelData)
-    this.VectorRingBuffer = createFactory(module, VectorRingBuffer)
-    this.VectorSizeT = createFactory(module, VectorSizeT)
-    this.VectorTensorShape = createFactory(module, VectorTensorShape)
-    this.VectorUnsignedInt = createFactory(module, VectorUnsignedInt)
-    this.VectorVectorInt64 = createFactory(module, VectorVectorInt64)
-    this.TensorShapeList = createFactory(module, TensorShapeList)
+  async unregisterJSEngine(jsKey: number): Promise<void> {
+    const index = this.engines.findIndex((e) => e.jsKey === jsKey)
+    if (index !== -1) this.engines.splice(index, 1)
+    await Promise.all(
+      this.workers.map((w) =>
+        this.whileStopped(w, async () => {
+          await request<UnregisterEngineMessage>(
+            w.worker,
+            { type: 'unregisterEngine', jsKey },
+            'engineUnregistered'
+          )
+        })
+      )
+    )
   }
 
   /**
-   * Restore Emscripten's stack pointer to a previously saved value.
-   * Used internally when re-entering WASM from a worker thread; rarely
-   * needed in user code.
+   * Make a JavaScript stage the pipeline's one stage (`anira_em_pipeline_add_js_stage`). Its
+   * main-thread object (`descriptor.stage`) joins this instance's registry; with a
+   * before/after bit the class is constructed on every inference Worker; with a pre/post/reset
+   * bit pass the returned js_key to `configureAudioWorklet`. Returns the stage's js_key.
    */
-  stackRestore(ptr: number): void {
-    this.wasmInstance.stackRestore(ptr)
-  }
-
-  /** Allocate ``size`` bytes in the WASM heap and return the pointer. */
-  malloc(size: number): number {
-    return this.wasmInstance._malloc(size)
-  }
-
-  /** Free a pointer previously returned by :js:meth:`malloc`. */
-  free(ptr: number): void {
-    this.wasmInstance._free(ptr)
-  }
-
-  /** Return the shared ``WebAssembly.Memory`` backing the WASM module. */
-  getMemory(): WebAssembly.Memory {
-    return this.memory
+  async addJSStage(pipelinePtr: number, descriptor: JSStageDescriptor): Promise<number> {
+    if ((descriptor.hookMask & MAIN_THREAD_STAGE_HOOKS) !== 0 && !descriptor.stage) {
+      throw new Error(
+        `JavaScript stage '${descriptor.className}': its init/prepare/unprepare/release bits run ` +
+          'on the main thread, so the descriptor needs the main-thread object (stage)'
+      )
+    }
+    const jsKey = this.nextKey++
+    const { heap, module } = this.anira
+    callWithError(heap, (err) =>
+      module._anira_em_pipeline_add_js_stage(
+        pipelinePtr,
+        jsKey,
+        descriptor.hookMask,
+        descriptor.stageFlags,
+        err
+      )
+    )
+    if (descriptor.stage) this.anira.hooks.stages.set(jsKey, descriptor.stage)
+    const entry = { jsKey, pipelinePtr, descriptor }
+    this.stages.push(entry)
+    if (AniraWeb.runsOnWorkers(descriptor)) {
+      await Promise.all(
+        this.workers.map((w) => this.whileStopped(w, () => this.sendStage(w, entry)))
+      )
+    }
+    return jsKey
   }
 
   /**
-   * Return the underlying Emscripten module instance. Use this to call
-   * raw WASM exports directly when the high-level wrappers don't cover
-   * what you need.
+   * Remove a JavaScript stage's objects from every instance (main, the Workers, the worklets
+   * that run it); the C stage stays with its carriers. A stage's release on the main thread
+   * does the same by itself.
    */
-  getWasmInstance(): AniraWasmInstance {
-    return this.wasmInstance
+  async removeJSStage(jsKey: number): Promise<void> {
+    this.anira.hooks.stages.delete(jsKey)
+    await this.dropStageEverywhere(jsKey)
   }
 
-  /**
-   * Return a ``Float32Array`` view over the WASM module's ``HEAPF32``
-   * buffer. Useful for reading or writing float32 data at raw heap
-   * offsets.
-   */
-  getHeapF32(): Float32Array {
-    return this.wasmInstance.HEAPF32
+  /** The release callback of the main registry: the stage is gone, drop it elsewhere too. */
+  private forgetStage(jsKey: number): void {
+    this.dropStageEverywhere(jsKey).catch((error) =>
+      console.error(`anira: dropping the released stage ${jsKey} failed:`, error)
+    )
   }
 
-  /**
-   * Return a ``Uint32Array`` view over the WASM module's ``HEAPU32``
-   * buffer. Useful for reading or writing pointer-sized values at raw
-   * heap offsets — for example the channel pointer arrays referenced
-   * by :js:meth:`AniraAudioWorkletBase.buildMultiTensorPointers`.
-   */
-  getHeapU32(): Uint32Array {
-    return this.wasmInstance.HEAPU32
+  private async dropStageEverywhere(jsKey: number): Promise<void> {
+    const index = this.stages.findIndex((s) => s.jsKey === jsKey)
+    if (index === -1) return
+    const [entry] = this.stages.splice(index, 1)
+    const done: Promise<void>[] = []
+    if (AniraWeb.runsOnWorkers(entry.descriptor)) {
+      for (const w of this.workers) {
+        done.push(
+          this.whileStopped(w, () =>
+            request<UnregisterStageMessage>(
+              w.worker,
+              { type: 'unregisterStage', jsKey },
+              'stageUnregistered'
+            )
+          )
+        )
+      }
+    }
+    for (const [node, worklet] of this.worklets) {
+      if (worklet.stageKey !== jsKey) continue
+      worklet.stageKey = undefined
+      done.push(
+        request<UnregisterStageMessage>(
+          node.port,
+          { type: 'unregisterStage', jsKey },
+          'stageUnregistered'
+        )
+      )
+    }
+    await Promise.all(done)
   }
 
-  // ---- General utilities ----
-
-  /**
-   * Encode ``str`` as a null-terminated UTF-8 string in the WASM
-   * heap and return the pointer. The caller is responsible for
-   * :js:meth:`free`-ing the returned pointer when done.
-   */
-  allocWasmString(str: string): number {
-    const bytes = new TextEncoder().encode(str + '\0')
-    const ptr = this.wasmInstance._malloc(bytes.length)
-    new Uint8Array(this.wasmInstance.HEAPU32.buffer, ptr, bytes.length).set(bytes)
-    return ptr
+  private static runsOnWorkers(descriptor: JSStageDescriptor): boolean {
+    return (descriptor.hookMask & (ANIRA_EM_HOOK_BEFORE | ANIRA_EM_HOOK_AFTER)) !== 0
   }
 
-  // ---- Worker & Audio Worklet helpers ----
+  private async sendEngine(
+    w: WorkerEntry,
+    { jsKey, descriptor }: EngineEntry
+  ): Promise<void> {
+    await request<RegisterEngineMessage>(
+      w.worker,
+      {
+        type: 'registerEngine',
+        jsKey,
+        className: descriptor.className,
+        engineId: descriptor.engineId,
+        modelConfigPtr: descriptor.modelConfigPtr,
+        modelIndex: descriptor.modelIndex ?? 0,
+      },
+      'engineRegistered'
+    )
+  }
+
+  private async sendStage(
+    w: WorkerEntry,
+    { jsKey, descriptor }: StageEntry
+  ): Promise<void> {
+    await request<RegisterStageMessage>(
+      w.worker,
+      { type: 'registerStage', jsKey, className: descriptor.className },
+      'stageRegistered'
+    )
+  }
+
+  /** Run `op` after the Worker's earlier operations; skipped once the Worker was stopped. */
+  private enqueue(w: WorkerEntry, op: () => Promise<void>): Promise<void> {
+    const run = w.queue.then(() => (w.stopped ? undefined : op()))
+    w.queue = run.catch(() => {})
+    return run
+  }
+
+  /** A Worker handles messages only outside its loop: stop it, run `action`, restart it. */
+  private whileStopped(w: WorkerEntry, action: () => Promise<void>): Promise<void> {
+    return this.enqueue(w, async () => {
+      await w.thread.stop()
+      try {
+        await action()
+      } finally {
+        await w.thread.start(() =>
+          w.worker.postMessage({ type: 'start' } satisfies StartMessage)
+        )
+      }
+    })
+  }
+
+  // ---- inference Workers ----
 
   protected async ensureWasmBinary(): Promise<ArrayBuffer> {
     if (!this.wasmBinary) {
@@ -253,106 +467,40 @@ export class AniraWeb {
     return this.wasmBinary
   }
 
-  protected static readonly WORKER_STACK_SIZE = 4194304 // 4 MB per worker stack
-
-  protected allocateWorkerStack(): number {
-    const base = this.malloc(AniraWeb.WORKER_STACK_SIZE)
-    if (!base) throw new Error('Failed to allocate worker stack')
-    return base + AniraWeb.WORKER_STACK_SIZE
-  }
-
-  protected freeWorkerStack(stackTop: number): void {
-    this.free(stackTop - AniraWeb.WORKER_STACK_SIZE)
-  }
-
-  /**
-   * Register a custom JS inference backend so the inference worker
-   * can dispatch into it. Required for any backend that uses
-   * ``InferenceBackend.CUSTOM`` — see :doc:`../../custom_inference_backends`.
-   * The descriptor is also forwarded to all currently-running
-   * inference workers so they can construct the backend on their side.
-   */
-  async registerProcessor(backend: JSBackendBase, className: string): Promise<void> {
-    const descriptor: ProcessorDescriptor = { backend, className }
-    this.registeredProcessors.push(descriptor)
-    await Promise.all(this.activeWorkers.map((w) => w.registerProcessor(descriptor)))
-  }
-
-  /**
-   * Inverse of :js:meth:`registerProcessor`. Removes the descriptor from the
-   * main-thread registry and instructs all active inference workers to destroy
-   * and deregister the backend (releasing any resources such as ORT sessions).
-   */
-  async unregisterProcessor(backend: JSBackendBase): Promise<void> {
-    const idx = this.registeredProcessors.findIndex((d) => d.backend === backend)
-    if (idx !== -1) this.registeredProcessors.splice(idx, 1)
-    await Promise.all(this.activeWorkers.map((w) => w.unregisterProcessor(backend)))
-  }
-
-  /**
-   * Register a :js:class:`JSPrePostProcessor` subclass so its
-   * ``beforeInference`` / ``afterInference`` hooks run on the inference
-   * worker(s). These hooks fire on the inference thread — not the audio
-   * worklet where ``preProcess`` / ``postProcess`` run — so the subclass has
-   * to be reconstructed there; ``className`` must match a key passed to
-   * ``setupInferenceWorker(processorClasses, prePostProcessorClasses)`` in the
-   * worker file. The descriptor is forwarded to all currently-running inference
-   * workers and replayed on any spun up later. Needed only for stateful models
-   * that splice cross-inference state (e.g. recurrent hidden state); pure
-   * pre/post customization does not require it.
-   */
-  async registerPrePostProcessor(
-    prePostProcessor: JSPrePostProcessor,
-    className: string
-  ): Promise<void> {
-    const descriptor: PrePostProcessorDescriptor = { prePostProcessor, className }
-    this.registeredPrePostProcessors.push(descriptor)
-    await Promise.all(this.activeWorkers.map((w) => w.registerPrePostProcessor(descriptor)))
-  }
-
-  /**
-   * Inverse of :js:meth:`registerPrePostProcessor`. Removes the descriptor from
-   * the main-thread registry and instructs all active inference workers to stop
-   * running the JS inference hooks for this processor (the C++ object itself is
-   * owned by the caller and is not freed here — see the lifecycle docs).
-   */
-  async unregisterPrePostProcessor(prePostProcessor: JSPrePostProcessor): Promise<void> {
-    const idx = this.registeredPrePostProcessors.findIndex(
-      (d) => d.prePostProcessor === prePostProcessor
-    )
-    if (idx !== -1) this.registeredPrePostProcessors.splice(idx, 1)
-    await Promise.all(
-      this.activeWorkers.map((w) => w.unregisterPrePostProcessor(prePostProcessor))
-    )
-  }
-
-  /**
-   * Return the inference workers currently spawned by this
-   * ``AniraWeb``. The list is updated automatically when
-   * :js:meth:`spinUpInferenceWorker` adds a worker or
-   * ``InferenceWorker.stop`` removes one.
-   */
+  /** The inference Workers this `AniraWeb` runs. */
   getActiveWorkers(): readonly InferenceWorker[] {
-    return this.activeWorkers
+    return this.workers.map((w) => w.handle)
   }
 
   /**
-   * Spawn a new inference worker (a Web Worker hosting an
-   * ``InferenceThread``) and return its handle. Inference runs there
-   * instead of on the audio thread, keeping the audio worklet
-   * real-time-safe. Spin up multiple workers to run inference on
-   * multiple batches in parallel — see :doc:`../../architecture`.
+   * Spawn an inference Worker: a user-driven inference thread of `contextPtr`'s core
+   * (`anira_inference_thread_create` here), its own stack and thread-local block, every
+   * registered JavaScript engine and Worker-side stage, then the loop. Spin up several to run
+   * several inferences at once.
    *
-   * @param workerOrUrl - Optional override for the worker entry point.
-   *   Pass a ``URL`` to load a custom worker file (used by user-written
-   *   JS backends, see :doc:`../../custom_inference_backends`), or an
-   *   already-constructed ``Worker`` instance to take ownership of one
-   *   you spawned yourself. Omit to use anira's bundled default worker.
+   * @param contextPtr - The `anira_context` whose core the thread serves; a missing or NULL
+   *   pointer (the 2.x call without arguments, or a Worker in its place) is a `TypeError`,
+   *   thrown before any C call.
+   * @param workerOrUrl - A custom worker file (`setupInferenceWorker` with your classes), or a
+   *   `Worker` to take over; the bundled default worker otherwise.
    */
-  async spinUpInferenceWorker(workerOrUrl?: Worker | URL): Promise<InferenceWorker> {
-    const inferenceThread = this.InferenceThread()
-
-    const inferenceStackPtr = this.allocateWorkerStack()
+  async spinUpInferenceWorker(
+    contextPtr: number,
+    workerOrUrl?: Worker | URL
+  ): Promise<InferenceWorker> {
+    if (
+      typeof contextPtr !== 'number' ||
+      !Number.isInteger(contextPtr) ||
+      contextPtr <= 0
+    ) {
+      throw new TypeError(
+        'spinUpInferenceWorker(contextPtr, workerOrUrl?): the first argument is the ' +
+          `anira_context the Worker's inference thread serves, not ${String(contextPtr)} ` +
+          '(3.x; the 2.x spinUpInferenceWorker(workerOrUrl?) took no context)'
+      )
+    }
+    const thread = InferenceThread.create(this.anira, contextPtr)
+    const stack = allocInstanceStack(this.module)
     let worker: Worker
     if (workerOrUrl instanceof Worker) {
       worker = workerOrUrl
@@ -363,123 +511,71 @@ export class AniraWeb {
         type: 'module',
       })
     }
+    this.forwardLogs(worker)
 
-    worker.postMessage({
-      type: 'initInferenceWorker',
-      wasmMemory: this.memory,
-      stackPtr: inferenceStackPtr,
-      threadPtr: inferenceThread.getPointer(),
-    } satisfies InitInferenceWorkerMessage)
-    await waitForWorkerMessage(worker, 'ready')
+    try {
+      await request<InitInferenceWorkerMessage>(
+        worker,
+        {
+          type: 'initInferenceWorker',
+          wasmMemory: this.memory,
+          wasmBinary: this.wasmBinary ?? undefined,
+          stackBase: stack.base,
+          stackBytes: stack.bytes,
+          threadPtr: thread.pointer,
+        },
+        'ready'
+      )
 
-    for (const { backend, className } of this.registeredProcessors) {
-      worker.postMessage({
-        type: 'registerProcessor',
-        processorPtr: backend.getPointer(),
-        className,
-        inferenceConfigPtr: backend.inferenceConfigPtr || undefined,
-      } satisfies RegisterProcessorMessage)
-      await waitForWorkerMessage(worker, 'processorRegistered')
+      const pending: WorkerEntry = {
+        worker,
+        thread,
+        handle: { worker, thread, stop: async () => {} },
+        queue: Promise.resolve(),
+        stopped: false,
+      }
+      for (const entry of this.engines) await this.sendEngine(pending, entry)
+      for (const entry of this.stages) {
+        if (AniraWeb.runsOnWorkers(entry.descriptor)) await this.sendStage(pending, entry)
+      }
+      await thread.start(() =>
+        worker.postMessage({ type: 'start' } satisfies StartMessage)
+      )
+
+      pending.handle.stop = () => this.stopWorker(pending, stack)
+      this.workers.push(pending)
+      return pending.handle
+    } catch (error) {
+      worker.terminate()
+      await thread.stop().catch(() => {})
+      thread.destroy()
+      freeInstanceStack(this.module, stack)
+      throw error
     }
-
-    for (const { prePostProcessor, className } of this.registeredPrePostProcessors) {
-      worker.postMessage({
-        type: 'registerPrePostProcessor',
-        prePostProcessorPtr: prePostProcessor.getPointer(),
-        className,
-      } satisfies RegisterPrePostProcessorMessage)
-      await waitForWorkerMessage(worker, 'prePostProcessorRegistered')
-    }
-
-    inferenceThread.start()
-    worker.postMessage({ type: 'start' } satisfies StartMessage)
-
-    const inferenceWorker: InferenceWorker = {
-      worker,
-      registerProcessor: async (descriptor: ProcessorDescriptor) => {
-        inferenceThread.stop()
-        await waitForWorkerMessage(worker, 'stopped')
-
-        worker.postMessage({
-          type: 'registerProcessor',
-          processorPtr: descriptor.backend.getPointer(),
-          className: descriptor.className,
-          inferenceConfigPtr: descriptor.backend.inferenceConfigPtr || undefined,
-        } satisfies RegisterProcessorMessage)
-        await waitForWorkerMessage(worker, 'processorRegistered')
-
-        inferenceThread.start()
-        worker.postMessage({ type: 'start' } satisfies StartMessage)
-      },
-      unregisterProcessor: async (backend: JSBackendBase) => {
-        inferenceThread.stop()
-        await waitForWorkerMessage(worker, 'stopped')
-
-        worker.postMessage({
-          type: 'unregisterProcessor',
-          processorPtr: backend.getPointer(),
-        } satisfies UnregisterProcessorMessage)
-        await waitForWorkerMessage(worker, 'processorUnregistered')
-
-        inferenceThread.start()
-        worker.postMessage({ type: 'start' } satisfies StartMessage)
-      },
-      registerPrePostProcessor: async (descriptor: PrePostProcessorDescriptor) => {
-        inferenceThread.stop()
-        await waitForWorkerMessage(worker, 'stopped')
-
-        worker.postMessage({
-          type: 'registerPrePostProcessor',
-          prePostProcessorPtr: descriptor.prePostProcessor.getPointer(),
-          className: descriptor.className,
-        } satisfies RegisterPrePostProcessorMessage)
-        await waitForWorkerMessage(worker, 'prePostProcessorRegistered')
-
-        inferenceThread.start()
-        worker.postMessage({ type: 'start' } satisfies StartMessage)
-      },
-      unregisterPrePostProcessor: async (prePostProcessor: JSPrePostProcessor) => {
-        inferenceThread.stop()
-        await waitForWorkerMessage(worker, 'stopped')
-
-        worker.postMessage({
-          type: 'unregisterPrePostProcessor',
-          prePostProcessorPtr: prePostProcessor.getPointer(),
-        } satisfies UnregisterPrePostProcessorMessage)
-        await waitForWorkerMessage(worker, 'prePostProcessorUnregistered')
-
-        inferenceThread.start()
-        worker.postMessage({ type: 'start' } satisfies StartMessage)
-      },
-      stop: async () => {
-        inferenceThread.stop()
-        await waitForWorkerMessage(worker, 'stopped')
-        worker.postMessage({ type: 'destroy' } satisfies DestroyMessage)
-        inferenceThread.destroy()
-        this.freeWorkerStack(inferenceStackPtr)
-        const idx = this.activeWorkers.indexOf(inferenceWorker)
-        if (idx !== -1) this.activeWorkers.splice(idx, 1)
-      },
-    }
-
-    this.activeWorkers.push(inferenceWorker)
-    return inferenceWorker
   }
 
+  private stopWorker(entry: WorkerEntry, stack: InstanceStack): Promise<void> {
+    return this.enqueue(entry, async () => {
+      entry.stopped = true
+      const index = this.workers.indexOf(entry)
+      if (index !== -1) this.workers.splice(index, 1)
+      await entry.thread.stop()
+      entry.thread.destroy()
+      // The stack is the Worker instance's until it says it calls into the module no more.
+      await request<DestroyMessage>(entry.worker, { type: 'destroy' }, 'destroyed')
+      freeInstanceStack(this.module, stack)
+    })
+  }
+
+  // ---- the audio worklet ----
+
   /**
-   * Install anira's audio worklet module on the given ``AudioContext``.
-   * Must be called once per context before
-   * :js:meth:`configureAudioWorklet`.
-   *
-   * @param audioContext - The Web Audio context to install the
-   *   worklet on.
-   * @param workletUrl - Optional URL of a custom worklet file (a
-   *   subclass of :js:class:`AniraAudioWorkletBase`, see
-   *   :doc:`../../custom_audio_worklets`). Omit to use anira's bundled
-   *   default worklet, which handles the simple single-tensor case.
+   * Install anira's audio worklet module on `audioContext` (once per context, before
+   * `configureAudioWorklet`); `workletUrl` for a custom worklet file (a subclass of
+   * `AniraAudioWorkletBase` with its `stageClasses`).
    */
   async registerAudioWorkletForContext(
-    audioContext: AudioContext,
+    audioContext: BaseAudioContext,
     workletUrl?: string | URL
   ): Promise<void> {
     const url =
@@ -488,107 +584,205 @@ export class AniraWeb {
   }
 
   /**
-   * Construct an ``AudioWorkletNode`` wired to ``inferenceHandlerPtr``
-   * and ``prePostProcessorPtr`` and complete the configure handshake
-   * so the worklet is ready to process audio. Allocates the input /
-   * output scratch buffers in WASM memory and posts them to the
-   * worklet thread.
-   *
-   * @param audioContext - The Web Audio context to attach the node to.
-   * @param inferenceHandlerPtr - The :js:class:`InferenceHandler` (or
-   *   its raw pointer) that will run inference for this worklet.
-   * @param prePostProcessorPtr - The :js:class:`PrePostProcessor`
-   *   used during inference.
-   * @param audioWorkletNodeName - Processor name registered via
-   *   ``registerProcessor`` inside the worklet file. Defaults to
-   *   ``'inference-processor'`` (the bundled default worklet's name).
-   * @param ioOptions - Channel counts, ``maxBufferSize``, and
-   *   optional ``audioWorkletNodeOptions`` overrides. See
-   *   :doc:`../../custom_audio_worklets` for the multi-tensor and
-   *   custom-buffer-size cases.
-   * @returns The connected, ready-to-use ``AudioWorkletNode``.
+   * Construct an `AudioWorkletNode` that streams through `handlerPtr` (a prepared handler of a
+   * Hard contract with `block_min = block_max = quantum`, 128 frames by default) and complete
+   * the configure handshake. The worklet instance gets its own stack and thread-local block and
+   * builds its planar host tensors for `quantum` now; `process()` allocates nothing. When the
+   * browser renders another quantum the worklet outputs silence and reports it:
+   * `onQuantumChange` re-prepares the handler, then the worklet rebuilds its tensors. The
+   * `staticInputs` slots get a buffer each in the shared heap, written by
+   * `node.setStaticInput`. Free the node's resources with `disposeAudioWorklet` before
+   * destroying the handler.
    */
   async configureAudioWorklet(
-    audioContext: AudioContext,
-    inferenceHandlerPtr: PossiblePointer<InferenceHandler>,
-    prePostProcessorPtr: PossiblePointer<PrePostProcessor>,
-    audioWorkletNodeName = 'inference-processor',
-    ioOptions: ConfigureAudioWorkletIOOptions = {}
-  ): Promise<AudioWorkletNode> {
-    const wasmMemory = this.memory
+    audioContext: BaseAudioContext,
+    handlerPtr: number,
+    options: ConfigureAudioWorkletOptions = {}
+  ): Promise<AniraAudioWorkletNode> {
     const ioConfig: AudioWorkletIOConfig = {
-      maxBufferSize: ioOptions.maxBufferSize ?? 1024,
-      inputNodeIndex: ioOptions.inputNodeIndex ?? 0,
-      outputNodeIndex: ioOptions.outputNodeIndex ?? 0,
-      inputChannels: ioOptions.inputChannels ?? 2,
-      outputChannels: ioOptions.outputChannels ?? 2,
+      inputNodeIndex: options.inputNodeIndex ?? 0,
+      outputNodeIndex: options.outputNodeIndex ?? 0,
+      inputChannels: options.inputChannels ?? 2,
+      outputChannels: options.outputChannels ?? 2,
+      inputSlot: options.inputSlot ?? 0,
+      outputSlot: options.outputSlot ?? 0,
+      waitMs: options.waitMs ?? 0,
+      quantum: options.quantum ?? 128,
     }
-
     if (
-      ioConfig.maxBufferSize <= 0 ||
       ioConfig.inputChannels <= 0 ||
-      ioConfig.outputChannels <= 0
+      ioConfig.outputChannels <= 0 ||
+      ioConfig.quantum <= 0
     ) {
       throw new Error(
-        'Invalid AudioWorklet IO config: sizes and channel counts must be > 0'
+        'Invalid AudioWorklet IO config: channel counts and the quantum must be > 0'
       )
+    }
+    const staticSlots = options.staticInputs ?? []
+    if (staticSlots.length > 0 && options.modelConfigPtr === undefined) {
+      throw new Error(
+        'configureAudioWorklet: staticInputs needs modelConfigPtr, the specs that size them'
+      )
+    }
+    if (new Set(staticSlots).size !== staticSlots.length) {
+      throw new Error('configureAudioWorklet: staticInputs lists a slot twice')
+    }
+    const stageEntry = this.workletStage(options)
+    const stage: AudioWorkletConfigureMessage['stage'] = stageEntry && {
+      jsKey: stageEntry.jsKey,
+      className: stageEntry.descriptor.className,
     }
 
     const wasmBinary = await this.ensureWasmBinary()
-
-    const nodeOptions: AudioWorkletNodeOptions = {
-      channelCount: ioConfig.inputChannels,
-      channelCountMode: 'explicit',
-      outputChannelCount: [ioConfig.outputChannels],
-      ...ioOptions.audioWorkletNodeOptions,
+    let node = options.node as AniraAudioWorkletNode | undefined
+    if (node) {
+      await this.disposeAudioWorklet(node)
+    } else {
+      const created = new AudioWorkletNode(
+        audioContext,
+        options.nodeName ?? 'inference-processor',
+        {
+          channelCount: ioConfig.inputChannels,
+          channelCountMode: 'explicit',
+          outputChannelCount: [ioConfig.outputChannels],
+          ...options.audioWorkletNodeOptions,
+        }
+      ) as AniraAudioWorkletNode
+      created.setStaticInput = (slot, values) =>
+        this.writeStaticInput(created, slot, values)
+      node = created
+      node.port.start()
+      this.forwardLogs(node.port)
+      const port = node.port
+      port.addEventListener('message', (e: MessageEvent<{ type: string }>) => {
+        if (e.data.type !== 'quantumChanged') return
+        const { quantum } = e.data as QuantumChangedMessage
+        // Re-prepare first (the host's), then let the worklet allocate for the new quantum.
+        void (async () => {
+          try {
+            await options.onQuantumChange?.(quantum)
+            await request<SetQuantumMessage>(
+              port,
+              { type: 'setQuantum', quantum },
+              'quantumSet'
+            )
+          } catch (error) {
+            console.error('anira: the quantum change failed:', error)
+          }
+        })()
+      })
     }
-    const inferenceNode = new AudioWorkletNode(
-      audioContext,
-      audioWorkletNodeName,
-      nodeOptions
-    )
-    const processStackPtr = this.allocateWorkerStack()
-    const bytesPerChannel = ioConfig.maxBufferSize * Float32Array.BYTES_PER_ELEMENT
-
-    const inputDataBuffer = this.malloc(bytesPerChannel * ioConfig.inputChannels)
-    const outputDataBuffer = this.malloc(bytesPerChannel * ioConfig.outputChannels)
-
-    const inputBufferPtr = this.malloc(ioConfig.inputChannels * 4)
-    const outputBufferPtr = this.malloc(ioConfig.outputChannels * 4)
-
-    const inputPtrArray = new Uint32Array(
-      wasmMemory.buffer,
-      inputBufferPtr,
-      ioConfig.inputChannels
-    )
-    const outputPtrArray = new Uint32Array(
-      wasmMemory.buffer,
-      outputBufferPtr,
-      ioConfig.outputChannels
-    )
-    for (let i = 0; i < ioConfig.inputChannels; i++) {
-      inputPtrArray[i] = inputDataBuffer + i * bytesPerChannel
+    const staticInputs: StaticInputBlock[] = []
+    try {
+      for (const slot of staticSlots) {
+        staticInputs.push(
+          allocStaticInputBlock(this.module, this.heap, options.modelConfigPtr!, slot)
+        )
+      }
+    } catch (error) {
+      for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
+      throw error
     }
-    for (let i = 0; i < ioConfig.outputChannels; i++) {
-      outputPtrArray[i] = outputDataBuffer + i * bytesPerChannel
+    const stack = allocInstanceStack(this.module)
+    try {
+      await request<AudioWorkletConfigureMessage>(
+        node.port,
+        {
+          type: 'configure',
+          wasmMemory: this.memory,
+          wasmBinary,
+          stackBase: stack.base,
+          stackBytes: stack.bytes,
+          handlerPtr,
+          stage,
+          ioConfig,
+          staticInputs,
+        },
+        'ready'
+      )
+    } catch (error) {
+      // The worklet instance never ran on the stack, or gave it up on the failure.
+      freeInstanceStack(this.module, stack)
+      for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
+      throw error
     }
+    const buffer = this.memory.buffer
+    this.worklets.set(node, {
+      stack,
+      stageKey: stage?.jsKey,
+      staticInputs,
+      writers: new Map(
+        staticInputs.map((block) => [block.slot, new StaticInputWriter(buffer, block)])
+      ),
+    })
+    return node
+  }
 
-    inferenceNode.port.start()
-    inferenceNode.port.postMessage({
-      type: 'configure',
-      wasmMemory,
-      wasmBinary,
-      stackPtr: processStackPtr,
-      inferenceHandlerPtr: resolvePtr(inferenceHandlerPtr),
-      prePostProcessorPtr: resolvePtr(prePostProcessorPtr),
-      inputBufferPtr,
-      outputBufferPtr,
-      inputDataBuffer,
-      outputDataBuffer,
-      ioConfig,
-    } satisfies AudioWorkletConfigureMessage)
+  private writeStaticInput(
+    node: AudioWorkletNode,
+    slot: number,
+    values: ArrayBufferView | ArrayLike<number>
+  ): void {
+    const entry = this.worklets.get(node)
+    if (!entry) throw new Error('setStaticInput: the node is not configured')
+    const writer = entry.writers.get(slot)
+    if (!writer) {
+      throw new RangeError(
+        `setStaticInput: the worklet does not serve input slot ${slot}; list it in staticInputs`
+      )
+    }
+    writer.write(values)
+  }
 
-    await waitForWorkerMessage(inferenceNode.port, 'ready')
-    return inferenceNode
+  /**
+   * The JavaScript stage whose pre/post/reset the worklet must run: `stageKey`'s, or the one of
+   * `pipelinePtr` with worklet bits. A stage with worklet bits the options leave unnamed is an
+   * error here, not a failing hook at the first quantum.
+   */
+  private workletStage(options: ConfigureAudioWorkletOptions): StageEntry | undefined {
+    const runsInWorklet = (e: StageEntry) =>
+      (e.descriptor.hookMask & WORKLET_STAGE_HOOKS) !== 0
+    if (options.stageKey !== undefined) {
+      const entry = this.stages.find((e) => e.jsKey === options.stageKey)
+      if (!entry) throw new Error(`no JavaScript stage under js_key ${options.stageKey}`)
+      if (
+        options.pipelinePtr !== undefined &&
+        entry.pipelinePtr !== options.pipelinePtr
+      ) {
+        throw new Error(
+          `the JavaScript stage ${entry.jsKey} belongs to another pipeline than pipelinePtr`
+        )
+      }
+      return entry
+    }
+    if (options.pipelinePtr !== undefined) {
+      return this.stages.find(
+        (e) => e.pipelinePtr === options.pipelinePtr && runsInWorklet(e)
+      )
+    }
+    const unnamed = this.stages.filter(runsInWorklet)
+    if (unnamed.length > 0) {
+      throw new Error(
+        `JavaScript stage(s) ${unnamed.map((e) => `${e.jsKey} ('${e.descriptor.className}')`).join(', ')} ` +
+          "run pre/post/reset in the worklet: pass the handler pipeline's pipelinePtr or the stageKey " +
+          'to configureAudioWorklet, so the worklet constructs the stage it streams through'
+      )
+    }
+    return undefined
+  }
+
+  /**
+   * Free what `configureAudioWorklet` allocated for `node`: the worklet frees its tensors and
+   * stops calling into the module (it outputs silence from then on), then the worklet
+   * instance's stack and thread-local block and the Static input buffers are freed here. Call it before destroying the
+   * handler the node streams through; a node not configured here is ignored.
+   */
+  async disposeAudioWorklet(node: AudioWorkletNode): Promise<void> {
+    const entry = this.worklets.get(node)
+    if (!entry) return
+    await request<DisposeMessage>(node.port, { type: 'dispose' }, 'disposed')
+    freeInstanceStack(this.module, entry.stack)
+    for (const block of entry.staticInputs) freeStaticInputBlock(this.heap, block)
+    this.worklets.delete(node)
   }
 }

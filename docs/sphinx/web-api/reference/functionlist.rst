@@ -1,7 +1,10 @@
 Function list
 =============
 
-Module-level free functions exported by ``@anira-project/anira``.
+Module-level free functions exported by ``@anira-project/anira``. The C ABI itself is reached
+through the raw ``_anira_*`` exports of :js:attr:`AniraWeb.module`, documented with the C
+headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
+``layout``) and the enums and defines in ``abi/enums.ts``.
 
 WASM bootstrap
 --------------
@@ -10,12 +13,32 @@ WASM bootstrap
 
 .. js:autofunction:: getWasmUrl
 
-Wrappers
---------
+Instance stacks
+---------------
 
-.. js:autofunction:: createInferenceBackend
+.. js:autofunction:: allocInstanceStack
 
-.. js:autofunction:: resolvePtr
+.. js:autofunction:: freeInstanceStack
+
+.. js:autofunction:: enterInstance
+
+.. js:autofunction:: installThreadLocalBlock
+
+Status and errors
+-----------------
+
+.. js:autofunction:: callWithError
+
+.. js:autofunction:: checkStatus
+
+.. js:autofunction:: statusString
+
+Hook records
+------------
+
+.. js:autofunction:: readStageContext
+
+.. js:autofunction:: readLogRecord
 
 Workers
 -------
@@ -24,13 +47,17 @@ Workers
 
 .. js:autofunction:: waitForWorkerMessage
 
+.. js:autofunction:: request
+
+.. js:autofunction:: nextRequestId
+
 Helpers
 -------
 
-.. js:autofunction:: randomSample
-
-.. js:autofunction:: fillBuffer
-
-.. js:autofunction:: pushBufferToRingbuffer
-
 .. js:autofunction:: getAniraVersion
+
+.. js:autofunction:: drainAniraLog
+
+.. js:autofunction:: startLogPump
+
+.. js:autofunction:: consoleLogSink

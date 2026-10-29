@@ -211,6 +211,22 @@ public:
      */
     static bool any_loop_active() noexcept;
 
+    /**
+     * @brief The wake word: says that the inference queue may have work, or that a thread was
+     * told to stop.
+     *
+     * Called after every enqueue into the inference queue (Core::enqueue_inference_or_drop, a
+     * stateful session's next dispatch, the drain's requeue) and by request_stop() and stop().
+     * On WebAssembly it increments a process-wide word and wakes every Worker parked on it
+     * (memory.atomic.notify): run_loop()'s last backoff phase parks on the word for at most
+     * 5 ms (memory.atomic.wait32) instead of yielding and sleeping, which in that libc spins
+     * on the clock and keeps a core busy. A notify that misses a parked thread costs that
+     * thread at most the 5 ms bound. Natively it does nothing: the polling loop sleeps and the
+     * blocking one wakes on the queue's semaphore. Wait-free and real-time safe (the audio
+     * thread calls it on every submission).
+     */
+    static void notify_work() noexcept;
+
 private:
     /**
      * @brief Performs inference processing for a specific session

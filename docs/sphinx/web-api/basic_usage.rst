@@ -1,265 +1,211 @@
 Basic Usage
 ===========
 
-This guide walks through the smallest end-to-end ``Anira Web`` setup: loading
-an ONNX model, configuring inference, and wiring it into a Web Audio graph.
-The code follows the `simple-gain-stereo demo <https://anira-project.github.io/anira-web-example>`_ — a stereo
-gain plugin with one streamable audio tensor and one non-streamable scalar
-tensor (the gain value). You can run it live alongside this guide.
+This guide walks through the smallest end-to-end ``Anira Web`` setup: a stereo model run by
+``onnxruntime-web`` (:js:class:`ONNXRuntimeWebBackend`) on an inference Worker, streamed through
+the audio worklet. The configuration is built with the raw ``_anira_*`` exports, the same C
+calls as in :doc:`../usage`; a typed TypeScript API over them follows. The steps:
 
-The flow follows the same eight steps as the C++ :doc:`../usage` guide. Every
-configuration class you know from C++ has a TypeScript equivalent that is
-created via the ``aniraWeb`` instance.
+1. instantiate the module and route the log,
+2. a context, a model config and a pipeline with the JavaScript engine,
+3. the handler and a Hard contract of the render quantum,
+4. an inference Worker,
+5. the audio worklet,
+6. the stop and the teardown.
 
 1. Bootstrap
 ------------
 
-Create the ``AniraWeb`` instance and start the inference worker. The
-instance owns the WebAssembly module, exposes all factories, and routes
-work between threads.
+.. code-block:: typescript
+
+   import {
+     AniraWeb,
+     callWithError,
+     startLogPump,
+     anira_budget_kind,
+     anira_log_drain,
+     anira_wait_strategy,
+     anira_warmup_mode,
+     ONNXRUNTIME_WEB_ENGINE_ID,
+   } from '@anira-project/anira'
+
+   const anira = await AniraWeb.create()
+   const m = anira.module // the raw exports: every anira_* entry as _anira_*
+   const heap = anira.heap // views over the shared memory, malloc/free, C strings
+
+   anira.setLogHook() // every instance's records to the console
+   const stopLogPump = startLogPump(m) // no drain thread on the web
+
+   // A C out-parameter: a heap slot for one pointer, read after the call.
+   const out = heap.malloc(4)
+   const created = (call: (err: number) => number): number => {
+     callWithError(heap, call) // throws an AniraError with the entry's message
+     return heap.readU32(out)
+   }
+
+2. Context, Model Config and Pipeline
+-------------------------------------
+
+The context brings no pool threads on the web: the inference Workers of step 4 are its
+threads. The model config below is the JSON form; ``_anira_model_config_*`` builds the same in
+code. The entry names the JavaScript engine by its id, so the pipeline runs it as
+``ANIRA_ENGINE_CUSTOM`` with that id; its path is the URL ``ONNXRuntimeWebBackend.init()``
+fetches on the Worker.
 
 .. code-block:: typescript
 
-   import { AniraWeb } from '@anira-project/anira'
+   const contextConfig = created((err) => m._anira_context_config_create(out, err))
+   m._anira_context_config_set_threads(contextConfig, 0, anira_wait_strategy.ANIRA_WAIT_SPIN_BACKOFF)
+   m._anira_context_config_set_log_drain(contextConfig, anira_log_drain.ANIRA_LOG_DRAIN_MANUAL, 10)
+   const context = created((err) => m._anira_context_create(contextConfig, out, err))
 
-   const aniraWeb = await AniraWeb.create()
-   await aniraWeb.spinUpInferenceWorker()
+   const modelJson = JSON.stringify({
+     models: [{ engine: ONNXRUNTIME_WEB_ENGINE_ID, path: new URL('model.onnx', location.href).href }],
+     inputs: [
+       {
+         name: 'audio_in',
+         dtype: 'float32',
+         role: 'streamed',
+         axes: [['batch', 1], ['channel', 2], ['time', 512]],
+         window: { min: 512, max: 512 },
+       },
+     ],
+     outputs: [
+       {
+         name: 'audio_out',
+         dtype: 'float32',
+         role: 'streamed',
+         axes: [['batch', 1], ['channel', 2], ['time', 512]],
+         window: { min: 512, max: 512 },
+       },
+     ],
+   })
+   const model = heap.withCString(modelJson, (json) =>
+     created((err) => m._anira_model_config_from_json(json, modelJson.length, 0, out, err))
+   )
+
+   const pipeline = created((err) => m._anira_pipeline_create(out, err))
+   const variants = heap.malloc(4)
+   heap.writeU32(variants, model)
+   // NULL candidates: the default set, which holds every custom engine an entry names.
+   callWithError(heap, (err) => m._anira_pipeline_add_inference(pipeline, variants, 1, 0, 0, err))
+
+   // The engine object of the pipeline, run on every inference Worker (step 4).
+   await anira.registerJSEngine(pipeline, {
+     engineId: ONNXRUNTIME_WEB_ENGINE_ID,
+     className: 'ONNXRuntimeWebBackend',
+     modelConfigPtr: model,
+   })
+
+``registerJSEngine`` calls ``_anira_em_pipeline_register_js_engine`` (create the engine under
+its id, add it to the pipeline) and has every Worker construct the class and await its
+``init()``. Register before ``_anira_handler_create``: a handler copies the pipeline.
+
+3. Handler and Contract
+-----------------------
+
+The worklet calls the handler once per render quantum, so the Hard contract declares that
+block: ``block_min = block_max = 128`` at the context's sample rate. A call above the declared
+block is refused; when the browser changes the quantum, re-prepare (step 5). A refused call
+throws an :js:class:`AniraError` from ``callWithError`` with the entry's message.
+
+.. code-block:: typescript
 
    const audioContext = new AudioContext({ sampleRate: 48000 })
 
-.. note::
-   ``spinUpInferenceWorker()`` starts the Web Worker that runs model
-   inference off the audio thread. Without it, no inference will execute.
-   See :doc:`architecture` for the threading model.
-
-2. Load the Model
------------------
-
-Fetch the model bytes and wrap them in a ``ModelData`` factory.
-``ModelData`` accepts either an ``ArrayBuffer`` (built-in WASM backends) or
-a URL string (custom JS backends — see :doc:`custom_inference_backends`).
-
-.. code-block:: typescript
-
-   const res = await fetch('simple-gain-stereo.onnx')
-   const modelBuffer = await res.arrayBuffer()
-
-   const vectorModelData = aniraWeb.VectorModelData([
-     aniraWeb.ModelData(modelBuffer, aniraWeb.InferenceBackend.ONNX),
-   ])
-
-3. Tensor Shapes
-----------------
-
-Define the input and output tensor shapes. Each ``TensorShapeList`` entry
-is one tensor; ``TensorShape`` pairs an input list with an output list.
-
-.. code-block:: typescript
-
-   const inputShapeList  = aniraWeb.TensorShapeList([[1, 2, 512], [1]])
-   const outputShapeList = aniraWeb.TensorShapeList([[1, 2, 512], [1]])
-   const tensorShape       = aniraWeb.TensorShape(inputShapeList, outputShapeList)
-   const vectorTensorShape = aniraWeb.VectorTensorShape([tensorShape])
-
-The model has two tensors: ``[1, 2, 512]`` is a stereo audio tensor
-(batch 1, 2 channels, 512 samples per block) and ``[1]`` is the scalar
-gain value.
-
-4. ProcessingSpec
------------------
-
-The :js:class:`ProcessingSpec` describes how each tensor is processed.
-A streamable tensor (continuous audio) has ``preprocess_input_size`` /
-``postprocess_output_size`` greater than zero; a non-streamable tensor
-(asynchronous control values) uses ``0`` and is set/read via
-``setInput`` / ``getOutput``.
-
-.. code-block:: typescript
-
-   const preprocessChannels  = aniraWeb.VectorSizeT([2, 1])
-   const postprocessChannels = aniraWeb.VectorSizeT([2, 1])
-   const preprocessSize      = aniraWeb.VectorSizeT([512, 0])  // tensor 0 streamable, tensor 1 not
-   const postprocessSize     = aniraWeb.VectorSizeT([512, 0])
-
-   const processingSpec = aniraWeb.ProcessingSpec(
-     preprocessChannels,
-     postprocessChannels,
-     preprocessSize,
-     postprocessSize
+   const handler = created((err) => m._anira_handler_create(context, pipeline, out, err))
+   const contract = created((err) =>
+     m._anira_contract_create_hard(128, 128, audioContext.sampleRate, out, err)
    )
+   m._anira_contract_hard_set_budget(contract, anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 2.0)
+   // The default warm-up (UNTIL_STABLE) is refused by this runtime: none, or a fixed count.
+   m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
+   callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
 
-5. InferenceConfig
-------------------
-
-Combine model data, shapes, and the processing spec into an
-:js:class:`InferenceConfig`. The remaining positional arguments mirror
-the C++ struct:
-
-.. code-block:: typescript
-
-   const inferenceConfig = aniraWeb.InferenceConfig(
-     vectorModelData,
-     vectorTensorShape,
-     processingSpec,
-     5,      // max inference time in ms (real-time threshold)
-     10,     // warm-up iterations
-     false,  // session_exclusive_processor
-     0,      // blocking_ratio
-     1       // num_parallel_processors
-   )
-
-6. PrePostProcessor
--------------------
-
-For most models the default :js:class:`PrePostProcessor` is enough.
-``setInput(value, tensorIndex, sampleIndex)`` writes a non-streamable
-input — here the initial gain value:
+4. An Inference Worker
+----------------------
 
 .. code-block:: typescript
 
-   const ppProcessor = aniraWeb.PrePostProcessor(inferenceConfig)
-   ppProcessor.setInput(1, 0, 1)   // gain tensor (tensor 1, channel 0) = 1.0
+   const worker = await anira.spinUpInferenceWorker(context)
 
-If your model needs custom JS-side pre/post-processing, use
-:js:class:`JSPrePostProcessor` instead — see
-:doc:`custom_pre_post_processing`.
+The Worker gets its own stack and thread-local block, the registered JavaScript engine, and
+then runs ``_anira_inference_thread_run_loop`` until stopped; while no job is queued it parks
+on the wake word. Spin up more for more inferences in flight.
 
-7. HostConfig and InferenceHandler
-----------------------------------
-
-The :js:class:`HostConfig` describes the buffer size and sample rate the
-host will deliver. Once the handler is constructed, call ``prepare`` to
-allocate buffers and ``setInferenceBackend`` to pick the runtime.
+5. The Audio Worklet
+--------------------
 
 .. code-block:: typescript
 
-   const hostAudioConfig = aniraWeb.HostConfig(128, 48000, false, 0)
+   await anira.registerAudioWorkletForContext(audioContext)
+   const node = await anira.configureAudioWorklet(audioContext, handler, {
+     inputChannels: 2,
+     outputChannels: 2,
+     quantum: 128, // the declared block: the worklet builds its tensors for it now
+     onQuantumChange: (quantum) => {
+       m._anira_contract_hard_set_geometry(contract, quantum, quantum, audioContext.sampleRate)
+       callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
+     },
+   })
+   source.connect(node).connect(audioContext.destination)
 
-   const inferenceHandler = aniraWeb.InferenceHandler(ppProcessor, inferenceConfig)
-   inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.ONNX)
-   inferenceHandler.prepare(hostAudioConfig)
+The worklet instance builds planar host tensors of ``[2, 128]`` at configure and makes one
+``_anira_handler_process`` per quantum, allocating nothing in ``process()``; the output is the
+model's, delayed by the handler's latency (``_anira_handler_get_latency(handler, 0)``
+samples). A missed quantum carries the miss policy's fill (BYPASS by default). When the
+browser renders another quantum the worklet outputs silence and reports it once:
+``onQuantumChange`` re-prepares the handler (resolve a promise when that is asynchronous),
+then the worklet rebuilds its tensors for the new quantum, outside its ``process()``.
 
-.. note::
-   The buffer size you pass here is the host buffer size that the audio
-   worklet will deliver per block (typically ``128`` samples in Web
-   Audio), not the model's tensor size. It is stated in samples of the
-   *reference stream*: by default the first streamable input tensor and, for
-   generator models with no streamable input, the first streamable output
-   tensor. Pass an explicit tensor index (fourth argument) and direction
-   (optional fifth argument, ``tensorIsInput``, default ``true``) to select
-   a different reference.
-
-8. Audio Worklet Wiring
------------------------
-
-In the browser, anira's real-time ``process`` callback runs in an
-``AudioWorkletNode``. ``registerAudioWorkletForContext`` installs the
-worklet module on the given ``AudioContext``; ``configureAudioWorklet``
-returns the connected ``AudioWorkletNode``.
-
-Calling ``registerAudioWorkletForContext`` with no second argument uses
-anira's built-in default worklet, which handles single-tensor in-place
-processing automatically. For multi-tensor or custom buffer sizes you
-pass a custom worklet URL — see :doc:`custom_audio_worklets`.
+A control of the model, such as a gain, is a Static input: add it to the model config
+(``{ name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] }`` in ``inputs``,
+here slot 1), have the worklet serve it and write it from the main thread:
 
 .. code-block:: typescript
 
-   await aniraWeb.registerAudioWorkletForContext(audioContext)
+   const node = await anira.configureAudioWorklet(audioContext, handler, {
+     inputChannels: 2,
+     outputChannels: 2,
+     staticInputs: [1],
+     modelConfigPtr: model,
+   })
+   node.setStaticInput(1, [1.0])
+   slider.oninput = () => node.setStaticInput(1, [Number(slider.value)])
 
-   const inferenceNode = await aniraWeb.configureAudioWorklet(
-     audioContext,
-     inferenceHandler,
-     ppProcessor
-   )
+The worklet pushes a changed value before its next quantum's call, never torn
+(:doc:`custom_audio_worklets`, "Static Inputs").
 
-   const audio = new Audio('vibes.mp3')
-   const sourceNode = audioContext.createMediaElementSource(audio)
-   sourceNode.connect(inferenceNode).connect(audioContext.destination)
-
-9. Runtime Control
-------------------
-
-Non-streamable inputs can be updated from any thread at any time. UI
-handlers typically write directly through the ``PrePostProcessor``:
+6. Stop and Teardown
+--------------------
 
 .. code-block:: typescript
 
-   gainSlider.oninput = () => {
-     ppProcessor.setInput(parseFloat(gainSlider.value), 0, 1)
-   }
+   node.disconnect()
+   await anira.disposeAudioWorklet(node) // the worklet frees its tensors, then its stack goes
+   await worker.stop() // _stop, poll _has_exited, _destroy, 'destroyed', free the Worker's stack
+   m._anira_handler_destroy(handler)
+   m._anira_pipeline_destroy(pipeline)
+   m._anira_contract_destroy(contract)
+   m._anira_model_config_destroy(model)
+   m._anira_context_destroy(context)
+   m._anira_context_config_destroy(contextConfig)
+   heap.free(variants)
+   heap.free(out)
+   stopLogPump()
 
-The audio worklet thread reads the latest value at the start of each
-block.
+``worker.stop()`` requests the exit (``_anira_inference_thread_stop``), waits until the
+Worker has left its loop, which the main thread sees through
+``_anira_inference_thread_has_exited`` (destroying the thread before that is refused), and
+frees the Worker's stack once the Worker says it destroyed its engines.
+``disposeAudioWorklet(node)`` comes before ``_anira_handler_destroy``: the worklet must stop
+calling the handler first.
 
-Cleanup
--------
+Running on the Built-in ONNX Runtime
+------------------------------------
 
-Every Anira Web wrapper exposes a ``destroy()`` method that frees the
-underlying C++ object. JavaScript's garbage collector does not call
-this for you — if you ``new`` a wrapper and never call ``destroy()``,
-the C++ memory leaks for the lifetime of the WebAssembly module. For
-single-model apps that load a model once and keep it running, this is
-harmless; if your app swaps models, recreates handlers, or runs inside
-a long-lived test harness, ``destroy()`` is what you call when you're
-done with each wrapper.
-
-Inference workers are torn down separately. ``spinUpInferenceWorker()``
-returns an ``InferenceWorker`` handle whose ``stop()`` method halts the
-inference thread and terminates the underlying Web Worker:
-
-.. code-block:: typescript
-
-   const worker = await aniraWeb.spinUpInferenceWorker()
-   // ... use the worker ...
-   await worker.stop()
-
-See :doc:`architecture` for the full lifecycle story — which wrappers
-need ``destroy()``, which ones don't, and the order to tear them down
-in.
-
-.. _run-inference-in-javascript:
-
-(Optional) Run Inference in JavaScript
---------------------------------------
-
-The flow above runs the model through the WASM-side ONNX Runtime that
-ships in anira's WebAssembly module. ``Anira Web`` also bundles a
-JavaScript-side engine, :js:class:`ONNXRuntimeWebBackend`, which runs
-the model through ``onnxruntime-web``. Two small changes flip the basic setup over to
-it:
-
-* ``ModelData`` takes a **URL string** instead of an ``ArrayBuffer`` —
-  ``onnxruntime-web`` fetches the model itself.
-* You instantiate the backend, register it with ``aniraWeb``, and pass
-  it to ``InferenceHandler`` as a third argument; the inference
-  backend is then ``InferenceBackend.CUSTOM``.
-
-.. code-block:: typescript
-
-   const vectorModelData = aniraWeb.VectorModelData([
-     aniraWeb.ModelData(
-       new URL('/simple-gain-stereo.onnx', window.location.origin).href,
-       aniraWeb.InferenceBackend.CUSTOM
-     ),
-   ])
-
-   // ... build inferenceConfig, processingSpec, ppProcessor as before ...
-
-   const onnxBackend = aniraWeb.ONNXRuntimeWebBackend(inferenceConfig)
-   await aniraWeb.registerProcessor(onnxBackend, 'ONNXRuntimeWebBackend')
-
-   const inferenceHandler = aniraWeb.InferenceHandler(
-     ppProcessor, inferenceConfig, onnxBackend
-   )
-   inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.CUSTOM)
-
-To plug in a different engine — your own JS implementation, a third
-JS runtime, or GPU code — see :doc:`custom_inference_backends`.
-
-Relation to the C++ API
------------------------
-
-The TypeScript API mirrors the C++ one: most classes and methods have a
-camelCase counterpart with near-identical semantics, so the C++
-:doc:`../usage` guide carries over almost verbatim. See the
-:doc:`reference/index` for the full TypeScript surface.
+The module also carries ONNX Runtime itself (``ANIRA_ENGINE_ONNXRUNTIME`` on
+``ANIRA_PROVIDER_CPU``), run on the inference Worker without a JavaScript engine. Its entry
+names the engine and holds the model bytes, since the module cannot open a file: fetch the
+model, copy it into the heap and add it with ``_anira_model_config_add_model_bytes``; skip
+``registerJSEngine``. Everything else is as above.

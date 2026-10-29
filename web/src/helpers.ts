@@ -1,75 +1,42 @@
-import type { AniraWasmInstance } from './factory'
-import { BufferF } from './wrappers/utils/BufferF'
-import { RingBuffer } from './wrappers/utils/RingBuffer'
+import { anira_log_level } from './abi/enums'
+import type { AniraWasmInstance } from './runtime/createAniraWasm'
+import type { AniraLogRecord } from './runtime/hooks'
+
+/** The library's release identity (`anira_version_string`), e.g. "3.0.0-alpha.2". */
+export const getAniraVersion = (module: AniraWasmInstance): string =>
+  module.UTF8ToString(module._anira_version_string() >>> 0)
 
 /**
- * Mirrors `anira::random_sample()` — uniform sample in [-1.0, 1.0).
+ * Delivers the queued real-time records (`anira_drain_log`) to the sinks: the C sinks of the
+ * contexts and the JavaScript hook of `AniraWeb.setLogHook`. There is no drain thread on the
+ * web; pump it from the main thread (`startLogPump`). Returns the number of records delivered.
  */
-export const randomSample = (): number => Math.random() * 2 - 1
+export const drainAniraLog = (module: AniraWasmInstance): number =>
+  module._anira_drain_log() >>> 0
 
-/**
- * Mirrors `anira::fill_buffer(BufferF&)` — overwrites every sample on every
- * channel with a fresh `randomSample`. Pure TS; goes through the wrapper
- * so it works for any pointer the wrapper owns.
- */
-export const fillBuffer = (buffer: BufferF): void => {
-  const numChannels = buffer.getNumChannels()
-  const numSamples = buffer.getNumSamples()
-  for (let i = 0; i < numChannels; i++) {
-    for (let j = 0; j < numSamples; j++) {
-      buffer.setSample(i, j, randomSample())
-    }
-  }
+/** Pumps `drainAniraLog` on a main-thread interval; returns the function that stops it. */
+export const startLogPump = (
+  module: AniraWasmInstance,
+  intervalMs = 20
+): (() => void) => {
+  const id = setInterval(() => drainAniraLog(module), intervalMs)
+  return () => clearInterval(id)
 }
 
-/**
- * Mirrors `anira::push_buffer_to_ringbuffer(BufferF const&, RingBuffer&)` —
- * pushes every sample of every channel into the ring buffer in order.
- *
- * The `wasmInstance` parameter is kept for signature compatibility; both
- * wrappers carry their own instance, so it is no longer read.
- */
-export const pushBufferToRingbuffer = (
-  _wasmInstance: AniraWasmInstance,
-  buffer: BufferF,
-  ringbuffer: RingBuffer
-): void => {
-  const numChannels = buffer.getNumChannels()
-  const numSamples = buffer.getNumSamples()
-  if (numChannels === 0 || numSamples === 0) {
-    throw new Error('Buffer is empty, cannot push to ring buffer.')
-  }
-  const rbChannels = ringbuffer.getNumChannels()
-  const rbSamples = ringbuffer.getNumSamples()
-  if (rbChannels === 0 || rbSamples === 0) {
-    throw new Error('Ring buffer is not initialized, cannot push samples.')
-  }
-  for (let i = 0; i < numChannels; i++) {
-    for (let j = 0; j < numSamples; j++) {
-      ringbuffer.pushSample(i, buffer.getSample(i, j))
-    }
+/** The console sink: one line per record, at the console level of its anira level. */
+export const consoleLogSink = (record: AniraLogRecord): void => {
+  const line = `[${record.group}] ${record.message}`
+  switch (record.level) {
+    case anira_log_level.ANIRA_LOG_ERROR:
+      console.error(line)
+      break
+    case anira_log_level.ANIRA_LOG_WARNING:
+      console.warn(line)
+      break
+    case anira_log_level.ANIRA_LOG_INFO:
+      console.info(line)
+      break
+    default:
+      console.debug(line)
   }
 }
-
-/**
- * Mirrors `anira::_anira_get_version()` —
- * returns the `ANIRA_VERSION` string.
- */
-export const getAniraVersion = (wasmInstance: AniraWasmInstance): string => {
-  const ptr = wasmInstance._anira_get_version()
-  const view = new Uint8Array(wasmInstance.HEAPU32.buffer, ptr, 256)
-  let end = 0
-  while (end < view.length && view[end] !== 0) end++
-  return new TextDecoder().decode(view.subarray(0, end))
-}
-
-/**
- * Mirrors `anira::_anira_drain_log()` — forwards the log records anira's
- * real-time paths (process/push/pop, the inference workers) queued through
- * tanh-lib's real-time logger to the log sinks (the console by default).
- * There is no drain thread on the web, so call this periodically from the
- * main thread, e.g. on a timer; returns the number of records delivered.
- */
-export const drainAniraLog = (wasmInstance: AniraWasmInstance): number =>
-  wasmInstance._anira_drain_log()
-

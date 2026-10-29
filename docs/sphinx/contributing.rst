@@ -291,7 +291,16 @@ followed by an explicit ``reserved``. A header with ``draft: true`` lives under
 symbol lists and its declaration into a promised header without renaming it; a draft function
 is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
 addition, while a changed arm of a frozen union (an appended one included), a changed
-signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. The
+signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
+with ``platform: emscripten`` is a companion of the ABI for one target (``file:
+anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
+its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)`` (elsewhere it is an
+empty header, so a native consumer may include it, and the reference documents it from any
+host), it declares functions, callbacks, typedefs and defines only, and no
+header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
+export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
+or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any
+other, and ``abi/anira.json`` records the key. The
 generator refuses a member name repeated within one C scope (the fields of a struct, the arms
 of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
 ``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may
@@ -366,6 +375,20 @@ like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
 table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
 ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
 entry, a draft one included, needs its body in the same pull request, on Emscripten too.
+``build_web`` builds the ``wasm-abi`` preset (``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``,
+the one test option WebAssembly allows), whose gates run under node:
+``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
+as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
+of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
+through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
+thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
+which runs a second instance in a ``worker_threads`` Worker inside
+``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
+stop); the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
+``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
+target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~
