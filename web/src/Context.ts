@@ -6,7 +6,8 @@ import type { WithAbi } from './ModelConfig'
 export type ContextOptions = {
   /**
    * The pool: this many inference threads, which anira starts as Wasm Workers; `'auto'` for half
-   * the cores (`ANIRA_THREADS_AUTO`), 0 for none (a host that drives inference itself). Default 1.
+   * the cores (`ANIRA_THREADS_AUTO`), 0 for none (a host that drives inference itself). Default
+   * the context config's, as natively: `ANIRA_THREADS_AUTO` (or the `json`'s value).
    */
   threads?: number | 'auto'
   /**
@@ -46,7 +47,8 @@ export class Context {
         ? abi.anira_context_config_create()
         : abi.anira_context_config_from_json(options.json)
     try {
-      const threads = options.threads ?? (options.json === undefined ? 1 : undefined)
+      // Unset, the config's own: ANIRA_THREADS_AUTO, the native default (one config for both).
+      const threads = options.threads
       if (threads !== undefined) {
         abi.anira_context_config_set_threads(
           config,

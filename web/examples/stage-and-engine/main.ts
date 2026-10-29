@@ -48,9 +48,9 @@ export async function createGainExample(
   anira.setLogHook()
   const stopLogPump = anira.startLogPump()
 
-  // 2. A context whose pool of one Wasm Worker imports the engine's module, and the model
+  // 2. A context whose pool of Wasm Workers imports the engine's module, and the model
   //    config: a streamed audio input, the Static input `gain` (slot 1), a streamed output.
-  const context = Context.create(anira, { threads: 1, workerModule })
+  const context = Context.create(anira, { workerModule }) // the pool: half the cores
   const streamed = (name: string) => ({
     name,
     dtype: 'float32',

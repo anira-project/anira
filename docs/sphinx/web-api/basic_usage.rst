@@ -53,8 +53,9 @@ the console once, through the console method of its level (:doc:`../logging`).
    :end-before: // [context]
    :dedent:
 
-The context's inference threads are Wasm Workers anira starts from C, ``threads`` of them
-(``'auto'``: half the cores). A page with JavaScript engines names the module every Worker
+The context's inference threads are Wasm Workers anira starts from C: as many as the context
+config says, by default ``ANIRA_THREADS_AUTO`` (half the cores, at least one) as on a native
+host; ``threads`` sets a count. A page with JavaScript engines names the module every Worker
 imports first, ``workerModule`` (:doc:`custom_inference_backends`); the built-in engines need
 none.
 

@@ -39,7 +39,7 @@ const anira = await Anira.create()
 anira.setLogHook()
 anira.startLogPump()
 
-const context = Context.create(anira, { threads: 1 })
+const context = Context.create(anira) // a pool of Wasm Workers, half the cores
 // The same files a native host loads; the ONNX entry's model file is fetched beside the config.
 const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
 const contract = (

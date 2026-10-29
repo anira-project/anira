@@ -44,7 +44,7 @@ export async function createModelFileExample(
   // [log]
 
   // [context]
-  const context = Context.create(anira, { threads: 1 })
+  const context = Context.create(anira) // the pool: half the cores, as natively
   // [context]
 
   // [configs]
