@@ -137,7 +137,11 @@ constexpr const char* k_never_opened = "never-opened.bin";
 /// exact copy; another id is what a registered engine runs.
 ModelConfig stream_model(const char* engine_id = k_custom, const char* path = "custom-processor") {
     ModelConfig model;
-    model.add_model_path(engine_id, path);
+    if (path == nullptr) {
+        model.add_model(engine_id);  // an entry without a source
+    } else {
+        model.add_model_path(engine_id, path);
+    }
     TensorSpec in("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
     in.axis(0, ANIRA_AXIS_BATCH, 1)
         .axis(1, ANIRA_AXIS_CHANNEL, 1)
@@ -2252,6 +2256,75 @@ TEST(AbiEngine, AnUnregisteredCustomIdIsNotSupported) {
             << pipe.m_err.message;
         EXPECT_EQ(gain.m_prepared, 0);
     }
+}
+
+// An entry without a source (a NULL path; a JSON entry without "path") runs on a custom engine
+// that declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL: the load sees no path and no bytes. On an
+// engine that does not declare it the entry is ANIRA_ERROR_CONFIG at create, naming the flag.
+TEST(AbiEngine, AnEntryWithoutASourceRunsOnAnEngineThatNeedsNoModel) {
+    const Context context;
+    for (const bool declared : {true, false}) {
+        SCOPED_TRACE(declared ? "the engine needs no model" : "the engine needs a model");
+        GainEngine gain;  // outlives the pipeline, whose carrier's release reads it
+        Pipe pipe;
+        ASSERT_EQ(
+            pipe.add_new_engine(k_gain_id,
+                                gain_desc(gain, declared ? ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL : 0)),
+            ANIRA_OK)
+            << pipe.m_err.message;
+        const ModelConfig model = stream_model(k_gain_id, nullptr);
+        EXPECT_EQ(anira_model_config_model_path(model.native(), 0), nullptr);
+        pipe.add_inference(model);
+        anira_handler* handler = nullptr;
+        if (!declared) {
+            EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_ERROR_CONFIG)
+                << pipe.m_err.message;
+            EXPECT_EQ(handler, nullptr);
+            EXPECT_NE(std::strstr(pipe.m_err.message, "neither a path nor bytes"), nullptr)
+                << pipe.m_err.message;
+            EXPECT_NE(std::strstr(pipe.m_err.message, "ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL"), nullptr)
+                << pipe.m_err.message;
+            continue;
+        }
+        ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+        anira_error err = ANIRA_ERROR_INIT;
+        const anira::ContractHandle contract = explicit_contract();
+        ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        ASSERT_EQ(gain.m_loaded, 1);
+        EXPECT_EQ(kept_of(gain).m_path, "") << "the load reads no path";
+        anira_handler_destroy(handler);
+    }
+}
+
+// The JSON form: an entry without "path" is read, and runs on such an engine.
+TEST(AbiEngine, AJsonEntryWithoutAPathIsAnEntryWithoutASource) {
+    const std::string json = std::string(R"({"models": [{"engine": ")") + k_gain_id +
+                             R"("}], "inputs": [{"name": "in", "dtype": "float32", )"
+                             R"("role": "streamed", "axes": [["batch", 1], ["channel", 1], )"
+                             R"(["time", 64]], "window": {"min": 64, "max": 64}}], )"
+                             R"("outputs": [{"name": "out", "dtype": "float32", )"
+                             R"("role": "streamed", "axes": [["batch", 1], ["channel", 1], )"
+                             R"(["time", 64]], "window": {"min": 64, "max": 64}}]})";
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_model_config* model = nullptr;
+    ASSERT_EQ(anira_model_config_from_json(json.data(), json.size(), nullptr, &model, &err),
+              ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(anira_model_config_model_path(model, 0), nullptr);
+    const Context context;
+    GainEngine gain;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc(gain, ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL)),
+              ANIRA_OK)
+        << pipe.m_err.message;
+    const std::array<const anira_model_config*, 1> variants{model};
+    ASSERT_EQ(anira_pipeline_add_inference(pipe.m_pipeline, variants.data(), 1, nullptr, 0, &err),
+              ANIRA_OK)
+        << err.message;
+    anira_handler* handler = nullptr;
+    EXPECT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_handler_destroy(handler);
+    anira_model_config_destroy(model);
 }
 
 // A built-in engine this build does not carry, named by the candidates, is

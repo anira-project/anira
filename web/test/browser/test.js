@@ -132,14 +132,13 @@ const run = async () => {
   const model = await ModelConfig.fromJson(
     anira,
     JSON.stringify({
-      models: [{ engine: ENGINE_ID, path: 'never-opened.bin' }],
+      models: [{ engine: ENGINE_ID }], // no path: the engine needs no model
       inputs: [
         streamed('in'),
         { name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] },
       ],
       outputs: [streamed('out')],
-    }),
-    { fetchModel: () => false }
+    })
   )
   const pipeline = Pipeline.create(anira)
     .addInference(model)

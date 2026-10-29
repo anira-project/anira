@@ -648,6 +648,17 @@ bool serves_custom_id(const std::string& id, const EngineFacts* engines) {
     return std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
 }
 
+// Whether the registered engine of a custom row declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, which
+// admits an entry without a source (neither a path nor bytes).
+bool needs_no_model(const std::string& id, const EngineFacts* engines) {
+    if (engines == nullptr) { return false; }
+    const auto found = std::ranges::find(engines->m_ids, id);
+    if (found == engines->m_ids.end()) { return false; }
+    const auto at = static_cast<size_t>(found - engines->m_ids.begin());
+    return at < engines->m_flags.size() &&
+           (engines->m_flags[at] & ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL) != 0;
+}
+
 void check_rows(const anira_model_config& model,
                 const anira_backend_id* candidates,
                 uint32_t num_candidates,
@@ -687,8 +698,11 @@ void check_rows(const anira_model_config& model,
                 "' is not in this build (its engines: " + engines_list(enabled_engines()) +
                 "); name the candidates to skip the entries this build cannot load");
         }
-        if (row.m_path.empty() && !row.has_bytes()) {
-            config_error(at_row(i) + "neither a path nor bytes");
+        if (row.m_path.empty() && !row.has_bytes() &&
+            !(row.is_custom() && needs_no_model(row.m_engine_id, engines))) {
+            config_error(at_row(i) + "neither a path nor bytes (an entry without a source is " +
+                         "legal for a custom engine that declares " +
+                         "ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone)");
         }
         for (const Taken& other : taken) {
             if (other.m_engine == row.m_engine && other.m_engine_id == row.m_engine_id &&

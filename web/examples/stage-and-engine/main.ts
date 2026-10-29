@@ -65,14 +65,14 @@ export async function createGainExample(
   const model = await ModelConfig.fromJson(
     anira,
     JSON.stringify({
-      models: [{ engine: DOUBLE_ENGINE, path: 'no-model-file' }],
+      // No path: the engine declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL.
+      models: [{ engine: DOUBLE_ENGINE }],
       inputs: [
         streamed('audio_in'),
         { name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] },
       ],
       outputs: [streamed('audio_out')],
-    }),
-    { fetchModel: () => false }
+    })
   )
 
   // 3. The pipeline: the engine and the stage, under the names their modules define them by.

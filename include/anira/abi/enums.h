@@ -789,8 +789,9 @@ typedef enum anira_phase {
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither
- * a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this
- * pre-release; consumed when a source-less entry can be built, in a later one.
+ * a path nor bytes (anira_model_config_add_model_path with a NULL path; a JSON entry
+ * without "path"). anira_handler_create refuses a source-less entry of any other engine
+ * with ANIRA_ERROR_CONFIG. Reported in anira_plan_info.engine_flags.
  */
 #define ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL 1u
 

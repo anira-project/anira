@@ -81,6 +81,8 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const Derived& derived) {
     const HardContract& hard = *contract.hard();
 
+    // The stand-in source of an entry without one, which nothing opens.
+    static constexpr const char* k_no_source = "anira:no-source";
     std::vector<anira::ModelData> model_data;
     for (const size_t index : derived.m_rows) {
         const ModelEntry& row = model.m_models[index];
@@ -97,8 +99,13 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                 backend,
                 model_function,
                 true);
-        } else {
+        } else if (!row.m_path.empty()) {
             model_data.emplace_back(row.m_path, backend, model_function);
+        } else {
+            // An entry without a source (a custom engine that declares
+            // ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL; validate admits no other): a 2.x ModelData
+            // needs a non-empty source, and the CUSTOM backend the row runs on never reads it.
+            model_data.emplace_back(std::string(k_no_source), backend, model_function);
         }
     }
 

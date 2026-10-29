@@ -767,7 +767,7 @@ headers:
       - kind: define
         name: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL
         value: "1u"
-        doc: "anira_engine_desc.flags bit: a model entry of this engine may have no source, neither a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this pre-release; consumed when a source-less entry can be built, in a later one."
+        doc: "anira_engine_desc.flags bit: a model entry of this engine may have no source, neither a path nor bytes (anira_model_config_add_model_path with a NULL path; a JSON entry without \"path\"). anira_handler_create refuses a source-less entry of any other engine with ANIRA_ERROR_CONFIG. Reported in anira_plan_info.engine_flags."
       - kind: define
         name: ANIRA_ENGINE_FLAG_REALTIME_SAFE
         value: "2u"
@@ -2017,14 +2017,14 @@ headers:
           - {type: anira_model_config*, name: config, doc: "The config."}
           - {type: anira_engine, name: engine, doc: "A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE)."}
           - {type: const char*, name: engine_id, doc: "The custom engine's reverse-URI id (must contain a '.'), copied, beside ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine."}
-          - {type: const char*, name: utf8_path, doc: "Model file path, UTF-8, copied."}
+          - {type: const char*, name: utf8_path, doc: "Model file path, UTF-8, copied; NULL for an entry without a source, which anira_handler_create admits for a custom engine that declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone (the JSON form: an entry without \"path\")."}
           - {type: uint32_t*, name: out_index, doc: "Receives the model index, or NULL."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.1"
         doc: "Appends a model entry that loads from a file, for the engine the pair names (the pair rule of anira_engine). Whether a built-in engine is in this build is decided at anira_handler_create (an entry of an engine the build lacks is skipped when the candidates leave it out, refused when they name it), so a config can name every engine a deployment might have. A custom engine is named by the id anira_custom_engine_create gave it; the entry and the engine's addition to the pipeline (anira_pipeline_add_engine) may come in either order, and an id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM without an id or with an id without a '.'), or a NULL or empty path."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM without an id or with an id without a '.'), or an empty path."
       - kind: function
         name: anira_model_config_add_model_bytes
         returns: anira_status

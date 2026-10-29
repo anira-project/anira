@@ -57,11 +57,10 @@ const run = async () => {
   const model = await ModelConfig.fromJson(
     anira,
     JSON.stringify({
-      models: [{ engine: ENGINE, path: 'never-opened.bin' }],
+      models: [{ engine: ENGINE }],
       inputs: [streamed('in')],
       outputs: [streamed('out')],
-    }),
-    { fetchModel: () => false }
+    })
   )
   const workerModule = new URL('./boot-worker.js', import.meta.url)
 

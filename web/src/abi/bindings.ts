@@ -2093,7 +2093,9 @@ export class AniraBindings {
    *   NONE).
    * @param engine_id The custom engine's reverse-URI id (must contain a '.'), copied,
    *   beside ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine.
-   * @param utf8_path Model file path, UTF-8, copied.
+   * @param utf8_path Model file path, UTF-8, copied; NULL for an entry without a source,
+   *   which anira_handler_create admits for a custom engine that declares
+   *   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone (the JSON form: an entry without "path").
    * @returns What the entry writes to out_index. A failed status throws an AniraError
    *   with the entry's message.
    * Thread: [main-thread]
@@ -2102,7 +2104,7 @@ export class AniraBindings {
     config: number,
     engine: number,
     engine_id: string | null,
-    utf8_path: string
+    utf8_path: string | null
   ): number {
     const m = this.module
     const sp = m.stackSave()

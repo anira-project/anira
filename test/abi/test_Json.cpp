@@ -281,8 +281,6 @@ TEST(AbiJsonModel, AProviderKeyPinsTheEntry) {
 TEST(AbiJsonModel, RejectionsNameTheKeyPath) {
     EXPECT_EQ(load_fails(R"({"models": [{"engine": "foo", "path": "x"}]})", "models[0].engine"),
               ANIRA_ERROR_JSON);
-    EXPECT_EQ(load_fails(R"({"models": [{"engine": "onnxruntime"}]})", "models[0].path"),
-              ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails(R"({"models": [{"path": "x"}]})", "models[0].engine"), ANIRA_ERROR_JSON);
     EXPECT_EQ(load_fails(R"({"inputs": [{"name": "a", "role": "weird"}]})", "inputs[0].role"),
               ANIRA_ERROR_JSON);

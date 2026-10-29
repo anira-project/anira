@@ -429,9 +429,11 @@ Statuses and flags
 The flags are the engine's promises, declared once and reported in
 ``anira_plan_info.engine_flags`` of every plan of the engine (``0`` for a built-in engine):
 
-- ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: a model entry of this engine may have no source.
-  Declared and reported now; consumed when a source-less entry can be built, in a later
-  pre-release (today every entry carries a path or bytes, which the engine is free to ignore).
+- ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: a model entry of this engine may have no source,
+  neither a path nor bytes: ``anira_model_config_add_model_path`` with a NULL path
+  (:cpp:func:`anira::ModelConfig::add_model`), or a JSON entry without ``"path"``. The load
+  then reads no path and no bytes; ``anira_handler_create`` refuses a source-less entry of any
+  other engine (``ANIRA_ERROR_CONFIG``).
 - ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``: ``process`` allocates nothing, takes no lock and makes
   no syscall after prepare. Reported; consumed by a later contract option. No built-in engine
   sets it.

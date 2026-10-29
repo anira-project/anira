@@ -572,7 +572,8 @@ void load_model_v3(const Json& root, const char* base_dir, anira_model_config& c
                     }
                 }
                 if (!has_engine) { fail_json(child(entry_path, "engine"), "required"); }
-                if (entry.m_path.empty()) { fail_json(child(entry_path, "path"), "required"); }
+                // No "path": an entry without a source, which the handler admits for a custom
+                // engine that declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone.
                 cfg.m_models.push_back(std::move(entry));
             }
         } else if (key == "default_engine") {

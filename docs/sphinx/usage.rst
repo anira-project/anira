@@ -629,7 +629,8 @@ document), so a typo never turns into a default.
 
 - ``models[]``: one entry per export, tagged by ``engine`` (``onnxruntime``, ``executorch``,
   ``litert``, ``libtorch``, ``tflite``, or the reverse-URI name of a custom engine) and,
-  when pinned, ``provider``; relative ``path`` values resolve against the file's directory
+  when pinned, ``provider``; ``path`` (required unless the entry's custom engine declares
+  ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``) values resolve, when relative, against the file's directory
   (``from_file``) or the ``base_dir`` argument (``from_json``); ``tensors`` holds the
   per-tensor records of section 1.2, keyed by *your* canonical name: a string is the export's
   name for the tensor, an object has ``name`` and ``layout`` (spec axis indices, ``"insert"``

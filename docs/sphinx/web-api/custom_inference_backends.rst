@@ -46,7 +46,7 @@ id:
 .. code-block:: ts
 
    const model = await ModelConfig.fromJson(anira, JSON.stringify({
-     models: [{ engine: 'org.example.double', path: 'no-model-file' }],
+     models: [{ engine: 'org.example.double' }], // no path: the engine needs no model
      // ...
    }))
    const pipeline = Pipeline.create(anira)
@@ -54,7 +54,7 @@ id:
      .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 
 ``flags`` states the engine's promises (``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: it reads no model
-file). Register before ``Handler.create``: a handler copies the pipeline.
+file, so its model entry needs no ``path``). Register before ``Handler.create``: a handler copies the pipeline.
 
 ONNX Runtime Web
 ----------------

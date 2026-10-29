@@ -1082,12 +1082,15 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_create(anira_model_config**
  * @param engine A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE).
  * @param engine_id The custom engine's reverse-URI id (must contain a '.'), copied, beside
  *        ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine.
- * @param utf8_path Model file path, UTF-8, copied.
+ * @param utf8_path Model file path, UTF-8, copied; NULL for an entry without a source, which
+ *        anira_handler_create admits for a custom engine that declares
+ *        ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone (the JSON form: an entry without
+ *        "path").
  * @param out_index Receives the model index, or NULL.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a
  *         pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM
- *         without an id or with an id without a '.'), or a NULL or empty path.
+ *         without an id or with an id without a '.'), or an empty path.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
