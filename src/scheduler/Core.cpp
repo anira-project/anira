@@ -1545,10 +1545,12 @@ void Core::start_thread_pool_locked(State& state) {
     if (!state.m_thread_pool.empty()) { watch_process_exit(); }
 #endif
     for (const auto& i : state.m_thread_pool) {
+        // A start without the memory for its thread throws (WebAssembly: the Worker's region,
+        // ANIRA_ERROR_OUT_OF_MEMORY).
         if (!i->is_running() && !i->start()) {
             // Waiting for is_running() below would never return: say it instead.
             throw std::runtime_error(
-                "anira: the operating system refused to create an "
+                "anira: the operating system (or the browser) refused to create an "
                 "inference thread of the pool");
         }
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }

@@ -25,8 +25,9 @@ inline constexpr size_t k_worker_stack_bytes = size_t{4} * 1024 * 1024;
 /// A module that fails to load is reported on the console and the entry is called all the same.
 /// Once the entry returned (or was skipped), the worker's JavaScript stores 1 to the record's
 /// left word, after its last C frame: from then on the worker runs no C code and its region may
-/// go (has_left). Returns a worker of id 0 when the worker or its region cannot be created.
-/// Main thread.
+/// go (has_left). Returns a worker of id 0 when the browser refuses to create the worker;
+/// throws anira::StatusError(ANIRA_ERROR_OUT_OF_MEMORY) when its region or record cannot be
+/// allocated. Main thread.
 Worker start_worker(const std::string& module_url, void (*enter)(void*), void* arg);
 
 /// Cancels a worker that has not called its entry yet: true, and the worker is handed to the

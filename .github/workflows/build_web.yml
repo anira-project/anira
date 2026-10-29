@@ -51,6 +51,23 @@ jobs:
         with:
           PRESET: wasm-abi
 
+      # The node gate anira_em_oom, config.html and the model-file example load a bundled model
+      # config (extras/models/model-pool/gain.model.json) and its model file: the fixture trees,
+      # restored from the cache warm_caches.yml keeps, else fetched at their pins.
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+      - name: fetch the model fixtures
+        run: cmake -P extras/fetch-models.cmake
+
       # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
       # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
       # emsdk's, the CMAKE_CROSSCOMPILING_EMULATOR of the configure.
@@ -120,23 +137,6 @@ jobs:
       - name: check the bundles carry no onnxruntime-web
         working-directory: web
         run: npm run check:bundle
-
-      # config.html and the model-file example load a bundled model config (extras/models/model-pool/gain.model.json) and
-      # fetches its model file: the fixture trees, restored from the cache warm_caches.yml
-      # keeps, else fetched at their pins.
-      - name: restore the model fixtures
-        uses: actions/cache/restore@v4
-        with:
-          path: |
-            extras/models/hybrid-nn/GuitarLSTM
-            extras/models/cnn/steerable-nafx
-            extras/models/stateful-rnn/stateful-lstm
-            extras/models/model-pool/example-models
-            extras/models/third-party/ircam-acids/RAVE
-          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
-          enableCrossOsArchive: true
-      - name: fetch the model fixtures
-        run: cmake -P extras/fetch-models.cmake
 
       # The built package in headless Chromium and Firefox (served with COOP/COEP).
       # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm

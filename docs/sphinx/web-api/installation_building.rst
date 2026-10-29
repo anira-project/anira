@@ -174,13 +174,24 @@ The ``wasm-abi`` preset builds the same module plus the ABI gates that run under
 (two threads of one module build and tear down handlers at once), the pool test (a context
 whose two Wasm Workers import a worker module with a JavaScript engine) and the console test (a
 consumer of the archive alone sees a warning once, as ``console.warn``) and the runtime test (a
-module that links the archive never exits its runtime on its own).
+module that links the archive never exits its runtime on its own) and the out-of-memory test (a
+full heap refuses a handler with a status, not an abort).
 
 A module of your own that links ``libanira.a`` gets two objects whatever it calls: the console
 sink and the runtime that never exits on its own (the library depends on Emscripten's
 ``noExitRuntime``; without it, a ``-pthread`` module ends its runtime after the first callback
 into C that runs with no keepalive held, and drops every later one). ``noExitRuntime`` is
 ``!EXIT_RUNTIME``: an app that links with ``-sEXIT_RUNTIME=1`` owns its runtime's lifetime.
+
+Out of memory is a status, ``ANIRA_ERROR_OUT_OF_MEMORY`` (an ``AniraError`` in the typed layer),
+not an abort of the module: the library links ``-sABORTING_MALLOC=0`` into every module that uses
+it, so ``malloc`` returns NULL and ``operator new`` throws ``std::bad_alloc`` with the fixed memory
+(``ALLOW_MEMORY_GROWTH=0``), and every C entry turns that into the status. A failed handler
+creation or prepare leaves nothing behind. A module of your own that prefers the abort passes
+``-sABORTING_MALLOC=1`` after anira's options: the last ``-s`` wins. For sizing the 512 MiB: the
+core takes about 170 MiB once the first context exists, a handler about 1.5 MiB beside its
+model's instances (each loaded model instance holds its own copy of the model's weights: about
+16.5 MiB per instance of a 16 MB RAVE export), and every inference thread a 4 MiB stack.
 
 .. code-block:: bash
 

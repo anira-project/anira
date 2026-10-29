@@ -370,7 +370,13 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     # (em_runtime.cpp, the noExitRuntime dependency).
     target_link_options(${PROJECT_NAME} INTERFACE
         "-Wl,--undefined=anira_em_console_anchor"
-        "-Wl,--undefined=anira_em_runtime_anchor")
+        "-Wl,--undefined=anira_em_runtime_anchor"
+        # Out of memory is a status (ANIRA_ERROR_OUT_OF_MEMORY), not an abort: malloc returns
+        # NULL and operator new throws std::bad_alloc, which every entry's firewall turns into
+        # the status. Emscripten's default with a fixed memory (ALLOW_MEMORY_GROWTH=0) aborts
+        # the module instead. A consumer that prefers the abort passes -sABORTING_MALLOC=1
+        # after this (the last -s wins).
+        "SHELL:-s ABORTING_MALLOC=0")
     # A Wasm executable that links the library (AniraWeb and the node gates of test/abi) peaks
     # at about 4.9 GB while it links (anira_em_pool, measured on 2026-10-29); four at once ran a
     # 16 GB CI runner out of memory. Those links join this Ninja pool, so at most two run at a time.

@@ -319,6 +319,26 @@ if(_abi_on_wasm)
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
     set_property(TARGET anira_em_runtime APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
+    # Out of memory as a status: a consumer with AniraWeb's fixed 512 MiB and nothing of its own
+    # about malloc (the library's INTERFACE options make malloc return NULL) fills the heap and
+    # must see a handler on the bundled gain config refused, then prepare once freed.
+    add_executable(anira_em_oom em_oom.c)
+    anira_abi_consumer_target(anira_em_oom C)
+    target_link_libraries(anira_em_oom PRIVATE anira::anira)
+    set_target_properties(anira_em_oom PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_oom PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sNODERAWFS=1
+        -sINITIAL_MEMORY=536870912
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -334,8 +354,10 @@ if(_abi_on_wasm)
             "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_console>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_runtime>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_oom>
+            "${anira_SOURCE_DIR}/extras/models/model-pool/gain.model.json"
         DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
-            anira_em_console anira_em_runtime
+            anira_em_console anira_em_runtime anira_em_oom
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

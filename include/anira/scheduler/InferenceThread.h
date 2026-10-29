@@ -126,8 +126,12 @@ public:
      * @brief Starts the thread: a real-time priority OS thread running run_loop() (native), a
      * Wasm Worker that imports the worker module and then runs run_loop() (WebAssembly).
      *
-     * @return False when the thread is already running, or (native) when the operating
-     *         system refused to create it; is_running() stays false in the latter case.
+     * @return False when the thread is already running, or when the operating system (native)
+     *         or the browser (WebAssembly) refused to create it; is_running() stays false in
+     *         the latter case.
+     * @throws std::exception (WebAssembly) when there is no memory for the Worker's region (its
+     *         stack and thread-locals): the C entries return it as ANIRA_ERROR_OUT_OF_MEMORY, and
+     *         is_running() stays false.
      */
     bool start();
 

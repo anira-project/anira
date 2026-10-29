@@ -1,6 +1,7 @@
 // The Wasm Workers of InferenceThread::start on WebAssembly: see em_worker.h.
 #include "em_worker.h"
 
+#include <anira/abi/status.h>
 #include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <emscripten/emscripten.h>
@@ -11,8 +12,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <new>
 #include <string>
 #include <vector>
+
+#include "../../utils/StatusError.h"
 
 namespace {
 
@@ -164,9 +168,22 @@ Worker start_worker(const std::string& module_url, void (*enter)(void*), void* a
     const size_t tls_align =
         __builtin_wasm_tls_align() > k_align ? __builtin_wasm_tls_align() : k_align;
     const size_t bytes = round_up(k_worker_stack_bytes + __builtin_wasm_tls_size(), tls_align);
+    // Out of memory is the caller's status, named here: a NULL region would otherwise read as
+    // the browser refusing the worker.
     void* region = std::aligned_alloc(tls_align, bytes);
-    if (region == nullptr) { return {}; }
-    auto* boot = new Boot();  // NOLINT(cppcoreguidelines-owning-memory)
+    if (region == nullptr) {
+        throw StatusError(ANIRA_ERROR_OUT_OF_MEMORY,
+                          "inference thread: no memory for the Wasm Worker's region (" +
+                              std::to_string(bytes) + " bytes: its stack and thread-locals)");
+    }
+    Boot* boot = nullptr;
+    try {
+        boot = new Boot();  // NOLINT(cppcoreguidelines-owning-memory)
+    } catch (const std::bad_alloc&) {
+        std::free(region);  // NOLINT(cppcoreguidelines-no-malloc)
+        throw StatusError(ANIRA_ERROR_OUT_OF_MEMORY,
+                          "inference thread: no memory for the Wasm Worker's boot record");
+    }
     boot->m_enter = enter;
     boot->m_arg = arg;
     boot->m_module_url = module_url;

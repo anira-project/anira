@@ -112,7 +112,13 @@ bool InferenceThread::start() {
     // false→true transition alone.
     if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
     m_should_exit.store(false, std::memory_order::release);
-    const em::Worker worker = em::start_worker(m_worker_module, &enter_worker, this);
+    em::Worker worker;
+    try {
+        worker = em::start_worker(m_worker_module, &enter_worker, this);
+    } catch (...) {
+        m_is_running.store(false, std::memory_order::release);
+        throw;  // out of memory for the Worker: the caller's status
+    }
     if (worker.m_id == 0) {
         m_is_running.store(false, std::memory_order::release);
         return false;
