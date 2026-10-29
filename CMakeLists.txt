@@ -362,11 +362,15 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
         src/platform/emscripten/em_audio.cpp
         src/platform/emscripten/em_console.cpp
         src/platform/emscripten/em_hooks.cpp
+        src/platform/emscripten/em_runtime.cpp
         src/platform/emscripten/em_worker.cpp)
-    # The console sink (em_console.cpp) is switched on by its TU's static constructor; a
-    # consumer's link must pull that object out of the archive even when it calls nothing of
-    # it, so every link against anira references its anchor.
-    target_link_options(${PROJECT_NAME} INTERFACE "-Wl,--undefined=anira_em_console_anchor")
+    # Two objects every consumer's module needs whether or not it calls into them, so every
+    # link against anira references their anchors: the console sink (em_console.cpp), switched
+    # on by its TU's static constructor, and the runtime that never exits on its own
+    # (em_runtime.cpp, the noExitRuntime dependency).
+    target_link_options(${PROJECT_NAME} INTERFACE
+        "-Wl,--undefined=anira_em_console_anchor"
+        "-Wl,--undefined=anira_em_runtime_anchor")
     # A Wasm executable that links the library (AniraWeb and the node gates of test/abi) peaks
     # at about 4.9 GB while it links (anira_em_pool, measured on 2026-10-29); four at once ran a
     # 16 GB CI runner out of memory. Those links join this Ninja pool, so at most two run at a time.

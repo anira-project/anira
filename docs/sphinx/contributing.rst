@@ -403,8 +403,10 @@ a second thread of the ``-pthread`` link build, prepare and tear down handlers a
 so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
 a context of two inference threads that anira starts as Wasm Workers, each importing
 ``test/abi/em_pool_module.mjs`` (a JavaScript engine on the scope's registry) before its loop,
-and ``anira_em_console`` (``test/abi/em_console.c``), a consumer of the archive with no export
-list that logs one warning and must see it once, through ``console.warn``;
+``anira_em_console`` (``test/abi/em_console.c``), a consumer of the archive with no export
+list that logs one warning and must see it once, through ``console.warn``, and
+``anira_em_runtime`` (``test/abi/em_runtime.c``), a library module that links the archive with
+none of AniraWeb's flags and must still run a timer callback after a first one;
 the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
 ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the

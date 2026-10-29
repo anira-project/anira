@@ -295,6 +295,30 @@ if(_abi_on_wasm)
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
     set_property(TARGET anira_em_console APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
+    # The runtime that never exits on its own: a -pthread library module (--no-entry) that links
+    # the archive with none of AniraWeb's flags (EXIT_RUNTIME at its default) still runs C after
+    # a timer callback. Its incoming Module API is narrowed as AniraWeb's is: the default one
+    # names noExitRuntime, which includes the symbol and hides the failure.
+    add_executable(anira_em_runtime em_runtime.c)
+    anira_abi_consumer_target(anira_em_runtime C)
+    target_link_libraries(anira_em_runtime PRIVATE anira::anira)
+    set_target_properties(anira_em_runtime PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_runtime PRIVATE
+        --no-entry
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sASSERTIONS=0
+        -sINCOMING_MODULE_JS_API=onRuntimeInitialized,print,printErr
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
+    set_property(TARGET anira_em_runtime APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -309,8 +333,9 @@ if(_abi_on_wasm)
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_pool>
             "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_console>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_runtime>
         DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
-            anira_em_console
+            anira_em_console anira_em_runtime
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

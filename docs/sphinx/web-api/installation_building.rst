@@ -173,7 +173,14 @@ The ``wasm-abi`` preset builds the same module plus the ABI gates that run under
 ``anira/anira_em.h`` and of a loop the host drives on a Wasm Worker of its own, the mutex test
 (two threads of one module build and tear down handlers at once), the pool test (a context
 whose two Wasm Workers import a worker module with a JavaScript engine) and the console test (a
-consumer of the archive alone sees a warning once, as ``console.warn``).
+consumer of the archive alone sees a warning once, as ``console.warn``) and the runtime test (a
+module that links the archive never exits its runtime on its own).
+
+A module of your own that links ``libanira.a`` gets two objects whatever it calls: the console
+sink and the runtime that never exits on its own (the library depends on Emscripten's
+``noExitRuntime``; without it, a ``-pthread`` module ends its runtime after the first callback
+into C that runs with no keepalive held, and drops every later one). ``noExitRuntime`` is
+``!EXIT_RUNTIME``: an app that links with ``-sEXIT_RUNTIME=1`` owns its runtime's lifetime.
 
 .. code-block:: bash
 
