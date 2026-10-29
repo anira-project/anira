@@ -46,11 +46,15 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    quantum is served. Chromium reports the burst as ``baseLatency`` (``audio_context.cc``: the
    larger of the destination's frames per buffer and the render quantum, over the rate, fixed
    when the context is constructed), which ``measureRenderGeometry`` returns at once, rounded up
-   to whole quanta. Gecko's ``baseLatency`` is 0 by its definition (no buffering between the graph
-   and the audio subsystem), and its ``outputLatency`` is the output's delay, not the callback's
-   size; there a probe ``AudioWorklet`` watches ``process()`` calls for about 300 ms (after a
-   100 ms lead-in) and takes the longest run of back-to-back calls. The probe needs a running
-   context, so ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by
+   to whole quanta: a device buffer need not be a multiple of the quantum (441 frames, 9.1875 ms
+   at 48 kHz, on a CI runner, which renders 3 or 4 quanta per callback: a burst of 512). Gecko's
+   ``baseLatency`` is 0 by its definition (no buffering between the graph and the audio
+   subsystem), and its ``outputLatency`` is the output's delay, not the callback's size; there a
+   probe ``AudioWorklet`` watches ``process()`` calls for about 300 ms (after a 100 ms lead-in)
+   and takes the longest run of back-to-back calls. The probe may measure more than the device
+   buffer, never less: on a loaded machine two callbacks can run almost back to back and merge
+   into one run (640 frames against the 512 above), which only sizes the handler a little larger.
+   The probe needs a running context, so ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by
    quantum: its burst is one quantum.
 
 The geometry is explicit: the page measures it and declares it.

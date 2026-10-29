@@ -1,16 +1,18 @@
 // A live AudioContext (Chromium only: headless Firefox keeps a live context suspended, it has no
-// audio output to run against). A live context renders each device callback as a burst of
-// render quanta back to back (headless Chromium: 2048 frames, 16 quanta), so a handler must be
-// prepared for blocks up to that burst for its inferences to keep up. measureRenderGeometry
-// gives the geometry: from baseLatency, and from the probe (forced) the same. The bundled gain
+// audio output to run against). A live context renders each device callback as a burst of render
+// quanta back to back (headless Chromium: 2048 frames, 16 quanta), so a handler must be prepared
+// for blocks up to that burst for its inferences to keep up. measureRenderGeometry gives the
+// geometry: from baseLatency, and from the probe (forced) the same or up to two quanta more (a
+// device buffer of 441 frames reads as 512; a loaded runner's probe saw 640). The bundled gain
 // config (extras/models/model-pool/gain.model.json, the built-in ONNX Runtime engine) is prepared
 // with it and the miss policy ZEROS, a tone streams through the handler's audio node, and a tap
-// after the node counts the quanta that are all zero (a missed quantum: the tone never is) once
-// the stream has started. Expected: 0. Then a node streaming at block_max = one quantum (which
-// misses) is re-prepared mid-stream at the measured geometry through audioNode.prepare: a plain
-// handler.prepare is refused meanwhile, the output goes on, the latency read back changes, and
-// no quantum misses after the re-prepare. Where the browser takes renderSizeHint "hardware", the
-// geometry is one quantum of the device's size. The verdict is window.anira_test_result.
+// after the node counts the quanta that are all zero (a missed quantum: the tone never is) once the
+// stream has started. Expected: 0. Then a node streaming at block_max = one quantum (which misses
+// where the burst exceeds its latency) is re-prepared mid-stream through audioNode.prepare to a
+// block_max past that latency: a plain handler.prepare is refused meanwhile, the output goes on,
+// the latency read back changes, and no quantum misses after the re-prepare. Where the browser
+// takes renderSizeHint "hardware", the geometry is one quantum of the device's size. The verdict is
+// window.anira_test_result.
 import {
   Anira,
   AniraError,
@@ -142,9 +144,12 @@ const run = async () => {
       `${audio.baseLatency})`
   )
   const probed = await measureRenderGeometry(audio, { probe: true })
+  // The probe never under-reports, and may over-report: on a loaded machine two device
+  // callbacks can run almost back to back and merge into one run.
   check(
-    probed.burst === geometry.burst,
-    `the probe measures the same burst: ${probed.burst} frames`
+    probed.burst >= geometry.burst && probed.burst <= geometry.burst + 2 * quantum,
+    `the probe measures the burst read, up to two quanta more: ${probed.burst} frames ` +
+      `(read ${geometry.burst})`
   )
 
   // At the measured geometry: no quantum misses once the stream runs.
@@ -157,10 +162,25 @@ const run = async () => {
   )
   sized.stop()
 
-  // A node at block_max = one quantum, re-prepared mid-stream at the measured geometry.
+  // A node at block_max = one quantum, re-prepared mid-stream at a block_max past its latency.
+  // It misses only where the burst exceeds its latency (a device buffer of 2048 frames against
+  // the latency of 128/128; not one of 512).
   const small = await stream(anira, audio, { quantum, burst: quantum })
   const before = await small.count()
   const latencyBefore = small.handler.latency()
+  if (geometry.burst > latencyBefore) {
+    check(
+      before.zeros > 0,
+      `at block_max ${quantum}: ${before.zeros} of ${before.blocks} quanta missed (burst ` +
+        `${geometry.burst} > latency ${latencyBefore})`
+    )
+  } else {
+    check(
+      true,
+      `at block_max ${quantum}: the miss demo skipped, the burst ${geometry.burst} is within ` +
+        `the latency ${latencyBefore} (${before.zeros} of ${before.blocks} quanta missed)`
+    )
+  }
   let refused = null
   try {
     small.handler.prepare(small.contract)
@@ -172,16 +192,20 @@ const run = async () => {
       refused.code === anira_status.ANIRA_ERROR_INVALID_STATE,
     `a plain handler.prepare is refused while the node streams (${refused?.message})`
   )
-  small.contract.setGeometry(geometry.quantum, geometry.burst, audio.sampleRate)
+  // Four bursts, doubled until past the latency before: the latency covers block_max, so it
+  // changes.
+  let blockMax = 4 * geometry.burst
+  while (blockMax <= latencyBefore) blockMax *= 2
+  small.contract.setGeometry(geometry.quantum, blockMax, audio.sampleRate)
   const held = performance.now()
   small.audioNode.prepare(small.contract)
   const heldMs = performance.now() - held
   const after = await small.count()
   const latencyAfter = small.handler.latency()
   check(
-    before.zeros > 0 && after.blocks > 0 && after.zeros === 0,
-    `re-prepared mid-stream through the node: ${before.zeros} of ${before.blocks} quanta ` +
-      `missed at block_max ${quantum}, ${after.zeros} of ${after.blocks} after`
+    after.blocks > 0 && after.zeros === 0,
+    `re-prepared mid-stream through the node to block_max ${blockMax}: ${after.zeros} of ` +
+      `${after.blocks} quanta missed after`
   )
   check(
     latencyAfter > latencyBefore,
