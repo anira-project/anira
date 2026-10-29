@@ -109,13 +109,15 @@ if(ANIRA_WITH_ONNXRUNTIME)
     # The backends WASM archive currently ships only include/ + lib/, so the
     # heavy LICENSE/ThirdPartyNotices may be absent; only copy them if present
     # (an empty `cmake -E copy` would fail the build). PACKAGE.txt is always written.
+    # The directory is not cleared first: web/licenses/onnxruntime/ is tracked, and an
+    # archive without the two files would otherwise delete them from the checkout and from
+    # the package, which still links ONNX Runtime.
     set(_ort_license_copy "")
     if(_ort_license_inputs)
         set(_ort_license_copy COMMAND ${CMAKE_COMMAND} -E copy ${_ort_license_inputs} "${_ort_license_dest}/")
     endif()
 
     add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E rm -rf "${_ort_license_dest}"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${_ort_license_dest}"
         ${_ort_license_copy}
         COMMAND ${CMAKE_COMMAND} -E copy
