@@ -274,6 +274,27 @@ if(_abi_on_wasm)
         "-sEXPORTED_FUNCTIONS=@${_smoke_exports}"
         "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"UTF8ToString\"]")
     set_property(TARGET anira_em_pool APPEND PROPERTY LINK_DEPENDS "${_smoke_exports}")
+    # The console sink of WebAssembly: a consumer of the archive with no export list that
+    # calls anira_log alone sees its warning once, through console.warn (em_console.c).
+    add_executable(anira_em_console em_console.c)
+    anira_abi_consumer_target(anira_em_console C)
+    target_link_libraries(anira_em_console PRIVATE anira::anira)
+    set_target_properties(anira_em_console PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_console PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
+    set_property(TARGET anira_em_console APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -287,7 +308,9 @@ if(_abi_on_wasm)
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_mutex>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_pool>
             "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_console>
         DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
+            anira_em_console
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

@@ -171,8 +171,9 @@ build (CI installs ``typescript@5.9`` globally).
 The ``wasm-abi`` preset builds the same module plus the ABI gates that run under node
 (``ANIRA_WITH_ABI_TESTS``): the layout table on wasm32 and the smoke tests of
 ``anira/anira_em.h`` and of a loop the host drives on a Wasm Worker of its own, the mutex test
-(two threads of one module build and tear down handlers at once) and the pool test (a context
-whose two Wasm Workers import a worker module with a JavaScript engine).
+(two threads of one module build and tear down handlers at once), the pool test (a context
+whose two Wasm Workers import a worker module with a JavaScript engine) and the console test (a
+consumer of the archive alone sees a warning once, as ``console.warn``).
 
 .. code-block:: bash
 

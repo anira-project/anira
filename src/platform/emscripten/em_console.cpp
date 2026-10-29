@@ -59,14 +59,20 @@ std::mutex s_mutex;
 anira::detail::LogSinkId s_sink = 0;
 bool s_platform_off = false;
 
-// On from the module's start, before any record: the static constructor of this TU, which
-// the library links whenever it links its log sinks (LogSinks.cpp calls in here).
+// On from the module's start, before any record: the static constructor of this TU. An object
+// of a static archive that nothing references is not linked, and its constructor with it, so
+// every link against anira on WebAssembly references anira_em_console_anchor below
+// (target_link_options INTERFACE -Wl,--undefined in CMakeLists.txt): this TU is in every
+// consumer's module, whatever of the library the consumer calls.
 [[maybe_unused]] const bool k_started = [] {
     anira::em::set_console_sink_enabled(true);
     return true;
 }();
 
 }  // namespace
+
+// The symbol every WebAssembly link of anira pulls in (see k_started). Not part of the ABI.
+extern "C" void anira_em_console_anchor() {}
 
 namespace anira::em {
 
