@@ -222,11 +222,14 @@ protected:
             to_ort_logging_level(static_cast<anira::LogLevel>(info.log_level));
         try {
 #ifdef USE_ANIRA_WEB
-            // No session-owned threads in WebAssembly: the environment carries a global thread
-            // pool of one intra-op thread the sessions run on. The environment copies the
-            // threading options, which die with this scope.
+            // No session-owned threads in WebAssembly: the environment carries global thread
+            // pools of one thread each, the calling one, so ONNX Runtime creates no pthread (the
+            // module links -pthread; a pthread started from the browser's main thread runs only
+            // once that thread yields, so the join at the environment's release would never
+            // return). The environment copies the threading options, which die with this scope.
             Ort::ThreadingOptions threading;
             threading.SetGlobalIntraOpNumThreads(1);
+            threading.SetGlobalInterOpNumThreads(1);
             m_env = Ort::Env(threading, severity, "Default");
 #else
             m_env = Ort::Env(severity, "Default");

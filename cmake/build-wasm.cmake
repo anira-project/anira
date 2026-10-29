@@ -34,8 +34,10 @@ endif()
 # module's threads are Wasm Workers and the Wasm Audio Worklet, created from C on the one
 # imported shared memory; -pthread gives them the threaded libc and libc++, whose mutexes are
 # real futex mutexes across them (the no-pthread libraries' are stubs that lock nothing, and
-# since emsdk 5 do not link). INCOMING_MODULE_JS_API names every Module property the package
-# passes at instantiation (emsdk 6 no longer reads wasmMemory and wasmBinary by default).
+# since emsdk 5 do not link). No code of the module may start a pthread: one started from the
+# browser's main thread runs only once that thread yields, so a join there never returns.
+# INCOMING_MODULE_JS_API names every Module property the package passes at instantiation
+# (emsdk 6 reads neither wasmMemory nor wasmBinary by default).
 set(ANIRA_WASM_LINK_FLAGS "\
   --no-entry \
   -pthread \

@@ -97,9 +97,10 @@ Activate Emscripten
 ~~~~~~~~~~~~~~~~~~~
 
 .. note::
-  We use version 6.0.13 of the Emscripten SDK, the version CI pins. The module links
-  ``-pthread -sWASM_WORKERS -sAUDIO_WORKLET``, which needs emsdk 6: since emsdk 5 the
-  libraries without ``-pthread`` lack the mutexes anira links against.
+  We use version 4.0.23 of the Emscripten SDK, the version CI pins: the prebuilt ONNX Runtime
+  archive the module links (the built-in engine) is built with it, and the libc++ of a later
+  emsdk is not compatible with it. The module links ``-pthread -sWASM_WORKERS
+  -sAUDIO_WORKLET``.
 
 
 The CMake presets reference the Emscripten toolchain through the
@@ -107,14 +108,14 @@ The CMake presets reference the Emscripten toolchain through the
 
 .. code-block:: bash
    # clone emscripten
-   git clone https://github.com/emscripten-core/emsdk.git emsdk-6.0.13
-   cd emsdk-6.0.13
+   git clone https://github.com/emscripten-core/emsdk.git emsdk-4.0.23
+   cd emsdk-4.0.23
 
    # one-time setup
-   ./emsdk install 6.0.13
-   ./emsdk activate 6.0.13
+   ./emsdk install 4.0.23
+   ./emsdk activate 4.0.23
 
-   export EMSDK=/path/to/emsdk-6.0.13
+   export EMSDK=/path/to/emsdk-4.0.23
 
    # sanity-check
    echo "$EMSDK"

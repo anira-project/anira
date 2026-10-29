@@ -241,7 +241,7 @@ pre-release configs and handlers are built with the raw `_anira_*` calls.
 
 #### Building @anira-project/anira from source
 
-If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (6.0.13, the version CI pins) and TypeScript on the `PATH` (`emcc --emit-tsd` runs `tsc`). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
+If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (4.0.23, the version CI pins) and TypeScript on the `PATH` (`emcc --emit-tsd` runs `tsc`). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
 
 ```bash
 git clone https://github.com/anira-project/anira.git

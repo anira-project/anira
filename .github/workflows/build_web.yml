@@ -1,7 +1,8 @@
 name: build_web
 
-# The wasm build runs through the shared cmake-build-wasm action, with anira's emsdk
-# pin (6.0.13) as its EMSDK_VERSION input. The JS/TS npm package build
+# The wasm build runs through the shared cmake-build-wasm action — the emsdk
+# pin lives there, shared across tanh-lab repos (4.0.23: the prebuilt ONNX Runtime
+# archive the module links is built with it). The JS/TS npm package build
 # that follows is anira product code and stays here, in the same job, because
 # it consumes the wasm build outputs.
 
@@ -49,9 +50,6 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
           PRESET: wasm-abi
-          # anira's own pin, above the shared tanh-lab default: the module links -pthread
-          # -sWASM_WORKERS -sAUDIO_WORKLET (cmake/build-wasm.cmake), which emsdk 6 needs.
-          EMSDK_VERSION: "6.0.13"
 
       # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
       # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
