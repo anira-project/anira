@@ -895,6 +895,13 @@ def emit_header(reg: dict, header: dict) -> str:
         f" * {header_path(header)} -- generated from abi/anira.yml by tools/abi/gen.py.",
         " * Do not edit: change the registry and run `python3 tools/abi/gen.py --repo . --write`.",
         " */",
+    ]
+    if platform_macro:
+        # A platform header is generated into include/anira/ beside hand-written headers, so no
+        # directory-wide DisableFormat (include/anira/abi/.clang-format) covers it: the generator
+        # is its formatter too, and clang-format leaves the whole file alone.
+        out.append("// clang-format off")
+    out += [
         f"#ifndef {guard}",
         f"#define {guard}",
         "",
@@ -961,6 +968,8 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append("#endif")
     out.append("")
     out.append(f"#endif /* {guard} */")
+    if platform_macro:
+        out.append("// clang-format on")
     return "\n".join(out) + "\n"
 
 
