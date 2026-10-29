@@ -1,5 +1,6 @@
 import type { AniraBindings } from './abi/bindings'
 import { ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS, anira_status } from './abi/enums'
+import type { Contract } from './Contract'
 import type { WithAbi } from './ModelConfig'
 
 /** How `createAudioNode` builds the node (`anira_em_audio_node_create`). */
@@ -57,49 +58,16 @@ export type AniraAudioNode = {
    * call, never torn (`anira_em_audio_node_set_static_input`).
    */
   setStaticInput(slot: number, values: ArrayBufferView | ArrayLike<number>): void
+  /**
+   * Re-prepare the node's handler under `contract` while the node streams: the way to change the
+   * geometry of a running node (`measureRenderGeometry` again after an output-device change).
+   * The render callback is held off (silence) while the handler re-prepares, then resumes; read
+   * the handler's latency again afterwards. `handler.prepare` refuses while a node streams
+   * through the handler (`anira_em_audio_node_prepare`).
+   */
+  prepare(contract: Contract): void
   /** Stop the node calling the handler and release it (`anira_em_audio_node_destroy`). */
   destroy(): void
-}
-
-/** What `renderBurstFrames` reads of a context: a live `AudioContext` has the two latencies. */
-export type BurstSource = {
-  readonly sampleRate: number
-  readonly baseLatency?: number
-  readonly outputLatency?: number
-  readonly renderQuantumSize?: number
-}
-
-/** The burst assumed of a live context that reports no buffer at all (2048 frames at 48 kHz). */
-const UNKNOWN_BURST_SECONDS = 2048 / 48000
-
-/**
- * The frames a context renders back to back, as one burst of render quanta with no time between
- * them: what a handler's Hard `block_max` must cover so that an inference started in one burst
- * may complete by the next (`Contract.hard({ blockMax })`, `setGeometry(128, blockMax, rate)`;
- * the latency the handler then reports covers the burst). A live `AudioContext` renders one
- * device callback per burst; an `OfflineAudioContext` renders quantum by quantum (the render
- * quantum, 128).
- *
- * The Web Audio spec defines `baseLatency` as the latency of "passing the audio from the
- * AudioDestinationNode to the audio subsystem". Chromium reports the callback buffer there
- * (third_party/blink/renderer/modules/webaudio/audio_context.cc: `base_latency_` is the larger
- * of the destination's frames per buffer and the render quantum, over the rate), which is the
- * burst. Gecko returns 0 (dom/media/webaudio/AudioContext.h: "Gecko does not do any buffering
- * between rendering the audio and sending it to the audio subsystem") although its graph also
- * fills each audio callback with several quanta; there `outputLatency` stands in for it (the
- * audio stream's output latency, `Graph()->AudioOutputLatency()`, taken to cover the callback
- * buffer: an assumption, conservative since it also counts the device's own latency). A context
- * that reports neither (Gecko's before it runs) is assumed to burst 2048 frames at 48 kHz.
- * The result is a whole number of render quanta, at least one.
- */
-export const renderBurstFrames = (context: BurstSource): number => {
-  const quantum = context.renderQuantumSize ?? 128
-  // An OfflineAudioContext has no baseLatency.
-  if (context.baseLatency === undefined) return quantum
-  const base = context.baseLatency
-  const output = context.outputLatency ?? 0
-  const seconds = base > 0 ? base : output > 0 ? output : UNKNOWN_BURST_SECONDS
-  return Math.max(1, Math.ceil((seconds * context.sampleRate) / quantum - 1e-9)) * quantum
 }
 
 // The audio contexts registered with the module (emscriptenRegisterAudioObject), once each.
@@ -217,6 +185,9 @@ export const createAudioNode = async (
         } finally {
           m._free(ptr)
         }
+      },
+      prepare(contract) {
+        abi.anira_em_audio_node_prepare(handle, contract.ptr)
       },
       destroy() {
         abi.anira_em_audio_node_destroy(handle)

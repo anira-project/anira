@@ -31,7 +31,7 @@ import {
   Handler,
   ModelConfig,
   Pipeline,
-  renderBurstFrames,
+  measureRenderGeometry,
 } from '@anira-project/anira'
 
 const audioContext = new AudioContext({ sampleRate: 48000 })
@@ -42,9 +42,11 @@ anira.startLogPump()
 const context = Context.create(anira) // a pool of Wasm Workers, half the cores
 // The same files a native host loads; the ONNX entry's model file is fetched beside the config.
 const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
+await audioContext.resume() // the geometry is measured on a running context
+const geometry = await measureRenderGeometry(audioContext) // the render quantum, the burst
 const contract = (
   await Contract.fromUrl(anira, '/models/gain.contract.json')
-).setGeometry(128, renderBurstFrames(audioContext), audioContext.sampleRate)
+).setGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
 const handler = Handler.create(
   context,
   Pipeline.create(anira).addInference(model)

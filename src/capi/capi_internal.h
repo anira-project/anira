@@ -100,6 +100,11 @@ void report_void_failure(const char* entry) noexcept;
 /// the logger, so this writes at most one line to stderr and never logs.
 void report_void_failure_quiet(const char* entry) noexcept;
 
+/// anira_handler_prepare's work, without its check that no audio node streams through the
+/// handler: the prepare, and on any failure the unprepare, then the rethrow. The audio node's
+/// held re-prepare (anira_em_audio_node_prepare) calls it once its render callback is held off.
+void prepare_or_unprepare(anira_handler& handler, const anira_contract& contract);
+
 /// One hold on thl::Logger's platform sink being off (acquire) or its release: the sink is on
 /// while no one holds it off. The holders are the contexts whose config sets
 /// ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK and, on the web, the JavaScript log hook while it is

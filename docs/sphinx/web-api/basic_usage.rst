@@ -78,10 +78,11 @@ fetches the entry's file relative to the config's URL and attaches it as bytes
 their paths unfetched. A JavaScript engine reads its entry's bytes from that memory in every
 Worker (``load(model)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
 each model file is fetched once. Serve the model files beside the config the way its paths say. A contract
-file may leave the Hard geometry to the host: blocks from the render quantum (128) up to the
-context's burst (``renderBurstFrames``) at the context's rate. A live context renders a device
-callback's worth of quanta back to back, so ``block_max`` must cover that burst for the
-inferences to keep up; the latency the handler reports then covers it too (:doc:`audio_nodes`).
+file may leave the Hard geometry to the host: :js:func:`~renderGeometry.measureRenderGeometry` gives it, blocks
+from the render quantum up to the context's burst at the context's rate. A live context renders
+a device callback's worth of quanta back to back, so ``block_max`` must cover that burst for the
+inferences to keep up; the latency the handler reports then covers it too, and a live context
+must run when it is measured (:doc:`audio_nodes`).
 :js:meth:`ModelConfig.fromJson` and :js:meth:`Contract.hard` build the same in code.
 
 4. The Pipeline and the Handler
@@ -100,6 +101,15 @@ inferences to keep up; the latency the handler reports then covers it too (:doc:
    :language: ts
    :start-after: // [node]
    :end-before: // [node]
+   :dedent:
+
+The handler's latency, in samples, delays the dry path beside the model's, so the two stay
+aligned:
+
+.. literalinclude:: ../../../web/examples/model-file/main.ts
+   :language: ts
+   :start-after: // [latency]
+   :end-before: // [latency]
    :dedent:
 
 The node is a Wasm Audio Worklet node whose render callback is C: per quantum it hands the

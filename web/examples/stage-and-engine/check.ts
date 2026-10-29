@@ -20,7 +20,11 @@ const run = async (): Promise<Result> => {
   check(crossOriginIsolated, 'the page is cross-origin isolated (COOP/COEP)')
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
-  const example = await createGainExample(audio, { gain: GAIN_BEFORE, waitMs: 500 })
+  const example = await createGainExample(audio, {
+    gain: GAIN_BEFORE,
+    waitMs: 500,
+    dryLevel: 0, // the dry path muted for the exact check of the wet one
+  })
   example.gain.setValueAtTime(GAIN_BEFORE, 0)
   example.gain.setValueAtTime(GAIN_AFTER, (CHANGE_QUANTUM * QUANTUM) / RATE)
   const samples = new Float32Array(QUANTUM * QUANTA)
@@ -31,10 +35,11 @@ const run = async (): Promise<Result> => {
   const input = audio.createBuffer(1, samples.length, RATE)
   input.copyToChannel(samples, 0)
   const source = new AudioBufferSourceNode(audio, { buffer: input })
-  source.connect(example.audioNode.node).connect(audio.destination)
+  source.connect(example.input)
+  example.output.connect(audio.destination)
   source.start(0)
   const rendered = (await audio.startRendering()).getChannelData(0)
-  const { latency } = example
+  const latency = example.latency()
 
   // The gain of sample i of input block `block`: the stage ramps over the block the new gain
   // arrives in.
@@ -55,6 +60,12 @@ const run = async (): Promise<Result> => {
     worst < 1e-6,
     `the output is the input times 2 * the stage's gain after ${latency} samples, the gain ` +
       `automated mid-render ramped in over quantum ${CHANGE_QUANTUM} (worst error ${worst})`
+  )
+
+  const delay = example.dry.delayTime.value
+  check(
+    Math.abs(delay - latency / RATE) < 1e-7,
+    `the dry path is delayed by the handler's latency (${delay} s = ${latency} / ${RATE})`
   )
 
   example.teardown()

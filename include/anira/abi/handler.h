@@ -627,7 +627,9 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  *         ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
  *         spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
  *         ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
- *         stage's prepare function returned.
+ *         stage's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
+ *         streams through the handler (WebAssembly: its render callback may be inside a process
+ *         call; re-prepare through anira_em_audio_node_prepare).
  * @par Thread contract
  * [main-thread & !processing]
  * @since ABI 0.2

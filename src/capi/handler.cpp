@@ -1821,6 +1821,17 @@ anira_status enumerate_rows(const std::vector<T>& rows,
 
 namespace anira::capi {
 
+void prepare_or_unprepare(anira_handler& handler, const anira_contract& contract) {
+    try {
+        prepare_handler(handler, contract);
+    } catch (...) {
+        // A failed prepare leaves the handler unprepared whatever step failed: a refused
+        // contract on a prepared handler releases the previous session too.
+        unprepare(handler);
+        throw;
+    }
+}
+
 anira_model_config clone_model_config(const anira_model_config& model) {
     anira_model_config copy;
     copy.m_models = model.m_models;
@@ -2445,14 +2456,14 @@ anira_status ANIRA_CALL anira_handler_prepare(anira_handler* handler,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "handler: NULL contract");
-    try {
-        prepare_handler(*handler, *contract);
-    } catch (...) {
-        // A failed prepare leaves the handler unprepared whatever step failed: a refused
-        // contract on a prepared handler releases the previous session too.
-        unprepare(*handler);
-        throw;
-    }
+    ANIRA_CAPI_REQUIRE(handler->m_audio_nodes.load(std::memory_order_acquire) == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_STATE,
+                       "handler: %u audio node(s) stream through it, whose render callback may "
+                       "be inside a process call; re-prepare through the node "
+                       "(anira_em_audio_node_prepare), which holds the callback off",
+                       handler->m_audio_nodes.load(std::memory_order_relaxed));
+    anira::capi::prepare_or_unprepare(*handler, *contract);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

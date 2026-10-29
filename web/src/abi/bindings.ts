@@ -251,6 +251,7 @@ export interface AbiModule {
   _anira_em_inference_threads_in_loop(): number
   _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number, _14: number): number
   _anira_em_audio_node_set_static_input(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_em_audio_node_prepare(_0: number, _1: number, _2: number): number
   _anira_em_audio_node_destroy(_0: number): void
   _malloc(bytes: number): number
   _free(ptr: number): void
@@ -5532,8 +5533,10 @@ export class AniraBindings {
    *   ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
    *   spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
    *   ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
-   *   stage's prepare function returned. A failed status throws an AniraError with the
-   *   entry's message.
+   *   stage's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
+   *   streams through the handler (WebAssembly: its render callback may be inside a process
+   *   call; re-prepare through anira_em_audio_node_prepare). A failed status throws an
+   *   AniraError with the entry's message.
    * Thread: [main-thread & !processing]
    */
   anira_handler_prepare(handler: number, contract: number): number {
@@ -6893,6 +6896,46 @@ export class AniraBindings {
         m,
         m._anira_em_audio_node_set_static_input(node, slot, bytes, size, err),
         'anira_em_audio_node_set_static_input',
+        err
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
+   * Re-prepares the node's handler under contract while the node lives and its context
+   * runs: the way to change the geometry of a running node (a new block_max after the
+   * output device changed). The render callback is held off first: from its next quantum
+   * it outputs silence and leaves the handler alone, and this call waits (at most 5000
+   * ms, on the main thread; the callback never waits) until the quantum in flight
+   * returned; then anira_handler_prepare's work runs, the node's state that depends on
+   * the prepare is rebuilt off the audio thread (the handler's empty tensors; its Static
+   * inputs are pushed again at the next quantum), and the callback resumes. The quanta in
+   * between are silence. anira_handler_prepare itself refuses while a node streams
+   * through the handler. Nothing allocates on the audio thread.
+   *
+   * @param node A node of anira_em_audio_node_create.
+   * @param contract A Hard contract whose block range holds the context's render quantum;
+   *   copied by the prepare.
+   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for an unknown node or a NULL
+   *   contract; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range
+   *   excludes the render quantum (the handler untouched); ANIRA_ERROR_INVALID_STATE when
+   *   the render callback did not return within the bound (the handler untouched);
+   *   otherwise anira_handler_prepare's statuses, after which a failed prepare leaves the
+   *   handler unprepared and the node silent until a prepare succeeds. A failed status
+   *   throws an AniraError with the entry's message.
+   * Thread: [main-thread]
+   */
+  anira_em_audio_node_prepare(node: number, contract: number): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const err = stackError(m)
+      return checkStatus(
+        m,
+        m._anira_em_audio_node_prepare(node, contract, err),
+        'anira_em_audio_node_prepare',
         err
       )
     } finally {

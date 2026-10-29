@@ -423,6 +423,35 @@ ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_set_static_input(uint32_t 
                                                                        anira_error* err) ANIRA_NOEXCEPT;
 
 /**
+ * @brief Re-prepares the node's handler under contract while the node lives and its context
+ * runs: the way to change the geometry of a running node (a new block_max after the
+ * output device changed). The render callback is held off first: from its next quantum
+ * it outputs silence and leaves the handler alone, and this call waits (at most 5000 ms,
+ * on the main thread; the callback never waits) until the quantum in flight returned;
+ * then anira_handler_prepare's work runs, the node's state that depends on the prepare
+ * is rebuilt off the audio thread (the handler's empty tensors; its Static inputs are
+ * pushed again at the next quantum), and the callback resumes. The quanta in between are
+ * silence. anira_handler_prepare itself refuses while a node streams through the
+ * handler. Nothing allocates on the audio thread.
+ * @param node A node of anira_em_audio_node_create.
+ * @param contract A Hard contract whose block range holds the context's render quantum; copied
+ *        by the prepare.
+ * @param err Nullable.
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for an unknown node or a NULL contract;
+ *         ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the
+ *         render quantum (the handler untouched); ANIRA_ERROR_INVALID_STATE when the render
+ *         callback did not return within the bound (the handler untouched); otherwise
+ *         anira_handler_prepare's statuses, after which a failed prepare leaves the handler
+ *         unprepared and the node silent until a prepare succeeds.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
+                                                              const anira_contract* contract,
+                                                              anira_error* err) ANIRA_NOEXCEPT;
+
+/**
  * @brief Stops the node's render callback calling into the handler (a quantum inside it
  * finishes first, at most its wait bound), disconnects the node and releases its handle;
  * the callback outputs silence and lets the browser drop the node. Destroy the nodes

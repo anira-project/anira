@@ -208,8 +208,8 @@ included in the published package. ``npm test`` runs the unit tests (node, no bu
 ``web/examples/model-file``, and ``node test/browser/run.mjs chromium`` (or ``firefox``, with
 Playwright installed) runs the browser test: the package's pages, the examples' check pages built,
 stage-and-engine's under Vite's dev server, and in Chromium a live ``AudioContext``
-(``live.html``: no quantum missed at the geometry of ``renderBurstFrames``; headless Firefox keeps
-a live context suspended). The test's ``config.html`` and the model-file
+(``live.html``: the geometry of ``measureRenderGeometry``, read and probed, no quantum missed at
+it, and a running node re-prepared to it; headless Firefox keeps a live context suspended). The test's ``config.html`` and the model-file
 example load the bundled ``extras/models`` configs and their model files; fetch those first with
 ``cmake -P extras/fetch-models.cmake``.
 

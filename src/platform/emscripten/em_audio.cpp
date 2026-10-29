@@ -90,6 +90,7 @@ struct NodeState {
     std::vector<size_t> m_delivered;
     std::vector<ParamSlot> m_params;
     std::vector<std::unique_ptr<StaticBlock>> m_blocks;
+    bool m_counted = false;  ///< counted in the handler's m_audio_nodes (main thread)
 };
 
 // The node table: a slot per node, never freed, so a render callback that runs after its node
@@ -100,6 +101,9 @@ struct NodeSlot {
     std::atomic<uint32_t> m_generation{0};
     std::atomic<uint32_t> m_open{0};
     std::atomic<uint32_t> m_busy{0};
+    /// 1 while anira_em_audio_node_prepare re-prepares the handler: the callback outputs silence
+    /// and leaves the handler alone (the same handshake as the destroy's, with m_open kept).
+    std::atomic<uint32_t> m_held{0};
     NodeState* m_state = nullptr;  ///< written on the main thread while closed
     EMSCRIPTEN_AUDIO_WORKLET_NODE_T m_node = 0;
 };
@@ -162,6 +166,12 @@ bool render(int num_inputs,
         slot.m_busy.store(0, std::memory_order::seq_cst);
         silence(num_outputs, outputs);
         return false;  // destroyed: the browser may let the node go
+    }
+    if (slot.m_held.load(std::memory_order::seq_cst) != 0) {
+        // Re-preparing on the main thread: silence, the handler untouched.
+        slot.m_busy.store(0, std::memory_order::seq_cst);
+        silence(num_outputs, outputs);
+        return true;
     }
     NodeState& state = *slot.m_state;
     const int frames = num_outputs > 0  ? outputs[0].samplesPerChannel
@@ -284,9 +294,36 @@ void finish(const Pending& pending, anira_status status, EMSCRIPTEN_AUDIO_WORKLE
     __atomic_store_n(pending.m_out_status, static_cast<int32_t>(status), __ATOMIC_RELEASE);
 }
 
+// The node no longer streams through its handler: anira_handler_prepare is legal again once no
+// node does.
+void uncount(NodeState& state) {
+    if (!state.m_counted) { return; }
+    state.m_counted = false;
+    state.m_handler->m_audio_nodes.fetch_sub(1, std::memory_order_acq_rel);
+}
+
 void free_state(NodeSlot& slot) {
+    if (slot.m_state != nullptr) { uncount(*slot.m_state); }
     delete slot.m_state;  // NOLINT(cppcoreguidelines-owning-memory)
     slot.m_state = nullptr;
+}
+
+// Waits, on the main thread, until the slot's render callback is outside its call; false after
+// the bound. The callback never waits for this.
+bool wait_until_idle(NodeSlot& slot, double bound_ms) {
+    const double start = emscripten_get_now();
+    while (slot.m_busy.load(std::memory_order::seq_cst) != 0) {
+        if (emscripten_get_now() - start > bound_ms) { return false; }
+    }
+    return true;
+}
+
+// The handler's empty tensors at every position of the multi call, with the served slots'
+// entries rewritten each quantum; rebuilt after a re-prepare, which rebuilds the handler's.
+void copy_empty_tensors(NodeState& state) {
+    state.m_input_tensors = state.m_handler->m_input_tensors;
+    state.m_output_tensors = state.m_handler->m_output_tensors;
+    state.m_delivered.assign(state.m_output_tensors.size(), 0);
 }
 
 void create_node(EMSCRIPTEN_WEBAUDIO_T context, const Pending& pending) {
@@ -595,9 +632,7 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
     state->m_output_planes.assign(output_planes, nullptr);
     // The handler's empty tensors (one per slot, built at prepare): the multi form's elements of
     // every slot the node does not serve, and of the Static ones (pushed separately).
-    state->m_input_tensors = handler->m_input_tensors;
-    state->m_output_tensors = handler->m_output_tensors;
-    state->m_delivered.assign(state->m_output_tensors.size(), 0);
+    copy_empty_tensors(*state);
     for (uint32_t i = 0; i < num_param_slots; ++i) {
         const anira_tensor_spec* spec = static_spec(*handler, param_slots[i]);
         uint64_t elements = 1;
@@ -704,6 +739,9 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                        k_max_nodes);
     NodeSlot& slot = s_nodes[index];
     slot.m_generation.fetch_add(1, std::memory_order::seq_cst);
+    slot.m_held.store(0, std::memory_order::seq_cst);
+    handler->m_audio_nodes.fetch_add(1, std::memory_order_acq_rel);
+    state->m_counted = true;
     slot.m_state = state.release();
     __atomic_store_n(out_status, static_cast<int32_t>(ANIRA_INCOMPLETE), __ATOMIC_RELEASE);
     *out_node = 0;
@@ -764,18 +802,84 @@ anira_status ANIRA_CALL anira_em_audio_node_set_static_input(uint32_t node,
     ANIRA_CAPI_REQUIRE(false, err, ANIRA_ERROR_INVALID_ARGUMENT, "audio node: no node %u", node);
 } catch (...) { return translate_exception(err, __func__); }
 
+anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
+                                                    const anira_contract* contract,
+                                                    anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(contract != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "audio node: NULL contract");
+    NodeSlot* found = nullptr;
+    for (NodeSlot& s : s_nodes) {
+        if (s.m_node == static_cast<int>(node) && s.m_open.load() != 0 && s.m_state != nullptr) {
+            found = &s;
+            break;
+        }
+    }
+    ANIRA_CAPI_REQUIRE(found != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "audio node: no node %u",
+                       node);
+    NodeSlot& slot = *found;
+    NodeState& state = *slot.m_state;
+    ANIRA_CAPI_REQUIRE(anira_contract_get_kind(contract) == ANIRA_CONTRACT_HARD,
+                       err,
+                       ANIRA_ERROR_CONFIG,
+                       "audio node: the contract is not Hard");
+    double block_min = 0;
+    double block_max = 0;
+    double rate = 0;
+    static_cast<void>(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate));
+    const auto quantum = static_cast<double>(state.m_quantum);
+    ANIRA_CAPI_REQUIRE(block_min <= quantum && quantum <= block_max,
+                       err,
+                       ANIRA_ERROR_CONFIG,
+                       "audio node: the context renders quanta of %.0f frames, the contract "
+                       "declares blocks of %.0f to %.0f",
+                       quantum,
+                       block_min,
+                       block_max);
+    // Hold the callback off: from its next quantum it outputs silence; wait until the one in
+    // flight returns. Then nothing on the audio thread touches the handler or this state.
+    slot.m_held.store(1, std::memory_order::seq_cst);
+    if (!wait_until_idle(slot, 5000.0)) {
+        slot.m_held.store(0, std::memory_order::seq_cst);
+        ANIRA_CAPI_REQUIRE(false,
+                           err,
+                           ANIRA_ERROR_INVALID_STATE,
+                           "audio node: the render callback did not return within 5000 ms; "
+                           "the handler is not re-prepared");
+    }
+    try {
+        anira::capi::prepare_or_unprepare(*state.m_handler, *contract);
+    } catch (...) {
+        // Unprepared: the callback's process calls fail into silence until a prepare succeeds.
+        copy_empty_tensors(state);
+        slot.m_held.store(0, std::memory_order::seq_cst);
+        throw;
+    }
+    // What depends on the prepare, rebuilt off the audio thread: the handler's empty tensors,
+    // and the Static inputs, pushed again at the next quantum.
+    copy_empty_tensors(state);
+    for (ParamSlot& p : state.m_params) { p.m_pushed = false; }
+    for (auto& block : state.m_blocks) {
+        if (block->m_sequence.load(std::memory_order::acquire) != 0) { block->m_pushed = ~0U; }
+    }
+    slot.m_held.store(0, std::memory_order::seq_cst);
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
 void ANIRA_CALL anira_em_audio_node_destroy(uint32_t node) ANIRA_NOEXCEPT try {
     for (NodeSlot& s : s_nodes) {
         if (s.m_node != static_cast<int>(node) || s.m_open.load() == 0) { continue; }
         s.m_open.store(0, std::memory_order::seq_cst);
         // A quantum inside the callback finishes first (it may wait up to the node's wait_ms).
-        const double start = emscripten_get_now();
-        while (s.m_busy.load(std::memory_order::seq_cst) != 0) {
-            if (emscripten_get_now() - start > 5000.0) { break; }
-        }
+        const bool idle = wait_until_idle(s, 5000.0);
         emscripten_destroy_web_audio_node(s.m_node);
         s.m_node = 0;
-        if (s.m_busy.load(std::memory_order::seq_cst) == 0) { free_state(s); }
+        if (s.m_state != nullptr) { uncount(*s.m_state); }
+        if (idle) { free_state(s); }
         return;
     }
 } catch (...) { anira::capi::report_void_failure(__func__); }

@@ -29,7 +29,7 @@ Audio
 
 .. js:autofunction:: AudioNode.createAudioNode
 
-.. js:autofunction:: AudioNode.renderBurstFrames
+.. js:autofunction:: renderGeometry.measureRenderGeometry
 
 Configs
 -------

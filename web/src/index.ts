@@ -12,3 +12,8 @@ export * from './Contract'
 export * from './Pipeline'
 export * from './Handler'
 export * from './AudioNode'
+export {
+  measureRenderGeometry,
+  type RenderGeometry,
+  type RenderGeometryOptions,
+} from './renderGeometry'

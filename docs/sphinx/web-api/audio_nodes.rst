@@ -23,29 +23,95 @@ The node's render callback is C, on the browser's audio thread, once per render 
   handler whose Hard block range excludes the context's render quantum);
 * it allocates nothing and locks nothing.
 
-The handler is prepared under a Hard contract whose smallest block is the render quantum and
-whose largest is the context's burst:
+Destroy the node (``audioNode.destroy()``) before the handler.
 
-.. code-block:: ts
+The Render Geometry
+-------------------
 
-   Contract.hard(anira, {
-     blockMin: 128,
-     blockMax: renderBurstFrames(audioContext),
-     rate: audioContext.sampleRate,
-     budgetMs,
-   })
+The handler is prepared under a Hard contract whose block range is the context's render
+geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
 
-A live ``AudioContext`` does not render one quantum at a time: each device callback renders a
-burst of quanta back to back, with no time between them (2048 frames, 16 quanta, in headless
-Chromium; the device buffer in a browser on real hardware). An inference started in a burst
-cannot complete before the burst's next quantum, so a handler prepared for blocks of 128 alone
-misses most quanta live; with ``block_max`` the burst, the latency the handler reports covers it
-and every quantum is served once the stream runs. :js:func:`~AudioNode.renderBurstFrames` reads
-the burst from the context: Chromium's ``baseLatency`` (its callback buffer), Gecko's
-``outputLatency`` where ``baseLatency`` is 0, 128 for an ``OfflineAudioContext``. Call it once the
-context runs (Gecko reports its latency then). :js:meth:`Handler.createAudioNode` warns on the
-console when the prepared ``block_max`` is below the burst. Destroy the node
-(``audioNode.destroy()``) before the handler.
+``quantum``, the smallest block
+   The frames of one ``process()`` call: the context's ``renderQuantumSize`` where the browser has
+   it, else 128. A context's render size is set at construction (``renderSizeHint``: an integer
+   "between 1 sample frame and 6 times the context sample rate, inclusive", Web Audio API,
+   *Supported Render Quantum Sizes*; ``"hardware"`` lets the browser pick the device's size) and
+   only its effect, ``renderQuantumSize``, is observable.
+``burst``, the largest block
+   The frames the context renders back to back. A live ``AudioContext`` renders each device
+   callback as a run of quanta with no time between them (2048 frames, 16 quanta, in headless
+   Chromium; the device buffer on real hardware). An inference started in a run cannot complete
+   before the run's next quantum, so a handler prepared for one quantum alone misses most quanta
+   live; with ``block_max`` the burst, the latency the handler reports covers the run and every
+   quantum is served. Chromium reports the burst as ``baseLatency`` (``audio_context.cc``: the
+   larger of the destination's frames per buffer and the render quantum, over the rate, fixed
+   when the context is constructed), which ``measureRenderGeometry`` returns at once, rounded up
+   to whole quanta. Gecko's ``baseLatency`` is 0 by its definition (no buffering between the graph
+   and the audio subsystem), and its ``outputLatency`` is the output's delay, not the callback's
+   size; there a probe ``AudioWorklet`` watches ``process()`` calls for about 200 ms and takes the
+   longest run of back-to-back calls. The probe needs a running context, so
+   ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by quantum: its
+   burst is one quantum.
+
+The geometry is explicit: the page measures it and declares it.
+
+.. literalinclude:: ../../../web/examples/model-file/main.ts
+   :language: ts
+   :start-after: // [configs]
+   :end-before: // [configs]
+   :dedent:
+
+The handler's latency then covers the burst. A dry path beside the model's waits as long:
+
+.. literalinclude:: ../../../web/examples/model-file/main.ts
+   :language: ts
+   :start-after: // [latency]
+   :end-before: // [latency]
+   :dedent:
+
+:js:meth:`Handler.createAudioNode` warns on the console when the prepared ``block_max`` is
+below the burst the context reports (Chromium); nothing re-prepares on its own.
+
+.. tip::
+   Where the browser takes it, ``new AudioContext({ renderSizeHint: 'hardware' })`` renders one
+   quantum of the device's size per callback, evenly spaced: the burst is one quantum
+   (``block_min == block_max``), the lowest-latency setup. Feature-detect it
+   (``context.renderQuantumSize > 0``), never assume it.
+
+Changing the Geometry of a Running Node
+---------------------------------------
+
+``audioNode.prepare(contract)`` (``anira_em_audio_node_prepare``) re-prepares the node's handler
+while the node streams and its context runs; ``handler.prepare`` refuses then, since the node's
+render callback may be inside a process call. The node's callback is held off first (it outputs
+silence for those quanta and leaves the handler alone), the main thread waits until the quantum
+in flight returned (bounded; the audio thread never waits), the handler re-prepares, the node's
+state that depends on the prepare is rebuilt off the audio thread, and the callback resumes.
+In headless Chromium the hold lasts about 2 ms, under one burst. Read the handler's latency
+again afterwards.
+
+Device changes
+   Chromium keeps the ``baseLatency`` of the device the context was created on, so after an
+   output-device change the page measures with the probe, declares the new geometry and
+   re-prepares through the node:
+
+   .. literalinclude:: ../../../web/examples/model-file/main.ts
+      :language: ts
+      :start-after: // [device]
+      :end-before: // [device]
+      :dedent:
+
+   It is the page's call, not anira's: the page switches the device (``setSinkId``), and the
+   page decides whether a latency change mid-stream is acceptable. anira does not listen for
+   ``sinkchange``; a page that does:
+
+   .. literalinclude:: ../../../web/examples/model-file/main.ts
+      :language: ts
+      :start-after: // [sinkchange]
+      :end-before: // [sinkchange]
+      :dedent:
+
+   A change of the operating system's default device may fire no event at all.
 
 A Model with Several Streams
 ----------------------------

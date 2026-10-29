@@ -2,7 +2,8 @@
 // serves the repository's extras/models at /extras/models/): the bundled gain config rendered
 // offline on the built-in ONNX Runtime engine, with the gain automated mid-render. The model
 // applies the gain of the block it runs on, so each output block is its input block times the
-// gain of that quantum, the handler's latency later. The verdict is window.anira_test_result.
+// gain of that quantum, the handler's latency later (the dry path muted for the exact check), and
+// the dry path's delay is that latency. The verdict is window.anira_test_result.
 import { createModelFileExample } from './main'
 
 const RATE = 48000
@@ -25,6 +26,7 @@ const run = async (): Promise<Result> => {
     modelsUrl: new URL('/extras/models/model-pool/', location.href),
     gain: GAIN_BEFORE,
     waitMs: 500,
+    dryLevel: 0,
   })
   example.gain.setValueAtTime(GAIN_BEFORE, 0)
   example.gain.setValueAtTime(GAIN_AFTER, (CHANGE_QUANTUM * QUANTUM) / RATE)
@@ -36,10 +38,11 @@ const run = async (): Promise<Result> => {
   const input = audio.createBuffer(1, samples.length, RATE)
   input.copyToChannel(samples, 0)
   const source = new AudioBufferSourceNode(audio, { buffer: input })
-  source.connect(example.audioNode.node).connect(audio.destination)
+  source.connect(example.input)
+  example.output.connect(audio.destination)
   source.start(0)
   const rendered = (await audio.startRendering()).getChannelData(0)
-  const { latency } = example
+  const latency = example.latency()
 
   let worst = 0
   for (let j = 0; j + latency < rendered.length; j++) {
@@ -52,6 +55,12 @@ const run = async (): Promise<Result> => {
     worst < 1e-6,
     `the output is the input times the model's Static gain after ${latency} samples, the gain ` +
       `automated mid-render from quantum ${CHANGE_QUANTUM} (worst error ${worst})`
+  )
+
+  const delay = example.dry.delayTime.value
+  check(
+    Math.abs(delay - latency / RATE) < 1e-7,
+    `the dry path is delayed by the handler's latency (${delay} s = ${latency} / ${RATE})`
   )
 
   example.teardown()
