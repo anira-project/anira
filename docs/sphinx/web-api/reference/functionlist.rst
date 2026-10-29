@@ -52,6 +52,11 @@ Workers
 
 .. js:autofunction:: nextRequestId
 
+Configs
+-------
+
+.. js:autofunction:: enabledEngines
+
 Helpers
 -------
 

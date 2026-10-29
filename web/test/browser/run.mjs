@@ -1,10 +1,14 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
 // isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a
-// headless browser (Playwright) and prints its checks: test/browser/index.html and ort.html
-// (the package as built) and the custom-worklet example's check page (as its own Vite build
-// bundled it). Exit code 0 when every check passed and the browser refused no load.
-// usage: node test/browser/run.mjs [chromium|firefox]
-//   (after npm run build and npm run examples, from web/; CI runs both browsers)
+// headless browser (Playwright) and prints its checks: test/browser/index.html, ort.html and
+// config.html (the package as built) and the custom-worklet example's check page (as its own
+// Vite build bundled it). The repository's extras/models is served at /extras/models/, so a page
+// fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
+// fetches those) the way a site serves its own. Exit code 0 when every check passed and the
+// browser refused no load.
+// usage: node test/browser/run.mjs [chromium|firefox] [page...]
+//   (after npm run build and npm run examples, from web/; CI runs both browsers; the pages
+//   default to all of them)
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -12,12 +16,15 @@ import { fileURLToPath } from 'node:url'
 import { chromium, firefox } from 'playwright'
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
+const models = path.resolve(root, '../extras/models')
+const MODELS_PREFIX = '/extras/models/'
 const types = {
   '.html': 'text/html',
   '.js': 'text/javascript',
   '.mjs': 'text/javascript',
   '.wasm': 'application/wasm',
   '.json': 'application/json',
+  '.onnx': 'application/octet-stream',
 }
 
 // A bundler resolves the package's extensionless imports of the Emscripten module
@@ -30,8 +37,12 @@ const resolveFile = (file) => {
 
 const server = http.createServer((request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname)
-  const file = resolveFile(path.join(root, pathname))
-  if (!file || !file.startsWith(root)) {
+  const inModels = pathname.startsWith(MODELS_PREFIX)
+  const base = inModels ? models : root
+  const file = resolveFile(
+    path.join(base, inModels ? pathname.slice(MODELS_PREFIX.length) : pathname)
+  )
+  if (!file || !file.startsWith(base)) {
     response.writeHead(404)
     response.end()
     return
@@ -46,11 +57,13 @@ const server = http.createServer((request, response) => {
 await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
 const { port } = server.address()
 
-const pages = [
+const allPages = [
   'test/browser/index.html',
   'test/browser/ort.html',
+  'test/browser/config.html',
   'examples/custom-worklet/dist/check.html',
 ]
+const pages = process.argv.length > 3 ? process.argv.slice(3) : allPages
 
 const browserName = process.argv[2] ?? 'chromium'
 const browserType = { chromium, firefox }[browserName]

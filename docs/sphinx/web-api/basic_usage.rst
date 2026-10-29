@@ -1,6 +1,17 @@
 Basic Usage
 ===========
 
+.. note::
+   **One config file for native and web.** The model and contract files of a native host load
+   unchanged: ``await ModelConfig.fromUrl(anira, 'models/gain.model.json')`` parses the file
+   (``anira_model_config_from_json``) and fetches the model file of every entry whose engine the
+   module compiled in, relative to the file's URL, attaching it as bytes
+   (``anira_model_config_set_model_bytes``); ``await Contract.fromUrl(anira,
+   'models/gain.contract.json')`` reads a contract file, whose Hard geometry the page sets
+   (``contract.setGeometry(128, 128, audioContext.sampleRate)``). The module's built-in ONNX
+   Runtime engine runs the ``"onnxruntime"`` entries as natively; serve the model files beside
+   the config the way the paths in it say.
+
 This guide walks through the smallest end-to-end ``Anira Web`` setup: a stereo model run by
 ``onnxruntime-web`` (:js:class:`ONNXRuntimeWebBackend`) on an inference Worker, streamed through
 the audio worklet. The configuration is built with the raw ``_anira_*`` exports, the same C
