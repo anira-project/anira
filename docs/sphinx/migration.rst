@@ -1065,4 +1065,8 @@ path is a Wasm Audio Worklet node whose render callback is C.
 move the same way: the worker file's ``setupInferenceWorker({ MyEngine })`` becomes
 ``defineEngine`` calls in the context's worker module, the worklet subclass with its
 ``stageClasses`` becomes ``defineStage`` in a ``workletModules`` module, and
-``configureAudioWorklet`` becomes ``handler.createAudioNode``.
+``configureAudioWorklet`` becomes ``handler.createAudioNode``. Its single-slot options
+``inputChannels``, ``outputChannels``, ``inputSlot`` and ``outputSlot`` become ``inputSlots`` and
+``outputSlots``, lists of Streamed slots whose channel counts come from the model (the default
+is every Streamed slot of the side, so a single-stream model needs neither), with
+``partialStreams`` to leave a Streamed slot unserved (:doc:`web-api/audio_nodes`).
