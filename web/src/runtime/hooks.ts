@@ -1,5 +1,6 @@
 import { ANIRA_EM_HOOKS_VERSION, anira_phase, anira_status } from '../abi/enums'
 import { anira_log_record, anira_stage_ctx } from '../abi/layout'
+import type { AniraBindings } from '../abi/bindings'
 import type { AniraWasmInstance } from './createAniraWasm'
 import type { Heap } from './Heap'
 
@@ -29,6 +30,8 @@ export interface JSStage {
 /** What a JavaScript stage class is constructed with, on each instance that runs it. */
 export type JSStageEnv = {
   module: AniraWasmInstance
+  /** The instance's typed C ABI. */
+  abi: AniraBindings
   heap: Heap
 }
 

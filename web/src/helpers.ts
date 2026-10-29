@@ -1,25 +1,25 @@
 import { anira_log_level } from './abi/enums'
-import type { AniraWasmInstance } from './runtime/createAniraWasm'
+import type { AniraBindings } from './abi/bindings'
 import type { AniraLogRecord } from './runtime/hooks'
 
 /** The library's release identity (`anira_version_string`), e.g. "3.0.0-alpha.2". */
-export const getAniraVersion = (module: AniraWasmInstance): string =>
-  module.UTF8ToString(module._anira_version_string() >>> 0)
+export const getAniraVersion = (anira: { abi: AniraBindings }): string =>
+  anira.abi.anira_version_string() ?? ''
 
 /**
  * Delivers the queued real-time records (`anira_drain_log`) to the sinks: the C sinks of the
  * contexts and the JavaScript hook of `AniraWeb.setLogHook`. There is no drain thread on the
  * web; pump it from the main thread (`startLogPump`). Returns the number of records delivered.
  */
-export const drainAniraLog = (module: AniraWasmInstance): number =>
-  module._anira_drain_log() >>> 0
+export const drainAniraLog = (anira: { abi: AniraBindings }): number =>
+  anira.abi.anira_drain_log()
 
 /** Pumps `drainAniraLog` on a main-thread interval; returns the function that stops it. */
 export const startLogPump = (
-  module: AniraWasmInstance,
+  anira: { abi: AniraBindings },
   intervalMs = 20
 ): (() => void) => {
-  const id = setInterval(() => drainAniraLog(module), intervalMs)
+  const id = setInterval(() => drainAniraLog(anira), intervalMs)
   return () => clearInterval(id)
 }
 

@@ -13,7 +13,7 @@ import {
   anira_role,
 } from '../abi/enums'
 import { anira_tensor } from '../abi/layout'
-import type { AniraWasmInstance } from '../runtime/createAniraWasm'
+import type { AniraBindings } from '../abi/bindings'
 import type { Heap } from '../runtime/Heap'
 
 /**
@@ -85,34 +85,26 @@ const numberArrayType = (dtype: number): NumberArrayType | null => {
  * and shape are the spec's, which must be a Static input of concrete extents.
  */
 export const allocStaticInputBlock = (
-  module: AniraWasmInstance,
+  abi: AniraBindings,
   heap: Heap,
   modelConfigPtr: number,
   slot: number
 ): StaticInputBlock => {
-  const spec = module._anira_model_config_input(modelConfigPtr, slot) >>> 0
+  const spec = abi.anira_model_config_input(modelConfigPtr, slot)
   if (spec === 0) {
     throw new RangeError(`staticInputs: slot ${slot} is not an input of the model config`)
   }
-  if (module._anira_tensor_spec_role(spec) !== anira_role.ANIRA_ROLE_STATIC) {
+  if (abi.anira_tensor_spec_role(spec) !== anira_role.ANIRA_ROLE_STATIC) {
     throw new TypeError(`staticInputs: input slot ${slot} is not a Static input`)
   }
-  const dtype = module._anira_tensor_spec_dtype(spec) >>> 0
+  const dtype = abi.anira_tensor_spec_dtype(spec)
   const elementBytes = Math.ceil((ANIRA_DTYPE_BITS(dtype) * ANIRA_DTYPE_LANES(dtype)) / 8)
-  const ndim = module._anira_tensor_spec_ndim(spec) >>> 0
+  const ndim = abi.anira_tensor_spec_ndim(spec)
   if (elementBytes === 0 || ndim > MAX_RANK) {
     throw new TypeError(`staticInputs: input slot ${slot} has no host layout`)
   }
   const extents: bigint[] = []
-  const scratch = heap.malloc(16)
-  try {
-    for (let i = 0; i < ndim; i++) {
-      module._anira_tensor_spec_axis(spec, i, scratch, scratch + 8)
-      extents.push(heap.readI64(scratch + 8))
-    }
-  } finally {
-    heap.free(scratch)
-  }
+  for (let i = 0; i < ndim; i++) extents.push(abi.anira_tensor_spec_axis(spec, i).extent)
   if (extents.some((extent) => extent < 0n)) {
     throw new TypeError(`staticInputs: input slot ${slot} has a dynamic extent`)
   }
@@ -130,13 +122,7 @@ export const allocStaticInputBlock = (
     elements,
   }
   extents.forEach((extent, i) => heap.writeI64(base + SHAPE_OFFSET + i * 8, extent))
-  module._anira_tensor_init_host(
-    block.tensor,
-    block.copy,
-    dtype,
-    ndim,
-    base + SHAPE_OFFSET
-  )
+  abi.anira_tensor_init_host(block.tensor, block.copy, dtype, ndim, base + SHAPE_OFFSET)
   return block
 }
 

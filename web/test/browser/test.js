@@ -51,6 +51,25 @@ const run = async () => {
     refusal === anira_status.ANIRA_ERROR_JSON,
     `a refused call returns its status (${refusal})`
   )
+  // The generated bindings (web/src/abi/bindings.ts): the same refusal thrown as an AniraError
+  // with the entry's message, out parameters returned, strings in and out.
+  let thrown = null
+  try {
+    anira.abi.anira_model_config_from_json('{ not json', null)
+  } catch (error) {
+    thrown = error
+  }
+  check(
+    thrown?.name === 'AniraError' &&
+      thrown.code === anira_status.ANIRA_ERROR_JSON &&
+      thrown.message.startsWith('anira_model_config_from_json: '),
+    `the bindings throw a refused call as an AniraError (${thrown?.message})`
+  )
+  const version = anira.abi.anira_version_string()
+  check(
+    typeof version === 'string' && version.length > 0,
+    `the bindings return strings (${version})`
+  )
 
   const contextConfig = created((err) => m._anira_context_config_create(out, err))
   m._anira_context_config_set_threads(

@@ -1,17 +1,9 @@
 import { ANIRA_FAILED } from '../abi/enums'
 import { anira_error } from '../abi/layout'
+import { AniraError } from '../AniraError'
 import type { Heap } from './Heap'
 
-/** A failed anira status and the message of its `anira_error`. */
-export class AniraError extends Error {
-  readonly code: number
-
-  constructor(code: number, message: string) {
-    super(message)
-    this.name = 'AniraError'
-    this.code = code
-  }
-}
+export { AniraError }
 
 /** The static text of a status (`anira_status_string`). */
 export const statusString = (heap: Heap, status: number): string =>

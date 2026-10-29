@@ -2,9 +2,10 @@ Function list
 =============
 
 Module-level free functions exported by ``@anira-project/anira``. The C ABI itself is reached
-through the raw ``_anira_*`` exports of :js:attr:`AniraWeb.module`, documented with the C
-headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
-``layout``) and the enums and defines in ``abi/enums.ts``.
+through :js:class:`AniraBindings` (``aniraWeb.abi``, generated from the registry) or the raw
+``_anira_*`` exports of :js:attr:`AniraWeb.module`, documented with the C headers
+(:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as ``layout``) and
+the enums and defines in ``abi/enums.ts``.
 
 WASM bootstrap
 --------------

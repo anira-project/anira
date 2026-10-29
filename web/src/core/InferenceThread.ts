@@ -1,6 +1,4 @@
 import type { AniraModule } from '../runtime/createAniraWasm'
-import { Heap } from '../runtime/Heap'
-import { callWithError } from '../runtime/Status'
 
 const POLL_INTERVAL_MS = 1
 
@@ -37,24 +35,15 @@ export class InferenceThread {
 
   /** `anira_inference_thread_create` over the context's core. */
   static create(anira: AniraModule, contextPtr: number): InferenceThread {
-    const { heap, module } = anira
-    const out = heap.malloc(4)
-    try {
-      callWithError(heap, (err) =>
-        module._anira_inference_thread_create(contextPtr, out, err)
-      )
-      return new InferenceThread(anira, heap.readU32(out))
-    } finally {
-      heap.free(out)
-    }
+    return new InferenceThread(anira, anira.abi.anira_inference_thread_create(contextPtr))
   }
 
   hasExited(): boolean {
-    return this.anira.module._anira_inference_thread_has_exited(this.ptr) !== 0
+    return this.anira.abi.anira_inference_thread_has_exited(this.ptr)
   }
 
   isRunning(): boolean {
-    return this.anira.module._anira_inference_thread_is_running(this.ptr) !== 0
+    return this.anira.abi.anira_inference_thread_is_running(this.ptr)
   }
 
   /**
@@ -63,9 +52,8 @@ export class InferenceThread {
    * entry, so a later `stop()` never reads a stale one).
    */
   async start(post: () => void, timeoutMs = 5000): Promise<void> {
-    const { heap, module } = this.anira
     const exitedBefore = this.hasExited()
-    callWithError(heap, (err) => module._anira_inference_thread_start(this.ptr, err))
+    this.anira.abi.anira_inference_thread_start(this.ptr)
     this.started = true
     post()
     if (exitedBefore) {
@@ -75,7 +63,7 @@ export class InferenceThread {
 
   /** Requests the exit and resolves once the Worker left the loop (`has_exited`). */
   async stop(timeoutMs = 5000): Promise<void> {
-    this.anira.module._anira_inference_thread_stop(this.ptr)
+    this.anira.abi.anira_inference_thread_stop(this.ptr)
     if (!this.started) return
     await pollUntil(() => this.hasExited(), timeoutMs, 'the Worker leaving its loop')
     this.started = false
@@ -86,11 +74,11 @@ export class InferenceThread {
     if (this.started) {
       throw new Error('anira: destroy an inference thread only after stop() resolved')
     }
-    this.anira.module._anira_inference_thread_destroy(this.ptr)
+    this.anira.abi.anira_inference_thread_destroy(this.ptr)
   }
 
   /** The thread object's pointer as a Worker receives it. */
   get pointer(): number {
-    return Heap.unsigned(this.ptr)
+    return this.ptr >>> 0
   }
 }

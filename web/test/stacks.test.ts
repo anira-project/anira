@@ -1,7 +1,7 @@
 // allocInstanceStack (src/runtime/stacks.ts): the size it hands to anira_em_alloc_thread_stack.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { AniraWasmInstance } from '../src/runtime/createAniraWasm'
+import type { AniraBindings } from '../src/abi/bindings'
 import {
   allocInstanceStack,
   DEFAULT_INSTANCE_STACK_BYTES,
@@ -10,11 +10,11 @@ import {
 
 const fakeModule = (requests: number[]) =>
   ({
-    _anira_em_alloc_thread_stack: (bytes: number) => {
+    anira_em_alloc_thread_stack: (bytes: number) => {
       requests.push(bytes)
       return 4096
     },
-  }) as unknown as AniraWasmInstance
+  }) as unknown as AniraBindings
 
 test('a size below the minimum is refused, 0 included, and reaches no C call', () => {
   const requests: number[] = []

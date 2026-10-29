@@ -10,6 +10,7 @@ import {
   ANIRA_EM_HOOK_RESET,
   ANIRA_EM_HOOK_UNPREPARE,
 } from './abi/enums'
+import type { AniraBindings } from './abi/bindings'
 import { InferenceThread } from './core/InferenceThread'
 import { consoleLogSink } from './helpers'
 import {
@@ -20,7 +21,6 @@ import {
 } from './runtime/createAniraWasm'
 import type { Heap } from './runtime/Heap'
 import type { AniraLogRecord, JSStage } from './runtime/hooks'
-import { callWithError } from './runtime/Status'
 import {
   allocInstanceStack,
   freeInstanceStack,
@@ -225,6 +225,14 @@ export class AniraWeb {
     anira.hooks.onStageReleased = (jsKey) => this.forgetStage(jsKey)
   }
 
+  /**
+   * The C ABI of the main instance, typed (`web/src/abi/bindings.ts`, generated): one method
+   * per entry, the out parameters returned, a failed status thrown as an `AniraError`.
+   */
+  get abi(): AniraBindings {
+    return this.anira.abi
+  }
+
   /** The raw exports: every `_anira_*` entry of the C ABI, `_malloc` and `_free`. */
   get module(): AniraWasmInstance {
     return this.anira.module
@@ -248,7 +256,7 @@ export class AniraWeb {
   setLogHook(onRecord: ((record: AniraLogRecord) => void) | null = consoleLogSink): void {
     this.onLogRecord = onRecord
     this.anira.hooks.log = onRecord
-    this.module._anira_em_set_log_hook(onRecord ? 1 : 0)
+    this.anira.abi.anira_em_set_log_hook(onRecord !== null)
   }
 
   private forwardLogs(target: Pick<Worker, 'addEventListener'>): void {
@@ -277,18 +285,12 @@ export class AniraWeb {
       )
     }
     const jsKey = this.nextKey++
-    const { heap, module } = this.anira
-    heap.withCString(descriptor.engineId, (id) =>
-      callWithError(heap, (err) =>
-        module._anira_em_pipeline_register_js_engine(
-          pipelinePtr,
-          id,
-          jsKey,
-          descriptor.hookMask ?? 0,
-          descriptor.engineFlags ?? 0,
-          err
-        )
-      )
+    this.anira.abi.anira_em_pipeline_register_js_engine(
+      pipelinePtr,
+      descriptor.engineId,
+      jsKey,
+      descriptor.hookMask ?? 0,
+      descriptor.engineFlags ?? 0
     )
     const entry = { jsKey, descriptor }
     this.engines.push(entry)
@@ -333,15 +335,11 @@ export class AniraWeb {
       )
     }
     const jsKey = this.nextKey++
-    const { heap, module } = this.anira
-    callWithError(heap, (err) =>
-      module._anira_em_pipeline_add_js_stage(
-        pipelinePtr,
-        jsKey,
-        descriptor.hookMask,
-        descriptor.stageFlags,
-        err
-      )
+    this.anira.abi.anira_em_pipeline_add_js_stage(
+      pipelinePtr,
+      jsKey,
+      descriptor.hookMask,
+      descriptor.stageFlags
     )
     if (descriptor.stage) this.anira.hooks.stages.set(jsKey, descriptor.stage)
     const entry = { jsKey, pipelinePtr, descriptor }
@@ -500,7 +498,7 @@ export class AniraWeb {
       )
     }
     const thread = InferenceThread.create(this.anira, contextPtr)
-    const stack = allocInstanceStack(this.module)
+    const stack = allocInstanceStack(this.anira.abi)
     let worker: Worker
     if (workerOrUrl instanceof Worker) {
       worker = workerOrUrl
@@ -549,7 +547,7 @@ export class AniraWeb {
       worker.terminate()
       await thread.stop().catch(() => {})
       thread.destroy()
-      freeInstanceStack(this.module, stack)
+      freeInstanceStack(this.anira.abi, stack)
       throw error
     }
   }
@@ -563,7 +561,7 @@ export class AniraWeb {
       entry.thread.destroy()
       // The stack is the Worker instance's until it says it calls into the module no more.
       await request<DestroyMessage>(entry.worker, { type: 'destroy' }, 'destroyed')
-      freeInstanceStack(this.module, stack)
+      freeInstanceStack(this.anira.abi, stack)
     })
   }
 
@@ -676,14 +674,14 @@ export class AniraWeb {
     try {
       for (const slot of staticSlots) {
         staticInputs.push(
-          allocStaticInputBlock(this.module, this.heap, options.modelConfigPtr!, slot)
+          allocStaticInputBlock(this.anira.abi, this.heap, options.modelConfigPtr!, slot)
         )
       }
     } catch (error) {
       for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
       throw error
     }
-    const stack = allocInstanceStack(this.module)
+    const stack = allocInstanceStack(this.anira.abi)
     try {
       await request<AudioWorkletConfigureMessage>(
         node.port,
@@ -702,7 +700,7 @@ export class AniraWeb {
       )
     } catch (error) {
       // The worklet instance never ran on the stack, or gave it up on the failure.
-      freeInstanceStack(this.module, stack)
+      freeInstanceStack(this.anira.abi, stack)
       for (const block of staticInputs) freeStaticInputBlock(this.heap, block)
       throw error
     }
@@ -781,7 +779,7 @@ export class AniraWeb {
     const entry = this.worklets.get(node)
     if (!entry) return
     await request<DisposeMessage>(node.port, { type: 'dispose' }, 'disposed')
-    freeInstanceStack(this.module, entry.stack)
+    freeInstanceStack(this.anira.abi, entry.stack)
     for (const block of entry.staticInputs) freeStaticInputBlock(this.heap, block)
     this.worklets.delete(node)
   }

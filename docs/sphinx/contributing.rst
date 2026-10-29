@@ -250,7 +250,8 @@ The C headers under ``include/anira/abi/`` are generated, never edited by hand. 
 single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
 (or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
 registry against the header conventions of ``docs/anira-v3-architecture.md`` and
-rewrites the headers, ``web/src/abi/enums.ts`` and ``web/src/abi/layout.ts``, the symbol and
+rewrites the headers, ``web/src/abi/enums.ts``, ``web/src/abi/layout.ts`` and
+``web/src/abi/bindings.ts`` (one typed method per entry point, see below), the symbol and
 wasm export lists, the tables under ``src/capi/generated/`` (the status texts, and
 ``struct_sizes.inc`` behind ``anira_sizeof``) and ``test/abi/generated/``,
 ``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``. Commit the
@@ -261,8 +262,22 @@ pre-release) or breaking (a major). The generated files carry a ``.clang-format`
 ``DisableFormat`` (``include/anira/abi/``'s covers the ``draft/`` folder below it) and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
 untouched; ``layout.ts`` is emitted the way prettier prints it under ``web/.prettierrc``
-(check it with ``npx prettier --check src/abi/layout.ts``, and never run ``npm run format``:
-it rewrites the generated ``enums.ts``, which then fails ``--check``).
+(check it with ``npx prettier --check src/abi/layout.ts``), and ``web/.prettierignore`` lists
+the generated ``enums.ts`` and ``bindings.ts``, so ``npm run format`` leaves them as written.
+
+``bindings.ts`` is the TypeScript face of the C ABI: the class ``AniraBindings`` over one
+module instance, one method per entry point under its C name, derived from the registry's
+types alone. The ``anira_error*`` parameter is made by the binding on the instance's stack and
+a failed ``anira_status`` throws an ``AniraError`` with the entry's message (an entry without
+one throws with the status text); a ``const char*`` argument is a JS string copied to the
+stack (with its ``size_t len`` computed when one follows); what an entry writes through a
+non-const pointer to a scalar, an enum, a handle pointer or a ``const char*`` is returned (one
+value, or an object of them by parameter name); a ``_to_json`` returns its text; an
+``anira_bool`` is a ``boolean``, a 64-bit integer a ``bigint``, a pointer or a size a
+``number``. An enumeration entry (a ``uint32_t* count`` the caller sets to its capacity) keeps
+its pointers as arguments, and a record the caller passes in (a tensor, a descriptor, a
+capability row) is a pointer. A new entry needs no TypeScript: regenerating gives it its
+method.
 
 Entity kinds are ``verbatim``, ``typedef``, ``define``, ``enum``, ``handles``, ``struct``,
 ``union``, ``callback`` and ``function``. A struct field or a union arm has exactly one shape:

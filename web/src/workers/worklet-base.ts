@@ -222,7 +222,7 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
       }
       anira.hooks.stages.set(
         message.stage.jsKey,
-        new Stage({ module: anira.module, heap: anira.heap })
+        new Stage({ module: anira.module, abi: anira.abi, heap: anira.heap })
       )
     }
     const quantum = message.ioConfig.quantum
@@ -289,7 +289,7 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     channels: number,
     quantum: number
   ): PlanarBlock {
-    const { heap, module } = anira
+    const { heap, abi } = anira
     const bytesPerChannel = quantum * Float32Array.BYTES_PER_ELEMENT
     const data = heap.malloc(bytesPerChannel * channels)
     const planes = heap.malloc(channels * 4)
@@ -304,14 +304,7 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     }
     heap.writeI64(shape, BigInt(channels))
     heap.writeI64(shape + 8, BigInt(quantum))
-    module._anira_tensor_init_host_planar(
-      tensor,
-      planes,
-      channels,
-      ANIRA_DTYPE_F32,
-      2,
-      shape
-    )
+    abi.anira_tensor_init_host_planar(tensor, planes, channels, ANIRA_DTYPE_F32, 2, shape)
     return { tensor, planes, shape, data, channels, quantum, views }
   }
 

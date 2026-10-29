@@ -46,7 +46,7 @@ export async function createGainExample(
   const m = anira.module
   const heap = anira.heap
   anira.setLogHook()
-  const stopLogPump = startLogPump(m)
+  const stopLogPump = startLogPump(anira)
   const out = heap.malloc(4)
   const created = (call: (err: number) => number): number => {
     callWithError(heap, call)
@@ -114,7 +114,7 @@ export async function createGainExample(
       ANIRA_EM_HOOK_UNPREPARE,
     // preProcess and reset run on the audio thread under a Hard contract: stated.
     stageFlags: ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
-    stage: new InputGainStage({ module: m, heap }),
+    stage: new InputGainStage({ module: m, abi: anira.abi, heap }),
   })
 
   // 4. The handler and its Hard contract: one render quantum per call, at the context's rate.

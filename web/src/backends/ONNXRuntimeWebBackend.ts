@@ -1,5 +1,4 @@
 import { anira_status } from '../abi/enums'
-import { Heap } from '../runtime/Heap'
 import { JSBackend } from './JSBackend'
 
 // onnxruntime-web 1.19.2 doesn't expose this WASM module factory via its
@@ -304,15 +303,12 @@ export class ONNXRuntimeWebBackend extends JSBackend {
 
   /** The model of the entry this engine was registered with, as bytes. */
   private async readModel(): Promise<Uint8Array> {
-    const { module, heap, modelConfigPtr, modelIndex } = this.env
+    const { abi, heap, modelConfigPtr, modelIndex } = this.env
     if (!modelConfigPtr) {
       throw new Error('ONNXRuntimeWebBackend: registered without a model config')
     }
-    const pathPtr = Heap.unsigned(
-      module._anira_model_config_model_path(modelConfigPtr, modelIndex)
-    )
-    if (pathPtr !== 0) {
-      const modelUrl = heap.cString(pathPtr)
+    const modelUrl = abi.anira_model_config_model_path(modelConfigPtr, modelIndex)
+    if (modelUrl !== null) {
       const response = await fetch(modelUrl)
       if (!response.ok) {
         throw new Error(
@@ -322,25 +318,8 @@ export class ONNXRuntimeWebBackend extends JSBackend {
       return new Uint8Array(await response.arrayBuffer())
     }
     // A bytes entry: the config owns them; copy out of the shared memory.
-    const out = heap.malloc(8)
-    try {
-      const status = module._anira_model_config_model_bytes(
-        modelConfigPtr,
-        modelIndex,
-        out,
-        out + 4
-      )
-      if ((status | 0) < 0) {
-        throw new Error(
-          `ONNXRuntimeWebBackend: model entry ${modelIndex} has neither a path nor bytes`
-        )
-      }
-      const bytes = heap.readU32(out)
-      const size = heap.readU32(out + 4)
-      return heap.u8.slice(bytes, bytes + size)
-    } finally {
-      heap.free(out)
-    }
+    const { bytes, size } = abi.anira_model_config_model_bytes(modelConfigPtr, modelIndex)
+    return heap.u8.slice(bytes, bytes + size)
   }
 
   private lastError(): string {

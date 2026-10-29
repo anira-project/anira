@@ -1,12 +1,15 @@
 import { anira_status } from '../abi/enums'
 import { anira_engine_ctx, anira_tensor } from '../abi/layout'
+import type { AniraBindings } from '../abi/bindings'
 import type { AniraWasmInstance } from '../runtime/createAniraWasm'
-import { Heap } from '../runtime/Heap'
+import type { Heap } from '../runtime/Heap'
 import type { JSEngine } from '../runtime/hooks'
 
 /** What a JavaScript engine is constructed with, in the Worker that runs it. */
 export type JSBackendEnv = {
   module: AniraWasmInstance
+  /** The Worker instance's typed C ABI. */
+  abi: AniraBindings
   heap: Heap
   /** Its reverse-URI id (`anira_em_pipeline_register_js_engine`). */
   engineId: string
@@ -66,17 +69,16 @@ export class JSBackend implements JSEngine {
   }
 
   private tensors(array: number, count: number): EngineTensor[] {
-    const { heap, module } = this.env
+    const { heap, abi } = this.env
     const out: EngineTensor[] = []
     for (let i = 0; i < count; i++) {
       const ptr = array + i * anira_tensor.size
-      const data = Heap.unsigned(module._anira_tensor_data_f32(ptr))
+      const data = abi.anira_tensor_data_f32(ptr)
       out.push({
         ptr,
         dtype: heap.readU32(ptr + anira_tensor.fields.dtype.offset),
         f32Index: data >>> 2,
-        numElements:
-          data === 0 ? 0 : Heap.unsigned(module._anira_tensor_num_elements(ptr)),
+        numElements: data === 0 ? 0 : abi.anira_tensor_num_elements(ptr),
       })
     }
     return out

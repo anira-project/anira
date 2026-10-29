@@ -55,7 +55,7 @@ set(ANIRA_WASM_LINK_FLAGS "\
   -s NO_DISABLE_EXCEPTION_CATCHING \
   -s STACK_SIZE=33554432 \
   -s EXPORTED_FUNCTIONS=@${CMAKE_CURRENT_SOURCE_DIR}/web/src/abi/exports_wasm.txt \
-  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\",\"stackSave\",\"stackRestore\",\"emscriptenRegisterAudioObject\"]' \
+  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"stringToUTF8OnStack\",\"lengthBytesUTF8\",\"HEAPU8\",\"HEAP32\",\"HEAPU32\",\"HEAPF32\",\"HEAPF64\",\"HEAP64\",\"HEAPU64\",\"stackSave\",\"stackRestore\",\"stackAlloc\",\"emscriptenRegisterAudioObject\"]' \
   ")
 
 # CMake requires at least one source file for add_executable.

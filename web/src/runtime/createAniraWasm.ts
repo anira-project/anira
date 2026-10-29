@@ -1,5 +1,6 @@
 import AniraWebFactory, { type MainModule } from '../../wasm/AniraWeb'
-import { ANIRA_EM_HOOKS_VERSION, anira_status } from '../abi/enums'
+import { AniraBindings, type AbiModule } from '../abi/bindings'
+import { ANIRA_EM_HOOKS_VERSION } from '../abi/enums'
 import { Heap } from './Heap'
 import { HookRegistry } from './hooks'
 import {
@@ -31,9 +32,13 @@ export type AniraWasmInstance = Omit<MainModule, 'HEAPF32' | 'HEAPU32'> & {
   HEAPU32: Uint32Array
 }
 
-/** One instance of the module on the shared memory, with its heap views and hook registry. */
+/**
+ * One instance of the module on the shared memory, with its typed bindings (`abi`, generated
+ * from the registry), heap views and hook registry.
+ */
 export type AniraModule = {
   module: AniraWasmInstance
+  abi: AniraBindings
   memory: WebAssembly.Memory
   heap: Heap
   hooks: HookRegistry
@@ -84,15 +89,16 @@ export const createAniraWasm = async (
       return path
     },
   })) as unknown as AniraWasmInstance
+  const abi = new AniraBindings(out as unknown as AbiModule)
   if (options.stack) {
-    enterInstance(out, options.stack)
+    enterInstance(out, abi, options.stack)
   } else {
     // The main instance keeps its stack but needs a thread-local block of its own: the module
     // has no main(), so none was installed, and C++ exceptions trap without one. The region
     // lives as long as the instance.
-    installThreadLocalBlock(out, allocInstanceStack(out, MIN_INSTANCE_STACK_BYTES))
+    installThreadLocalBlock(abi, allocInstanceStack(abi, MIN_INSTANCE_STACK_BYTES))
   }
-  const moduleHooksVersion = out._anira_em_hooks_version() >>> 0
+  const moduleHooksVersion = abi.anira_em_hooks_version()
   if (moduleHooksVersion !== ANIRA_EM_HOOKS_VERSION) {
     throw new Error(
       `anira: the module's hook object is version ${moduleHooksVersion}, this package's is ` +
@@ -101,14 +107,14 @@ export const createAniraWasm = async (
   }
   if (
     options.abiVersion !== undefined &&
-    out._anira_check_abi(options.abiVersion >>> 0) !== anira_status.ANIRA_OK
+    !abi.anira_check_abi(options.abiVersion >>> 0)
   ) {
     throw new Error(
-      `anira: the module (ABI 0x${(out._anira_abi_version() >>> 0).toString(16)}) does not ` +
+      `anira: the module (ABI 0x${abi.anira_abi_version().toString(16)}) does not ` +
         `serve ABI 0x${(options.abiVersion >>> 0).toString(16)}`
     )
   }
   const heap = new Heap(out, wasmMemory)
   hooks.attach(out, heap)
-  return { module: out, memory: wasmMemory, heap, hooks }
+  return { module: out, abi, memory: wasmMemory, heap, hooks }
 }

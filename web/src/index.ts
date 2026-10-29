@@ -1,4 +1,5 @@
 export * from './runtime'
+export { AniraBindings, type AbiModule } from './abi/bindings'
 export * from './abi/enums'
 export * as layout from './abi/layout'
 export * from './AniraWeb'

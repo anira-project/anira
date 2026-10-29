@@ -85,6 +85,7 @@ export const setupInferenceWorker = (
         if (!engines.has(message.jsKey)) {
           const engine = new Engine({
             module: a.module,
+            abi: a.abi,
             heap: a.heap,
             engineId: message.engineId,
             modelConfigPtr: message.modelConfigPtr,
@@ -124,7 +125,10 @@ export const setupInferenceWorker = (
           )
         }
         if (!a.hooks.stages.has(message.jsKey)) {
-          a.hooks.stages.set(message.jsKey, new Stage({ module: a.module, heap: a.heap }))
+          a.hooks.stages.set(
+            message.jsKey,
+            new Stage({ module: a.module, abi: a.abi, heap: a.heap })
+          )
         }
         postMessage({
           type: 'stageRegistered',
@@ -147,7 +151,7 @@ export const setupInferenceWorker = (
       case 'start': {
         // Blocks this Worker until main stops the thread; the loop parks on the wake word
         // while the queue is empty.
-        requireModule(anira).module._anira_inference_thread_run_loop(threadPtr)
+        requireModule(anira).abi.anira_inference_thread_run_loop(threadPtr)
         return
       }
 
