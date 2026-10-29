@@ -67,6 +67,13 @@ if (typeof (globalThis as { performance?: unknown }).performance === 'undefined'
   }
 }
 
+// AudioWorkletGlobalScope has no `navigator` either, which the -pthread runtime reads for
+// std::thread::hardware_concurrency() (anira's static initialisers call it, and this worklet's
+// instance runs them). One core: the worklet starts no thread.
+if (typeof (globalThis as { navigator?: unknown }).navigator === 'undefined') {
+  ;(globalThis as { navigator?: unknown }).navigator = { hardwareConcurrency: 1 }
+}
+
 /**
  * One direction of the worklet's host block: a planar host tensor
  * (`anira_tensor_init_host_planar`, shape `[channels, quantum]`) over one heap buffer per
@@ -182,10 +189,28 @@ export class AniraAudioWorkletBase extends AudioWorkletProcessor {
     // A re-configure of this node gives up the previous instance's blocks first.
     this.dispose()
     this.disposed = false
-    const anira = await createAniraWasm(message.wasmMemory, {
-      wasmBinary: message.wasmBinary,
-      stack: { base: message.stackBase, bytes: message.stackBytes },
-    })
+    // The module is linked with -sAUDIO_WORKLET, whose glue takes an instance in this scope for
+    // one of Emscripten's own Wasm Audio Worklets (booted by Emscripten, its processors
+    // registered at instantiation). This worklet instantiates it as a plain instance of its
+    // own, one the glue takes for a window's: the glue reads the scope only while the factory
+    // starts, so the worklet scope is hidden and a window shown then. As a window's instance it
+    // probes whether the thread may block (Atomics.wait), which the audio thread may not:
+    // anira's waits then spin instead of trapping.
+    const scope = globalThis as { AudioWorkletGlobalScope?: unknown; window?: unknown }
+    const workletScope = scope.AudioWorkletGlobalScope
+    scope.AudioWorkletGlobalScope = undefined
+    scope.window = scope
+    let instantiating: ReturnType<typeof createAniraWasm>
+    try {
+      instantiating = createAniraWasm(message.wasmMemory, {
+        wasmBinary: message.wasmBinary,
+        stack: { base: message.stackBase, bytes: message.stackBytes },
+      })
+    } finally {
+      scope.AudioWorkletGlobalScope = workletScope
+      delete scope.window
+    }
+    const anira = await instantiating
     anira.hooks.log = (record) =>
       this.port.postMessage({ type: 'log', record } satisfies LogRecordMessage)
     if (message.stage) {

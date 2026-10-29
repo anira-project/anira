@@ -385,7 +385,9 @@ through the trampolines of ``anira/anira_em.h`` on one instance and holds the li
 thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
 which runs a second instance in a ``worker_threads`` Worker inside
 ``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
-stop); the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
+a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
+so the core's mutexes must exclude across them; the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
 ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).

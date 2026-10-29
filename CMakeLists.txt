@@ -100,7 +100,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 if(ANIRA_BUILD_WASM)
     tanh_detect_emscripten()
     if(WASM)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -matomics -msimd128 -mbulk-memory -sNO_DISABLE_EXCEPTION_CATCHING")
+        # -pthread: Emscripten's threaded libc and libc++ (real futex mutexes across the Wasm
+        # Workers and the audio worklet that share the module's memory; issue #212). Every
+        # object of the link carries it, the fetched dependencies' C and C++ included.
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -msimd128 -sNO_DISABLE_EXCEPTION_CATCHING")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread -msimd128")
     endif()
 endif()
 

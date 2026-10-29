@@ -72,6 +72,9 @@ export const createAniraWasm = async (
     wasmMemory,
     anira: hooks.hookObject(),
     locateFile: (path: string) => {
+      // The worklet scope has no URL; its instance is handed the binary and fetches nothing,
+      // though the glue still asks for the name.
+      if (typeof URL === 'undefined') return path
       if (path.endsWith('.wasm')) {
         return getWasmUrl()
       }

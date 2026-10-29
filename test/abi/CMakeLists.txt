@@ -192,11 +192,11 @@ if(_abi_on_wasm)
     add_executable(anira_em_smoke em_smoke.c)
     anira_abi_consumer_target(anira_em_smoke C)
     target_link_libraries(anira_em_smoke PRIVATE anira::anira)
-    # A shared-memory link takes objects built with the atomics and bulk-memory features only
-    # (anira's C++ carries them through CMAKE_CXX_FLAGS; this is C).
-    target_compile_options(anira_em_smoke PRIVATE -matomics -mbulk-memory)
+    # The link is AniraWeb's: -pthread, whose objects carry the atomics and bulk-memory
+    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS).
     set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX)
     target_link_options(anira_em_smoke PRIVATE
+        -pthread
         -sENVIRONMENT=node
         -sSHARED_MEMORY=1
         -sINITIAL_MEMORY=268435456
@@ -217,10 +217,10 @@ if(_abi_on_wasm)
     add_executable(anira_em_smoke_thread em_smoke_thread.c)
     anira_abi_consumer_target(anira_em_smoke_thread C)
     target_link_libraries(anira_em_smoke_thread PRIVATE anira::anira)
-    target_compile_options(anira_em_smoke_thread PRIVATE -matomics -mbulk-memory)
     set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX SUFFIX ".mjs")
     target_link_options(anira_em_smoke_thread PRIVATE
         --no-entry
+        -pthread
         -sENVIRONMENT=node
         -sMODULARIZE=1
         -sEXPORT_ES6=1
@@ -236,6 +236,23 @@ if(_abi_on_wasm)
         "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"stackRestore\"]")
     set_property(TARGET anira_em_smoke_thread APPEND PROPERTY LINK_DEPENDS
         "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt")
+    # Issue #212: the core's mutexes exclude across two threads of one module (a pthread
+    # beside the main thread, on the threaded libc AniraWeb's Wasm Workers run on).
+    add_executable(anira_em_mutex em_mutex.c)
+    anira_abi_consumer_target(anira_em_mutex C)
+    target_link_libraries(anira_em_mutex PRIVATE anira::anira)
+    set_target_properties(anira_em_mutex PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_options(anira_em_mutex PRIVATE
+        -pthread
+        -sPTHREAD_POOL_SIZE=1
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -247,7 +264,8 @@ if(_abi_on_wasm)
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke_thread.mjs"
             $<TARGET_FILE:anira_em_smoke_thread>
-        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_mutex>
+        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

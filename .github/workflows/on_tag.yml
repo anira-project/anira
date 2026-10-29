@@ -244,6 +244,9 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
           PRESET: wasm-release
+          # anira's own pin, above the shared tanh-lab default: the module links -pthread
+          # -sWASM_WORKERS -sAUDIO_WORKLET (cmake/build-wasm.cmake), which emsdk 6 needs.
+          EMSDK_VERSION: "6.0.13"
       # The module that ships exports exactly the promised, draft and Emscripten entry
       # points (and _malloc, _free): the same check as build_web, on this build.
       - name: check the exports of AniraWeb against the symbol lists

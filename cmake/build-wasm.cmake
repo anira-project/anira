@@ -12,11 +12,13 @@ message(STATUS "Building AniraWeb WASM module...")
 
 set(ANIRA_WEB_LICENSES_DIR "${CMAKE_CURRENT_SOURCE_DIR}/web/licenses")
 
-# Set flags if Debug
+# Set flags if Debug. ASSERTIONS=1 only there: Emscripten's Web Audio library asserts that a
+# context is a window.AudioContext (libwebaudio.js), which refuses the OfflineAudioContext the
+# browser test renders through, so the shipped (Release) module is built without assertions.
 if(NOT CMAKE_BUILD_TYPE STREQUAL "Release")
-  set(ANIRA_WASM_DEBUG_FLAGS "-O0 -gsource-map")
+  set(ANIRA_WASM_DEBUG_FLAGS "-O0 -gsource-map -s ASSERTIONS=1")
 else()
-  set(ANIRA_WASM_DEBUG_FLAGS "")
+  set(ANIRA_WASM_DEBUG_FLAGS "-s ASSERTIONS=0")
 endif()
 
 # The C ABI's export list is the generated web/src/abi/exports_wasm.txt (one _-prefixed
@@ -27,8 +29,19 @@ endif()
 # --whole-archive is needed, and a registry entry without a definition on Emscripten fails
 # this link: the presence gate of the wasm leg. build_web compares the emitted .d.ts with
 # the symbol lists in both directions.
+#
+# Threads: -pthread with -sWASM_WORKERS and -sAUDIO_WORKLET (Emscripten's hybrid mode). The
+# module's threads are Wasm Workers and the Wasm Audio Worklet, created from C on the one
+# imported shared memory; -pthread gives them the threaded libc and libc++, whose mutexes are
+# real futex mutexes across them (the no-pthread libraries' are stubs that lock nothing, and
+# since emsdk 5 do not link). INCOMING_MODULE_JS_API names every Module property the package
+# passes at instantiation (emsdk 6 no longer reads wasmMemory and wasmBinary by default).
 set(ANIRA_WASM_LINK_FLAGS "\
   --no-entry \
+  -pthread \
+  -s WASM_WORKERS=1 \
+  -s AUDIO_WORKLET=1 \
+  -s INCOMING_MODULE_JS_API=wasmMemory,wasmBinary,locateFile,instantiateWasm,print,printErr \
   --emit-tsd=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.d.ts \
   -s STACK_OVERFLOW_CHECK=0 \
   -s IMPORTED_MEMORY=1 \
@@ -38,12 +51,11 @@ set(ANIRA_WASM_LINK_FLAGS "\
   -s MALLOC=emmalloc \
   -s EXPORT_ES6=1 \
   -s MODULARIZE=1 \
-  -s ENVIRONMENT=worklet,web \
-  -s ASSERTIONS=1 \
+  -s ENVIRONMENT=web,worker,worklet \
   -s NO_DISABLE_EXCEPTION_CATCHING \
   -s STACK_SIZE=33554432 \
   -s EXPORTED_FUNCTIONS=@${CMAKE_CURRENT_SOURCE_DIR}/web/src/abi/exports_wasm.txt \
-  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\",\"stackSave\",\"stackRestore\"]' \
+  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\",\"stackSave\",\"stackRestore\",\"emscriptenRegisterAudioObject\"]' \
   ")
 
 # CMake requires at least one source file for add_executable.
