@@ -208,12 +208,9 @@ struct ANIRA_API CoreConfig {
      *                   Default: half of available CPU cores (minimum 1) on native
      *                   builds, 0 on WebAssembly (see default_num_threads()).
      *                   Pass 0 to opt out of the auto-managed pool and supply your
-     *                   own threads via Core::make_inference_thread() (required on
-     *                   WebAssembly, optional on native). On WebAssembly a nonzero
-     *                   value is coerced to 0 with a warning by Core::create_session
-     *                   and JsonConfigLoader — the core cannot run threads there;
-     *                   they are always supplied externally (e.g.
-     *                   AniraWeb.spinUpInferenceWorker()). When sessions already
+     *                   own threads via Core::make_inference_thread(). On
+     *                   WebAssembly the pool's threads are Wasm Workers, each of
+     *                   which imports m_em_worker_module first. When sessions already
      *                   exist, num_threads == 0 leaves the existing pool untouched —
      *                   it signals "no preference," not "shrink to zero." The pool
      *                   exists exactly while sessions exist: it is built by the first

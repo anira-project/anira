@@ -582,10 +582,10 @@ contexts are reconciled against it).
 - **Devices.** ``cuda`` / ``gl`` / ``vulkan`` / ``metal`` / ``d3d12`` / ``webgpu`` declare the
   device blocks anira may use, each an ``ANIRA_*_DESC_INIT`` descriptor naming either a device
   anira creates and owns or a handle the host lends.
-- **WebAssembly.** The core cannot run threads on the web: use ``threads(0)`` (the workers
-  are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the log
-  manually; ``webgpu`` throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a
-  JavaScript API.
+- **WebAssembly.** The pool's threads are Wasm Workers anira starts, each importing the
+  context's worker module first (``anira_em_context_config_set_worker_module``,
+  :doc:`web-api/architecture`); there is no drain thread, so drain the log manually. ``webgpu``
+  throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a JavaScript API.
 
 1.5. JSON files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

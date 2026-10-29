@@ -621,8 +621,7 @@ void InferenceManager::set_non_realtime(bool is_non_realtime) const {
                           "set_non_realtime(true) refused: no inference threads are "
                           "configured or running, so the resulting blocking waits could never "
                           "complete. Configure CoreConfig::m_num_threads > 0, start a thread "
-                          "from Core::make_inference_thread(), or spin up an inference worker "
-                          "(web: AniraWeb.spinUpInferenceWorker()) first.");
+                          "from Core::make_inference_thread() first.");
         return;
     }
     m_session->m_is_non_real_time.store(is_non_realtime, std::memory_order::release);
