@@ -114,6 +114,13 @@ jobs:
         working-directory: web
         run: npm run examples
 
+      # A page that only names the ONNX Runtime Web engine (ONNXRUNTIME_WEB_ENGINE_ID from the root
+      # entry) must not bundle onnxruntime-web: no module the root or scope entry imports, and no
+      # chunk of the examples, carries its code.
+      - name: check the bundles carry no onnxruntime-web
+        working-directory: web
+        run: npm run check:bundle
+
       # config.html and the model-file example load a bundled model config (extras/models/model-pool/gain.model.json) and
       # fetches its model file: the fixture trees, restored from the cache warm_caches.yml
       # keeps, else fetched at their pins.

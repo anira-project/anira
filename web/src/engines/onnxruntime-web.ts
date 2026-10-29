@@ -22,8 +22,8 @@ import {
 // aliases the specifier to node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs.
 import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
 
-/** The engine id the ONNX Runtime Web engine is registered under by convention. */
-export const ONNXRUNTIME_WEB_ENGINE_ID = 'org.anira.onnxruntime-web'
+// The id lives in a module of its own, which the root entry re-exports without this engine.
+export { ONNXRUNTIME_WEB_ENGINE_ID } from './ids'
 
 export type OnnxRuntimeWebOptions = {
   /** The model: a URL the engine fetches in its init, or the bytes. */

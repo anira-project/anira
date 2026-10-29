@@ -72,4 +72,8 @@ float32 ORT tensor per model tensor of the call:
 
    defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb({ model: new URL('./model.onnx', import.meta.url) }))
 
-The page then registers ``ONNXRUNTIME_WEB_ENGINE_ID`` and names it in the model entry.
+The page then registers ``ONNXRUNTIME_WEB_ENGINE_ID`` and names it in the model entry, with the
+id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
+the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
+module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+that.
