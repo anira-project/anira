@@ -20,6 +20,8 @@ worklet's module (``@anira-project/anira/scope``).
 
 .. js:autofunction:: registry.engineTensors
 
+.. js:autofunction:: registry.engineModel
+
 .. js:autofunction:: registry.scopeRegistry
 
 Audio

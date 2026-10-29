@@ -15,6 +15,7 @@ import {
   engineTensors,
   type Engine,
   type EngineFactory,
+  type EngineModel,
   type ScopeEnv,
 } from '../registry'
 
@@ -26,8 +27,13 @@ import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
 export { ONNXRUNTIME_WEB_ENGINE_ID } from './ids'
 
 export type OnnxRuntimeWebOptions = {
-  /** The model: a URL the engine fetches in its init, or the bytes. */
-  model: string | URL | Uint8Array
+  /**
+   * The model: a URL the engine fetches in its init, or the bytes. Default: the model entry the
+   * engine runs (its bytes, which `ModelConfig.fromUrl` attached on the main thread, so the
+   * model is fetched once; or its path, fetched synchronously by the Worker, absolute or
+   * relative to the module's glue).
+   */
+  model?: string | URL | Uint8Array
 }
 
 /** The ONNX Runtime Web wasm module's C API, as far as the engine calls it. */
@@ -79,6 +85,18 @@ type TensorMeta = { namePtr: number; dims: number[] }
 // One ORT module per scope, shared by the scope's engines.
 let ortModule: Promise<OrtWasmModule> | null = null
 
+// A model file read on an inference Worker whose event loop does not run (its C loop blocks):
+// a synchronous request, which a Worker may make. Absolute, or relative to the module's glue.
+const fetchSync = (path: string): Uint8Array => {
+  const request = new XMLHttpRequest()
+  request.open('GET', new URL(path, globalThis.location.href).href, false)
+  request.responseType = 'arraybuffer'
+  request.send()
+  if (request.status < 200 || request.status >= 300)
+    throw new Error(`onnxruntime-web: fetching ${path} failed: ${request.status}`)
+  return new Uint8Array(request.response as ArrayBuffer)
+}
+
 const readModel = async (model: string | URL | Uint8Array): Promise<Uint8Array> => {
   if (model instanceof Uint8Array) return model
   const response = await fetch(model)
@@ -114,10 +132,41 @@ class OnnxRuntimeWebEngine implements Engine {
   }
 
   async init(): Promise<void> {
-    const bytes = await readModel(this.options.model)
+    const bytes = this.options.model ? await readModel(this.options.model) : null
     ortModule ??= ortWasmFactory({ numThreads: 1 }) as Promise<OrtWasmModule>
     const ort = (this.ort = await ortModule)
     if (ort._OrtInit(1, 3) !== 0) throw new Error('onnxruntime-web: _OrtInit failed')
+    if (bytes) this.createSession(bytes)
+  }
+
+  /**
+   * The model entry the calls run: without an explicit `model`, the session is created from the
+   * entry's bytes (copied into ORT's own heap, a separate module) or its fetched path.
+   */
+  load(model: EngineModel): number {
+    if (this.options.model) return anira_status.ANIRA_OK
+    if (this.session !== 0) this.releaseSession()
+    const bytes = model.bytes ?? (model.path !== null ? fetchSync(model.path) : null)
+    if (!bytes) {
+      throw new Error(
+        `onnxruntime-web: model entry ${model.row} has neither bytes nor a path, and no ` +
+          'model was given to onnxRuntimeWeb()'
+      )
+    }
+    this.createSession(bytes)
+    return anira_status.ANIRA_OK
+  }
+
+  private releaseSession(): void {
+    const ort = this.ort!
+    ort._OrtReleaseSession(this.session)
+    if (this.runOptions !== 0) ort._OrtReleaseRunOptions(this.runOptions)
+    this.session = 0
+    this.runOptions = 0
+  }
+
+  private createSession(bytes: Uint8Array): void {
+    const ort = this.ort!
     const sessionOptions = ort._OrtCreateSessionOptions(99, 1, 1, 0, 0, 0, 0, 3, 0, 0)
     if (sessionOptions === 0)
       throw new Error('onnxruntime-web: _OrtCreateSessionOptions failed')
@@ -255,8 +304,11 @@ class OnnxRuntimeWebEngine implements Engine {
   }
 }
 
-/** The factory of `defineEngine` for an ONNX Runtime Web engine over `options.model`. */
+/**
+ * The factory of `defineEngine` for an ONNX Runtime Web engine: over the model entry it runs
+ * (the default), or over `options.model`.
+ */
 export const onnxRuntimeWeb =
-  (options: OnnxRuntimeWebOptions): EngineFactory =>
+  (options: OnnxRuntimeWebOptions = {}): EngineFactory =>
   (env) =>
     new OnnxRuntimeWebEngine(env, options)

@@ -74,7 +74,9 @@ that serves ``extras/models/model-pool/``):
 model entry whose engine the module compiled in (the ONNX Runtime one) or a JavaScript engine's,
 fetches the entry's file relative to the config's URL and attaches it as bytes
 (``anira_model_config_set_model_bytes``); the other entries (a LibTorch or a TFLite one) keep
-their paths unfetched. Serve the model files beside the config the way its paths say. A contract
+their paths unfetched. A JavaScript engine reads its entry's bytes from that memory in every
+Worker (``load(model)``, :doc:`custom_inference_backends`; the ONNX Runtime Web engine does), so
+each model file is fetched once. Serve the model files beside the config the way its paths say. A contract
 file may leave the Hard geometry to the host: blocks from the render quantum (128) up to the
 context's burst (``renderBurstFrames``) at the context's rate. A live context renders a device
 callback's worth of quanta back to back, so ``block_max`` must cover that burst for the

@@ -71,6 +71,11 @@ What the Page Needs
   dev server works (the module's build rewrites the one construct of the glue it would turn into
   a client import, ``cmake/wasm-glue-rewrite.cmake``); it warns once that the Workers' dynamic
   import cannot be analysed, which is intended.
+* **onnxruntime-web excluded from the dev server's optimisation too**, when a page uses the ONNX
+  Runtime Web engine: ``optimizeDeps: { exclude: ['@anira-project/anira', 'onnxruntime-web'] }``.
+  Otherwise Vite re-optimises its dependencies at the first import of onnxruntime-web and reloads
+  the page, aborting what it was fetching (Chromium: "wasm streaming compile failed: ...
+  Response body loading was aborted" while ``Anira.create`` fetched the module).
 
 ``web/examples/stage-and-engine/vite.config.ts`` is a complete configuration:
 

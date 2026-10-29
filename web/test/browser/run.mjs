@@ -37,8 +37,21 @@ const resolveFile = (file) => {
   return null
 }
 
+// The requests served, by path: a page reads them from /__requests (ort.html: the model is
+// fetched once, by the main thread, not once per Worker).
+const requestCounts = {}
+
 const server = http.createServer((request, response) => {
   const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname)
+  if (pathname === '/__requests') {
+    response.writeHead(200, {
+      'Content-Type': 'application/json',
+      'Cross-Origin-Resource-Policy': 'same-origin',
+    })
+    response.end(JSON.stringify(requestCounts))
+    return
+  }
+  requestCounts[pathname] = (requestCounts[pathname] ?? 0) + 1
   const inModels = pathname.startsWith(MODELS_PREFIX)
   const base = inModels ? models : root
   const file = resolveFile(

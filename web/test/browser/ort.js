@@ -1,8 +1,12 @@
-// The ONNX Runtime Web engine (@anira-project/anira/engines/onnxruntime-web) on a pool of one
-// Wasm Worker, which imports ort-worker.js: the SimpleGainNetwork model of extras/models (output =
-// input * gain), a Hard handler of block 128 over its window of 512, and an OfflineAudioContext
-// rendered through the handler's audio node, the Static gain its AudioParam. The output must be
-// the input times the gain after the handler's latency. The verdict is window.anira_test_result.
+// The ONNX Runtime Web engine (@anira-project/anira/engines/onnxruntime-web) on a pool of two
+// Wasm Workers, which import ort-worker.js (the engine with no model of its own). The model config
+// ort-gain.model.json names the SimpleGainNetwork model of extras/models (output = input * gain)
+// for org.anira.onnxruntime-web: ModelConfig.fromUrl fetches it once on the main thread and
+// attaches the bytes, and each Worker's engine creates its session from the entry's bytes
+// (engineModel), so the .onnx is requested exactly once (run.mjs counts the requests). Then a
+// Hard handler of block 128 over the window of 512 and an OfflineAudioContext rendered through
+// the handler's audio node, the Static gain its AudioParam: the output must be the input times
+// the gain after the handler's latency. The verdict is window.anira_test_result.
 import {
   Anira,
   Context,
@@ -18,6 +22,11 @@ const QUANTUM = 128
 const QUANTA = 64
 const WINDOW = 512
 const GAIN = 0.5
+const ONNX =
+  '/extras/models/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.onnx'
+
+const requests = async (pathname) =>
+  (await (await fetch('/__requests')).json())[pathname] ?? 0
 
 const run = async () => {
   const checks = []
@@ -26,35 +35,13 @@ const run = async () => {
   const anira = await Anira.create()
   anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
   const context = Context.create(anira, {
-    threads: 1,
+    threads: 2,
     workerModule: new URL('./ort-worker.js', import.meta.url),
   })
 
-  const streamed = (name) => ({
-    name,
-    dtype: 'float32',
-    role: 'streamed',
-    axes: [
-      ['batch', 1],
-      ['channel', 1],
-      ['time', WINDOW],
-    ],
-    window: { min: WINDOW, max: WINDOW },
-  })
-  const scalar = (name) => ({
-    name,
-    dtype: 'float32',
-    role: 'static',
-    axes: [['any', 1]],
-  })
-  const model = await ModelConfig.fromJson(
+  const model = await ModelConfig.fromUrl(
     anira,
-    JSON.stringify({
-      models: [{ engine: ONNXRUNTIME_WEB_ENGINE_ID, path: 'loaded-by-the-engine.onnx' }],
-      inputs: [streamed('audio_in'), scalar('gain')],
-      outputs: [streamed('audio_out'), scalar('gain_out')],
-    }),
-    { fetchModel: () => false }
+    new URL('./ort-gain.model.json', import.meta.url)
   )
   const pipeline = Pipeline.create(anira)
     .addInference(model)
@@ -62,9 +49,10 @@ const run = async () => {
   const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
   const handler = Handler.create(context, pipeline).prepare(contract)
   const latency = handler.latency()
-  // The Worker's boot awaits the engine's init: the ORT module and the session.
+  // The Workers' boot awaits the engine's init: the ORT module; the session comes with the
+  // entry, at the first call.
   await context.ready(30000)
-  check(true, 'the Worker booted the ONNX Runtime Web engine (model and binary loaded)')
+  check(true, 'the Workers booted the ONNX Runtime Web engine (its binary loaded)')
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const audioNode = await handler.createAudioNode(audio, { params: [1], waitMs: 500 })
@@ -83,6 +71,11 @@ const run = async () => {
   for (let i = latency; i < rendered.length; i++) {
     worst = Math.max(worst, Math.abs(rendered[i] - GAIN * samples[i - latency]))
   }
+  check(
+    (await requests(ONNX)) === 1,
+    `the model was requested once for the config and the pool of two Workers ` +
+      `(${await requests(ONNX)} requests)`
+  )
   const energy = rendered.reduce((sum, x) => sum + x * x, 0)
   check(energy > 1, `the node rendered audio (energy ${energy.toFixed(2)})`)
   check(
@@ -97,7 +90,7 @@ const run = async () => {
   contract.destroy()
   model.destroy()
   context.destroy()
-  check(context.threads === 0, 'the Worker stopped with the context')
+  check(context.threads === 0, 'the Workers stopped with the context')
   return { checks }
 }
 

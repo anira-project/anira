@@ -84,6 +84,11 @@ const pipeline = Pipeline.create(anira)
   .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 ```
 
+A JavaScript engine reads its model entry in each Worker (`load(model)`: the bytes
+`ModelConfig.fromUrl` attached, a view of the shared memory), so a model file is fetched once:
+`defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())` runs the model the config names for
+`org.anira.onnxruntime-web`. With Vite, also exclude `onnxruntime-web` from `optimizeDeps`.
+
 `web/examples/model-file/` in the repository is the quick example as a page, and
 `web/examples/stage-and-engine/` a complete page with a TypeScript stage and engine, both bundled
 by Vite.

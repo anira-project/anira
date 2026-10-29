@@ -105,6 +105,9 @@ Once the Workers run, what reaches a stage or an engine is what the shared memor
   tensor);
 * a stage's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by every
   phase in every realm;
+* an engine's model entry, read by anira's load on the main thread and handed to every call as
+  ``prepared`` (``load(model)``, :js:func:`~registry.engineModel`: the bytes the config's
+  loader attached, a view of the shared memory);
 * a block of the page's own in the WebAssembly heap (``anira.module._malloc``), coordinated with
   ``Atomics``.
 

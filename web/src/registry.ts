@@ -35,13 +35,34 @@ export interface Stage {
 }
 
 /**
+ * The model entry a JavaScript engine runs, what a C engine's load reads of its row
+ * (`anira_engine_load_info.row`, `anira_model_config_model_bytes` / `_model_path`): the
+ * entry's bytes as a view of the shared memory (no copy; valid while the loaded model lives,
+ * so copy what must outlive the call), or its path when it carries no bytes, or neither for an
+ * engine that declares `ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL`. `ModelConfig.fromUrl` attaches the
+ * bytes of a JavaScript engine's entry, so the model is fetched once, on the main thread.
+ */
+export type EngineModel = {
+  /** The entry's position in the model config's models list. */
+  row: number
+  /** The entry's bytes, a view of the shared memory, or null. */
+  bytes: Uint8Array | null
+  /** The entry's path when it has no bytes, else null. */
+  path: string | null
+}
+
+/**
  * A JavaScript engine, constructed once per inference Worker: `init` (optional, may be async)
- * runs before the Worker enters its loop, `process` once per inference (`ctx` an
- * `anira_engine_ctx`, read with `engineTensors`), `reset` at a new stream (with
- * `ANIRA_EM_ENGINE_HOOK_RESET`), `query` on the main thread (with `ANIRA_EM_ENGINE_HOOK_QUERY`).
+ * runs before the Worker enters its loop; `load` (optional, synchronous) receives the model
+ * entry the calls run, on the inference Worker before the first call on a loaded model (and
+ * again when a later call runs another one); `process` once per inference (`ctx` an
+ * `anira_engine_ctx`, read with `engineTensors`; `prepared` the loaded model's record, which
+ * `engineModel` reads), `reset` at a new stream (with `ANIRA_EM_ENGINE_HOOK_RESET`), `query` on
+ * the main thread (with `ANIRA_EM_ENGINE_HOOK_QUERY`).
  */
 export interface Engine {
   init?(): void | Promise<void>
+  load?(model: EngineModel): number | void
   process(ctx: number, prepared: number): number | void
   reset?(ctx: number, prepared: number): void
   query?(initInfo: number, outAvailable: number): number | void
@@ -208,15 +229,31 @@ export class Registry {
     const engine = this.engineOf(module, key, idPtr)
     const p = anira_phase
     switch (phase) {
-      case p.ANIRA_PHASE_INFERENCE:
-        return status(engine.process(a, b))
+      case p.ANIRA_PHASE_INFERENCE: {
+        const loaded = this.loadOnce(module, engine, b)
+        return loaded !== anira_status.ANIRA_OK ? loaded : status(engine.process(a, b))
+      }
       case p.ANIRA_PHASE_RESET:
-        engine.reset?.(a, b)
+        if (this.loadOnce(module, engine, b) === anira_status.ANIRA_OK)
+          engine.reset?.(a, b)
         return anira_status.ANIRA_OK
       case p.ANIRA_PHASE_QUERY:
         return status(engine.query?.(a, b))
     }
     throw new Error(`JavaScript engine ${key}: phase ${phase} is not an engine phase`)
+  }
+
+  /** @hidden */
+  private readonly loadedModels = new WeakMap<Engine, number>()
+
+  /** @hidden */
+  private loadOnce(module: AbiModule, engine: Engine, model: number): number {
+    if (!engine.load || model === 0 || this.loadedModels.get(engine) === model) {
+      return anira_status.ANIRA_OK
+    }
+    const loaded = status(engine.load(engineModel(this.envOf(module), model)))
+    if (loaded === anira_status.ANIRA_OK) this.loadedModels.set(engine, model)
+    return loaded
   }
 
   /** The log hook's target. */
@@ -287,6 +324,27 @@ export const engineTensors = (
       m.HEAPU32[(ctx + f.outputs.offset) >>> 2],
       m.HEAPU32[(ctx + f.num_outputs.offset) >>> 2]
     ),
+  }
+}
+
+// The record a JavaScript engine's calls receive as `prepared` (src/platform/emscripten/
+// em_hooks.cpp, EngineModel): four 32-bit words, the row, the bytes, their size, the path.
+const ENGINE_MODEL_ROW = 0
+const ENGINE_MODEL_BYTES = 4
+const ENGINE_MODEL_SIZE = 8
+const ENGINE_MODEL_PATH = 12
+
+/** The model entry of an engine call's `prepared` record (see `EngineModel`). */
+export const engineModel = (env: ScopeEnv, prepared: number): EngineModel => {
+  const m = env.module
+  const word = (offset: number) => m.HEAPU32[(prepared + offset) >>> 2]
+  const bytes = word(ENGINE_MODEL_BYTES)
+  const size = word(ENGINE_MODEL_SIZE)
+  const path = word(ENGINE_MODEL_PATH)
+  return {
+    row: word(ENGINE_MODEL_ROW),
+    bytes: bytes === 0 ? null : new Uint8Array(m.HEAPU8.buffer, bytes, size),
+    path: path === 0 ? null : m.UTF8ToString(path),
   }
 }
 

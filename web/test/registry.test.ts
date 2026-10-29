@@ -5,7 +5,13 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AbiModule } from '../src/abi/bindings'
 import { anira_phase, anira_status } from '../src/abi/enums'
-import { Registry, keyOf } from '../src/registry'
+import {
+  Registry,
+  engineModel,
+  keyOf,
+  type EngineModel,
+  type ScopeEnv,
+} from '../src/registry'
 
 const fakeModule = () =>
   ({
@@ -103,6 +109,46 @@ test('an engine is built and initialised at the boot, before its first call', as
     registry.engine(module, key, anira_phase.ANIRA_PHASE_INFERENCE, 0, 0, 0),
     anira_status.ANIRA_OK
   )
+})
+
+test("an engine's load sees its model entry before the first call on it, once", () => {
+  // The record of src/platform/emscripten/em_hooks.cpp (EngineModel) at 16: row 2, four bytes
+  // at 40, no path; a second one at 32: row 0, no bytes, the path at 48.
+  const memory = new ArrayBuffer(64)
+  const words = new Uint32Array(memory)
+  words.set([2, 40, 4, 0], 16 / 4)
+  words.set([0, 0, 0, 48], 32 / 4)
+  new Uint8Array(memory).set([1, 2, 3, 4], 40)
+  const module = {
+    HEAPU8: new Uint8Array(memory),
+    HEAPU32: words,
+    UTF8ToString: (ptr: number) => (ptr === 48 ? 'model.onnx' : ''),
+  } as unknown as AbiModule
+  const registry = new Registry()
+  const seen: EngineModel[] = []
+  let processed = 0
+  const key = registry.defineEngine('org.example.loads', () => ({
+    load(model: EngineModel) {
+      seen.push(model)
+    },
+    process() {
+      processed++
+    },
+  }))
+  const p = anira_phase.ANIRA_PHASE_INFERENCE
+  assert.equal(registry.engine(module, key, p, 0, 16, 0), anira_status.ANIRA_OK)
+  assert.equal(registry.engine(module, key, p, 0, 16, 0), anira_status.ANIRA_OK)
+  assert.equal(seen.length, 1, 'one load for one loaded model')
+  assert.equal(seen[0].row, 2)
+  assert.deepEqual([...seen[0].bytes!], [1, 2, 3, 4])
+  assert.equal(seen[0].bytes!.buffer, memory, 'a view of the shared memory, no copy')
+  assert.equal(seen[0].path, null)
+  assert.equal(registry.engine(module, key, p, 0, 32, 0), anira_status.ANIRA_OK)
+  assert.equal(seen.length, 2, 'another loaded model loads again')
+  assert.equal(seen[1].bytes, null)
+  assert.equal(seen[1].path, 'model.onnx')
+  assert.equal(processed, 3)
+  assert.deepEqual(engineModel({ module } as ScopeEnv, 16).row, 2)
 })
 
 test('a key nobody defined, and two names of one key, are refused', () => {

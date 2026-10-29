@@ -23,8 +23,15 @@ and name the module in the context, bundled into one file (with Vite,
 
    const context = Context.create(anira, { threads: 2, workerModule })
 
-``init`` (optional, may be async) loads what the engine needs: a model fetched by URL, a runtime
-instantiated. ``process(ctx, prepared)`` runs once per inference: ``engineTensors(env, ctx)``
+``init`` (optional, may be async) loads what the engine needs before the Worker's loop: a runtime
+instantiated. ``load(model)`` (optional, synchronous) receives the model entry the calls run, what
+a C engine's load reads of its row: ``model.bytes`` (a ``Uint8Array`` view of the shared memory,
+no copy; valid while the loaded model lives), else ``model.path``, or neither for an engine that
+declares ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``. It runs on each Worker before the first call on a
+loaded model; ``ModelConfig.fromUrl`` attaches the bytes of a JavaScript engine's entry, so the
+model file is fetched once, on the main thread, and every Worker reads the same memory.
+``process(ctx, prepared)`` runs once per inference (``prepared`` the loaded model's record, which
+:js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
 gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
 tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
 ``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``registerEngine``) runs at a new stream of an exclusive
@@ -61,8 +68,10 @@ ONNX Runtime Web
 
 ``@anira-project/anira/engines/onnxruntime-web`` wraps onnxruntime-web's own WebAssembly build
 as such an engine: its ``init`` loads onnxruntime-web's binary (``dist/wasm/
-ort-wasm-simd-threaded.wasm``) and creates a session from the model, its ``process`` runs one
-float32 ORT tensor per model tensor of the call:
+ort-wasm-simd-threaded.wasm``), its ``load`` creates a session from the model entry's bytes
+(copied into onnxruntime-web's own heap, a separate module) or, for an entry with a path and no
+bytes, from a synchronous fetch of the path, and its ``process`` runs one float32 ORT tensor per
+model tensor of the call:
 
 .. code-block:: ts
 
@@ -70,10 +79,18 @@ float32 ORT tensor per model tensor of the call:
    import { defineEngine } from '@anira-project/anira/scope'
    import { ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb } from '@anira-project/anira/engines/onnxruntime-web'
 
-   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb({ model: new URL('./model.onnx', import.meta.url) }))
+   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())
 
-The page then registers ``ONNXRUNTIME_WEB_ENGINE_ID`` and names it in the model entry, with the
-id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
+The model is the config's, stated once:
+
+.. code-block:: json
+
+   { "models": [{ "engine": "org.anira.onnxruntime-web", "path": "model.onnx" }], "inputs": [], "outputs": [] }
+
+``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
+each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
+(a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
 the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
 module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.

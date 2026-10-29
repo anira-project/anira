@@ -3,6 +3,7 @@
 // trampolines that call them, the heap record behind the descriptors' user_data, the JavaScript
 // log sink and the context's worker module. Compiled into anira on the Wasm binary format only
 // (CMakeLists.txt); the header is empty everywhere else.
+#include <anira/abi/config.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -213,6 +214,59 @@ void ANIRA_CALL stage_release(void* user_data) noexcept {
 
 // ---- the engine trampolines ----
 
+// What a JavaScript engine learns of its model entry, the C engine's load record read once:
+// built by the descriptor's load on the control thread from the row of anira_engine_load_info
+// (its path, copied, and its bytes, borrowed: the loaded model holds them while it lives, and
+// this record goes with its unload), and handed to every process and reset call as their
+// `prepared` pointer (the descriptor's prepare returns it). The layout is the package's
+// (web/src/registry.ts engineModel reads it): four 32-bit words on wasm32.
+struct EngineModel {
+    uint32_t m_row = 0;
+    const void* m_bytes = nullptr;  ///< the entry's bytes, or NULL
+    uint32_t m_size = 0;            ///< their size, 0 without
+    const char* m_path = nullptr;   ///< into m_path_storage, or NULL for an entry without one
+    std::string m_path_storage;
+};
+static_assert(sizeof(void*) == 4 && offsetof(EngineModel, m_row) == 0 &&
+                  offsetof(EngineModel, m_bytes) == 4 && offsetof(EngineModel, m_size) == 8 &&
+                  offsetof(EngineModel, m_path) == 12,
+              "registry.ts engineModel reads these four words");
+
+anira_status ANIRA_CALL engine_load(const anira_engine_load_info* info,
+                                    void* /*user_data*/,
+                                    void** out_loaded) noexcept {
+    try {
+        auto model = std::make_unique<EngineModel>();
+        model->m_row = info->row;
+        if (const char* path = anira_model_config_model_path(info->model, info->row)) {
+            model->m_path_storage = path;
+            model->m_path = model->m_path_storage.c_str();
+        }
+        const void* bytes = nullptr;
+        size_t size = 0;
+        if (anira_model_config_model_bytes(info->model, info->row, &bytes, &size) == ANIRA_OK) {
+            model->m_bytes = bytes;
+            model->m_size = static_cast<uint32_t>(size);
+        }
+        *out_loaded = model.release();
+        return ANIRA_OK;
+    } catch (...) { return ANIRA_ERROR_OUT_OF_MEMORY; }
+}
+
+void ANIRA_CALL engine_unload(void* loaded, void* /*user_data*/) noexcept {
+    delete static_cast<EngineModel*>(loaded);  // NOLINT(cppcoreguidelines-owning-memory)
+}
+
+anira_status ANIRA_CALL engine_prepare(const anira_prepare_info* /*info*/,
+                                       void* loaded,
+                                       void* /*user_data*/,
+                                       void** out_prepared) noexcept {
+    *out_prepared = loaded;
+    return ANIRA_OK;
+}
+
+void ANIRA_CALL engine_unprepare(void* /*prepared*/, void* /*user_data*/) noexcept {}
+
 anira_status ANIRA_CALL engine_process(const anira_engine_ctx* ctx,
                                        void* prepared,
                                        void* user_data) noexcept {
@@ -278,6 +332,12 @@ void fill_engine_desc(anira_engine_desc& desc,
     record->m_hook_mask = hook_mask;
     desc = ANIRA_ENGINE_DESC_INIT;
     desc.process = &engine_process;
+    // The model record of every call (no crossing: the engine runs in the Workers' scopes,
+    // and reads the record there, registry.ts engineModel).
+    desc.load = &engine_load;
+    desc.unload = &engine_unload;
+    desc.prepare = &engine_prepare;
+    desc.unprepare = &engine_unprepare;
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_RESET) != 0) { desc.reset = &engine_reset; }
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_QUERY) != 0) { desc.query = &engine_query; }
     desc.release = &engine_release;
