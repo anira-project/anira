@@ -106,9 +106,9 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The custom-worklet example (web/examples/custom-worklet) against the built package: tsc
-      # with strict over its files and the package's types, then its Vite build (the worklet
-      # bundled into one script), which the browser test runs.
+      # The stage-and-engine example (web/examples/stage-and-engine) against the built package:
+      # tsc with strict over its files and the package's types, then its Vite build (the worker
+      # module and the worklet module bundled into one script each), which the browser test runs.
       - name: build the examples
         working-directory: web
         run: npm run examples
@@ -131,17 +131,14 @@ jobs:
         run: cmake -P extras/fetch-models.cmake
 
       # The built package in headless Chromium and Firefox (served with COOP/COEP).
-      # web/test/browser/index.html: a JavaScript engine on an inference Worker that doubles its
-      # input times a Static gain, a Hard handler of block 128, an OfflineAudioContext rendered
-      # through the default worklet, which serves the gain (changed mid-render where the browser
-      # can suspend an offline render); the output must be the input times 2 * gain after the
-      # handler's latency, then the Worker stops and the worklet is disposed. ort.html: an ONNX
-      # model on the default Worker's ONNX Runtime Web engine. config.html: the bundled
-      # gain.model.json and gain.contract.json as they are in the repository (ModelConfig.fromUrl,
-      # Contract.fromUrl), the ONNX entry on the module's built-in ONNX Runtime engine, driven on
-      # the page's thread. The example's check page: the
-      # same render through its own worklet and JavaScript stage. A load the browser refuses
-      # (Firefox's file:/// security error) fails the step too.
+      # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm
+      # Workers importing a worker module with a JavaScript engine, a JavaScript stage in the
+      # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
+      # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
+      # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX
+      # entry on the module's built-in ONNX Runtime engine. ort.html: the ONNX Runtime Web
+      # engine on a Worker. The example's check page, built and under Vite's dev server. A load
+      # the browser refuses (Firefox's file:/// security error) fails the step too.
       - name: browser test (headless Chromium and Firefox)
         working-directory: web
         run: |

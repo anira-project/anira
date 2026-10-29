@@ -1,8 +1,8 @@
-// anira/anira_em.h: the Emscripten companion of the C ABI. The EM_JS thunks into the hook
-// object Module.anira of the instance that runs the C call, the stage and engine trampolines
-// that call them, the heap record behind the descriptors' user_data, the JavaScript log sink
-// and the per-instance stack and thread-local block. Compiled into anira on the Wasm binary
-// format only (CMakeLists.txt); the header is empty everywhere else.
+// anira/anira_em.h: the Emscripten companion of the C ABI. The EM_JS thunks into the registry of
+// the scope that runs the C call (globalThis[Symbol.for('anira.registry')]), the stage and engine
+// trampolines that call them, the heap record behind the descriptors' user_data, the JavaScript
+// log sink and the context's worker module. Compiled into anira on the Wasm binary format only
+// (CMakeLists.txt); the header is empty everywhere else.
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -28,10 +28,6 @@
 
 using anira::capi::translate_exception;
 
-// wasm-ld synthesizes it for a shared-memory link: copies the TLS segment's initial image into
-// the block and makes it the calling instance's __tls_base.
-extern "C" void __wasm_init_tls(void* block);  // NOLINT(bugprone-reserved-identifier)
-
 // The thunks. Each catches what the hook throws, reports it on the console (not through the anira
 // log, which may be what threw) and returns the failure status the caller passes, so that no
 // JavaScript exception unwinds through a C frame. A hook that returns nothing is ANIRA_OK. The
@@ -45,9 +41,6 @@ EM_JS(int,
       (uint32_t key, uint32_t phase, uintptr_t a, uintptr_t b, int failure),
       {
           try {
-              if (Module.anira) {
-                  return Module.anira.stage(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
-              }
               var registry = globalThis[Symbol.for ('anira.registry')];
               if (!registry) { throw new Error('no anira registry in this scope'); }
               return registry.stage(Module, key >>> 0, phase, a >>> 0, b >>> 0) | 0;
@@ -82,9 +75,6 @@ EM_JS(int,
       (uint32_t key, uint32_t phase, uintptr_t a, uintptr_t b, uintptr_t engine_id, int failure),
       {
           try {
-              if (Module.anira) {
-                  return Module.anira.engine(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
-              }
               var registry = globalThis[Symbol.for ('anira.registry')];
               if (!registry) { throw new Error('no anira registry in this scope'); }
               return registry.engine(Module, key >>> 0, phase, a >>> 0, b >>> 0, engine_id >>> 0) |
@@ -120,10 +110,6 @@ EM_JS(int,
 
 EM_JS(void, anira_em_js_log, (uintptr_t record), {
     try {
-        if (Module.anira) {
-            Module.anira.log(record >>> 0);
-            return;
-        }
         var registry = globalThis[Symbol.for ('anira.registry')];
         if (registry && registry.log) { registry.log(Module, record >>> 0); }
     } catch (e) {
@@ -160,8 +146,6 @@ constexpr uint32_t k_engine_hooks = ANIRA_EM_ENGINE_HOOK_RESET | ANIRA_EM_ENGINE
 // What the hook of a stage returns when it throws: the phase fails, its chunk delivers zeros.
 constexpr anira_status k_stage_thrown = ANIRA_ERROR_UNKNOWN;
 constexpr anira_status k_engine_thrown = ANIRA_ERROR_ENGINE;
-constexpr size_t k_stack_align = 16;
-constexpr size_t k_default_stack_bytes = size_t{4} * 1024 * 1024;
 
 // The user_data of a JavaScript stage or engine: freed by the descriptor's release.
 struct HookRecord {
@@ -261,24 +245,6 @@ void ANIRA_CALL log_hook(const anira_log_record* record, void* /*user_data*/) {
 // One registration per module: the instances share one memory and so the sink list.
 anira::detail::LogSinkId s_log_hook_sink = 0;
 
-size_t stack_bytes(size_t bytes) noexcept {
-    const size_t requested = bytes == 0 ? k_default_stack_bytes : bytes;
-    return (requested + k_stack_align - 1) / k_stack_align * k_stack_align;
-}
-
-size_t tls_align() noexcept {
-    const size_t align = __builtin_wasm_tls_align();
-    return align > k_stack_align ? align : k_stack_align;
-}
-
-// The thread-local block sits above the stack's top, where a growing stack never reaches.
-void* tls_block(void* stack_base, size_t bytes) noexcept {
-    const size_t align = tls_align();
-    const uintptr_t top = address(stack_base) + stack_bytes(bytes);
-    const uintptr_t block = (top + align - 1) / align * align;
-    return reinterpret_cast<void*>(block);  // NOLINT(performance-no-int-to-ptr)
-}
-
 // Fills a stage descriptor of trampolines over a new record; throws std::bad_alloc only.
 void fill_stage_desc(anira_stage_desc& desc,
                      uint32_t js_key,
@@ -321,10 +287,6 @@ void fill_engine_desc(anira_engine_desc& desc,
 }
 
 }  // namespace
-
-uint32_t ANIRA_CALL anira_em_hooks_version(void) ANIRA_NOEXCEPT {
-    return ANIRA_EM_HOOKS_VERSION;
-}
 
 anira_status ANIRA_CALL anira_em_stage_desc_init(anira_stage_desc* desc,
                                                  uint32_t js_key,
@@ -423,21 +385,3 @@ anira_status ANIRA_CALL anira_em_context_config_set_worker_module(anira_context_
     config->m_em_worker_module = url != nullptr ? url : "";
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
-
-void* ANIRA_CALL anira_em_alloc_thread_stack(size_t bytes) ANIRA_NOEXCEPT {
-    const size_t tls_bytes = __builtin_wasm_tls_size();
-    const size_t total = stack_bytes(bytes) + tls_align() + tls_bytes;
-    // A multiple of the alignment, as aligned_alloc wants; free() returns it.
-    return std::aligned_alloc(k_stack_align,
-                              (total + k_stack_align - 1) / k_stack_align * k_stack_align);
-}
-
-void ANIRA_CALL anira_em_free_thread_stack(void* base) ANIRA_NOEXCEPT {
-    std::free(base);  // NOLINT(cppcoreguidelines-no-malloc)
-}
-
-anira_status ANIRA_CALL anira_em_init_instance(void* stack_base, size_t bytes) ANIRA_NOEXCEPT {
-    if (stack_base == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    __wasm_init_tls(tls_block(stack_base, bytes));
-    return ANIRA_OK;
-}

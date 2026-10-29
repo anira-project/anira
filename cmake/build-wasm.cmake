@@ -75,6 +75,15 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   RUNTIME_OUTPUT_DIRECTORY ${ANIRA_WASM_OUTPUT_FOLDER}
 )
 
+# The glue's one construct that has Vite's dev server inject its client (the pthread pool's
+# literal worker URL), rewritten to go through locateFile: cmake/wasm-glue-rewrite.cmake.
+add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+        "-DGLUE=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.js"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wasm-glue-rewrite.cmake"
+    VERBATIM
+    COMMENT "Rewriting the pthread worker URL of ${ANIRA_WASM_TARGET_NAME}.js for Vite's dev server")
+
 # ==============================================================================
 # Bundle license files from native deps that get statically linked into the
 # WASM binary, so the @anira-project/anira npm package can ship them and downstream

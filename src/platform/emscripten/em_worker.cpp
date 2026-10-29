@@ -47,7 +47,10 @@ EM_JS(void,
       (const char* module_url, uintptr_t enter, void* boot, int32_t* left),
       {
           var url = module_url ? UTF8ToString(module_url) : "";
-          var loaded = url ? import(url) : Promise.resolve();
+          // A template literal: Vite's dev server rewrites a dynamic import of a bare variable
+          // into one through its client, which a worklet scope cannot load
+          // (cmake/wasm-glue-rewrite.cmake).
+          var loaded = url ? import(`${url}`) : Promise.resolve();
           loaded
               .then(function() {
                   var registry = globalThis[Symbol.for ('anira.registry')];

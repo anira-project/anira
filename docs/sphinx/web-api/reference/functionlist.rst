@@ -2,68 +2,37 @@ Function list
 =============
 
 Module-level free functions exported by ``@anira-project/anira``. The C ABI itself is reached
-through :js:class:`AniraBindings` (``aniraWeb.abi``, generated from the registry) or the raw
-``_anira_*`` exports of :js:attr:`AniraWeb.module`, documented with the C headers
-(:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as ``layout``) and
-the enums and defines in ``abi/enums.ts``.
+through :js:class:`AniraBindings` (``anira.abi``, generated from the registry), documented with
+the C headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
+``layout``) and the enums and defines in ``abi/enums.ts``.
 
-WASM bootstrap
---------------
+Stages and engines
+------------------
 
-.. js:autofunction:: createAniraWasm
+In every scope that runs one of their phases: the main thread, an inference Worker's module, a
+worklet's module (``@anira-project/anira/scope``).
 
-.. js:autofunction:: getWasmUrl
+.. js:autofunction:: defineStage
 
-Instance stacks
----------------
+.. js:autofunction:: defineEngine
 
-.. js:autofunction:: allocInstanceStack
+.. js:autofunction:: keyOf
 
-.. js:autofunction:: freeInstanceStack
+.. js:autofunction:: engineTensors
 
-.. js:autofunction:: enterInstance
+.. js:autofunction:: scopeRegistry
 
-.. js:autofunction:: installThreadLocalBlock
+Audio
+-----
 
-Status and errors
------------------
-
-.. js:autofunction:: callWithError
-
-.. js:autofunction:: checkStatus
-
-.. js:autofunction:: statusString
-
-Hook records
-------------
-
-.. js:autofunction:: readStageContext
-
-.. js:autofunction:: readLogRecord
-
-Workers
--------
-
-.. js:autofunction:: setupInferenceWorker
-
-.. js:autofunction:: waitForWorkerMessage
-
-.. js:autofunction:: request
-
-.. js:autofunction:: nextRequestId
+.. js:autofunction:: createAudioNode
 
 Configs
 -------
 
 .. js:autofunction:: enabledEngines
 
-Helpers
--------
-
-.. js:autofunction:: getAniraVersion
-
-.. js:autofunction:: drainAniraLog
-
-.. js:autofunction:: startLogPump
+Log
+---
 
 .. js:autofunction:: consoleLogSink

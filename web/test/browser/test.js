@@ -1,58 +1,57 @@
-// The browser test of the built package (web/dist), run by run.mjs in headless Chromium: the
-// main instance, a JavaScript engine on an inference Worker that doubles its input times a
-// Static gain, a Hard handler of block 128, and an OfflineAudioContext rendered through the
-// anira worklet node, which serves the gain (node.setStaticInput, changed mid-render). The
-// output must be the input times 2 * gain after the handler's latency, each block with the gain
-// of the quantum that submitted it; then the Worker is stopped (its has_exited stop) and the
-// worklet disposed. The verdict is window.anira_test_result.
+// The browser test of the built package (web/dist), run by run.mjs in headless Chromium and
+// Firefox: the typed layer end to end. The module on the page (Anira), a context whose pool is two
+// Wasm Workers importing pool-worker.js (a JavaScript engine that writes its input times 2 * the
+// Static gain), a pipeline with that engine and a JavaScript stage (worklet-stage.js: halves the
+// input in pre_process, on the worklet scope's registry), a Hard handler of block 128, and an
+// OfflineAudioContext rendered through the handler's Wasm Audio Worklet node (C render callback),
+// the gain being the node's AudioParam, automated mid-render. The output must be the input times
+// the gain of its quantum after the handler's latency (the stage's 0.5 and the engine's 2 cancel).
+// Then the gain as a tensor slot written with setStaticInput on a second handler, and the teardown:
+// the nodes, the handlers and the context, which stops the pool. The verdict is
+// window.anira_test_result.
 import {
+  ANIRA_EM_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-  AniraWeb,
-  anira_budget_kind,
-  anira_log_drain,
+  Anira,
+  AniraError,
+  Context,
+  Contract,
+  Handler,
+  ModelConfig,
+  Pipeline,
   anira_status,
-  anira_wait_strategy,
-  anira_warmup_mode,
-  callWithError,
 } from '../../dist/index.js'
 
 const RATE = 48000
 const QUANTUM = 128
 const QUANTA = 64
-// The quantum from which on the gain is GAIN_AFTER (the render suspends there to write it).
-const CHANGE_QUANTUM = 32
+const THREADS = 2
+// The gain until CHANGE_QUANTUM, then GAIN_AFTER (an AudioParam event at the quantum's start).
 const GAIN_BEFORE = 1
 const GAIN_AFTER = 0.25
-const ENGINE_ID = 'org.anira-test.double'
+const CHANGE_QUANTUM = 32
+const ENGINE_ID = 'org.anira-test.pool-double'
+const STAGE = 'org.anira-test.half'
+
+const render = async (audio, audioNode, samples) => {
+  const input = audio.createBuffer(1, samples.length, RATE)
+  input.copyToChannel(samples, 0)
+  const source = new AudioBufferSourceNode(audio, { buffer: input })
+  source.connect(audioNode.node).connect(audio.destination)
+  source.start(0)
+  return (await audio.startRendering()).getChannelData(0)
+}
 
 const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   check(crossOriginIsolated, 'the page is cross-origin isolated (COOP/COEP)')
 
-  const anira = await AniraWeb.create()
-  const { module: m, heap } = anira
+  const anira = await Anira.create()
   anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
-  const out = heap.malloc(4)
-  const created = (call) => {
-    callWithError(heap, call)
-    return heap.readU32(out)
-  }
+  check(anira.version.length > 0, `the module is anira ${anira.version}`)
 
-  // A refused call throws and catches a C++ exception inside the module: it must come back as
-  // its status, which needs the main instance's thread-local block (createAniraWasm).
-  const refusal = heap.withCString('{ not json', (json) => {
-    const err = heap.malloc(520)
-    const status = m._anira_model_config_from_json(json, 10, 0, out, err)
-    heap.free(err)
-    return status
-  })
-  check(
-    refusal === anira_status.ANIRA_ERROR_JSON,
-    `a refused call returns its status (${refusal})`
-  )
-  // The generated bindings (web/src/abi/bindings.ts): the same refusal thrown as an AniraError
-  // with the entry's message, out parameters returned, strings in and out.
+  // The bindings throw a refused call as an AniraError with the entry's message.
   let thrown = null
   try {
     anira.abi.anira_model_config_from_json('{ not json', null)
@@ -60,207 +59,125 @@ const run = async () => {
     thrown = error
   }
   check(
-    thrown?.name === 'AniraError' &&
+    thrown instanceof AniraError &&
       thrown.code === anira_status.ANIRA_ERROR_JSON &&
       thrown.message.startsWith('anira_model_config_from_json: '),
-    `the bindings throw a refused call as an AniraError (${thrown?.message})`
-  )
-  const version = anira.abi.anira_version_string()
-  check(
-    typeof version === 'string' && version.length > 0,
-    `the bindings return strings (${version})`
+    `a refused call throws an AniraError (${thrown?.message})`
   )
 
-  const contextConfig = created((err) => m._anira_context_config_create(out, err))
-  m._anira_context_config_set_threads(
-    contextConfig,
-    0,
-    anira_wait_strategy.ANIRA_WAIT_SPIN_BACKOFF
-  )
-  m._anira_context_config_set_log_drain(
-    contextConfig,
-    anira_log_drain.ANIRA_LOG_DRAIN_MANUAL,
-    10
-  )
-  const context = created((err) => m._anira_context_create(contextConfig, out, err))
+  const context = Context.create(anira, {
+    threads: THREADS,
+    workerModule: new URL('./pool-worker.js', import.meta.url),
+  })
 
-  const modelJson = JSON.stringify({
-    models: [{ engine: ENGINE_ID, path: 'never-opened.bin' }],
-    inputs: [
-      {
-        name: 'in',
-        dtype: 'float32',
-        role: 'streamed',
-        axes: [
-          ['batch', 1],
-          ['channel', 1],
-          ['time', QUANTUM],
-        ],
-        window: { min: QUANTUM, max: QUANTUM },
-      },
-      { name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] },
+  const streamed = (name) => ({
+    name,
+    dtype: 'float32',
+    role: 'streamed',
+    axes: [
+      ['batch', 1],
+      ['channel', 1],
+      ['time', QUANTUM],
     ],
-    outputs: [
-      {
-        name: 'out',
-        dtype: 'float32',
-        role: 'streamed',
-        axes: [
-          ['batch', 1],
-          ['channel', 1],
-          ['time', QUANTUM],
-        ],
-        window: { min: QUANTUM, max: QUANTUM },
-      },
-    ],
+    window: { min: QUANTUM, max: QUANTUM },
   })
-  const model = heap.withCString(modelJson, (json) =>
-    created((err) => m._anira_model_config_from_json(json, modelJson.length, 0, out, err))
+  const model = await ModelConfig.fromJson(
+    anira,
+    JSON.stringify({
+      models: [{ engine: ENGINE_ID, path: 'never-opened.bin' }],
+      inputs: [
+        streamed('in'),
+        { name: 'gain', dtype: 'float32', role: 'static', axes: [['any', 1]] },
+      ],
+      outputs: [streamed('out')],
+    }),
+    { fetchModel: () => false }
   )
-  const pipeline = created((err) => m._anira_pipeline_create(out, err))
-  const variants = heap.malloc(4)
-  heap.writeU32(variants, model)
-  callWithError(heap, (err) =>
-    m._anira_pipeline_add_inference(pipeline, variants, 1, 0, 0, err)
-  )
-  await anira.registerJSEngine(pipeline, {
-    engineId: ENGINE_ID,
-    className: 'DoubleEngine',
-    modelConfigPtr: model,
-    engineFlags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-  })
-
-  const handler = created((err) => m._anira_handler_create(context, pipeline, out, err))
-  const contract = created((err) =>
-    m._anira_contract_create_hard(QUANTUM, QUANTUM, RATE, out, err)
-  )
-  m._anira_contract_hard_set_budget(
-    contract,
-    anira_budget_kind.ANIRA_BUDGET_EXPLICIT,
-    2.0
-  )
-  m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
-  callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
-  const latency = m._anira_handler_get_latency(handler, 0) >>> 0
-
-  // The 2.x call (no context, or a worker in its place) is refused before any C call.
-  const refusals = []
-  for (const args of [[], [0], [new URL('./double-worker.js', import.meta.url)]]) {
-    refusals.push(
-      await anira.spinUpInferenceWorker(...args).then(
-        () => 'resolved',
-        (error) => error.name
-      )
-    )
-  }
+  const pipeline = Pipeline.create(anira)
+    .addInference(model)
+    .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addStage(STAGE, { hooks: ANIRA_EM_HOOK_PRE })
+  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
+  const handler = Handler.create(context, pipeline).prepare(contract)
+  const latency = handler.latency()
+  // The first session built the pool.
   check(
-    refusals.every((name) => name === 'TypeError') &&
-      anira.getActiveWorkers().length === 0,
-    `spinUpInferenceWorker without a context is a TypeError (${refusals.join(', ')})`
+    context.threads === THREADS,
+    `the context's pool has ${context.threads} Wasm Workers`
   )
+  // An offline render waits for every inference: the Workers must be in their loops first.
+  await context.ready()
+  check(true, `the pool's Wasm Workers are in their loops (latency ${latency})`)
 
-  const worker = await anira.spinUpInferenceWorker(
-    context,
-    new URL('./double-worker.js', import.meta.url)
-  )
-
-  const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
-  await anira.registerAudioWorkletForContext(
-    audio,
-    new URL('../../dist/workers/audio-worklet.bundled.js', import.meta.url)
-  )
-  // The offline render runs faster than real time: wait for each quantum's inference.
-  const node = await anira.configureAudioWorklet(audio, handler, {
-    inputChannels: 1,
-    outputChannels: 1,
-    waitMs: 500,
-    staticInputs: [1],
-    modelConfigPtr: model,
-  })
-  let refused = ''
-  try {
-    node.setStaticInput(1, [1, 2])
-  } catch (error) {
-    refused = error.name
-  }
-  check(refused === 'RangeError', `a value of the wrong size is refused (${refused})`)
-  node.setStaticInput(1, [GAIN_BEFORE])
-  const input = audio.createBuffer(1, QUANTUM * QUANTA, RATE)
-  // Kept in a buffer of its own: Firefox detaches an AudioBuffer's channel arrays once a
-  // source node plays it.
   const samples = new Float32Array(QUANTUM * QUANTA)
   for (let i = 0; i < samples.length; i++)
     samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / RATE)
-  input.copyToChannel(samples, 0)
-  const source = audio.createBufferSource()
-  source.buffer = input
-  source.connect(node).connect(audio.destination)
-  source.start(0)
-  // Firefox's OfflineAudioContext cannot suspend: there the gain stays.
-  let suspended = true
-  try {
-    audio.suspend((CHANGE_QUANTUM * QUANTUM) / RATE).then(() => {
-      node.setStaticInput(1, new Float32Array([GAIN_AFTER]))
-      return audio.resume()
-    })
-  } catch {
-    suspended = false
-  }
-  const rendered = (await audio.startRendering()).getChannelData(0)
+  const stageModule = new URL('./worklet-stage.js', import.meta.url)
 
-  // Each input block carries the gain of the quantum that submitted it; the suspension lands on
-  // the boundary of CHANGE_QUANTUM, or one quantum later where the time rounds up.
-  const blockError = (block, gain) => {
-    let worst = 0
-    for (let j = block * QUANTUM; j < (block + 1) * QUANTUM; j++) {
-      if (j + latency >= rendered.length) break
-      worst = Math.max(worst, Math.abs(rendered[j + latency] - 2 * gain * samples[j]))
-    }
-    return worst
-  }
+  const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
+  const audioNode = await handler.createAudioNode(audio, {
+    params: [1],
+    waitMs: 500,
+    workletModules: [stageModule],
+  })
+  check(
+    audioNode.node instanceof AudioWorkletNode && audioNode.params.has(1),
+    "the node is an AudioWorkletNode with the gain's AudioParam"
+  )
+  const gain = audioNode.params.get(1)
+  gain.setValueAtTime(GAIN_BEFORE, 0)
+  gain.setValueAtTime(GAIN_AFTER, (CHANGE_QUANTUM * QUANTUM) / RATE)
+  const rendered = await render(audio, audioNode, samples)
+  // Each input block carries the gain of the quantum that submitted it.
   let worst = 0
-  let changedAt = -1
-  for (let block = 0; (block + 1) * QUANTUM + latency <= rendered.length; block++) {
-    const before = blockError(block, GAIN_BEFORE)
-    const after = blockError(block, GAIN_AFTER)
-    if (changedAt === -1 && after < before) changedAt = block
-    worst = Math.max(worst, changedAt === -1 ? before : after)
+  for (let j = 0; j + latency < rendered.length; j++) {
+    const g = Math.floor(j / QUANTUM) < CHANGE_QUANTUM ? GAIN_BEFORE : GAIN_AFTER
+    worst = Math.max(worst, Math.abs(rendered[j + latency] - g * samples[j]))
   }
   const energy = rendered.reduce((sum, x) => sum + x * x, 0)
-  check(energy > 1, `the worklet rendered audio (energy ${energy.toFixed(2)})`)
+  check(energy > 1, `the C render callback rendered audio (energy ${energy.toFixed(2)})`)
   check(
     worst < 1e-6,
-    `the output is the input times 2 * gain after ${latency} samples (worst error ${worst})`
+    `the output is the input times the AudioParam's gain after ${latency} samples, through ` +
+      `the worklet's JavaScript stage and the pool's engine (worst error ${worst})`
   )
-  if (suspended) {
-    check(
-      changedAt === CHANGE_QUANTUM || changedAt === CHANGE_QUANTUM + 1,
-      `the gain written mid-render applies from quantum ${changedAt} (written at ${CHANGE_QUANTUM})`
-    )
-  } else {
-    check(
-      changedAt === -1,
-      'skipped: the mid-render write (OfflineAudioContext.suspend unsupported)'
-    )
+  audioNode.destroy()
+  handler.destroy()
+
+  // The same gain as a tensor slot the main thread writes whole: a constant 0.5.
+  const second = Handler.create(context, pipeline).prepare(contract)
+  const audio2 = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
+  const tensorNode = await second.createAudioNode(audio2, {
+    staticInputs: [1],
+    waitMs: 500,
+    workletModules: [stageModule],
+  })
+  let refused = ''
+  try {
+    tensorNode.setStaticInput(1, [1, 2])
+  } catch (error) {
+    refused = error.name
   }
-
-  await worker.stop()
+  check(refused === 'AniraError', `a value of the wrong size is refused (${refused})`)
+  tensorNode.setStaticInput(1, [0.5])
+  const rendered2 = await render(audio2, tensorNode, samples)
+  let worst2 = 0
+  for (let j = 0; j + latency < rendered2.length; j++) {
+    worst2 = Math.max(worst2, Math.abs(rendered2[j + latency] - 0.5 * samples[j]))
+  }
   check(
-    anira.getActiveWorkers().length === 0,
-    'the Worker stopped (has_exited) and was destroyed'
+    worst2 < 1e-6,
+    `the tensor slot written with setStaticInput reaches the handler (worst error ${worst2})`
   )
-  await anira.disposeAudioWorklet(node)
-  check(true, 'the worklet was disposed')
+  tensorNode.destroy()
+  second.destroy()
 
-  m._anira_handler_destroy(handler)
-  m._anira_pipeline_destroy(pipeline)
-  m._anira_contract_destroy(contract)
-  m._anira_model_config_destroy(model)
-  m._anira_context_destroy(context)
-  m._anira_context_config_destroy(contextConfig)
-  heap.free(variants)
-  heap.free(out)
-  return { latency, worst, checks }
+  pipeline.destroy()
+  contract.destroy()
+  model.destroy()
+  context.destroy()
+  check(context.threads === 0, 'the last context stopped the pool')
+  return { checks }
 }
 
 run()

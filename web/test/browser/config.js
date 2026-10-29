@@ -4,25 +4,23 @@
 // fetches the model file of every entry whose engine this module has compiled in (the ONNX
 // Runtime entry: simple_gain_network_mono.onnx, relative to the config) and attaches it as bytes,
 // and leaves the others (LibTorch, TFLite, LiteRT, ExecuTorch) unfetched. The handler runs the
-// entry on the module's built-in ONNX Runtime engine; the page drives it the way the node smoke
-// does, one Hard process call per block and the queue run on the same thread
-// (anira_inference_thread_execute), with the Static gain set through the handler. The output
-// must be the input times the gain after the handler's latency. The verdict is
-// window.anira_test_result.
+// entry on the module's built-in ONNX Runtime engine, on a pool of one Wasm Worker (no worker
+// module: the built-in engine needs no JavaScript), streamed through the handler's audio node in
+// an OfflineAudioContext with the Static gain as its AudioParam. The output must be the input
+// times the gain after the handler's latency. The verdict is window.anira_test_result.
 import {
-  ANIRA_DTYPE_F32,
-  AniraWeb,
+  Anira,
+  Context,
   Contract,
+  Handler,
   ModelConfig,
+  Pipeline,
   anira_engine,
-  anira_log_drain,
-  anira_wait_strategy,
-  layout,
 } from '../../dist/index.js'
 
 const RATE = 48000
-const BLOCK = 512
-const BLOCKS = 8
+const QUANTUM = 128
+const QUANTA = 64
 const GAIN = 0.5
 const MODELS = '../../extras/models/model-pool/'
 
@@ -30,9 +28,8 @@ const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
 
-  const anira = await AniraWeb.create()
+  const anira = await Anira.create()
   const { abi } = anira
-  const m = abi.module
   anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
 
   const model = await ModelConfig.fromUrl(
@@ -55,101 +52,55 @@ const run = async () => {
       abi.anira_model_config_model_path(model.ptr, libtorch) !== null,
     'an entry of an engine this module lacks keeps its path, unfetched'
   )
-  const contract = await Contract.fromUrl(
-    anira,
-    new URL(`${MODELS}gain.contract.json`, import.meta.url)
-  )
-  // The file leaves the geometry to the host.
-  contract.setGeometry(BLOCK, BLOCK, RATE)
+  // The file leaves the geometry to the host: the render quantum at the context's rate.
+  const contract = (
+    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
+  ).setGeometry(QUANTUM, QUANTUM, RATE)
   check(
     abi.anira_contract_hard_budget(contract.ptr).explicit_ms === 5,
     'the contract file is read as written (budget 5 ms)'
   )
 
-  const contextConfig = abi.anira_context_config_create()
-  abi.anira_context_config_set_threads(
-    contextConfig,
-    0,
-    anira_wait_strategy.ANIRA_WAIT_SPIN_BACKOFF
-  )
-  abi.anira_context_config_set_log_drain(
-    contextConfig,
-    anira_log_drain.ANIRA_LOG_DRAIN_MANUAL,
-    10
-  )
-  const context = abi.anira_context_create(contextConfig)
-  const pipeline = abi.anira_pipeline_create()
-  const variants = m._malloc(4)
-  m.HEAPU32[variants >>> 2] = model.ptr
-  abi.anira_pipeline_add_inference(pipeline, variants, 1, 0, 0)
-  const handler = abi.anira_handler_create(context, pipeline)
-  abi.anira_handler_prepare(handler, contract.ptr)
-  const latency = abi.anira_handler_get_latency(handler, 0)
+  const context = Context.create(anira, { threads: 1 })
+  const pipeline = Pipeline.create(anira).addInference(model)
+  const handler = Handler.create(context, pipeline).prepare(contract)
+  const latency = handler.latency()
   check(
     true,
     `the handler prepared on the built-in ONNX Runtime engine (latency ${latency})`
   )
-  const thread = abi.anira_inference_thread_create(context)
+  await context.ready()
 
-  // Host tensors over heap buffers: the block in and out ([1, BLOCK]) and the gain ([1]).
-  const tensor = (elements, shape) => {
-    const data = m._malloc(elements * 4)
-    const dims = m._malloc(shape.length * 8)
-    shape.forEach((extent, i) => (m.HEAP64[(dims >>> 3) + i] = BigInt(extent)))
-    const record = m._malloc(layout.anira_tensor.size)
-    abi.anira_tensor_init_host(record, data, ANIRA_DTYPE_F32, shape.length, dims)
-    return { record, data, dims }
-  }
-  const input = tensor(BLOCK, [1, BLOCK])
-  const output = tensor(BLOCK, [1, BLOCK])
-  const gain = tensor(1, [1])
-  m.HEAPF32[gain.data >>> 2] = GAIN
-  abi.anira_handler_set_static_input(handler, 1, gain.record)
-
-  const samples = new Float32Array(BLOCK * BLOCKS)
+  const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
+  const audioNode = await handler.createAudioNode(audio, { params: [1], waitMs: 500 })
+  audioNode.params.get(1).value = GAIN
+  const samples = new Float32Array(QUANTUM * QUANTA)
   for (let i = 0; i < samples.length; i++)
     samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / RATE)
-  const rendered = new Float32Array(BLOCK * BLOCKS)
-  for (let block = 0; block < BLOCKS; block++) {
-    m.HEAPF32.set(samples.subarray(block * BLOCK, (block + 1) * BLOCK), input.data >>> 2)
-    const delivered = abi.anira_handler_process(
-      handler,
-      input.record,
-      0,
-      output.record,
-      0
-    )
-    if (delivered === BLOCK) {
-      rendered.set(
-        m.HEAPF32.subarray(output.data >>> 2, (output.data >>> 2) + BLOCK),
-        block * BLOCK
-      )
-    }
-    while (abi.anira_inference_thread_execute(thread)) {
-      // The queued inference of this block, run here.
-    }
-  }
+  const input = audio.createBuffer(1, samples.length, RATE)
+  input.copyToChannel(samples, 0)
+  const source = new AudioBufferSourceNode(audio, { buffer: input })
+  source.connect(audioNode.node).connect(audio.destination)
+  source.start(0)
+  const rendered = (await audio.startRendering()).getChannelData(0)
   let worst = 0
-  let compared = 0
   for (let i = latency; i < rendered.length; i++) {
     worst = Math.max(worst, Math.abs(rendered[i] - GAIN * samples[i - latency]))
-    compared++
   }
+  const energy = rendered.reduce((sum, x) => sum + x * x, 0)
+  check(energy > 1, `the node rendered audio (energy ${energy.toFixed(2)})`)
   check(
-    compared > 0 && worst < 1e-6,
+    worst < 1e-6,
     `the output is the input times the Static gain ${GAIN} after ${latency} samples ` +
-      `(${compared} samples, worst error ${worst})`
+      `(worst error ${worst})`
   )
 
-  abi.anira_inference_thread_destroy(thread)
-  abi.anira_handler_destroy(handler)
-  abi.anira_pipeline_destroy(pipeline)
+  audioNode.destroy()
+  handler.destroy()
+  pipeline.destroy()
   contract.destroy()
   model.destroy()
-  abi.anira_context_destroy(context)
-  abi.anira_context_config_destroy(contextConfig)
-  for (const t of [input, output, gain]) for (const p of Object.values(t)) m._free(p)
-  m._free(variants)
+  context.destroy()
   return { checks }
 }
 

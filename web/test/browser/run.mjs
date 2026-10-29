@@ -4,11 +4,13 @@
 // config.html (the package as built) and the custom-worklet example's check page (as its own
 // Vite build bundled it). The repository's extras/models is served at /extras/models/, so a page
 // fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
-// fetches those) the way a site serves its own. Exit code 0 when every check passed and the
-// browser refused no load.
+// fetches those) the way a site serves its own. Then the example's check page once more under
+// Vite's dev server (vite's createServer over the example's config), whose transform of the
+// module's glue the worklet scope must survive (decision D2; cmake/wasm-glue-rewrite.cmake). Exit
+// code 0 when every check passed and the browser refused no load.
 // usage: node test/browser/run.mjs [chromium|firefox] [page...]
 //   (after npm run build and npm run examples, from web/; CI runs both browsers; the pages
-//   default to all of them)
+//   default to all of them and the dev-server run, which a page `dev` names alone)
 import fs from 'node:fs'
 import http from 'node:http'
 import path from 'node:path'
@@ -61,11 +63,21 @@ const allPages = [
   'test/browser/index.html',
   'test/browser/ort.html',
   'test/browser/config.html',
-  'test/browser/pool.html',
-  'test/browser/worklet.html',
-  'examples/custom-worklet/dist/check.html',
+  'examples/stage-and-engine/dist/check.html',
 ]
-const pages = process.argv.length > 3 ? process.argv.slice(3) : allPages
+const pages = process.argv.length > 3 ? process.argv.slice(3) : [...allPages, 'dev']
+// The example's check page under Vite's dev server.
+const DEV_PAGE = 'check.html'
+const devServer = async () => {
+  const { createServer } = await import('vite')
+  const dev = await createServer({
+    configFile: path.join(root, 'examples/stage-and-engine/vite.config.ts'),
+    server: { port: 0, host: '127.0.0.1' },
+    logLevel: 'error',
+  })
+  await dev.listen()
+  return dev
+}
 
 const browserName = process.argv[2] ?? 'chromium'
 const browserType = { chromium, firefox }[browserName]
@@ -74,7 +86,10 @@ const browser = await browserType.launch()
 let failed = 0
 try {
   for (const pathname of pages) {
-    console.log(`-- ${pathname}`)
+    console.log(
+      `-- ${pathname === 'dev' ? `examples/stage-and-engine/${DEV_PAGE} (vite dev)` : pathname}`
+    )
+    const dev = pathname === 'dev' ? await devServer() : null
     const page = await browser.newPage()
     page.on('console', (message) => {
       console.log(`page: ${message.text()}`)
@@ -86,7 +101,11 @@ try {
       }
     })
     page.on('pageerror', (error) => console.log(`page error: ${error.message}`))
-    await page.goto(`http://127.0.0.1:${port}/${pathname}`)
+    await page.goto(
+      dev
+        ? `${dev.resolvedUrls.local[0]}${DEV_PAGE}`
+        : `http://127.0.0.1:${port}/${pathname}`
+    )
     await page.waitForFunction(() => window.anira_test_result, null, { timeout: 120000 })
     const result = await page.evaluate(() => window.anira_test_result)
     if (result.error) {
@@ -99,6 +118,7 @@ try {
       }
     }
     await page.close()
+    await dev?.close()
   }
 } finally {
   await browser.close()

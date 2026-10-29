@@ -394,13 +394,11 @@ entry, a draft one included, needs its body in the same pull request, on Emscrip
 the one test option WebAssembly allows), whose gates run under node:
 ``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
 as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
-the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
-of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
-through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
-thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
-which runs a second instance in a ``worker_threads`` Worker inside
-``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
-stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
+``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine through
+the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
+a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
+(the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
 a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
 so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
 a context of two inference threads that anira starts as Wasm Workers, each importing

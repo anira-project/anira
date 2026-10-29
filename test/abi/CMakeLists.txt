@@ -214,36 +214,25 @@ if(_abi_on_wasm)
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js")
     set_property(TARGET anira_em_smoke APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js" "${_smoke_exports}")
-    # The inference thread for real (decision 9.12): an ES module of the same library that
-    # em_smoke_thread.mjs instantiates twice on one memory, once in a worker_threads Worker
-    # that runs anira_inference_thread_run_loop (the park, the notify, the has_exited stop).
+    # A loop the host drives on a thread of its own: a Wasm Worker the test creates runs
+    # anira_inference_thread_run_loop (the park on the wake word, the notify, the has_exited
+    # stop), with a C engine.
     add_executable(anira_em_smoke_thread em_smoke_thread.c)
     anira_abi_consumer_target(anira_em_smoke_thread C)
     target_link_libraries(anira_em_smoke_thread PRIVATE anira::anira)
-    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX SUFFIX ".mjs")
+    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX)
     target_link_options(anira_em_smoke_thread PRIVATE
-        --no-entry
         -pthread
         -sWASM_WORKERS
         -sAUDIO_WORKLET
         -sENVIRONMENT=node
-        -sMODULARIZE=1
-        -sEXPORT_ES6=1
-        -sIMPORTED_MEMORY=1
-        -sSHARED_MEMORY=1
         -sINITIAL_MEMORY=268435456
         -sALLOW_MEMORY_GROWTH=0
         -sMALLOC=emmalloc
         -sSTACK_SIZE=8388608
-        # 0: the Worker's second instance of the module runs the constructors again, among them
-        # the Wasm Worker runtime's carving of a thread-local block off the heap top, which asserts
-        # an aligned top (the per-instance design of this test, not of anira's own Workers).
-        -sASSERTIONS=0
-        -sNO_DISABLE_EXCEPTION_CATCHING
-        "-sEXPORTED_FUNCTIONS=@${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt"
-        "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"stackRestore\"]")
-    set_property(TARGET anira_em_smoke_thread APPEND PROPERTY LINK_DEPENDS
-        "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt")
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
     # Issue #212: the core's mutexes exclude across two threads of one module (a pthread
     # beside the main thread, on the threaded libc AniraWeb's Wasm Workers run on).
     add_executable(anira_em_mutex em_mutex.c)
@@ -294,8 +283,7 @@ if(_abi_on_wasm)
             -DACTUAL=${CMAKE_CURRENT_BINARY_DIR}/layout-${ANIRA_ABI_MAJOR}.actual.txt
             -P ${anira_SOURCE_DIR}/cmake/abi-layout-check.cmake
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke>
-        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke_thread.mjs"
-            $<TARGET_FILE:anira_em_smoke_thread>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke_thread>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_mutex>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_pool>
             "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"

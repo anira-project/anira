@@ -10,9 +10,16 @@ export type HardContractOptions = {
   blockMax?: number
   /** The host's sample rate. */
   rate: number
-  /** An explicit inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`). */
-  budgetMs?: number
-  /** Fixed warmup iterations at prepare (`ANIRA_WARMUP_FIXED`); 0 for none. */
+  /**
+   * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`): how long an inference may
+   * take before its block is late. Required in this pre-release, whose prepare refuses the
+   * measured default.
+   */
+  budgetMs: number
+  /**
+   * Fixed warmup iterations at prepare (`ANIRA_WARMUP_FIXED`); default 0, none (this pre-release
+   * refuses the library's `ANIRA_WARMUP_UNTIL_STABLE` default).
+   */
   warmup?: number
 }
 
@@ -66,22 +73,19 @@ export class Contract {
       )
     )
     try {
-      if (options.budgetMs !== undefined) {
-        abi.anira_contract_hard_set_budget(
-          contract.ptr,
-          anira_budget_kind.ANIRA_BUDGET_EXPLICIT,
-          options.budgetMs
-        )
-      }
-      if (options.warmup !== undefined) {
-        abi.anira_contract_hard_set_warmup(
-          contract.ptr,
-          options.warmup > 0
-            ? anira_warmup_mode.ANIRA_WARMUP_FIXED
-            : anira_warmup_mode.ANIRA_WARMUP_NONE,
-          options.warmup
-        )
-      }
+      abi.anira_contract_hard_set_budget(
+        contract.ptr,
+        anira_budget_kind.ANIRA_BUDGET_EXPLICIT,
+        options.budgetMs
+      )
+      const warmup = options.warmup ?? 0
+      abi.anira_contract_hard_set_warmup(
+        contract.ptr,
+        warmup > 0
+          ? anira_warmup_mode.ANIRA_WARMUP_FIXED
+          : anira_warmup_mode.ANIRA_WARMUP_NONE,
+        warmup
+      )
     } catch (error) {
       contract.destroy()
       throw error

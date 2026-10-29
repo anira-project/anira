@@ -242,7 +242,6 @@ export interface AbiModule {
   _anira_tensor_init_iosurface(_0: number, _1: number, _2: bigint, _3: number, _4: number, _5: number, _6: number): void
   _anira_tensor_init_ahardwarebuffer(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): void
   _anira_tensor_init_d3d12(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number): void
-  _anira_em_hooks_version(): number
   _anira_em_stage_desc_init(_0: number, _1: number, _2: number, _3: number): number
   _anira_em_pipeline_add_js_stage(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number): number
@@ -253,9 +252,6 @@ export interface AbiModule {
   _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number): number
   _anira_em_audio_node_set_static_input(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_audio_node_destroy(_0: number): void
-  _anira_em_alloc_thread_stack(_0: number): number
-  _anira_em_free_thread_stack(_0: number): void
-  _anira_em_init_instance(_0: number, _1: number): number
   _malloc(bytes: number): number
   _free(ptr: number): void
   stackSave(): number
@@ -6491,33 +6487,22 @@ export class AniraBindings {
   }
 
   /**
-   * The hook-object layout this module was built for, ANIRA_EM_HOOKS_VERSION; the runtime
-   * refuses an instance whose Module.anira.version differs.
-   *
-   * @returns ANIRA_EM_HOOKS_VERSION.
-   * Thread: [thread-safe] ANIRA_NONBLOCKING
-   */
-  anira_em_hooks_version(): number {
-    const m = this.module
-    return m._anira_em_hooks_version() >>> 0
-  }
-
-  /**
-   * Fills a stage descriptor whose slots are the trampolines into Module.anira.stage: one
-   * per bit of hook_mask, every other slot NULL, the release slot always (it frees the
-   * record behind user_data, after the hook's release when ANIRA_EM_HOOK_RELEASE is set),
-   * and flags stage_flags. The promise is stated, never derived from the hook bits: under
-   * a Hard contract a stage with a pre_process, post_process or reset hook runs it on the
-   * driving thread (the audio worklet), and anira_handler_prepare refuses it with
-   * ANIRA_ERROR_CONFIG unless stage_flags carries ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The
-   * descriptor is for anira_pipeline_add_stage; one that is never added keeps its record,
-   * so anira_em_pipeline_add_js_stage is the call JavaScript makes.
+   * Fills a stage descriptor whose slots are the trampolines into the scope registry's
+   * stage: one per bit of hook_mask, every other slot NULL, the release slot always (it
+   * frees the record behind user_data, after the hook's release when
+   * ANIRA_EM_HOOK_RELEASE is set), and flags stage_flags. The promise is stated, never
+   * derived from the hook bits: under a Hard contract a stage with a pre_process,
+   * post_process or reset hook runs it on the driving thread (the audio worklet), and
+   * anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless stage_flags carries
+   * ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The descriptor is for anira_pipeline_add_stage;
+   * one that is never added keeps its record, so anira_em_pipeline_add_js_stage is the
+   * call JavaScript makes.
    *
    * @param desc The caller's descriptor, overwritten from ANIRA_STAGE_DESC_INIT.
    * @param js_key The key the hook receives, the stage's entry in the instance's
    *   registry.
-   * @param hook_mask An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into
-   *   Module.anira.stage.
+   * @param hook_mask An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into the
+   *   scope registry's stage.
    * @param stage_flags The descriptor's flags, the stage's real-time promise, which
    *   JavaScript cannot write into the descriptor itself: an OR of
    *   ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the pre_process, post_process and reset hooks
@@ -6582,12 +6567,13 @@ export class AniraBindings {
 
   /**
    * Fills an engine descriptor whose process (always), reset and query (per bit) are
-   * trampolines into Module.anira.engine, and whose release frees the record behind
-   * user_data without crossing into JavaScript. The init, load, unload, prepare and
-   * unprepare slots stay NULL: a JavaScript engine is ready when its Worker says so,
-   * before anira_handler_prepare. flags is engine_flags; providers stay empty (the CPU
-   * path alone), for a C caller to fill before anira_custom_engine_create. A descriptor
-   * that is never created keeps its record.
+   * trampolines into the scope registry's engine, and whose release frees the record
+   * behind user_data without crossing into JavaScript. The init, load, unload, prepare
+   * and unprepare slots stay NULL: a JavaScript engine is ready when its Worker's
+   * registry booted (its init resolved), before the Worker enters its loop. flags is
+   * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill
+   * before anira_custom_engine_create. A descriptor that is never created keeps its
+   * record.
    *
    * @param desc The caller's descriptor, overwritten from ANIRA_ENGINE_DESC_INIT.
    * @param js_key The key the hook receives, the engine's entry in the instance's
@@ -6675,12 +6661,12 @@ export class AniraBindings {
   }
 
   /**
-   * Registers Module.anira.log as a log sink of this module, beside the C sinks of the
-   * contexts (anira_context_config_set_log_sink works on WebAssembly too): every record
-   * at any level the core logs reaches the hook, as an anira_log_record pointer the hook
-   * reads through layout.ts while it runs, on the instance that logs or drains
-   * (anira_drain_log). One registration for the whole module: the instances share one
-   * memory and so one sink list.
+   * Registers the scope registries' log as a log sink of this module, beside the C sinks
+   * of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every
+   * record at any level the core logs reaches the registry of the scope that logs or
+   * drains (anira_drain_log), as an anira_log_record pointer it reads through layout.ts
+   * while it runs. One registration for the whole module: the threads share one memory
+   * and so one sink list.
    *
    * @param enable ANIRA_TRUE registers the hook as a log sink, ANIRA_FALSE removes it; a
    *   repeated call changes nothing.
@@ -6894,60 +6880,5 @@ export class AniraBindings {
   anira_em_audio_node_destroy(node: number): void {
     const m = this.module
     m._anira_em_audio_node_destroy(node)
-  }
-
-  /**
-   * Allocates the stack of a new module instance (an inference Worker's, the audio
-   * worklet's) together with its thread-local block: one malloc'd region, 16-byte
-   * aligned, the stack first and the block above its top, sized for this module's TLS
-   * segment (__builtin_wasm_tls_size). The instance sets its stack pointer to base +
-   * bytes and calls anira_em_init_instance(base, bytes) before anything else.
-   *
-   * @param bytes The stack size, rounded up to 16; 0 for the default of 4 MiB.
-   * @returns The base of the region, or NULL when it cannot be allocated.
-   * Thread: [main-thread]
-   */
-  anira_em_alloc_thread_stack(bytes: number): number {
-    const m = this.module
-    return m._anira_em_alloc_thread_stack(bytes) >>> 0
-  }
-
-  /**
-   * Frees a region of anira_em_alloc_thread_stack, once the instance that ran on it has
-   * stopped calling into the module.
-   *
-   * @param base What anira_em_alloc_thread_stack returned; NULL is a no-op.
-   * Thread: [main-thread]
-   */
-  anira_em_free_thread_stack(base: number): void {
-    const m = this.module
-    m._anira_em_free_thread_stack(base)
-  }
-
-  /**
-   * Installs the thread-local block of the region as the calling instance's
-   * (__wasm_init_tls): its thread_local variables, anira's and tanh-lib's, start from
-   * their initial values in that block, private to the instance. Without it a second
-   * instance's thread-local block is the one at address 0, shared with every other
-   * uninitialised instance. The first call of every instance, on that instance's thread,
-   * before any other entry: a Worker's and the worklet's, with the region whose stack
-   * they run on, and the main instance's, with a region it allocates for the block (it
-   * keeps its own stack). A module linked without main() starts without a usable block,
-   * and Emscripten's exception state is thread-local: until this call a thrown and caught
-   * C++ exception (any refused call) traps.
-   *
-   * @param stack_base What anira_em_alloc_thread_stack returned.
-   * @param bytes The size passed to anira_em_alloc_thread_stack (0 for the default).
-   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL stack_base. A failed
-   *   status throws an AniraError.
-   * Thread: [thread-safe]
-   */
-  anira_em_init_instance(stack_base: number, bytes: number): number {
-    const m = this.module
-    return checkStatus(
-      m,
-      m._anira_em_init_instance(stack_base, bytes),
-      'anira_em_init_instance'
-    )
   }
 }

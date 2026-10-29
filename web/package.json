@@ -24,17 +24,9 @@
       "types": "./dist/scope.d.ts",
       "import": "./dist/scope.js"
     },
-    "./workers/inference-worker": {
-      "types": "./dist/workers/inference-worker.d.ts",
-      "import": "./dist/workers/inference-worker.js"
-    },
-    "./workers/audio-worklet": {
-      "types": "./dist/workers/audio-worklet.d.ts",
-      "import": "./dist/workers/audio-worklet.js"
-    },
-    "./workers/worklet-base": {
-      "types": "./dist/workers/worklet-base.d.ts",
-      "import": "./dist/workers/worklet-base.js"
+    "./engines/onnxruntime-web": {
+      "types": "./dist/engines/onnxruntime-web.d.ts",
+      "import": "./dist/engines/onnxruntime-web.js"
     },
     "./wasm/*": "./dist/wasm/*"
   },
@@ -44,7 +36,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "test": "node --experimental-strip-types --no-warnings --import ./test/resolve-ts.mjs --test test/*.test.ts",
-    "examples": "tsc -p examples/custom-worklet && vite build --config examples/custom-worklet/vite.config.ts",
+    "examples": "tsc -p examples/stage-and-engine && vite build --config examples/stage-and-engine/vite.config.ts",
     "dev": "vite build --watch",
     "format": "prettier . --write"
   },
