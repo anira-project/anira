@@ -1,6 +1,6 @@
 {
   "name": "@anira-project/anira",
-  "version": "2.2.1",
+  "version": "3.0.0-alpha.2",
   "license": "Apache-2.0",
   "homepage": "https://github.com/anira-project/anira",
   "repository": {
@@ -39,6 +39,8 @@
   ],
   "scripts": {
     "build": "tsc && vite build",
+    "test": "node --experimental-strip-types --no-warnings --import ./test/resolve-ts.mjs --test test/*.test.ts",
+    "examples": "tsc -p examples/custom-worklet && vite build --config examples/custom-worklet/vite.config.ts",
     "dev": "vite build --watch",
     "format": "prettier . --write"
   },

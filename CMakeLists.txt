@@ -18,6 +18,7 @@ option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" O
 option(ANIRA_WITH_EXAMPLES  "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL   "Add install targets" OFF)
 option(ANIRA_WITH_TESTS     "Add build tests" OFF)
+option(ANIRA_WITH_ABI_TESTS "Add the ABI gates alone (test/abi); the one test option WebAssembly allows, run under node" OFF)
 option(ANIRA_WITH_DOCS      "Build documentation" OFF)
 option(ANIRA_WITH_LOGGING   "Enable logging printouts" ON)
 option(ANIRA_WITH_RTSAN     "Enable RealtimeSanitizer (rtsan) checks (requires clang 20)" OFF)
@@ -26,6 +27,7 @@ option(ANIRA_WITH_UBSAN     "Enable UndefinedBehaviorSanitizer" OFF)
 option(ANIRA_WITH_TSAN      "Enable ThreadSanitizer" OFF)
 option(ANIRA_WITH_LSAN      "Enable LeakSanitizer (standalone)" OFF)
 option(ANIRA_BUILD_WASM     "Build WebAssembly module (requires Emscripten toolchain)" OFF)
+option(ANIRA_LINK_COMPILE_COMMANDS "Link build/compile_commands.json, which clangd reads, to this tree's (top-level builds only)" OFF)
 
 # ==============================================================================
 # Inference engines — wiring per engine in cmake/engines/<engine>.cmake,
@@ -90,6 +92,14 @@ tanh_apple_deployment_target(MACOS 11.0)
 # prebuilt ONNX/LiteRT iOS xcframeworks ship an arm64-only simulator slice; an
 # Intel simulator build needs no engine (or TFLite's fat framework).
 tanh_apple_default_architectures()
+
+# clangd reads build/compile_commands.json (.clangd). The development presets turn
+# ANIRA_LINK_COMPILE_COMMANDS on, so each configure of one of their trees links its
+# database there and clangd follows the tree configured last (cmake/tanh/compile-commands.cmake).
+if(ANIRA_LINK_COMPILE_COMMANDS)
+    include(cmake/tanh/compile-commands.cmake)
+    tanh_link_compile_commands()
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -196,12 +206,13 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
     # anira and the fetched tanh-lib must pin the same tanh-tooling tag
     # (modules-version.cmake warns otherwise).
-    # v0.4.0. Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50:
+    # v0.4.0 plus tanh-tooling v0.3.0 (tanh-lab/tanh-lib#73; nothing in the core changed
+    # since v0.4.0). Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50:
     # push_block / pop_block / peek_past_block with a stride) that anira_ring forwards to.
     # Needed since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity,
     # per-record flags, the drop count on the record) and the TANH_LOG_COMPILED_MAX_LEVEL
-    # option (#38). tanh-tooling v0.2.8, the same tooling tag this tree pins.
-    GIT_TAG f703f2d16eb591a6f669737cbc1fcbf861ca7702
+    # option (#38). tanh-tooling v0.3.0, the same tooling tag this tree pins.
+    GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966
 )
 FetchContent_MakeAvailable(tanh-lib)
 
@@ -339,6 +350,12 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/engine.cpp
     src/capi/tensor.cpp
 )
+# anira/anira_em.h, the Emscripten companion (registry `platform: emscripten`): the trampolines
+# into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
+# empty on every other binary format, so the TU exists on Wasm alone.
+if(TANH_BINARY_FORMAT STREQUAL "Wasm")
+    target_sources(${PROJECT_NAME} PRIVATE src/platform/emscripten/em_hooks.cpp)
+endif()
 
 # Shared between the anira target and the isolated ExecuTorch object target below —
 # the two must agree on every USE_* define (they shape the anira class layouts).
@@ -433,6 +450,10 @@ endif()
 
 if (ANIRA_WITH_TESTS)
     add_subdirectory(test)
+elseif(ANIRA_WITH_ABI_TESTS)
+    # The gates of test/abi without the rest of the suite: on WebAssembly the layout printer
+    # and the anira_em.h smoke run under node (test/abi/CMakeLists.txt, its Wasm arm).
+    add_subdirectory(test/abi)
 endif()
 
 if (ANIRA_WITH_DOCS)

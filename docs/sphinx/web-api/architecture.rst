@@ -1,221 +1,151 @@
 Architecture
 ============
 
-``Anira Web`` is the WebAssembly distribution of anira: the same C++
-library, compiled to WASM and wrapped in a
-TypeScript API. The TypeScript layer's job is to spread that WASM
-module across the browser threads anira needs in order to run
-real-time inference — a main thread, the audio worklet thread, and one
-or more inference worker threads.
+``Anira Web`` is anira compiled to WebAssembly and the TypeScript runtime that spreads the
+module across the browser threads real-time inference needs: the main thread, the audio
+worklet thread, and one or more inference Worker threads.
 
 .. code-block:: text
 
    ┌──────────────────┐    ┌────────────────────┐    ┌──────────────────────┐
-   │   Main thread    │    │ Inference worker(s)│    │ Audio worklet thread │
-   │                  │    │   (Web Worker(s))  │    │                      │
-   │  Setup           │    │                    │    │  AudioWorklet-       │
-   │                  │    │  Model inference   │    │   Processor          │
-   │  Configuration   │◀──▶│  (WASM ONNX,       │◀──▶│  Real-time           │
-   │                  │    │   onnxruntime-web, │    │   process()          │
-   │  UI control      │    │   or custom)       │    │  Pre/Post-processor  │
+   │   Main thread    │    │ Inference Worker(s)│    │ Audio worklet thread │
+   │                  │    │                    │    │                      │
+   │  configs, the    │    │  run_loop of an    │    │  one handler process │
+   │  pipeline, the   │    │  inference thread: │    │  per render quantum  │
+   │  handler, the    │◀──▶│  the engine call   │◀──▶│  stage pre/post/     │
+   │  log pump, UI    │    │  (built-in ORT or  │    │  reset hooks         │
+   │  stage init/prep │    │  a JS engine),     │    │                      │
+   │                  │    │  before/after hooks│    │                      │
    └──────────────────┘    └────────────────────┘    └──────────────────────┘
             ▲                       ▲                          ▲
             └───────────────────────┴──────────────────────────┘
-                       Shared WebAssembly memory
+                       One shared WebAssembly.Memory
 
-The number of inference workers is up to you. Each call to
-``aniraWeb.spinUpInferenceWorker()`` spawns a new Web Worker hosting an
-``InferenceThread`` — the same primitive anira uses for its desktop
-thread pool. One worker is enough for simple models on most hardware; spawn more if
-you see audio dropouts, so anira can run inference on multiple batches
-in parallel.
+Module Instances on One Memory
+------------------------------
 
-All threads share a single ``WebAssembly.Memory`` instance, so
-configuration objects, ring buffers, and tensor data live at the same
-heap addresses everywhere. Cross-thread coordination uses message
-passing for setup and atomics on shared memory for the real-time path.
+Every thread instantiates the same module (``createAniraWasm``) on one shared
+``WebAssembly.Memory``, so a config, a handler, a ring or a tensor lives at the same heap
+address everywhere and a pointer is passed between threads as a number. The main instance is
+created by ``AniraWeb.create()``. Every other instance (each inference Worker, the worklet) runs
+on a stack and a thread-local block of its own: the main thread allocates both
+(``_anira_em_alloc_thread_stack``), the instance's first C call installs them
+(``_anira_em_init_instance``), so the ``thread_local`` variables of anira, tanh-lib and the
+runtime are per instance, as they are per thread natively. The main instance installs a block
+of its own the same way (the module has no ``main()``, so none exists at instantiation, and
+the runtime's exception state lives there). Setup crosses threads by ``postMessage``; the
+real-time path uses only the shared memory and its atomics.
+
+JavaScript Reaches anira Through the C ABI
+------------------------------------------
+
+The module's exports are the C ABI: ``aniraWeb.module._anira_context_create(...)`` is the
+same call a C host makes (:doc:`../usage`), with pointers as numbers. Records are read and
+written only through the generated offsets of ``abi/layout.ts`` (``layout.anira_tensor``,
+``layout.anira_engine_ctx``, …), enums and defines come from ``abi/enums.ts``, and an
+``anira_error`` is read by :js:func:`callWithError`, which throws an :js:class:`AniraError`.
+The :js:class:`Heap` holds the views over the memory and the ``>>> 0`` rule: a pointer, a
+``size_t`` or a ``uint32_t`` an export returns arrives as a signed 32-bit number, so it is
+made unsigned before use.
+
+The Hook Object and the Trampolines
+-----------------------------------
+
+What runs in JavaScript (a stage, an engine, the log) is reached through the Emscripten
+companion ``anira/anira_em.h``. Each instance has one hook object, ``Module.anira``
+(``{ version, stage, engine, log }``), installed before instantiation over that instance's
+:js:class:`HookRegistry`, which maps a ``js_key`` to the stage or engine object. A JavaScript
+stage or engine is a descriptor whose slots are C trampolines compiled into anira: each calls
+the hook of the instance that runs the C call, so
+
+* ``preProcess``, ``postProcess`` and ``reset`` of a stage run in the worklet (under a Hard
+  contract the driving thread is the audio thread),
+* ``beforeInference`` / ``afterInference`` and an engine's ``process`` run on the inference
+  Worker that dequeued the job,
+* a stage's ``init``, ``prepare``, ``unprepare`` and ``release`` run on the main thread.
+
+Every request to a Worker or the worklet carries a request id its reply and its error echo,
+so concurrent requests on one target never answer or fail each other. The same ``js_key``
+therefore names one object per instance: :js:meth:`AniraWeb.addJSStage`
+puts the main-thread object into the main registry and has every Worker construct the class
+for its own registry; the worklet constructs it from its ``stageClasses``. A stage released
+on the main thread (its last carrier died) is dropped from every instance's registry. What an
+instance could never serve is refused at registration: a stage with main-thread bits and no
+main-thread object, an engine with the query bit, a worklet configured without the stage its
+handler's pipeline runs there. A hook that throws
+is caught in its trampoline, reported once with ``console.error``, and fails the call
+(``ANIRA_ERROR_UNKNOWN`` for a stage, ``ANIRA_ERROR_ENGINE`` for an engine): the chunk
+delivers zeros and the handler's real-time error is latched, as for a failing C callback.
 
 Main Thread
 -----------
 
-The main thread is where you set up anira. Calling
-``await AniraWeb.create()`` instantiates the WASM module and returns
-the ``aniraWeb`` factory; from there you wire up the model, inference
-configuration, and pre/post-processing the same way you would in C++.
+The main thread builds the configuration with raw calls: a context config and context (no
+pool threads on the web: the Workers bring them), a model config (in code or from JSON), a
+pipeline with the inference stage and, optionally, a JavaScript stage and JavaScript engines,
+the handler, the contract, ``anira_handler_prepare``. It also owns the log: there is no drain
+thread on the web, so ``startLogPump`` drains the real-time queue on an interval, and
+:js:meth:`AniraWeb.setLogHook` routes the records of every instance to one callback.
 
-The main thread also owns your UI. Non-streamable tensor values
-written from here — through ``setInput`` and similar APIs — reach the
-model without blocking the audio path, so a slider or toggle can
-update the model from frame to frame.
+Inference Workers
+-----------------
 
-Inference Worker
-----------------
+``await aniraWeb.spinUpInferenceWorker(contextPtr)`` creates a user-driven inference thread of
+the context's core on the main instance (``_anira_inference_thread_create``) and a Worker that
+runs it: the Worker instantiates the module, enters its stack, registers the JavaScript
+engines and Worker-side stages (an engine's ``init()`` is awaited), and calls
+``_anira_inference_thread_run_loop`` inside its message handler. Spin up more Workers to run
+more inferences at once.
 
-``await aniraWeb.spinUpInferenceWorker()`` starts a Web Worker that
-owns inference execution. Pulling inference off the audio thread is
-what keeps the audio worklet's ``process`` callback real-time-safe
-even when a forward pass takes longer than one audio block.
+While the queue is empty the loop parks on the wake word (``memory.atomic.wait32``, at most
+5 ms at a time) instead of spinning a core; every enqueue and every stop notifies it.
 
-The worker hosts the inference engine itself, regardless of where that
-engine actually runs. ``Anira Web`` ships with two built-in engines:
-ONNX Runtime compiled into the WASM module, and ``onnxruntime-web`` on
-the JavaScript side (:js:class:`ONNXRuntimeWebBackend`). User-written JS backends
-also run on this worker. See :doc:`custom_inference_backends`.
+The stop protocol has no message: ``_anira_inference_thread_stop`` requests the exit and the
+main thread polls ``_anira_inference_thread_has_exited`` (a shared-memory flag) on a
+``setTimeout`` until the Worker left the loop; only then is
+``_anira_inference_thread_destroy`` legal. :js:class:`InferenceThread` and
+``InferenceWorker.stop()`` implement it. A Worker handles no message while it is inside the
+loop, so ``AniraWeb`` stops the thread, sends a registration, and starts it again whenever an
+engine or stage is added later.
 
-You can also replace the worker entry point itself:
-
-.. code-block:: typescript
-
-   await aniraWeb.spinUpInferenceWorker(
-     new URL('./customInferenceWorker.ts', import.meta.url)
-   )
-
-``spinUpInferenceWorker()`` returns an ``InferenceWorker`` handle.
-When you're done with a worker — for instance when reconfiguring or
-unloading the model — call ``worker.stop()`` to halt its inference
-thread, terminate the underlying ``Worker``, and remove it from
-``aniraWeb.getActiveWorkers()``. Workers spun up but never stopped
-stay alive for the lifetime of the page.
+The engine a Worker calls is either the ONNX Runtime compiled into the module
+(``ANIRA_ENGINE_ONNXRUNTIME`` on ``ANIRA_PROVIDER_CPU``, from model bytes) or a JavaScript
+engine: :js:class:`ONNXRuntimeWebBackend` (``org.anira.onnxruntime-web``) or your own
+:js:class:`JSBackend` subclass, see :doc:`custom_inference_backends`.
 
 Audio Worklet Thread
 --------------------
 
-The browser's ``AudioWorkletGlobalScope`` runs the audio callback. Anira
-ships with a default worklet that handles the common case: a
-single-tensor model with in-place stereo or mono I/O. To install it:
+The worklet streams through a prepared handler: one ``_anira_handler_process`` per render
+quantum over planar input and output tensors it builds once. The handler's Hard contract
+declares ``block_min = block_max =`` the render quantum (128 frames); a call above the declared
+block is refused, so the worklet builds its tensors at configure for the declared
+quantum and, when the browser renders another one, outputs silence and reports it
+(``onQuantumChange``): the host re-prepares the handler with the new block, then the worklet
+rebuilds its tensors in its message handler, never in ``process()``, which allocates
+nothing. The worklet
+never waits unless asked to (``waitMs``, ``_anira_handler_process_wait``). See
+:doc:`custom_audio_worklets`.
 
-.. code-block:: typescript
+Customization
+-------------
 
-   await aniraWeb.registerAudioWorkletForContext(audioContext)
-   const node = await aniraWeb.configureAudioWorklet(
-     audioContext,
-     inferenceHandler,
-     ppProcessor
-   )
-
-For models that need more — multi-tensor I/O, a custom processing
-buffer size, ``AudioParam`` integration, or a JS pre/post processor —
-you provide a custom worklet file. See :doc:`custom_audio_worklets`.
-
-.. note::
-   :js:class:`JSPrePostProcessor` subclasses are constructed on the
-   thread where their hooks run, not on the main thread. ``preProcess`` /
-   ``postProcess`` run in the audio worklet's real-time callback, so a
-   subclass overriding them is constructed on the audio worklet thread.
-   ``beforeInference`` / ``afterInference`` run on the inference worker
-   instead, so a subclass overriding those is constructed there — via
-   :js:meth:`AniraWeb.registerPrePostProcessor`, see
-   :doc:`custom_pre_post_processing`. A subclass that does both is
-   constructed on both threads over the one shared C++ object.
-
-Three Customization Axes
-------------------------
-
-Most extension work falls into one of three independent categories,
-each with its own page:
-
-1. :doc:`custom_audio_worklets` — extend
-   :js:class:`AniraAudioWorkletBase` for multi-tensor models
-   (``processMulti``), custom ``maxBufferSize``, ``AudioParam``
-   integration, or to host a custom :js:class:`JSPrePostProcessor`.
-2. :doc:`custom_pre_post_processing` — subclass
-   :js:class:`JSPrePostProcessor` to run JavaScript before and after
-   inference (windowing, normalization, parameter clamping, etc.).
-3. :doc:`custom_inference_backends` — replace the WASM-side runtime with
-   a JavaScript backend. Built-in options
-   (:js:class:`JSBackendBase`, :js:class:`ONNXRuntimeWebBackend`) and
-   user-written backends both run on the inference worker.
-
-Customizing ``preProcess`` / ``postProcess`` **requires** a custom
-worklet (the subclass must be instantiated on the audio thread);
-customizing ``beforeInference`` / ``afterInference`` likewise **requires**
-a custom inference worker (the subclass must be instantiated there, see
-:doc:`custom_pre_post_processing`). Custom worklets, custom inference
-workers, and custom backends are otherwise independent and can be combined
-freely.
-
-The JS ↔ WASM Bridge
---------------------
-
-C++ objects live in WASM-managed memory and are referenced by raw
-numeric pointers. The TypeScript wrappers (``InferenceHandler``,
-``PrePostProcessor``, ``BufferF``, …) extend :js:class:`BaseWrapper`,
-which holds two fields per instance: ``ptr`` (the C++ pointer) and
-``wasmInstance`` (the Emscripten module). Every wrapper method
-forwards into a ``_<class>_<method>`` C export with ``this.ptr`` as
-the first argument.
-
-Most wrapper APIs accept the union type
-``PossiblePointer<T> = T | number``, so you can pass either a wrapper
-instance *or* a raw numeric pointer. This avoids forcing an allocation
-just to call into the next wrapper — when you already have a pointer
-in hand (for example from a worklet message or another wrapper's
-``getPointer()``), pass it directly.
-
-Helpers, all exported from the package root:
-
-+--------------------------------+----------------------------------------------------------+
-| Helper                         | Role                                                     |
-+================================+==========================================================+
-| ``resolvePtr(value)``          | Coerce a ``PossiblePointer`` to a number — returns       |
-|                                | ``value`` if it's already numeric, ``value.getPointer()``|
-|                                | if it's a wrapper instance. Use this inside hot loops or |
-|                                | when calling raw WASM exports yourself.                  |
-+--------------------------------+----------------------------------------------------------+
-| ``instance.getPointer()``      | Return the wrapper's underlying C++ pointer as a         |
-|                                | number. Symmetric to ``resolvePtr`` for the              |
-|                                | wrapper-to-pointer direction.                            |
-+--------------------------------+----------------------------------------------------------+
-| ``instance.wrapPointer(Cls,    | Build a wrapper of class ``Cls`` around an existing      |
-| ptr)``                         | pointer, reusing ``this.wasmInstance``. Skips the C++    |
-|                                | constructor — useful for viewing C++ objects you don't   |
-|                                | own.                                                     |
-+--------------------------------+----------------------------------------------------------+
-| ``Cls.createFromPointer(       | Static counterpart of ``wrapPointer`` for cases where    |
-| module, ptr)``                 | you don't have an existing wrapper handy (e.g.           |
-|                                | reconstructing a ``JSPrePostProcessor`` subclass on the  |
-|                                | worklet thread from ``state.prePostProcessorPtr``).      |
-+--------------------------------+----------------------------------------------------------+
-
-.. _lifecycle-and-cleanup:
+1. :doc:`custom_audio_worklets` — extend :js:class:`AniraAudioWorkletBase` to stream more
+   slots, add ``AudioParam`` handling or host a JavaScript stage's pre/post/reset.
+2. :doc:`custom_pre_post_processing` — a JavaScript stage (``anira_em_pipeline_add_js_stage``)
+   that owns the pre/post phases or the hooks around the inference.
+3. :doc:`custom_inference_backends` — a JavaScript engine
+   (``anira_em_pipeline_register_js_engine``) run by the inference Workers.
 
 Lifecycle and Cleanup
 ---------------------
 
-Wrapper instances expose a ``destroy()`` method that frees the
-underlying C++ object via the corresponding ``_<class>_destroy`` C
-export. JavaScript has no destructors, so the GC won't call this for
-you — the C++ memory only goes away when ``destroy()`` runs. For a
-long-lived page that loads a model once and keeps inferring, the leak
-is harmless (the module stays alive for the session anyway); for apps
-that swap models, recreate handlers, or run under a test harness,
-``destroy()`` is what you call.
-
-Not every wrapper needs ``destroy()``, though. Whether a wrapper is
-*owning* depends on how it was created:
-
-* A wrapper from ``new SomeClass(...)`` runs the TS constructor,
-  which calls ``_<class>_create`` and stashes the fresh C++ pointer.
-  This wrapper is the only handle to that C++ object — calling
-  ``destroy()`` on it frees the object.
-* A wrapper from ``wrapPointer`` or ``createFromPointer`` skips the
-  TS constructor entirely; it's a view over a C++ object that was
-  allocated by somebody else (typically another wrapper, or the
-  inference worker). **Don't call ``destroy()`` on these** — doing so
-  would free a C++ object that other code is still pointing at.
-
-For example, ``InferenceConfig.getTensorInputShape()`` returns a
-``TensorShapeList`` view; the underlying storage belongs to the
-``InferenceConfig``, so you destroy the config, not the view.
-
-When you do tear down a full setup, free the handler before the
-config and processor it references — the handler holds pointers back
-into them, so freeing them first leaves it with dangling references:
-
-.. code-block:: typescript
-
-   inferenceHandler.destroy()   // first: holds refs into pp + config
-   ppProcessor.destroy()
-   inferenceConfig.destroy()    // last among the three
-   // ProcessingSpec, VectorModelData, VectorTensorShape, etc. can
-   // then be destroyed in any order.
+C objects are freed by their ``_destroy`` entries, never by the garbage collector. Tear down in
+the reverse order of creation: dispose the worklet (``await aniraWeb.disposeAudioWorklet(node)``:
+the worklet frees its tensors and stops calling into the module, then its stack is freed),
+stop the Workers (``await worker.stop()``, which destroys the thread and frees the Worker's
+stack once the Worker said it destroyed its engines), then ``_anira_handler_destroy``,
+``_anira_pipeline_destroy``, ``_anira_contract_destroy``, ``_anira_model_config_destroy``,
+``_anira_context_destroy`` and ``_anira_context_config_destroy``. A JavaScript stage's
+``release`` runs when its last carrier dies, a JavaScript engine's C object when the pipeline
+and the handlers holding it are gone; ``unregisterJSEngine`` removes the Worker-side object.

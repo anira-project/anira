@@ -9,6 +9,8 @@ on:
   workflow_dispatch:
   merge_group:
   pull_request:
+  # on_tag.yml gates publish_npm on this workflow.
+  workflow_call:
 
 concurrency:
   group: build-web-${{ github.ref }}
@@ -41,10 +43,41 @@ jobs:
           which tsc
           tsc --version
 
+      # wasm-abi is wasm-release (the module the package ships) plus ANIRA_WITH_ABI_TESTS:
+      # the ABI gates that run under node, in the same build.
       - name: build wasm
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
-          PRESET: wasm-release
+          PRESET: wasm-abi
+
+      # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
+      # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
+      # emsdk's, the CMAKE_CROSSCOMPILING_EMULATOR of the configure.
+      - name: run the WebAssembly ABI gates under node
+        run: cmake --build --preset wasm-abi --target anira_abi_wasm_gates
+
+      # The module exports exactly the promised, draft and Emscripten entry points (and
+      # _malloc, _free), read from the typing emcc emitted: a name of the lists missing from
+      # the link, or an export no list has, fails the job.
+      - name: check the exports of AniraWeb against the symbol lists
+        run: |
+          set -euo pipefail
+          dts=web/wasm/AniraWeb.d.ts
+          grep -oE '^  _[A-Za-z0-9_]+\(' "$dts" | sed -E 's/^  _//; s/\($//' | sort -u > "$RUNNER_TEMP/exported.txt"
+          { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
+            | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          extra=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
+            echo "$missing"
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::AniraWeb.d.ts exports names no symbol list has:"
+            echo "$extra"
+          fi
+          [ -z "$missing" ] && [ -z "$extra" ]
+          echo "the module exports exactly the $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists"
 
       - name: setup node
         uses: actions/setup-node@v5
@@ -66,6 +99,35 @@ jobs:
       - name: build js package
         working-directory: web
         run: npm run build
+
+      # The package's unit tests under node's type stripping (web/test/*.test.ts).
+      - name: test js package
+        working-directory: web
+        run: npm test
+
+      # The custom-worklet example (web/examples/custom-worklet) against the built package: tsc
+      # with strict over its files and the package's types, then its Vite build (the worklet
+      # bundled into one script), which the browser test runs.
+      - name: build the examples
+        working-directory: web
+        run: npm run examples
+
+      # The built package in headless Chromium and Firefox (served with COOP/COEP).
+      # web/test/browser/index.html: a JavaScript engine on an inference Worker that doubles its
+      # input times a Static gain, a Hard handler of block 128, an OfflineAudioContext rendered
+      # through the default worklet, which serves the gain (changed mid-render where the browser
+      # can suspend an offline render); the output must be the input times 2 * gain after the
+      # handler's latency, then the Worker stops and the worklet is disposed. ort.html: an ONNX
+      # model on the default Worker's ONNX Runtime Web engine. The example's check page: the
+      # same render through its own worklet and JavaScript stage. A load the browser refuses
+      # (Firefox's file:/// security error) fails the step too.
+      - name: browser test (headless Chromium and Firefox)
+        working-directory: web
+        run: |
+          npm install --no-save playwright@1.49.1
+          npx playwright install --with-deps chromium firefox
+          node test/browser/run.mjs chromium
+          node test/browser/run.mjs firefox
 
   # The queue's required status for this workflow.
   result:

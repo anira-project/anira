@@ -18,6 +18,10 @@ function watchWasm() {
  * references as base64 data URLs. Instead, the built output keeps the `new URL()`
  * pattern with corrected paths pointing to the built entry points, so that a
  * consumer's app-mode Vite build can detect them (e.g. for worker bundling).
+ * onnxruntime-web's own `new URL("ort-wasm-simd-threaded.wasm", import.meta.url)` is one
+ * of them: inlined, its 12.8 MB binary became 17 MB of base64 in every chunk that imports
+ * the ONNX Runtime Web engine; kept, it is one file in dist/wasm, fetched when the engine
+ * initialises.
  */
 function preserveWorkerUrls(): Plugin {
   // Map source-level paths to their built entry point paths in dist/
@@ -31,14 +35,19 @@ function preserveWorkerUrls(): Plugin {
       builtEntry: 'workers/audio-worklet.bundled.js',
     },
     {
-      sourcePath: '../wasm/AniraWeb.js',
+      sourcePath: '../../wasm/AniraWeb.js',
       builtEntry: 'wasm/AniraWeb.js',
     },
     {
-      sourcePath: '../wasm/AniraWeb.wasm',
+      sourcePath: '../../wasm/AniraWeb.wasm',
       builtEntry: 'wasm/AniraWeb.wasm',
     },
+    {
+      sourcePath: 'ort-wasm-simd-threaded.wasm',
+      builtEntry: 'wasm/ort-wasm-simd-threaded.wasm',
+    },
   ]
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
   return {
     name: 'preserve-worker-urls',
@@ -50,8 +59,12 @@ function preserveWorkerUrls(): Plugin {
       let result = code
       let modified = false
       for (const { sourcePath } of rewrites) {
-        const needle = `new URL('${sourcePath}', import.meta.url)`
-        if (result.includes(needle)) {
+        // Either quote, with or without a space: the package's sources and the minified ORT.
+        const needle = new RegExp(
+          `new URL\\((['"])${escape(sourcePath)}\\1,\\s*import\\.meta\\.url\\)`,
+          'g'
+        )
+        if (needle.test(result)) {
           result = result.replace(
             needle,
             `new URL(String('${sourcePath}'), import.meta.url)`
@@ -68,21 +81,12 @@ function preserveWorkerUrls(): Plugin {
       let result = code
       let modified = false
       for (const { sourcePath, builtEntry } of rewrites) {
-        const pattern = new RegExp(
-          `String\\(["']${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\)`,
-          'g'
-        )
+        const pattern = new RegExp(`String\\(["']${escape(sourcePath)}["']\\)`, 'g')
         if (!pattern.test(result)) continue
         const chunkDir = path.dirname(chunk.fileName)
         let relPath = path.posix.relative(chunkDir, builtEntry)
         if (!relPath.startsWith('.')) relPath = './' + relPath
-        result = result.replace(
-          new RegExp(
-            `String\\(["']${sourcePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\)`,
-            'g'
-          ),
-          `'${relPath}'`
-        )
+        result = result.replace(pattern, `'${relPath}'`)
         modified = true
       }
       return modified ? result : null
@@ -154,6 +158,11 @@ export default defineConfig({
       targets: [
         { src: 'wasm/*.wasm', dest: 'wasm' },
         { src: 'wasm/*.js', dest: 'wasm' },
+        // The ONNX Runtime Web engine's binary, loaded by URL (preserveWorkerUrls).
+        {
+          src: 'node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm',
+          dest: 'wasm',
+        },
         // Attribution for native deps statically linked into the WASM binary
         // (populated by cmake/BuildWasm.cmake from the downloaded prebuilt).
         { src: 'licenses/*', dest: 'licenses' },

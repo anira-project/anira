@@ -226,22 +226,22 @@ Moreover, the following options are available:
 
 ### Anira Web (Web / JavaScript)
 
-Anira is available as the `@anira-project/anira` package for use in web applications:
+Anira is available as the `@anira-project/anira` package for web applications: anira compiled
+to WebAssembly, whose exports are the C ABI (`_anira_*`) and the Emscripten companion
+`anira/anira_em.h`, and the TypeScript runtime around it (the module on one shared memory in
+the main thread, the inference Workers and the audio worklet, JavaScript engines and stages).
+The 3.x pre-release is on the `next` dist-tag:
 
 ```bash
-# npm
-npm install @anira-project/anira
-
-# pnpm
-pnpm add @anira-project/anira
-
-# yarn
-yarn add @anira-project/anira
+npm install @anira-project/anira@next
 ```
+
+See the [Anira Web guides](https://anira-project.github.io/anira/web-api/index.html); in this
+pre-release configs and handlers are built with the raw `_anira_*` calls.
 
 #### Building @anira-project/anira from source
 
-If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
+If you want to build the WASM module and JavaScript bindings yourself, you need to provide your own [Emscripten SDK](https://emscripten.org/docs/getting_started/downloads.html) (4.0.23, the version CI pins) and TypeScript on the `PATH` (`emcc --emit-tsd` runs `tsc`). The CMake presets expect the `EMSDK` environment variable to be set to the root of your emsdk installation.
 
 ```bash
 git clone https://github.com/anira-project/anira.git
@@ -249,9 +249,9 @@ cd anira
 
 export EMSDK=/path/to/your/emsdk
 
-# Configure and build the WASM module (release)
-cmake --preset web-prod
-cmake --build --preset web-prod
+# Configure and build the WASM module (release); wasm-abi adds the node ABI gates
+cmake --preset wasm-release
+cmake --build --preset wasm-release
 
 # Build the JavaScript package
 cd web
@@ -271,7 +271,7 @@ Then install the package in your project:
 npm install path/to/anira/web/anira-project-anira-x.x.x.tgz
 ```
 
-A debug preset is also available via `cmake --preset web` / `cmake --build --preset web`.
+A debug preset is also available via `cmake --preset wasm-debug` / `cmake --build --preset wasm-debug`.
 
 ## Examples
 

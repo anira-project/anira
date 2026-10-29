@@ -5,9 +5,14 @@ Anira Web is the TypeScript / WebAssembly distribution of Anira. It is
 made up of two parts:
 
 * a WebAssembly module (``AniraWeb.wasm`` + ``AniraWeb.js``) compiled from
-  the Anira C++ sources via Emscripten, and
-* a TypeScript package that wraps the module and exposes a high-level API
-  for use in the browser (with or without the Web Audio API).
+  the Anira C++ sources via Emscripten, whose exports are the C ABI (every
+  ``anira_*`` function of the ``anira/abi/`` headers as ``_anira_*``), the
+  Emscripten companion ``anira/anira_em.h`` (``_anira_em_*``), ``_malloc`` and
+  ``_free``, and
+* a TypeScript runtime around it: the module instantiated on one shared memory
+  in every thread that needs it, the inference Workers, the audio worklet, the
+  JavaScript engines and stages, and the generated mirrors of the C headers
+  (``abi/enums.ts``, ``abi/layout.ts``).
 
 The sections below cover how to consume the published package, how to
 import it in your project, and how to build the WASM module and the
@@ -27,7 +32,9 @@ Add the package to your project with the package manager of your choice:
 
 The package ships its WebAssembly artifacts under ``@anira-project/anira/dist/wasm/``
 (``AniraWeb.wasm`` and the Emscripten-generated ``AniraWeb.js`` glue
-file). When bundling, make sure the ``.wasm`` file is copied to a path
+file, and ``ort-wasm-simd-threaded.wasm``, onnxruntime-web's binary, which the
+``ONNXRuntimeWebBackend`` engine fetches when it initialises; nothing loads it otherwise).
+When bundling, make sure the ``.wasm`` file is copied to a path
 your runtime can fetch — most modern bundlers (Vite, webpack 5, Rollup
 with the right plugins, esbuild) already understand the
 ``new URL('./file.wasm', import.meta.url)`` references emitted by the
@@ -37,15 +44,24 @@ Importing
 ---------
 
 The package is published as ESM only. The main entry point re-exports the
-high-level API (``AniraWeb``, factories, wrappers, backends, helpers, and
-the inference-worker handler):
+runtime (``AniraWeb``, ``createAniraWasm``, ``Heap``, ``callWithError``, the
+instance stacks, the hook registry), ``InferenceThread``, the engines
+(``JSBackend``, ``ONNXRuntimeWebBackend``), the inference-worker handler, the
+helpers, the enums and defines of the C headers and their record layouts
+(``layout``):
 
 .. code-block:: ts
 
    import {
      AniraWeb,
-     // factories, wrappers, backends, helpers, ...
+     callWithError,
+     anira_budget_kind,
+     ONNXRUNTIME_WEB_ENGINE_ID,
+     layout,
    } from '@anira-project/anira'
+
+The worklet base has its own subpath (``@anira-project/anira/workers/worklet-base``), as
+do the bundled worker and worklet entry points.
 
 .. _building:
 
@@ -122,7 +138,22 @@ The resulting files are written directly into ``anira/web/wasm/``:
 
 * ``AniraWeb.js`` — Emscripten ES6 module loader
 * ``AniraWeb.wasm`` — the compiled module
-* ``AniraWeb.d.ts`` — TypeScript declarations emitted by ``--emit-tsd``
+* ``AniraWeb.d.ts`` — TypeScript declarations emitted by ``--emit-tsd``: exactly the
+  names of ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and
+  ``abi/symbols-emscripten.txt``, plus ``_malloc`` and ``_free``
+
+``emcc --emit-tsd`` runs ``tsc``, so TypeScript must be on the ``PATH`` during the
+build (CI installs ``typescript@5.9`` globally).
+
+The ``wasm-abi`` preset builds the same module plus the ABI gates that run under node
+(``ANIRA_WITH_ABI_TESTS``): the layout table on wasm32 and the smoke tests of
+``anira/anira_em.h`` and of an inference thread in a ``worker_threads`` Worker.
+
+.. code-block:: bash
+
+   cmake --preset wasm-abi
+   cmake --build --preset wasm-abi
+   cmake --build --preset wasm-abi --target anira_abi_wasm_gates
 
 Build the TypeScript Package
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~

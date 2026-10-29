@@ -98,7 +98,7 @@ The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with t
 Code Style
 ~~~~~~~~~~
 
-Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
+Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs, the compile-database link) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
 
 To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/lint.yml`` to the same tag in the same commit:
 
@@ -165,7 +165,7 @@ The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep
 
 The sweep is about an hour of CPU time for some 115 files: 3 minutes on 32 cores, and no core count brings it much below 2, since single files take that long. The time goes to the test files: one of ``test/abi/`` includes googletest and the whole C++ face and runs the static analyzer over dozens of test bodies, 80 to 125 s per file, where a library file takes 5 to 55 s. A pull request that changes a test file therefore spends minutes on it, not seconds.
 
-Every configure preset exports ``compile_commands.json`` into its tree, so clangd works on any of them: ``.clangd`` reads ``build/desktop/Debug/`` (the ``desktop-debug`` preset, library sources only); for the tests, point it at a test tree such as ``build/desktop/Tests/Debug/`` in a local, untracked config.
+Every configure preset exports ``compile_commands.json`` into its tree, and ``.clangd`` reads ``build/compile_commands.json``. The development presets (every ``desktop-*`` one and ``wasm-debug`` / ``wasm-release``) set ``ANIRA_LINK_COMPILE_COMMANDS=ON``, so each configure of one of them links its tree's database there (``tanh_link_compile_commands`` in ``cmake/tanh/compile-commands.cmake``) and clangd follows the tree configured last: configure ``desktop-tests-debug`` to work on the tests, ``wasm-debug`` to see the Emscripten branches, ``desktop-debug`` for the library alone. The ``clang-tidy``, ``docs``, ``ci-*``, sanitizer and mobile presets leave the link alone, so a tidy sweep or a sanitizer run does not move it. The wasm trees compile with ``em++``, which adds the wasm target and the emsdk sysroot itself; start clangd with ``--query-driver=**/em++`` so it asks ``em++`` for them. That is a command-line flag (it lets clangd run the compiler), never a ``.clangd`` key.
 
 Documentation
 ~~~~~~~~~~~~~
@@ -291,7 +291,16 @@ followed by an explicit ``reserved``. A header with ``draft: true`` lives under
 symbol lists and its declaration into a promised header without renaming it; a draft function
 is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
 addition, while a changed arm of a frozen union (an appended one included), a changed
-signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. The
+signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
+with ``platform: emscripten`` is a companion of the ABI for one target (``file:
+anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
+its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)`` (elsewhere it is an
+empty header, so a native consumer may include it, and the reference documents it from any
+host), it declares functions, callbacks, typedefs and defines only, and no
+header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
+export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
+or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any
+other, and ``abi/anira.json`` records the key. The
 generator refuses a member name repeated within one C scope (the fields of a struct, the arms
 of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
 ``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may
@@ -366,6 +375,20 @@ like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
 table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
 ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
 entry, a draft one included, needs its body in the same pull request, on Emscripten too.
+``build_web`` builds the ``wasm-abi`` preset (``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``,
+the one test option WebAssembly allows), whose gates run under node:
+``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
+as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
+of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
+through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
+thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
+which runs a second instance in a ``worker_threads`` Worker inside
+``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
+stop); the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
+``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
+target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -1,0 +1,9 @@
+anira_em_alloc_thread_stack
+anira_em_engine_desc_init
+anira_em_free_thread_stack
+anira_em_hooks_version
+anira_em_init_instance
+anira_em_pipeline_add_js_stage
+anira_em_pipeline_register_js_engine
+anira_em_set_log_hook
+anira_em_stage_desc_init

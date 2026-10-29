@@ -2,9 +2,10 @@ Class ONNXRuntimeWebBackend
 ===========================
 
 .. note::
-   Construct via the :doc:`AniraWeb` factory in most cases:
-   ``aniraWeb.ONNXRuntimeWebBackend(...)`` rather than ``new ONNXRuntimeWebBackend(...)``. The
-   factory threads the WASM instance through for you.
+   The class runs on an inference Worker; the main thread registers it by name with
+   :js:meth:`AniraWeb.registerJSEngine` under the engine id ``org.anira.onnxruntime-web``
+   (``ONNXRUNTIME_WEB_ENGINE_ID``). The bundled default worker knows it; see
+   :doc:`../../custom_inference_backends`.
 
 .. js:autoclass:: ONNXRuntimeWebBackend.ONNXRuntimeWebBackend
    :short-name:

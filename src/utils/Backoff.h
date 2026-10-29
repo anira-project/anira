@@ -59,6 +59,10 @@ public:
     constexpr Backoff(int immediate, int paused) noexcept
         : m_immediate(immediate), m_paused(paused) {}
 
+    /// Whether the retries have reached the last phase, where pause() yields and sleeps: the
+    /// inference thread parks on its wake word there instead on WebAssembly.
+    [[nodiscard]] bool in_last_phase() const noexcept { return m_step >= m_immediate + m_paused; }
+
     /// Waits before the next retry, by the phase the retries so far have reached.
     void pause() noexcept {
         if (m_step < m_immediate) {

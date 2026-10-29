@@ -21,6 +21,9 @@ jobs:
     uses: ./.github/workflows/build_test.yml
   build_test_mobile:
     uses: ./.github/workflows/build_test_mobile.yml
+  # The wasm build, the node ABI gates, the export check and the npm build of the PR leg.
+  build_web:
+    uses: ./.github/workflows/build_web.yml
   build_release:
     needs: [build_test, build_test_mobile]
     name: ${{ matrix.name }}
@@ -214,7 +217,7 @@ jobs:
   publish_npm:
     name: npm publish
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build_test, build_test_mobile]
+    needs: [build_test, build_test_mobile, build_web]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -225,6 +228,12 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      # What is published is what the registry says: the committed C ABI files must match
+      # abi/anira.yml before the module is built from them.
+      - name: check the generated C ABI files against abi/anira.yml
+        run: |
+          python3 -m pip install --user pyyaml
+          python3 tools/abi/gen.py --repo . --check
       # emcc emits the .d.ts during the build (--emit-tsd), so the pin must
       # precede it.
       - name: pin global typescript for emscripten --emit-tsd
@@ -235,6 +244,27 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
           PRESET: wasm-release
+      # The module that ships exports exactly the promised, draft and Emscripten entry
+      # points (and _malloc, _free): the same check as build_web, on this build.
+      - name: check the exports of AniraWeb against the symbol lists
+        run: |
+          set -euo pipefail
+          dts=web/wasm/AniraWeb.d.ts
+          grep -oE '^  _[A-Za-z0-9_]+\(' "$dts" | sed -E 's/^  _//; s/\($//' | sort -u > "$RUNNER_TEMP/exported.txt"
+          { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
+            | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          extra=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
+            echo "$missing"
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::AniraWeb.d.ts exports names no symbol list has:"
+            echo "$extra"
+          fi
+          [ -z "$missing" ] && [ -z "$extra" ]
+          echo "the module exports exactly the $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists"
       - name: setup node
         uses: actions/setup-node@v5
         with:

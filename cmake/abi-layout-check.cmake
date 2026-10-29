@@ -5,6 +5,8 @@
 #       runs the layout printer and fails when its table differs from the committed one
 #   cmake -DLAYOUT_EXE=<anira_abi_layout> -DWRITE_TO=<abi/layout-N.txt> -P <this>
 #       rewrites the committed table from the built printer
+#   -DLAYOUT_RUNNER=<node> runs the printer through that program (the WebAssembly arm of
+#       test/abi, whose printer is a node executable)
 #
 # N is ANIRA_ABI_MAJOR, and the script reads it from the file name. While N is 0 (before the
 # v3.0.0 freeze) the table grows with the registry: tools/abi/gen.py writes it from
@@ -15,7 +17,7 @@
 if(NOT LAYOUT_EXE)
     message(FATAL_ERROR "abi-layout-check: LAYOUT_EXE is required")
 endif()
-execute_process(COMMAND "${LAYOUT_EXE}" OUTPUT_VARIABLE _table RESULT_VARIABLE _rc)
+execute_process(COMMAND ${LAYOUT_RUNNER} "${LAYOUT_EXE}" OUTPUT_VARIABLE _table RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "abi-layout-check: ${LAYOUT_EXE} failed (${_rc})")
 endif()
