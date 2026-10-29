@@ -360,6 +360,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     target_sources(${PROJECT_NAME} PRIVATE
         src/platform/emscripten/em_audio.cpp
+        src/platform/emscripten/em_console.cpp
         src/platform/emscripten/em_hooks.cpp
         src/platform/emscripten/em_worker.cpp)
     # A Wasm executable that links the library (AniraWeb and the node gates of test/abi) peaks

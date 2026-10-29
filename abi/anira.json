@@ -10617,7 +10617,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Registers the scope registries' log as a log sink of this module, beside the C sinks of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every record at any level the core logs reaches the registry of the scope that logs or drains (anira_drain_log), as an anira_log_record pointer it reads through layout.ts while it runs. One registration for the whole module: the threads share one memory and so one sink list. While registered the hook takes the place of tanh-lib's platform sink (stderr, which the glue prints as console.error), so a record reaches the console once: the same hold on the platform sink a context's ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK takes, released with the hook."
+          "doc": "Registers the scope registries' log as a log sink of this module, beside the C sinks of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every record at any level the core logs reaches the registry of the scope that logs or drains (anira_drain_log), as an anira_log_record pointer it reads through layout.ts while it runs. One registration for the whole module: the threads share one memory and so one sink list. While registered the hook takes the place of the platform sink, which on WebAssembly is the console by level (console.debug, .info, .warn, .error; tanh-lib's own stderr sink stays off), so a record reaches the console once: the same hold on the platform sink a context's ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK takes, released with the hook."
         },
         {
           "kind": "function",

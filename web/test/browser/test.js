@@ -9,8 +9,8 @@
 // Then the gain as a tensor slot written with setStaticInput on a second handler, and the teardown:
 // the nodes, the handlers and the context, which stops the pool. The verdict is
 // window.anira_test_result. First, before any of it: a warning reaches the console exactly once,
-// through the log hook while one is set (it replaces the platform sink, which the glue prints as
-// console.error), through the platform sink once the hook is removed.
+// through the log hook while one is set (it replaces the platform sink), through the platform
+// sink once the hook is removed, there as console.warn (the console by level).
 import {
   ANIRA_EM_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
@@ -93,8 +93,8 @@ const run = async () => {
   anira.setLogHook(null)
   warnOnce(anira.abi)
   check(
-    counter.total() === 2 && counter.counts.log === 1,
-    `without the hook it reaches the console once, through the platform sink ` +
+    counter.total() === 2 && counter.counts.log === 1 && counter.counts.warn === 1,
+    `without the hook it reaches the console once, through the platform sink as console.warn ` +
       `(${JSON.stringify(counter.counts)})`
   )
   anira.setLogHook(hook)

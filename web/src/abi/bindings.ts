@@ -6673,10 +6673,11 @@ export class AniraBindings {
    * record at any level the core logs reaches the registry of the scope that logs or
    * drains (anira_drain_log), as an anira_log_record pointer it reads through layout.ts
    * while it runs. One registration for the whole module: the threads share one memory
-   * and so one sink list. While registered the hook takes the place of tanh-lib's
-   * platform sink (stderr, which the glue prints as console.error), so a record reaches
-   * the console once: the same hold on the platform sink a context's
-   * ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK takes, released with the hook.
+   * and so one sink list. While registered the hook takes the place of the platform sink,
+   * which on WebAssembly is the console by level (console.debug, .info, .warn, .error;
+   * tanh-lib's own stderr sink stays off), so a record reaches the console once: the same
+   * hold on the platform sink a context's ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK takes,
+   * released with the hook.
    *
    * @param enable ANIRA_TRUE registers the hook as a log sink, ANIRA_FALSE removes it; a
    *   repeated call changes nothing.

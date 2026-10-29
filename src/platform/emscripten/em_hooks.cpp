@@ -360,8 +360,8 @@ anira_status ANIRA_CALL anira_em_pipeline_register_js_engine(anira_pipeline* pip
 } catch (...) { return translate_exception(err, __func__); }
 
 void ANIRA_CALL anira_em_set_log_hook(anira_bool enable) ANIRA_NOEXCEPT try {
-    // The hook takes the platform sink's place: that sink writes stderr, which the glue prints
-    // as console.error, so every record would reach the console twice, once at the wrong level.
+    // The hook takes the platform sink's place (the console by level, em_console.cpp): both would
+    // print every record to the console.
     if (enable != 0) {
         if (s_log_hook_sink == 0) {
             s_log_hook_sink = anira::detail::add_log_sink(&log_hook, nullptr, ANIRA_LOG_DEBUG);

@@ -284,10 +284,11 @@ which sinks run.
 stdout/stderr on Linux and Windows, the browser console on WebAssembly.
 ``ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK`` in ``log_flags`` switches it off while that context
 lives (counted across contexts), for a host that shows its own log or a DAW that mirrors
-stderr. On WebAssembly the JavaScript log hook (``anira.setLogHook()``,
-``anira_em_set_log_hook``) takes the same hold while it is set: it replaces the platform sink,
-whose stderr the module's glue prints as ``console.error``, so a record reaches the console once
-and at its own level (``console.warn`` for a warning).
+stderr. On WebAssembly the platform sink is the browser console by level (``console.debug``,
+``console.info``, ``console.warn``, ``console.error``; tanh-lib's own platform sink, stderr, which
+the module's glue would print as ``console.error`` for every level, stays off there), and the
+JavaScript log hook (``anira.setLogHook()``, ``anira_em_set_log_hook``) takes the same hold on it
+while it is set: a record reaches the console once, at its level.
 
 **The host sink.** ``log_sink(callback, user_data)`` (``anira_context_config_set_log_sink``, or
 the ``callback`` field of ``anira_log_desc``) registers an ``anira_log_fn`` that receives
@@ -356,9 +357,8 @@ uses tanh-lib has a second logger under ``thl``, which anira never touches.
   lines are on stdout/stderr (the Xcode console) instead, not in ``log``.
 - Linux and Windows: stderr for Error and Warning, stdout for Info and Debug; a plugin host
   shows them where it shows its own stderr, or not at all, which is what the host sink is for.
-- WebAssembly: the browser console, through the log hook (``anira.setLogHook()``: one console
-  method per level) or, without one, the platform sink (stdout as ``console.log``, stderr as
-  ``console.error``); the page must pump ``anira.drainLog()`` (``startLogPump``) for real-time
+- WebAssembly: the browser console by level, through the log hook (``anira.setLogHook()``) or,
+  without one, the platform sink; the page must pump ``anira.drainLog()`` (``startLogPump``) for real-time
   records.
 - The engines keep their own tags and channels: ONNX Runtime's ``onnxruntime`` logger, LiteRT's
   and TFLite's ``tflite``, ExecuTorch's ``ExecuTorch``, LibTorch's c10 warnings on stderr;
