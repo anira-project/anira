@@ -1,7 +1,12 @@
 import type { AniraBindings } from './abi/bindings'
 import { ANIRA_DTYPE_F32 } from './abi/enums'
 import { anira_tensor } from './abi/layout'
-import { createAudioNode, type AniraAudioNode, type AudioNodeOptions } from './AudioNode'
+import {
+  createAudioNode,
+  renderBurstFrames,
+  type AniraAudioNode,
+  type AudioNodeOptions,
+} from './AudioNode'
 import type { Context } from './Context'
 import type { Contract } from './Contract'
 import type { Pipeline } from './Pipeline'
@@ -15,6 +20,8 @@ export class Handler {
   readonly abi: AniraBindings
   /** The `anira_handler*` the raw entries take. */
   readonly ptr: number
+  /** The `block_max` of the Hard contract of the last `prepare`; undefined before one. */
+  blockMax: number | undefined
 
   private constructor(abi: AniraBindings, ptr: number) {
     this.abi = abi
@@ -32,6 +39,11 @@ export class Handler {
   /** `anira_handler_prepare`: copies the contract, which can be destroyed right after. */
   prepare(contract: Contract): this {
     this.abi.anira_handler_prepare(this.ptr, contract.ptr)
+    try {
+      this.blockMax = this.abi.anira_contract_hard_geometry(contract.ptr).block_max
+    } catch {
+      this.blockMax = undefined // not a Hard contract: no audio node streams through it
+    }
     return this
   }
 
@@ -62,11 +74,24 @@ export class Handler {
     }
   }
 
-  /** A Wasm Audio Worklet node that streams through this handler (`createAudioNode`). */
+  /**
+   * A Wasm Audio Worklet node that streams through this handler (`createAudioNode`). Warns when
+   * the prepared `block_max` is below the context's burst (`renderBurstFrames`): such a handler
+   * misses quanta on a live context.
+   */
   createAudioNode(
     audioContext: BaseAudioContext,
     options: AudioNodeOptions = {}
   ): Promise<AniraAudioNode> {
+    const burst = renderBurstFrames(audioContext)
+    if (this.blockMax !== undefined && this.blockMax < burst) {
+      console.warn(
+        `anira: the handler is prepared for blocks up to ${this.blockMax} frames, but this ` +
+          `context renders bursts of ${burst} frames (renderBurstFrames): inferences cannot ` +
+          `complete within a burst and quanta will miss. Prepare with ` +
+          `setGeometry(128, renderBurstFrames(context), rate).`
+      )
+    }
     return createAudioNode(this, audioContext, this.ptr, options)
   }
 

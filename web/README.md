@@ -31,6 +31,7 @@ import {
   Handler,
   ModelConfig,
   Pipeline,
+  renderBurstFrames,
 } from '@anira-project/anira'
 
 const audioContext = new AudioContext({ sampleRate: 48000 })
@@ -43,7 +44,7 @@ const context = Context.create(anira, { threads: 1 })
 const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
 const contract = (
   await Contract.fromUrl(anira, '/models/gain.contract.json')
-).setGeometry(128, 128, audioContext.sampleRate)
+).setGeometry(128, renderBurstFrames(audioContext), audioContext.sampleRate)
 const handler = Handler.create(
   context,
   Pipeline.create(anira).addInference(model)

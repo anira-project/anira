@@ -1033,8 +1033,9 @@ path is a Wasm Audio Worklet node whose render callback is C.
   config: ``await ModelConfig.fromUrl(anira, url)`` reads the 3.x model file a native host reads
   (a 2.x JSON document is read too, :ref:`migration-json`) and fetches its model files.
 - ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
-  ``Contract.hard(anira, { blockMin: 128, rate: sampleRate, budgetMs })`` or a contract file
-  (``Contract.fromUrl``, then ``setGeometry``); the render quantum is the declared block.
+  ``Contract.hard(anira, { blockMin: 128, blockMax: renderBurstFrames(context), rate:
+  sampleRate, budgetMs })`` or a contract file (``Contract.fromUrl``, then ``setGeometry``): the
+  render quantum is the smallest block, the context's burst of quanta the largest.
 - ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
   ``Pipeline.create(anira).addInference(model)``, ``Handler.create(context, pipeline)`` and
   ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core

@@ -27,6 +27,8 @@ Audio
 
 .. js:autofunction:: AudioNode.createAudioNode
 
+.. js:autofunction:: AudioNode.renderBurstFrames
+
 Configs
 -------
 

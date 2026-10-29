@@ -11,6 +11,7 @@ import {
   Handler,
   ModelConfig,
   Pipeline,
+  renderBurstFrames,
 } from '@anira-project/anira'
 // [module]
 import type { AniraAudioNode } from '@anira-project/anira'
@@ -48,9 +49,12 @@ export async function createModelFileExample(
 
   // [configs]
   const model = await ModelConfig.fromUrl(anira, new URL('gain.model.json', modelsUrl))
+  // One render quantum per call, and bursts of quanta up to the context's burst: a live
+  // context renders a device callback's worth of quanta back to back, so the latency the
+  // handler reports must cover it (an offline context: 128).
   const contract = (
     await Contract.fromUrl(anira, new URL('gain.contract.json', modelsUrl))
-  ).setGeometry(128, 128, audioContext.sampleRate)
+  ).setGeometry(128, renderBurstFrames(audioContext), audioContext.sampleRate)
   // [configs]
 
   // [handler]

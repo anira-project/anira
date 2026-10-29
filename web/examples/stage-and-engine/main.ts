@@ -14,6 +14,7 @@ import {
   Handler,
   ModelConfig,
   Pipeline,
+  renderBurstFrames,
   type AniraAudioNode,
 } from '@anira-project/anira'
 // The stage's module on this thread too: its prepare and unprepare run here.
@@ -86,9 +87,12 @@ export async function createGainExample(
         ANIRA_EM_HOOK_UNPREPARE,
     })
 
-  // 4. The handler and its Hard contract: one render quantum per call, at the context's rate.
+  // 4. The handler and its Hard contract: one render quantum per call, at the context's rate, in
+  //    bursts up to the context's (a live context renders a device callback's worth of quanta
+  //    back to back; the latency the handler reports covers it).
   const contract = Contract.hard(anira, {
     blockMin: QUANTUM,
+    blockMax: renderBurstFrames(audioContext),
     rate: audioContext.sampleRate,
     budgetMs: 2,
   })

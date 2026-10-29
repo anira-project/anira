@@ -66,7 +66,14 @@ const allPages = [
   'examples/stage-and-engine/dist/check.html',
   'examples/model-file/dist/check.html',
 ]
-const pages = process.argv.length > 3 ? process.argv.slice(3) : [...allPages, 'dev']
+const browserName = process.argv[2] ?? 'chromium'
+const browserType = { chromium, firefox }[browserName]
+if (!browserType) throw new Error(`no browser '${browserName}': chromium or firefox`)
+// live.html needs a live AudioContext that runs: headless Firefox keeps one suspended (no audio
+// output to run against), so the page runs in Chromium alone.
+const livePages = browserName === 'chromium' ? ['test/browser/live.html'] : []
+const pages =
+  process.argv.length > 3 ? process.argv.slice(3) : [...allPages, ...livePages, 'dev']
 // The example's check page under Vite's dev server.
 const DEV_PAGE = 'check.html'
 const devServer = async () => {
@@ -80,10 +87,12 @@ const devServer = async () => {
   return dev
 }
 
-const browserName = process.argv[2] ?? 'chromium'
-const browserType = { chromium, firefox }[browserName]
-if (!browserType) throw new Error(`no browser '${browserName}': chromium or firefox`)
-const browser = await browserType.launch()
+// A live AudioContext must run without a user gesture (live.html).
+const browser = await browserType.launch(
+  browserName === 'chromium'
+    ? { args: ['--autoplay-policy=no-user-gesture-required'] }
+    : {}
+)
 let failed = 0
 try {
   for (const pathname of pages) {

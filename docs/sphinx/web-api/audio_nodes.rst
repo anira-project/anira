@@ -21,9 +21,29 @@ The node's render callback is C, on the browser's audio thread, once per render 
   handler whose Hard block range excludes the context's render quantum);
 * it allocates nothing and locks nothing.
 
-The handler is prepared under a Hard contract whose block is the render quantum
-(``Contract.hard(anira, { blockMin: 128, rate: audioContext.sampleRate, budgetMs })``). Destroy
-the node (``audioNode.destroy()``) before the handler.
+The handler is prepared under a Hard contract whose smallest block is the render quantum and
+whose largest is the context's burst:
+
+.. code-block:: ts
+
+   Contract.hard(anira, {
+     blockMin: 128,
+     blockMax: renderBurstFrames(audioContext),
+     rate: audioContext.sampleRate,
+     budgetMs,
+   })
+
+A live ``AudioContext`` does not render one quantum at a time: each device callback renders a
+burst of quanta back to back, with no time between them (2048 frames, 16 quanta, in headless
+Chromium; the device buffer in a browser on real hardware). An inference started in a burst
+cannot complete before the burst's next quantum, so a handler prepared for blocks of 128 alone
+misses most quanta live; with ``block_max`` the burst, the latency the handler reports covers it
+and every quantum is served once the stream runs. :js:func:`~AudioNode.renderBurstFrames` reads
+the burst from the context: Chromium's ``baseLatency`` (its callback buffer), Gecko's
+``outputLatency`` where ``baseLatency`` is 0, 128 for an ``OfflineAudioContext``. Call it once the
+context runs (Gecko reports its latency then). :js:meth:`Handler.createAudioNode` warns on the
+console when the prepared ``block_max`` is below the burst. Destroy the node
+(``audioNode.destroy()``) before the handler.
 
 Options
 -------
