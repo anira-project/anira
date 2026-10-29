@@ -20,6 +20,10 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./scope": {
+      "types": "./dist/scope.d.ts",
+      "import": "./dist/scope.js"
+    },
     "./workers/inference-worker": {
       "types": "./dist/workers/inference-worker.d.ts",
       "import": "./dist/workers/inference-worker.js"

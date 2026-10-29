@@ -131,8 +131,10 @@ typedef struct anira_edge_info {
  * file comment), registers the config's log sink so that it receives every record from
  * here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and
  * probes the capabilities. A device block on the config is refused in this pre-release.
- * On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD
- * are coerced with a warning, as the context file section says.
+ * On WebAssembly the pool's threads are Wasm Workers
+ * (anira_em_context_config_set_worker_module names the module they import);
+ * ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL
+ * with a warning.
  * @param config The context config; copied, destroyable right after.
  * @param out Receives the handle on success.
  * @param err Nullable.

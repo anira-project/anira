@@ -402,7 +402,10 @@ which runs a second instance in a ``worker_threads`` Worker inside
 ``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
 stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
 a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
-so the core's mutexes must exclude across them; the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
+a context of two inference threads that anira starts as Wasm Workers, each importing
+``test/abi/em_pool_module.mjs`` (a JavaScript engine on the scope's registry) before its loop;
+the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
 ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).

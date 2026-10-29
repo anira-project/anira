@@ -47,13 +47,13 @@ export class InferenceThread {
   }
 
   /**
-   * Marks the thread running (`anira_inference_thread_start`) and has `post` tell the Worker to
-   * enter the loop; resolves once it has (its `has_exited` from an earlier run is cleared on
-   * entry, so a later `stop()` never reads a stale one).
+   * Has `post` tell the Worker to enter the loop (`anira_inference_thread_run_loop`, a loop the
+   * host drives: `anira_inference_thread_start` would start a Wasm Worker of anira's own);
+   * resolves once it has (its `has_exited` from an earlier run is cleared on entry, so a later
+   * `stop()` never reads a stale one).
    */
   async start(post: () => void, timeoutMs = 5000): Promise<void> {
     const exitedBefore = this.hasExited()
-    this.anira.abi.anira_inference_thread_start(this.ptr)
     this.started = true
     post()
     if (exitedBefore) {

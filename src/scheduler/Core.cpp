@@ -474,31 +474,17 @@ size_t Core::prospective_thread_pool_size(const anira_context_config& context_co
 
 anira_context_config Core::sanitize_config(anira_context_config context_config) {
 #ifdef __EMSCRIPTEN__
-    // Blocking waits are impossible on WebAssembly: inference loops are driven
-    // cooperatively by JS Workers, and there is no pthreads runtime to block on.
-    // Coerce before the config is stored or compared, so the strategy that takes
-    // effect and the mismatch check stay meaningful.
+    // The inference queue of WebAssembly has no semaphore to block on (InferenceQueue): an idle
+    // Wasm Worker parks on the wake word instead, which is what ANIRA_WAIT_BLOCKING buys
+    // natively. Coerce before the config is stored or compared, so the strategy that takes
+    // effect and the mismatch check stay meaningful. The pool's threads are Wasm Workers
+    // (InferenceThread::start), so num_threads and AUTO mean what they mean natively.
     if (context_config.m_wait == ANIRA_WAIT_BLOCKING) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "ANIRA_WAIT_BLOCKING is not supported on WebAssembly builds. Using "
-                          "ANIRA_WAIT_SPIN_BACKOFF.");
+                          "ANIRA_WAIT_SPIN_BACKOFF (an idle Wasm Worker parks all the same).");
         context_config.m_wait = ANIRA_WAIT_SPIN_BACKOFF;
     }
-    // The auto-managed thread pool cannot exist on WebAssembly either: an
-    // InferenceThread owns no OS thread here, so pool entries would be inert
-    // objects that never run, and the parallel-processor clamp in
-    // create_session() would measure phantom capacity. Threads are always
-    // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
-    // backed by Core::make_inference_thread()). AUTO is 0 here as well
-    // (default_num_threads()), silently: it is the platform default.
-    if (context_config.m_num_threads != 0 && context_config.m_num_threads != ANIRA_THREADS_AUTO) {
-        ANIRA_LOG_WARNING(log_group::k_core,
-                          "num_threads = %u is not supported on WebAssembly builds: the core "
-                          "cannot run inference threads; they must be supplied externally "
-                          "(e.g. AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.",
-                          context_config.m_num_threads);
-    }
-    context_config.m_num_threads = 0;
     if (context_config.m_log_drain != ANIRA_LOG_DRAIN_MANUAL) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: no "
@@ -507,9 +493,8 @@ anira_context_config Core::sanitize_config(anira_context_config context_config) 
         context_config.m_log_drain = ANIRA_LOG_DRAIN_MANUAL;
     }
 #endif
-    // ANIRA_THREADS_AUTO is the library default: half the cores, at least one (0 on
-    // WebAssembly, resolved above). Resolved here, once, so that the stored config and
-    // every comparison against it hold a real count.
+    // ANIRA_THREADS_AUTO is the library default: half the cores, at least one. Resolved here,
+    // once, so that the stored config and every comparison against it hold a real count.
     if (context_config.m_num_threads == ANIRA_THREADS_AUTO) {
         context_config.m_num_threads = default_num_threads();
     }
@@ -645,6 +630,17 @@ void Core::apply_or_compare_config_locked(State& state,
                               context_config.m_queue_capacity,
                               context_config.m_drain_interval_ms);
         }
+#ifdef __EMSCRIPTEN__
+        if (state.m_core_config.m_em_worker_module != context_config.m_em_worker_module) {
+            ANIRA_LOG_WARNING(log_group::k_core,
+                              "worker module mismatch: the core's inference Workers import '%s' "
+                              "but a new context or session asked for '%s'. All sessions in "
+                              "this process share one pool, so the first module stays in "
+                              "effect.",
+                              state.m_core_config.m_em_worker_module.c_str(),
+                              context_config.m_em_worker_module.c_str());
+        }
+#endif
         if (state.m_core_config.m_wait != context_config.m_wait) {
             ANIRA_LOG_WARNING(log_group::k_core,
                               "wait strategy mismatch: the core was created with wait strategy "
@@ -703,6 +699,9 @@ void Core::resize_pool_locked(State& state, unsigned int new_num_threads) {
             state.m_thread_pool.emplace_back(
                 std::make_unique<InferenceThread>(state.m_next_inference,
                                                   state.m_core_config.m_wait));
+#ifdef __EMSCRIPTEN__
+            state.m_thread_pool.back()->set_worker_module(state.m_core_config.m_em_worker_module);
+#endif
         }
     } else if (new_num_threads < current_num_threads) {
         stop_and_join(state.m_thread_pool, new_num_threads);
@@ -1701,11 +1700,21 @@ std::unique_ptr<InferenceThread> Core::make_inference_thread() {
     watch_process_exit();  // as for the pool (start_thread_pool_locked)
 #endif
     anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
+#ifdef __EMSCRIPTEN__
+    std::string worker_module;
+#endif
     {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
         wait = state.m_core_config.m_wait;
+#ifdef __EMSCRIPTEN__
+        worker_module = state.m_core_config.m_em_worker_module;
+#endif
     }
-    return std::make_unique<InferenceThread>(state.m_next_inference, wait);
+    auto thread = std::make_unique<InferenceThread>(state.m_next_inference, wait);
+#ifdef __EMSCRIPTEN__
+    thread->set_worker_module(std::move(worker_module));
+#endif
+    return thread;
 }
 
 unsigned int Core::get_num_inference_threads() {

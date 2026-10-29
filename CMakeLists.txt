@@ -348,7 +348,9 @@ target_sources(${PROJECT_NAME} PRIVATE
 # into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
 # empty on every other binary format, so the TU exists on Wasm alone.
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
-    target_sources(${PROJECT_NAME} PRIVATE src/platform/emscripten/em_hooks.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE
+        src/platform/emscripten/em_hooks.cpp
+        src/platform/emscripten/em_worker.cpp)
 endif()
 
 # Shared between the anira target and the isolated ExecuTorch object target below —

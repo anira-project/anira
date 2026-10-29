@@ -80,12 +80,48 @@ delivers zeros and the handler's real-time error is latched, as for a failing C 
 Main Thread
 -----------
 
-The main thread builds the configuration with raw calls: a context config and context (no
-pool threads on the web: the Workers bring them), a model config (in code or from JSON), a
+The main thread builds the configuration with raw calls: a context config and context (its
+pool, see below), a model config (in code or from JSON), a
 pipeline with the inference stage and, optionally, a JavaScript stage and JavaScript engines,
 the handler, the contract, ``anira_handler_prepare``. It also owns the log: there is no drain
 thread on the web, so ``startLogPump`` drains the real-time queue on an interval, and
 :js:meth:`AniraWeb.setLogHook` routes the records of every instance to one callback.
+
+The Context's Pool
+------------------
+
+The context's inference threads are Wasm Workers anira starts itself, as natively they are OS
+threads: ``anira_context_config_set_threads(config, n, ...)`` (or ``ANIRA_THREADS_AUTO``, half the
+cores) gives the core ``n`` of them, and ``anira_inference_thread_start`` starts one for a
+user-driven thread. Each Worker runs on the module's shared memory with a stack and a
+thread-local block of its own, imports the context's worker module first
+(``anira_em_context_config_set_worker_module(config, url)``, the one web-only field of a
+context config), awaits the boot of its scope's registry and then enters the loop. The module
+defines the JavaScript engines (and the Worker-side phases of stages) on that registry:
+
+.. code-block:: javascript
+
+   // inference-worker.js, the context's worker module
+   import { anira_status, defineEngine, engineTensors } from '@anira-project/anira/scope'
+
+   defineEngine('org.example.double', (env) => ({
+     async init() {
+       // load what the engine needs; the Worker enters its loop once this resolved
+     },
+     process(ctx) {
+       const { inputs, outputs } = engineTensors(env, ctx)
+       for (let i = 0; i < outputs[0].elements; i++) outputs[0].f32[i] = 2 * inputs[0].f32[i]
+       return anira_status.ANIRA_OK
+     },
+   }))
+
+On the main thread the engine is added to the pipeline under the same id, with
+``keyOf(id)`` as its key (``_anira_em_pipeline_register_js_engine``). A Worker starts only once
+the main thread yields to its event loop, and enters its loop after the import: a page that
+waits for inferences on the main thread (an offline render) first waits until
+``_anira_em_inference_threads_in_loop()`` reaches ``_anira_num_inference_threads()``.
+Destroying the last context stops the pool: each Worker leaves its loop (a Worker still
+importing never enters it) and is terminated.
 
 Inference Workers
 -----------------
@@ -108,7 +144,9 @@ main thread polls ``_anira_inference_thread_has_exited`` (a shared-memory flag) 
 loop, so ``AniraWeb`` stops the thread, sends a registration, and starts it again whenever an
 engine or stage is added later.
 
-The engine a Worker calls is either the ONNX Runtime compiled into the module
+The 3.0.0-alpha.2 Workers above are user-driven threads of a context without a pool
+(``num_threads`` 0) and stay until the typed runtime replaces them. The engine a Worker calls is
+either the ONNX Runtime compiled into the module
 (``ANIRA_ENGINE_ONNXRUNTIME`` on ``ANIRA_PROVIDER_CPU``, from model bytes) or a JavaScript
 engine: :js:class:`ONNXRuntimeWebBackend` (``org.anira.onnxruntime-web``) or your own
 :js:class:`JSBackend` subclass, see :doc:`custom_inference_backends`.

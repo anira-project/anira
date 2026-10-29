@@ -6830,7 +6830,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Creates a context over this copy's core: reconciles the config into the core (see the file comment), registers the config's log sink so that it receives every record from here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and probes the capabilities. A device block on the config is refused in this pre-release. On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced with a warning, as the context file section says.",
+          "doc": "Creates a context over this copy's core: reconciles the config into the core (see the file comment), registers the config's log sink so that it receives every record from here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and probes the capabilities. A device block on the config is refused in this pre-release. On WebAssembly the pool's threads are Wasm Workers (anira_em_context_config_set_worker_module names the module they import); ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL with a warning.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out, ANIRA_ERROR_NOT_SUPPORTED for a device block, ANIRA_ERROR_EXTENSION_UNCONSUMED for a context extension nothing consumes."
         },
         {
@@ -7176,7 +7176,7 @@
       "file": "thread.h",
       "guard": "ANIRA_ABI_THREAD_H",
       "brief": "User-driven inference threads, the WebAssembly Worker's primitive.",
-      "doc": "A host that configured its context with num_threads = 0 drives inference itself: it creates anira_inference_thread objects, bound to the core's queue, and either lets anira start an OS thread for each (anira_inference_thread_start, native only) or runs the loop on a thread of its own (anira_inference_thread_run_loop, the only form on WebAssembly, where the thread is a Worker). The objects outlive the context that created them and must be stopped before the library is unloaded.",
+      "doc": "A host that configured its context with num_threads = 0 drives inference itself: it creates anira_inference_thread objects, bound to the core's queue, and either lets anira start a thread for each (anira_inference_thread_start: an OS thread natively, a Wasm Worker on WebAssembly) or runs the loop on a thread of its own (anira_inference_thread_run_loop). The objects outlive the context that created them and must be stopped before the library is unloaded.",
       "includes": [
         "<stdint.h>",
         "export.h",
@@ -7208,7 +7208,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Creates an inference thread bound to the core's queue. Nothing runs until anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the object is created on the main instance and run in a Worker.",
+          "doc": "Creates an inference thread bound to the core's queue. Nothing runs until anira_inference_thread_start or anira_inference_thread_run_loop.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context or out."
         },
         {
@@ -7263,7 +7263,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Native: spawns an OS thread at the inference-thread scheduling class (real-time where granted) that runs the loop. WebAssembly: marks the object running; the loop is entered by the Worker through anira_inference_thread_run_loop. A second start while the loop runs, and an operating system that refuses the thread, are returned, never silent: is_running stays 0 then.",
+          "doc": "Spawns a thread that runs the loop: natively an OS thread at the inference-thread scheduling class (real-time where granted), on WebAssembly a Wasm Worker on the module's memory, which imports the context's worker module (anira_em_context_config_set_worker_module) first. A second start while the loop runs, and an operating system or browser that refuses the thread, are returned, never silent: is_running stays 0 then.",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL thread; ANIRA_ERROR_INVALID_STATE when it is already running; ANIRA_ERROR_OUT_OF_MEMORY when the operating system refused to create the thread (a thread limit or its stack)."
         },
         {
@@ -7280,7 +7280,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly: requests only; poll anira_inference_thread_has_exited."
+          "doc": "Requests the loop to exit and joins the thread anira_inference_thread_start started (WebAssembly: waits for its Wasm Worker to leave the loop, then terminates it; a Worker still importing its module is terminated at once). A loop the host runs itself (anira_inference_thread_run_loop) is asked to return only; poll anira_inference_thread_has_exited."
         },
         {
           "kind": "function",
@@ -7333,7 +7333,7 @@
           "nonblocking": true,
           "status": "promised",
           "since": "0.2",
-          "doc": "Nonzero while the loop is running (native: the OS thread exists and has not returned; WebAssembly: between start and stop).",
+          "doc": "Nonzero while the loop is running (native: the OS thread exists and has not returned; WebAssembly: between start and stop, the Wasm Worker's import included).",
           "return_doc": "The running flag."
         },
         {
@@ -10370,7 +10370,7 @@
       "platform": "emscripten",
       "guard": "ANIRA_ANIRA_EM_H",
       "brief": "The Emscripten companion: the trampolines into the JavaScript hook object Module.anira, the JS log hook and the per-instance stacks.",
-      "doc": "Outside WebAssembly this header declares nothing; under __EMSCRIPTEN__ it declares the entries JavaScript needs beside the C ABI and cannot write itself. Each module instance (the main thread's, an inference Worker's, the audio worklet's) has one hook object, Module.anira, installed before instantiation: { version, stage(key, phase, a, b), engine(key, phase, a, b), log(recordPtr), complete }, where version is ANIRA_EM_HOOKS_VERSION and complete is reserved (Async, undriven). A JS stage or a JS engine is a descriptor whose slots are C trampolines compiled into anira: each calls the hook of the instance that runs the C call (the worklet for pre_process, post_process and reset under a Hard contract, the Worker for before_inference, after_inference and the engine's process, the main thread for init, prepare, unprepare, release and query) with the stage's or engine's js_key, the anira_phase of the call and two pointers into the shared memory, which JavaScript reads through web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared pointer in pre_process, post_process, before_inference, after_inference and reset; a the anira_prepare_info and b the address of the out_prepared slot in prepare; a the prepared pointer in unprepare; a the anira_init_info in init; both 0 in release. For an engine, a is the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and ANIRA_PHASE_RESET; a the anira_init_info and b the address of the uint64_t provider mask in ANIRA_PHASE_QUERY. The hook returns an anira_status (a void slot ignores it). A hook that throws is caught in the trampoline: the exception is reported once with console.error, not through the anira log, which may be what threw, and the call returns ANIRA_ERROR_UNKNOWN (a stage) or ANIRA_ERROR_ENGINE (an engine), which fails the chunk the usual way (zeros, the real-time error latched); no JavaScript exception unwinds through a C frame. The trampolines keep {js_key, the engine id} in a small heap record as the descriptor's user_data and free it in the descriptor's release, which is always set for that purpose. Every instance has a thread-local block of its own, and every instance but the main one a stack: anira_em_alloc_thread_stack allocates both, anira_em_init_instance installs the block as the instance's first call, so every thread_local of anira, tanh-lib and the runtime (Emscripten's exception state among them) is per instance, as it is per thread natively. A module without main() (AniraWeb, linked --no-entry) starts without a usable block on the main instance too: its C++ exceptions trap until one is installed, so the main instance makes the same call with a region of its own.",
+      "doc": "Outside WebAssembly this header declares nothing; under __EMSCRIPTEN__ it declares the entries JavaScript needs beside the C ABI and cannot write itself. Each module instance (the main thread's, an inference Worker's, the audio worklet's) has one hook object, Module.anira, installed before instantiation: { version, stage(key, phase, a, b), engine(key, phase, a, b), log(recordPtr), complete }, where version is ANIRA_EM_HOOKS_VERSION and complete is reserved (Async, undriven). A JS stage or a JS engine is a descriptor whose slots are C trampolines compiled into anira: each calls the hook of the instance that runs the C call (the worklet for pre_process, post_process and reset under a Hard contract, the Worker for before_inference, after_inference and the engine's process, the main thread for init, prepare, unprepare, release and query) with the stage's or engine's js_key, the anira_phase of the call and two pointers into the shared memory, which JavaScript reads through web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared pointer in pre_process, post_process, before_inference, after_inference and reset; a the anira_prepare_info and b the address of the out_prepared slot in prepare; a the prepared pointer in unprepare; a the anira_init_info in init; both 0 in release. For an engine, a is the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and ANIRA_PHASE_RESET; a the anira_init_info and b the address of the uint64_t provider mask in ANIRA_PHASE_QUERY. The hook returns an anira_status (a void slot ignores it). A hook that throws is caught in the trampoline: the exception is reported once with console.error, not through the anira log, which may be what threw, and the call returns ANIRA_ERROR_UNKNOWN (a stage) or ANIRA_ERROR_ENGINE (an engine), which fails the chunk the usual way (zeros, the real-time error latched); no JavaScript exception unwinds through a C frame. The trampolines keep {js_key, the engine id} in a small heap record as the descriptor's user_data and free it in the descriptor's release, which is always set for that purpose. Every instance has a thread-local block of its own, and every instance but the main one a stack: anira_em_alloc_thread_stack allocates both, anira_em_init_instance installs the block as the instance's first call, so every thread_local of anira, tanh-lib and the runtime (Emscripten's exception state among them) is per instance, as it is per thread natively. A module without main() (AniraWeb, linked --no-entry) starts without a usable block on the main instance too: its C++ exceptions trap until one is installed, so the main instance makes the same call with a region of its own. Where an instance has no Module.anira (a Wasm Worker anira starts: anira_inference_thread_start, the context's pool), the trampolines call the registry of the scope instead, globalThis[Symbol.for('anira.registry')]: stage(Module, key, phase, a, b), engine(Module, key, phase, a, b, engineIdPtr) and log(Module, recordPtr), with the instance's Module first, and the Worker awaits its boot(Module) before the loop; the package's defineEngine and defineStage install it.",
       "includes": [
         "<stddef.h>",
         "<stdint.h>",
@@ -10624,6 +10624,45 @@
           "status": "promised",
           "since": "0.2",
           "doc": "Registers Module.anira.log as a log sink of this module, beside the C sinks of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every record at any level the core logs reaches the hook, as an anira_log_record pointer the hook reads through layout.ts while it runs, on the instance that logs or drains (anira_drain_log). One registration for the whole module: the instances share one memory and so one sink list."
+        },
+        {
+          "kind": "function",
+          "name": "anira_em_context_config_set_worker_module",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "anira_context_config*",
+              "name": "config",
+              "doc": "The config."
+            },
+            {
+              "type": "const char*",
+              "name": "url",
+              "doc": "The absolute URL of an ES module, copied; NULL or empty for none."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The one web-only field of a context config: the ES module every inference Worker imports before it enters its loop. The context's pool threads are Wasm Workers (as natively they are OS threads), and anira_inference_thread_start starts one for a user-driven thread; each imports this module first, which defines the JavaScript engines and stages of its scope on the registry globalThis[Symbol.for('anira.registry')] (the package's defineEngine and defineStage), and awaits the registry's boot (the engines' async init) before the loop. A module that fails to load is reported on the console and the Worker runs without it. Like the wait strategy, the first context's module is the one in effect for the process's pool; a later context naming another is warned about. Not part of the context config's JSON.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config."
+        },
+        {
+          "kind": "function",
+          "name": "anira_em_inference_threads_in_loop",
+          "returns": "uint32_t",
+          "params": [],
+          "thread": "thread-safe",
+          "nonblocking": true,
+          "status": "promised",
+          "since": "0.2",
+          "doc": "The inference threads inside their loops now, the pool's and the user-driven ones alike. A Wasm Worker anira starts enters its loop asynchronously, once the browser has started it (the main thread must yield to its event loop first) and its worker module is imported and booted: a host that waits for the inferences of a prepared handler on the main thread (an offline render, anira_handler_process_wait) first waits, yielding, until this reaches anira_num_inference_threads; natively the pool is inside its loops by the time anira_handler_prepare returns.",
+          "return_doc": "The count."
         },
         {
           "kind": "function",

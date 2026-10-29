@@ -12,6 +12,7 @@
 #include <anira/abi/stage.h>
 #include <anira/abi/status.h>
 #include <anira/anira_em.h>
+#include <anira/scheduler/InferenceThread.h>
 #include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <emscripten/em_macros.h>
@@ -23,6 +24,7 @@
 #include <string>
 
 #include "../../capi/capi_internal.h"
+#include "../../capi/handles.h"
 
 using anira::capi::translate_exception;
 
@@ -43,7 +45,12 @@ EM_JS(int,
       (uint32_t key, uint32_t phase, uintptr_t a, uintptr_t b, int failure),
       {
           try {
-              return Module.anira.stage(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
+              if (Module.anira) {
+                  return Module.anira.stage(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
+              }
+              var registry = globalThis[Symbol.for ('anira.registry')];
+              if (!registry) { throw new Error('no anira registry in this scope'); }
+              return registry.stage(Module, key >>> 0, phase, a >>> 0, b >>> 0) | 0;
           } catch (e) {
               var report = Module.aniraReportThrow;
               if (!report) {
@@ -75,7 +82,13 @@ EM_JS(int,
       (uint32_t key, uint32_t phase, uintptr_t a, uintptr_t b, uintptr_t engine_id, int failure),
       {
           try {
-              return Module.anira.engine(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
+              if (Module.anira) {
+                  return Module.anira.engine(key >>> 0, phase, a >>> 0, b >>> 0) | 0;
+              }
+              var registry = globalThis[Symbol.for ('anira.registry')];
+              if (!registry) { throw new Error('no anira registry in this scope'); }
+              return registry.engine(Module, key >>> 0, phase, a >>> 0, b >>> 0, engine_id >>> 0) |
+                     0;
           } catch (e) {
               var report = Module.aniraReportThrow;
               if (!report) {
@@ -107,7 +120,12 @@ EM_JS(int,
 
 EM_JS(void, anira_em_js_log, (uintptr_t record), {
     try {
-        Module.anira.log(record >>> 0);
+        if (Module.anira) {
+            Module.anira.log(record >>> 0);
+            return;
+        }
+        var registry = globalThis[Symbol.for ('anira.registry')];
+        if (registry && registry.log) { registry.log(Module, record >>> 0); }
     } catch (e) {
         var report = Module.aniraReportThrow;
         if (!report) {
@@ -389,6 +407,22 @@ void ANIRA_CALL anira_em_set_log_hook(anira_bool enable) ANIRA_NOEXCEPT try {
         s_log_hook_sink = 0;
     }
 } catch (...) { anira::capi::report_void_failure(__func__); }
+
+uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    return anira::InferenceThread::get_num_loop_active();
+}
+
+anira_status ANIRA_CALL anira_em_context_config_set_worker_module(anira_context_config* config,
+                                                                  const char* url,
+                                                                  anira_error* err) ANIRA_NOEXCEPT
+    try {
+    ANIRA_CAPI_REQUIRE(config != nullptr,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "context config: NULL handle");
+    config->m_em_worker_module = url != nullptr ? url : "";
+    return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
 
 void* ANIRA_CALL anira_em_alloc_thread_stack(size_t bytes) ANIRA_NOEXCEPT {
     const size_t tls_bytes = __builtin_wasm_tls_size();

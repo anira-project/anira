@@ -261,6 +261,10 @@ static void check_pipeline(void) {
     anira_context_config* config = NULL;
     anira_context* context = NULL;
     check_status(anira_context_config_create(&config, &err), &err, "anira_context_config_create");
+    /* No pool: this test drives the queue itself (anira_inference_thread_execute). */
+    check_status(anira_context_config_set_threads(config, 0, ANIRA_WAIT_SPIN_BACKOFF),
+                 NULL,
+                 "anira_context_config_set_threads");
     check_status(anira_context_config_set_log_drain(config, ANIRA_LOG_DRAIN_MANUAL, 10),
                  NULL,
                  "anira_context_config_set_log_drain");

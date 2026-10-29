@@ -193,10 +193,12 @@ if(_abi_on_wasm)
     anira_abi_consumer_target(anira_em_smoke C)
     target_link_libraries(anira_em_smoke PRIVATE anira::anira)
     # The link is AniraWeb's: -pthread, whose objects carry the atomics and bulk-memory
-    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS).
+    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS), and Wasm Workers, which
+    # InferenceThread::start creates.
     set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX)
     target_link_options(anira_em_smoke PRIVATE
         -pthread
+        -sWASM_WORKERS
         -sENVIRONMENT=node
         -sSHARED_MEMORY=1
         -sINITIAL_MEMORY=268435456
@@ -221,6 +223,7 @@ if(_abi_on_wasm)
     target_link_options(anira_em_smoke_thread PRIVATE
         --no-entry
         -pthread
+        -sWASM_WORKERS
         -sENVIRONMENT=node
         -sMODULARIZE=1
         -sEXPORT_ES6=1
@@ -230,7 +233,10 @@ if(_abi_on_wasm)
         -sALLOW_MEMORY_GROWTH=0
         -sMALLOC=emmalloc
         -sSTACK_SIZE=8388608
-        -sASSERTIONS=1
+        # 0: the Worker's second instance of the module runs the constructors again, among them
+        # the Wasm Worker runtime's carving of a thread-local block off the heap top, which asserts
+        # an aligned top (the per-instance design of this test, not of anira's own Workers).
+        -sASSERTIONS=0
         -sNO_DISABLE_EXCEPTION_CATCHING
         "-sEXPORTED_FUNCTIONS=@${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt"
         "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"stackRestore\"]")
@@ -244,6 +250,7 @@ if(_abi_on_wasm)
     set_target_properties(anira_em_mutex PROPERTIES LINKER_LANGUAGE CXX)
     target_link_options(anira_em_mutex PRIVATE
         -pthread
+        -sWASM_WORKERS
         -sPTHREAD_POOL_SIZE=1
         -sENVIRONMENT=node
         -sINITIAL_MEMORY=268435456
@@ -253,6 +260,27 @@ if(_abi_on_wasm)
         -sEXIT_RUNTIME=1
         -sASSERTIONS=1
         -sNO_DISABLE_EXCEPTION_CATCHING)
+    # The context's pool on WebAssembly: two inference threads anira starts as Wasm Workers,
+    # each importing em_pool_module.mjs (a JavaScript engine on the scope's registry) before its
+    # loop; the handler's blocks are waited for on the main thread, then the pool is stopped.
+    add_executable(anira_em_pool em_pool.c)
+    anira_abi_consumer_target(anira_em_pool C)
+    target_link_libraries(anira_em_pool PRIVATE anira::anira)
+    set_target_properties(anira_em_pool PROPERTIES LINKER_LANGUAGE CXX)
+    target_link_options(anira_em_pool PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "-sEXPORTED_FUNCTIONS=@${_smoke_exports}"
+        "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"UTF8ToString\"]")
+    set_property(TARGET anira_em_pool APPEND PROPERTY LINK_DEPENDS "${_smoke_exports}")
     # Both gates under node, in one target build_web runs after the build.
     add_custom_target(anira_abi_wasm_gates
         COMMAND ${CMAKE_COMMAND}
@@ -265,7 +293,9 @@ if(_abi_on_wasm)
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke_thread.mjs"
             $<TARGET_FILE:anira_em_smoke_thread>
         COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_mutex>
-        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_pool>
+            "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"
+        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
         COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
         VERBATIM)
     return()

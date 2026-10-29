@@ -242,6 +242,10 @@ struct anira_context_config {
     std::optional<anira_webgpu_desc> m_webgpu;
     anira::capi::ExtBag m_ext;
     bool m_upgraded = false;
+#ifdef __EMSCRIPTEN__
+    /// The ES module the inference Workers import (anira_em_context_config_set_worker_module).
+    std::string m_em_worker_module;
+#endif
 };
 
 struct anira_job_options {

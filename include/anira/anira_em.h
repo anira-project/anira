@@ -40,7 +40,12 @@
  * exception state among them) is per instance, as it is per thread natively. A module without
  * main() (AniraWeb, linked --no-entry) starts without a usable block on the main instance too:
  * its C++ exceptions trap until one is installed, so the main instance makes the same call with
- * a region of its own.
+ * a region of its own. Where an instance has no Module.anira (a Wasm Worker anira starts:
+ * anira_inference_thread_start, the context's pool), the trampolines call the registry of the
+ * scope instead, globalThis[Symbol.for('anira.registry')]: stage(Module, key, phase, a, b),
+ * engine(Module, key, phase, a, b, engineIdPtr) and log(Module, recordPtr), with the instance's
+ * Module first, and the Worker awaits its boot(Module) before the loop; the package's
+ * defineEngine and defineStage install it.
  */
 
 #include <stddef.h>
@@ -266,6 +271,45 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_register_js_engine(anira_pip
  * @since ABI 0.2
  */
 ANIRA_API void ANIRA_CALL anira_em_set_log_hook(anira_bool enable) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The one web-only field of a context config: the ES module every inference Worker
+ * imports before it enters its loop. The context's pool threads are Wasm Workers (as
+ * natively they are OS threads), and anira_inference_thread_start starts one for a
+ * user-driven thread; each imports this module first, which defines the JavaScript
+ * engines and stages of its scope on the registry
+ * globalThis[Symbol.for('anira.registry')] (the package's defineEngine and defineStage),
+ * and awaits the registry's boot (the engines' async init) before the loop. A module
+ * that fails to load is reported on the console and the Worker runs without it. Like the
+ * wait strategy, the first context's module is the one in effect for the process's pool;
+ * a later context naming another is warned about. Not part of the context config's JSON.
+ * @param config The config.
+ * @param url The absolute URL of an ES module, copied; NULL or empty for none.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_em_context_config_set_worker_module(anira_context_config* config,
+                                                                            const char* url,
+                                                                            anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The inference threads inside their loops now, the pool's and the user-driven ones
+ * alike. A Wasm Worker anira starts enters its loop asynchronously, once the browser has
+ * started it (the main thread must yield to its event loop first) and its worker module
+ * is imported and booted: a host that waits for the inferences of a prepared handler on
+ * the main thread (an offline render, anira_handler_process_wait) first waits, yielding,
+ * until this reaches anira_num_inference_threads; natively the pool is inside its loops
+ * by the time anira_handler_prepare returns.
+ * @return The count.
+ * @par Thread contract
+ * [thread-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
+                                                                 ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief Allocates the stack of a new module instance (an inference Worker's, the audio

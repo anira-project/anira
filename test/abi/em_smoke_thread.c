@@ -3,9 +3,10 @@
  * main instance builds a Hard handler over a JavaScript engine and creates the thread;
  * em_smoke_thread_worker.mjs runs a second instance of this module in a worker_threads Worker
  * on the same memory, with its own stack and thread-local block (anira_em_init_instance), and
- * calls anira_inference_thread_run_loop there for real: the loop parks on the wake word while
- * the queue is empty and is woken by the enqueues and the stop. em_smoke_thread.mjs drives
- * the exports below from the main thread. Every failed check prints one line.
+ * calls anira_inference_thread_run_loop there for real, a loop the host drives (no
+ * anira_inference_thread_start, which starts a Wasm Worker of anira's own): the loop parks on the
+ * wake word while the queue is empty and is woken by the enqueues and the stop. em_smoke_thread.mjs
+ * drives the exports below from the main thread. Every failed check prints one line.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -59,7 +60,7 @@ EMSCRIPTEN_KEEPALIVE uint32_t smoke_ctx_outputs_offset(void) {
     return (uint32_t)offsetof(anira_engine_ctx, outputs);
 }
 
-/* The handler, the thread (started: the Worker enters its loop next) and the Worker's stack. */
+/* The handler, the thread (the Worker enters its loop next) and the Worker's stack. */
 EMSCRIPTEN_KEEPALIVE int smoke_thread_setup(void) {
     static const char k_json[] =
         "{\"models\": [{\"engine\": \"" SMOKE_ENGINE_ID
@@ -72,6 +73,10 @@ EMSCRIPTEN_KEEPALIVE int smoke_thread_setup(void) {
         " \"window\": {\"min\": 128, \"max\": 128}}]}";
     anira_error err = ANIRA_ERROR_INIT;
     check_status(anira_context_config_create(&s_config, &err), &err, "anira_context_config_create");
+    /* No pool: the Worker of this test is the context's one thread. */
+    check_status(anira_context_config_set_threads(s_config, 0, ANIRA_WAIT_SPIN_BACKOFF),
+                 NULL,
+                 "anira_context_config_set_threads");
     check_status(anira_context_config_set_log_drain(s_config, ANIRA_LOG_DRAIN_MANUAL, 10),
                  NULL,
                  "anira_context_config_set_log_drain");
@@ -114,9 +119,6 @@ EMSCRIPTEN_KEEPALIVE int smoke_thread_setup(void) {
     check_status(anira_inference_thread_create(s_context, &s_thread, &err),
                  &err,
                  "anira_inference_thread_create");
-    check_status(anira_inference_thread_start(s_thread, &err),
-                 &err,
-                 "anira_inference_thread_start");
     s_stack = anira_em_alloc_thread_stack(SMOKE_STACK_BYTES);
     check(s_stack != NULL, "anira_em_alloc_thread_stack");
     return s_failures;

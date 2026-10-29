@@ -162,20 +162,12 @@ struct ANIRA_API LogConfig {
 };
 
 /**
- * @brief Platform-dependent default thread count: half of the available CPU
- * cores (minimum 1) on native builds, 0 on WebAssembly.
- *
- * On WebAssembly the core cannot run threads — InferenceThread owns no OS
- * thread there and inference loops are driven externally by JS Workers (see
- * Core::make_inference_thread()) — so the only meaningful pool size is 0.
+ * @brief The default thread count: half of the available CPU cores, at least 1 (on
+ * WebAssembly navigator.hardwareConcurrency; the pool's threads are Wasm Workers there).
  */
 inline unsigned int default_num_threads() noexcept {
-#ifdef __EMSCRIPTEN__
-    return 0;
-#else
     return (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2
                                                          : 1;
-#endif
 }
 
 /**

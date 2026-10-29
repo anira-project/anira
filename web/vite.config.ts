@@ -183,6 +183,7 @@ export default defineConfig({
         ),
         'workers/audio-worklet': path.resolve(__dirname, 'src/workers/audio-worklet.ts'),
         'workers/worklet-base': path.resolve(__dirname, 'src/workers/worklet-base.ts'),
+        scope: path.resolve(__dirname, 'src/scope.ts'),
       },
       formats: ['es'],
     },

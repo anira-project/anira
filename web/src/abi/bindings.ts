@@ -248,6 +248,8 @@ export interface AbiModule {
   _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number): number
   _anira_em_pipeline_register_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
   _anira_em_set_log_hook(_0: number): void
+  _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
+  _anira_em_inference_threads_in_loop(): number
   _anira_em_alloc_thread_stack(_0: number): number
   _anira_em_free_thread_stack(_0: number): void
   _anira_em_init_instance(_0: number, _1: number): number
@@ -4006,8 +4008,10 @@ export class AniraBindings {
    * file comment), registers the config's log sink so that it receives every record from
    * here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and
    * probes the capabilities. A device block on the config is refused in this pre-release.
-   * On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD
-   * are coerced with a warning, as the context file section says.
+   * On WebAssembly the pool's threads are Wasm Workers
+   * (anira_em_context_config_set_worker_module names the module they import);
+   * ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL
+   * with a warning.
    *
    * @param config The context config; copied, destroyable right after.
    * @returns What the entry writes to out. A failed status throws an AniraError with the
@@ -4357,8 +4361,7 @@ export class AniraBindings {
 
   /**
    * Creates an inference thread bound to the core's queue. Nothing runs until
-   * anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the
-   * object is created on the main instance and run in a Worker.
+   * anira_inference_thread_start or anira_inference_thread_run_loop.
    *
    * @param context The context whose core the thread serves; the thread waits with the
    *   core's reconciled wait strategy, the first user's.
@@ -4411,10 +4414,11 @@ export class AniraBindings {
   }
 
   /**
-   * Native: spawns an OS thread at the inference-thread scheduling class (real-time where
-   * granted) that runs the loop. WebAssembly: marks the object running; the loop is
-   * entered by the Worker through anira_inference_thread_run_loop. A second start while
-   * the loop runs, and an operating system that refuses the thread, are returned, never
+   * Spawns a thread that runs the loop: natively an OS thread at the inference-thread
+   * scheduling class (real-time where granted), on WebAssembly a Wasm Worker on the
+   * module's memory, which imports the context's worker module
+   * (anira_em_context_config_set_worker_module) first. A second start while the loop
+   * runs, and an operating system or browser that refuses the thread, are returned, never
    * silent: is_running stays 0 then.
    *
    * @param thread The object.
@@ -4441,8 +4445,11 @@ export class AniraBindings {
   }
 
   /**
-   * Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly:
-   * requests only; poll anira_inference_thread_has_exited.
+   * Requests the loop to exit and joins the thread anira_inference_thread_start started
+   * (WebAssembly: waits for its Wasm Worker to leave the loop, then terminates it; a
+   * Worker still importing its module is terminated at once). A loop the host runs itself
+   * (anira_inference_thread_run_loop) is asked to return only; poll
+   * anira_inference_thread_has_exited.
    *
    * @param thread The object.
    * Thread: [main-thread]
@@ -4479,7 +4486,7 @@ export class AniraBindings {
 
   /**
    * Nonzero while the loop is running (native: the OS thread exists and has not returned;
-   * WebAssembly: between start and stop).
+   * WebAssembly: between start and stop, the Wasm Worker's import included).
    *
    * @param thread The object.
    * @returns The running flag.
@@ -6677,6 +6684,59 @@ export class AniraBindings {
   anira_em_set_log_hook(enable: boolean): void {
     const m = this.module
     m._anira_em_set_log_hook(enable ? 1 : 0)
+  }
+
+  /**
+   * The one web-only field of a context config: the ES module every inference Worker
+   * imports before it enters its loop. The context's pool threads are Wasm Workers (as
+   * natively they are OS threads), and anira_inference_thread_start starts one for a
+   * user-driven thread; each imports this module first, which defines the JavaScript
+   * engines and stages of its scope on the registry
+   * globalThis[Symbol.for('anira.registry')] (the package's defineEngine and
+   * defineStage), and awaits the registry's boot (the engines' async init) before the
+   * loop. A module that fails to load is reported on the console and the Worker runs
+   * without it. Like the wait strategy, the first context's module is the one in effect
+   * for the process's pool; a later context naming another is warned about. Not part of
+   * the context config's JSON.
+   *
+   * @param config The config.
+   * @param url The absolute URL of an ES module, copied; NULL or empty for none.
+   * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config. A failed status
+   *   throws an AniraError with the entry's message.
+   * Thread: [main-thread]
+   */
+  anira_em_context_config_set_worker_module(config: number, url: string | null): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const url_ = url === null ? 0 : m.stringToUTF8OnStack(url)
+      const err = stackError(m)
+      return checkStatus(
+        m,
+        m._anira_em_context_config_set_worker_module(config, url_, err),
+        'anira_em_context_config_set_worker_module',
+        err
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
+   * The inference threads inside their loops now, the pool's and the user-driven ones
+   * alike. A Wasm Worker anira starts enters its loop asynchronously, once the browser
+   * has started it (the main thread must yield to its event loop first) and its worker
+   * module is imported and booted: a host that waits for the inferences of a prepared
+   * handler on the main thread (an offline render, anira_handler_process_wait) first
+   * waits, yielding, until this reaches anira_num_inference_threads; natively the pool is
+   * inside its loops by the time anira_handler_prepare returns.
+   *
+   * @returns The count.
+   * Thread: [thread-safe] ANIRA_NONBLOCKING
+   */
+  anira_em_inference_threads_in_loop(): number {
+    const m = this.module
+    return m._anira_em_inference_threads_in_loop() >>> 0
   }
 
   /**

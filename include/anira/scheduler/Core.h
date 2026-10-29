@@ -626,11 +626,11 @@ private:
     /**
      * @brief Coerces a requested configuration to what this platform can honor
      *
-     * Resolves ANIRA_THREADS_AUTO to default_num_threads(). WebAssembly: blocking waits,
-     * core-run threads and a drain thread are impossible, so ANIRA_WAIT_BLOCKING becomes
-     * ANIRA_WAIT_SPIN_BACKOFF, a non-zero thread count becomes 0 and
-     * ANIRA_LOG_DRAIN_THREAD becomes ANIRA_LOG_DRAIN_MANUAL, each with a warning (AUTO
-     * becomes 0 silently: that is the platform default). Native: only the AUTO resolution.
+     * Resolves ANIRA_THREADS_AUTO to default_num_threads(). WebAssembly: the queue has no
+     * semaphore and no drain thread exists, so ANIRA_WAIT_BLOCKING becomes
+     * ANIRA_WAIT_SPIN_BACKOFF (an idle Wasm Worker parks on the wake word all the same) and
+     * ANIRA_LOG_DRAIN_THREAD becomes ANIRA_LOG_DRAIN_MANUAL, each with a warning; the pool's
+     * threads are Wasm Workers. Native: only the AUTO resolution.
      *
      * @param context_config Configuration as requested by a session or a context
      * @return Configuration to apply
