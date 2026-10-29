@@ -5006,6 +5006,52 @@ headers:
         doc: "The inference threads inside their loops now, the pool's and the user-driven ones alike. A Wasm Worker anira starts enters its loop asynchronously, once the browser has started it (the main thread must yield to its event loop first) and its worker module is imported and booted: a host that waits for the inferences of a prepared handler on the main thread (an offline render, anira_handler_process_wait) first waits, yielding, until this reaches anira_num_inference_threads; natively the pool is inside its loops by the time anira_handler_prepare returns."
         return_doc: "The count."
       - kind: function
+        name: anira_em_audio_node_create
+        returns: anira_status
+        params:
+          - {type: anira_handler*, name: handler, doc: "A handler prepared under a Hard contract whose block range holds the context's render quantum; it must outlive the node (anira_em_audio_node_destroy first)."}
+          - {type: uint32_t, name: audio_context, doc: "The audio context: what emscriptenRegisterAudioObject returned for an AudioContext or an OfflineAudioContext."}
+          - {type: uint32_t, name: input_channels, doc: "The node's input channels (its channelCount, explicit, discrete): the channels of the input tensor; 0 for a node without an input."}
+          - {type: uint32_t, name: output_channels, doc: "The node's output channels, 1 to 64: the channels of the output tensor."}
+          - {type: uint32_t, name: input_slot, doc: "The Streamed input slot the node's input feeds."}
+          - {type: uint32_t, name: output_slot, doc: "The Streamed output slot the node's output plays."}
+          - {type: const uint32_t*, name: param_slots, doc: "num_param_slots input slots of float32 Static scalars (rank 1, one element), each driven by the AudioParam of its index ('0', '1', ...; k-rate, default 0); NULL for none."}
+          - {type: uint32_t, name: num_param_slots, doc: "Their count, at most 32."}
+          - {type: const uint32_t*, name: tensor_slots, doc: "num_tensor_slots Static input slots the main thread writes whole with anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL for none."}
+          - {type: uint32_t, name: num_tensor_slots, doc: "Their count."}
+          - {type: double, name: wait_ms, doc: "0: every quantum calls anira_handler_process (a live context); above 0: anira_handler_process_wait with this bound (an offline render that waits for every inference)."}
+          - {type: int32_t*, name: out_status, doc: "Written later: ANIRA_INCOMPLETE now, the creation's status once it completed (written last, with release ordering); the caller keeps the word alive until then.", written_later: true}
+          - {type: uint32_t*, name: out_node, doc: "Written later, before out_status: the node's handle (emscriptenGetAudioObject gives the AudioWorkletNode).", written_later: true}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Creates a Wasm Audio Worklet node that streams through the handler, asynchronously: the first node of a context starts the context's worklet thread (once; its stack stays the context's), a node of n AudioParams registers the processor anira-node-n once per context, and the node is created after both, from the main thread's event loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio thread, the C render callback hands the node's buffers to the handler as planar host tensors (no copy: the output tensor is the node's output), pushes an AudioParam's value to its Static input when it changed and a tensor slot's value the main thread wrote since the last push, and calls anira_handler_process (or anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success silences what was not delivered. A quantum other than the declared one is silence. A JavaScript stage of the handler runs its worklet phases on the worklet scope's registry, which the caller fills before (audioWorklet.addModule of a module that calls defineStage) and anira boots over the worklet's instance at every create. The render callback allocates nothing and locks nothing; nodes are at most 256 at once."
+        return_doc: "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a channel count out of range or a slot list without its pointer; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
+      - kind: function
+        name: anira_em_audio_node_set_static_input
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create."}
+          - {type: uint32_t, name: slot, doc: "One of its tensor slots."}
+          - {type: const void*, name: bytes, doc: "The whole value, the spec's bytes in its layout; copied."}
+          - {type: size_t, name: size, doc: "Their count: exactly the spec's."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Writes a Static input a node serves, for the render callback to push before its next process call: a seqlock per slot (the main thread the one writer), so the audio thread never pushes a torn value and never waits; a write it overlaps is pushed at a later quantum, the handler keeping the previous value until then."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node, a slot it does not serve, NULL bytes or a size other than the spec's."
+      - kind: function
+        name: anira_em_audio_node_destroy
+        returns: void
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create; an unknown one is a no-op."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Stops the node's render callback calling into the handler (a quantum inside it finishes first, at most its wait bound), disconnects the node and releases its handle; the callback outputs silence and lets the browser drop the node. Destroy the nodes before the handler they stream through."
+      - kind: function
         name: anira_em_alloc_thread_stack
         returns: void*
         params:

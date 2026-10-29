@@ -312,6 +312,112 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
                                                                  ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
+ * @brief Creates a Wasm Audio Worklet node that streams through the handler, asynchronously:
+ * the first node of a context starts the context's worklet thread (once; its stack stays
+ * the context's), a node of n AudioParams registers the processor anira-node-n once per
+ * context, and the node is created after both, from the main thread's event loop;
+ * out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio
+ * thread, the C render callback hands the node's buffers to the handler as planar host
+ * tensors (no copy: the output tensor is the node's output), pushes an AudioParam's
+ * value to its Static input when it changed and a tensor slot's value the main thread
+ * wrote since the last push, and calls anira_handler_process (or
+ * anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's fill,
+ * a failure is silence, a success silences what was not delivered. A quantum other than
+ * the declared one is silence. A JavaScript stage of the handler runs its worklet phases
+ * on the worklet scope's registry, which the caller fills before (audioWorklet.addModule
+ * of a module that calls defineStage) and anira boots over the worklet's instance at
+ * every create. The render callback allocates nothing and locks nothing; nodes are at
+ * most 256 at once.
+ * @param handler A handler prepared under a Hard contract whose block range holds the context's
+ *        render quantum; it must outlive the node (anira_em_audio_node_destroy first).
+ * @param audio_context The audio context: what emscriptenRegisterAudioObject returned for an
+ *        AudioContext or an OfflineAudioContext.
+ * @param input_channels The node's input channels (its channelCount, explicit, discrete): the
+ *        channels of the input tensor; 0 for a node without an input.
+ * @param output_channels The node's output channels, 1 to 64: the channels of the output
+ *        tensor.
+ * @param input_slot The Streamed input slot the node's input feeds.
+ * @param output_slot The Streamed output slot the node's output plays.
+ * @param param_slots num_param_slots input slots of float32 Static scalars (rank 1, one
+ *        element), each driven by the AudioParam of its index ('0', '1', ...;
+ *        k-rate, default 0); NULL for none.
+ * @param num_param_slots Their count, at most 32.
+ * @param tensor_slots num_tensor_slots Static input slots the main thread writes whole with
+ *        anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL
+ *        for none.
+ * @param num_tensor_slots Their count.
+ * @param wait_ms 0: every quantum calls anira_handler_process (a live context); above 0:
+ *        anira_handler_process_wait with this bound (an offline render that waits for
+ *        every inference).
+ * @param out_status Written later: ANIRA_INCOMPLETE now, the creation's status once it
+ *        completed (written last, with release ordering); the caller keeps the word
+ *        alive until then.
+ * @param out_node Written later, before out_status: the node's handle (emscriptenGetAudioObject
+ *        gives the AudioWorkletNode).
+ * @param err Nullable.
+ * @return ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
+ *         handler or out word, a channel count out of range or a slot list without its pointer;
+ *         ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a
+ *         contract that is not Hard or whose block range excludes the quantum, a parameter slot
+ *         that is not a float32 Static scalar, a tensor slot that is not Static or has a
+ *         dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to
+ *         start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or
+ *         processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
+ *         ANIRA_ERROR_OUT_OF_MEMORY.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
+                                                             uint32_t audio_context,
+                                                             uint32_t input_channels,
+                                                             uint32_t output_channels,
+                                                             uint32_t input_slot,
+                                                             uint32_t output_slot,
+                                                             const uint32_t* param_slots,
+                                                             uint32_t num_param_slots,
+                                                             const uint32_t* tensor_slots,
+                                                             uint32_t num_tensor_slots,
+                                                             double wait_ms,
+                                                             int32_t* out_status,
+                                                             uint32_t* out_node,
+                                                             anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Writes a Static input a node serves, for the render callback to push before its next
+ * process call: a seqlock per slot (the main thread the one writer), so the audio thread
+ * never pushes a torn value and never waits; a write it overlaps is pushed at a later
+ * quantum, the handler keeping the previous value until then.
+ * @param node A node of anira_em_audio_node_create.
+ * @param slot One of its tensor slots.
+ * @param bytes The whole value, the spec's bytes in its layout; copied.
+ * @param size Their count: exactly the spec's.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node, a slot it does not
+ *         serve, NULL bytes or a size other than the spec's.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_set_static_input(uint32_t node,
+                                                                       uint32_t slot,
+                                                                       const void* bytes,
+                                                                       size_t size,
+                                                                       anira_error* err) ANIRA_NOEXCEPT;
+
+/**
+ * @brief Stops the node's render callback calling into the handler (a quantum inside it
+ * finishes first, at most its wait bound), disconnects the node and releases its handle;
+ * the callback outputs silence and lets the browser drop the node. Destroy the nodes
+ * before the handler they stream through.
+ * @param node A node of anira_em_audio_node_create; an unknown one is a no-op.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API void ANIRA_CALL anira_em_audio_node_destroy(uint32_t node) ANIRA_NOEXCEPT;
+
+/**
  * @brief Allocates the stack of a new module instance (an inference Worker's, the audio
  * worklet's) together with its thread-local block: one malloc'd region, 16-byte aligned,
  * the stack first and the block above its top, sized for this module's TLS segment

@@ -1307,7 +1307,12 @@ def ts_param_plan(fn: dict, model: dict) -> list[dict]:
         depth = len(t) - len(t.rstrip("*"))
         const = base.startswith("const ")
         bare = base[len("const "):] if const else base
-        if p["name"] == "err" and t == "anira_error*":
+        if p.get("written_later"):
+            # The entry writes it after it returned (an asynchronous completion): a pointer the
+            # caller keeps alive, never a stack slot of the binding.
+            row["role"] = "value"
+            row["kind"] = "u32"
+        elif p["name"] == "err" and t == "anira_error*":
             row["role"] = "err"
         elif to_json and p["name"] in ("buf", "cap", "out_len"):
             row["role"] = "json"
@@ -1597,6 +1602,8 @@ def emit_bindings_ts(reg: dict) -> str:
         "  HEAPF64: Float64Array",
         "  HEAP64: BigInt64Array",
         "  HEAPU64: BigUint64Array",
+        "  emscriptenRegisterAudioObject(object: unknown): number",
+        "  emscriptenGetAudioObject(handle: number): unknown",
         "}",
         "",
         "// An 8-byte out slot on the stack, zeroed.",

@@ -349,6 +349,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 # empty on every other binary format, so the TU exists on Wasm alone.
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     target_sources(${PROJECT_NAME} PRIVATE
+        src/platform/emscripten/em_audio.cpp
         src/platform/emscripten/em_hooks.cpp
         src/platform/emscripten/em_worker.cpp)
 endif()

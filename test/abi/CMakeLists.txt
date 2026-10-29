@@ -193,12 +193,13 @@ if(_abi_on_wasm)
     anira_abi_consumer_target(anira_em_smoke C)
     target_link_libraries(anira_em_smoke PRIVATE anira::anira)
     # The link is AniraWeb's: -pthread, whose objects carry the atomics and bulk-memory
-    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS), and Wasm Workers, which
-    # InferenceThread::start creates.
+    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS), Wasm Workers, which
+    # InferenceThread::start creates, and the Wasm Audio Worklet of anira_em_audio_node_create.
     set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX)
     target_link_options(anira_em_smoke PRIVATE
         -pthread
         -sWASM_WORKERS
+        -sAUDIO_WORKLET
         -sENVIRONMENT=node
         -sSHARED_MEMORY=1
         -sINITIAL_MEMORY=268435456
@@ -224,6 +225,7 @@ if(_abi_on_wasm)
         --no-entry
         -pthread
         -sWASM_WORKERS
+        -sAUDIO_WORKLET
         -sENVIRONMENT=node
         -sMODULARIZE=1
         -sEXPORT_ES6=1
@@ -251,6 +253,7 @@ if(_abi_on_wasm)
     target_link_options(anira_em_mutex PRIVATE
         -pthread
         -sWASM_WORKERS
+        -sAUDIO_WORKLET
         -sPTHREAD_POOL_SIZE=1
         -sENVIRONMENT=node
         -sINITIAL_MEMORY=268435456
@@ -270,6 +273,7 @@ if(_abi_on_wasm)
     target_link_options(anira_em_pool PRIVATE
         -pthread
         -sWASM_WORKERS
+        -sAUDIO_WORKLET
         -sENVIRONMENT=node
         -sINITIAL_MEMORY=268435456
         -sALLOW_MEMORY_GROWTH=0

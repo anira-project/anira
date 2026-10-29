@@ -62,6 +62,7 @@ const allPages = [
   'test/browser/ort.html',
   'test/browser/config.html',
   'test/browser/pool.html',
+  'test/browser/worklet.html',
   'examples/custom-worklet/dist/check.html',
 ]
 const pages = process.argv.length > 3 ? process.argv.slice(3) : allPages

@@ -151,6 +151,35 @@ either the ONNX Runtime compiled into the module
 engine: :js:class:`ONNXRuntimeWebBackend` (``org.anira.onnxruntime-web``) or your own
 :js:class:`JSBackend` subclass, see :doc:`custom_inference_backends`.
 
+The Audio Node in C
+-------------------
+
+``await createAudioNode(anira, audioContext, handler, options)`` makes a Wasm Audio Worklet node
+of a prepared Hard handler (``_anira_em_audio_node_create``): the render callback is C, on the
+browser's audio thread, once per quantum. The node's input and output buffers are the handler's
+planar host tensors (no copy), the call is ``anira_handler_process`` (or, with ``waitMs``,
+``anira_handler_process_wait``, for an offline render that waits for every inference), and the
+miss rule is applied there (``ANIRA_MISSED`` keeps the miss policy's fill, a failure is silence).
+A Static float32 scalar input can be an AudioParam of the node (``options.params``: k-rate,
+automatable, ``audioNode.params.get(slot)``); a Static input of any shape is written whole from
+the main thread (``options.staticInputs``, ``audioNode.setStaticInput(slot, values)``), through a
+seqlock block the render callback copies, never torn. A JavaScript stage of the handler runs its
+worklet phases (``preProcess``, ``postProcess``, ``reset``) on the worklet scope's registry: list
+the module that defines it in ``options.workletModules`` (``audioWorklet.addModule``)::
+
+   // my-stage.js, loaded into the worklet scope
+   import { defineStage } from '@anira-project/anira/scope'
+   defineStage('org.example.gain', (env) => ({ preProcess(ctx) { /* ... */ } }))
+
+and add it to the pipeline on the main thread under the same name
+(``_anira_em_pipeline_add_js_stage(pipeline, keyOf('org.example.gain'), ANIRA_EM_HOOK_PRE,
+ANIRA_STAGE_FLAG_REALTIME_PRE_POST)``). ``createAudioNode`` loads ``worklet-scope.js`` into a
+context's worklet scope first (its ``performance`` clock, which the scope lacks). The first node
+of a context starts the context's worklet thread, so creation is asynchronous; it works on an
+``AudioContext`` and an ``OfflineAudioContext`` in Chromium and Firefox (the module is built with
+``-sASSERTIONS=0``: Emscripten's assertion of a ``window.AudioContext`` refuses an offline one).
+``audioNode.destroy()`` before the handler.
+
 Audio Worklet Thread
 --------------------
 

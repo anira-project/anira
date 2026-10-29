@@ -250,6 +250,9 @@ export interface AbiModule {
   _anira_em_set_log_hook(_0: number): void
   _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
   _anira_em_inference_threads_in_loop(): number
+  _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number): number
+  _anira_em_audio_node_set_static_input(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_em_audio_node_destroy(_0: number): void
   _anira_em_alloc_thread_stack(_0: number): number
   _anira_em_free_thread_stack(_0: number): void
   _anira_em_init_instance(_0: number, _1: number): number
@@ -268,6 +271,8 @@ export interface AbiModule {
   HEAPF64: Float64Array
   HEAP64: BigInt64Array
   HEAPU64: BigUint64Array
+  emscriptenRegisterAudioObject(object: unknown): number
+  emscriptenGetAudioObject(handle: number): unknown
 }
 
 // An 8-byte out slot on the stack, zeroed.
@@ -6737,6 +6742,158 @@ export class AniraBindings {
   anira_em_inference_threads_in_loop(): number {
     const m = this.module
     return m._anira_em_inference_threads_in_loop() >>> 0
+  }
+
+  /**
+   * Creates a Wasm Audio Worklet node that streams through the handler, asynchronously:
+   * the first node of a context starts the context's worklet thread (once; its stack
+   * stays the context's), a node of n AudioParams registers the processor anira-node-n
+   * once per context, and the node is created after both, from the main thread's event
+   * loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on
+   * the audio thread, the C render callback hands the node's buffers to the handler as
+   * planar host tensors (no copy: the output tensor is the node's output), pushes an
+   * AudioParam's value to its Static input when it changed and a tensor slot's value the
+   * main thread wrote since the last push, and calls anira_handler_process (or
+   * anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's
+   * fill, a failure is silence, a success silences what was not delivered. A quantum
+   * other than the declared one is silence. A JavaScript stage of the handler runs its
+   * worklet phases on the worklet scope's registry, which the caller fills before
+   * (audioWorklet.addModule of a module that calls defineStage) and anira boots over the
+   * worklet's instance at every create. The render callback allocates nothing and locks
+   * nothing; nodes are at most 256 at once.
+   *
+   * @param handler A handler prepared under a Hard contract whose block range holds the
+   *   context's render quantum; it must outlive the node (anira_em_audio_node_destroy
+   *   first).
+   * @param audio_context The audio context: what emscriptenRegisterAudioObject returned
+   *   for an AudioContext or an OfflineAudioContext.
+   * @param input_channels The node's input channels (its channelCount, explicit,
+   *   discrete): the channels of the input tensor; 0 for a node without an input.
+   * @param output_channels The node's output channels, 1 to 64: the channels of the
+   *   output tensor.
+   * @param input_slot The Streamed input slot the node's input feeds.
+   * @param output_slot The Streamed output slot the node's output plays.
+   * @param param_slots num_param_slots input slots of float32 Static scalars (rank 1, one
+   *   element), each driven by the AudioParam of its index ('0', '1', ...; k-rate, default
+   *   0); NULL for none.
+   * @param num_param_slots Their count, at most 32.
+   * @param tensor_slots num_tensor_slots Static input slots the main thread writes whole
+   *   with anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL for
+   *   none.
+   * @param num_tensor_slots Their count.
+   * @param wait_ms 0: every quantum calls anira_handler_process (a live context); above
+   *   0: anira_handler_process_wait with this bound (an offline render that waits for every
+   *   inference).
+   * @param out_status Written later: ANIRA_INCOMPLETE now, the creation's status once it
+   *   completed (written last, with release ordering); the caller keeps the word alive
+   *   until then.
+   * @param out_node Written later, before out_status: the node's handle
+   *   (emscriptenGetAudioObject gives the AudioWorkletNode).
+   * @returns ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a
+   *   NULL handler or out word, a channel count out of range or a slot list without its
+   *   pointer; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for
+   *   a contract that is not Hard or whose block range excludes the quantum, a parameter
+   *   slot that is not a float32 Static scalar, a tensor slot that is not Static or has a
+   *   dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to
+   *   start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or
+   *   processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
+   *   ANIRA_ERROR_OUT_OF_MEMORY. A failed status throws an AniraError with the entry's
+   *   message.
+   * Thread: [main-thread]
+   */
+  anira_em_audio_node_create(
+    handler: number,
+    audio_context: number,
+    input_channels: number,
+    output_channels: number,
+    input_slot: number,
+    output_slot: number,
+    param_slots: number,
+    num_param_slots: number,
+    tensor_slots: number,
+    num_tensor_slots: number,
+    wait_ms: number,
+    out_status: number,
+    out_node: number
+  ): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const err = stackError(m)
+      return checkStatus(
+        m,
+        m._anira_em_audio_node_create(
+          handler,
+          audio_context,
+          input_channels,
+          output_channels,
+          input_slot,
+          output_slot,
+          param_slots,
+          num_param_slots,
+          tensor_slots,
+          num_tensor_slots,
+          wait_ms,
+          out_status,
+          out_node,
+          err
+        ),
+        'anira_em_audio_node_create',
+        err
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
+   * Writes a Static input a node serves, for the render callback to push before its next
+   * process call: a seqlock per slot (the main thread the one writer), so the audio
+   * thread never pushes a torn value and never waits; a write it overlaps is pushed at a
+   * later quantum, the handler keeping the previous value until then.
+   *
+   * @param node A node of anira_em_audio_node_create.
+   * @param slot One of its tensor slots.
+   * @param bytes The whole value, the spec's bytes in its layout; copied.
+   * @param size Their count: exactly the spec's.
+   * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node, a slot it
+   *   does not serve, NULL bytes or a size other than the spec's. A failed status throws an
+   *   AniraError with the entry's message.
+   * Thread: [main-thread]
+   */
+  anira_em_audio_node_set_static_input(
+    node: number,
+    slot: number,
+    bytes: number,
+    size: number
+  ): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const err = stackError(m)
+      return checkStatus(
+        m,
+        m._anira_em_audio_node_set_static_input(node, slot, bytes, size, err),
+        'anira_em_audio_node_set_static_input',
+        err
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
+   * Stops the node's render callback calling into the handler (a quantum inside it
+   * finishes first, at most its wait bound), disconnects the node and releases its
+   * handle; the callback outputs silence and lets the browser drop the node. Destroy the
+   * nodes before the handler they stream through.
+   *
+   * @param node A node of anira_em_audio_node_create; an unknown one is a no-op.
+   * Thread: [main-thread]
+   */
+  anira_em_audio_node_destroy(node: number): void {
+    const m = this.module
+    m._anira_em_audio_node_destroy(node)
   }
 
   /**
