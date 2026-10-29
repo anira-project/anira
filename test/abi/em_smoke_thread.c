@@ -15,6 +15,7 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
+#include <anira/anira_em.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/wasm_worker.h>
 #include <stddef.h>
@@ -27,6 +28,7 @@
 #define SMOKE_ENGINE_ID "org.anira-test.c-double"
 #define SMOKE_STACK_BYTES (1024u * 1024u)
 #define SMOKE_IDLE_MS 50.0
+#define SMOKE_ENTER_BOUND_MS 10000.0
 #define SMOKE_STOP_BOUND_MS 100.0
 
 static int s_failures = 0;
@@ -134,8 +136,17 @@ int main(void) {
     const emscripten_wasm_worker_t worker = emscripten_malloc_wasm_worker(SMOKE_STACK_BYTES);
     check(worker != 0, "the test's Wasm Worker");
     emscripten_wasm_worker_post_function_v(worker, run_loop);
-    /* The Worker starts and enters the loop on its own, then parks on the wake word. */
-    idle(SMOKE_IDLE_MS);
+    /* The Worker starts and enters the loop on its own, then parks on the wake word. A wait
+     * refuses (ANIRA_ERROR_INVALID_STATE) while no thread is in its loop, and a Worker loads the
+     * module's glue before it runs anything: how long that takes is the machine's, so wait for
+     * the loop itself, not for a fixed time. */
+    const double posted = emscripten_get_now();
+    while (anira_em_inference_threads_in_loop() == 0 &&
+           emscripten_get_now() - posted < SMOKE_ENTER_BOUND_MS) {}
+    printf("the host's Worker entered its loop %.1f ms after the post\n",
+           emscripten_get_now() - posted);
+    check(anira_em_inference_threads_in_loop() == 1,
+          "the host's Worker entered its loop within the bound");
 
     float in[SMOKE_BLOCK];
     float out[SMOKE_BLOCK];
