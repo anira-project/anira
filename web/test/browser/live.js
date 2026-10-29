@@ -7,12 +7,14 @@
 // config (extras/models/model-pool/gain.model.json, the built-in ONNX Runtime engine) is prepared
 // with it and the miss policy ZEROS, a tone streams through the handler's audio node, and a tap
 // after the node counts the quanta that are all zero (a missed quantum: the tone never is) once the
-// stream has started. Expected: 0. Then a node streaming at block_max = one quantum (which misses
-// where the burst exceeds its latency) is re-prepared mid-stream through audioNode.prepare to a
-// block_max past that latency: a plain handler.prepare is refused meanwhile, the output goes on,
-// the latency read back changes, and no quantum misses after the re-prepare. Where the browser
-// takes renderSizeHint "hardware", the geometry is one quantum of the device's size. The verdict is
-// window.anira_test_result.
+// stream has started. Expected: 0. While it streams, a load processor spins in every call and
+// stalls in every 16th (as a model's JavaScript stage does once per callback), and the probe, three
+// times under each of two loads, must measure the burst read or more. Then a node streaming at
+// block_max = one quantum (which misses where the burst exceeds its latency) is re-prepared
+// mid-stream through audioNode.prepare to a block_max past that latency: a plain handler.prepare is
+// refused meanwhile, the output goes on, the latency read back changes, and no quantum misses after
+// the re-prepare. Where the browser takes renderSizeHint "hardware", the geometry is one quantum of
+// the device's size. The verdict is window.anira_test_result.
 import {
   Anira,
   AniraError,
@@ -62,6 +64,27 @@ const TAP = `registerProcessor('anira-test-tap', class extends AudioWorkletProce
       if (!channel || channel.every((x) => x === 0)) this.zeros++
     }
     this.frame += frames
+    return true
+  }
+})
+// Load on the audio thread, as a model's JavaScript stage puts there: every call spins for a
+// moment, and every 16th call (once per callback of 16 quanta, where a stage's pre_process
+// unfolds an inference's input) for longer. A message stops it.
+registerProcessor('anira-test-load', class extends AudioWorkletProcessor {
+  constructor(options) {
+    super()
+    this.spinMs = options.processorOptions.spinMs
+    this.stallMs = options.processorOptions.stallMs
+    this.calls = 0
+    this.stopped = false
+    this.port.onmessage = () => (this.stopped = true)
+  }
+  process() {
+    if (this.stopped) return false
+    this.calls++
+    const end = Date.now() + (this.calls % 16 === 0 ? this.stallMs : this.spinMs)
+    let x = 0
+    while (Date.now() < end) x += Math.sqrt(x + 1)
     return true
   }
 })`
@@ -160,6 +183,35 @@ const run = async () => {
     `at quantum ${geometry.quantum}, burst ${geometry.burst}: ${counts.zeros} of ` +
       `${counts.blocks} quanta missed (latency ${sized.handler.latency()})`
   )
+
+  // The probe on a loaded audio thread: the node streams, and a load processor spins in every
+  // call and stalls once per 16. A run of back-to-back calls then shows late calls inside it,
+  // which split at a fixed gap gave a burst of 15 quanta of 16 (a model with a JavaScript stage
+  // re-measured 6139 -> 5887 samples of latency). The probe must never report less than the
+  // burst read.
+  for (const [spinMs, stallMs] of [
+    [0.3, 4],
+    [0.8, 8],
+  ]) {
+    const load = new AudioWorkletNode(audio, 'anira-test-load', {
+      numberOfInputs: 0,
+      processorOptions: { spinMs, stallMs },
+    })
+    const muted = new GainNode(audio, { gain: 0 })
+    load.connect(muted).connect(audio.destination)
+    await delay(200)
+    const bursts = []
+    for (let k = 0; k < 3; k++)
+      bursts.push((await measureRenderGeometry(audio, { probe: true })).burst)
+    load.port.postMessage('stop')
+    load.disconnect()
+    muted.disconnect()
+    check(
+      bursts.every((b) => b >= geometry.burst),
+      `loaded (${spinMs} ms per call, ${stallMs} ms every 16th, a node streaming): the probe ` +
+        `measures ${bursts.join(', ')} frames, never below the burst read (${geometry.burst})`
+    )
+  }
   sized.stop()
 
   // A node at block_max = one quantum, re-prepared mid-stream at a block_max past its latency.

@@ -52,6 +52,84 @@ test('a run straddling a millisecond tick stays one run', () => {
   assert.equal(longestRun(times, (128 / RATE) * 1000), 16)
 })
 
+// The times (ms, floored to Date.now's resolution) of the calls of a context whose device calls
+// back every `periodMs` and renders `counts[k % counts.length]` quanta in callback k, each quantum
+// taking `renderMs`; every `lateEvery`-th call (counted over the window) starts `lateMs` late,
+// and the calls after it follow (a callback starts once the previous one's calls are done).
+const loaded = (
+  counts: number[],
+  periodMs: number,
+  renderMs: number,
+  callbacks: number,
+  lateEvery = 0,
+  lateMs = 0
+) => {
+  const times: number[] = []
+  let call = 0
+  let t = 0
+  for (let k = 0; k < callbacks; k++) {
+    t = Math.max(t, 1000 + k * periodMs)
+    for (let c = 0; c < counts[k % counts.length]; c++) {
+      call++
+      if (lateEvery > 0 && call % lateEvery === 0) t += lateMs
+      times.push(Math.floor(t))
+      t += renderMs
+    }
+  }
+  return times
+}
+
+test('a loaded audio thread: the runs stay whole, never shorter than the callback', () => {
+  const quantumMs = (128 / RATE) * 1000
+  const periodMs = 16 * quantumMs
+  // The graph's rendering per quantum from light to most of a quantum (split at a fixed 1.5 ms,
+  // Chromium's runs under such loads came out 4 to 15 quanta of 16).
+  for (const renderMs of [0.05, 0.5, 1.2, 2.0]) {
+    assert.equal(
+      longestRun(loaded([16], periodMs, renderMs, 40), quantumMs),
+      16,
+      `${renderMs}`
+    )
+  }
+  // Late once per callback, at a fixed place in it (a stage's pre_process): the run stays whole.
+  for (const late of [3, 6, 12]) {
+    const times = loaded([16], periodMs, 0.5, 40, 16, late)
+    assert.equal(longestRun(times, quantumMs), 16, `late ${late} ms every 16th call`)
+  }
+  // Late at places that move from callback to callback, so the callbacks render for different
+  // times and the gaps between them differ: never short, and where a gap is short two callbacks
+  // may merge.
+  for (const [every, late] of [
+    [7, 3],
+    [5, 6],
+    [11, 12],
+  ]) {
+    const times = loaded([16], periodMs, 0.5, 40, every, late)
+    assert.ok(longestRun(times, quantumMs) >= 16, `late ${late} ms every ${every}th call`)
+  }
+  // Most of a callback's period rendering (1.5 ms per quantum and a 4 ms late call every 5th):
+  // the gaps between callbacks shrink; never short.
+  const heavy = loaded([16], periodMs, 1.5, 40, 5, 4)
+  assert.ok(longestRun(heavy, quantumMs) >= 16)
+  // A thread that cannot keep up (2.3 ms per quantum and the late calls) leaves no gap between
+  // callbacks: its calls look evenly paced, the limit the rule cannot see past.
+  assert.ok(longestRun(loaded([16], periodMs, 2.3, 40, 5, 6), quantumMs) < 16)
+})
+
+test('callbacks of a size that is no multiple of the quantum: the largest run', () => {
+  const quantumMs = (128 / RATE) * 1000
+  // 480 frames (10 ms) per callback: 4, 4, 4, 3 quanta; 441 frames: 3 or 4 quanta (CI).
+  assert.equal(longestRun(loaded([4, 4, 4, 3], 10, 0.05, 40), quantumMs), 4)
+  assert.equal(longestRun(loaded([4, 3, 4, 3, 3], 9.1875, 0.3, 40), quantumMs), 4)
+})
+
+test('an evenly paced context late once: one quantum, or the quanta it caught up', () => {
+  const quantumMs = (128 / RATE) * 1000
+  assert.equal(longestRun(loaded([1], quantumMs, 0.05, 200), quantumMs), 1)
+  // 8 ms late: the next three quanta are due already and follow back to back.
+  assert.equal(longestRun(loaded([1], quantumMs, 0.05, 200, 97, 8), quantumMs), 4)
+})
+
 test('measureRenderGeometry reads what it can without measuring', async () => {
   const offline = { sampleRate: RATE } as unknown as BaseAudioContext
   assert.deepEqual(await measureRenderGeometry(offline), { quantum: 128, burst: 128 })

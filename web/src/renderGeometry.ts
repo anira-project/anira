@@ -45,17 +45,52 @@ const quantumOf = (context: GeometrySource): number =>
     ? context.renderQuantumSize
     : DEFAULT_QUANTUM
 
+// The share of the window the gaps between runs must add beyond a quantum each for the window to
+// show runs: a context that renders ahead of the wall clock in runs and then waits.
+const BURST_EXCESS = 0.1
+
 /**
  * The longest run of process() calls with no wall time between them, in calls, from their
  * timestamps (ms, the scope's clock: `Date.now` resolution in an AudioWorkletGlobalScope, which
- * has no `performance`). Two calls belong to one run when they are closer than half a quantum's
- * duration and never closer than 1.5 ms: a run's calls are back to back but may straddle a
- * millisecond tick, the calls of an evenly paced context are a whole quantum apart. The bound
- * can merge evenly paced calls of a quantum shorter than 3 ms into one run: the burst then comes
- * out too long, never too short.
+ * has no `performance`).
+ *
+ * A context that renders a device callback as a run of quanta shows its runs apart by the gaps
+ * between callbacks, the longest gaps of the window. Inside a run the calls follow each other at
+ * the graph's rendering time per quantum, and on a loaded audio thread that time grows and some
+ * calls are late by milliseconds (a JavaScript stage that unfolds an inference's input in one
+ * call per callback, a preempted thread): split at a fixed gap, such a run came out a quantum or
+ * more short. So a run ends where a gap reaches halfway from one quantum's duration to the
+ * longest gap: a call inside a run splits it only when it is late by about half the time between
+ * callbacks. That holds where the window shows runs: its longest gap is two quanta or more, at
+ * least two gaps reach the halfway mark, and those gaps add a tenth of the window beyond a quantum
+ * each (the context renders ahead of the wall clock and then waits). Otherwise the calls are
+ * evenly paced, one quantum per callback with a late call now and then, and two calls are one
+ * run when they are closer than half a quantum's duration and never closer than 1.5 ms (a run's
+ * calls may straddle a millisecond tick); there the quanta caught up after a late call are one
+ * run. The errors left are long ones: two callbacks merge where the gap between them is short
+ * (the first rendered late), and evenly paced calls of a quantum shorter than 3 ms merge. Short
+ * only where a late call splits every run of the window, or where the rendering takes nearly a
+ * quantum's duration per quantum: then no gap is left to see and the calls look evenly paced.
  */
 export const longestRun = (timesMs: ArrayLike<number>, quantumMs: number): number => {
-  const gap = Math.max(quantumMs / 2, 1.5)
+  let longestGap = 0
+  for (let i = 1; i < timesMs.length; i++) {
+    longestGap = Math.max(longestGap, timesMs[i] - timesMs[i - 1])
+  }
+  const halfway = (quantumMs + longestGap) / 2
+  let reaching = 0
+  let excess = 0
+  for (let i = 1; i < timesMs.length; i++) {
+    const gap = timesMs[i] - timesMs[i - 1]
+    if (gap >= halfway) {
+      reaching++
+      excess += gap - quantumMs
+    }
+  }
+  const windowMs = timesMs.length > 1 ? timesMs[timesMs.length - 1] - timesMs[0] : 0
+  const bursts =
+    longestGap >= 2 * quantumMs && reaching >= 2 && excess >= BURST_EXCESS * windowMs
+  const gap = bursts ? halfway : Math.max(quantumMs / 2, 1.5)
   let longest = timesMs.length > 0 ? 1 : 0
   let run = 1
   for (let i = 1; i < timesMs.length; i++) {

@@ -51,11 +51,16 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    ``baseLatency`` is 0 by its definition (no buffering between the graph and the audio
    subsystem), and its ``outputLatency`` is the output's delay, not the callback's size; there a
    probe ``AudioWorklet`` watches ``process()`` calls for about 300 ms (after a 100 ms lead-in)
-   and takes the longest run of back-to-back calls. The probe may measure more than the device
-   buffer, never less: on a loaded machine two callbacks can run almost back to back and merge
-   into one run (640 frames against the 512 above), which only sizes the handler a little larger.
-   The probe needs a running context, so ``await context.resume()`` first. An ``OfflineAudioContext`` renders quantum by
-   quantum: its burst is one quantum.
+   and takes the longest run of back-to-back calls, a run ending where a gap reaches halfway from
+   one quantum's duration to the longest gap between callbacks: on a loaded audio thread (a
+   model's JavaScript stage, a preempted thread) some calls inside a run are late by
+   milliseconds, and only one late by about half the time between callbacks splits its run. Its
+   errors lean long: two callbacks merge into one run where the gap between them is short (640
+   frames against the 512 above, on a loaded CI runner), which only sizes the handler larger. It
+   reports short only where a late call splits every callback it watches, or where the graph
+   renders so slowly that no gap between callbacks is left (the context then barely keeps up).
+   The probe needs a running context, so ``await context.resume()`` first. An
+   ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum.
 
 The geometry is explicit: the page measures it and declares it.
 
