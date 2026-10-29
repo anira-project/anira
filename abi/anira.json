@@ -9654,7 +9654,7 @@
           "nonblocking": true,
           "status": "promised",
           "since": "0.2",
-          "doc": "Pushes one block into the input ring of in_slot, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring of out_slot into the memory of out; the two sample counts may differ under a time ratio, and the two slots are independent (a model whose stream is input 1 and output 0 calls anira_handler_process(handler, in, 1, out, 0, delivered)). Accepts a planar tensor (ANIRA_TENSOR_PLANAR) as well as one block read by strides (interleaved is strides {1, channels}) or packed, for any channel count; each side has its own description and its own dtype, which must be its slot's ring dtype (nothing converts). A single form is the form of a Streamed slot: the single form of a Static slot is anira_handler_set_static_input / anira_handler_get_static_output, a State tensor is carried by no Hard entry, and an in_slot or out_slot that names a Static or a State tensor is refused (a generator with Static input 0 calls anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is validated before anything is pushed, so a refusal pushes nothing. Each tensor carries one host block of the geometry's block_max at most, ceil(b) samples of the block b on its slot's stream (the header doc): a larger shape[1] is refused, never cut to its tail. A block whose inference has not completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of the input block when in_slot is the anchored input's slot and zeros past it; any other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and the call returns ANIRA_MISSED, a success: the memory is valid and the stream stays time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss is not recorded. One tensor handed over as in and out is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory that overlap under two different descriptions (an interleaved input over planar views of the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx and acquire of the tensors are not read: the memory is borrowed until the call returns.",
+          "doc": "Pushes one block into the input ring of in_slot, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring of out_slot into the memory of out; the two sample counts may differ under a time ratio, and the two slots are independent (a model whose stream is input 1 and output 0 calls anira_handler_process(handler, in, 1, out, 0, delivered)). Accepts a planar tensor (ANIRA_TENSOR_PLANAR) as well as one block read by strides (interleaved is strides {1, channels}) or packed, for any channel count; each side has its own description and its own dtype, which must be its slot's ring dtype (nothing converts). A single form is the form of a Streamed slot: the single form of a Static slot is anira_handler_set_static_input / anira_handler_get_static_output, a State tensor is carried by no Hard entry, and an in_slot or out_slot that names a Static or a State tensor is refused (a generator with Static input 0 calls anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is validated before anything is pushed, so a refusal pushes nothing. Each tensor carries one host block of the geometry's block_max at most, ceil(b) samples of the block b on its slot's stream (the header doc): a larger shape[1] is refused, never cut to its tail. A block whose inference has not completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of the input block when in_slot is the anchored input's slot and zeros past it; any other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and the call returns ANIRA_MISSED, a success: the memory is valid and the stream stays time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss is not recorded. One tensor handed over as in and out is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory that overlap under two different descriptions (an interleaved input over planar views of the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx and acquire of the tensors are not read: the memory is borrowed until the call returns. A model with several Streamed inputs is driven by one call per host block over all of them (anira_handler_process_multi); separate single-slot calls per stream keep the streams aligned but lose ANIRA_MISS_BYPASS (the call that does not carry the anchored slot fills zeros on a miss) and the wait credit of ANIRA_WAIT_CONTRACT for that call.",
           "return_doc": "ANIRA_OK; ANIRA_MISSED for a missed block (out holds what the miss policy says); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or tensor, an in_slot or out_slot out of range of its list or naming a Static or a State tensor, or a malformed tensor: a rank other than 2 (a zeroed tensor included), a domain other than ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, ANIRA_TENSOR_READ_ONLY on out, shape[0] other than the slot's channel count, a negative shape[1], and with shape[1] above 0: NULL memory, a plane count other than shape[0], a NULL plane, a negative stride, a stride of 0 on an axis longer than 1 unless every stride is 0, a channel that does not start on a multiple of the element size; and a shape[1] above one host block of block_max on the slot's stream (ceil of the block); ANIRA_ERROR_NOT_SUPPORTED for a flag bit this library does not know; ANIRA_ERROR_CONFIG for a dtype other than the slot's; ANIRA_ERROR_NOT_PREPARED before a successful prepare. A tensor is checked in the order rank, domain, flags, shape, dtype, memory and strides, then its count against the block, in before out. Every failure but the NULL handler is recorded in anira_handler_rt_error."
         },
         {
@@ -10455,6 +10455,12 @@
           "doc": "Engine hook bit: query crosses into the hook (ANIRA_PHASE_QUERY); unset, every listed provider is usable."
         },
         {
+          "kind": "define",
+          "name": "ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS",
+          "value": "1u",
+          "doc": "Audio node flag: the node may leave Streamed slots of the model unserved; their positions in the multi call stay empty tensors. Without it, every Streamed slot is served by exactly one input or output of the node."
+        },
+        {
           "kind": "function",
           "name": "anira_em_stage_desc_init",
           "returns": "anira_status",
@@ -10668,24 +10674,24 @@
               "doc": "The audio context: what emscriptenRegisterAudioObject returned for an AudioContext or an OfflineAudioContext."
             },
             {
-              "type": "uint32_t",
-              "name": "input_channels",
-              "doc": "The node's input channels (its channelCount, explicit, discrete): the channels of the input tensor; 0 for a node without an input."
+              "type": "const uint32_t*",
+              "name": "input_slots",
+              "doc": "num_input_slots Streamed input slots, input k of the node feeding the k-th; each input has the slot's channels (the node's channelCount is the largest of them, explicit, discrete; a slot reads its first channels). NULL: every Streamed input slot of the model, in slot order."
             },
             {
               "type": "uint32_t",
-              "name": "output_channels",
-              "doc": "The node's output channels, 1 to 64: the channels of the output tensor."
+              "name": "num_input_slots",
+              "doc": "Their count, at most 32; ignored for NULL. 0 with a non-NULL list: a node without an input."
+            },
+            {
+              "type": "const uint32_t*",
+              "name": "output_slots",
+              "doc": "num_output_slots Streamed output slots, output k of the node playing the k-th with the slot's channels. NULL: every Streamed output slot of the model, in slot order."
             },
             {
               "type": "uint32_t",
-              "name": "input_slot",
-              "doc": "The Streamed input slot the node's input feeds."
-            },
-            {
-              "type": "uint32_t",
-              "name": "output_slot",
-              "doc": "The Streamed output slot the node's output plays."
+              "name": "num_output_slots",
+              "doc": "Their count, at most 32; ignored for NULL."
             },
             {
               "type": "const uint32_t*",
@@ -10708,9 +10714,14 @@
               "doc": "Their count."
             },
             {
+              "type": "uint32_t",
+              "name": "flags",
+              "doc": "ANIRA_EM_AUDIO_NODE_FLAG_*; 0 for none."
+            },
+            {
               "type": "double",
               "name": "wait_ms",
-              "doc": "0: every quantum calls anira_handler_process (a live context); above 0: anira_handler_process_wait with this bound (an offline render that waits for every inference)."
+              "doc": "0: every quantum calls anira_handler_process_multi (a live context); above 0: anira_handler_process_multi_wait with this bound (an offline render that waits for every inference)."
             },
             {
               "type": "int32_t*",
@@ -10733,8 +10744,8 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Creates a Wasm Audio Worklet node that streams through the handler, asynchronously: the first node of a context starts the context's worklet thread (once; its stack stays the context's), a node of n AudioParams registers the processor anira-node-n once per context, and the node is created after both, from the main thread's event loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio thread, the C render callback hands the node's buffers to the handler as planar host tensors (no copy: the output tensor is the node's output), pushes an AudioParam's value to its Static input when it changed and a tensor slot's value the main thread wrote since the last push, and calls anira_handler_process (or anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success silences what was not delivered. A quantum other than the declared one is silence. A JavaScript stage of the handler runs its worklet phases on the worklet scope's registry, which the caller fills before (audioWorklet.addModule of a module that calls defineStage) and anira boots over the worklet's instance at every create. The render callback allocates nothing and locks nothing; nodes are at most 256 at once.",
-          "return_doc": "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a channel count out of range or a slot list without its pointer; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
+          "doc": "Creates a Wasm Audio Worklet node that streams through the handler, asynchronously: the first node of a context starts the context's worklet thread (once; its stack stays the context's), a node of n AudioParams registers the processor anira-node-n once per context, and the node is created after both, from the main thread's event loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio thread, the C render callback hands the node's buffers to the handler as planar host tensors (no copy: the output tensor is the node's output), pushes an AudioParam's value to its Static input when it changed and a tensor slot's value the main thread wrote since the last push, and calls anira_handler_process_multi (or anira_handler_process_multi_wait) once for every Streamed slot it serves, an empty tensor at every other position, so a model with several streams keeps every guarantee of the multi form (ANIRA_MISS_BYPASS passes the anchored input through to every output, the wait credit of ANIRA_WAIT_CONTRACT, one anira_miss_fn call per block); the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success silences what an output was not delivered. Every Streamed slot of the model is served by exactly one input or output of the node, unless ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS leaves some out (their positions stay empty). Driving one handler from several nodes, one slot each, is not the supported form: the streams stay aligned, but a non-anchored call loses BYPASS (zeros on a miss), the wait credit and the miss callback's view of the block. A quantum other than the declared one is silence. A JavaScript stage of the handler runs its worklet phases on the worklet scope's registry, which the caller fills before (audioWorklet.addModule of a module that calls defineStage) and anira boots over the worklet's instance at every create. The render callback allocates nothing and locks nothing; nodes are at most 256 at once.",
+          "return_doc": "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a slot list longer than 32 or without its pointer, a slot listed twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
         },
         {
           "kind": "function",

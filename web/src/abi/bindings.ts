@@ -249,7 +249,7 @@ export interface AbiModule {
   _anira_em_set_log_hook(_0: number): void
   _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
   _anira_em_inference_threads_in_loop(): number
-  _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number): number
+  _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number, _14: number): number
   _anira_em_audio_node_set_static_input(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_audio_node_destroy(_0: number): void
   _malloc(bytes: number): number
@@ -5755,7 +5755,11 @@ export class AniraBindings {
    * that overlap under two different descriptions (an interleaved input over planar views
    * of the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx
    * and acquire of the tensors are not read: the memory is borrowed until the call
-   * returns.
+   * returns. A model with several Streamed inputs is driven by one call per host block
+   * over all of them (anira_handler_process_multi); separate single-slot calls per stream
+   * keep the streams aligned but lose ANIRA_MISS_BYPASS (the call that does not carry the
+   * anchored slot fills zeros on a miss) and the wait credit of ANIRA_WAIT_CONTRACT for
+   * that call.
    *
    * @param handler The handler.
    * @param in_ The input block of in_slot: a host tensor of the logical shape [channels,
@@ -6742,11 +6746,20 @@ export class AniraBindings {
    * the audio thread, the C render callback hands the node's buffers to the handler as
    * planar host tensors (no copy: the output tensor is the node's output), pushes an
    * AudioParam's value to its Static input when it changed and a tensor slot's value the
-   * main thread wrote since the last push, and calls anira_handler_process (or
-   * anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's
-   * fill, a failure is silence, a success silences what was not delivered. A quantum
-   * other than the declared one is silence. A JavaScript stage of the handler runs its
-   * worklet phases on the worklet scope's registry, which the caller fills before
+   * main thread wrote since the last push, and calls anira_handler_process_multi (or
+   * anira_handler_process_multi_wait) once for every Streamed slot it serves, an empty
+   * tensor at every other position, so a model with several streams keeps every guarantee
+   * of the multi form (ANIRA_MISS_BYPASS passes the anchored input through to every
+   * output, the wait credit of ANIRA_WAIT_CONTRACT, one anira_miss_fn call per block);
+   * the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a
+   * success silences what an output was not delivered. Every Streamed slot of the model
+   * is served by exactly one input or output of the node, unless
+   * ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS leaves some out (their positions stay
+   * empty). Driving one handler from several nodes, one slot each, is not the supported
+   * form: the streams stay aligned, but a non-anchored call loses BYPASS (zeros on a
+   * miss), the wait credit and the miss callback's view of the block. A quantum other
+   * than the declared one is silence. A JavaScript stage of the handler runs its worklet
+   * phases on the worklet scope's registry, which the caller fills before
    * (audioWorklet.addModule of a module that calls defineStage) and anira boots over the
    * worklet's instance at every create. The render callback allocates nothing and locks
    * nothing; nodes are at most 256 at once.
@@ -6756,12 +6769,16 @@ export class AniraBindings {
    *   first).
    * @param audio_context The audio context: what emscriptenRegisterAudioObject returned
    *   for an AudioContext or an OfflineAudioContext.
-   * @param input_channels The node's input channels (its channelCount, explicit,
-   *   discrete): the channels of the input tensor; 0 for a node without an input.
-   * @param output_channels The node's output channels, 1 to 64: the channels of the
-   *   output tensor.
-   * @param input_slot The Streamed input slot the node's input feeds.
-   * @param output_slot The Streamed output slot the node's output plays.
+   * @param input_slots num_input_slots Streamed input slots, input k of the node feeding
+   *   the k-th; each input has the slot's channels (the node's channelCount is the largest
+   *   of them, explicit, discrete; a slot reads its first channels). NULL: every Streamed
+   *   input slot of the model, in slot order.
+   * @param num_input_slots Their count, at most 32; ignored for NULL. 0 with a non-NULL
+   *   list: a node without an input.
+   * @param output_slots num_output_slots Streamed output slots, output k of the node
+   *   playing the k-th with the slot's channels. NULL: every Streamed output slot of the
+   *   model, in slot order.
+   * @param num_output_slots Their count, at most 32; ignored for NULL.
    * @param param_slots num_param_slots input slots of float32 Static scalars (rank 1, one
    *   element), each driven by the AudioParam of its index ('0', '1', ...; k-rate, default
    *   0); NULL for none.
@@ -6770,37 +6787,42 @@ export class AniraBindings {
    *   with anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL for
    *   none.
    * @param num_tensor_slots Their count.
-   * @param wait_ms 0: every quantum calls anira_handler_process (a live context); above
-   *   0: anira_handler_process_wait with this bound (an offline render that waits for every
-   *   inference).
+   * @param flags ANIRA_EM_AUDIO_NODE_FLAG_*; 0 for none.
+   * @param wait_ms 0: every quantum calls anira_handler_process_multi (a live context);
+   *   above 0: anira_handler_process_multi_wait with this bound (an offline render that
+   *   waits for every inference).
    * @param out_status Written later: ANIRA_INCOMPLETE now, the creation's status once it
    *   completed (written last, with release ordering); the caller keeps the word alive
    *   until then.
    * @param out_node Written later, before out_status: the node's handle
    *   (emscriptenGetAudioObject gives the AudioWorkletNode).
    * @returns ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a
-   *   NULL handler or out word, a channel count out of range or a slot list without its
-   *   pointer; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for
-   *   a contract that is not Hard or whose block range excludes the quantum, a parameter
-   *   slot that is not a float32 Static scalar, a tensor slot that is not Static or has a
-   *   dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to
-   *   start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or
-   *   processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
-   *   ANIRA_ERROR_OUT_OF_MEMORY. A failed status throws an AniraError with the entry's
-   *   message.
+   *   NULL handler or out word, a slot list longer than 32 or without its pointer, a slot
+   *   listed twice, a slot that is not a Streamed slot of its side with a float32 ring, a
+   *   Streamed slot no input or output serves (without
+   *   ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot
+   *   of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler;
+   *   ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the
+   *   quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is
+   *   not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's
+   *   worklet thread failed to start (later failures land in out_status:
+   *   ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN
+   *   for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY. A failed status throws an
+   *   AniraError with the entry's message.
    * Thread: [main-thread]
    */
   anira_em_audio_node_create(
     handler: number,
     audio_context: number,
-    input_channels: number,
-    output_channels: number,
-    input_slot: number,
-    output_slot: number,
+    input_slots: number,
+    num_input_slots: number,
+    output_slots: number,
+    num_output_slots: number,
     param_slots: number,
     num_param_slots: number,
     tensor_slots: number,
     num_tensor_slots: number,
+    flags: number,
     wait_ms: number,
     out_status: number,
     out_node: number
@@ -6814,14 +6836,15 @@ export class AniraBindings {
         m._anira_em_audio_node_create(
           handler,
           audio_context,
-          input_channels,
-          output_channels,
-          input_slot,
-          output_slot,
+          input_slots,
+          num_input_slots,
+          output_slots,
+          num_output_slots,
           param_slots,
           num_param_slots,
           tensor_slots,
           num_tensor_slots,
+          flags,
           wait_ms,
           out_status,
           out_node,

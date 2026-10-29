@@ -807,7 +807,11 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  * is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory that
  * overlap under two different descriptions (an interleaved input over planar views of
  * the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx and
- * acquire of the tensors are not read: the memory is borrowed until the call returns.
+ * acquire of the tensors are not read: the memory is borrowed until the call returns. A
+ * model with several Streamed inputs is driven by one call per host block over all of
+ * them (anira_handler_process_multi); separate single-slot calls per stream keep the
+ * streams aligned but lose ANIRA_MISS_BYPASS (the call that does not carry the anchored
+ * slot fills zeros on a miss) and the wait credit of ANIRA_WAIT_CONTRACT for that call.
  * @param handler The handler.
  * @param in The input block of in_slot: a host tensor of the logical shape [channels, samples]
  *        in the slot's dtype, planar, read by strides or packed; shape[1] is the number of

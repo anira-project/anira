@@ -130,6 +130,13 @@ extern "C" {
 #define ANIRA_EM_ENGINE_HOOK_QUERY 2u
 
 /**
+ * @brief Audio node flag: the node may leave Streamed slots of the model unserved; their
+ * positions in the multi call stay empty tensors. Without it, every Streamed slot is
+ * served by exactly one input or output of the node.
+ */
+#define ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS 1u
+
+/**
  * @brief Fills a stage descriptor whose slots are the trampolines into the scope registry's
  * stage: one per bit of hook_mask, every other slot NULL, the release slot always (it
  * frees the record behind user_data, after the hook's release when ANIRA_EM_HOOK_RELEASE
@@ -311,24 +318,37 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  * thread, the C render callback hands the node's buffers to the handler as planar host
  * tensors (no copy: the output tensor is the node's output), pushes an AudioParam's
  * value to its Static input when it changed and a tensor slot's value the main thread
- * wrote since the last push, and calls anira_handler_process (or
- * anira_handler_process_wait); the miss rule: ANIRA_MISSED keeps the miss policy's fill,
- * a failure is silence, a success silences what was not delivered. A quantum other than
- * the declared one is silence. A JavaScript stage of the handler runs its worklet phases
- * on the worklet scope's registry, which the caller fills before (audioWorklet.addModule
- * of a module that calls defineStage) and anira boots over the worklet's instance at
- * every create. The render callback allocates nothing and locks nothing; nodes are at
- * most 256 at once.
+ * wrote since the last push, and calls anira_handler_process_multi (or
+ * anira_handler_process_multi_wait) once for every Streamed slot it serves, an empty
+ * tensor at every other position, so a model with several streams keeps every guarantee
+ * of the multi form (ANIRA_MISS_BYPASS passes the anchored input through to every
+ * output, the wait credit of ANIRA_WAIT_CONTRACT, one anira_miss_fn call per block); the
+ * miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success
+ * silences what an output was not delivered. Every Streamed slot of the model is served
+ * by exactly one input or output of the node, unless
+ * ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS leaves some out (their positions stay empty).
+ * Driving one handler from several nodes, one slot each, is not the supported form: the
+ * streams stay aligned, but a non-anchored call loses BYPASS (zeros on a miss), the wait
+ * credit and the miss callback's view of the block. A quantum other than the declared
+ * one is silence. A JavaScript stage of the handler runs its worklet phases on the
+ * worklet scope's registry, which the caller fills before (audioWorklet.addModule of a
+ * module that calls defineStage) and anira boots over the worklet's instance at every
+ * create. The render callback allocates nothing and locks nothing; nodes are at most 256
+ * at once.
  * @param handler A handler prepared under a Hard contract whose block range holds the context's
  *        render quantum; it must outlive the node (anira_em_audio_node_destroy first).
  * @param audio_context The audio context: what emscriptenRegisterAudioObject returned for an
  *        AudioContext or an OfflineAudioContext.
- * @param input_channels The node's input channels (its channelCount, explicit, discrete): the
- *        channels of the input tensor; 0 for a node without an input.
- * @param output_channels The node's output channels, 1 to 64: the channels of the output
- *        tensor.
- * @param input_slot The Streamed input slot the node's input feeds.
- * @param output_slot The Streamed output slot the node's output plays.
+ * @param input_slots num_input_slots Streamed input slots, input k of the node feeding the
+ *        k-th; each input has the slot's channels (the node's channelCount is the
+ *        largest of them, explicit, discrete; a slot reads its first channels).
+ *        NULL: every Streamed input slot of the model, in slot order.
+ * @param num_input_slots Their count, at most 32; ignored for NULL. 0 with a non-NULL list: a
+ *        node without an input.
+ * @param output_slots num_output_slots Streamed output slots, output k of the node playing the
+ *        k-th with the slot's channels. NULL: every Streamed output slot of the
+ *        model, in slot order.
+ * @param num_output_slots Their count, at most 32; ignored for NULL.
  * @param param_slots num_param_slots input slots of float32 Static scalars (rank 1, one
  *        element), each driven by the AudioParam of its index ('0', '1', ...;
  *        k-rate, default 0); NULL for none.
@@ -337,9 +357,10 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  *        anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL
  *        for none.
  * @param num_tensor_slots Their count.
- * @param wait_ms 0: every quantum calls anira_handler_process (a live context); above 0:
- *        anira_handler_process_wait with this bound (an offline render that waits for
- *        every inference).
+ * @param flags ANIRA_EM_AUDIO_NODE_FLAG_*; 0 for none.
+ * @param wait_ms 0: every quantum calls anira_handler_process_multi (a live context); above 0:
+ *        anira_handler_process_multi_wait with this bound (an offline render that waits
+ *        for every inference).
  * @param out_status Written later: ANIRA_INCOMPLETE now, the creation's status once it
  *        completed (written last, with release ordering); the caller keeps the word
  *        alive until then.
@@ -347,7 +368,10 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  *        gives the AudioWorkletNode).
  * @param err Nullable.
  * @return ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
- *         handler or out word, a channel count out of range or a slot list without its pointer;
+ *         handler or out word, a slot list longer than 32 or without its pointer, a slot listed
+ *         twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed
+ *         slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a
+ *         node without any input or output, a slot of more than 64 channels;
  *         ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a
  *         contract that is not Hard or whose block range excludes the quantum, a parameter slot
  *         that is not a float32 Static scalar, a tensor slot that is not Static or has a
@@ -361,14 +385,15 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  */
 ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                                                              uint32_t audio_context,
-                                                             uint32_t input_channels,
-                                                             uint32_t output_channels,
-                                                             uint32_t input_slot,
-                                                             uint32_t output_slot,
+                                                             const uint32_t* input_slots,
+                                                             uint32_t num_input_slots,
+                                                             const uint32_t* output_slots,
+                                                             uint32_t num_output_slots,
                                                              const uint32_t* param_slots,
                                                              uint32_t num_param_slots,
                                                              const uint32_t* tensor_slots,
                                                              uint32_t num_tensor_slots,
+                                                             uint32_t flags,
                                                              double wait_ms,
                                                              int32_t* out_status,
                                                              uint32_t* out_node,

@@ -1,17 +1,25 @@
 import type { AniraBindings } from './abi/bindings'
-import { anira_status } from './abi/enums'
+import { ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS, anira_status } from './abi/enums'
 import type { WithAbi } from './ModelConfig'
 
 /** How `createAudioNode` builds the node (`anira_em_audio_node_create`). */
 export type AudioNodeOptions = {
-  /** The node's input channels, the input tensor's; 0 for a node without an input. Default 1. */
-  inputChannels?: number
-  /** The node's output channels, the output tensor's. Default 1. */
-  outputChannels?: number
-  /** The Streamed input slot the node's input feeds. Default 0. */
-  inputSlot?: number
-  /** The Streamed output slot the node plays. Default 0. */
-  outputSlot?: number
+  /**
+   * The Streamed input slots the node's inputs feed, input k the k-th, each with the slot's
+   * channels. Default: every Streamed input slot of the model, in slot order (input 0 the first).
+   * `[]`: a node without an input.
+   */
+  inputSlots?: number[]
+  /**
+   * The Streamed output slots the node's outputs play, output k the k-th, each with the slot's
+   * channels. Default: every Streamed output slot of the model, in slot order.
+   */
+  outputSlots?: number[]
+  /**
+   * Leave Streamed slots of the model unserved (`ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS`);
+   * without it the creation refuses a model slot that no input or output of the node serves.
+   */
+  partialStreams?: boolean
   /**
    * Static float32 scalar inputs driven by AudioParams, by slot: `audioNode.params.get(slot)` is
    * the k-rate AudioParam (automatable, default 0) whose value the handler gets each quantum it
@@ -99,10 +107,16 @@ const contexts = new WeakMap<BaseAudioContext, number>()
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-const writeSlots = (abi: AniraBindings, slots: readonly number[]): number => {
-  if (slots.length === 0) return 0
+// The slots as a uint32_t array in the heap, 0 for an empty list unless `always` (an empty list
+// that must still be a pointer).
+const writeSlots = (
+  abi: AniraBindings,
+  slots: readonly number[],
+  always = false
+): number => {
+  if (slots.length === 0 && !always) return 0
   const m = abi.module
-  const ptr = m._malloc(slots.length * 4)
+  const ptr = m._malloc(Math.max(1, slots.length) * 4)
   if (ptr === 0) throw new RangeError('anira: out of memory for the node options')
   slots.forEach((slot, i) => (m.HEAPU32[(ptr >>> 2) + i] = slot))
   return ptr
@@ -111,8 +125,9 @@ const writeSlots = (abi: AniraBindings, slots: readonly number[]): number => {
 /**
  * A Wasm Audio Worklet node that streams through `handler` (a prepared Hard handler whose block
  * range holds the context's render quantum): the render callback is C
- * (`anira_em_audio_node_create`), the node's buffers are the handler's tensors, the miss rule is
- * applied there. Works on an `AudioContext` and an `OfflineAudioContext`. Destroy the node
+ * (`anira_em_audio_node_create`), one input per Streamed input slot and one output per Streamed
+ * output slot it serves (all of them by default), their buffers the handler's tensors, one
+ * `anira_handler_process_multi` per quantum over all of them, the miss rule applied there. Works on an `AudioContext` and an `OfflineAudioContext`. Destroy the node
  * before the handler.
  */
 export const createAudioNode = async (
@@ -139,6 +154,10 @@ export const createAudioNode = async (
   const tensors = options.staticInputs ?? []
   const words = m._malloc(8)
   if (words === 0) throw new RangeError('anira: out of memory for the node')
+  // A list, even an empty one, names the slots; none (0, the NULL pointer) asks for every
+  // Streamed slot of the side.
+  const inputSlots = options.inputSlots ? writeSlots(abi, options.inputSlots, true) : 0
+  const outputSlots = options.outputSlots ? writeSlots(abi, options.outputSlots, true) : 0
   const paramSlots = writeSlots(abi, params)
   const tensorSlots = writeSlots(abi, tensors)
   // The words stay allocated while the creation may still write them (a timeout).
@@ -147,14 +166,15 @@ export const createAudioNode = async (
     abi.anira_em_audio_node_create(
       handler,
       context,
-      options.inputChannels ?? 1,
-      options.outputChannels ?? 1,
-      options.inputSlot ?? 0,
-      options.outputSlot ?? 0,
+      inputSlots,
+      options.inputSlots?.length ?? 0,
+      outputSlots,
+      options.outputSlots?.length ?? 0,
       paramSlots,
       params.length,
       tensorSlots,
       tensors.length,
+      options.partialStreams ? ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS : 0,
       options.waitMs ?? 0,
       words,
       words + 4
@@ -204,6 +224,8 @@ export const createAudioNode = async (
     }
   } finally {
     if (settled) m._free(words)
+    if (inputSlots) m._free(inputSlots)
+    if (outputSlots) m._free(outputSlots)
     if (paramSlots) m._free(paramSlots)
     if (tensorSlots) m._free(tensorSlots)
   }

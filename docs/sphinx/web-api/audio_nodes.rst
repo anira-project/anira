@@ -11,12 +11,14 @@ The Render Callback
 
 The node's render callback is C, on the browser's audio thread, once per render quantum:
 
-* the node's input and output buffers are the handler's planar host tensors, ``[channels,
-  quantum]``, without a copy: the output tensor is the node's output;
-* the call is ``anira_handler_process`` (with ``waitMs``, ``anira_handler_process_wait``: an
-  offline render that waits for every inference);
+* the node has one input per Streamed input slot it serves and one output per Streamed output
+  slot, each with the slot's channels; their buffers are the handler's planar host tensors,
+  ``[channels, quantum]``, without a copy: an output tensor is the node's output;
+* the call is one ``anira_handler_process_multi`` over every slot (with ``waitMs``,
+  ``anira_handler_process_multi_wait``: an offline render that waits for every inference), an
+  empty tensor at each position the node does not serve;
 * the miss rule: ``ANIRA_MISSED`` keeps the miss policy's fill (bypass, hold the last, the
-  callback), a failure is silence, a success silences the samples it did not deliver;
+  callback), a failure is silence, a success silences the samples an output was not delivered;
 * a quantum other than the one the handler is prepared for is silence (the creation refuses a
   handler whose Hard block range excludes the context's render quantum);
 * it allocates nothing and locks nothing.
@@ -45,14 +47,49 @@ context runs (Gecko reports its latency then). :js:meth:`Handler.createAudioNode
 console when the prepared ``block_max`` is below the burst. Destroy the node
 (``audioNode.destroy()``) before the handler.
 
+A Model with Several Streams
+----------------------------
+
+A model with several Streamed inputs or outputs (a mixture and a control signal, a stereo pair
+as two tensors) runs through one node with an input and an output per stream, which is the
+default:
+
+.. code-block:: ts
+
+   const audioNode = await handler.createAudioNode(audioContext) // every Streamed slot
+   voice.connect(audioNode.node, 0, 0) // node input 0: Streamed input slot 0
+   sidechain.connect(audioNode.node, 0, 1) // node input 1: Streamed input slot 1
+   audioNode.node.connect(left, 0) // node output 0: Streamed output slot 0
+   audioNode.node.connect(right, 1) // node output 1: Streamed output slot 1
+
+One node calls ``anira_handler_process_multi`` once per quantum over every stream, which keeps
+the guarantees of the multi form. Two nodes on one handler, one slot each, are not the
+supported form: each calls the single-slot entry, so the streams stay aligned (submission waits
+for every stream's ring), but
+
+* ``ANIRA_MISS_BYPASS`` passes the input through only on the call that carries the anchored
+  slot: the other node gets zeros on a miss;
+* the wait credit of ``ANIRA_WAIT_CONTRACT`` (the ``_wait`` forms' budget from the anchored
+  tensor) is never taken for the other call;
+* an ``anira_miss_fn`` is called once per node, each time with one slot, instead of once per
+  block with all of them.
+
+On a miss under ``ANIRA_MISS_BYPASS``, every output carries the anchored input's block (the
+contract refuses BYPASS when an output's channels are not the anchored input's).
+
 Options
 -------
 
-``inputChannels`` / ``outputChannels``
-   The node's channels (the input's count is explicit and discrete), the tensors' channel axes.
-   Default 1 and 1; 0 inputs for a node without an input.
-``inputSlot`` / ``outputSlot``
-   The Streamed slots of the model config the node feeds and plays. Default 0.
+``inputSlots`` / ``outputSlots``
+   The Streamed slots the node's inputs feed and its outputs play, input (output) *k* the *k*-th,
+   each with the slot's channels (the node's ``channelCount`` is the largest input slot's,
+   explicit and discrete; a slot reads its first channels). Default: every Streamed slot of the
+   side, in slot order, so input 0 feeds the first Streamed input. ``inputSlots: []`` is a node
+   without an input.
+``partialStreams``
+   Without it the creation refuses a Streamed slot of the model that no input or output of the
+   node serves; with it (``ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS``) such a slot stays an empty
+   element of the multi call.
 ``params``
    Static float32 scalar inputs (rank 1, one element) as AudioParams of the node, by slot:
    ``audioNode.params.get(slot)`` is a k-rate AudioParam (automatable, default 0); the callback

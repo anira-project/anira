@@ -1,6 +1,7 @@
 // anira/anira_em.h: the Wasm Audio Worklet node of a prepared handler. One render callback per
-// quantum on the browser's audio thread, in C: the node's input and output buffers are the
-// handler's planar host tensors (no copy), the miss rule is applied here, the Static inputs a
+// quantum on the browser's audio thread, in C: the node's inputs and outputs are the handler's
+// Streamed slots, their buffers its planar host tensors (no copy), one process_multi call per
+// quantum over all of them, the miss rule is applied here, the Static inputs a
 // node serves arrive as AudioParams (scalars) or through a seqlock block per slot (tensors), and
 // a JavaScript stage of the handler runs through the trampolines on the worklet scope's
 // registry. Compiled on the Wasm binary format only.
@@ -36,6 +37,7 @@ namespace {
 constexpr size_t k_worklet_stack_bytes = size_t{512} * 1024;
 constexpr uint32_t k_max_nodes = 256;
 constexpr uint32_t k_max_channels = 64;
+constexpr uint32_t k_max_streams = 32;
 constexpr uint32_t k_max_params = 32;
 constexpr size_t k_align = 16;
 
@@ -62,22 +64,30 @@ struct ParamSlot {
     anira_tensor m_tensor{};
 };
 
+// One Streamed slot a node input or output serves: the slot, its channels and where its planes
+// start in the node's plane array.
+struct Stream {
+    uint32_t m_slot = 0;
+    uint32_t m_channels = 0;
+    size_t m_first_plane = 0;
+    std::array<int64_t, 2> m_shape{};
+};
+
 // What the render callback reads: built on the main thread at create, never resized after.
 struct NodeState {
     anira_handler* m_handler = nullptr;
-    uint32_t m_input_channels = 0;
-    uint32_t m_output_channels = 0;
-    uint32_t m_input_slot = 0;
-    uint32_t m_output_slot = 0;
     uint32_t m_quantum = 0;
     double m_wait_ms = 0.0;
-    std::vector<float> m_zeros;  ///< one quantum: an input channel not connected
-    std::array<void*, k_max_channels> m_input_planes{};
-    std::array<void*, k_max_channels> m_output_planes{};
-    std::array<int64_t, 2> m_input_shape{};
-    std::array<int64_t, 2> m_output_shape{};
-    anira_tensor m_input{};
-    anira_tensor m_output{};
+    std::vector<float> m_zeros;     ///< one quantum: an input channel not connected
+    std::vector<Stream> m_inputs;   ///< node input k serves m_inputs[k]
+    std::vector<Stream> m_outputs;  ///< node output k plays m_outputs[k]
+    std::vector<void*> m_input_planes;
+    std::vector<void*> m_output_planes;
+    /// One tensor per slot of each side, as the multi form takes them: the handler's empty
+    /// tensors, the served slots' entries rewritten every quantum.
+    std::vector<anira_tensor> m_input_tensors;
+    std::vector<anira_tensor> m_output_tensors;
+    std::vector<size_t> m_delivered;
     std::vector<ParamSlot> m_params;
     std::vector<std::unique_ptr<StaticBlock>> m_blocks;
 };
@@ -154,7 +164,10 @@ bool render(int num_inputs,
         return false;  // destroyed: the browser may let the node go
     }
     NodeState& state = *slot.m_state;
-    if (num_outputs < 1 || outputs[0].samplesPerChannel != static_cast<int>(state.m_quantum)) {
+    const int frames = num_outputs > 0  ? outputs[0].samplesPerChannel
+                       : num_inputs > 0 ? inputs[0].samplesPerChannel
+                                        : 0;
+    if (frames != static_cast<int>(state.m_quantum)) {
         // Not the quantum the handler is prepared for: silence, the handler untouched.
         silence(num_outputs, outputs);
         slot.m_busy.store(0, std::memory_order::release);
@@ -164,57 +177,68 @@ bool render(int num_inputs,
     pull_blocks(state);
 
     const size_t quantum = state.m_quantum;
-    const bool has_input = num_inputs > 0;
-    for (uint32_t ch = 0; ch < state.m_input_channels; ++ch) {
-        const bool connected = has_input && ch < static_cast<uint32_t>(inputs[0].numberOfChannels);
-        state.m_input_planes[ch] = connected ? static_cast<void*>(inputs[0].data + ch * quantum)
-                                             : static_cast<void*>(state.m_zeros.data());
+    for (size_t k = 0; k < state.m_inputs.size(); ++k) {
+        const Stream& stream = state.m_inputs[k];
+        const bool present = k < static_cast<size_t>(num_inputs);
+        for (uint32_t ch = 0; ch < stream.m_channels; ++ch) {
+            const bool connected =
+                present && ch < static_cast<uint32_t>(inputs[k].numberOfChannels);
+            state.m_input_planes[stream.m_first_plane + ch] =
+                connected ? static_cast<void*>(inputs[k].data + ch * quantum)
+                          : static_cast<void*>(state.m_zeros.data());
+        }
+        anira_tensor_init_host_planar(&state.m_input_tensors[stream.m_slot],
+                                      &state.m_input_planes[stream.m_first_plane],
+                                      stream.m_channels,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      stream.m_shape.data());
     }
-    for (uint32_t ch = 0; ch < state.m_output_channels; ++ch) {
-        state.m_output_planes[ch] = outputs[0].data + ch * quantum;
+    for (size_t k = 0; k < state.m_outputs.size(); ++k) {
+        const Stream& stream = state.m_outputs[k];
+        for (uint32_t ch = 0; ch < stream.m_channels; ++ch) {
+            state.m_output_planes[stream.m_first_plane + ch] = outputs[k].data + ch * quantum;
+        }
+        anira_tensor_init_host_planar(&state.m_output_tensors[stream.m_slot],
+                                      &state.m_output_planes[stream.m_first_plane],
+                                      stream.m_channels,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      stream.m_shape.data());
     }
-    anira_tensor_init_host_planar(&state.m_input,
-                                  state.m_input_planes.data(),
-                                  state.m_input_channels,
-                                  ANIRA_DTYPE_F32,
-                                  2,
-                                  state.m_input_shape.data());
-    anira_tensor_init_host_planar(&state.m_output,
-                                  state.m_output_planes.data(),
-                                  state.m_output_channels,
-                                  ANIRA_DTYPE_F32,
-                                  2,
-                                  state.m_output_shape.data());
-    size_t delivered = 0;
-    const anira_status status = state.m_wait_ms > 0.0
-                                    ? anira_handler_process_wait(state.m_handler,
-                                                                 &state.m_input,
-                                                                 state.m_input_slot,
-                                                                 &state.m_output,
-                                                                 state.m_output_slot,
-                                                                 &delivered,
+    const auto num_in = static_cast<uint32_t>(state.m_input_tensors.size());
+    const auto num_out = static_cast<uint32_t>(state.m_output_tensors.size());
+    const anira_status status =
+        state.m_wait_ms > 0.0 ? anira_handler_process_multi_wait(state.m_handler,
+                                                                 state.m_input_tensors.data(),
+                                                                 num_in,
+                                                                 state.m_output_tensors.data(),
+                                                                 num_out,
+                                                                 state.m_delivered.data(),
                                                                  state.m_wait_ms)
-                                    : anira_handler_process(state.m_handler,
-                                                            &state.m_input,
-                                                            state.m_input_slot,
-                                                            &state.m_output,
-                                                            state.m_output_slot,
-                                                            &delivered);
+                              : anira_handler_process_multi(state.m_handler,
+                                                            state.m_input_tensors.data(),
+                                                            num_in,
+                                                            state.m_output_tensors.data(),
+                                                            num_out,
+                                                            state.m_delivered.data());
     // The miss rule: ANIRA_MISSED delivers 0 by the ABI, yet the miss policy (bypass, hold the
-    // last, a callback) filled the whole block, which is the output already; a failure is
-    // silence; any other success is what it delivered, the rest silence.
+    // last, a callback) filled every output's whole block, which is the output already; a
+    // failure is silence; any other success is what each output was delivered, the rest silence.
     if (status != ANIRA_MISSED) {
-        const size_t filled =
-            ANIRA_FAILED(status) ? 0 : (delivered < quantum ? delivered : quantum);
-        if (filled < quantum) {
-            for (uint32_t ch = 0; ch < state.m_output_channels; ++ch) {
-                std::memset(outputs[0].data + ch * quantum + filled,
+        for (size_t k = 0; k < state.m_outputs.size(); ++k) {
+            const Stream& stream = state.m_outputs[k];
+            const size_t delivered = state.m_delivered[stream.m_slot];
+            const size_t filled =
+                ANIRA_FAILED(status) ? 0 : (delivered < quantum ? delivered : quantum);
+            if (filled == quantum) { continue; }
+            for (uint32_t ch = 0; ch < stream.m_channels; ++ch) {
+                std::memset(outputs[k].data + ch * quantum + filled,
                             0,
                             (quantum - filled) * sizeof(float));
             }
         }
     }
-    // Output channels the node has beyond the handler's (none: the node is built with as many).
     slot.m_busy.store(0, std::memory_order::release);
     return true;
 }
@@ -268,12 +292,20 @@ void free_state(NodeSlot& slot) {
 void create_node(EMSCRIPTEN_WEBAUDIO_T context, const Pending& pending) {
     NodeSlot& slot = s_nodes[pending.m_slot_index];
     NodeState& state = *slot.m_state;
-    int output_channels[1] = {static_cast<int>(state.m_output_channels)};
+    std::array<int, k_max_streams> output_channels{};
+    for (size_t k = 0; k < state.m_outputs.size(); ++k) {
+        output_channels[k] = static_cast<int>(state.m_outputs[k].m_channels);
+    }
+    // One channelCount for every input of a node: the largest slot's; each slot reads its first.
+    uint32_t input_channels = 1;
+    for (const Stream& stream : state.m_inputs) {
+        input_channels = stream.m_channels > input_channels ? stream.m_channels : input_channels;
+    }
     EmscriptenAudioWorkletNodeCreateOptions options{};
-    options.numberOfInputs = state.m_input_channels > 0 ? 1 : 0;
-    options.numberOfOutputs = 1;
-    options.outputChannelCounts = output_channels;
-    options.channelCount = state.m_input_channels > 0 ? state.m_input_channels : 1;
+    options.numberOfInputs = static_cast<int>(state.m_inputs.size());
+    options.numberOfOutputs = static_cast<int>(state.m_outputs.size());
+    options.outputChannelCounts = output_channels.data();
+    options.channelCount = static_cast<int>(input_channels);
     options.channelCountMode = WEBAUDIO_CHANNEL_COUNT_MODE_EXPLICIT;
     options.channelInterpretation = WEBAUDIO_CHANNEL_INTERPRETATION_DISCRETE;
     const uintptr_t key = encode(pending.m_slot_index, slot.m_generation.load());
@@ -373,6 +405,94 @@ std::string processor_for(uint32_t params) {
     return name;
 }
 
+// The Streamed slots of one side a node serves: the listed ones, or every Streamed slot in slot
+// order for NULL. Checked against the handler's ports (prepared: their channels are set).
+anira_status resolve_streams(const anira_handler& handler,
+                             bool input,
+                             const uint32_t* slots,
+                             uint32_t num_slots,
+                             bool partial,
+                             std::vector<Stream>& streams,
+                             anira_error* err) {
+    const std::vector<anira::capi::Port>& ports =
+        input ? handler.m_input_ports : handler.m_output_ports;
+    const char* side = input ? "input" : "output";
+    std::vector<uint32_t> listed;
+    if (slots == nullptr) {
+        for (uint32_t s = 0; s < ports.size(); ++s) {
+            if (anira::capi::stream_port(ports, s) != nullptr) { listed.push_back(s); }
+        }
+    } else {
+        ANIRA_CAPI_REQUIRE(num_slots <= k_max_streams,
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "audio node: %u %s slots (at most %u)",
+                           num_slots,
+                           side,
+                           k_max_streams);
+        listed.assign(slots, slots + num_slots);
+    }
+    ANIRA_CAPI_REQUIRE(listed.size() <= k_max_streams,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "audio node: the model has %zu Streamed %s slots (a node serves at most %u)",
+                       listed.size(),
+                       side,
+                       k_max_streams);
+    std::vector<bool> served(ports.size(), false);
+    size_t planes = 0;
+    for (const uint32_t s : listed) {
+        const anira::capi::StreamPort* port = anira::capi::stream_port(ports, s);
+        ANIRA_CAPI_REQUIRE(port != nullptr,
+                           err,
+                           ANIRA_ERROR_CONFIG,
+                           "audio node: %s slot %u is not a Streamed slot of the model",
+                           side,
+                           s);
+        ANIRA_CAPI_REQUIRE(!served[s],
+                           err,
+                           ANIRA_ERROR_INVALID_ARGUMENT,
+                           "audio node: %s slot %u is listed twice",
+                           side,
+                           s);
+        ANIRA_CAPI_REQUIRE(port->m_ring_dtype == ANIRA_DTYPE_F32,
+                           err,
+                           ANIRA_ERROR_CONFIG,
+                           "audio node: %s slot %u streams another dtype than float32",
+                           side,
+                           s);
+        ANIRA_CAPI_REQUIRE(port->m_channels >= 1 && port->m_channels <= k_max_channels,
+                           err,
+                           ANIRA_ERROR_CONFIG,
+                           "audio node: %s slot %u has %u channels (1 to %u)",
+                           side,
+                           s,
+                           port->m_channels,
+                           k_max_channels);
+        served[s] = true;
+        Stream stream;
+        stream.m_slot = s;
+        stream.m_channels = port->m_channels;
+        stream.m_first_plane = planes;
+        planes += port->m_channels;
+        streams.push_back(stream);
+    }
+    if (!partial) {
+        for (uint32_t s = 0; s < ports.size(); ++s) {
+            ANIRA_CAPI_REQUIRE(anira::capi::stream_port(ports, s) == nullptr || served[s],
+                               err,
+                               ANIRA_ERROR_CONFIG,
+                               "audio node: no %s of the node serves the Streamed %s slot %u "
+                               "(every Streamed slot is served by one, or pass "
+                               "ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS)",
+                               side,
+                               side,
+                               s);
+        }
+    }
+    return ANIRA_OK;
+}
+
 const anira_tensor_spec* static_spec(const anira_handler& handler, uint32_t slot) {
     if (handler.m_pipeline.m_variants.empty() || slot >= handler.m_num_inputs) { return nullptr; }
     const anira_tensor_spec* spec =
@@ -385,14 +505,15 @@ const anira_tensor_spec* static_spec(const anira_handler& handler, uint32_t slot
 
 anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                                                    uint32_t audio_context,
-                                                   uint32_t input_channels,
-                                                   uint32_t output_channels,
-                                                   uint32_t input_slot,
-                                                   uint32_t output_slot,
+                                                   const uint32_t* input_slots,
+                                                   uint32_t num_input_slots,
+                                                   const uint32_t* output_slots,
+                                                   uint32_t num_output_slots,
                                                    const uint32_t* param_slots,
                                                    uint32_t num_param_slots,
                                                    const uint32_t* tensor_slots,
                                                    uint32_t num_tensor_slots,
+                                                   uint32_t flags,
                                                    double wait_ms,
                                                    int32_t* out_status,
                                                    uint32_t* out_node,
@@ -409,16 +530,6 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                        err,
                        ANIRA_ERROR_CONFIG,
                        "audio node: the handler is not prepared under a Hard contract");
-    ANIRA_CAPI_REQUIRE(output_channels > 0 && output_channels <= k_max_channels &&
-                           input_channels <= k_max_channels,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "audio node: %u input and %u output channels (1 to %u outputs, at most "
-                       "%u inputs)",
-                       input_channels,
-                       output_channels,
-                       k_max_channels,
-                       k_max_channels);
     ANIRA_CAPI_REQUIRE(num_param_slots <= k_max_params && (num_param_slots == 0 || param_slots),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -446,15 +557,47 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
 
     auto state = std::make_unique<NodeState>();
     state->m_handler = handler;
-    state->m_input_channels = input_channels;
-    state->m_output_channels = output_channels;
-    state->m_input_slot = input_slot;
-    state->m_output_slot = output_slot;
     state->m_quantum = static_cast<uint32_t>(quantum);
     state->m_wait_ms = wait_ms;
     state->m_zeros.assign(static_cast<size_t>(quantum), 0.0F);
-    state->m_input_shape = {static_cast<int64_t>(input_channels), quantum};
-    state->m_output_shape = {static_cast<int64_t>(output_channels), quantum};
+    const bool partial = (flags & ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS) != 0;
+    anira_status resolved = resolve_streams(*handler,
+                                            true,
+                                            input_slots,
+                                            num_input_slots,
+                                            partial,
+                                            state->m_inputs,
+                                            err);
+    if (resolved != ANIRA_OK) { return resolved; }
+    resolved = resolve_streams(*handler,
+                               false,
+                               output_slots,
+                               num_output_slots,
+                               partial,
+                               state->m_outputs,
+                               err);
+    if (resolved != ANIRA_OK) { return resolved; }
+    ANIRA_CAPI_REQUIRE(!state->m_inputs.empty() || !state->m_outputs.empty(),
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "audio node: it serves no Streamed slot (no input, no output)");
+    size_t input_planes = 0;
+    for (Stream& stream : state->m_inputs) {
+        stream.m_shape = {static_cast<int64_t>(stream.m_channels), quantum};
+        input_planes += stream.m_channels;
+    }
+    size_t output_planes = 0;
+    for (Stream& stream : state->m_outputs) {
+        stream.m_shape = {static_cast<int64_t>(stream.m_channels), quantum};
+        output_planes += stream.m_channels;
+    }
+    state->m_input_planes.assign(input_planes, nullptr);
+    state->m_output_planes.assign(output_planes, nullptr);
+    // The handler's empty tensors (one per slot, built at prepare): the multi form's elements of
+    // every slot the node does not serve, and of the Static ones (pushed separately).
+    state->m_input_tensors = handler->m_input_tensors;
+    state->m_output_tensors = handler->m_output_tensors;
+    state->m_delivered.assign(state->m_output_tensors.size(), 0);
     for (uint32_t i = 0; i < num_param_slots; ++i) {
         const anira_tensor_spec* spec = static_spec(*handler, param_slots[i]);
         uint64_t elements = 1;
