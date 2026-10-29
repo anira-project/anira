@@ -1,7 +1,7 @@
 # Anira Web
 
 The WebAssembly + TypeScript distribution of [**anira**](https://github.com/anira-project/anira) — a real-time neural-network inference library for low-latency audio applications.
-Anira Web is the same C++ library compiled to WebAssembly: the module exports anira's C ABI (`_anira_*`) and the Emscripten companion `anira/anira_em.h`, and the TypeScript runtime instantiates it on one shared memory in the main thread, the inference Workers and the audio worklet.
+Anira Web is the same C++ library compiled to WebAssembly with a thin typed layer over its C ABI. The page's main thread instantiates the module; anira starts the other threads from C on the same shared memory: the context's inference threads are Wasm Workers, and a handler streams audio through a Wasm Audio Worklet node whose render callback is C. Stages and inference engines are written in TypeScript against the package, with no rebuild of the module, and the model and contract files of a native host load unchanged.
 
 📚 **Full documentation:**
 [anira-project.github.io/anira/web-api](https://anira-project.github.io/anira/web-api/index.html)
@@ -12,134 +12,81 @@ Anira Web is the same C++ library compiled to WebAssembly: the module exports an
 npm install @anira-project/anira@next
 ```
 
-`3.0.0-alpha.2` is published on the `next` dist-tag. The package is ESM only and ships its
-WebAssembly artifacts under `@anira-project/anira/dist/wasm/`. Modern bundlers (Vite,
-webpack 5, Rollup, esbuild) understand the `new URL('./file.wasm', import.meta.url)`
-references emitted by the package and copy the asset automatically.
+The package is ESM only and ships its WebAssembly artifacts under `@anira-project/anira/dist/wasm/`.
+Modern bundlers (Vite, webpack 5, Rollup, esbuild) understand the `new URL('./file', import.meta.url)`
+references emitted by the package and copy the files. The page must be cross-origin isolated
+(`Cross-Origin-Opener-Policy: same-origin`, `Cross-Origin-Embedder-Policy: require-corp`): the module
+runs on a shared `WebAssembly.Memory`.
 
 ## Quick example
 
-In this pre-release configs and handlers are built with the raw C calls (a typed TypeScript
-API follows); `onnxruntime-web` runs the model on an inference Worker:
+A bundled model config run by the module's built-in ONNX Runtime engine on an inference Worker,
+streamed through the handler's audio node:
 
 ```ts
 import {
-  AniraWeb,
-  callWithError,
-  startLogPump,
-  anira_budget_kind,
-  anira_log_drain,
-  anira_wait_strategy,
-  anira_warmup_mode,
-  ONNXRUNTIME_WEB_ENGINE_ID,
+  Anira,
+  Context,
+  Contract,
+  Handler,
+  ModelConfig,
+  Pipeline,
 } from '@anira-project/anira'
 
-const anira = await AniraWeb.create()
-const { module: m, heap } = anira
-anira.setLogHook()
-startLogPump(m)
-
-const out = heap.malloc(4)
-const created = (call: (err: number) => number) => {
-  callWithError(heap, call)
-  return heap.readU32(out)
-}
-
-const contextConfig = created((err) => m._anira_context_config_create(out, err))
-m._anira_context_config_set_threads(contextConfig, 0, anira_wait_strategy.ANIRA_WAIT_SPIN_BACKOFF)
-m._anira_context_config_set_log_drain(contextConfig, anira_log_drain.ANIRA_LOG_DRAIN_MANUAL, 10)
-const context = created((err) => m._anira_context_create(contextConfig, out, err))
-
-const json = JSON.stringify({
-  models: [{ engine: ONNXRUNTIME_WEB_ENGINE_ID, path: new URL('model.onnx', location.href).href }],
-  inputs: [{ name: 'in', dtype: 'float32', role: 'streamed',
-             axes: [['batch', 1], ['channel', 2], ['time', 512]], window: { min: 512, max: 512 } }],
-  outputs: [{ name: 'out', dtype: 'float32', role: 'streamed',
-              axes: [['batch', 1], ['channel', 2], ['time', 512]], window: { min: 512, max: 512 } }],
-})
-const model = heap.withCString(json, (s) =>
-  created((err) => m._anira_model_config_from_json(s, json.length, 0, out, err)))
-
-const pipeline = created((err) => m._anira_pipeline_create(out, err))
-const variants = heap.malloc(4)
-heap.writeU32(variants, model)
-callWithError(heap, (err) => m._anira_pipeline_add_inference(pipeline, variants, 1, 0, 0, err))
-await anira.registerJSEngine(pipeline, {
-  engineId: ONNXRUNTIME_WEB_ENGINE_ID,
-  className: 'ONNXRuntimeWebBackend',
-  modelConfigPtr: model,
-})
-
 const audioContext = new AudioContext({ sampleRate: 48000 })
-const handler = created((err) => m._anira_handler_create(context, pipeline, out, err))
-const contract = created((err) => m._anira_contract_create_hard(128, 128, audioContext.sampleRate, out, err))
-m._anira_contract_hard_set_budget(contract, anira_budget_kind.ANIRA_BUDGET_EXPLICIT, 2.0)
-m._anira_contract_hard_set_warmup(contract, anira_warmup_mode.ANIRA_WARMUP_NONE, 0)
-callWithError(heap, (err) => m._anira_handler_prepare(handler, contract, err))
+const anira = await Anira.create()
+anira.setLogHook()
+anira.startLogPump()
 
-const worker = await anira.spinUpInferenceWorker(context)
-await anira.registerAudioWorkletForContext(audioContext)
-const node = await anira.configureAudioWorklet(audioContext, handler, { inputChannels: 2, outputChannels: 2 })
-sourceNode.connect(node).connect(audioContext.destination)
-// later: await anira.disposeAudioWorklet(node), await worker.stop(), then the _destroy calls
+const context = Context.create(anira, { threads: 1 })
+// The same files a native host loads; the ONNX entry's model file is fetched beside the config.
+const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
+const contract = (
+  await Contract.fromUrl(anira, '/models/gain.contract.json')
+).setGeometry(128, 128, audioContext.sampleRate)
+const handler = Handler.create(
+  context,
+  Pipeline.create(anira).addInference(model)
+).prepare(contract)
+
+const audioNode = await handler.createAudioNode(audioContext, { params: [1] })
+audioNode.params.get(1)!.value = 0.5 // the model's Static gain
+source.connect(audioNode.node).connect(audioContext.destination)
 ```
 
-The full walkthrough — the stop protocol, the quantum change, the built-in ONNX Runtime path
-and the teardown — is on the [Basic Usage](https://anira-project.github.io/anira/web-api/basic_usage.html)
-page.
+## Your own stages and engines
 
-## Documentation
+A JavaScript engine is defined in the context's worker module, which every inference Worker
+imports before its loop; a JavaScript stage in every scope that runs one of its phases (the page,
+the worklet's module):
 
-- [Basic Usage](https://anira-project.github.io/anira/web-api/basic_usage.html)
-  — minimal end-to-end setup.
-- [Architecture](https://anira-project.github.io/anira/web-api/architecture.html)
-  — the module instances on one memory, the hook object and the trampolines,
-  the inference Workers and their stop protocol, the lifecycle / cleanup story.
-- [Custom Audio Worklets](https://anira-project.github.io/anira/web-api/custom_audio_worklets.html)
-  — the tensor process per render quantum, JavaScript stages in the worklet,
-  more slots, `AudioParam` integration.
-- [Custom Pre- and Post-Processing](https://anira-project.github.io/anira/web-api/custom_pre_post_processing.html)
-  — a JavaScript stage (`addJSStage`): its hook bits and its stated real-time promise.
-- [Custom Inference Backends](https://anira-project.github.io/anira/web-api/custom_inference_backends.html)
-  — a JavaScript engine (`registerJSEngine`) run by the inference Workers.
-- [API Reference](https://anira-project.github.io/anira/web-api/reference/index.html)
-  — auto-generated class and function reference.
+```ts
+// double-engine.ts: the context's worker module
+import { anira_status, defineEngine, engineTensors } from '@anira-project/anira/scope'
 
-## Demos
+defineEngine('org.example.double', (env) => ({
+  process(ctx: number) {
+    const { inputs, outputs } = engineTensors(env, ctx)
+    outputs[0].f32!.set(inputs[0].f32!.map((x) => 2 * x))
+    return anira_status.ANIRA_OK
+  },
+}))
+```
 
-A list of demos is available [here](https://anira-project.github.io/anira-web-example).
+```ts
+// main.ts
+import workerModule from './double-engine.ts?worker&url'
 
-## Building from source
+const context = Context.create(anira, { threads: 2, workerModule })
+const pipeline = Pipeline.create(anira)
+  .addInference(model)
+  .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+```
 
-To build Anira Web from source — including cross-compiling the C++ library to WebAssembly — follow the [Installation / Building](https://anira-project.github.io/anira/web-api/installation_building.html#building-from-source) guide.
+`web/examples/model-file/` in the repository is the quick example as a page, and
+`web/examples/stage-and-engine/` a complete page with a TypeScript stage and engine, both bundled
+by Vite.
 
 ## License
 
-Anira Web itself is distributed under the [Apache License 2.0](https://github.com/anira-project/anira/blob/main/LICENSE).
-
-### Attribution requirements when redistributing
-
-The WebAssembly binary statically links **ONNX Runtime** (MIT, © Microsoft) and a number of native libraries (protobuf, abseil, Eigen, flatbuffers, mimalloc, …) whose code ends up in `dist/wasm/AniraWeb.wasm`. If you ship a product that includes `@anira-project/anira`, your distribution must reproduce the corresponding copyright notices and license texts.
-
-To make this straightforward, the package ships these files in known locations:
-
-```
-node_modules/@anira-project/anira/
-├── LICENSE                              # Apache-2.0 for anira / @anira-project/anira
-└── dist/licenses/
-    └── onnxruntime/
-        ├── LICENSE                      # MIT (ONNX Runtime)
-        ├── ThirdPartyNotices.txt        # ONNX Runtime's transitive deps
-        └── PACKAGE.txt                  # name / version / homepage / license
-```
-
-Each subdirectory under `dist/licenses/` represents one statically-linked native dep that needs attribution. `PACKAGE.txt` is a simple `key: value` manifest you can parse to drive an attribution generator.
-
-In practice the easiest path is to use a tool like [`rollup-plugin-license`](https://github.com/mjeanroy/rollup-plugin-license) or a similar webpack/esbuild plugin to auto-generate a `THIRD_PARTY_LICENSES.txt` and ship it alongside your build. If you do, point the plugin at:
-
-- the package's own `LICENSE` (already covered by the plugin's normal dep walk), and
-- each subdirectory under `node_modules/@anira-project/anira/dist/licenses/` (these aren't visible to npm-graph-based tools because they describe _native_ code linked into the WASM, not JS deps).
-
-If you don't use such a tool, copy the files above into your distribution alongside whatever attribution you already do for your other open-source dependencies.
-
-There is currently no `NOTICE` file shipped by anira itself, so Apache-2.0's NOTICE-propagation clause has nothing to apply. If that ever changes upstream, the file will appear at the package root next to `LICENSE`.
+Apache-2.0. The WebAssembly module statically links third-party code; see `dist/licenses/`.

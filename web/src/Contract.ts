@@ -1,6 +1,6 @@
 import type { AniraBindings } from './abi/bindings'
 import { anira_budget_kind, anira_warmup_mode } from './abi/enums'
-import type { WithAbi } from './ModelConfig'
+import type { Fetcher, WithAbi } from './ModelConfig'
 
 /** The fields of a Hard contract `Contract.hard` sets; the rest keep their defaults. */
 export type HardContractOptions = {
@@ -43,7 +43,7 @@ export class Contract {
   static async fromUrl(
     anira: WithAbi,
     url: string | URL,
-    fetcher: typeof fetch = globalThis.fetch
+    fetcher: Fetcher = globalThis.fetch
   ): Promise<Contract> {
     const contractUrl = new URL(
       url,

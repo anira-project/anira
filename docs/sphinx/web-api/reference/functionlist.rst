@@ -12,27 +12,27 @@ Stages and engines
 In every scope that runs one of their phases: the main thread, an inference Worker's module, a
 worklet's module (``@anira-project/anira/scope``).
 
-.. js:autofunction:: defineStage
+.. js:autofunction:: registry.defineStage
 
-.. js:autofunction:: defineEngine
+.. js:autofunction:: registry.defineEngine
 
-.. js:autofunction:: keyOf
+.. js:autofunction:: registry.keyOf
 
-.. js:autofunction:: engineTensors
+.. js:autofunction:: registry.engineTensors
 
-.. js:autofunction:: scopeRegistry
+.. js:autofunction:: registry.scopeRegistry
 
 Audio
 -----
 
-.. js:autofunction:: createAudioNode
+.. js:autofunction:: AudioNode.createAudioNode
 
 Configs
 -------
 
-.. js:autofunction:: enabledEngines
+.. js:autofunction:: ModelConfig.enabledEngines
 
 Log
 ---
 
-.. js:autofunction:: consoleLogSink
+.. js:autofunction:: Anira.consoleLogSink

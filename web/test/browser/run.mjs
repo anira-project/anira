@@ -1,10 +1,10 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
 // isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a
 // headless browser (Playwright) and prints its checks: test/browser/index.html, ort.html and
-// config.html (the package as built) and the custom-worklet example's check page (as its own
-// Vite build bundled it). The repository's extras/models is served at /extras/models/, so a page
+// config.html (the package as built) and the check pages of the two examples, stage-and-engine
+// and model-file (as their own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a page
 // fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
-// fetches those) the way a site serves its own. Then the example's check page once more under
+// fetches those) the way a site serves its own. Then the stage-and-engine check page once more under
 // Vite's dev server (vite's createServer over the example's config), whose transform of the
 // module's glue the worklet scope must survive (decision D2; cmake/wasm-glue-rewrite.cmake). Exit
 // code 0 when every check passed and the browser refused no load.
@@ -64,6 +64,7 @@ const allPages = [
   'test/browser/ort.html',
   'test/browser/config.html',
   'examples/stage-and-engine/dist/check.html',
+  'examples/model-file/dist/check.html',
 ]
 const pages = process.argv.length > 3 ? process.argv.slice(3) : [...allPages, 'dev']
 // The example's check page under Vite's dev server.

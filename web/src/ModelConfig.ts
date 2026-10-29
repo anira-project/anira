@@ -1,8 +1,11 @@
 import type { AniraBindings } from './abi/bindings'
 import { anira_bytes_ownership, anira_engine } from './abi/enums'
 
-/** Anything that carries the typed C ABI of the main instance (an `AniraWeb`). */
+/** Anything that carries the typed C ABI of the main instance (an `Anira`). */
 export type WithAbi = { readonly abi: AniraBindings }
+
+/** What a loader fetches with: `globalThis.fetch` or a stand-in of its shape. */
+export type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
 
 /** One model entry of a config file, as `fetchModel` sees it. */
 export type ModelEntry = {
@@ -32,7 +35,7 @@ export type ModelConfigLoadOptions = {
    */
   fetchModel?: (entry: ModelEntry) => boolean
   /** The fetch the files are read with; default `globalThis.fetch`. */
-  fetch?: typeof fetch
+  fetch?: Fetcher
 }
 
 // anira_backend_id on wasm32: struct_size, engine, provider, then the id pointers; the rows are
@@ -62,7 +65,7 @@ export const enabledEngines = (abi: AniraBindings): Set<number> => {
   }
 }
 
-const readBytes = async (fetcher: typeof fetch, url: URL): Promise<Uint8Array> => {
+const readBytes = async (fetcher: Fetcher, url: URL): Promise<Uint8Array> => {
   const response = await fetcher(url)
   if (!response.ok) {
     throw new Error(`anira: fetching ${url.href} failed: ${response.status}`)
@@ -102,7 +105,7 @@ export class ModelConfig {
     url: string | URL,
     options: Omit<ModelConfigLoadOptions, 'baseUrl'> = {}
   ): Promise<ModelConfig> {
-    const fetcher = options.fetch ?? globalThis.fetch
+    const fetcher: Fetcher = options.fetch ?? globalThis.fetch
     const configUrl = new URL(url, pageUrl())
     const response = await fetcher(configUrl)
     if (!response.ok) {
@@ -121,7 +124,7 @@ export class ModelConfig {
     options: ModelConfigLoadOptions = {}
   ): Promise<ModelConfig> {
     const { abi } = anira
-    const fetcher = options.fetch ?? globalThis.fetch
+    const fetcher: Fetcher = options.fetch ?? globalThis.fetch
     const baseUrl = new URL(options.baseUrl ?? pageUrl() ?? '', pageUrl())
     const config = new ModelConfig(abi, abi.anira_model_config_from_json(json, null))
     try {

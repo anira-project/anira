@@ -106,14 +106,15 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The stage-and-engine example (web/examples/stage-and-engine) against the built package:
-      # tsc with strict over its files and the package's types, then its Vite build (the worker
-      # module and the worklet module bundled into one script each), which the browser test runs.
+      # The two examples (web/examples/stage-and-engine, web/examples/model-file) against the built
+      # package: tsc with strict over their files and the package's types, then their Vite builds
+      # (stage-and-engine's worker and worklet modules bundled into one script each), which the
+      # browser test runs.
       - name: build the examples
         working-directory: web
         run: npm run examples
 
-      # config.html loads a bundled model config (extras/models/model-pool/gain.model.json) and
+      # config.html and the model-file example load a bundled model config (extras/models/model-pool/gain.model.json) and
       # fetches its model file: the fixture trees, restored from the cache warm_caches.yml
       # keeps, else fetched at their pins.
       - name: restore the model fixtures

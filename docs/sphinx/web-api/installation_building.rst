@@ -1,22 +1,21 @@
 Installation / Building
 =======================
 
-Anira Web is the TypeScript / WebAssembly distribution of Anira. It is
-made up of two parts:
+Anira Web is the TypeScript / WebAssembly distribution of Anira. It is made up of two parts:
 
-* a WebAssembly module (``AniraWeb.wasm`` + ``AniraWeb.js``) compiled from
-  the Anira C++ sources via Emscripten, whose exports are the C ABI (every
-  ``anira_*`` function of the ``anira/abi/`` headers as ``_anira_*``), the
-  Emscripten companion ``anira/anira_em.h`` (``_anira_em_*``), ``_malloc`` and
-  ``_free``, and
-* a TypeScript runtime around it: the module instantiated on one shared memory
-  in every thread that needs it, the inference Workers, the audio worklet, the
-  JavaScript engines and stages, and the generated mirrors of the C headers
-  (``abi/enums.ts``, ``abi/layout.ts``).
+* a WebAssembly module (``AniraWeb.wasm`` + ``AniraWeb.js``) compiled from the Anira C++ sources
+  via Emscripten, whose exports are the C ABI (every ``anira_*`` function of the ``anira/abi/``
+  headers as ``_anira_*``), the Emscripten companion ``anira/anira_em.h`` (``_anira_em_*``),
+  ``_malloc`` and ``_free``; it starts its own Wasm Workers (the inference threads) and Wasm
+  Audio Worklet (the audio path), and
+* a thin TypeScript layer over it: the bindings generated from the ABI registry
+  (:js:class:`AniraBindings`), the generated mirrors of the C headers (``abi/enums.ts``,
+  ``abi/layout.ts``), a few classes over the handles (:js:class:`Anira`, :js:class:`Context`,
+  :js:class:`ModelConfig`, :js:class:`Contract`, :js:class:`Pipeline`, :js:class:`Handler`) and
+  the registry a scope defines its JavaScript stages and engines on.
 
-The sections below cover how to consume the published package, how to
-import it in your project, and how to build the WASM module and the
-TypeScript package from source.
+The sections below cover how to consume the published package, what a bundler and a server must
+do for it, and how to build the WASM module and the TypeScript package from source.
 
 Installation
 ------------
@@ -31,37 +30,52 @@ Add the package to your project with the package manager of your choice:
    bun add @anira-project/anira
 
 The package ships its WebAssembly artifacts under ``@anira-project/anira/dist/wasm/``
-(``AniraWeb.wasm`` and the Emscripten-generated ``AniraWeb.js`` glue
-file, and ``ort-wasm-simd-threaded.wasm``, onnxruntime-web's binary, which the
-``ONNXRuntimeWebBackend`` engine fetches when it initialises; nothing loads it otherwise).
-When bundling, make sure the ``.wasm`` file is copied to a path
-your runtime can fetch — most modern bundlers (Vite, webpack 5, Rollup
-with the right plugins, esbuild) already understand the
-``new URL('./file.wasm', import.meta.url)`` references emitted by the
-package and will emit the asset automatically.
+(``AniraWeb.wasm``, the Emscripten-generated ``AniraWeb.js`` glue, and
+``ort-wasm-simd-threaded.wasm``, onnxruntime-web's binary, which the optional ONNX Runtime Web
+engine fetches; nothing loads it otherwise). The package names them as
+``new URL('./wasm/AniraWeb.js', import.meta.url)``, which Vite, webpack 5, Rollup and esbuild
+understand: they copy the files and rewrite the URLs. The glue is loaded three times, in the
+page, in every inference Worker and in the audio worklet, always through that URL.
 
 Importing
 ---------
 
-The package is published as ESM only. The main entry point re-exports the
-runtime (``AniraWeb``, ``createAniraWasm``, ``Heap``, ``callWithError``, the
-instance stacks, the hook registry), ``InferenceThread``, the engines
-(``JSBackend``, ``ONNXRuntimeWebBackend``), the inference-worker handler, the
-helpers, the enums and defines of the C headers and their record layouts
-(``layout``):
+The package is published as ESM only, with three entry points:
+
+* ``@anira-project/anira``: everything, for the page's main thread.
+* ``@anira-project/anira/scope``: the registry (:js:func:`~registry.defineStage`, :js:func:`~registry.defineEngine`,
+  :js:func:`~registry.engineTensors`), the bindings, the enums and the layouts, and nothing that loads the
+  module: what an inference Worker's module and a worklet's module import.
+* ``@anira-project/anira/engines/onnxruntime-web``: the ONNX Runtime Web engine for a worker
+  module (:doc:`custom_inference_backends`).
 
 .. code-block:: ts
 
-   import {
-     AniraWeb,
-     callWithError,
-     anira_budget_kind,
-     ONNXRUNTIME_WEB_ENGINE_ID,
-     layout,
-   } from '@anira-project/anira'
+   import { Anira, Context, ModelConfig, Pipeline, Handler, Contract } from '@anira-project/anira'
 
-The worklet base has its own subpath (``@anira-project/anira/workers/worklet-base``), as
-do the bundled worker and worklet entry points.
+What the Page Needs
+-------------------
+
+* **Cross-origin isolation.** The module runs on a shared ``WebAssembly.Memory``, which a page
+  may create only when ``crossOriginIsolated`` holds: serve it with
+  ``Cross-Origin-Opener-Policy: same-origin`` and ``Cross-Origin-Embedder-Policy: require-corp``.
+* **Self-contained worker and worklet modules.** The context's worker module and a worklet
+  module run in scopes of their own (an inference Worker, the AudioWorkletGlobalScope), loaded
+  by URL; a worklet scope cannot load a chunk at run time. With Vite,
+  ``import url from './my-worker.ts?worker&url'`` bundles a module and everything it imports
+  into one file and gives its URL, with ``worker: { format: 'es' }`` and one chunk
+  (``rolldownOptions: { output: { codeSplitting: false } }`` on Vite 8, ``inlineDynamicImports``
+  before).
+* **The package left as it is by the dev server.** ``optimizeDeps: { exclude:
+  ['@anira-project/anira'] }``: the glue loads itself into the Workers and the worklet. Vite's
+  dev server works (the module's build rewrites the one construct of the glue it would turn into
+  a client import, ``cmake/wasm-glue-rewrite.cmake``); it warns once that the Workers' dynamic
+  import cannot be analysed, which is intended.
+
+``web/examples/stage-and-engine/vite.config.ts`` is a complete configuration:
+
+.. literalinclude:: ../../../web/examples/stage-and-engine/vite.config.ts
+   :language: ts
 
 .. _building:
 
@@ -107,6 +121,7 @@ The CMake presets reference the Emscripten toolchain through the
 ``$EMSDK`` environment variable, so you must set it.
 
 .. code-block:: bash
+
    # clone emscripten
    git clone https://github.com/emscripten-core/emsdk.git emsdk-4.0.23
    cd emsdk-4.0.23
@@ -175,5 +190,11 @@ Once ``anira/web/wasm/`` is populated, build the npm package:
 The build runs ``tsc`` for type-checking and then ``vite build`` to
 produce ESM output in ``anira/web/dist/``. ``vite-plugin-static-copy``
 copies the WASM artifacts from ``wasm/`` into ``dist/wasm/`` so they are
-included in the published package.
+included in the published package. ``npm test`` runs the unit tests (node, no build needed),
+``npm run examples`` type-checks and builds ``web/examples/stage-and-engine`` and
+``web/examples/model-file``, and ``node test/browser/run.mjs chromium`` (or ``firefox``, with
+Playwright installed) runs the browser test: the package's pages, the examples' check pages built,
+and stage-and-engine's under Vite's dev server. The test's ``config.html`` and the model-file
+example load the bundled ``extras/models`` configs and their model files; fetch those first with
+``cmake -P extras/fetch-models.cmake``.
 

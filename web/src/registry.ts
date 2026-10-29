@@ -86,7 +86,9 @@ const status = (result: number | void): number => (result ?? anira_status.ANIRA_
  */
 export class Registry {
   readonly version = 1
+  /** @hidden */
   private readonly stages = new Map<number, Entry<StageFactory, Stage>>()
+  /** @hidden */
   private readonly engines = new Map<number, Entry<EngineFactory, Engine>>()
   private env: ScopeEnv | null = null
   /** The scope's log sink (`anira_em_set_log_hook`); none: the records are not shown here. */
@@ -100,6 +102,7 @@ export class Registry {
     return this.define(this.engines, id, factory)
   }
 
+  /** @hidden */
   private define<F, T>(map: Map<number, Entry<F, T>>, name: string, factory: F): number {
     const key = keyOf(name)
     const existing = map.get(key)

@@ -36,7 +36,7 @@
   "scripts": {
     "build": "tsc && vite build",
     "test": "node --experimental-strip-types --no-warnings --import ./test/resolve-ts.mjs --test test/*.test.ts",
-    "examples": "tsc -p examples/stage-and-engine && vite build --config examples/stage-and-engine/vite.config.ts",
+    "examples": "tsc -p examples/stage-and-engine && vite build --config examples/stage-and-engine/vite.config.ts && tsc -p examples/model-file && vite build --config examples/model-file/vite.config.ts",
     "dev": "vite build --watch",
     "format": "prettier . --write"
   },
