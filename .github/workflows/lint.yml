@@ -36,9 +36,9 @@ jobs:
 
   tooling-config:
     if: github.event_name != 'pull_request'
-    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.2.8
+    uses: tanh-lab/tanh-tooling/.github/workflows/config-check.yml@v0.3.0
     with:
-      ref: v0.2.8
+      ref: v0.3.0
       family: "clang cmake"
 
   clang_format_result:
