@@ -1,6 +1,10 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/processor.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -10,38 +14,49 @@
 #include <sanitizer/lsan_interface.h>
 #endif
 
-#include <algorithm>
+#include <anira/anira.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <iomanip>
-#include <ios>
+#include <optional>
 #include <ostream>
-#include <sstream>
-#include <stdexcept>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
 
+#include "../abi/handler_support.h"
+#include "../support/session_cases.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::SizingGeometry;
+using anira_test::SizingResult;
+using anira_test::SizingSession;
+using anira_test::SizingSlot;
+
+// The sizing of a session at prepare, read off a C handler's session (test/support/
+// session_cases.h): the latency per output, the struct pool and the ring sizes, for the
+// geometries and models below, and the ring dtypes; then the one-sided models. Three cases
+// drive a SessionElement of their own, unregistered: clear() and prepare() on a thread that may
+// hang, and the reference rule of the 2.x HostConfig.
 
 namespace {
 struct SessionElementTestParams {
-    HostConfig m_host_config;
-    InferenceConfig m_inference_config;
+    SizingGeometry m_geometry;
+    std::vector<SizingSlot> m_inputs;
+    std::vector<SizingSlot> m_outputs;
+    double m_budget_ms = 0.0;
+    double m_wait_ratio = 0.0;
     std::vector<unsigned int> m_expected_latency;
-    size_t m_expected_num_structs;
+    size_t m_expected_num_structs = 0;
     std::vector<size_t> m_expected_send_buffer_sizes;
     std::vector<size_t> m_expected_receive_buffer_sizes;
 };
-}  // namespace
 
-namespace {
 template <typename T>
 std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
     os << "[ ";
@@ -51,159 +66,176 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 }
 
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params) {
-    stream << "{ ";
-    stream << "Host Config: { ";
-    stream << "host_buffer_size = " << params.m_host_config.m_buffer_size;
-    stream << ", host_sample_rate = " << params.m_host_config.m_sample_rate;
-    stream << ", tensor_index = " << params.m_host_config.m_tensor_index;
-    stream << " }, Inference Config: { ";
-    stream << "max_inference_time = " << params.m_inference_config.m_max_inference_time << " ms";
-    stream << " }, Expected latency = " << params.m_expected_latency;
-    stream << ", Expected num_structs = " << params.m_expected_num_structs;
-    stream << ", Expected send buffer sizes = " << params.m_expected_send_buffer_sizes;
-    stream << ", Expected receive buffer sizes = " << params.m_expected_receive_buffer_sizes;
-    stream << " }";
-
+    stream << "{ block = " << params.m_geometry.m_block << ", rate = " << params.m_geometry.m_rate
+           << ", smaller = " << params.m_geometry.m_allow_smaller
+           << ", budget = " << params.m_budget_ms << " ms, wait ratio = " << params.m_wait_ratio
+           << ", expected latency = " << params.m_expected_latency
+           << ", expected num_structs = " << params.m_expected_num_structs
+           << ", expected send buffer sizes = " << params.m_expected_send_buffer_sizes
+           << ", expected receive buffer sizes = " << params.m_expected_receive_buffer_sizes
+           << " }";
     return stream;
 }
-}  // namespace
 
-// Test fixture for parameterized SessionElement tests
-namespace {
 class SessionElementTest : public ::testing::TestWithParam<SessionElementTestParams> {};
+
+/// A case prepared and sized; a failed prepare fails the test.
+SizingResult prepare_and_measure(const anira::ModelConfig& model,
+                                 const SizingGeometry& geometry,
+                                 double budget_ms = 10.0,
+                                 double wait_ratio = 0.0) {
+    const SizingSession session(model,
+                                anira_test::sizing_contract(geometry, budget_ms, wait_ratio));
+    EXPECT_EQ(session.prepared(), ANIRA_OK) << session.message();
+    return session.measure();
+}
 }  // namespace
 
 TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
-    auto test_params = GetParam();
-
-    PrePostProcessor pp_processor(test_params.m_inference_config);
-
-    InferenceQueue inference_queue;
-    SessionElement session_element(0,  // session_id
-                                   pp_processor,
-                                   test_params.m_inference_config,
-                                   moodycamel::ProducerToken(inference_queue));
-
-    session_element.prepare(test_params.m_host_config);
-
-    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
-        ASSERT_EQ(session_element.m_latency[i], test_params.m_expected_latency[i])
-            << "Latency mismatch at index " << i
-            << ". Expected: " << test_params.m_expected_latency[i]
-            << ", Got: " << session_element.m_latency[i];
+    const SessionElementTestParams& params = GetParam();
+    const SizingResult result = prepare_and_measure(
+        anira_test::sizing_model(params.m_inputs, params.m_outputs, 2, params.m_geometry.m_anchor),
+        params.m_geometry,
+        params.m_budget_ms,
+        params.m_wait_ratio);
+    ASSERT_EQ(result.m_latency.size(), params.m_expected_latency.size());
+    for (size_t i = 0; i < params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(result.m_latency[i], params.m_expected_latency[i])
+            << "Latency mismatch at index " << i;
     }
-
-    ASSERT_EQ(session_element.m_num_structs, test_params.m_expected_num_structs)
-        << "Number of structs mismatch. Expected: " << test_params.m_expected_num_structs
-        << ", Got: " << session_element.m_num_structs;
-
-    for (size_t i = 0; i < test_params.m_expected_send_buffer_sizes.size(); ++i) {
-        ASSERT_EQ(session_element.m_send_buffer_size[i],
-                  test_params.m_expected_send_buffer_sizes[i])
-            << "Send buffer size mismatch at index " << i
-            << ". Expected: " << test_params.m_expected_send_buffer_sizes[i]
-            << ", Got: " << session_element.m_send_buffer_size[i];
+    ASSERT_EQ(result.m_num_structs, params.m_expected_num_structs) << "Number of structs mismatch";
+    for (size_t i = 0; i < params.m_expected_send_buffer_sizes.size(); ++i) {
+        ASSERT_EQ(result.m_send[i], params.m_expected_send_buffer_sizes[i])
+            << "Send buffer size mismatch at index " << i;
     }
-
-    for (size_t i = 0; i < test_params.m_expected_receive_buffer_sizes.size(); ++i) {
-        ASSERT_EQ(session_element.m_receive_buffer_size[i],
-                  test_params.m_expected_receive_buffer_sizes[i])
-            << "Receive buffer size mismatch at index " << i
-            << ". Expected: " << test_params.m_expected_receive_buffer_sizes[i]
-            << ", Got: " << session_element.m_receive_buffer_size[i];
+    for (size_t i = 0; i < params.m_expected_receive_buffer_sizes.size(); ++i) {
+        ASSERT_EQ(result.m_receive[i], params.m_expected_receive_buffer_sizes[i])
+            << "Receive buffer size mismatch at index " << i;
     }
 }
+
+namespace {
+// The processor of the ring dtype case: it fills the two ring-moving phases (with the default
+// bodies), so the validator lets a ring hold another dtype than its float32 spec. No inference
+// runs.
+anira_status ANIRA_CALL default_pre_process(const anira_processor_ctx* ctx,
+                                            void* /*prepared*/,
+                                            void* /*user_data*/) noexcept {
+    return anira_processor_default_pre_process(ctx);
+}
+
+anira_status ANIRA_CALL default_post_process(const anira_processor_ctx* ctx,
+                                             void* /*prepared*/,
+                                             void* /*user_data*/) noexcept {
+    return anira_processor_default_post_process(ctx);
+}
+
+anira_processor_desc ring_moving_processor() {
+    anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
+    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;  // what the default bodies are
+    processor.pre_process = default_pre_process;
+    processor.post_process = default_post_process;
+    return processor;
+}
+
+/// The mono 512 pass-through with the rings of `in` and `out` in the dtypes given, prepared
+/// with the ring-moving processor; the status of the prepare in `status`.
+struct RingDtypeSession {
+    RingDtypeSession(anira_dtype in, anira_dtype out) {
+        anira::ContractHandle contract = anira_test::explicit_contract(512,
+                                                                       anira_test::k_rate,
+                                                                       ANIRA_MISS_ZEROS,
+                                                                       0.0,
+                                                                       /*budget_ms=*/5.0);
+        contract.hard_ring_dtype("in", in).hard_ring_dtype("out", out);
+        m_status = m_handler.prepare(contract);
+    }
+
+    anira::SessionElement& session() const { return *anira_test::session_of(m_handler.m_handler); }
+
+    anira_test::Context m_context{2};
+    std::vector<anira_processor_desc> m_processors{ring_moving_processor()};
+    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model(512), {}, m_processors};
+    anira_status m_status = ANIRA_ERROR_INTERNAL;
+};
+}  // namespace
 
 // The rings store the element type of their slot's ring dtype: a slot named int16 gets an int16
 // ring of the same element count as the float run (the sizes are element counts), a slot not
 // named stays float32, the latency priming is zeros of the ring's own type, and a dtype the
 // rings cannot store is refused like an unresolvable reference stream.
 TEST(SessionElementRingDtypes, ASlotsRingHoldsItsRingDtype) {
-    InferenceConfig config({ModelData("placeholder", InferenceBackend::CUSTOM)},
-                           {TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-                           5.0F);
-    PrePostProcessor pp_processor(config);
-    InferenceQueue inference_queue;
-    const HostConfig host_config(512, 48000.0);
+    const RingDtypeSession floats(ANIRA_DTYPE_F32, ANIRA_DTYPE_F32);
+    ASSERT_EQ(floats.m_status, ANIRA_OK) << floats.m_handler.m_err.message;
+    ASSERT_EQ(floats.session().m_send_buffer[0].dtype(), ANIRA_DTYPE_F32);
+    ASSERT_EQ(floats.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32);
 
-    SessionElement floats(0, pp_processor, config, moodycamel::ProducerToken(inference_queue));
-    floats.prepare(host_config);
-    ASSERT_EQ(floats.m_send_buffer[0].dtype(), ANIRA_DTYPE_F32);
-    ASSERT_EQ(floats.m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32);
+    const RingDtypeSession int16_in(ANIRA_DTYPE_I16, ANIRA_DTYPE_F32);
+    ASSERT_EQ(int16_in.m_status, ANIRA_OK) << int16_in.m_handler.m_err.message;
+    EXPECT_EQ(int16_in.session().m_send_buffer[0].dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_in.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32)
+        << "not named: float32";
+    EXPECT_EQ(int16_in.session().m_send_buffer_size, floats.session().m_send_buffer_size);
+    EXPECT_EQ(int16_in.session().m_receive_buffer_size, floats.session().m_receive_buffer_size);
+    EXPECT_EQ(int16_in.session().m_send_buffer[0].capacity(),
+              floats.session().m_send_buffer[0].capacity());
+    EXPECT_EQ(int16_in.session().m_send_buffer[0].num_channels(),
+              floats.session().m_send_buffer[0].num_channels());
 
-    RingDtypes dtypes;
-    dtypes.m_inputs = {ANIRA_DTYPE_I16};
-    SessionElement int16_in(1, pp_processor, config, moodycamel::ProducerToken(inference_queue));
-    int16_in.prepare(host_config, {}, dtypes);
-    EXPECT_EQ(int16_in.m_send_buffer[0].dtype(), ANIRA_DTYPE_I16);
-    EXPECT_EQ(int16_in.m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32) << "not named: float32";
-    EXPECT_EQ(int16_in.m_send_buffer_size, floats.m_send_buffer_size);
-    EXPECT_EQ(int16_in.m_receive_buffer_size, floats.m_receive_buffer_size);
-    EXPECT_EQ(int16_in.m_send_buffer[0].capacity(), floats.m_send_buffer[0].capacity());
-    EXPECT_EQ(int16_in.m_send_buffer[0].num_channels(), floats.m_send_buffer[0].num_channels());
-
-    dtypes = RingDtypes{};
-    dtypes.m_outputs = {ANIRA_DTYPE_I16};
-    SessionElement int16_out(2, pp_processor, config, moodycamel::ProducerToken(inference_queue));
-    int16_out.prepare(host_config, {}, dtypes);
-    EXPECT_EQ(int16_out.m_receive_buffer[0].dtype(), ANIRA_DTYPE_I16);
-    EXPECT_EQ(int16_out.m_receive_buffer[0].capacity(), floats.m_receive_buffer[0].capacity());
-    EXPECT_EQ(int16_out.m_receive_buffer[0].available(0), floats.m_receive_buffer[0].available(0))
+    const RingDtypeSession int16_out(ANIRA_DTYPE_F32, ANIRA_DTYPE_I16);
+    ASSERT_EQ(int16_out.m_status, ANIRA_OK) << int16_out.m_handler.m_err.message;
+    EXPECT_EQ(int16_out.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_out.session().m_receive_buffer[0].capacity(),
+              floats.session().m_receive_buffer[0].capacity());
+    EXPECT_EQ(int16_out.session().m_receive_buffer[0].available(0),
+              floats.session().m_receive_buffer[0].available(0))
         << "the latency priming is the same element count, typed";
     int16_t primed = 7;
-    ASSERT_EQ(int16_out.m_receive_buffer[0].pop_block(0, &primed, ANIRA_DTYPE_I16, 1), 1U);
+    ASSERT_EQ(int16_out.session().m_receive_buffer[0].pop_block(0, &primed, ANIRA_DTYPE_I16, 1),
+              1U);
     EXPECT_EQ(primed, 0);
 
-    dtypes = RingDtypes{};
-    dtypes.m_inputs = {ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)};
-    SessionElement lanes(3, pp_processor, config, moodycamel::ProducerToken(inference_queue));
-    EXPECT_THROW(lanes.prepare(host_config, {}, dtypes), std::invalid_argument);
+    const RingDtypeSession lanes(ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_DTYPE_F32);
+    EXPECT_EQ(lanes.m_status, ANIRA_ERROR_CONFIG) << lanes.m_handler.m_err.message;
 }
 
 namespace {
 std::string build_test_name(const testing::TestParamInfo<SessionElementTest::ParamType>& info) {
-    std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time, ss_tensor_index;
-    std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;
+    return "case_" + std::to_string(info.index);
+}
 
-    // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
-    ss_max_inference_time << std::fixed << std::setprecision(2)
-                          << info.param.m_inference_config.m_max_inference_time;
-    if (info.param.m_host_config.m_tensor_index == anira::HostConfig::k_first_streamable) {
-        ss_tensor_index << "auto";
-    } else {
-        ss_tensor_index << info.param.m_host_config.m_tensor_index;
-    }
+// A one-tensor-per-side model of `elements` samples in and out, mono, every sample a hop.
+std::vector<SizingSlot> mono(int64_t elements) {
+    return {SizingSlot{.m_elements = elements}};
+}
 
-    std::stringstream ss;
-    ss << "__input_size_";
-    for (const auto& size : info.param.m_inference_config.get_tensor_input_size()) {
-        ss_tensor_input_size.emplace_back();
-        ss_tensor_input_size.back() << size;
-        ss << ss_tensor_input_size.back().str() << "_";
-    }
+SessionElementTestParams row(SizingGeometry geometry,
+                             std::vector<SizingSlot> inputs,
+                             std::vector<SizingSlot> outputs,
+                             double budget_ms,
+                             double wait_ratio,
+                             std::vector<unsigned int> latency,
+                             size_t num_structs,
+                             std::vector<size_t> send,
+                             std::vector<size_t> receive) {
+    return SessionElementTestParams{.m_geometry = geometry,
+                                    .m_inputs = std::move(inputs),
+                                    .m_outputs = std::move(outputs),
+                                    .m_budget_ms = budget_ms,
+                                    .m_wait_ratio = wait_ratio,
+                                    .m_expected_latency = std::move(latency),
+                                    .m_expected_num_structs = num_structs,
+                                    .m_expected_send_buffer_sizes = std::move(send),
+                                    .m_expected_receive_buffer_sizes = std::move(receive)};
+}
 
-    ss << "_output_size_";
-    for (const auto& size : info.param.m_inference_config.get_tensor_output_size()) {
-        ss_tensor_output_size.emplace_back();
-        ss_tensor_output_size.back() << size;
-        ss << ss_tensor_output_size.back().str() << "_";
-    }
-
-    std::string sample_rate_str = ss_sample_rate.str();
-    std::string buffer_size_str = ss_buffer_size.str();
-    std::string max_inference_time_str = ss_max_inference_time.str();
-    std::string const tensor_index_str = ss_tensor_index.str();
-    std::string const tensor_shape_str = ss.str();
-
-    // Replace decimal points with underscores to make valid test names
-    std::ranges::replace(sample_rate_str, '.', '_');
-    std::ranges::replace(buffer_size_str, '.', '_');
-    std::ranges::replace(max_inference_time_str, '.', '_');
-
-    return "host_config_" + buffer_size_str + "x" + sample_rate_str + "_tidx_" + tensor_index_str +
-           tensor_shape_str + "_max_time_" + max_inference_time_str;
+/// The anchor of a geometry: input `index`.
+SizingGeometry anchored(double block, double rate, bool smaller, size_t index) {
+    return SizingGeometry{
+        .m_block = block,
+        .m_rate = rate,
+        .m_allow_smaller = smaller,
+        .m_anchor = anira_test::SizingAnchor{.m_is_input = true, .m_index = index}};
 }
 }  // namespace
 
@@ -212,351 +244,103 @@ INSTANTIATE_TEST_SUITE_P(
     SessionElementTest,
     ::testing::Values(
         // Basic test cases similar to InferenceManager tests
-        SessionElementTestParams{
-            HostConfig(2048, 48000),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+        row({2048, 48000}, mono(2048), mono(2048), 40.0, 0.0, {2048}, 4, {2048}, {10240}),
+        // collected inside the blocking wait: one slot in flight
+        row({2048, 48000}, mono(2048), mono(2048), 17.0, 0.5, {0}, 2, {2048}, {4096}),
+        // send buffer: one block plus hop - 1
+        row({2048, 48000, true}, mono(2048), mono(2048), 20.0, 0.5, {3966}, 4, {4095}, {12158}),
+        row({2048, 48000, true}, mono(2048), mono(2048), 10.0, 0.5, {3006}, 2, {4095}, {7102}),
+        row({2048, 48000, true}, mono(2048), mono(2048), 19.0, 0.0, {4095}, 4, {4095}, {12287}),
+        row({1, 48000.0 / 2048, true}, mono(1), mono(2048), 20.0, 0.0, {4095}, 4, {1}, {12287}),
+        row({1, 48000.0 / 2048}, mono(1), mono(2048), 50.0, 0.0, {4096}, 6, {1}, {16384}),
+        row({1, 48000.0 / 2048, true}, mono(1), mono(2048), 51.0, 0.0, {6143}, 6, {1}, {18431}),
+        row({256, 48000.0},
+            mono(2048),
+            {{.m_elements = 4, .m_channels = 4}},
+            40.0,
+            0.0,
+            {1},
+            4,
             {2048},
-            4,
-            {2048},  // Expected send buffer sizes
-            {10240}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2048, 48000),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            17.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
-            {0},
-            2,       // collected inside the blocking wait: one slot in flight
-            {2048},  // Expected send buffer sizes
-            {4096}   // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            20.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
-            {3966},
-            4,
-            {4095},  // Expected send buffer sizes: one block plus hop - 1
-            {12158}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            10.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
-            {3006},
-            2,
-            {4095},  // Expected send buffer sizes
-            {7102}   // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            19.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {4095},
-            4,
-            {4095},  // Expected send buffer sizes
-            {12287}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(1, 48000.0 / 2048, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                            20.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {4095},
-            4,
-            {1},
-            {12287}},
-        SessionElementTestParams{
-            HostConfig(1, 48000.0 / 2048),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                            50.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {4096},
-            6,
-            {1},
-            {16384}},
-        SessionElementTestParams{
-            HostConfig(1, 48000.0 / 2048, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                            51.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {6143},
-            6,
-            {1},
-            {18431}},
-        SessionElementTestParams{
-            HostConfig(256, 48000.0),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
-                            ProcessingSpec({1}, {4}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {1},
-            4,
-            {2048},  // Expected send buffer sizes
-            {5}      // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(1. / 256., 48000. / 2048., true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
-                            ProcessingSpec({4}, {1}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+            {5}),
+        row({1. / 256., 48000. / 2048., true},
+            {{.m_elements = 4, .m_channels = 4}},
+            mono(2048),
+            40.0,
+            0.0,
             {3972},
             2,
-            {1},    // Expected send buffer sizes
-            {8068}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(1., 48000. / 2048.),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
-                ProcessingSpec({16}, {1, 2}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2),
+            {1},
+            {8068}),
+        row({1., 48000. / 2048.},
+            {{.m_elements = 16, .m_channels = 16}},
+            {{.m_elements = 2048}, {.m_elements = 512, .m_channels = 2}},
+            40.0,
+            0.0,
             {2048, 256},
             4,
-            {1},           // Expected send buffer sizes
-            {10240, 1280}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(256., 48000. / 8, true, 1),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{
-                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                            ProcessingSpec({16, 2}, {1, 3}),
-                            5.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+            {1},
+            {10240, 1280}),
+        row(anchored(256., 48000. / 8, true, 1),
+            {{.m_elements = 16, .m_channels = 16}, {.m_elements = 512, .m_channels = 2}},
+            {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
+            5.0,
+            0.0,
             {4096, 256},
             4,
-            {1, 511},     // Expected send buffer sizes
-            {12288, 768}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(600., 48000. / 8, false, 1),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{
-                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                            ProcessingSpec({16, 2}, {1, 3}),
-                            50.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+            {1, 511},
+            {12288, 768}),
+        row(anchored(600., 48000. / 8, false, 1),
+            {{.m_elements = 16, .m_channels = 16}, {.m_elements = 512, .m_channels = 2}},
+            {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
+            50.0,
+            0.0,
             {8192, 512},
             10,
-            {3, 848},      // Expected send buffer sizes
-            {28672, 1792}  // Expected receive buffer sizes
-        },
+            {3, 848},
+            {28672, 1792}),
         // Non-power-of-two buffer size tests
-        SessionElementTestParams{
-            HostConfig(100, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            13.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2759},
-            2,
-            {2147},  // Expected send buffer sizes
-            {6855}   // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(300, 44100),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2820},
-            6,
-            {1320},  // Expected send buffer sizes
-            {8964}   // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2.5, 48000. / 2048., true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                            ProcessingSpec({8}, {1}),
-                            12.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+        row({100, 48000, true}, mono(2048), mono(2048), 13.0, 0.0, {2759}, 2, {2147}, {6855}),
+        row({300, 44100}, mono(1024), mono(1024), 40.0, 0.0, {2820}, 6, {1320}, {8964}),
+        row({2.5, 48000. / 2048., true},
+            {{.m_elements = 8, .m_channels = 8}},
+            mono(1024),
+            12.0,
+            0.0,
             {3583},
             10,
-            {3},     // Expected send buffer sizes
-            {13823}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2.5, 48000. / 1024., true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                            ProcessingSpec({8}, {1}),
-                            4.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
+            {3},
+            {13823}),
+        row({2.5, 48000. / 1024., true},
+            {{.m_elements = 8, .m_channels = 8}},
+            mono(1024),
+            4.0,
+            0.5,
             {1406},
             6,
-            {3},    // Expected send buffer sizes
-            {7550}  // Expected receive buffer sizes
-        },
-        SessionElementTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 10000}}, {{1, 1, 2048}})},
-                            ProcessingSpec({1}, {1}, {2048}, {2048}),
-                            21.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
+            {3},
+            {7550}),
+        // A window of 10000 samples moving 2048 per inference.
+        row({2048, 48000, true},
+            {{.m_elements = 10000, .m_hop = 2048}},
+            mono(2048),
+            21.0,
+            0.0,
             {4095},
             4,
-            {12047},  // Expected send buffer sizes
-            {12287}   // Expected receive buffer sizes
-        },
+            {12047},
+            {12287}),
         // Edge cases with very small buffer sizes. 30 ms of inference per 11.6 ms hop on
         // two processors exceeds the pool's capacity (LatencyCalculator::is_feasible);
         // the values size one host block on an idle pool.
-        SessionElementTestParams{
-            HostConfig(1, 44100, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-                            30.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {1834},
-            6,
-            {512},  // Expected send buffer sizes
-            {4906}  // Expected receive buffer sizes
-        },
+        row({1, 44100, true}, mono(512), mono(512), 30.0, 0.0, {1834}, 6, {512}, {4906}),
         // Test with large buffer sizes
-        SessionElementTestParams{
-            HostConfig(4096, 96000),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                            20.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {4096},
-            16,
-            {4096},  // Expected send buffer sizes
-            {20480}  // Expected receive buffer sizes
-        },
+        row({4096, 96000}, mono(1024), mono(1024), 20.0, 0.0, {4096}, 16, {4096}, {20480}),
         // Test with very short inference times
-        SessionElementTestParams{
-            HostConfig(512, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
-                            1.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {767},
-            8,
-            {767},  // Expected send buffer sizes
-            {2815}  // Expected receive buffer sizes
-        },
+        row({512, 48000, true}, mono(256), mono(256), 1.0, 0.0, {767}, 8, {767}, {2815}),
         // Test with very long inference times: 100 ms per 5.3 ms hop on two processors is
         // far beyond the pool's capacity; sized for one host block on an idle pool.
-        SessionElementTestParams{
-            HostConfig(512, 48000),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 256}}, {{1, 1, 256}})},
-                            100.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {5120},
-            44,
-            {512},   // Expected send buffer sizes
-            {16384}  // Expected receive buffer sizes
-        }),
+        row({512, 48000}, mono(256), mono(256), 100.0, 0.0, {5120}, 44, {512}, {16384})),
     build_test_name);
 
 namespace {
@@ -638,83 +422,52 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
 // sync_latencies() on an empty adjusted-latency vector. The reference stream is
 // now first-class (an input or an output), so both prepare() correctly.
 //
-// Expected values are derived by comparison with an equivalent two-sided config
-// computed by the same code -- never hard-coded numbers -- so they are immune to
+// Expected values are derived by comparison with an equivalent two-sided model
+// prepared by the same code -- never hard-coded numbers -- so they are immune to
 // float vs double rounding.
 // =============================================================================
 
 namespace {
-InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::move(shapes),
-        std::move(spec),
-        10.f,   // max_inference_time
-        0,      // warm_up
-        false,  // session_exclusive_processor
-        0.f,    // blocking_ratio
-        2);     // num_parallel_processors
-}
-
-struct PrepareResult {
-    std::vector<unsigned int> m_latency;
-    size_t m_num_structs = 0;
-    std::vector<size_t> m_send;
-    std::vector<size_t> m_receive;
-};
-
-PrepareResult prepare_and_measure(InferenceConfig inference_config, const HostConfig& host_config) {
-    PrePostProcessor pp_processor(inference_config);
-    InferenceQueue inference_queue;
-    SessionElement session(0,
-                           pp_processor,
-                           inference_config,
-                           moodycamel::ProducerToken(inference_queue));
-    session.prepare(host_config);
-    return PrepareResult{.m_latency = session.m_latency,
-                         .m_num_structs = session.m_num_structs,
-                         .m_send = session.m_send_buffer_size,
-                         .m_receive = session.m_receive_buffer_size};
-}
-
 // Generator: 4 control parameters in, a 2048-sample audio stream out.
-InferenceConfig generator_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                       ProcessingSpec({1}, {1}, {0}, {2048}));
+anira::ModelConfig generator_model() {
+    return anira_test::sizing_model({{.m_elements = 4, .m_hop = 0}}, {{.m_elements = 2048}}, 2);
 }
 
 // The generator's two-sided twin: a 2048-sample stream in and out. Same reference
 // size (2048), so the driving-side inference count and the output side match.
-InferenceConfig generator_twin_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                       ProcessingSpec({1}, {1}, {2048}, {2048}));
+anira::ModelConfig generator_twin_model(
+    const std::optional<anira_test::SizingAnchor>& anchor = std::nullopt) {
+    return anira_test::sizing_model({{.m_elements = 2048}}, {{.m_elements = 2048}}, 2, anchor);
 }
 
 // Analyser: a 2048-sample audio stream in plus one control parameter in, one
 // non-streamable scalar out.
-InferenceConfig analyser_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 1}})},
-                       ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}));
+anira::ModelConfig analyser_model() {
+    return anira_test::sizing_model({{.m_elements = 2048}, {.m_elements = 1, .m_hop = 0}},
+                                    {{.m_elements = 1, .m_hop = 0}},
+                                    2);
 }
 
 // The analyser's two-sided twin: identical input side, a 2048-sample streamable
 // output instead of the scalar.
-InferenceConfig analyser_twin_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 2048}})},
-                       ProcessingSpec({1, 1}, {1}, {2048, 0}, {2048}));
+anira::ModelConfig analyser_twin_model() {
+    return anira_test::sizing_model({{.m_elements = 2048}, {.m_elements = 1, .m_hop = 0}},
+                                    {{.m_elements = 2048}},
+                                    2);
 }
-}  // namespace
 
-namespace {
+SizingGeometry geometry(double block, double rate, bool smaller) {
+    return SizingGeometry{.m_block = block, .m_rate = rate, .m_allow_smaller = smaller};
+}
+
 class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};
 }  // namespace
 
 TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
     bool const smaller = GetParam();
-    PrepareResult const gen =
-        prepare_and_measure(generator_config(), HostConfig(512, 48000, smaller));
-    PrepareResult const twin =
-        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, smaller));
+    SizingResult const gen = prepare_and_measure(generator_model(), geometry(512, 48000, smaller));
+    SizingResult const twin =
+        prepare_and_measure(generator_twin_model(), geometry(512, 48000, smaller));
 
     EXPECT_EQ(gen.m_latency, twin.m_latency);
     EXPECT_EQ(gen.m_num_structs, twin.m_num_structs);
@@ -727,10 +480,9 @@ TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
 
 TEST_P(OneSidedStreamingPrepareTest, AnalyserHasNoStreamLatency) {
     bool const smaller = GetParam();
-    PrepareResult const ana =
-        prepare_and_measure(analyser_config(), HostConfig(512, 48000, smaller));
-    PrepareResult const twin =
-        prepare_and_measure(analyser_twin_config(), HostConfig(512, 48000, smaller));
+    SizingResult const ana = prepare_and_measure(analyser_model(), geometry(512, 48000, smaller));
+    SizingResult const twin =
+        prepare_and_measure(analyser_twin_model(), geometry(512, 48000, smaller));
 
     ASSERT_EQ(ana.m_latency.size(), 1u);
     EXPECT_EQ(ana.m_latency[0], 0u) << "A non-streamable output carries no stream latency.";
@@ -744,19 +496,22 @@ TEST_P(OneSidedStreamingPrepareTest, AnalyserHasNoStreamLatency) {
 // streamable outputs only and then indexed the synced vector by output tensor index --
 // an empty vector when every output is non-streamable (crash in sync_latencies()), a
 // short one for a mixed output list (out-of-bounds read into m_latency). Both passes
-// now build one entry per output tensor. The configs are the issue's (Silero-VAD
+// now build one entry per output tensor. The models are the issue's (Silero-VAD
 // shaped: probability + recurrent-state outputs); the oracle for the mixed case is the
 // non-adjusted pass, which always handled non-streamable outputs correctly.
 TEST_P(OneSidedStreamingPrepareTest, NonStreamableOutputsKeepLatencyIndexAligned) {
     bool const smaller = GetParam();
-    std::vector<TensorShape> const shapes{
-        TensorShape({{1, 576}, {2, 1, 128}}, {{1, 1}, {2, 1, 128}})};
-    HostConfig const host(512, 16000, smaller);
+    // 576 samples moving 512 per inference beside a [2, 1, 128] state.
+    const std::vector<SizingSlot> inputs{{.m_elements = 576, .m_hop = 512},
+                                         {.m_elements = 256, .m_hop = 0}};
+    SizingGeometry const host = geometry(512, 16000, smaller);
 
     // Case 1: every output non-streamable.
-    PrepareResult const all_static =
-        prepare_and_measure(make_config(shapes, ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {0, 0})),
-                            host);
+    SizingResult const all_static = prepare_and_measure(
+        anira_test::sizing_model(inputs,
+                                 {{.m_elements = 1, .m_hop = 0}, {.m_elements = 256, .m_hop = 0}},
+                                 2),
+        host);
     ASSERT_EQ(all_static.m_latency.size(), 2u);
     EXPECT_EQ(all_static.m_latency, (std::vector<unsigned int>{0, 0}))
         << "Non-streamable outputs carry no stream latency.";
@@ -764,10 +519,12 @@ TEST_P(OneSidedStreamingPrepareTest, NonStreamableOutputsKeepLatencyIndexAligned
         << "Non-streamable outputs have no receive rings.";
 
     // Case 2: a streamable result plus a non-streamable state tensor.
-    InferenceConfig const mixed =
-        make_config(shapes, ProcessingSpec({1, 1}, {1, 1}, {512, 0}, {1, 0}));
-    PrepareResult const adjusted = prepare_and_measure(mixed, host);
-    PrepareResult const plain = prepare_and_measure(mixed, HostConfig(512, 16000, false));
+    anira::ModelConfig const mixed =
+        anira_test::sizing_model(inputs,
+                                 {{.m_elements = 1, .m_hop = 1}, {.m_elements = 256, .m_hop = 0}},
+                                 2);
+    SizingResult const adjusted = prepare_and_measure(mixed, host);
+    SizingResult const plain = prepare_and_measure(mixed, geometry(512, 16000, false));
     ASSERT_EQ(adjusted.m_latency.size(), 2u);
     ASSERT_EQ(plain.m_latency.size(), 2u);
     EXPECT_EQ(adjusted.m_latency[1], 0u) << "The state tensor keeps a latency of 0.";
@@ -785,6 +542,27 @@ INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                          [](const testing::TestParamInfo<bool>& info) {
                              return info.param ? "allow_smaller_buffers" : "static_buffer";
                          });
+
+namespace {
+// The 2.x configurations of the cases below, which drive a SessionElement of their own.
+InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
+    return InferenceConfig(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::move(shapes),
+        std::move(spec),
+        10.f,   // max_inference_time
+        0,      // warm_up
+        false,  // session_exclusive_processor
+        0.f,    // blocking_ratio
+        2);     // num_parallel_processors
+}
+
+// Generator: 4 control parameters in, a 2048-sample audio stream out.
+InferenceConfig generator_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+                       ProcessingSpec({1}, {1}, {0}, {2048}));
+}
+}  // namespace
 
 // The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
 // never terminated. Run prepare() on a detached thread against a deadline. The
@@ -824,13 +602,13 @@ TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
 }
 
 TEST(OneSidedStreamingPrepareStandalone, ExplicitOutputReferenceEqualsInputReference) {
-    // A two-sided config with equal input/output stream sizes: naming input 0 or output 0 as
-    // the reference gives the same ratios and hence the same result.
-    PrepareResult const by_input =
-        prepare_and_measure(generator_twin_config(), HostConfig(2048, 48000, true));
-    PrepareResult const by_output = prepare_and_measure(
-        generator_twin_config(),
-        HostConfig(2048, 48000, true, /*tensor_index=*/0, /*tensor_is_input=*/false));
+    // A two-sided model with equal input/output stream sizes: anchoring input 0 or output 0
+    // gives the same ratios and hence the same result.
+    SizingResult const by_input =
+        prepare_and_measure(generator_twin_model(), geometry(2048, 48000, true));
+    SizingResult const by_output = prepare_and_measure(
+        generator_twin_model(anira_test::SizingAnchor{.m_is_input = false, .m_index = 0}),
+        geometry(2048, 48000, true));
 
     EXPECT_EQ(by_input.m_latency, by_output.m_latency);
     EXPECT_EQ(by_input.m_num_structs, by_output.m_num_structs);
@@ -838,26 +616,47 @@ TEST(OneSidedStreamingPrepareStandalone, ExplicitOutputReferenceEqualsInputRefer
     EXPECT_EQ(by_input.m_receive, by_output.m_receive);
 }
 
-TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceThrows) {
-    // Explicit non-streamable input reference on a generator.
-    EXPECT_THROW(prepare_and_measure(generator_config(), HostConfig(512, 48000, true, 0, true)),
-                 std::invalid_argument);
-    // Explicit non-streamable output reference on an analyser.
-    EXPECT_THROW(prepare_and_measure(analyser_config(), HostConfig(512, 48000, true, 0, false)),
-                 std::invalid_argument);
-    // Out of range, both directions.
-    EXPECT_THROW(
-        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, true, 5, true)),
-        std::invalid_argument);
-    EXPECT_THROW(
-        prepare_and_measure(generator_twin_config(), HostConfig(512, 48000, true, 5, false)),
-        std::invalid_argument);
+namespace {
+// The status of a handler's create over the model, beside the pass-through on the custom row:
+// an anchor the model config cannot have is refused there (ANIRA_ERROR_CONFIG), before any
+// prepare.
+anira_status create_status(const anira::ModelConfig& model) {
+    anira_error err = ANIRA_ERROR_INIT;
+    anira_pipeline* pipeline = nullptr;
+    anira_status status = anira_pipeline_create(&pipeline, &err);
+    if (status != ANIRA_OK) { return status; }
+    anira_test::add_passthrough(pipeline);
+    const std::array<const anira_model_config*, 1> variants{model.native()};
+    status = anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err);
+    if (status == ANIRA_OK) {
+        const anira_test::Context context(2);
+        anira_handler* handler = nullptr;
+        status = anira_handler_create(context.m_context, pipeline, &handler, &err);
+        anira_handler_destroy(handler);
+    }
+    anira_pipeline_destroy(pipeline);
+    return status;
+}
+
+anira::ModelConfig anchored_at(anira::ModelConfig model, const std::string& name) {
+    model.anchor(name);
+    return model;
+}
+}  // namespace
+
+TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceIsRefused) {
+    // An explicit non-streamable input anchor on a generator.
+    EXPECT_EQ(create_status(anchored_at(generator_model(), "in0")), ANIRA_ERROR_CONFIG);
+    // An explicit non-streamable output anchor on an analyser.
+    EXPECT_EQ(create_status(anchored_at(analyser_model(), "out0")), ANIRA_ERROR_CONFIG);
+    // A name that is no tensor, both directions.
+    EXPECT_EQ(create_status(anchored_at(generator_twin_model(), "in5")), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(create_status(anchored_at(generator_twin_model(), "out5")), ANIRA_ERROR_CONFIG);
     // No streamable tensor anywhere.
-    EXPECT_THROW(
-        prepare_and_measure(make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 1}})},
-                                        ProcessingSpec({1}, {1}, {0}, {0})),
-                            HostConfig(512, 48000)),
-        std::invalid_argument);
+    EXPECT_EQ(create_status(anira_test::sizing_model({{.m_elements = 4, .m_hop = 0}},
+                                                     {{.m_elements = 1, .m_hop = 0}},
+                                                     2)),
+              ANIRA_ERROR_CONFIG);
 }
 
 // =============================================================================

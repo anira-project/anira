@@ -1,55 +1,40 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <thread>
 #include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/handler_support.h"
 #include "engines/Adapter.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 // The pool-lifetime policy the session registry enforces (issue #104): inference
 // threads exist exactly while sessions exist. Building the pool is part of
 // registering the first session; stopping and joining it is part of unregistering
 // the last one — synchronously, inside the same critical section — so a plugin host
-// may unload the plugin's library the moment its last InferenceHandler is gone.
+// may unload the plugin's library the moment its last handler is gone.
 // Plus the backstops: shutdown() (the library-unload hook / module-exit call) and
 // release_core_if_idle() (the core's memory is reclaimed only when nothing uses it).
 
 namespace {
 
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-}
-
-// One "plugin instance", prepared on construction so its pool threads are running.
+// One "plugin instance": a context asking for `threads` pool threads and a handler over the
+// mono pass-through, prepared on construction so its pool threads are running.
 struct Instance {
-    explicit Instance(const CoreConfig& core_config = CoreConfig(2))
-        : m_handler(m_pp_processor, m_inference_config, core_config) {
-        m_handler.prepare(HostConfig(512, 48000));
+    explicit Instance(uint32_t threads = 2) : m_context(threads) {
+        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << m_handler.m_err.message;
     }
 
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler;
+    anira_test::Context m_context;
+    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
 };
 
 // The pool's threads count themselves as active when they enter their loop, i.e.
@@ -92,12 +77,12 @@ TEST(CoreLifecycleTest, LastReleaseJoinsPoolSynchronously) {
 TEST(CoreLifecycleTest, NextGenerationAppliesItsOwnConfig) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
     {
-        const Instance instance(CoreConfig(2));
+        const Instance instance(2);
         EXPECT_TRUE(wait_for_num_inference_threads(2));
     }
     EXPECT_EQ(Core::get_num_inference_threads(), 0u);
     {
-        const Instance instance(CoreConfig(3));
+        const Instance instance(3);
         EXPECT_TRUE(wait_for_num_inference_threads(3));
     }
     EXPECT_EQ(Core::get_num_inference_threads(), 0u);
@@ -108,19 +93,19 @@ TEST(CoreLifecycleTest, NextGenerationAppliesItsOwnConfig) {
 // implementation, kept unchanged.
 TEST(CoreLifecycleTest, LaterSessionOnlyShrinksThePool) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
-    const Instance instance_a(CoreConfig(3));
+    const Instance instance_a(3);
     ASSERT_TRUE(wait_for_num_inference_threads(3));
     {
-        const Instance instance_b(CoreConfig(1));
+        const Instance instance_b(1);
         EXPECT_TRUE(wait_for_num_inference_threads(1));
     }
     EXPECT_TRUE(wait_for_num_inference_threads(1));
     {
-        const Instance instance_c(CoreConfig(4));
+        const Instance instance_c(4);
         EXPECT_TRUE(wait_for_num_inference_threads(1));
     }
     {
-        const Instance instance_d(CoreConfig(0));
+        const Instance instance_d(0);
         EXPECT_TRUE(wait_for_num_inference_threads(1));
     }
     EXPECT_EQ(Core::get_num_sessions(), 1);

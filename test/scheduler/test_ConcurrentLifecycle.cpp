@@ -1,20 +1,14 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <atomic>
 #include <memory>
 #include <thread>
-#include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/handler_support.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 // Reproduces the unsynchronized session-lifecycle defect: the core
 // singleton's static state (m_sessions vector, shared inference thread pool,
@@ -36,25 +30,16 @@ using anira_test::V2Handler;
 
 namespace {
 
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-}
-
-// One "plugin instance": config + processor + handler, prepared on
-// construction so the session is registered with the shared core.
+// One "plugin instance": a context of two threads and a handler over the mono pass-through,
+// prepared on construction so the session is registered with the shared core.
 struct Instance {
-    Instance() { m_handler.prepare(HostConfig(512, 48000)); }
+    Instance() {
+        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << m_handler.m_err.message;
+    }
 
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler{m_pp_processor, m_inference_config, CoreConfig(2)};
+    anira_test::Context m_context{2};
+    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
 };
 
 // Spin gate so two threads hit their critical action as close to

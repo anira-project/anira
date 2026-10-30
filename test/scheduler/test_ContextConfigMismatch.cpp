@@ -1,4 +1,4 @@
-// The core is process-global and the first session's CoreConfig is the one
+// The core is process-global and the first context config is the one
 // that takes effect. Every later session that asks for something different is
 // told so, and told what actually happens instead — these diagnostics are what a
 // plugin developer sees when two instances of their plugin disagree, so they are
@@ -7,62 +7,60 @@
 // Each test asserts the message text, and where the outcome is observable (the
 // log level in effect) the outcome too.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <tanh/core/Logger.h>
 
-#include <string>
-#include <vector>
+#include <cstdint>
 
+#include "../abi/handler_support.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 namespace {
 
 using anira_test::RecordCollector;
 
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.F,
-        0,
-        false,
-        0.F,
-        2);
-}
-
-// One "plugin instance". Prepared on construction, like a host would.
-struct Instance {
-    explicit Instance(const CoreConfig& core_config)
-        : m_handler(m_pp_processor, m_inference_config, core_config) {
-        m_handler.prepare(HostConfig(512, 48000));
-    }
-
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler;
+// What a context asks of the core: the fields these tests vary, the drain on its own thread.
+struct ContextFields {
+    uint32_t m_threads = 1;
+    anira_wait_strategy m_wait = ANIRA_WAIT_BLOCKING;
+    anira_log_level m_level = ANIRA_LOG_DEBUG;
+    uint32_t m_drain_interval_ms = 10;
+    uint32_t m_queue_capacity = 0;  ///< 0: the default
 };
 
-// A config whose log level lets the diagnostics through to the sinks. The
-// core applies the lowest requested level, so the first session sets the
+// One "plugin instance": a context over `fields` and a handler over the mono pass-through.
+// Prepared on construction, like a host would.
+struct Instance {
+    explicit Instance(const ContextFields& fields)
+        : m_context(fields.m_threads,
+                    fields.m_wait,
+                    fields.m_level,
+                    ANIRA_LOG_DRAIN_THREAD,
+                    fields.m_drain_interval_ms,
+                    fields.m_queue_capacity) {
+        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << m_handler.m_err.message;
+    }
+
+    anira_test::Context m_context;
+    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
+};
+
+// Fields whose log level lets the diagnostics through to the sinks. The
+// core applies the lowest requested level, so the first context sets the
 // floor for the whole test.
-CoreConfig verbose_config(unsigned int num_threads = 1) {
-    CoreConfig config(num_threads, WaitStrategy::Blocking, LogLevel::Debug);
-    return config;
+ContextFields verbose_config() {
+    return ContextFields{};
 }
 
 // The core outlives individual sessions, so a test that inspects "what the
 // first session established" must start from no sessions at all.
-class CoreConfigMismatchTest : public ::testing::Test {
+class ContextConfigMismatchTest : public ::testing::Test {
 protected:
     void SetUp() override {
         ASSERT_EQ(Core::get_num_sessions(), 0) << "a previous test left a session registered";
@@ -84,36 +82,19 @@ void expect_diagnostic(RecordCollector& collector,
 
 }  // namespace
 
-// The queue is sized once per core and clamped to what the ring supports.
-TEST_F(CoreConfigMismatchTest, QueueCapacityOutsideTheSupportedRangeIsClamped) {
-    // The clamp is reported when the core's queue is created, i.e. by the first session of
-    // a core; on a leg that runs every suite in one process an earlier test may have left
-    // the core alive, so start from none.
-    Core::shutdown();
-    if (!Core::release_core_if_idle() && Core::has_core()) {
-        GTEST_SKIP() << "the core is held by another test's objects";
-    }
-    RecordCollector collector;
-    CoreConfig config = verbose_config();
-    config.m_log.m_queue_capacity = 8;  // below the 64-record minimum
-
-    const Instance instance(config);
-    expect_diagnostic(collector, "is outside [64, 65536]", thl::Logger::LogLevel::Warning);
-}
-
 // The queue is created once per core and never replaced, and the core outlives
 // the sessions — so even the first session of a *later* generation is told it
 // keeps the size the very first one asked for.
-TEST_F(CoreConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
+TEST_F(ContextConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
     RecordCollector collector;
-    CoreConfig first = verbose_config();
-    first.m_log.m_queue_capacity = 64;
+    ContextFields first = verbose_config();
+    first.m_queue_capacity = 64;
     {
         const Instance instance(first);
     }  // last session released; the core, and its log queue, remain
 
-    CoreConfig second = first;
-    second.m_log.m_queue_capacity = 4096;
+    ContextFields second = first;
+    second.m_queue_capacity = 4096;
     const Instance later(second);
 
     expect_diagnostic(collector,
@@ -123,11 +104,12 @@ TEST_F(CoreConfigMismatchTest, ALaterGenerationCannotGrowTheLogQueue) {
 
 // The log level is process-global and the most verbose request wins — including
 // when the more verbose one arrives second.
-TEST_F(CoreConfigMismatchTest, TheMostVerboseLogLevelWins) {
+TEST_F(ContextConfigMismatchTest, TheMostVerboseLogLevelWins) {
     RecordCollector collector;
-    const Instance instance(CoreConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
+    const Instance instance(verbose_config());
 
-    const CoreConfig quieter(1, WaitStrategy::Blocking, LogLevel::Error);
+    ContextFields quieter = verbose_config();
+    quieter.m_level = ANIRA_LOG_ERROR;
     const Instance later(quieter);
 
     expect_diagnostic(collector, "log level mismatch", thl::Logger::LogLevel::Warning);
@@ -137,25 +119,26 @@ TEST_F(CoreConfigMismatchTest, TheMostVerboseLogLevelWins) {
 }
 
 // The drain, its queue and its interval are process-global too.
-TEST_F(CoreConfigMismatchTest, MismatchedLogDrainIsReported) {
+TEST_F(ContextConfigMismatchTest, MismatchedLogDrainIsReported) {
     RecordCollector collector;
-    CoreConfig first = verbose_config();
-    first.m_log.m_drain_interval_ms = 10;
+    ContextFields first = verbose_config();
+    first.m_drain_interval_ms = 10;
     const Instance instance(first);
 
-    CoreConfig second = first;
-    second.m_log.m_drain_interval_ms = 250;
+    ContextFields second = first;
+    second.m_drain_interval_ms = 250;
     const Instance later(second);
 
     expect_diagnostic(collector, "log drain mismatch", thl::Logger::LogLevel::Warning);
 }
 
 // One thread pool per process means one wait strategy; the first one stays.
-TEST_F(CoreConfigMismatchTest, MismatchedWaitStrategyIsReported) {
+TEST_F(ContextConfigMismatchTest, MismatchedWaitStrategyIsReported) {
     RecordCollector collector;
-    const Instance instance(CoreConfig(1, WaitStrategy::Blocking, LogLevel::Debug));
+    const Instance instance(verbose_config());
 
-    const CoreConfig second(1, WaitStrategy::SpinBackoff, LogLevel::Debug);
+    ContextFields second = verbose_config();
+    second.m_wait = ANIRA_WAIT_SPIN_BACKOFF;
     const Instance later(second);
 
     expect_diagnostic(collector, "wait strategy mismatch", thl::Logger::LogLevel::Warning);

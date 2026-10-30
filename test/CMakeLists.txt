@@ -138,7 +138,7 @@ target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 anira_add_test_binary(test_scheduler
 	scheduler/test_PlanSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
-	scheduler/test_CoreConfigMismatch.cpp
+	scheduler/test_ContextConfigMismatch.cpp
 	scheduler/test_CopyPathOracle.cpp
 	scheduler/test_CoreLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
@@ -153,8 +153,8 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_TensorStems.cpp
 	test_PrePostProcessor.cpp
 )
-# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
-# and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
+# The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
+# engine room (src/engines/Adapter.h) the suites read white-box.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_engines

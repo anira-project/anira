@@ -1,74 +1,81 @@
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
-
-#include <algorithm>
+#include <anira/anira.hpp>
 #include <cstddef>
-#include <iomanip>
-#include <ios>
+#include <cstdint>
+#include <optional>
 #include <ostream>
-#include <sstream>
-#include <stdexcept>
 #include <string>
-#include <utility>
 #include <vector>
 
+#include "../support/session_cases.h"
 #include "gtest/gtest.h"
 
-using namespace anira;
+using anira_test::SizingGeometry;
+using anira_test::SizingSession;
+using anira_test::SizingSlot;
+
+// The latency a prepared session reports per output (anira_handler_get_latencies, the
+// manager's vector), for the geometries and models below, with and without the contract's
+// own stream latencies; then the one-sided models. The cases are C handlers' over the custom
+// row (test/support/session_cases.h).
 
 namespace {
 struct InferenceManagerTestParams {
-    HostConfig m_host_config;
-    InferenceConfig m_inference_config;
+    SizingGeometry m_geometry;
+    std::vector<SizingSlot> m_inputs;
+    std::vector<SizingSlot> m_outputs;
+    double m_budget_ms = 0.0;
+    double m_wait_ratio = 0.0;
+    uint32_t m_instances = 2;
     std::vector<unsigned int> m_expected_latency;
 };
 
 std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
-    stream << "{ ";
-    stream << "Host Config: { ";
-    stream << "host_buffer_size = " << params.m_host_config.m_buffer_size;
-    stream << ", host_sample_rate = " << params.m_host_config.m_sample_rate;
-    stream << " }, Inference Config: { ";
-    stream << "max_inference_time = " << params.m_inference_config.m_max_inference_time << " ms";
-    stream << " }";
-
+    stream << "{ block = " << params.m_geometry.m_block << ", rate = " << params.m_geometry.m_rate
+           << ", budget = " << params.m_budget_ms << " ms }";
     return stream;
+}
+
+anira::ModelConfig model_of(const InferenceManagerTestParams& params) {
+    return anira_test::sizing_model(params.m_inputs,
+                                    params.m_outputs,
+                                    params.m_instances,
+                                    params.m_geometry.m_anchor);
+}
+
+anira::ContractHandle contract_of(const InferenceManagerTestParams& params) {
+    return anira_test::sizing_contract(params.m_geometry, params.m_budget_ms, params.m_wait_ratio);
+}
+
+/// The latencies the prepared handler reports, one per output.
+std::vector<unsigned int> latencies_of(const SizingSession& session, size_t num_outputs) {
+    std::vector<unsigned int> latency;
+    latency.reserve(num_outputs);
+    for (uint32_t i = 0; i < num_outputs; ++i) {
+        latency.push_back(anira_handler_get_latency(session.handler(), i));
+    }
+    return latency;
 }
 
 // Named params shared by the full CalculateLatency sweep and the
 // custom-latency subset instantiation below — one source of truth.
 InferenceManagerTestParams single_tensor_param() {
-    return InferenceManagerTestParams{
-        .m_host_config = HostConfig(2048, 48000, true),
-        .m_inference_config = InferenceConfig(
-            std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-            1.f,
-            0,
-            false,
-            0.f,
-            2),
-        .m_expected_latency = {4095}};
+    return InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(2048, 48000, true),
+                                      .m_inputs = {{.m_elements = 2048}},
+                                      .m_outputs = {{.m_elements = 2048}},
+                                      .m_budget_ms = 1.0,
+                                      .m_expected_latency = {4095}};
 }
 
 InferenceManagerTestParams multi_tensor_param() {
     return InferenceManagerTestParams{
-        .m_host_config = HostConfig(1500, 44100. / 8., false, 1),
-        .m_inference_config = InferenceConfig(
-            std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-            std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 128}}, {{1, 1, 512}, {3, 64}})},
-            ProcessingSpec({4, 2}, {1, 1}),
-            50.f,
-            0,
-            false,
-            0.f,
-            2),
+        .m_geometry =
+            anira_test::sizing_geometry(1500, 44100. / 8., false, anira_test::input_anchor(1)),
+        .m_inputs = {{.m_elements = 4, .m_channels = 4}, {.m_elements = 256, .m_channels = 2}},
+        .m_outputs = {{.m_elements = 512}, {.m_elements = 192}},
+        .m_budget_ms = 50.0,
         // 50 ms per 23 ms hop on two processors exceeds the pool's capacity
         // (LatencyCalculator::is_feasible): sized for one host block on an idle pool.
         .m_expected_latency = {7680, 2880}};
@@ -76,235 +83,153 @@ InferenceManagerTestParams multi_tensor_param() {
 
 InferenceManagerTestParams non_streamable_mix_param() {
     return InferenceManagerTestParams{
-        .m_host_config = HostConfig(256., 48000. / 8, false, 1),
-        .m_inference_config = InferenceConfig(
-            std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-            std::vector<TensorShape>{TensorShape({{1, 4, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-            ProcessingSpec({1, 2}, {1, 1}, {0, 256}, {2048, 0}),
-            40.f,
-            0,
-            false,
-            0.f,
-            2),
+        .m_geometry =
+            anira_test::sizing_geometry(256., 48000. / 8, false, anira_test::input_anchor(1)),
+        .m_inputs = {{.m_elements = 4, .m_hop = 0},
+                     {.m_elements = 512, .m_channels = 2, .m_hop = 256}},
+        .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_hop = 0}},
+        .m_budget_ms = 40.0,
         .m_expected_latency = {2048, 0}};
 }
+
+/// A window of 1024 samples moving 160 per inference in, 360 elements over two channels
+/// moving one sample per inference out.
+InferenceManagerTestParams hop_160_param(double budget_ms,
+                                         double wait_ratio,
+                                         uint32_t instances,
+                                         unsigned int latency) {
+    return InferenceManagerTestParams{
+        .m_geometry = anira_test::sizing_geometry(2048, 48000, true),
+        .m_inputs = {{.m_elements = 1024, .m_hop = 160}},
+        .m_outputs = {{.m_elements = 360, .m_channels = 2, .m_hop = 1}},
+        .m_budget_ms = budget_ms,
+        .m_wait_ratio = wait_ratio,
+        .m_instances = instances,
+        .m_expected_latency = {latency}};
+}
+
+InferenceManagerTestParams mono_param(SizingGeometry geometry,
+                                      int64_t in,
+                                      int64_t out,
+                                      double budget_ms,
+                                      unsigned int latency) {
+    return InferenceManagerTestParams{.m_geometry = geometry,
+                                      .m_inputs = {{.m_elements = in}},
+                                      .m_outputs = {{.m_elements = out}},
+                                      .m_budget_ms = budget_ms,
+                                      .m_expected_latency = {latency}};
+}
+
 // // Test fixture for paramterized inference tests
 class InferenceManagerTest : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 
 // The custom-latency contracts (wholesale replace, empty, partial) branch only
 // on the output-tensor count and the streamable/non-streamable mix — never on the per-config
 // constants the full sweep varies: the override runs after the latency
-// calculation, which Simple/WithCustomLatency keep asserting on every param.
-// Three params cover every branch combination; running these two tests over
+// calculation, which Simple keeps asserting on every param.
+// Three params cover every branch combination; running these tests over
 // the full sweep re-ran identical code 20+ times (audit, docs/ci-overhaul.md §7).
 class InferenceManagerCustomLatencySubset
     : public ::testing::TestWithParam<InferenceManagerTestParams> {};
 }  // namespace
 
 TEST_P(InferenceManagerTest, Simple) {
-    auto test_params = GetParam();
+    const InferenceManagerTestParams& params = GetParam();
+    const SizingSession session(model_of(params), contract_of(params));
+    ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
 
-    PrePostProcessor pp_processor(test_params.m_inference_config);
-    BackendBase* custom_processor = nullptr;  // Use default processor
-    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                      // 3
-
-    InferenceManager inference_manager(pp_processor,
-                                       test_params.m_inference_config,
-                                       custom_processor,
-                                       core_config);
-
-    inference_manager.prepare(test_params.m_host_config);
-
-    std::vector<unsigned int> latency = inference_manager.get_latency();
-
-    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
-        ASSERT_EQ(latency[i], test_params.m_expected_latency[i])
-            << "Latency mismatch for tensor " << i;
+    const std::vector<unsigned int> latency = latencies_of(session, params.m_outputs.size());
+    for (size_t i = 0; i < params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(latency[i], params.m_expected_latency[i]) << "Latency mismatch for tensor " << i;
     }
 }
 
+// The contract's own latency per Streamed output (twice the calculated one here) replaces the
+// calculated one; a Static output has no stream, and no latency to set (0).
 TEST_P(InferenceManagerCustomLatencySubset, WithCustomLatency) {
-    auto test_params = GetParam();
-
-    PrePostProcessor pp_processor(test_params.m_inference_config);
-    BackendBase* custom_processor = nullptr;  // Use default processor
-    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                      // 3
-
-    InferenceManager inference_manager(pp_processor,
-                                       test_params.m_inference_config,
-                                       custom_processor,
-                                       core_config);
-
-    // Create custom latency values - double the expected values for testing
-    std::vector<long> custom_latency;
-    custom_latency.reserve(test_params.m_expected_latency.size());
-    for (const auto& latency : test_params.m_expected_latency) {
-        custom_latency.push_back(static_cast<long>(latency) * 2);
+    const InferenceManagerTestParams& params = GetParam();
+    anira::ContractHandle contract = contract_of(params);
+    std::vector<unsigned int> expected;
+    for (size_t i = 0; i < params.m_outputs.size(); ++i) {
+        const bool streamed = params.m_outputs[i].m_hop != 0;
+        expected.push_back(streamed ? params.m_expected_latency[i] * 2 : 0);
+        if (streamed) { contract.hard_latency(anira_test::sizing_name(false, i), expected.back()); }
     }
+    const SizingSession session(model_of(params), contract);
+    ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
 
-    // Prepare with custom latency
-    inference_manager.prepare(test_params.m_host_config, custom_latency);
-
-    // Verify that the latency values match our custom ones
-    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
-
-    ASSERT_EQ(actual_latency.size(), custom_latency.size()) << "Latency vector size mismatch";
-
-    for (size_t i = 0; i < custom_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], custom_latency[i])
+    const std::vector<unsigned int> actual = latencies_of(session, params.m_outputs.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(actual[i], expected[i])
             << "Custom latency not applied correctly for tensor " << i;
     }
 }
 
-// Test with empty custom latency (should fall back to calculated values)
+// No latency on the contract: the calculated values.
 TEST_P(InferenceManagerCustomLatencySubset, WithEmptyCustomLatency) {
-    auto test_params = GetParam();
+    const InferenceManagerTestParams& params = GetParam();
+    const SizingSession session(model_of(params), contract_of(params));
+    ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
 
-    PrePostProcessor pp_processor(test_params.m_inference_config);
-    BackendBase* custom_processor = nullptr;  // Use default processor
-    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                      // 3
-
-    InferenceManager inference_manager(pp_processor,
-                                       test_params.m_inference_config,
-                                       custom_processor,
-                                       core_config);
-
-    // Prepare with empty custom latency vector
-    std::vector<long> const empty_custom_latency;
-    inference_manager.prepare(test_params.m_host_config, empty_custom_latency);
-
-    // Verify that the latency values match the expected calculated ones
-    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
-
-    ASSERT_EQ(actual_latency.size(), test_params.m_expected_latency.size())
-        << "Latency vector size mismatch";
-
-    for (size_t i = 0; i < test_params.m_expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.m_expected_latency[i])
+    const std::vector<unsigned int> actual = latencies_of(session, params.m_outputs.size());
+    for (size_t i = 0; i < params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(actual[i], params.m_expected_latency[i])
             << "Latency did not fall back to calculated value for tensor " << i;
     }
 }
 
-// Test with partial custom latency (should use provided values and calculate the rest)
+// A latency for the first output alone: that one replaced, the rest calculated.
 TEST_P(InferenceManagerCustomLatencySubset, WithPartialCustomLatency) {
-    auto test_params = GetParam();
-
-    // Skip test if we don't have at least 2 tensors
-    if (test_params.m_expected_latency.size() < 2) {
+    const InferenceManagerTestParams& params = GetParam();
+    if (params.m_expected_latency.size() < 2) {
         GTEST_SKIP() << "Test requires at least 2 tensors to test partial custom latency";
         return;
     }
+    anira::ContractHandle contract = contract_of(params);
+    const unsigned int first = params.m_expected_latency[0] * 3;
+    contract.hard_latency(anira_test::sizing_name(false, 0), first);
+    const SizingSession session(model_of(params), contract);
+    ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
 
-    PrePostProcessor pp_processor(test_params.m_inference_config);
-    BackendBase* custom_processor = nullptr;  // Use default processor
-    CoreConfig const core_config(2);  // Use 2 threads for testing, gh runner max on macOS is
-                                      // 3
-
-    InferenceManager inference_manager(pp_processor,
-                                       test_params.m_inference_config,
-                                       custom_processor,
-                                       core_config);
-
-    // Create partial custom latency (only for the first tensor)
-    std::vector<long> partial_custom_latency(test_params.m_expected_latency.size(), -1);
-    // Set a custom value for the first tensor
-    partial_custom_latency[0] = static_cast<long>(test_params.m_expected_latency[0]) * 3;
-
-    // Prepare with partial custom latency
-    inference_manager.prepare(test_params.m_host_config, partial_custom_latency);
-
-    // Verify latency values
-    std::vector<unsigned int> actual_latency = inference_manager.get_latency();
-
-    ASSERT_EQ(actual_latency.size(), test_params.m_expected_latency.size())
-        << "Latency vector size mismatch";
-
-    // First latency should be our custom value
-    ASSERT_EQ(actual_latency[0], partial_custom_latency[0])
-        << "Custom latency not applied correctly for first tensor";
-
-    // Remaining latencies should be calculated values
-    for (size_t i = 1; i < test_params.m_expected_latency.size(); ++i) {
-        ASSERT_EQ(actual_latency[i], test_params.m_expected_latency[i])
+    const std::vector<unsigned int> actual = latencies_of(session, params.m_outputs.size());
+    ASSERT_EQ(actual[0], first) << "Custom latency not applied correctly for first tensor";
+    for (size_t i = 1; i < params.m_expected_latency.size(); ++i) {
+        ASSERT_EQ(actual[i], params.m_expected_latency[i])
             << "Latency calculation incorrect for tensor " << i;
     }
 }
 
 namespace {
 std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::ParamType>& info) {
-    std::stringstream ss_sample_rate, ss_buffer_size, ss_max_inference_time;
-    std::vector<std::stringstream> ss_tensor_input_size, ss_tensor_output_size;
-
-    // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_config.m_sample_rate;
-    ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_host_config.m_buffer_size;
-    ss_max_inference_time << std::fixed << std::setprecision(2)
-                          << info.param.m_inference_config.m_max_inference_time;
-
-    std::stringstream ss;
-    ss << "__input_size_";
-    for (const auto& size : info.param.m_inference_config.get_tensor_input_size()) {
-        ss_tensor_input_size.emplace_back();
-        ss_tensor_input_size.back() << size;
-        ss << ss_tensor_input_size.back().str() << "_";
-    }
-
-    ss << "_output_size_";
-    for (const auto& size : info.param.m_inference_config.get_tensor_output_size()) {
-        ss_tensor_output_size.emplace_back();
-        ss_tensor_output_size.back() << size;
-        ss << ss_tensor_output_size.back().str() << "_";
-    }
-
-    std::string sample_rate_str = ss_sample_rate.str();
-    std::string buffer_size_str = ss_buffer_size.str();
-    std::string max_inference_time_str = ss_max_inference_time.str();
-    std::string const tensor_shape_str = ss.str();
-
-    // Replace decimal points with underscores to make valid test names
-    std::ranges::replace(sample_rate_str, '.', '_');
-    std::ranges::replace(buffer_size_str, '.', '_');
-    std::ranges::replace(max_inference_time_str, '.', '_');
-
-    return "host_config_" + buffer_size_str + "x" + sample_rate_str + tensor_shape_str +
-           "_max_time_" + max_inference_time_str;
+    return "case_" + std::to_string(info.index);
 }
 }  // namespace
 
 // A custom latency replaces the calculated one wholesale, so it must not drop below the
 // model's internal latency: the receive buffer is primed with
-// (latency - internal_model_latency) zeros, and an unsigned underflow there would try to
-// prime ~4G samples. Below-internal values are clamped, above-internal values are kept.
+// (latency - internal_model_latency) zeros. A contract that asks for less is refused at
+// prepare (ANIRA_ERROR_CONFIG); a figure above the internal latency is kept.
 TEST(InferenceManagerCustomLatency, ClampsToInternalModelLatency) {
-    constexpr size_t k_internal_latency = 100;
-    InferenceConfig inference_config(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-        ProcessingSpec({1}, {1}, {2048}, {2048}, {k_internal_latency}),
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-    HostConfig const host_config(2048, 48000, true);
-
+    constexpr int64_t k_internal_latency = 100;
+    const anira::ModelConfig model = anira_test::sizing_model({{.m_elements = 2048}},
+                                                              {{.m_elements = 2048}},
+                                                              2,
+                                                              std::nullopt,
+                                                              {k_internal_latency});
+    const SizingGeometry geometry = anira_test::sizing_geometry(2048, 48000, true);
     {
-        PrePostProcessor pp_processor(inference_config);
-        CoreConfig const core_config(2);
-        InferenceManager inference_manager(pp_processor, inference_config, nullptr, core_config);
-        inference_manager.prepare(host_config, std::vector<long>{10});
-        EXPECT_EQ(inference_manager.get_latency()[0], k_internal_latency)
-            << "custom latency below the internal model latency must be clamped";
+        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        contract.hard_latency("out0", 10);
+        const SizingSession session(model, contract);
+        EXPECT_EQ(session.prepared(), ANIRA_ERROR_CONFIG)
+            << "a custom latency below the internal model latency is refused";
     }
     {
-        PrePostProcessor pp_processor(inference_config);
-        CoreConfig const core_config(2);
-        InferenceManager inference_manager(pp_processor, inference_config, nullptr, core_config);
-        inference_manager.prepare(host_config, std::vector<long>{500});
-        EXPECT_EQ(inference_manager.get_latency()[0], 500u)
+        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        contract.hard_latency("out0", 500);
+        const SizingSession session(model, contract);
+        ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
+        EXPECT_EQ(anira_handler_get_latency(session.handler(), 0), 500u)
             << "custom latency above the internal model latency must be kept";
     }
 }
@@ -314,247 +239,86 @@ INSTANTIATE_TEST_SUITE_P(
     InferenceManagerTest,
     ::testing::Values(
         single_tensor_param(),
+        hop_160_param(3.0, 0.5, 2, 2),
+        hop_160_param(5.0, 0.5, 2, 6),
+        // 1.47 hop periods of work per hop on one processor: infeasible, sized for one host
+        // block on an idle pool
+        hop_160_param(4.9, 0.5, 1, 14),
+        hop_160_param(4.0, 0.0, 2, 13),
+        mono_param(anira_test::sizing_geometry(1, 48000.0 / 2048, true), 1, 2048, 40.0, 5885),
+        mono_param(anira_test::sizing_geometry(2048, 48000.0, true), 2048, 1, 40.0, 2),
+        mono_param(anira_test::sizing_geometry(2048, 48000.0, false), 2048, 1, 39.0, 1),
+        mono_param(anira_test::sizing_geometry(1, 48000.0 / 2048), 1, 2048, 50.0, 4096),
+        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(256, 48000.0, true),
+                                   .m_inputs = {{.m_elements = 2048}},
+                                   .m_outputs = {{.m_elements = 4, .m_channels = 4}},
+                                   .m_budget_ms = 20.0,
+                                   .m_expected_latency = {1}},
         InferenceManagerTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                            ProcessingSpec({1}, {2}, {160}, {1}),
-                            3.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
-            {2}},
+            .m_geometry = anira_test::sizing_geometry(1. / 256., 48000. / 2048.),
+            .m_inputs = {{.m_elements = 4, .m_channels = 4}},
+            .m_outputs = {{.m_elements = 2048}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {3960}},
+        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(1., 48000. / 2048.),
+                                   .m_inputs = {{.m_elements = 16, .m_channels = 16}},
+                                   .m_outputs = {{.m_elements = 2048}},
+                                   .m_budget_ms = 40.0,
+                                   .m_expected_latency = {2048}},
         InferenceManagerTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                            ProcessingSpec({1}, {2}, {160}, {1}),
-                            5.f,
-                            0,
-                            false,
-                            0.5f,
-                            2),
-            {6}},
+            .m_geometry = anira_test::sizing_geometry(1., 48000. / 2048., true),
+            .m_inputs = {{.m_elements = 16, .m_channels = 16}},
+            .m_outputs = {{.m_elements = 2048}, {.m_elements = 512, .m_channels = 2}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {6144, 768}},
         InferenceManagerTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                            ProcessingSpec({1}, {2}, {160}, {1}),
-                            4.9f,
-                            0,
-                            false,
-                            0.5f,
-                            1),
-            {14}},  // 1.47 hop periods of work per hop on one processor: infeasible,
-                    // sized for one host block on an idle pool
+            .m_geometry =
+                anira_test::sizing_geometry(256., 48000. / 8, false, anira_test::input_anchor(1)),
+            .m_inputs = {{.m_elements = 16, .m_channels = 16},
+                         {.m_elements = 512, .m_channels = 2}},
+            .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {2048, 128}},
         InferenceManagerTestParams{
-            HostConfig(2048, 48000, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1024}}, {{360}})},
-                            ProcessingSpec({1}, {2}, {160}, {1}),
-                            4.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {13}},
+            .m_geometry =
+                anira_test::sizing_geometry(128., 48000. / 8, true, anira_test::input_anchor(1)),
+            .m_inputs = {{.m_elements = 16, .m_channels = 16},
+                         {.m_elements = 512, .m_channels = 2}},
+            .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {6144, 384}},
         InferenceManagerTestParams{
-            HostConfig(1, 48000.0 / 2048, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {5885}},
-        InferenceManagerTestParams{
-            HostConfig(2048, 48000.0, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2}},
-        InferenceManagerTestParams{
-            HostConfig(2048, 48000.0, false),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 1}})},
-                            39.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {1}},
-        InferenceManagerTestParams{
-            HostConfig(1, 48000.0 / 2048),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1}}, {{1, 1, 2048}})},
-                            50.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {4096},
-        },
-        InferenceManagerTestParams{
-            HostConfig(256, 48000.0, true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 4, 1}})},
-                            ProcessingSpec({1}, {4}),
-                            20.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {1}},
-        InferenceManagerTestParams{
-            HostConfig(1. / 256., 48000. / 2048.),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 4, 1}}, {{1, 1, 2048}})},
-                            ProcessingSpec({4}, {1}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {3960}},
-        InferenceManagerTestParams{
-            HostConfig(1., 48000. / 2048.),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}})},
-                            ProcessingSpec({16}, {1}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2048}},
-        InferenceManagerTestParams{
-            HostConfig(1., 48000. / 2048., true),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}}, {{1, 1, 2048}, {2, 256}})},
-                ProcessingSpec({16}, {1, 2}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2),
-            {6144, 768}},
-        InferenceManagerTestParams{
-            HostConfig(256., 48000. / 8, false, 1),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{
-                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                            ProcessingSpec({16, 2}, {1, 3}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2048, 128}},
-        InferenceManagerTestParams{
-            HostConfig(128., 48000. / 8, true, 1),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{
-                                TensorShape({{1, 16, 1}, {2, 256}}, {{1, 1, 2048}, {3, 128}})},
-                            ProcessingSpec({16, 2}, {1, 3}),
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {6144, 384}},
-        InferenceManagerTestParams{
-            HostConfig(128., 48000. / 8, true, 1),
-            InferenceConfig(
-                std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-                std::vector<TensorShape>{TensorShape({{1, 16, 1}, {2, 256}}, {{1, 2, 2048}})},
-                ProcessingSpec({16, 2}, {2}),
-                40.f,
-                0,
-                false,
-                0.f,
-                2),
-            {4924}},
+            .m_geometry =
+                anira_test::sizing_geometry(128., 48000. / 8, true, anira_test::input_anchor(1)),
+            .m_inputs = {{.m_elements = 16, .m_channels = 16},
+                         {.m_elements = 512, .m_channels = 2}},
+            .m_outputs = {{.m_elements = 4096, .m_channels = 2}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {4924}},
         // Non-power-of-two buffer size tests
+        mono_param(anira_test::sizing_geometry(100, 48000), 2048, 2048, 13.0, 2744),
+        mono_param(anira_test::sizing_geometry(300, 44100), 1024, 1024, 40.0, 2820),
+        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(2.5, 48000. / 2048.),
+                                   .m_inputs = {{.m_elements = 8, .m_channels = 8}},
+                                   .m_outputs = {{.m_elements = 1024}},
+                                   .m_budget_ms = 12.0,
+                                   .m_expected_latency = {3072}},
         InferenceManagerTestParams{
-            HostConfig(100, 48000),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                            13.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2744}},
-        InferenceManagerTestParams{
-            HostConfig(300, 44100),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 1, 1024}}, {{1, 1, 1024}})},
-                            40.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {2820}},
-        InferenceManagerTestParams{
-            HostConfig(2.5, 48000. / 2048.),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                            ProcessingSpec({8}, {1}),
-                            12.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {3072}},
-        InferenceManagerTestParams{
-            HostConfig(2.5, 48000. / 2048., true),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{TensorShape({{1, 8, 1}}, {{1, 1, 1024}})},
-                            ProcessingSpec({8}, {1}),
-                            13.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {3583}},
+            .m_geometry = anira_test::sizing_geometry(2.5, 48000. / 2048., true),
+            .m_inputs = {{.m_elements = 8, .m_channels = 8}},
+            .m_outputs = {{.m_elements = 1024}},
+            .m_budget_ms = 13.0,
+            .m_expected_latency = {3583}},
         multi_tensor_param(),
         InferenceManagerTestParams{
-            HostConfig(1500, 44100. / 8., true, 1),
-            InferenceConfig(std::vector<ModelData>{ModelData("placeholder",
-                                                             anira::InferenceBackend::CUSTOM)},
-                            std::vector<TensorShape>{
-                                TensorShape({{1, 4, 1}, {2, 128}, {1, 2}}, {{1, 1, 512}, {3, 64}})},
-                            ProcessingSpec({4, 2, 1}, {1, 1}),
-                            50.f,
-                            0,
-                            false,
-                            0.f,
-                            2),
-            {7680, 2880}},  // infeasible, see multi_tensor_param()
+            .m_geometry =
+                anira_test::sizing_geometry(1500, 44100. / 8., true, anira_test::input_anchor(1)),
+            .m_inputs = {{.m_elements = 4, .m_channels = 4},
+                         {.m_elements = 256, .m_channels = 2},
+                         {.m_elements = 2}},
+            .m_outputs = {{.m_elements = 512}, {.m_elements = 192}},
+            .m_budget_ms = 50.0,
+            .m_expected_latency = {7680, 2880}},  // infeasible, see multi_tensor_param()
         non_streamable_mix_param()),
     build_test_name);
 
@@ -566,65 +330,32 @@ INSTANTIATE_TEST_SUITE_P(CustomLatency,
                          build_test_name);
 
 // =============================================================================
-// One-sided streaming through the public prepare()/get_latency() path
+// One-sided streaming through prepare and the latency entries
 // (redo of the reverted PR #101, see #110)
 // =============================================================================
 
-namespace {
-InferenceConfig make_one_sided_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::move(shapes),
-        std::move(spec),
-        10.f,   // max_inference_time
-        0,      // warm_up
-        false,  // session_exclusive_processor
-        0.f,    // blocking_ratio
-        2);     // num_parallel_processors
-}
-}  // namespace
-
 TEST(InferenceManagerOneSided, GeneratorLatencyEqualsTwoSidedTwin) {
-    InferenceConfig generator =
-        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                              ProcessingSpec({1}, {1}, {0}, {2048}));
-    InferenceConfig twin =
-        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-                              ProcessingSpec({1}, {1}, {2048}, {2048}));
+    const SizingGeometry geometry = anira_test::sizing_geometry(512, 48000, true);
+    const anira::ContractHandle contract = anira_test::sizing_contract(geometry, 10.0, 0.0);
+    const SizingSession generator(
+        anira_test::sizing_model({{.m_elements = 4, .m_hop = 0}}, {{.m_elements = 2048}}, 2),
+        contract);
+    const SizingSession twin(
+        anira_test::sizing_model({{.m_elements = 2048}}, {{.m_elements = 2048}}, 2),
+        contract);
+    ASSERT_EQ(generator.prepared(), ANIRA_OK) << generator.message();
+    ASSERT_EQ(twin.prepared(), ANIRA_OK) << twin.message();
 
-    PrePostProcessor generator_pp(generator);
-    PrePostProcessor twin_pp(twin);
-    CoreConfig const core_config(2);
-    InferenceManager generator_manager(generator_pp, generator, nullptr, core_config);
-    InferenceManager twin_manager(twin_pp, twin, nullptr, core_config);
-
-    generator_manager.prepare(HostConfig(512, 48000, true));
-    twin_manager.prepare(HostConfig(512, 48000, true));
-
-    EXPECT_EQ(generator_manager.get_latency(), twin_manager.get_latency());
+    EXPECT_EQ(latencies_of(generator, 1), latencies_of(twin, 1));
 }
 
 TEST(InferenceManagerOneSided, AnalyserLatencyIsZero) {
-    InferenceConfig analyser =
-        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 2048}, {1, 1}}, {{1, 1}})},
-                              ProcessingSpec({1, 1}, {1}, {2048, 0}, {0}));
+    const SizingSession analyser(
+        anira_test::sizing_model({{.m_elements = 2048}, {.m_elements = 1, .m_hop = 0}},
+                                 {{.m_elements = 1, .m_hop = 0}},
+                                 2),
+        anira_test::sizing_contract(anira_test::sizing_geometry(512, 48000, true), 10.0, 0.0));
+    ASSERT_EQ(analyser.prepared(), ANIRA_OK) << analyser.message();
 
-    PrePostProcessor pp_processor(analyser);
-    InferenceManager manager(pp_processor, analyser, nullptr, CoreConfig(2));
-    manager.prepare(HostConfig(512, 48000, true));
-
-    EXPECT_EQ(manager.get_latency(), std::vector<unsigned int>{0});
-}
-
-TEST(InferenceManagerOneSided, InvalidReferenceThrowsFromPrepare) {
-    InferenceConfig generator =
-        make_one_sided_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                              ProcessingSpec({1}, {1}, {0}, {2048}));
-
-    PrePostProcessor pp_processor(generator);
-    InferenceManager manager(pp_processor, generator, nullptr, CoreConfig(2));
-
-    // Explicitly naming the non-streamable input as the reference is an error, not a
-    // silent fallback.
-    EXPECT_THROW(manager.prepare(HostConfig(512, 48000, true, 0, true)), std::invalid_argument);
+    EXPECT_EQ(latencies_of(analyser, 1), std::vector<unsigned int>{0});
 }

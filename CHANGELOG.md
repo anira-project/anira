@@ -80,6 +80,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Tests: the white-box suites leave the 2.x runtime** (the core on the 3.x types).
   - **The copy-path recordings run on C handlers' own sessions** (`anira_test::oracle::HandlerSession`, `test/support/copy_oracle.h`). `CopyPathOracle` and `TensorStems` drive the tensor stems of a C handler's `InferenceManager` directly, below the C entries and their block rule, over the C twins of the 2.x configurations the transcripts were recorded on. `NonStreamableRouter` keeps the Static values in the handler's Static ports, and `PlanarFloatAdapter` is sized from the ports. `AbiHandlerCopyOracle.MatchesTheV2CopyPath` is now `MatchesTheManagerCopyPath`, with the same stems of a C handler as its referee. The 2.x `GateBackend` and the gates built over it are gone. Both goldens are unchanged.
+  - **The scheduler suites run on C handlers.** `test/support/session_cases.h` describes a case by its slots (elements, channels, hop), a geometry, the budget, the wait ratio and the instances. The sizing and latency tables of `SessionElement` and `InferenceManager` are written this way, and the lifecycle, failure, plan-switch, one-sided, pooling, ordering and user-thread suites run the same way; every expected figure is unchanged. `test_CoreConfigMismatch` is renamed `test_ContextConfigMismatch`. A few cases went with the 2.x paths they tested:
+    - the roundtrip fallback for a backend without a model;
+    - `set_backend` on a table without that backend, and the 2.x default plan table;
+    - the core's warning for a log-queue capacity out of range (the C setter clamps, and `test_ReadBack` pins that);
+    - the manager's clamp of a custom latency below the model's own (the C prepare refuses that contract; `ClampsToInternalModelLatency` asserts the refusal);
+    - the empty plan table (the validator refuses a pipeline with no plan).
 - **Examples:** lean over `anira.hpp`.
   - **Backend choice (JUCE and CLAP):** the parameter listener stores the choice in an atomic. `processBlock` / `process` applies it through `PlanReport::find` and `set_plan`, over the report of the last prepare (nothing changes when the build or the model has no such plan). This replaces the plan tables built at prepare.
   - **Pipeline:** one chained expression, `Pipeline().add_engine(...).add_inference(...).add_processor(...)`, in the handler's initializer.

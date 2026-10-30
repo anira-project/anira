@@ -30,10 +30,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -56,15 +58,21 @@ constexpr const char* k_custom = "anira.v2.custom";
 /// A context over its own config: MANUAL drain by default, so a test decides when
 /// anira_drain_log() delivers the real-time records to its RecordCollector.
 struct Context {
+    /// `queue_capacity` 0 keeps the config's default capacity of the real-time log queue.
     explicit Context(uint32_t threads = 2,
                      anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF,
                      anira_log_level level = ANIRA_LOG_ERROR,
                      anira_log_drain drain = ANIRA_LOG_DRAIN_MANUAL,
-                     uint32_t interval_ms = 10) {
+                     uint32_t interval_ms = 10,
+                     uint32_t queue_capacity = 0) {
         EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK) << m_err.message;
         EXPECT_EQ(anira_context_config_set_threads(m_config, threads, wait), ANIRA_OK);
         EXPECT_EQ(anira_context_config_set_log_level(m_config, level), ANIRA_OK);
         EXPECT_EQ(anira_context_config_set_log_drain(m_config, drain, interval_ms), ANIRA_OK);
+        if (queue_capacity > 0) {
+            EXPECT_EQ(anira_context_config_set_log_queue_capacity(m_config, queue_capacity),
+                      ANIRA_OK);
+        }
         EXPECT_EQ(anira_context_create(m_config, &m_context, &m_err), ANIRA_OK) << m_err.message;
     }
     ~Context() {
@@ -212,6 +220,45 @@ inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
     hard.on_miss = on_miss;
     hard.wait_ratio = wait_ratio;
     return anira::ContractHandle(hard);
+}
+
+/// A Streamed tensor of `channels` channels of `time` samples ([Channel, Time]) that moves `hop`
+/// samples per inference (a window of `hop`, no overlap): the 2.x tensor of channels * time
+/// elements with that preprocess or postprocess size.
+inline anira::TensorSpec stream_tensor(std::string_view name,
+                                       int64_t channels,
+                                       int64_t time,
+                                       int64_t hop) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_CHANNEL, channels).axis(1, ANIRA_AXIS_TIME, time).window(hop, hop, 0);
+    return spec;
+}
+
+/// A Static tensor of the given extents, every axis ANIRA_AXIS_ANY.
+inline anira::TensorSpec static_tensor(std::string_view name,
+                                       std::initializer_list<int64_t> extents) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
+    uint32_t axis = 0;
+    for (const int64_t extent : extents) { spec.axis(axis++, ANIRA_AXIS_ANY, extent); }
+    return spec;
+}
+
+/// The custom row alone (a Handler runs it on the pass-through, or on the engine it is handed)
+/// with `max_instances` instances; the caller adds the tensors.
+inline anira::ModelConfig custom_model(uint32_t max_instances = 2) {
+    anira::ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    model.max_instances(max_instances);
+    return model;
+}
+
+/// custom_model() with one mono Streamed tensor of `window` samples on either side ("in",
+/// "out"): the 2.x [1, 1, window] in and out of the engine-free scheduler suites.
+inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t max_instances = 2) {
+    anira::ModelConfig model = custom_model(max_instances);
+    model.input(stream_tensor("in", 1, window, window));
+    model.output(stream_tensor("out", 1, window, window));
+    return model;
 }
 
 /// A bundled contract file with the host geometry patched in: what the 2.x side bridges,

@@ -331,7 +331,7 @@ enum class Mode { Clocked, Waiting };
 /// How a rig hands its blocks to the tensor stems.
 enum class Face {
     FloatAdapter,  ///< separate channel pointers, presented by a PlanarFloatAdapter the way
-                   ///< anira_test::V2Handler presents its own
+                   ///< the 2.x handler presented its own
     Tensor         ///< hand-built tensors over blocks of the rig's two layouts
 };
 

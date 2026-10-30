@@ -416,10 +416,7 @@ inline anira::TensorSpec static_spec(std::string_view name, int64_t count) {
 
 /// The custom row alone, which the gate engine runs, and two instances.
 inline anira::ModelConfig gate_model() {
-    anira::ModelConfig model;
-    model.add_model_path(k_custom, "custom-processor");
-    model.max_instances(2);
-    return model;
+    return custom_model(2);
 }
 
 /// `channels` channels in, as many out: the gate passes the input through.
