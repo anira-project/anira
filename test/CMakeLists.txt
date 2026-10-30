@@ -11,6 +11,27 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_definitions(ANIRA_EXTRAS_MODELS_DIR="${ANIRA_EXTRAS_MODELS_DIR}")
 
 
+# Windows: anira.dll and the runtime DLLs are searched next to the executable. Every test
+# binary of this directory is built into the same directory, so one target copies them there
+# once and each binary depends on it; a PRE_BUILD copy per binary had parallel links race on
+# the same file ("Permission denied"). Only when there are DLLs (a fully static build has none).
+if (MSVC AND ANIRA_SHARED_LIBS_WIN)
+    get_property(_anira_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (_anira_multi_config)
+        set(_anira_test_bin_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+    else ()
+        set(_anira_test_bin_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    endif ()
+    add_custom_target(anira_test_runtime_dlls
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_anira_test_bin_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ANIRA_SHARED_LIBS_WIN}
+                "${_anira_test_bin_dir}"
+        COMMENT "Copying the runtime DLLs next to the test binaries"
+        VERBATIM)
+    unset(_anira_multi_config)
+    unset(_anira_test_bin_dir)
+endif ()
+
 # One test binary per component, mirroring the source tree: test/<dir> covers
 # src/<dir> and include/anira/<dir>, and the root files cover the root units. The
 # test_* naming is load-bearing: it is what the shared ci-actions mobile runners
@@ -49,14 +70,8 @@ function(anira_add_test_binary TARGET)
             PROPERTIES LABELS ${TARGET})
     endif()
 
-    # Only copy runtime DLLs when there are any (a fully static build has none).
-    if (MSVC AND ANIRA_SHARED_LIBS_WIN)
-        add_custom_command(TARGET ${TARGET}
-                PRE_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${ANIRA_SHARED_LIBS_WIN}
-                $<TARGET_FILE_DIR:${TARGET}>
-        )
+    if (TARGET anira_test_runtime_dlls)
+        add_dependencies(${TARGET} anira_test_runtime_dlls)
     endif ()
 endfunction()
 
