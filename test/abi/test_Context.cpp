@@ -1,8 +1,5 @@
 // anira/abi/context.h: the context handle over the core, its sink, its flags, the Host-only
 // capabilities, the enabled-backends query, the clock and the shutdown family.
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -11,8 +8,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 #include <tanh/core/Logger.h>
 
@@ -27,14 +22,14 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
 #include "capi/capi_internal.h"
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
+#include "handler_support.h"
 
 using namespace anira;
+using anira_test::Instance;
 using anira_test::RecordCollector;
-using anira_test::V2Handler;
 
 namespace {
 
@@ -96,29 +91,6 @@ anira_context* create(const Config& config, anira_error* err = nullptr) {
     EXPECT_EQ(status, ANIRA_OK) << (err ? err->message : local.message);
     return context;
 }
-
-// One "plugin instance" of the 2.x runtime: a CUSTOM placeholder model, prepared on
-// construction, so that a session (and with it the pool) exists.
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.F,
-        0,
-        false,
-        0.F,
-        2);
-}
-
-struct Instance {
-    explicit Instance(const CoreConfig& core_config)
-        : m_handler(m_pp_processor, m_inference_config, core_config) {
-        m_handler.prepare(HostConfig(512, 48000));
-    }
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler;
-};
 
 /// Starts a test from a core nobody uses (a context's config is anchored only then); skips
 /// when another test's objects still hold the core.
@@ -498,7 +470,7 @@ TEST(AbiContext, LaterContextsReconcilePerField) {
         // The pool is built by the first session from the configuration in effect: two
         // threads anchored by the first context, shrunk to one by the second; the session's
         // own four cannot grow it.
-        const Instance instance{CoreConfig(4, WaitStrategy::SpinBackoff, LogLevel::Error)};
+        const Instance instance{4, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_ERROR};
         EXPECT_EQ(anira_num_inference_threads(), 1U);
     }
     EXPECT_EQ(anira_num_inference_threads(), 0U) << "the pool goes with the last session";
@@ -528,7 +500,7 @@ TEST(AbiContext, TheNextContextTakesEffectWholeAfterTheLast) {
     EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Warning);
     EXPECT_FALSE(collector.has("wait strategy mismatch", "native"));
     {
-        const Instance instance{CoreConfig(4, WaitStrategy::SpinBackoff, LogLevel::Error)};
+        const Instance instance{4, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_ERROR};
         EXPECT_EQ(anira_num_inference_threads(), 1U);
     }
     anira_context_destroy(second);
@@ -852,7 +824,7 @@ TEST(AbiContext, ShutdownIsRefusedWhileAContextOrASessionLives) {
     EXPECT_EQ(anira_release_core_if_idle(), 0U) << "a live context uses the core";
     anira_context_destroy(context);
     {
-        const Instance instance{CoreConfig(1, WaitStrategy::Blocking, LogLevel::Error)};
+        const Instance instance{1, ANIRA_WAIT_BLOCKING, ANIRA_LOG_ERROR};
         EXPECT_EQ(anira_shutdown(), ANIRA_ERROR_INVALID_STATE);
         EXPECT_GE(anira_num_inference_threads(), 1U);
     }

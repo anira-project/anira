@@ -1,31 +1,28 @@
 // anira/abi/thread.h: user-driven inference threads over a context with num_threads = 0,
-// serving a 2.x session.
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
+// serving a C handler's session.
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
+#include <array>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <thread>
+#include <vector>
 
 #include "../../extras/models/model_files.h"
-#include "../support/v2_handler.h"
-#include "../support/v2_objects.h"
+#include "handler_support.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 namespace {
 
@@ -119,18 +116,18 @@ TEST(AbiInferenceThread, RunLoopOnTheCallersOwnThread) {
 }
 
 TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
-    constexpr int k_buffer_size = 512;
+    constexpr uint32_t k_buffer_size = 512;
     constexpr double k_sample_rate = 44100.0;
-    const UserThreadContext context;
+    // Zero auto-pool threads: the user owns the threading.
+    const anira_test::Context context(0);
 
-    // The bundled gain model's custom row on the 2.x pass-through: one block run by the
-    // user's thread is the whole check.
-    InferenceConfig inference_config =
-        anira_test::inference_config_of(k_gain_model_json, k_gain_contract_json, true);
-    PrePostProcessor pp_processor(inference_config);
-    // Zero auto-pool threads, like the context: the user owns the threading.
-    const CoreConfig core_config(0, WaitStrategy::SpinBackoff, LogLevel::Error);
-    V2Handler inference_handler(pp_processor, inference_config, core_config);
+    // The bundled gain model's custom row on the pass-through: one block run by the user's
+    // thread is the whole check.
+    const std::vector<anira_backend_id> candidates{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_CUSTOM,
+                                                    .provider = ANIRA_PROVIDER_CPU,
+                                                    .engine_id = anira_test::k_custom}};
+    anira_test::Handler handler(context, anira_test::gain_with_custom(), candidates);
 
     anira_inference_thread* thread = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
@@ -138,20 +135,31 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
         << err.message;
     ASSERT_EQ(anira_inference_thread_start(thread, &err), ANIRA_OK) << err.message;
 
-    inference_handler.prepare(HostConfig{k_buffer_size, k_sample_rate});
-    inference_handler.set_inference_backend(InferenceBackend::CUSTOM);
+    ASSERT_EQ(handler.prepare(
+                  anira_test::file_contract(k_gain_contract_json, k_buffer_size, k_sample_rate)),
+              ANIRA_OK)
+        << handler.m_err.message;
     EXPECT_EQ(anira_num_inference_threads(), 0U) << "no pool: the user's thread serves";
 
-    BufferF test_buffer(1, k_buffer_size);
+    std::vector<float> test_buffer(k_buffer_size);
     for (size_t i = 0; i < k_buffer_size; ++i) {
-        test_buffer.set_sample(0, i, static_cast<float>(i) / k_buffer_size);
+        test_buffer[i] = static_cast<float>(i) / k_buffer_size;
     }
-    // Submit-only: get_available_samples() rises exactly when the user-driven thread has
+    const std::array<float*, 1> channels{test_buffer.data()};
+    const std::array<int64_t, 2> shape{1, k_buffer_size};
+    anira_tensor block{};
+    anira_tensor_init_host_planar(&block,
+                                  static_cast<const void*>(channels.data()),
+                                  1,
+                                  ANIRA_DTYPE_F32,
+                                  2,
+                                  shape.data());
+    // Submit-only: the available samples rise exactly when the user-driven thread has
     // executed the inference (see test_InferenceThread.cpp for why process() would race).
-    const size_t prev_samples = inference_handler.get_available_samples(0);
-    inference_handler.push_data(test_buffer.get_array_of_write_pointers(), k_buffer_size);
+    const size_t prev_samples = anira_test::available(handler.m_handler);
+    ASSERT_EQ(anira_handler_push_data(handler.m_handler, &block, 0), ANIRA_OK);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_s);
-    while (inference_handler.get_available_samples(0) <= prev_samples) {
+    while (anira_test::available(handler.m_handler) <= prev_samples) {
         if (std::chrono::steady_clock::now() > deadline) {
             FAIL() << "the user-driven inference thread did not process the block";
         }
