@@ -46,10 +46,10 @@ struct ExtRow {
     anira_status (*m_check)(const anira_ext_header* header, anira_error* err) = nullptr;
 };
 
-/// A stage or an engine and what it reads, as "<host>:<kind>" entries (hosts: tensor_spec,
+/// A processor or an engine and what it reads, as "<host>:<kind>" entries (hosts: tensor_spec,
 /// model, model_config, context, contract, job). The build's table (ext_consumers) is anira's
 /// own adapters, one per built-in engine, keyed by m_engine; a pipeline's vector holds its
-/// stage (neither key: it reads a slot wherever it sits, whatever the candidates) and one
+/// processor (neither key: it reads a slot wherever it sits, whatever the candidates) and one
 /// consumer per registered engine that declares kinds, keyed by m_engine_id (the id it was
 /// registered under, which the plan report's consumer column reads). An engine consumer of
 /// either kind reads its "model:" kinds from the entries of its own engine alone and its other
@@ -57,7 +57,7 @@ struct ExtRow {
 struct ExtConsumer {
     const char* m_name;
     anira_engine m_engine;    ///< a built-in engine's adapter; CUSTOM for a registered engine,
-                              ///< NONE for a stage
+                              ///< NONE for a processor
     std::string m_engine_id;  ///< a registered engine's id; empty otherwise
     std::vector<std::string> m_consumed;
 };
@@ -178,8 +178,8 @@ struct ANIRA_API ProviderOptionsPayload {
 /// means every consumer of this build; a built-in engine names its adapter,
 /// ANIRA_ENGINE_CUSTOM with an engine_id a custom engine's rows (the provider is not read); an
 /// engine adapter consumes only the entries of its own engine. `pipeline` are the consumers a
-/// pipeline declares (NULL for none): its stage (anira_stage_desc::consumed_kinds), which reads a
-/// slot wherever it sits, whatever the candidates, and its registered engines
+/// pipeline declares (NULL for none): its processor (anira_processor_desc::consumed_kinds), which
+/// reads a slot wherever it sits, whatever the candidates, and its registered engines
 /// (anira_engine_desc::consumed_kinds, one consumer per engine keyed by its id), each of which
 /// reads its "model:" kinds from its own entries alone and its other kinds from any host, while it
 /// is a candidate. On failure err carries the offending name.
@@ -200,7 +200,7 @@ struct ExtPlanRow {
 
 /// The extensions one plan consumes, in walk order (specs, the candidate entries, the model
 /// config, the contract): one row per slot and consumer, anira's own adapter first, then every
-/// consumer of `pipeline` that reads the slot's kind (the stage; a registered engine among the
+/// consumer of `pipeline` that reads the slot's kind (the processor; a registered engine among the
 /// candidates, on its own entries for a "model:" kind), in the vector's order. Never fails:
 /// ext_check_consumed ran first.
 ANIRA_API std::vector<ExtPlanRow> ext_consumed_rows(

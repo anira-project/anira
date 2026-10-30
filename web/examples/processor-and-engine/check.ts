@@ -1,7 +1,7 @@
-// The example's own check, run headless by web/test/browser/run.mjs on the built example (and
-// under Vite's dev server): the example rendered offline, with the gain automated mid-render.
-// Each input block is scaled by the stage (a ramp from the previous block's gain), doubled by the
-// engine, and delivered the handler's latency later. The verdict is window.anira_test_result.
+// The example's own check, run headless by web/test/browser/run.mjs on the built example (and under
+// Vite's dev server): the example rendered offline, with the gain automated mid-render. Each input
+// block is scaled by the processor (a ramp from the previous block's gain), doubled by the engine,
+// and delivered the handler's latency later. The verdict is window.anira_test_result.
 import { createGainExample } from './main'
 
 const RATE = 48000
@@ -41,7 +41,7 @@ const run = async (): Promise<Result> => {
   const rendered = (await audio.startRendering()).getChannelData(0)
   const latency = example.getLatency()
 
-  // The gain of sample i of input block `block`: the stage ramps over the block the new gain
+  // The gain of sample i of input block `block`: the processor ramps over the block the new gain
   // arrives in.
   const gainAt = (block: number, i: number) => {
     if (block < CHANGE_QUANTUM) return GAIN_BEFORE
@@ -58,7 +58,7 @@ const run = async (): Promise<Result> => {
   check(energy > 1, `the node rendered audio (energy ${energy.toFixed(2)})`)
   check(
     worst < 1e-6,
-    `the output is the input times 2 * the stage's gain after ${latency} samples, the gain ` +
+    `the output is the input times 2 * the processor's gain after ${latency} samples, the gain ` +
       `automated mid-render ramped in over quantum ${CHANGE_QUANTUM} (worst error ${worst})`
   )
 

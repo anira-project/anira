@@ -7,12 +7,12 @@ and TensorFlow Lite, ``ANIRA_ENGINE_*``), and a host adds its own: it **creates*
 once as an object under a reverse-URI id and **adds** it to pipelines. Examples: a Core ML or
 a WebGPU runtime, an engine the build does not carry, a synthetic model, a bypass for
 measuring the pipeline's overhead. A custom engine is one more implementation the inference
-stage resolves to, never a stage of its own (the stage is the pre- and post-processing around
+stage resolves to, never a processor of its own (the processor is the pre- and post-processing around
 it, :doc:`custom_preprocessing`): a model entry names it by its id, and the handler loads it,
 prepares it, runs it and resets it exactly as it does a built-in engine, with the same plan
 report, the same real-time rules and the same failure path. In C it is a descriptor,
 ``anira_engine_desc`` of ``anira/abi/engine.h``; in C++ the same descriptor is a subclass of
-:cpp:class:`anira::Engine` (below). Its lifecycle is the stage's with one level more, the same
+:cpp:class:`anira::Engine` (below). Its lifecycle is the processor's with one level more, the same
 words on both sides, from the outermost level in: ``init`` runs once per engine object,
 ``load`` once per loaded model anira pools and hands back a ``loaded`` pointer, ``prepare``
 once per handler on a loaded model and hands back a ``prepared`` pointer, every per-chunk call
@@ -101,7 +101,7 @@ The descriptor
 
 ``anira_engine_desc`` (Tier 2: ``struct_size`` first, ``user_data`` third, growth at the tail;
 ``ANIRA_ENGINE_DESC_INIT`` is an engine without a callback and without a promise) names, as
-the stage's descriptor does, the slots from the innermost level of the lifecycle out:
+the processor's descriptor does, the slots from the innermost level of the lifecycle out:
 
 - ``user_data``: handed to every callback as it is, never read by anira. One per engine
   object, shared by every pipeline it was added to, every loaded model of the engine and every
@@ -159,7 +159,7 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
 
 Three levels, three pointers, three lifetimes: ``user_data`` lives with the engine object,
 ``loaded`` with one loaded model of it, ``prepared`` with one handler on that loaded model.
-The stage's descriptor (``anira_stage_desc``, :doc:`custom_preprocessing`) has the same slots
+The processor's descriptor (``anira_processor_desc``, :doc:`custom_preprocessing`) has the same slots
 minus the model level, and its ``init`` and ``prepare`` receive the same two records,
 ``anira_init_info`` and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``.
 ``anira_phase`` names the phase of every slot, ``ANIRA_PHASE_INIT``,
@@ -176,7 +176,7 @@ destroy, handler create, destroy and prepare, ``anira_inference_thread_create``,
 ``anira_shutdown``, ``anira_release_core_if_idle``). This is where an engine builds what it
 keeps for its whole life beside ``user_data``: a device context, a thread pool, a weights
 cache. Its record, ``anira_init_info`` (Tier 2, valid for the duration of the call; the
-stage's ``init`` receives the same record):
+processor's ``init`` receives the same record):
 
 - ``log_level``: the ``anira_log_level`` in effect in this copy of anira (the core reconciles
   one per process, the most verbose of its contexts').
@@ -204,8 +204,8 @@ as a loaded model does), and a load before the init is ``ANIRA_ERROR_INVALID_STA
 A status other than ``ANIRA_OK`` fails that ``anira_handler_prepare`` with it, the message
 naming the engine (``the engine 'com.example.myengine' refused init: it returned N``), and
 leaves the object uninitialised, so the next prepare calls ``init`` again. The engine's
-``init`` runs before the stage's: the session is created, loading the models, before the
-stage is prepared.
+``init`` runs before the processor's: the session is created, loading the models, before the
+processor is prepared.
 
 **load(info, user_data, &loaded)** runs on the caller of ``anira_handler_prepare``, once per
 loaded model anira pools (below), under the core's lifecycle lock, after ``init``: it may
@@ -305,7 +305,7 @@ them where it is made.
 **prepare(info, loaded, user_data, &prepared)** runs on the caller of
 ``anira_handler_prepare``, once per handler and loaded model the handler runs on, after the
 plan report is built and while the handler already counts as prepared (its getters answer),
-with the loaded pointer and the record the stage's ``prepare`` receives. It may allocate: this
+with the loaded pointer and the record the processor's ``prepare`` receives. It may allocate: this
 is where an engine builds what it keeps per handler. The prepares and unprepares of one loaded
 model never overlap: anira serialises them per loaded model, so two handlers prepared on two
 threads reach the same ``loaded`` pointer one after the other (those of different loaded
@@ -319,7 +319,7 @@ the report stay valid while the handler stays prepared, the arrays do not):
   ``num_entries``: ``anira_handler_num_entries`` of this prepare, the chunks that can be in
   flight at once (``ctx->entry`` stays below it).
 - ``inputs`` / ``num_inputs`` and ``outputs`` / ``num_outputs``: one template per slot, State
-  tensors included, in slot order: the **model end** of every tensor as the stage sees it (the
+  tensors included, in slot order: the **model end** of every tensor as the processor sees it (the
   spec's dtype and shape at the pinned window, the slot's host domain, no memory); the engine
   side of the same slots is in the templates of the load record.
 - ``input_names`` / ``output_names``: the canonical names, in slot order.
@@ -339,17 +339,17 @@ value) is the ``prepared`` pointer every ``process``, ``reset`` and ``unprepare`
 handler on **this** loaded model receives beside the engine's ``user_data``.
 
 **process(ctx, prepared, user_data)** runs on an inference thread, in
-``ANIRA_PHASE_INFERENCE`` (between the stage's ``before_inference`` and ``after_inference``),
+``ANIRA_PHASE_INFERENCE`` (between the processor's ``before_inference`` and ``after_inference``),
 one inference over the context's tensors: a **shared call**, the call of a handler that is
 not exclusive, claims one of the loaded model's shared slots and runs on it; an **exclusive
 call** claims nothing and runs on what the handler's ``prepare`` built. It may block; it must
 not allocate per call. Its context, ``anira_engine_ctx`` (Tier 1, 64 bytes, on anira's stack
-for the duration of the call, like the stage's ``anira_stage_ctx``):
+for the duration of the call, like the processor's ``anira_processor_ctx``):
 
 - ``instance``: the shared slot of the loaded model this call runs on, ``0 .. instances - 1``;
   never two calls at once on one instance. ``0`` under ``ANIRA_ENGINE_CALL_EXCLUSIVE``, where
   no slot was claimed.
-- ``entry``: the chunk's position in the handler's inference queue, the stage context's
+- ``entry``: the chunk's position in the handler's inference queue, the processor context's
   ``entry`` of the same chunk (:doc:`usage` section 2).
 - ``inputs`` / ``num_inputs`` and ``outputs`` / ``num_outputs``: one descriptor per slot of
   either side in slot order, State tensors included, over the memory the engine reads and
@@ -385,7 +385,7 @@ declares the function ``ANIRA_NONBLOCKING`` themselves; the tensor accessors
 A ``process`` that returns any status but ``ANIRA_OK`` fails the chunk, as a built-in engine's
 failure does: ``anira_handler_rt_error`` reads ``ANIRA_ERROR_ENGINE`` with one latched record
 naming the status, anira zeroes the outputs, the chunk delivers zeros at its stream position,
-the stage's ``after_inference`` does not run for it, and a State pair keeps its last good
+the processor's ``after_inference`` does not run for it, and a State pair keeps its last good
 value (an aliasing engine writes in place: what a failed call left in the buffer is its own).
 A throw across this boundary is undefined.
 
@@ -455,8 +455,8 @@ engine's, and say what the handler is: ``ANIRA_PREPARE_EXCLUSIVE`` in
 the id and the plan's provider beside it (``provider``, or ``ANIRA_PROVIDER_CUSTOM`` with
 ``provider_id`` for a custom one; the pair rule of ``anira_engine`` and ``anira_provider``):
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
-``anira_stage_ctx.engine`` and ``provider`` in the stage's phases, both pairs whole through
-``anira_stage_engine`` and ``anira_stage_provider``, ``anira_edge_info.to_engine``
+``anira_processor_ctx.engine`` and ``provider`` in the processor's phases, both pairs whole through
+``anira_processor_engine`` and ``anira_processor_provider``, ``anira_edge_info.to_engine``
 with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
 ``ANIRA_ENGINE_CUSTOM``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
@@ -473,7 +473,7 @@ more: the State input's descriptor and the State output's descriptor name the pa
 buffers in turn from one call to the next, so an engine that read the data pointer at load or
 at prepare would read the wrong half every other inference. An engine that binds caller
 memory (an ``Ort::Value`` over the descriptor, a ``torch::from_blob`` view) runs the pair
-without a copy; one that stages its inputs copies as it copies every other slot.
+without a copy; one that processors its inputs copies as it copies every other slot.
 
 An engine whose runtime wants the addresses to stay put, a captured graph above all, sets
 ``ANIRA_ENGINE_FLAG_STATE_ALIAS``: for every call of a plan of that engine anira binds **one**
@@ -746,7 +746,7 @@ The same in C++
 
 :cpp:class:`anira::Engine` of ``anira/anira.hpp`` is the descriptor with virtual functions in
 place of the function pointers, split as the C lifecycle is, exactly like
-:cpp:class:`anira::Stage`: the engine object, ``anira::Engine``, is constructed with its id
+:cpp:class:`anira::Processor`: the engine object, ``anira::Engine``, is constructed with its id
 (``anira::Engine(std::string id)``, read back by ``id()``), states its promise in
 ``flags()``, its extensions in ``consumed_kinds()`` and the providers it serves in
 ``providers()`` (empty: the CPU path alone; all read once, when its C engine is
@@ -779,9 +779,8 @@ ownership spellings: the loaded model is anira's from ``load`` on (deleted at th
 is registered on and every handler created from them (a ``std::shared_ptr``). What every
 handler shares is a member of the ``Loaded``, what an exclusive handler keeps per stream (its
 own executor) a member of the ``Prepared``; nothing an inference needs is a member of the
-``Engine``. The engine is registered with ``Pipeline::register_engine(impl)``, or brought
-along by the inference stage, ``stage::Inference(cfg).engine(impl)``, which
-``Pipeline::add`` registers before it adds the stage.
+``Engine``. The engine is the pipeline's, added with ``Pipeline::add_engine(impl)``, the one
+way to add it, and the inference stage's model entries name it by its id.
 
 The ``anira::Engine`` object is the engine's identity, as ``anira_custom_engine`` is in C. The
 first registration of an object creates its C engine under the object's id; every later
@@ -870,8 +869,9 @@ times the gain:
 
     anira::ModelConfig cfg = anira::ModelConfig::from_file("gain.model.json");
     cfg.add_model_path("com.example.gain", "gain.bin");             // the entry the engine serves
-    anira::Pipeline pipe{anira::stage::Inference(cfg).engine(std::make_shared<Gain>(0.5F))};
-    // or: pipe.register_engine(std::make_shared<Gain>(0.5F));
+    anira::Pipeline pipe;
+    pipe.add_engine(std::make_shared<Gain>(0.5F));
+    pipe.add_inference(cfg);
 
 To share the engine across the instances of a plugin, every instance registers the same object,
 kept once per binary; the ``std::weak_ptr`` lets it go with the last instance:
@@ -889,7 +889,7 @@ kept once per binary; the ``std::weak_ptr`` lets it go with the last instance:
     }
 
     // every plugin instance, each with its own Pipeline:
-    pipe.register_engine(shared_gain());
+    pipe.add_engine(shared_gain());
 
 Every instance's ``Pipeline`` holds the object's C engine, so two instances with equal
 configurations load the model once. Keep the ``Pipeline`` for as long as the instance runs:
@@ -1001,4 +1001,4 @@ application ships its own engine runtime").
     engine. The engines anira
     ships are implemented as adapters of the same descriptor shape (``src/engines/``, internal),
     which is where to look for how a real engine binds by name, checks the shapes it was
-    handed, splits what one load shares from what one executor owns, and stages its buffers.
+    handed, splits what one load shares from what one executor owns, and processors its buffers.

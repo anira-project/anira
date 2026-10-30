@@ -56,7 +56,7 @@ private:
 /// One session's handle over a 2.x backend: the call itself. A slot whose descriptor names
 /// other memory than the struct's buffer (the halves of a declared State pair) is copied into
 /// the buffer ahead of the call (an input) and out of it behind the call (an output), so that
-/// the bind step of the stage processor keeps one rule for every plan. A throw out of the 2.x
+/// the bind step of the processor runner keeps one rule for every plan. A throw out of the 2.x
 /// virtual is caught and returned as ANIRA_ERROR_ENGINE.
 class ANIRA_API LegacyPrepared final : public Prepared {
 public:

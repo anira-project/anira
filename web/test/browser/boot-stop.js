@@ -41,8 +41,8 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const prepared = (anira, context, model) => {
   const pipeline = Pipeline.create(anira)
-    .inference(model)
-    .registerEngine(ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addInference(model)
+    .addEngine(ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
   const contract = ContractHandle.hard(anira, {
     blockMin: QUANTUM,
     rate: 48000,

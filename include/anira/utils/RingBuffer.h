@@ -21,7 +21,7 @@ struct RtLatch;
 /**
  * @brief What the rings of one session know about the session that owns them.
  *
- * The C ring accessors of `abi/stage.h` receive an `anira_ring*` and nothing else, yet a
+ * The C ring accessors of `abi/processor.h` receive an `anira_ring*` and nothing else, yet a
  * refused call has to land in `anira_handler_rt_error`. Every ring of a prepared session
  * therefore points at the session's one RingOwner (SessionElement::m_ring_owner). A ring built
  * outside a session has none and records nothing.
@@ -33,7 +33,7 @@ struct RingOwner {
 }  // namespace anira
 
 // NOLINTBEGIN(readability-identifier-naming)
-// The C tag: anira_ring is the type the 3.x ring accessors take (abi/stage.h), so it lives
+// The C tag: anira_ring is the type the 3.x ring accessors take (abi/processor.h), so it lives
 // outside namespace anira like the other handle types; its members follow anira's C++ names.
 
 /**
@@ -70,9 +70,9 @@ struct RingOwner {
  * ABI. This is a C++ type with a std::variant inside: like every 2.x class it is compiled into
  * the library and into whoever includes this header, so it is not a stable binary interface and
  * its layout may change with any release. What crosses the ABI is the opaque `anira_ring*` and
- * the C accessors of `abi/stage.h` (`anira_ring_dtype`, `anira_ring_push_block`, ...), which are
- * implemented on top of these members inside the library; a 3.x stage pops its samples through
- * those, or through the `anira.hpp` wrapper over them, never through this struct. The 2.x
+ * the C accessors of `abi/processor.h` (`anira_ring_dtype`, `anira_ring_push_block`, ...), which
+ * are implemented on top of these members inside the library; a 3.x processor pops its samples
+ * through those, or through the `anira.hpp` wrapper over them, never through this struct. The 2.x
  * pre/post processors of this pre-release use the members directly, as they used the previous
  * float ring, under the 2.x rule that the library and the plugin are built together.
  *
@@ -176,8 +176,9 @@ public:
         m_owner = owner;
     }
 
-    /// Elements per channel one inference moves through this ring: what the default stage
-    /// bodies pop or push, and what the stage processor's count check expects. 0 outside a session.
+    /// Elements per channel one inference moves through this ring: what the default processor
+    /// bodies pop or push, and what the processor runner's count check expects. 0 outside a
+    /// session.
     [[nodiscard]] size_t hop() const noexcept { return m_hop; }
 
     /// The owning session's RingOwner, nullptr outside a session.

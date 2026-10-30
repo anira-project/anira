@@ -12,7 +12,7 @@
 #include <unordered_map>
 
 #include "../../extras/models/BypassEngine.h"
-#include "../../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../../extras/models/model_files.h"
 #include "utils/DryWetMixer.h"
 
@@ -70,8 +70,9 @@ private:
 
     // The configuration: the model file and the contract file of GuitarLSTM (extras/models,
     // loaded with anira/anira.hpp) plus the entry of the bypass engine (BypassEngine.h), a
-    // Pipeline of the inference stage and the model's windows (HybridNNStage.h), and one handler
-    // on the plugin's context. The model config outlives the handler, so it is declared first.
+    // Pipeline of the inference stage and the model's windows (HybridNNProcessor.h), and one
+    // handler on the plugin's context. The model config outlives the handler, so it is declared
+    // first.
     anira::Context m_context{anira::ContextConfig{}};
     anira::ModelConfig m_model_config;
     anira::ContractHandle m_contract;

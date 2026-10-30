@@ -12,7 +12,7 @@
 
 #include "../../../extras/models/cnn/CNNConfig.h"
 #include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../../../extras/models/model_files.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
 #include "ClearEngine.h"
@@ -100,11 +100,11 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     // results.
     m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
     anira::Pipeline pipeline;
-    pipeline.add(anira::stage::Inference(model_config, {candidate_of(engine)})
-                     .engine(std::make_shared<ClearEngine>()));
+    pipeline.add_engine(std::make_shared<ClearEngine>());
+    pipeline.add_inference(model_config, {candidate_of(engine)});
     if (model == 1) {
         // GuitarLSTM's windows; the CNN and the LSTM take anira's default fill.
-        pipeline.add(anira::stage::Custom(std::make_shared<HybridNNStage>()));
+        pipeline.add_processor(std::make_shared<HybridNNProcessor>());
     }
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
     const anira::PlanReport report = m_inference_handler->prepare(contract);

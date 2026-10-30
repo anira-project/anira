@@ -58,8 +58,9 @@ anira::ContractHandle contract = anira::ContractHandle::from_file("path/to/contr
 // The context (the inference thread pool) and the handler over the model's inference stage,
 // on every engine of this build the model file names
 anira::Context context{anira::ContextConfig{}};
-anira::InferenceHandler inference_handler(
-    context, anira::Pipeline{anira::stage::Inference(model_config)});
+anira::Pipeline pipeline;
+pipeline.add_inference(model_config);
+anira::InferenceHandler inference_handler(context, pipeline);
 
 // Complete the contract with the host geometry and allocate memory for audio processing;
 // prepare returns the plans, one per engine the model runs on here
@@ -228,7 +229,7 @@ Moreover, the following options are available:
 Anira is available as the `@anira-project/anira` package for web applications: anira compiled
 to WebAssembly with a thin typed layer over its C ABI. anira starts the page's threads from C on
 one shared memory (the context's inference threads are Wasm Workers, the audio path a Wasm Audio
-Worklet node whose render callback is C), stages and inference engines are written in
+Worklet node whose render callback is C), processors and inference engines are written in
 TypeScript without rebuilding the module, and the model and contract files of a native host load
 unchanged. The 3.x pre-release is on the `next` dist-tag:
 

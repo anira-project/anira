@@ -1,18 +1,18 @@
 // The browser test of the built package (web/dist), run by run.mjs in headless Chromium and
 // Firefox: the typed layer end to end. The module on the page (Anira), a context whose pool is two
 // Wasm Workers importing pool-worker.js (a JavaScript engine that writes its input times 2 * the
-// Static gain), a pipeline with that engine and a JavaScript stage (worklet-stage.js: halves the
-// input in pre_process, on the worklet scope's registry), a Hard handler of block 128, and an
-// OfflineAudioContext rendered through the handler's Wasm Audio Worklet node (C render callback),
-// the gain being the node's AudioParam, automated mid-render. The output must be the input times
-// the gain of its quantum after the handler's latency (the stage's 0.5 and the engine's 2 cancel).
-// Then the gain as a tensor slot written with setStaticInput on a second handler, and the teardown:
-// the nodes, the handlers and the context, which stops the pool. The verdict is
-// window.anira_test_result. First, before any of it: a warning reaches the console exactly once,
-// through the log hook while one is set (it replaces the platform sink), through the platform
-// sink once the hook is removed, there as console.warn (the console by level).
+// Static gain), a pipeline with that engine and a JavaScript processor (worklet-processor.js:
+// halves the input in pre_process, on the worklet scope's registry), a Hard handler of block 128,
+// and an OfflineAudioContext rendered through the handler's Wasm Audio Worklet node (C render
+// callback), the gain being the node's AudioParam, automated mid-render. The output must be the
+// input times the gain of its quantum after the handler's latency (the processor's 0.5 and the
+// engine's 2 cancel). Then the gain as a tensor slot written with setStaticInput on a second
+// handler, and the teardown: the nodes, the handlers and the context, which stops the pool. The
+// verdict is window.anira_test_result. First, before any of it: a warning reaches the console
+// exactly once, through the log hook while one is set (it replaces the platform sink), through the
+// platform sink once the hook is removed, there as console.warn (the console by level).
 import {
-  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   AniraError,
@@ -34,7 +34,7 @@ const GAIN_BEFORE = 1
 const GAIN_AFTER = 0.25
 const CHANGE_QUANTUM = 32
 const ENGINE_ID = 'org.anira-test.pool-double'
-const STAGE = 'org.anira-test.half'
+const PROCESSOR = 'org.anira-test.half'
 
 // Counts the console lines that carry `marker`, whichever method printed them; installed before
 // the module, whose glue binds console.error for its stderr when it is instantiated.
@@ -141,9 +141,9 @@ const run = async () => {
     })
   )
   const pipeline = Pipeline.create(anira)
-    .inference(model)
-    .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-    .addStage(STAGE, { phases: ANIRA_EM_HOOK_PRE })
+    .addInference(model)
+    .addEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addProcessor(PROCESSOR, { phases: ANIRA_EM_PROCESSOR_HOOK_PRE })
   const contract = ContractHandle.hard(anira, {
     blockMin: QUANTUM,
     rate: RATE,
@@ -164,13 +164,13 @@ const run = async () => {
   const samples = new Float32Array(QUANTUM * QUANTA)
   for (let i = 0; i < samples.length; i++)
     samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / RATE)
-  const stageModule = new URL('./worklet-stage.js', import.meta.url)
+  const processorModule = new URL('./worklet-processor.js', import.meta.url)
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const audioNode = await handler.createAudioNode(audio, {
     params: [1],
     waitMs: 500,
-    workletModules: [stageModule],
+    workletModules: [processorModule],
   })
   check(
     audioNode.node instanceof AudioWorkletNode && audioNode.params.has(1),
@@ -191,7 +191,7 @@ const run = async () => {
   check(
     worst < 1e-6,
     `the output is the input times the AudioParam's gain after ${latency} samples, through ` +
-      `the worklet's JavaScript stage and the pool's engine (worst error ${worst})`
+      `the worklet's JavaScript processor and the pool's engine (worst error ${worst})`
   )
   audioNode.destroy()
   handler.destroy()
@@ -203,7 +203,7 @@ const run = async () => {
   const tensorNode = await second.createAudioNode(audio2, {
     staticInputs: [1],
     waitMs: 500,
-    workletModules: [stageModule],
+    workletModules: [processorModule],
   })
   let refused = ''
   try {

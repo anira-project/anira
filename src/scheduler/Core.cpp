@@ -1440,14 +1440,14 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
-            // What a stage processor leaves on the chunk (a 2.x processor never writes it).
-            session->m_inference_queue[i]->m_stage_status = ANIRA_OK;
+            // What a processor runner leaves on the chunk (a 2.x processor never writes it).
+            session->m_inference_queue[i]->m_processor_status = ANIRA_OK;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
-            // pre_process virtual, on this thread: a 3.x stage processor reads it there to
-            // tell the first chunk of a new stream, its reset boundary (capi/stage.h).
+            // pre_process virtual, on this thread: a 3.x processor runner reads it there to
+            // tell the first chunk of a new stream, its reset boundary (capi/processor.h).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
             // The chunk's descriptors follow its buffers' memory of the moment (a 2.x
@@ -1458,8 +1458,8 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
                                                 session->plan_backend(plan));
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
-            if (session->m_inference_queue[i]->m_stage_status != ANIRA_OK) {
-                // A stage's pre_process failed (the chain recorded it and kept the input
+            if (session->m_inference_queue[i]->m_processor_status != ANIRA_OK) {
+                // A processor's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct
                 // and timestamp and completes as zeros at its stream position without being
                 // enqueued, the path a full queue takes, so exactly one chunk was consumed and

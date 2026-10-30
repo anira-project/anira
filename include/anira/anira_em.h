@@ -16,30 +16,30 @@
  * (the context's pool, anira_inference_thread_start), the context's Wasm Audio Worklet
  * (anira_em_audio_node_create). Emscripten gives each its stack and thread-local block. Each
  * scope has one registry object, globalThis[Symbol.for('anira.registry')], which the package's
- * defineStage and defineEngine install: { version, stage(Module, key, phase, a, b),
+ * defineProcessor and defineEngine install: { version, processor(Module, key, phase, a, b),
  * engine(Module, key, phase, a, b, engineIdPtr), log(Module, recordPtr), boot(Module) }, where
- * version is ANIRA_EM_HOOKS_VERSION and Module the instance of the scope. A JS stage or a JS
- * engine is a descriptor whose slots are C trampolines compiled into anira: each calls the
+ * version is ANIRA_EM_HOOKS_VERSION and Module the instance of the scope. A JS processor or a
+ * JS engine is a descriptor whose slots are C trampolines compiled into anira: each calls the
  * registry of the scope that runs the C call (the worklet for pre_process, post_process and
  * reset under a Hard contract, an inference Worker for before_inference, after_inference and
  * the engine's process, the main thread for init, prepare, unprepare, release and query) with
- * the stage's or engine's js_key (the package's keyOf of its name: the 32-bit FNV-1a hash of
- * its UTF-16 code units, the same in every scope; a registry refuses a second name whose key is
- * taken), the anira_phase of the call and two pointers into the shared memory, which JavaScript
- * reads through web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared
- * pointer in pre_process, post_process, before_inference, after_inference and reset; a the
- * anira_prepare_info and b the address of the out_prepared slot in prepare; a the prepared
- * pointer in unprepare; a the anira_init_info in init; both 0 in release. For an engine, a is
- * the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and
+ * the processor's or engine's js_key (the package's keyOf of its name: the 32-bit FNV-1a hash
+ * of its UTF-16 code units, the same in every scope; a registry refuses a second name whose key
+ * is taken), the anira_phase of the call and two pointers into the shared memory, which
+ * JavaScript reads through web/src/abi/layout.ts. For a processor, a is the anira_processor_ctx
+ * and b the prepared pointer in pre_process, post_process, before_inference, after_inference
+ * and reset; a the anira_prepare_info and b the address of the out_prepared slot in prepare; a
+ * the prepared pointer in unprepare; a the anira_init_info in init; both 0 in release. For an
+ * engine, a is the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and
  * ANIRA_PHASE_RESET; a the anira_init_info and b the address of the uint64_t provider mask in
  * ANIRA_PHASE_QUERY. The hook returns an anira_status (a void slot ignores it). A hook that
  * throws, and a scope without a registry, are caught in the trampoline: the exception is
  * reported with console.error (rate-limited, not through the anira log, which may be what
- * threw) and the call returns ANIRA_ERROR_UNKNOWN (a stage) or ANIRA_ERROR_ENGINE (an engine),
- * which fails the chunk the usual way (zeros, the real-time error latched); no JavaScript
- * exception unwinds through a C frame. The trampolines keep {js_key, the engine id} in a small
- * heap record as the descriptor's user_data and free it in the descriptor's release, which is
- * always set for that purpose. An inference Worker imports the context's worker module
+ * threw) and the call returns ANIRA_ERROR_UNKNOWN (a processor) or ANIRA_ERROR_ENGINE (an
+ * engine), which fails the chunk the usual way (zeros, the real-time error latched); no
+ * JavaScript exception unwinds through a C frame. The trampolines keep {js_key, the engine id}
+ * in a small heap record as the descriptor's user_data and free it in the descriptor's release,
+ * which is always set for that purpose. An inference Worker imports the context's worker module
  * (anira_em_context_config_set_worker_module) and awaits the registry's boot before its loop;
  * the worklet's registry is booted at every anira_em_audio_node_create.
  */
@@ -49,7 +49,7 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/enums.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/handler.h>
 
@@ -64,63 +64,64 @@ extern "C" {
 /**
  * @brief The layout of a scope's registry object (the version field of
  * globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and
- * their arguments. Appended to, never reordered. 2: the stage hook bits are 1u <<
- * ANIRA_PHASE_* (one index space with anira.hpp's Stage::k_* phase bits); 1 numbered
+ * their arguments. Appended to, never reordered. 2: the processor hook bits are 1u <<
+ * ANIRA_PHASE_* (one index space with anira.hpp's Processor::k_* phase bits); 1 numbered
  * them 1u << n in their own order.
  */
 #define ANIRA_EM_HOOKS_VERSION 2u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_PRE_PROCESS: pre_process crosses into the hook. An
- * unset bit leaves the slot NULL, so that phase runs anira's default body and never
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_PRE_PROCESS: pre_process crosses into the hook.
+ * An unset bit leaves the slot NULL, so that phase runs anira's default body and never
  * crosses into JavaScript. The bits are the phases' own (anira.hpp's
- * Stage::k_pre_process is the same value): one index space.
+ * Processor::k_pre_process is the same value): one index space.
  */
-#define ANIRA_EM_HOOK_PRE 1u
+#define ANIRA_EM_PROCESSOR_HOOK_PRE 1u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_POST_PROCESS: post_process crosses into the hook.
- */
-#define ANIRA_EM_HOOK_POST 2u
-
-/**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_BEFORE_INFERENCE: before_inference crosses into the
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_POST_PROCESS: post_process crosses into the
  * hook.
  */
-#define ANIRA_EM_HOOK_BEFORE 4u
+#define ANIRA_EM_PROCESSOR_HOOK_POST 2u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_AFTER_INFERENCE: after_inference crosses into the
- * hook (bit 3, ANIRA_PHASE_INFERENCE, is no stage phase).
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_BEFORE_INFERENCE: before_inference crosses into
+ * the hook.
  */
-#define ANIRA_EM_HOOK_AFTER 16u
+#define ANIRA_EM_PROCESSOR_HOOK_BEFORE 4u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_PREPARE: prepare crosses into the hook.
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_AFTER_INFERENCE: after_inference crosses into
+ * the hook (bit 3, ANIRA_PHASE_INFERENCE, is no processor phase).
  */
-#define ANIRA_EM_HOOK_PREPARE 32u
+#define ANIRA_EM_PROCESSOR_HOOK_AFTER 16u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_RELEASE: release crosses into the hook before the
- * trampolines' record is freed. A lifecycle phase, above the data phases.
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_PREPARE: prepare crosses into the hook.
  */
-#define ANIRA_EM_HOOK_RELEASE 64u
+#define ANIRA_EM_PROCESSOR_HOOK_PREPARE 32u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_RESET: reset crosses into the hook, the first chunk
- * of a new stream, for a stage that keeps per-stream state.
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_RELEASE: release crosses into the hook before
+ * the trampolines' record is freed. A lifecycle phase, above the data phases.
  */
-#define ANIRA_EM_HOOK_RESET 128u
+#define ANIRA_EM_PROCESSOR_HOOK_RELEASE 64u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_UNPREPARE: unprepare crosses into the hook.
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_RESET: reset crosses into the hook, the first
+ * chunk of a new stream, for a processor that keeps per-stream state.
  */
-#define ANIRA_EM_HOOK_UNPREPARE 256u
+#define ANIRA_EM_PROCESSOR_HOOK_RESET 128u
 
 /**
- * @brief Stage hook bit, 1u << ANIRA_PHASE_INIT: init crosses into the hook.
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_UNPREPARE: unprepare crosses into the hook.
  */
-#define ANIRA_EM_HOOK_INIT 512u
+#define ANIRA_EM_PROCESSOR_HOOK_UNPREPARE 256u
+
+/**
+ * @brief Processor hook bit, 1u << ANIRA_PHASE_INIT: init crosses into the hook.
+ */
+#define ANIRA_EM_PROCESSOR_HOOK_INIT 512u
 
 /**
  * @brief Engine hook bit: reset crosses into the hook (ANIRA_PHASE_RESET). process always
@@ -142,59 +143,60 @@ extern "C" {
 #define ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS 1u
 
 /**
- * @brief Fills a stage descriptor whose slots are the trampolines into the scope registry's
- * stage: one per bit of hook_mask, every other slot NULL, the release slot always (it
- * frees the record behind user_data, after the hook's release when ANIRA_EM_HOOK_RELEASE
- * is set), and flags stage_flags. The promise is stated, never derived from the hook
- * bits: under a Hard contract a stage with a pre_process, post_process or reset hook
- * runs it on the driving thread (the audio worklet), and anira_handler_prepare refuses
- * it with ANIRA_ERROR_CONFIG unless stage_flags carries
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The descriptor is for anira_pipeline_add_stage;
- * one that is never added keeps its record, so anira_em_pipeline_add_js_stage is the
- * call JavaScript makes.
- * @param desc The caller's descriptor, overwritten from ANIRA_STAGE_DESC_INIT.
- * @param js_key The key the hook receives, the stage's entry in the instance's registry.
- * @param hook_mask An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into the scope
- *        registry's stage.
- * @param stage_flags The descriptor's flags, the stage's real-time promise, which JavaScript
- *        cannot write into the descriptor itself: an OR of
- *        ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the pre_process, post_process and
- *        reset hooks allocate nothing, lock nothing and block on nothing) and
- *        ANIRA_STAGE_FLAG_REALTIME_HOOKS (before_inference and after_inference
- *        likewise), or 0 for no promise. Stored as given: a bit the header does not
- *        define is refused by anira_pipeline_add_stage.
+ * @brief Fills a processor descriptor whose slots are the trampolines into the scope registry's
+ * processor: one per bit of hook_mask, every other slot NULL, the release slot always
+ * (it frees the record behind user_data, after the hook's release when
+ * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and flags processor_flags. The promise is
+ * stated, never derived from the hook bits: under a Hard contract a processor with a
+ * pre_process, post_process or reset hook runs it on the driving thread (the audio
+ * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless
+ * processor_flags carries ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST. The descriptor is for
+ * anira_pipeline_add_processor; one that is never added keeps its record, so
+ * anira_em_pipeline_add_js_processor is the call JavaScript makes.
+ * @param desc The caller's descriptor, overwritten from ANIRA_PROCESSOR_DESC_INIT.
+ * @param js_key The key the hook receives, the processor's entry in the instance's registry.
+ * @param hook_mask An OR of the ANIRA_EM_PROCESSOR_HOOK_* bits: the slots that cross into the
+ *        scope registry's processor.
+ * @param processor_flags The descriptor's flags, the processor's real-time promise, which
+ *        JavaScript cannot write into the descriptor itself: an OR of
+ *        ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the pre_process, post_process
+ *        and reset hooks allocate nothing, lock nothing and block on nothing)
+ *        and ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and
+ *        after_inference likewise), or 0 for no promise. Stored as given: a bit
+ *        the header does not define is refused by anira_pipeline_add_processor.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not
  *         define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_em_stage_desc_init(anira_stage_desc* desc,
-                                                           uint32_t js_key,
-                                                           uint32_t hook_mask,
-                                                           uint32_t stage_flags) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_desc* desc,
+                                                               uint32_t js_key,
+                                                               uint32_t hook_mask,
+                                                               uint32_t processor_flags) ANIRA_NOEXCEPT;
 
 /**
- * @brief anira_em_stage_desc_init followed by anira_pipeline_add_stage: the pipeline's one
- * stage is a JavaScript stage. A refused addition frees the record; the hook's release
- * is not called then, as anira_pipeline_add_stage never calls release on a refusal.
+ * @brief anira_em_processor_desc_init followed by anira_pipeline_add_processor: the pipeline's
+ * one processor is a JavaScript processor. A refused addition frees the record; the
+ * hook's release is not called then, as anira_pipeline_add_processor never calls release
+ * on a refusal.
  * @param pipeline The pipeline.
- * @param js_key As in anira_em_stage_desc_init.
- * @param hook_mask As in anira_em_stage_desc_init.
- * @param stage_flags As in anira_em_stage_desc_init: the stage's real-time promise.
+ * @param js_key As in anira_em_processor_desc_init.
+ * @param hook_mask As in anira_em_processor_desc_init.
+ * @param processor_flags As in anira_em_processor_desc_init: the processor's real-time promise.
  * @param err Nullable.
- * @return As anira_em_stage_desc_init, then as anira_pipeline_add_stage
+ * @return As anira_em_processor_desc_init, then as anira_pipeline_add_processor
  *         (ANIRA_ERROR_INVALID_ARGUMENT for a flags bit the header does not define,
- *         ANIRA_ERROR_INVALID_STATE when the pipeline already has a stage).
+ *         ANIRA_ERROR_INVALID_STATE when the pipeline already has a processor).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_stage(anira_pipeline* pipeline,
-                                                                 uint32_t js_key,
-                                                                 uint32_t hook_mask,
-                                                                 uint32_t stage_flags,
-                                                                 anira_error* err) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipeline,
+                                                                     uint32_t js_key,
+                                                                     uint32_t hook_mask,
+                                                                     uint32_t processor_flags,
+                                                                     anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Fills an engine descriptor whose process (always), reset and query (per bit) are
@@ -281,12 +283,13 @@ ANIRA_API void ANIRA_CALL anira_em_set_log_hook(anira_bool enable) ANIRA_NOEXCEP
  * imports before it enters its loop. The context's pool threads are Wasm Workers (as
  * natively they are OS threads), and anira_inference_thread_start starts one for a
  * user-driven thread; each imports this module first, which defines the JavaScript
- * engines and stages of its scope on the registry
- * globalThis[Symbol.for('anira.registry')] (the package's defineEngine and defineStage),
- * and awaits the registry's boot (the engines' async init) before the loop. A module
- * that fails to load is reported on the console and the Worker runs without it. Like the
- * wait strategy, the first context's module is the one in effect for the process's pool;
- * a later context naming another is warned about. Not part of the context config's JSON.
+ * engines and processors of its scope on the registry
+ * globalThis[Symbol.for('anira.registry')] (the package's defineEngine and
+ * defineProcessor), and awaits the registry's boot (the engines' async init) before the
+ * loop. A module that fails to load is reported on the console and the Worker runs
+ * without it. Like the wait strategy, the first context's module is the one in effect
+ * for the process's pool; a later context naming another is warned about. Not part of
+ * the context config's JSON.
  * @param config The config.
  * @param url The absolute URL of an ES module, copied; NULL or empty for none.
  * @param err Nullable.
@@ -336,11 +339,11 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  * Driving one handler from several nodes, one slot each, is not the supported form: the
  * streams stay aligned, but a non-anchored call loses BYPASS (zeros on a miss), the wait
  * credit and the miss callback's view of the block. A quantum other than the declared
- * one is silence. A JavaScript stage of the handler runs its worklet phases on the
+ * one is silence. A JavaScript processor of the handler runs its worklet phases on the
  * worklet scope's registry, which the caller fills before (audioWorklet.addModule of a
- * module that calls defineStage) and anira boots over the worklet's instance at every
- * create. The render callback allocates nothing and locks nothing; nodes are at most 256
- * at once.
+ * module that calls defineProcessor) and anira boots over the worklet's instance at
+ * every create. The render callback allocates nothing and locks nothing; nodes are at
+ * most 256 at once.
  * @param handler A handler prepared under a Hard contract whose block range holds the context's
  *        render quantum; it must outlive the node (anira_em_audio_node_destroy first).
  * @param audio_context The audio context: what emscriptenRegisterAudioObject returned for an

@@ -165,7 +165,7 @@ not its slot's (nothing converts: the input is not pushed, the output is zero-fi
 reports 0 samples), a failed inference. A failed
 inference — an engine exception, a throwing custom processor or hook — zero-fills its output
 (never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
-latched record; the inference thread survives it. A stage of the C handler fails differently:
+latched record; the inference thread survives it. A processor of the C handler fails differently:
 a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status and its
 chunk delivers zeros, the hop-count guard after ``pre_process`` and
 ``post_process`` latches ``ANIRA_ERROR_CONFIG``, and a ring or context accessor refused inside

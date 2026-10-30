@@ -212,7 +212,7 @@ public:
          * slot of either side, over the buffer's memory, with the spec's rank and extents
          * (the universal TensorShape rows) and the storage's dtype, float32, all-zero
          * strides. What the engine call hands its adapter (anira_engine_ctx::inputs /
-         * outputs) and what a stage context copies for a slot.
+         * outputs) and what a processor context copies for a slot.
          *
          * @param input_shapes The spec's extents per input tensor
          * @param output_shapes The spec's extents per output tensor
@@ -266,29 +266,29 @@ public:
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
-        // What a stage left on the chunk (a 3.x handler's StageProcessor; a 2.x
+        // What a processor left on the chunk (a 3.x handler's ProcessorRunner; a 2.x
         // processor never writes it): ANIRA_OK, or the status of the phase callback that
         // failed. Core::pre_process resets it, then completes the chunk as zeros without
         // enqueueing it when pre_process failed; InferenceThread::do_inference reads it around
         // the hooks and skips the engine call, or zeroes the outputs, on a failure. Plain
         // field: written by the thread that holds the struct, synced by the queue handoffs
         // like the stamps above.
-        anira_status m_stage_status{ANIRA_OK};
+        anira_status m_processor_status{ANIRA_OK};
         // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
         // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
         // inference thread (a throw, a failed before_inference or after_inference), its output
-        // buffers cleared. Core::pre_process resets it. A 3.x stage processor reads it in
+        // buffers cleared. Core::pre_process resets it. A 3.x processor runner reads it in
         // post_process: such a chunk does not overwrite the handler's Static output store.
         // Plain field, synced by the queue handoffs like the stamps above (written before the
         // done signal, read after it).
         bool m_completed_as_zeros{false};
         // The struct's position in SessionElement::m_inference_queue: the chunk's entry
-        // (anira_engine_ctx::entry, anira_stage_ctx::entry), set by prepare with the pool.
+        // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
         std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
         std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
         // One descriptor per slot of either side over the buffers above (bind_tensors,
-        // rebind_tensors): the engine call's anira_engine_ctx names these arrays, a stage
+        // rebind_tensors): the engine call's anira_engine_ctx names these arrays, a processor
         // context copies one for a slot. Written on the driving thread at the claim, read on
         // the inference thread; synced by the queue handoffs like the fields above.
         std::vector<anira_tensor> m_input_tensors;
@@ -343,7 +343,7 @@ public:
         PlanSlot& operator=(PlanSlot&&) noexcept;
         PlanSlot(const PlanSlot&) = delete;
         PlanSlot& operator=(const PlanSlot&) = delete;
-        /// The backend a stage context reports for the chunk: a built-in engine, or
+        /// The backend a processor context reports for the chunk: a built-in engine, or
         /// ANIRA_ENGINE_CUSTOM with m_engine_id for a custom one, on a provider of the enum, or
         /// ANIRA_PROVIDER_CUSTOM with m_provider_id for a custom one.
         anira_engine m_engine = ANIRA_ENGINE_NONE;
@@ -358,7 +358,7 @@ public:
         /// plan, and the inference thread logs RtSite::NoModelForBackend once per prepare.
         bool m_missing_model = false;
         /// The plan's engine keeps its own aliasing of a declared State pair
-        /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the stage processor binds one stable
+        /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
         bool m_state_alias = false;
         /**
@@ -538,7 +538,7 @@ public:
                        ///< else &m_rt_own. Set by the constructor and published by the
                        ///< lifecycle lock that registers the session; never null
     // What every ring of this session points at (anira_ring::owner), set by prepare(): m_rt,
-    // and the name of the stage a 3.x handler's chain is running on the driving thread.
+    // and the name of the processor a 3.x handler's chain is running on the driving thread.
     RingOwner m_ring_owner;
 
     // Written by InferenceManager::set_non_realtime() -- typically from a control/UI

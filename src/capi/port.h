@@ -11,7 +11,7 @@
  *   State    -> StatePort: the input half holds the state, a StateSlot (two buffers in the
  *               spec's shape and dtype, one read and one written per inference, swapped by a
  *               flip) and the generation it was last bound under; the output half names the
- *               input slot it feeds (m_partner). The stage processor binds the model's State
+ *               input slot it feeds (m_partner). The processor runner binds the model's State
  *               input to the read buffer and the model's State output to the write buffer
  *               ahead of before_inference and flips them behind after_inference, on the
  *               inference thread; no Hard entry carries it.
@@ -20,13 +20,13 @@
  *
  * The vectors are built once, at anira_handler_create, and never resized; an arm never changes.
  * prepare fills the fields of a StreamPort; every per-call path only reads (std::get_if, which
- * cannot throw). The entries of the handler and the stage processor ask the port: which entry takes
- * a slot, what a multi form's element must be, what the chain materialises and captures.
+ * cannot throw). The entries of the handler and the processor runner ask the port: which entry
+ * takes a slot, what a multi form's element must be, what the chain materialises and captures.
  * Private to src/capi (and the tests through the src/ include directory): header-inline, not
  * installed, not exported.
  *
  * The Static value: sized and zeroed once, at anira_handler_create, untouched by prepare and by
- * reset: what anira_handler_set_static_input stores and the stage processor materialises into the
+ * reset: what anira_handler_set_static_input stores and the processor runner materialises into the
  * model's input tensors, and what the chain captures from the model's output tensors and
  * anira_handler_get_static_output returns.
  *
@@ -319,7 +319,7 @@ struct StreamPort {
     /// sized for. 0 before prepare.
     size_t m_max_samples = 0;
     /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
-    /// by StageProcessor::bind and valid while that session lives; NULL before.
+    /// by ProcessorRunner::bind and valid while that session lives; NULL before.
     anira_ring* m_ring = nullptr;
 };
 
@@ -332,7 +332,7 @@ struct StaticPort {
 
 /// The value of one declared state pair: two buffers in the spec's shape and dtype, each
 /// starting on a 64-byte boundary (explicit over-allocation of one block), one read and one
-/// written per inference. The stage processor binds the model's State input to read() and the
+/// written per inference. The processor runner binds the model's State input to read() and the
 /// model's State output of the pair to write() ahead of the inference and flips the two behind
 /// a successful one, so the produced state is the next inference's input without a copy of
 /// anira's; a failed inference leaves the read buffer the last good state. Under a plan whose
@@ -424,7 +424,7 @@ private:
 };
 
 /// One half of a declared state pair. The INPUT half holds the state: a StateSlot in the
-/// spec's shape and dtype, whose read buffer the stage processor binds to the model's State
+/// spec's shape and dtype, whose read buffer the processor runner binds to the model's State
 /// input ahead of before_inference and whose write buffer it binds to the model's State output
 /// of the pair, flipping the two behind a successful after_inference, and the generation the
 /// value was last bound under (a chunk stamped with another one is the first of a new stream:

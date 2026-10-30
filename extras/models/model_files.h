@@ -12,7 +12,9 @@
 //
 //     anira::ModelConfig model = anira::ModelConfig::from_file(k_cnn_model_json);
 //     anira::ContractHandle contract = anira::ContractHandle::from_file(k_cnn_contract_json);
-//     anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(model)});
+//     anira::Pipeline pipeline;
+//     pipeline.add_inference(model);
+//     anira::InferenceHandler handler(context, pipeline);
 //     handler.prepare(contract.hard_geometry(block, block, rate));
 //
 // (or anira_model_config_from_json_file / anira_contract_from_json from C). The files set no

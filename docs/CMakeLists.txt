@@ -63,18 +63,18 @@ add_custom_target(breathe-apidocs
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_plan_slot.rst
     # anira::scheduler::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1scheduler_1_1_inference_thread_1_1_instance_hold.rst
-    # anira::Stage::Prepared, anira::Engine::Loaded, anira::Engine::Prepared and
+    # anira::Processor::Prepared, anira::Engine::Loaded, anira::Engine::Prepared and
     # anira::ext::ProviderOptions::Set are documented inside their outer class's page (breathe
     # lists the nested class there); a page of their own would declare every member twice.
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_stage_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_processor_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_loaded.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1ext_1_1_provider_options_1_1_set.rst
-    # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessorStage::Prepared, the
+    # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessor::Prepared, the
     # private Loaded and Prepared of PassthroughEngine (EXTRACT_PRIVATE lists them), the
     # Defaults of anira::v2::InferenceConfig (as the 2.x one's above), and the three aggregates
     # of anira::SpecView (Axis, Window, TimeRatio).
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_stage_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_loaded.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1v2_1_1_inference_config_1_1_defaults.rst

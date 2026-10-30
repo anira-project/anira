@@ -6,13 +6,13 @@ through :js:class:`AniraBindings` (``anira.abi``, generated from the registry), 
 the C headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
 ``layout``) and the enums and defines in ``abi/enums.ts``.
 
-Stages and engines
-------------------
+Processors and engines
+----------------------
 
 In every scope that runs one of their phases: the main thread, an inference Worker's module, a
 worklet's module (``@anira-project/anira/scope``).
 
-.. js:autofunction:: registry.defineStage
+.. js:autofunction:: registry.defineProcessor
 
 .. js:autofunction:: registry.defineEngine
 

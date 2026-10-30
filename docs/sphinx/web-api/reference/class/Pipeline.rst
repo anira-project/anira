@@ -1,9 +1,9 @@
 Class Pipeline
 ==============
 
-The inference stage over model configs, a JavaScript stage and JavaScript engines, which the
-scopes that run them define under the same names (:js:func:`~registry.defineStage`, :js:func:`~registry.defineEngine`).
+The inference stage over model configs, a JavaScript processor and JavaScript engines, which the
+scopes that run them define under the same names (:js:func:`~registry.defineProcessor`, :js:func:`~registry.defineEngine`).
 
 .. js:autoclass:: Pipeline.Pipeline
    :short-name:
-   :members: create, inference, registerEngine, addStage, native, destroy
+   :members: create, inference, addEngine, addProcessor, native, destroy

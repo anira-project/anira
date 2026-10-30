@@ -1,34 +1,34 @@
-Custom Stages
-=============
+Custom Processors
+=================
 
-A JavaScript stage is the pipeline's one stage written in TypeScript: the counterpart of a C
-``anira_stage_desc`` (:doc:`../custom_preprocessing`), defined by name in every scope that runs
+A JavaScript processor is the pipeline's one processor written in TypeScript: the counterpart of a C
+``anira_processor_desc`` (:doc:`../custom_preprocessing`), defined by name in every scope that runs
 one of its phases, with no rebuild of the module.
 
-Defining a Stage
-----------------
+Defining a Processor
+--------------------
 
 .. code-block:: ts
 
-   import { defineStage } from '@anira-project/anira/scope'
+   import { defineProcessor } from '@anira-project/anira/scope'
 
-   defineStage('org.example.my-stage', (env) => ({
+   defineProcessor('org.example.my-processor', (env) => ({
      preProcess(ctx, prepared) { /* ... */ },
    }))
 
 The factory builds the scope's instance over its ``env``: ``env.abi`` (the bindings over the
 scope's module instance) and ``env.module`` (its heap views: ``env.module.HEAPF32``, ...). Each
-method receives pointers into the shared memory: ``ctx`` an ``anira_stage_ctx`` (``layout``),
+method receives pointers into the shared memory: ``ctx`` an ``anira_processor_ctx`` (``layout``),
 ``prepared`` what this handler's ``prepare`` stored. A method returns an ``anira_status``
-(nothing is ``ANIRA_OK``); one that throws fails its call. A stage without ``preProcess`` or
+(nothing is ``ANIRA_OK``); one that throws fails its call. A processor without ``preProcess`` or
 ``postProcess`` runs anira's default body there.
 
 The phases run in different scopes (:doc:`architecture`): ``preProcess``, ``postProcess`` and
 ``reset`` in the audio worklet under a Hard contract, ``beforeInference`` and
 ``afterInference`` on the inference Workers, ``init``, ``prepare``, ``unprepare`` and
-``release`` on the main thread. Define the stage in each scope its phases need: import the
+``release`` on the main thread. Define the processor in each scope its phases need: import the
 module on the main thread, list it in the context's ``workerModule`` for the Workers' phases,
-and in ``createAudioNode``'s ``workletModules`` for the worklet's. One name is one stage
+and in ``createAudioNode``'s ``workletModules`` for the worklet's. One name is one processor
 (:js:func:`~registry.keyOf`).
 
 Adding It to the Pipeline
@@ -36,30 +36,31 @@ Adding It to the Pipeline
 
 .. code-block:: ts
 
-   pipeline.addStage('org.example.my-stage', {
+   pipeline.addProcessor('org.example.my-processor', {
      phases:
-       ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_PREPARE | ANIRA_EM_HOOK_UNPREPARE,
+       ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_RESET | ANIRA_EM_PROCESSOR_HOOK_PREPARE | ANIRA_EM_PROCESSOR_HOOK_UNPREPARE,
    })
 
-``phases`` names the phases that cross into JavaScript; a phase without its bit runs anira's
-default and never crosses. Each bit is ``1 << ANIRA_PHASE_*``, one index space with
-``anira::Stage::k_*`` of ``anira.hpp`` (``ANIRA_EM_HOOK_AFTER`` is ``Stage::k_after_inference``,
-16), the lifecycle phases (prepare, release, reset, unprepare, init) above the data phases. ``flags`` is the stage's real-time promise, stated, never derived:
-the default ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` says ``preProcess``, ``postProcess`` and
+``phases`` names the phases that cross into JavaScript; a phase without its bit runs anira's default
+and never crosses. Each bit is ``1 << ANIRA_PHASE_*``, one index space with
+``anira::Processor::k_*`` of ``anira.hpp`` (``ANIRA_EM_PROCESSOR_HOOK_AFTER`` is
+``Processor::k_after_inference``, 16), the lifecycle phases (prepare, release, reset, unprepare,
+init) above the data phases. ``flags`` is the processor's real-time promise, stated, never derived:
+the default ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` says ``preProcess``, ``postProcess`` and
 ``reset`` allocate nothing, lock nothing and wait for nothing, which a Hard contract requires of
-them (they run on the audio thread); ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` says the same of
+them (they run on the audio thread); ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says the same of
 ``beforeInference`` and ``afterInference``.
 
-The Example's Stage
--------------------
+The Example's Processor
+-----------------------
 
-``InputGainStage`` of ``web/examples/stage-and-engine/`` scales the model's audio input by the
-Static input ``gain`` in ``preProcess``, ramping from the previous block's gain across the
-block. Its ``prepare`` and ``unprepare`` run on the main thread and allocate its per-handler
-memory in the shared heap; ``preProcess`` and ``reset`` run in the worklet and reach that memory
-through ``prepared``; ``preProcess`` reads the tensors through the stage accessors
-(``_anira_stage_input_tensor``, ``anira_tensor_data_f32``). The same module is imported by the
+``INPUT_GAIN_PROCESSOR`` of ``web/examples/processor-and-engine/`` scales the model's audio input by
+the Static input ``gain`` in ``preProcess``, ramping from the previous block's gain across the
+block. Its ``prepare`` and ``unprepare`` run on the main thread and allocate its per-handler memory
+in the shared heap; ``preProcess`` and ``reset`` run in the worklet and reach that memory through
+``prepared``; ``preProcess`` reads the tensors through the processor accessors
+(``_anira_processor_input_tensor``, ``anira_tensor_data_f32``). The same module is imported by the
 page (``main.ts``) and bundled into the worklet:
 
-.. literalinclude:: ../../../web/examples/stage-and-engine/gain-stage.ts
+.. literalinclude:: ../../../web/examples/processor-and-engine/gain-processor.ts
    :language: ts

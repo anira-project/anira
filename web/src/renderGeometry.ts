@@ -28,7 +28,7 @@ export type RenderGeometryOptions = {
   /**
    * Running audio nodes of the context to hold while the probe measures (`AniraAudioNode.hold`:
    * silence, their handlers left alone), released after, whatever happens. A node's rendering
-   * on the audio thread (a JavaScript stage that unfolds a model's input) makes calls late and
+   * on the audio thread (a JavaScript processor that unfolds a model's input) makes calls late and
    * can hide a callback's run. Pass the nodes that stream when measuring again (`sinkchange`).
    */
   hold?: readonly AniraAudioNode[]
@@ -76,7 +76,7 @@ const BURST_EXCESS = 0.1
  * A context that renders a device callback as a run of quanta shows its runs apart by the gaps
  * between callbacks, the longest gaps of the window. Inside a run the calls follow each other at
  * the graph's rendering time per quantum, and on a loaded audio thread that time grows and some
- * calls are late by milliseconds (a JavaScript stage that unfolds an inference's input in one
+ * calls are late by milliseconds (a JavaScript processor that unfolds an inference's input in one
  * call per callback, a preempted thread): split at a fixed gap, such a run came out a quantum or
  * more short. So a run ends where a gap reaches halfway from one quantum's duration to the
  * longest gap: a call inside a run splits it only when it is late by about half the time between

@@ -711,7 +711,7 @@ const char* consumer_of(std::string_view host,
     return nullptr;
 }
 
-// The consumers of a pipeline that read "<host>:<kind>", in the vector's order. Its stage
+// The consumers of a pipeline that read "<host>:<kind>", in the vector's order. Its processor
 // (neither engine key) reads a slot wherever it sits: no candidate filter. A registered
 // engine (m_engine_id) reads only while it is a candidate, and a "model" host only when the
 // entry is its own (entry_engine_id): the rule of the build's adapters, keyed by the id.
@@ -828,7 +828,7 @@ anira_status check_bag(const ExtBag& bag,
             fail(err,
                  ANIRA_ERROR_EXTENSION_UNCONSUMED,
                  nullptr,
-                 "extension '%s' on %s %s is consumed by no engine or stage of this pipeline",
+                 "extension '%s' on %s %s is consumed by no engine or processor of this pipeline",
                  slot.kind().c_str(),
                  host_name(host),
                  where.c_str());

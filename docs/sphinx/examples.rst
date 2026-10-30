@@ -25,21 +25,23 @@ accumulator names no TFLite or LiteRT row, since that export orders its outputs 
 the engines bind tensors by position) and RAVE funk drum as the whole model, its encoder and its
 decoder (``third-party/ircam-acids/``, LibTorch only).
 
-Every example loads a model the same way, in three lines, and the runtime takes it from there:
+Every example loads a model the same way, in a few lines, and the runtime takes it from there:
 
 .. code-block:: cpp
 
     anira::ModelConfig model_config = anira::ModelConfig::from_file(k_cnn_model_json);
     anira::ContractHandle contract = anira::ContractHandle::from_file(k_cnn_contract_json);
-    anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(model_config)});
+    anira::Pipeline pipeline;
+    pipeline.add_inference(model_config);
+    anira::InferenceHandler handler(context, pipeline);
 
 The files set no instance ceiling, so the instance count is the inference pool's
 (``ANIRA_INSTANCES_AUTO``); the plugins pass no context configuration either, since the library
 default (half the hardware threads) is what they want. Every plugin also carries the bypass
 engine of ``extras/models/BypassEngine.h`` (``org.anira.examples.bypass``, a custom engine that
 needs no model file and delays the input by the latency anira reports) behind its "BYPASS"
-backend choice, and GuitarLSTM runs with ``HybridNNStage`` (``extras/models/hybrid-nn/``), the
-stage that builds the model's overlapping windows; the CNN and the other models take anira's
+backend choice, and GuitarLSTM runs with ``HybridNNProcessor`` (``extras/models/hybrid-nn/``), the
+processor that builds the model's overlapping windows; the CNN and the other models take anira's
 default fill. The one place a model is built in code is the benchmark sweeps: ``CNNConfig.h``,
 ``HybridNNConfig.h`` and ``StatefulRNNConfig.h`` build the same configurations with the hop,
 the batch count or the chunk following the host buffer, which the fixed windows of the files
@@ -75,8 +77,8 @@ Key files:
     cache variable (``-DMODEL_TO_USE=2``; the default is 1): 0 the steerable-nafx CNN, 1 the
     same CNN with every file compiled into the plugin, 2 GuitarLSTM, 3 the stateful LSTM, 4
     and 5 SimpleGainNetwork in mono and stereo, 6 RAVE funk drum, 7 RAVE as an encoder and a
-    decoder handler. Every variant is configured by the three lines above; what changes is the
-    pair of files and, for GuitarLSTM, the ``HybridNNStage`` of the pipeline. The "Backend Type"
+    decoder handler. Every variant is configured by the lines above; what changes is the
+    pair of files and, for GuitarLSTM, the ``HybridNNProcessor`` of the pipeline. The "Backend Type"
     parameter picks a plan of the ``PlanReport`` that ``prepare`` returns
     (``InferenceHandler::set_plan``), and the gain of variants 4 and 5 is the model's Static input
     (``set_static_input``). Variant 1
@@ -129,7 +131,7 @@ Simple Benchmark
 
 Basic benchmarking setup demonstrating:
 
-- Single configuration benchmarking (GuitarLSTM with ``HybridNNStage`` on ONNX Runtime)
+- Single configuration benchmarking (GuitarLSTM with ``HybridNNProcessor`` on ONNX Runtime)
 - Basic performance measurement
 - Simple benchmark fixture usage
 

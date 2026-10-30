@@ -62,7 +62,8 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
             anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
 
         // Create and prepare the InferenceHandler instance, then pick the plan to measure
-        const anira::Pipeline pipeline{anira::stage::Inference(my_model_config)};
+        anira::Pipeline pipeline;
+        pipeline.add_inference(my_model_config);
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(my_contract);
         const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);
@@ -262,8 +263,9 @@ Test different buffer sizes by passing arguments during registration:
         my_contract.hard_geometry(block, block, SAMPLE_RATE);
 
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(
-            *m_context, anira::Pipeline{anira::stage::Inference(my_model_config)});
+        anira::Pipeline pipeline;
+        pipeline.add_inference(my_model_config);
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(my_contract);
         const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);
         m_inference_handler->set_plan(plan);
@@ -328,10 +330,10 @@ For complex configuration testing, define argument combinations using a custom f
 
         // Setup with selected configuration: the one engine as the single candidate
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
-        m_inference_handler = std::make_unique<anira::InferenceHandler>(
-            *m_context,
-            anira::Pipeline{anira::stage::Inference(model, {candidate_of(engine)})
-                                .engine(std::make_shared<ClearEngine>())});
+        anira::Pipeline pipeline;
+        pipeline.add_engine(std::make_shared<ClearEngine>())
+            .add_inference(model, {candidate_of(engine)});
+        m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(contract);
         const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);
         m_inference_handler->set_plan(plan);
@@ -361,8 +363,9 @@ To measure only pre/post-processing overhead without actual inference, run a cus
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_NO_INFERENCE)(::benchmark::State& state) {
         // ... setup code: the model config names the engine (model.add_model(k_clear_engine_id)) ...
-        const anira::Pipeline pipeline{
-            anira::stage::Inference(model).engine(std::make_shared<ClearEngine>())};
+        anira::Pipeline pipeline;
+        pipeline.add_engine(std::make_shared<ClearEngine>());
+        pipeline.add_inference(model);
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(hard);
         m_inference_handler->set_plan(
@@ -376,7 +379,7 @@ This configuration measures the overhead of anira's processing pipeline without 
 Benchmarking Custom Inference
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A custom engine is benchmarked like a built-in one: it is an :cpp:class:`anira::Engine` added to the pipeline's inference stage (``.engine(...)``, or ``anira_custom_engine_create`` and ``anira_pipeline_add_engine`` in C; :doc:`custom_engines`), named by a model entry, and its plan is selected by its id, as in the scenario above.
+A custom engine is benchmarked like a built-in one: it is an :cpp:class:`anira::Engine` added to the pipeline (``Pipeline::add_engine``, or ``anira_custom_engine_create`` and ``anira_pipeline_add_engine`` in C; :doc:`custom_engines`), named by a model entry, and its plan is selected by its id, as in the scenario above.
 
 Best Practices
 --------------

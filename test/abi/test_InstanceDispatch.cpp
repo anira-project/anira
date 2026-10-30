@@ -15,7 +15,7 @@
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
@@ -164,7 +164,7 @@ Measurement measure(anira_wait_strategy wait) {
         a_handlers.push_back(std::make_unique<Handler>(context,
                                                        model,
                                                        k_custom_only,
-                                                       std::span<const anira_stage_desc>{},
+                                                       std::span<const anira_processor_desc>{},
                                                        engine_a.engine()));
     }
     Handler b_handler(context, model, k_custom_only, {}, engine_b.engine());

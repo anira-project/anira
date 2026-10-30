@@ -349,7 +349,7 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/v3_to_v2.cpp
     src/capi/version.cpp
     src/capi/handler.cpp
-    src/capi/stage.cpp
+    src/capi/processor.cpp
     src/capi/engine.cpp
     src/capi/tensor.cpp
 )

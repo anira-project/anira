@@ -8,7 +8,7 @@
 // The name anira::InferenceHandler is anira.hpp's class over the C handler, and no class of
 // namespace anira is defined both in libanira and in the header-only anira.hpp; the 2.x float
 // face lives on here, in the tests only: the scheduler, engine and utils suites that drive a 2.x
-// session, and the differential arms of test_abi (test_Handler, test_HandlerTensor, test_Stage,
+// session, and the differential arms of test_abi (test_Handler, test_HandlerTensor, test_Processor,
 // test_Compat), which compare the C entries and anira/compat/v2.hpp with it. It goes with the 2.x
 // configuration types when the core takes the 3.x ones (PR 10b). Header-inline: the two helpers
 // it holds (test/support/PlanarFloatAdapter.h, test/support/NonStreamableRouter.h) are

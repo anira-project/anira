@@ -354,7 +354,7 @@ public:
      * context configuration is registered
      *
      * What the init record of a registration names for a session that does not exist yet
-     * (the stage's init runs before the session's models load): the pool in effect, clamped
+     * (the processor's init runs before the session's models load): the pool in effect, clamped
      * by the configuration's thread count, or the configuration's count when no user has a
      * pool yet; 0 for a configuration that brings its own threads. Takes the lifecycle lock.
      *

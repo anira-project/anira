@@ -220,7 +220,7 @@ typedef enum anira_struct_id {
     ANIRA_STRUCT_TENSOR = 1,  /**< anira_tensor (216 bytes). */
     ANIRA_STRUCT_SYNC_TOKEN = 2,  /**< anira_sync_token (24 bytes). */
     ANIRA_STRUCT_MEMORY_HANDLE = 3,  /**< anira_memory_handle (24 bytes). */
-    ANIRA_STRUCT_STAGE_CTX = 4,  /**< anira_stage_ctx (64 bytes). */
+    ANIRA_STRUCT_PROCESSOR_CTX = 4,  /**< anira_processor_ctx (64 bytes). */
     ANIRA_STRUCT_LOG_RECORD = 5,  /**< anira_log_record (56 bytes). */
     ANIRA_STRUCT_ERROR = 6,  /**< anira_error (520 bytes). */
     ANIRA_STRUCT_EDGE_INFO = 7,  /**< anira_edge_info (Tier 2). */
@@ -325,14 +325,14 @@ typedef enum anira_role {
      * and shape, paired by anira_tensor_spec_set_state_source on the input. anira keeps the
      * state in the handler, on the port of the state input, in the spec's shape and dtype (the
      * store of a Static tensor with another life), feeds it into the model input ahead of the
-     * stage's before_inference and captures the model output into it behind the stage's
+     * processor's before_inference and captures the model output into it behind the processor's
      * after_inference, on the inference thread; the value is zeroed at create and at prepare
      * and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list
      * and has a slot like every other tensor, its position in the model config's list, but no
      * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
      * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
-     * more with an extent of 0). A stage sees it at the same slot. No Time axis, window, time
-     * ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
+     * more with an extent of 0). A processor sees it at the same slot. No Time axis, window,
+     * time ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
      * every model tensor.
      */
     ANIRA_ROLE_STATE = 3,
@@ -622,12 +622,12 @@ typedef enum anira_pad_policy {
  * ANIRA_ENGINE_TFLITE and below ANIRA_ENGINE_CUSTOM are reserved for later built-in
  * engines, which are appended after TFLITE and never renumber CUSTOM. The pair rule,
  * wherever an engine is named (a model entry, the default engine, anira_backend_id,
- * anira_plan_info, anira_edge_info, anira_provider_option_set, anira_stage_ctx): the
+ * anira_plan_info, anira_edge_info, anira_provider_option_set, anira_processor_ctx): the
  * engine_id is non-NULL if and only if the engine is ANIRA_ENGINE_CUSTOM. A built-in
  * engine is its value with a NULL id; a custom engine (anira_custom_engine_create, added
  * to a pipeline with anira_pipeline_add_engine) is ANIRA_ENGINE_CUSTOM with its
- * reverse-URI id (a stage reads it with anira_stage_engine); ANIRA_ENGINE_NONE names no
- * engine and takes no id. A setter refuses any other combination with
+ * reverse-URI id (a processor reads it with anira_processor_engine); ANIRA_ENGINE_NONE
+ * names no engine and takes no id. A setter refuses any other combination with
  * ANIRA_ERROR_INVALID_ARGUMENT.
  */
 typedef enum anira_engine {
@@ -654,9 +654,9 @@ typedef enum anira_engine {
  * are reserved for later providers, which are appended after XNNPACK and never renumber
  * CUSTOM. The pair rule, wherever a provider is named (the pin of a model entry, the
  * default provider, anira_backend_id, anira_plan_info, anira_edge_info,
- * anira_provider_option_set, anira_engine_load_info, anira_stage_ctx): the provider_id
- * is non-NULL if and only if the provider is ANIRA_PROVIDER_CUSTOM. A provider of the
- * enum is its value with a NULL id; a provider the enum does not name is
+ * anira_provider_option_set, anira_engine_load_info, anira_processor_ctx): the
+ * provider_id is non-NULL if and only if the provider is ANIRA_PROVIDER_CUSTOM. A
+ * provider of the enum is its value with a NULL id; a provider the enum does not name is
  * ANIRA_PROVIDER_CUSTOM with its non-empty name in the engine's own vocabulary: the
  * runtime's name for a built-in engine (what the context's capabilities report), an
  * entry of the descriptor's providers list for a custom engine. A setter refuses any
@@ -701,21 +701,21 @@ typedef enum anira_provider {
 } anira_provider;
 
 /**
- * @brief The phase a callback of either descriptor runs in: the phases and slots of a stage,
- * the engine call between two of them and the slots of an engine (abi/stage.h,
- * abi/engine.h). The two lifecycles share it, so like their shared records
- * (anira/abi/lifecycle.h) it names no side. The value travels in one field,
- * anira_stage_ctx.phase, since a stage's accessors depend on it; an engine receives
- * none, each of its slots being a callback of its own. Every message anira writes about
- * a slot names the phase by the lower-case name of its value (pre_process, post_process,
- * before_inference, inference, after_inference, prepare, release, reset, unprepare,
- * init, load, unload, query): a stage phase that fails or that an accessor refuses, a
- * refused init, load or prepare of a stage or an engine ("the engine 'x' refused load:
- * it returned N"), a failed engine call. Pinned now. The three inference-thread phases
- * are numbered in the order they run; the phases of the shared lifecycle
- * (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and unprepare,
- * then init, then the engine's two model-level phases, load and unload, then the
- * engine's query.
+ * @brief The phase a callback of either descriptor runs in: the phases and slots of a
+ * processor, the engine call between two of them and the slots of an engine
+ * (abi/processor.h, abi/engine.h). The two lifecycles share it, so like their shared
+ * records (anira/abi/lifecycle.h) it names no side. The value travels in one field,
+ * anira_processor_ctx.phase, since a processor's accessors depend on it; an engine
+ * receives none, each of its slots being a callback of its own. Every message anira
+ * writes about a slot names the phase by the lower-case name of its value (pre_process,
+ * post_process, before_inference, inference, after_inference, prepare, release, reset,
+ * unprepare, init, load, unload, query): a processor phase that fails or that an
+ * accessor refuses, a refused init, load or prepare of a processor or an engine ("the
+ * engine 'x' refused load: it returned N"), a failed engine call. Pinned now. The three
+ * inference-thread phases are numbered in the order they run; the phases of the shared
+ * lifecycle (anira/abi/lifecycle.h) are appended behind the lifecycle pair: reset and
+ * unprepare, then init, then the engine's two model-level phases, load and unload, then
+ * the engine's query.
  */
 typedef enum anira_phase {
     ANIRA_PHASE_PRE_PROCESS = 0,  /**< Before the model inputs are formed. */
@@ -723,9 +723,9 @@ typedef enum anira_phase {
     ANIRA_PHASE_BEFORE_INFERENCE = 2,  /**< On the inference thread, before the engine call. */
     /**
      * On the inference thread, the engine call itself: the built-in engine of the running plan,
-     * or a registered custom engine's process. No stage callback runs in this phase; a failed
-     * engine call is logged under its word ("inference failed in session N: the engine of plan
-     * P returned S").
+     * or a registered custom engine's process. No processor callback runs in this phase; a
+     * failed engine call is logged under its word ("inference failed in session N: the engine
+     * of plan P returned S").
      */
     ANIRA_PHASE_INFERENCE = 3,
     ANIRA_PHASE_AFTER_INFERENCE = 4,  /**< On the inference thread, after the engine call. */
@@ -733,20 +733,20 @@ typedef enum anira_phase {
     ANIRA_PHASE_RELEASE = 6,  /**< When the last carrier dies. */
     /**
      * The first chunk of a new stream (after prepare, after anira_handler_reset), before its
-     * pre_process, on the thread that runs pre_process: the stage's reset slot
-     * (anira_stage_reset_fn), with that chunk's context, where the accessors answer the role
-     * only.
+     * pre_process, on the thread that runs pre_process: the processor's reset slot
+     * (anira_processor_reset_fn), with that chunk's context, where the accessors answer the
+     * role only.
      */
     ANIRA_PHASE_RESET = 7,
     /**
      * At the next anira_handler_prepare and at anira_handler_destroy, after the last phase call
-     * of the handler: the stage's unprepare slot (anira_stage_unprepare_fn), and the engine's
-     * (anira_engine_unprepare_fn) for that handler.
+     * of the handler: the processor's unprepare slot (anira_processor_unprepare_fn), and the
+     * engine's (anira_engine_unprepare_fn) for that handler.
      */
     ANIRA_PHASE_UNPREPARE = 8,
     /**
-     * At the first anira_handler_prepare that reaches a stage's or an engine's carrier, once
-     * per carrier: the init slot (anira_stage_init_fn, anira_engine_init_fn) with an
+     * At the first anira_handler_prepare that reaches a processor's or an engine's carrier,
+     * once per carrier: the init slot (anira_processor_init_fn, anira_engine_init_fn) with an
      * anira_init_info.
      */
     ANIRA_PHASE_INIT = 9,
@@ -770,22 +770,22 @@ typedef enum anira_phase {
 } anira_phase;
 
 /**
- * @brief anira_stage_desc.flags bit: the stage promises that its pre_process and post_process
- * allocate nothing, lock nothing and block on nothing (its reset runs on the same thread
- * and is covered by the same promise). Required by anira_handler_prepare for a filled
- * pre_process, post_process or reset under a Hard contract, where the three phases run
- * on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not required
- * under an Async contract.
+ * @brief anira_processor_desc.flags bit: the processor promises that its pre_process and
+ * post_process allocate nothing, lock nothing and block on nothing (its reset runs on
+ * the same thread and is covered by the same promise). Required by anira_handler_prepare
+ * for a filled pre_process, post_process or reset under a Hard contract, where the three
+ * phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag without it); not
+ * required under an Async contract.
  */
-#define ANIRA_STAGE_FLAG_REALTIME_PRE_POST 1u
+#define ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST 1u
 
 /**
- * @brief anira_stage_desc.flags bit: the stage promises the same of its before_inference and
- * after_inference. Not required by any contract of this pre-release (the hooks run on an
- * inference thread); a later contract option that runs them on the driving thread will
- * require it together with ANIRA_STAGE_FLAG_REALTIME_PRE_POST.
+ * @brief anira_processor_desc.flags bit: the processor promises the same of its
+ * before_inference and after_inference. Not required by any contract of this pre-release
+ * (the hooks run on an inference thread); a later contract option that runs them on the
+ * driving thread will require it together with ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST.
  */
-#define ANIRA_STAGE_FLAG_REALTIME_HOOKS 2u
+#define ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS 2u
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither
@@ -837,7 +837,7 @@ typedef enum anira_phase {
  * ANIRA_MODEL_STATEFUL or with a declared State pair, with a reset at every stream
  * start. An engine builds what it keeps per stream at this prepare, its own executor
  * included: its process calls for this handler carry ANIRA_ENGINE_CALL_EXCLUSIVE and
- * claim no shared slot of the loaded model. For a stage the bit is informational.
+ * claim no shared slot of the loaded model. For a processor the bit is informational.
  */
 #define ANIRA_PREPARE_EXCLUSIVE 1u
 

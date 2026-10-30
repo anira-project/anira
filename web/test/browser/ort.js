@@ -36,8 +36,8 @@ const requests = async (pathname) =>
 // rendered energy.
 const renderGain = async (anira, context, model) => {
   const pipeline = Pipeline.create(anira)
-    .inference(model)
-    .registerEngine(ONNXRUNTIME_WEB_ENGINE_ID)
+    .addInference(model)
+    .addEngine(ONNXRUNTIME_WEB_ENGINE_ID)
   const contract = ContractHandle.hard(anira, {
     blockMin: QUANTUM,
     rate: RATE,

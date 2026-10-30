@@ -61,8 +61,8 @@ const render = async (
     })
   )
   const pipeline = Pipeline.create(anira)
-    .inference(model)
-    .registerEngine(engine, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addInference(model)
+    .addEngine(engine, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
   const contract = ContractHandle.hard(anira, {
     blockMin: QUANTUM,
     rate: RATE,

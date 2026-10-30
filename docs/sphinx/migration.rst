@@ -31,7 +31,7 @@ Where the 2.x API stands in this pre-release
   (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
   :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
   and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
-  becomes the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
+  becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
   custom :cpp:class:`anira::BackendBase` a *registered engine* (``anira_engine_desc``,
   :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
   :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps its code
@@ -91,8 +91,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        ``ANIRA_ENGINE_LITERT``, ``ANIRA_ENGINE_EXECUTORCH``. A custom backend is a named
        engine, created under its id and added to the pipeline (``anira_custom_engine_create``
        and ``anira_pipeline_add_engine``; an :cpp:class:`anira::Engine` constructed with its
-       id and registered with ``anira::Pipeline::register_engine(impl)`` or
-       ``anira::stage::Inference(cfg).engine(impl)``)
+       id and added with ``anira::Pipeline::add_engine(impl)``)
        and named by the entry: ``cfg.add_model_path("de.tu-berlin.coreml", path)``
        (``anira_model_config_add_model_path`` with ``ANIRA_ENGINE_CUSTOM`` and the id).
    * - ``anira::ModelData{bytes, size, backend}`` (binary)
@@ -177,14 +176,14 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
 
 .. _migration-runtime:
 
-The handler entries and the stage
----------------------------------
+The handler entries and the processor
+-------------------------------------
 
 The 3.x runtime is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp`` over the C
-handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5) with the stage of
-``anira/abi/stage.h`` (:doc:`usage` section 2). It is created on an :cpp:class:`anira::Context`
+handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5) with the processor of
+``anira/abi/processor.h`` (:doc:`usage` section 2). It is created on an :cpp:class:`anira::Context`
 from an :cpp:class:`anira::Pipeline` (``anira::InferenceHandler handler(context,
-anira::Pipeline{anira::stage::Inference(cfg)})``), where the 2.x handler took a processor, the
+pipeline)`` over ``pipeline.add_inference(cfg)``), where the 2.x handler took a processor, the
 configuration and a ``CoreConfig``. What each 2.x call becomes (``handler`` is the
 :cpp:class:`anira::InferenceHandler`, ``h`` the ``anira_handler`` of the C entry in brackets; a
 block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` section 3.3):
@@ -211,7 +210,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
    * - the ``tensor_index`` argument
      - ``slot``: the tensor's position in the model config's list of its side, State tensors
        included, one number everywhere (the ``_multi`` arrays and their ``delivered`` counts,
-       the latencies, the plan report's rows, a stage's accessors); the 2.x index counted the
+       the latencies, the plan report's rows, a processor's accessors); the 2.x index counted the
        same list. A model whose stream sits at another position on each side names both:
        ``in_slot`` and ``out_slot``.
    * - ``push_data(...)`` / ``pop_data(...)``
@@ -271,7 +270,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
        (``anira_inference_thread_create``).
 
 What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
-stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C++):
+processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Processor` in C++):
 
 .. list-table::
    :header-rows: 1
@@ -280,58 +279,58 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - anira 2.x
      - anira 3.x
    * - ``class X : public anira::PrePostProcessor``
-     - An ``anira_stage_desc`` handed to ``anira_pipeline_add_stage``, or a subclass of
-       :cpp:class:`anira::Stage` handed to :cpp:class:`anira::Pipeline` as
-       :cpp:class:`anira::stage::Custom`; at most one per pipeline, the registration every
+     - An ``anira_processor_desc`` handed to ``anira_pipeline_add_processor``, or a subclass of
+       :cpp:class:`anira::Processor` handed to :cpp:class:`anira::Pipeline` with
+       ``add_processor``; at most one per pipeline, the registration every
        handler of the pipeline shares.
    * - the members of a processor (a scratch sized in its constructor from the config)
      - The prepared object of one handler: ``prepare(info, user_data, &prepared)`` receives an
        ``anira_prepare_info`` (``anira/abi/lifecycle.h``, the record an earlier pre-release
-       called ``anira_stage_prepare_info``) and hands it back
-       (``Stage::prepare(const PrepareInfo&)`` returns the
-       :cpp:class:`anira::Stage::Prepared`), sized by the record's ``num_entries`` and
+       called ``anira_processor_prepare_info``) and hands it back
+       (``Processor::prepare(const PrepareInfo&)`` returns the
+       :cpp:class:`anira::Processor::Prepared`), sized by the record's ``num_entries`` and
        templates; every phase of that handler receives it, ``unprepare`` gets it back (anira
        deletes the ``Prepared``) at the next prepare or the destroy of the handler, and
        ``reset`` re-initialises what it keeps at the first chunk of a new stream.
    * - a static of the processor class, shared by every instance of it
-     - ``init(info, user_data)`` / ``Stage::init(const InitInfo&)``: once per
-       ``anira_pipeline_add_stage``, at the first ``anira_handler_prepare`` of a handler of the
+     - ``init(info, user_data)`` / ``Processor::init(const InitInfo&)``: once per
+       ``anira_pipeline_add_processor``, at the first ``anira_handler_prepare`` of a handler of the
        pipeline, before that handler's prepare, with an ``anira_init_info``
        (``anira/abi/lifecycle.h``: the log level, the size of the inference thread pool, the
        handler's context); a refused init fails that prepare and the next one calls init
        again; ``release`` once, with the last carrier, whether or not init ever ran.
    * - ``pre_process(std::vector<RingBuffer>& input, std::vector<BufferF>& output,
        InferenceBackend backend)``
-     - ``pre_process(const anira_stage_ctx* ctx, void* prepared, void* user_data)`` /
-       ``Stage::Prepared::pre_process(StageContext& ctx)``: per slot ``anira_stage_input_role`` (what
-       the slot is, ``ctx.input_role(slot, role)``), ``anira_stage_input_ring`` (the ring of
-       a Streamed slot, ``ctx.input_ring(slot, ring)``) and ``anira_stage_input_tensor`` (the
+     - ``pre_process(const anira_processor_ctx* ctx, void* prepared, void* user_data)`` /
+       ``Processor::Prepared::pre_process(ProcessorContext& ctx)``: per slot ``anira_processor_input_role`` (what
+       the slot is, ``ctx.input_role(slot, role)``), ``anira_processor_input_ring`` (the ring of
+       a Streamed slot, ``ctx.input_ring(slot, ring)``) and ``anira_processor_input_tensor`` (the
        model tensor, ``ctx.input_tensor(slot, tensor)``), each a status and an out-parameter;
        the backend is ``ctx->engine`` and ``ctx->provider`` (``ctx.engine()``,
        ``ctx.provider()``).
    * - ``post_process(std::vector<BufferF>& input, std::vector<RingBuffer>& output,
        InferenceBackend backend)``
-     - ``post_process``: ``anira_stage_output_tensor`` and ``anira_stage_output_ring``.
+     - ``post_process``: ``anira_processor_output_tensor`` and ``anira_processor_output_ring``.
    * - ``before_inference(std::vector<BufferF>& input, ...)`` /
        ``after_inference(std::vector<BufferF>& output, ...)``
      - ``before_inference`` / ``after_inference``, one to one, on the inference thread:
-       ``anira_stage_input_tensor`` / ``anira_stage_output_tensor`` for every slot, State
+       ``anira_processor_input_tensor`` / ``anira_processor_output_tensor`` for every slot, State
        tensors included.
    * - ``pop_samples_from_buffer(ring, buffer, n)`` and its windowing overloads
      - ``anira_ring_pop_block``, ``anira_ring_peek_past_block`` (the history) and
        ``anira_ring_pop_windows`` (the batched windows); :cpp:class:`anira::RingView`
        ``pop_block`` / ``peek_past_block`` / ``pop_windows`` over a ``std::span``. The default
-       fill itself is ``anira_stage_default_pre_process`` ("call super",
-       ``Stage::Prepared::pre_process``).
+       fill itself is ``anira_processor_default_pre_process`` ("call super",
+       ``Processor::Prepared::pre_process``).
    * - ``push_samples_to_buffer(buffer, ring, n)``
      - ``anira_ring_push_block`` (``RingView::push_block``); the default push is
-       ``anira_stage_default_post_process`` (``Stage::Prepared::post_process``).
+       ``anira_processor_default_post_process`` (``Processor::Prepared::post_process``).
    * - ``get_input(i, sample)`` inside ``pre_process``, ``set_output(value, i, sample)`` inside
        ``post_process`` (the non-streamable tensors)
      - Nothing: anira materialises a Static input into the model tensor ahead of
-       ``pre_process`` and captures a Static output from it behind ``post_process``; a stage
-       reads or alters the value through ``anira_stage_input_tensor`` /
-       ``anira_stage_output_tensor``.
+       ``pre_process`` and captures a Static output from it behind ``post_process``; a processor
+       reads or alters the value through ``anira_processor_input_tensor`` /
+       ``anira_processor_output_tensor``.
    * - the sizes of ``m_inference_config`` (``get_preprocess_input_size()``, the tensor sizes)
      - The ``anira_tensor`` an accessor fills (``shape``, ``ndim``,
        ``anira_tensor_num_elements``) and ``anira_ring_num_channels``; the hop is what the
@@ -339,14 +338,14 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - the ``float`` helpers on a ring of another dtype (which did nothing)
      - The ring accessors state the dtype: another one than the ring's moves nothing, returns
        ``0`` and records ``ANIRA_ERROR_CONFIG``; a ring dtype that differs from the spec's is
-       legal when the stage fills the phase that moves that ring.
+       legal when the processor fills the phase that moves that ring.
    * - a virtual that throws
      - A returned status: the callbacks are ``noexcept``, a status other than ``ANIRA_OK``
        fails the chunk (zeros at its stream position) and is latched in
        ``anira_handler_rt_error``.
    * - the audio-thread rule of ``pre_process`` / ``post_process``
-     - The flags: ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` is required under a Hard contract
-       (``Stage::flags()``), ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` is the promise for the two hooks.
+     - The flags: ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` is required under a Hard contract
+       (``Processor::flags()``), ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` is the promise for the two hooks.
    * - the hidden-state splice in the hooks (the ``StatefulPrePostProcessor`` pattern)
      - Declared state: ``"role": "state"`` on both halves and ``"state_source"`` on the input;
        anira feeds and captures it, no hook needed. The hooks still see the fed and the
@@ -354,7 +353,7 @@ stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C+
    * - the FFT of a spectrogram processor
      - Stays in ``pre_process`` with the promise, as in 2.x; or moves to ``before_inference``
        on the inference thread, with the window popped into a per-entry scratch
-       (``anira_stage_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
+       (``anira_processor_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
        (:doc:`custom_preprocessing`).
 
 What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
@@ -371,9 +370,8 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
      - An ``anira_engine_desc`` made an engine under a reverse-URI id with
        ``anira_custom_engine_create(id, &desc, &engine, &err)`` and added with
        ``anira_pipeline_add_engine(pipe, engine, &err)``, or a subclass of
-       :cpp:class:`anira::Engine` constructed with its id and registered with
-       ``Pipeline::register_engine(impl)`` or brought along by
-       ``stage::Inference(cfg).engine(impl)``; a model entry names the id
+       :cpp:class:`anira::Engine` constructed with its id and added with
+       ``Pipeline::add_engine(impl)``; a model entry names the id
        (``cfg.add_model_path(id, path)``), and that entry is a plan the report lists as
        ``ANIRA_ENGINE_CUSTOM`` with the id, selected with ``anira_handler_set_plan``.
    * - ``X(anira::InferenceConfig& config)`` and the members sized from it
@@ -385,7 +383,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        that model sees (``Engine::load(const EngineLoadInfo&)`` returns the
        :cpp:class:`anira::Engine::Loaded`); once per loaded model anira pools, a stateful
        model included. The prepared handle: ``prepare(info, loaded, user_data, &prepared)``
-       receives the ``anira_prepare_info`` the stage's prepare receives (the handler, its plan
+       receives the ``anira_prepare_info`` the processor's prepare receives (the handler, its plan
        report, ``num_entries``, the model-end templates, the names, ``flags``) and the loaded
        pointer, and hands back what ``process`` runs on for that handler
        (``Engine::Loaded::prepare(const PrepareInfo&)`` returns the
@@ -435,9 +433,9 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        the loaded model is re-prepared or destroyed, after every unprepare of it
        (``Engine::Loaded`` is deleted there); ``release(user_data)`` once, with the last
        reference to the engine object, whether or not init ever ran (``Engine::release()``).
-   * - ``InferenceBackend::CUSTOM`` in the plan report and the stage context
+   * - ``InferenceBackend::CUSTOM`` in the plan report and the processor context
      - ``ANIRA_ENGINE_CUSTOM`` with ``engine_id`` (``anira_plan_info``, ``anira_backend_id``;
-       a stage reads the pair with ``anira_stage_engine``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
+       a processor reads the pair with ``anira_processor_engine``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
        C handler runs it like every added id, on the engine added under it (the one id with
        the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
        adds it for a 2.x custom backend).
@@ -456,7 +454,7 @@ host compiles against it by including it in place of ``<anira/anira.h>`` and add
 minor release after 3.0.0 (:ref:`migration-compat-schedule`); moving to the 3.x API of the
 rest of this page is the way forward, and the header lets that happen one class at a time
 (``anira::v2::InferenceConfig::model_config()`` hands out the 3.x handle,
-``anira::v2::LegacyProcessorStage`` runs a 2.x processor as the stage of a 3.x pipeline).
+``anira::v2::LegacyProcessor`` runs a 2.x processor as the processor of a 3.x pipeline).
 
 .. code-block:: cpp
 
@@ -644,11 +642,11 @@ The processor half of the runtime is in the header too. ``anira::v2::PrePostProc
 the four virtuals with their 2.x signatures and default bodies, the per-element atomics of the
 non-streamable tensors (``set_input``, ``get_output`` and their twins, from any thread) and
 the five helpers, over two views: ``anira::v2::RingBuffer`` is a view of the ``anira_ring`` of
-one Streamed slot (the float face of the ring accessors of ``anira/abi/stage.h``), and
+one Streamed slot (the float face of the ring accessors of ``anira/abi/processor.h``), and
 ``anira::v2::BufferF`` a view of the model end of one slot, one channel of the tensor's packed
-elements, as 2.x laid a model buffer out. ``anira::v2::LegacyProcessorStage`` runs such a
-processor as the stage of a 3.x pipeline (all four phases,
-``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``); the processor sees the backend of the chunk's plan,
+elements, as 2.x laid a model buffer out. ``anira::v2::LegacyProcessor`` runs such a
+processor as the processor of a 3.x pipeline (all four phases,
+``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST``); the processor sees the backend of the chunk's plan,
 ``CUSTOM`` for a custom engine. ``anira::v2::PassthroughEngine`` is ``BackendBase::process`` as
 an :cpp:class:`anira::Engine` under ``anira.v2.custom``: what a 2.x ``CUSTOM`` row runs when
 no engine was passed. ``anira::v2::Context`` carries the 2.x statics (``shutdown``,
@@ -675,7 +673,7 @@ What differs from 2.x:
 ``ContextConfig`` (the custom form an :cpp:class:`anira::Engine` in place of the
 ``BackendBase``), build a context, a pipeline of a private copy of the configuration's model
 config (the custom engine, the inference stage under the default candidate set, a
-``LegacyProcessorStage`` over the processor) and one ``anira_handler``; ``prepare`` mints the
+``LegacyProcessor`` over the processor) and one ``anira_handler``; ``prepare`` mints the
 legacy contract with the host geometry, the ``process``, ``push_data`` and ``pop_data`` forms
 present the caller's channel pointers as planar float tensors and route the non-streamable
 values through the processor's atomics, and the rest forwards to the entry of the same name. A
@@ -774,7 +772,7 @@ drove the 2.x handler through the bridge hands the same objects to
    * - The bridge
      - anira 3.x
    * - ``to_inference_config(cfg, hard, candidates)``
-     - ``anira::stage::Inference(cfg, candidates)`` in an :cpp:class:`anira::Pipeline`; the
+     - ``pipeline.add_inference(cfg, candidates)`` on an :cpp:class:`anira::Pipeline`; the
        candidates are ``anira::BackendId`` rows (an engine on a provider), none for the
        default set.
    * - ``to_core_config(context_config)``
@@ -786,7 +784,7 @@ drove the 2.x handler through the bridge hands the same objects to
      - ``anira::enabled_engines()``.
    * - ``anira::InferenceHandler handler(pp, inference_config, core_config)``
      - ``anira::InferenceHandler handler(context, pipeline)``, with a custom processor's 3.x
-       form as the pipeline's stage (``anira::stage::Custom``, :ref:`migration-runtime`).
+       form as the pipeline's processor (``pipeline.add_processor``, :ref:`migration-runtime`).
 
 .. code-block:: cpp
 
@@ -796,7 +794,9 @@ drove the 2.x handler through the bridge hands the same objects to
     anira::ContractHandle contract = ...;    // section 1.3
     anira::Context context{anira::ContextConfig{}};
 
-    anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(cfg)});
+    anira::Pipeline pipeline;
+    pipeline.add_inference(cfg);
+    anira::InferenceHandler handler(context, pipeline);
 
     // prepare, once the host geometry is known
     contract.hard_geometry(samples_per_block, samples_per_block, sample_rate);
@@ -925,7 +925,9 @@ from its ``context_config`` block, the three objects a handler runs the file wit
     anira::ContextConfig context_config = anira::ContextConfig::from_file("Config.json");
 
     anira::Context context(context_config);
-    anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(model_config)});
+    anira::Pipeline pipeline;
+    pipeline.add_inference(model_config);
+    anira::InferenceHandler handler(context, pipeline);
 
 **Converting a file.** Reading a 2.x file and writing the handle back is the migration tool:
 ``anira_model_config_to_json`` and ``anira_context_config_to_json`` write the 3.x spelling with a
@@ -988,7 +990,7 @@ path is a Wasm Audio Worklet node whose render callback is C.
   (``ContractHandle.fromUrl``, then ``hardGeometry``): the render quantum is the smallest block,
   the context's burst of quanta the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
 - ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
-  ``Pipeline.create(anira).inference(model)``, ``InferenceHandler.create(context, pipeline)`` and
+  ``Pipeline.create(anira).addInference(model)``, ``InferenceHandler.create(context, pipeline)`` and
   ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core
   and its pool.
 - ``inferenceHandler.process(...)`` in a worklet becomes the handler's audio node,
@@ -996,14 +998,14 @@ path is a Wasm Audio Worklet node whose render callback is C.
   callback is C; ``setInput`` on a Static tensor becomes the node's AudioParam (scalars) or
   ``audioNode.setStaticInput`` (tensors). ``BufferF``, ``RingBuffer`` and the ``Vector*``
   classes have no successor: tensors are heap memory described by ``anira_tensor`` records.
-- ``JSPrePostProcessor`` and ``registerPrePostProcessor`` become ``defineStage(name, factory)``
-  in every scope that runs one of the stage's phases (the page, the worklet's module) and
-  ``pipeline.addStage(name, { hooks, flags })``: the method names stay (``preProcess``,
+- ``JSPrePostProcessor`` and ``registerPrePostProcessor`` become ``defineProcessor(name, factory)``
+  in every scope that runs one of the processor's phases (the page, the worklet's module) and
+  ``pipeline.addProcessor(name, { hooks, flags })``: the method names stay (``preProcess``,
   ``postProcess``, ``beforeInference``, ``afterInference``), they receive the
-  ``anira_stage_ctx`` pointer instead of buffer vectors.
+  ``anira_processor_ctx`` pointer instead of buffer vectors.
 - ``JSBackendBase`` and ``registerProcessor(backend, className)`` become
   ``defineEngine(id, factory)`` in the context's worker module and
-  ``pipeline.registerEngine(id, { flags })``; ``process(ctx, prepared)`` reads the
+  ``pipeline.addEngine(id, { flags })``; ``process(ctx, prepared)`` reads the
   ``anira_engine_ctx`` (``engineTensors``), ``InferenceBackend.CUSTOM`` becomes the engine id in
   the model entry. The ONNX Runtime Web backend is
   ``onnxRuntimeWeb({ model })`` from ``@anira-project/anira/engines/onnxruntime-web``; the built-in
@@ -1015,7 +1017,7 @@ path is a Wasm Audio Worklet node whose render callback is C.
 ``addJSStage``, ``configureAudioWorklet``, ``AniraAudioWorkletBase``, ``setupInferenceWorker``)
 move the same way: the worker file's ``setupInferenceWorker({ MyEngine })`` becomes
 ``defineEngine`` calls in the context's worker module, the worklet subclass with its
-``stageClasses`` becomes ``defineStage`` in a ``workletModules`` module, and
+``stageClasses`` becomes ``defineProcessor`` in a ``workletModules`` module, and
 ``configureAudioWorklet`` becomes ``handler.createAudioNode``. Its single-slot options
 ``inputChannels``, ``outputChannels``, ``inputSlot`` and ``outputSlot`` become ``inputSlots`` and
 ``outputSlots``, lists of Streamed slots whose channel counts come from the model (the default

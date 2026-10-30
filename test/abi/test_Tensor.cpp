@@ -991,7 +991,7 @@ TEST(AbiTensor, SizeofAnswersEveryRegisteredRecord) {
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_TENSOR), 216U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_SYNC_TOKEN), 24U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_MEMORY_HANDLE), 24U);
-    EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_STAGE_CTX), 64U);
+    EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_PROCESSOR_CTX), 64U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_LOG_RECORD), 56U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_ERROR), 520U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_ENGINE_CTX), 64U);

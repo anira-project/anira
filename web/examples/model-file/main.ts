@@ -2,7 +2,7 @@
 // module's built-in ONNX Runtime engine, on the context's inference Workers, streamed through the
 // handler's audio node. extras/models/model-pool/gain.model.json is the bundled SimpleGainNetwork
 // config (the output is the input times the Static input `gain`); its model files sit beside it
-// as its paths say. No JavaScript stage or engine: the built-in engine needs none. Beside the
+// as its paths say. No JavaScript processor or engine: the built-in engine needs none. Beside the
 // model's (wet) path a dry path, delayed by the handler's latency so the two stay aligned.
 // [module]
 import {
@@ -78,7 +78,7 @@ export async function createModelFileExample(
   // [configs]
 
   // [handler]
-  const pipeline = Pipeline.create(anira).inference(model)
+  const pipeline = Pipeline.create(anira).addInference(model)
   const handler = InferenceHandler.create(context, pipeline)
   const report = handler.prepare(contract) // the plans this prepare compiled
   for (const plan of report.plans()) {

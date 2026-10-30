@@ -12,7 +12,7 @@
 // A model config serves it with an entry without a source, which the engine's
 // ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL allows (anira::ModelConfig::add_model(k_bypass_engine_id), or a
 // JSON entry `{"engine": "org.anira.examples.bypass"}`); the pipeline carries the engine
-// (stage::Inference::engine or Pipeline::register_engine). process allocates nothing
+// (Pipeline::add_engine). process allocates nothing
 // (ANIRA_ENGINE_FLAG_REALTIME_SAFE); a shape it cannot read so (an output row longer than the
 // input row) is zero-filled.
 

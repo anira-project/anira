@@ -28,7 +28,7 @@
 #include <anira/abi/core.h>  // IWYU pragma: export
 #include <anira/abi/thread.h>  // IWYU pragma: export
 #include <anira/abi/lifecycle.h>  // IWYU pragma: export
-#include <anira/abi/stage.h>  // IWYU pragma: export
+#include <anira/abi/processor.h>  // IWYU pragma: export
 #include <anira/abi/engine.h>  // IWYU pragma: export
 #include <anira/abi/handler.h>  // IWYU pragma: export
 #include <anira/abi/draft/tensor_platform.h>  // IWYU pragma: export

@@ -1,8 +1,8 @@
 // anira/anira_em.h: the Emscripten companion of the C ABI. The EM_JS thunks into the registry of
-// the scope that runs the C call (globalThis[Symbol.for('anira.registry')]), the stage and engine
-// trampolines that call them, the heap record behind the descriptors' user_data, the JavaScript
-// log sink and the context's worker module. Compiled into anira on the Wasm binary format only
-// (CMakeLists.txt); the header is empty everywhere else.
+// the scope that runs the C call (globalThis[Symbol.for('anira.registry')]), the processor and
+// engine trampolines that call them, the heap record behind the descriptors' user_data, the
+// JavaScript log sink and the context's worker module. Compiled into anira on the Wasm binary
+// format only (CMakeLists.txt); the header is empty everywhere else.
 #include <anira/abi/config.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
@@ -10,7 +10,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/anira_em.h>
 #include <anira/scheduler/InferenceThread.h>
@@ -38,13 +38,13 @@ using anira::capi::translate_exception;
 EM_JS_DEPS(anira_em_hooks, "$UTF8ToString");
 
 EM_JS(int,
-      anira_em_js_stage,
+      anira_em_js_processor,
       (uint32_t key, uint32_t phase, uintptr_t a, uintptr_t b, int failure),
       {
           try {
               var registry = globalThis[Symbol.for ('anira.registry')];
               if (!registry) { throw new Error('no anira registry in this scope'); }
-              return registry.stage(Module, key >>> 0, phase, a >>> 0, b >>> 0) | 0;
+              return registry.processor(Module, key >>> 0, phase, a >>> 0, b >>> 0) | 0;
           } catch (e) {
               var report = Module.aniraReportThrow;
               if (!report) {
@@ -66,7 +66,8 @@ EM_JS(int,
                       state.suppressed = 0;
                   };
               }
-              report("the JavaScript stage hook (key " + (key >>> 0) + ", phase " + phase + ")", e);
+              report("the JavaScript processor hook (key " + (key >>> 0) + ", phase " + phase + ")",
+                     e);
               return failure;
           }
       });
@@ -139,32 +140,33 @@ EM_JS(void, anira_em_js_log, (uintptr_t record), {
 
 namespace {
 
-constexpr uint32_t k_stage_hooks = ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST | ANIRA_EM_HOOK_BEFORE |
-                                   ANIRA_EM_HOOK_AFTER | ANIRA_EM_HOOK_PREPARE |
-                                   ANIRA_EM_HOOK_RELEASE | ANIRA_EM_HOOK_RESET |
-                                   ANIRA_EM_HOOK_UNPREPARE | ANIRA_EM_HOOK_INIT;
+constexpr uint32_t k_processor_hooks =
+    ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_POST | ANIRA_EM_PROCESSOR_HOOK_BEFORE |
+    ANIRA_EM_PROCESSOR_HOOK_AFTER | ANIRA_EM_PROCESSOR_HOOK_PREPARE |
+    ANIRA_EM_PROCESSOR_HOOK_RELEASE | ANIRA_EM_PROCESSOR_HOOK_RESET |
+    ANIRA_EM_PROCESSOR_HOOK_UNPREPARE | ANIRA_EM_PROCESSOR_HOOK_INIT;
 constexpr uint32_t k_engine_hooks = ANIRA_EM_ENGINE_HOOK_RESET | ANIRA_EM_ENGINE_HOOK_QUERY;
-// The stage hook bits are the phases' own (ANIRA_EM_HOOKS_VERSION 2): one index space with
-// anira.hpp's Stage::k_* bits.
-static_assert(ANIRA_EM_HOOK_PRE == 1U << ANIRA_PHASE_PRE_PROCESS &&
-                  ANIRA_EM_HOOK_POST == 1U << ANIRA_PHASE_POST_PROCESS &&
-                  ANIRA_EM_HOOK_BEFORE == 1U << ANIRA_PHASE_BEFORE_INFERENCE &&
-                  ANIRA_EM_HOOK_AFTER == 1U << ANIRA_PHASE_AFTER_INFERENCE &&
-                  ANIRA_EM_HOOK_PREPARE == 1U << ANIRA_PHASE_PREPARE &&
-                  ANIRA_EM_HOOK_RELEASE == 1U << ANIRA_PHASE_RELEASE &&
-                  ANIRA_EM_HOOK_RESET == 1U << ANIRA_PHASE_RESET &&
-                  ANIRA_EM_HOOK_UNPREPARE == 1U << ANIRA_PHASE_UNPREPARE &&
-                  ANIRA_EM_HOOK_INIT == 1U << ANIRA_PHASE_INIT,
-              "a stage hook bit is 1 << its anira_phase");
-// What the hook of a stage returns when it throws: the phase fails, its chunk delivers zeros.
-constexpr anira_status k_stage_thrown = ANIRA_ERROR_UNKNOWN;
+// The processor hook bits are the phases' own (ANIRA_EM_HOOKS_VERSION 2): one index space with
+// anira.hpp's Processor::k_* bits.
+static_assert(ANIRA_EM_PROCESSOR_HOOK_PRE == 1U << ANIRA_PHASE_PRE_PROCESS &&
+                  ANIRA_EM_PROCESSOR_HOOK_POST == 1U << ANIRA_PHASE_POST_PROCESS &&
+                  ANIRA_EM_PROCESSOR_HOOK_BEFORE == 1U << ANIRA_PHASE_BEFORE_INFERENCE &&
+                  ANIRA_EM_PROCESSOR_HOOK_AFTER == 1U << ANIRA_PHASE_AFTER_INFERENCE &&
+                  ANIRA_EM_PROCESSOR_HOOK_PREPARE == 1U << ANIRA_PHASE_PREPARE &&
+                  ANIRA_EM_PROCESSOR_HOOK_RELEASE == 1U << ANIRA_PHASE_RELEASE &&
+                  ANIRA_EM_PROCESSOR_HOOK_RESET == 1U << ANIRA_PHASE_RESET &&
+                  ANIRA_EM_PROCESSOR_HOOK_UNPREPARE == 1U << ANIRA_PHASE_UNPREPARE &&
+                  ANIRA_EM_PROCESSOR_HOOK_INIT == 1U << ANIRA_PHASE_INIT,
+              "a processor hook bit is 1 << its anira_phase");
+// What the hook of a processor returns when it throws: the phase fails, its chunk delivers zeros.
+constexpr anira_status k_processor_thrown = ANIRA_ERROR_UNKNOWN;
 constexpr anira_status k_engine_thrown = ANIRA_ERROR_ENGINE;
 
-// The user_data of a JavaScript stage or engine: freed by the descriptor's release.
+// The user_data of a JavaScript processor or engine: freed by the descriptor's release.
 struct HookRecord {
     uint32_t m_js_key = 0;
     uint32_t m_hook_mask = 0;
-    std::string m_engine_id;  ///< empty for a stage
+    std::string m_engine_id;  ///< empty for a processor
 };
 
 HookRecord& record_of(void* user_data) noexcept {
@@ -175,9 +177,9 @@ uintptr_t address(const void* pointer) noexcept {
     return reinterpret_cast<uintptr_t>(pointer);
 }
 
-anira_status call_stage(void* user_data, uint32_t phase, uintptr_t a, uintptr_t b) noexcept {
+anira_status call_processor(void* user_data, uint32_t phase, uintptr_t a, uintptr_t b) noexcept {
     return static_cast<anira_status>(
-        anira_em_js_stage(record_of(user_data).m_js_key, phase, a, b, k_stage_thrown));
+        anira_em_js_processor(record_of(user_data).m_js_key, phase, a, b, k_processor_thrown));
 }
 
 anira_status call_engine(void* user_data, uint32_t phase, uintptr_t a, uintptr_t b) noexcept {
@@ -191,36 +193,39 @@ anira_status call_engine(void* user_data, uint32_t phase, uintptr_t a, uintptr_t
                            k_engine_thrown));
 }
 
-// ---- the stage trampolines: one per slot shape; the four phases share one, by ctx->phase ----
+// ---- the processor trampolines: one per slot shape; the four phases share one, by ctx->phase ----
 
-anira_status ANIRA_CALL stage_phase(const anira_stage_ctx* ctx,
-                                    void* prepared,
-                                    void* user_data) noexcept {
-    return call_stage(user_data, ctx->phase, address(ctx), address(prepared));
+anira_status ANIRA_CALL processor_phase(const anira_processor_ctx* ctx,
+                                        void* prepared,
+                                        void* user_data) noexcept {
+    return call_processor(user_data, ctx->phase, address(ctx), address(prepared));
 }
 
-void ANIRA_CALL stage_reset(const anira_stage_ctx* ctx, void* prepared, void* user_data) noexcept {
-    static_cast<void>(call_stage(user_data, ANIRA_PHASE_RESET, address(ctx), address(prepared)));
+void ANIRA_CALL processor_reset(const anira_processor_ctx* ctx,
+                                void* prepared,
+                                void* user_data) noexcept {
+    static_cast<void>(
+        call_processor(user_data, ANIRA_PHASE_RESET, address(ctx), address(prepared)));
 }
 
-anira_status ANIRA_CALL stage_prepare(const anira_prepare_info* info,
-                                      void* user_data,
-                                      void** out_prepared) noexcept {
-    return call_stage(user_data, ANIRA_PHASE_PREPARE, address(info), address(out_prepared));
+anira_status ANIRA_CALL processor_prepare(const anira_prepare_info* info,
+                                          void* user_data,
+                                          void** out_prepared) noexcept {
+    return call_processor(user_data, ANIRA_PHASE_PREPARE, address(info), address(out_prepared));
 }
 
-void ANIRA_CALL stage_unprepare(void* prepared, void* user_data) noexcept {
-    static_cast<void>(call_stage(user_data, ANIRA_PHASE_UNPREPARE, address(prepared), 0));
+void ANIRA_CALL processor_unprepare(void* prepared, void* user_data) noexcept {
+    static_cast<void>(call_processor(user_data, ANIRA_PHASE_UNPREPARE, address(prepared), 0));
 }
 
-anira_status ANIRA_CALL stage_init(const anira_init_info* info, void* user_data) noexcept {
-    return call_stage(user_data, ANIRA_PHASE_INIT, address(info), 0);
+anira_status ANIRA_CALL processor_init(const anira_init_info* info, void* user_data) noexcept {
+    return call_processor(user_data, ANIRA_PHASE_INIT, address(info), 0);
 }
 
-void ANIRA_CALL stage_release(void* user_data) noexcept {
+void ANIRA_CALL processor_release(void* user_data) noexcept {
     const std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(user_data));
-    if ((record->m_hook_mask & ANIRA_EM_HOOK_RELEASE) != 0) {
-        static_cast<void>(call_stage(user_data, ANIRA_PHASE_RELEASE, 0, 0));
+    if ((record->m_hook_mask & ANIRA_EM_PROCESSOR_HOOK_RELEASE) != 0) {
+        static_cast<void>(call_processor(user_data, ANIRA_PHASE_RELEASE, 0, 0));
     }
 }
 
@@ -311,26 +316,32 @@ void ANIRA_CALL log_hook(const anira_log_record* record, void* /*user_data*/) {
 // One registration per module: the instances share one memory and so the sink list.
 anira::detail::LogSinkId s_log_hook_sink = 0;
 
-// Fills a stage descriptor of trampolines over a new record; throws std::bad_alloc only.
-void fill_stage_desc(anira_stage_desc& desc,
-                     uint32_t js_key,
-                     uint32_t hook_mask,
-                     uint32_t stage_flags) {
+// Fills a processor descriptor of trampolines over a new record; throws std::bad_alloc only.
+void fill_processor_desc(anira_processor_desc& desc,
+                         uint32_t js_key,
+                         uint32_t hook_mask,
+                         uint32_t processor_flags) {
     auto record = std::make_unique<HookRecord>();
     record->m_js_key = js_key;
     record->m_hook_mask = hook_mask;
-    desc = ANIRA_STAGE_DESC_INIT;
-    if ((hook_mask & ANIRA_EM_HOOK_PRE) != 0) { desc.pre_process = &stage_phase; }
-    if ((hook_mask & ANIRA_EM_HOOK_POST) != 0) { desc.post_process = &stage_phase; }
-    if ((hook_mask & ANIRA_EM_HOOK_BEFORE) != 0) { desc.before_inference = &stage_phase; }
-    if ((hook_mask & ANIRA_EM_HOOK_AFTER) != 0) { desc.after_inference = &stage_phase; }
-    if ((hook_mask & ANIRA_EM_HOOK_RESET) != 0) { desc.reset = &stage_reset; }
-    if ((hook_mask & ANIRA_EM_HOOK_PREPARE) != 0) { desc.prepare = &stage_prepare; }
-    if ((hook_mask & ANIRA_EM_HOOK_UNPREPARE) != 0) { desc.unprepare = &stage_unprepare; }
-    if ((hook_mask & ANIRA_EM_HOOK_INIT) != 0) { desc.init = &stage_init; }
-    desc.release = &stage_release;
-    // The caller's stated promise, as given: anira_pipeline_add_stage judges the bits.
-    desc.flags = stage_flags;
+    desc = ANIRA_PROCESSOR_DESC_INIT;
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_PRE) != 0) { desc.pre_process = &processor_phase; }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_POST) != 0) { desc.post_process = &processor_phase; }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_BEFORE) != 0) {
+        desc.before_inference = &processor_phase;
+    }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_AFTER) != 0) {
+        desc.after_inference = &processor_phase;
+    }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_RESET) != 0) { desc.reset = &processor_reset; }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_PREPARE) != 0) { desc.prepare = &processor_prepare; }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_UNPREPARE) != 0) {
+        desc.unprepare = &processor_unprepare;
+    }
+    if ((hook_mask & ANIRA_EM_PROCESSOR_HOOK_INIT) != 0) { desc.init = &processor_init; }
+    desc.release = &processor_release;
+    // The caller's stated promise, as given: anira_pipeline_add_processor judges the bits.
+    desc.flags = processor_flags;
     desc.user_data = record.release();
 }
 
@@ -360,34 +371,35 @@ void fill_engine_desc(anira_engine_desc& desc,
 
 }  // namespace
 
-anira_status ANIRA_CALL anira_em_stage_desc_init(anira_stage_desc* desc,
-                                                 uint32_t js_key,
-                                                 uint32_t hook_mask,
-                                                 uint32_t stage_flags) ANIRA_NOEXCEPT try {
-    if (desc == nullptr || (hook_mask & ~k_stage_hooks) != 0) {
+anira_status ANIRA_CALL anira_em_processor_desc_init(anira_processor_desc* desc,
+                                                     uint32_t js_key,
+                                                     uint32_t hook_mask,
+                                                     uint32_t processor_flags) ANIRA_NOEXCEPT try {
+    if (desc == nullptr || (hook_mask & ~k_processor_hooks) != 0) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    fill_stage_desc(*desc, js_key, hook_mask, stage_flags);
+    fill_processor_desc(*desc, js_key, hook_mask, processor_flags);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_em_pipeline_add_js_stage(anira_pipeline* pipeline,
-                                                       uint32_t js_key,
-                                                       uint32_t hook_mask,
-                                                       uint32_t stage_flags,
-                                                       anira_error* err) ANIRA_NOEXCEPT try {
-    ANIRA_CAPI_REQUIRE((hook_mask & ~k_stage_hooks) == 0,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "JavaScript stage: hook_mask 0x%x carries a bit no ANIRA_EM_HOOK_* "
-                       "defines (they are 0x%x)",
-                       hook_mask,
-                       k_stage_hooks);
-    anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    fill_stage_desc(desc, js_key, hook_mask, stage_flags);
+anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipeline,
+                                                           uint32_t js_key,
+                                                           uint32_t hook_mask,
+                                                           uint32_t processor_flags,
+                                                           anira_error* err) ANIRA_NOEXCEPT try {
+    ANIRA_CAPI_REQUIRE(
+        (hook_mask & ~k_processor_hooks) == 0,
+        err,
+        ANIRA_ERROR_INVALID_ARGUMENT,
+        "JavaScript processor: hook_mask 0x%x carries a bit no ANIRA_EM_PROCESSOR_HOOK_* "
+        "defines (they are 0x%x)",
+        hook_mask,
+        k_processor_hooks);
+    anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
+    fill_processor_desc(desc, js_key, hook_mask, processor_flags);
     // A refused addition never calls release: until it succeeds the record is ours.
     std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(desc.user_data));
-    const anira_status added = anira_pipeline_add_stage(pipeline, &desc, err);
+    const anira_status added = anira_pipeline_add_processor(pipeline, &desc, err);
     if (added == ANIRA_OK) { static_cast<void>(record.release()); }
     return added;
 } catch (...) { return translate_exception(err, __func__); }

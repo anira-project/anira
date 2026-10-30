@@ -67,12 +67,12 @@ THREAD_TAGS = {
     "main-thread & !loader-lock",
     "driver-thread",
     "inference-thread",
-    # The one dual tag: a stage callback (and the accessors and the two stage defaults it may
+    # The one dual tag: a processor callback (and the accessors and the two processor defaults it may
     # call) runs on the driving thread under Hard and on an inference thread for
     # before/after_inference and under Async. anira's own entries under the tag are real-time
-    # on both, so nonblocking is required of an entry; the callback typedef anira_stage_fn
-    # carries no attribute, since whether a stage body is real-time is the stage's own promise
-    # (anira_stage_desc.flags), which differs per stage and cannot be a property of the shared
+    # on both, so nonblocking is required of an entry; the callback typedef anira_processor_fn
+    # carries no attribute, since whether a processor body is real-time is the processor's own promise
+    # (anira_processor_desc.flags), which differs per processor and cannot be a property of the shared
     # type.
     "driver-thread | inference-thread",
     "thread-safe",

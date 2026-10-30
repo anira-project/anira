@@ -147,13 +147,13 @@ Complete Examples
 plays a tone through it, ``check.ts`` renders it offline with the gain automated. Its Vite config
 serves the repository's ``extras/models`` at ``/extras/models/``.
 
-``web/examples/stage-and-engine/`` is a complete page that writes its own stage and engine in
-TypeScript (:doc:`custom_pre_post_processing`, :doc:`custom_inference_backends`): a gain stage in
-the worklet and a stand-in engine on the inference Worker, bundled by Vite. ``npm run examples``
-type-checks and builds it, and the browser test renders its check page offline in Chromium and
-Firefox, built and under Vite's dev server. Its ``main.ts``:
+``web/examples/processor-and-engine/`` is a complete page that writes its own processor and engine
+in TypeScript (:doc:`custom_pre_post_processing`, :doc:`custom_inference_backends`): a gain
+processor in the worklet and a stand-in engine on the inference Worker, bundled by Vite. ``npm run
+examples`` type-checks and builds it, and the browser test renders its check page offline in
+Chromium and Firefox, built and under Vite's dev server. Its ``main.ts``:
 
-.. literalinclude:: ../../../web/examples/stage-and-engine/main.ts
+.. literalinclude:: ../../../web/examples/processor-and-engine/main.ts
    :language: ts
 
 Raw Calls

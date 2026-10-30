@@ -1,7 +1,7 @@
 // The C++20 face of the configuration ABI (anira/anira.hpp): the RAII handles, the
 // builders and the aggregates, each a thin wrapper over one C entry of anira/abi/config.h;
-// the custom stage (anira::Stage) and the custom engine (anira::Engine) as classes, run end to
-// end through a C-created handler. What lands in the C handles is read through
+// the custom processor (anira::Processor) and the custom engine (anira::Engine) as classes, run end
+// to end through a C-created handler. What lands in the C handles is read through
 // src/capi/handles.h, as test_Handles does.
 
 #include <anira/abi/config.h>
@@ -873,16 +873,17 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     expect_move_semantics(anira::Pipeline(), anira::Pipeline());
 
     anira::ModelConfig model = anira_test::gain_with_custom();
-    anira::Pipeline pipe{anira::stage::Inference(model)};
+    anira::Pipeline pipe;
+    pipe.add_inference(model);
     EXPECT_NE(pipe.native(), nullptr);
-    const Thrown second = thrown_by([&] { pipe.inference(model); });
+    const Thrown second = thrown_by([&] { pipe.add_inference(model); });
     EXPECT_TRUE(second.m_thrown);
     EXPECT_EQ(second.m_status, ANIRA_ERROR_CONFIG);
     EXPECT_NE(second.m_what.find("a second inference stage"), std::string::npos) << second.m_what;
 
     const Thrown variants = thrown_by([&] {
-        const anira::Pipeline two{
-            anira::stage::Inference({std::cref(model), std::cref(model)}, {})};
+        anira::Pipeline two;
+        two.add_inference({std::cref(model), std::cref(model)}, {});
     });
     EXPECT_TRUE(variants.m_thrown);
     EXPECT_EQ(variants.m_status, ANIRA_ERROR_NOT_SUPPORTED);
@@ -893,21 +894,18 @@ TEST(AbiCxx, PipelineIsMoveOnlyAndHoldsOneInferenceStage) {
     // enum and a provider_id at once); whether an engine serves it is the handler's question at
     // create.
     const Thrown provider = thrown_by([&] {
-        const anira::Pipeline gpu{
-            anira::stage::Inference(model,
-                                    {anira::BackendId{.struct_size = sizeof(anira::BackendId),
-                                                      .engine = ANIRA_ENGINE_ONNXRUNTIME,
-                                                      .provider = ANIRA_PROVIDER_CUDA,
-                                                      .engine_id = nullptr,
-                                                      .provider_id = "com.example.npu"}})};
+        anira::Pipeline gpu;
+        gpu.add_inference(model,
+                          {anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                                            .engine = ANIRA_ENGINE_ONNXRUNTIME,
+                                            .provider = ANIRA_PROVIDER_CUDA,
+                                            .engine_id = nullptr,
+                                            .provider_id = "com.example.npu"}});
     });
     EXPECT_TRUE(provider.m_thrown);
     EXPECT_EQ(provider.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(provider.m_what.find("the provider_id is set if and only if"), std::string::npos)
         << provider.m_what;
-
-    EXPECT_EQ(anira::stage::Inference(model).variants().size(), 1u);
-    EXPECT_TRUE(anira::stage::Inference(model).candidates().empty());
 }
 
 TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
@@ -915,12 +913,12 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     const anira_test::Context context;
     const anira::ModelConfig model = anira_test::gain_with_custom();
     // The custom row alone: one plan on every leg, the engine-less ones included.
-    anira::Pipeline pipe{
-        anira::stage::Inference(model,
-                                {anira::BackendId{.struct_size = sizeof(anira::BackendId),
-                                                  .engine = ANIRA_ENGINE_CUSTOM,
-                                                  .provider = ANIRA_PROVIDER_CPU,
-                                                  .engine_id = anira_test::k_custom}})};
+    anira::Pipeline pipe;
+    pipe.add_inference(model,
+                       {anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                                         .engine = ANIRA_ENGINE_CUSTOM,
+                                         .provider = ANIRA_PROVIDER_CPU,
+                                         .engine_id = anira_test::k_custom}});
     anira_handler* h = nullptr;
     anira_error err{};
     anira_test::add_passthrough(pipe.native());
@@ -967,10 +965,11 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     anira_handler_destroy(h);
 }
 
-// ---- stages ------------------------------------------------------------------------------------
+// ---- processors
+// ------------------------------------------------------------------------------------
 //
-// A phase function of a Stage runs inside an ANIRA_NONBLOCKING entry or on an inference thread:
-// the test stages hold no gtest assertion there (a failing EXPECT allocates, which under
+// A phase function of a Processor runs inside an ANIRA_NONBLOCKING entry or on an inference thread:
+// the test processors hold no gtest assertion there (a failing EXPECT allocates, which under
 // RealtimeSanitizer aborts the process), allocate nothing and write atomics the test reads once
 // the block's inference was collected. The streams run in lockstep, one block and then the wait.
 
@@ -980,7 +979,7 @@ constexpr size_t k_hop = anira_test::k_block;
 
 /// A mono stream through the custom row, one hop in and one hop out: the pass-through engine a
 /// test adds for the row is an exact copy, so the output stream is the input behind the latency.
-ModelConfig stage_stream_model() {
+ModelConfig processor_stream_model() {
     ModelConfig model;
     model.add_model_path(anira_test::k_custom, "custom-processor");
     model.input(streamed("in", static_cast<int64_t>(k_hop)));
@@ -995,7 +994,7 @@ anira::BackendId custom_row() {
                             .engine_id = anira_test::k_custom};
 }
 
-/// What prepare of a CountingStage does.
+/// What prepare of a CountingProcessor does.
 enum class PrepareMode : uint8_t {
     Ok,
     ThrowError,
@@ -1030,10 +1029,10 @@ struct PreparedCounts {
 
 /// The Prepared of one handler: every phase counts itself and notes whether the context answered
 /// as its phase promises, asking the legal questions of its phase only (a refused one would be
-/// recorded, and the tests read anira_handler_rt_error as ANIRA_OK behind this stage);
+/// recorded, and the tests read anira_handler_rt_error as ANIRA_OK behind this processor);
 /// pre_process and post_process then call the base class, anira's default body; post_process
 /// scales the model output first. The scratch is its own, sized by the record's entry count.
-class CountingPrepared final : public anira::Stage::Prepared {
+class CountingPrepared final : public anira::Processor::Prepared {
 public:
     CountingPrepared(std::shared_ptr<PreparedCounts> counts, float scale)
         : m_counts(std::move(counts)), m_scale(scale) {}
@@ -1043,7 +1042,7 @@ public:
     CountingPrepared(CountingPrepared&&) = delete;
     CountingPrepared& operator=(CountingPrepared&&) = delete;
 
-    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+    anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
         m_counts->m_pre.fetch_add(1);
         anira::Role in_role = ANIRA_ROLE_FORCE32;
         anira::Role out_role = ANIRA_ROLE_FORCE32;
@@ -1061,7 +1060,7 @@ public:
             ctx.input_tensor(0, tensor) == ANIRA_OK && tensor.num_elements() == k_hop &&
             ctx.native() != nullptr;
         if (!as_promised) { m_counts->m_broken.fetch_add(1); }
-        const anira_status status = anira::Stage::Prepared::pre_process(ctx);
+        const anira_status status = anira::Processor::Prepared::pre_process(ctx);
         // The chunk's first sample into this handler's scratch, at the chunk's entry.
         anira::Tensor filled{};
         if (status == ANIRA_OK && ctx.entry() < m_counts->m_scratch.size() &&
@@ -1070,7 +1069,7 @@ public:
         }
         return status;
     }
-    anira_status before_inference(anira::StageContext& ctx) noexcept override {
+    anira_status before_inference(anira::ProcessorContext& ctx) noexcept override {
         m_counts->m_before.fetch_add(1);
         anira::Tensor tensor{};
         const bool as_promised = ctx.phase() == ANIRA_PHASE_BEFORE_INFERENCE &&
@@ -1079,7 +1078,7 @@ public:
         if (!as_promised) { m_counts->m_broken.fetch_add(1); }
         return ANIRA_OK;
     }
-    anira_status after_inference(anira::StageContext& ctx) noexcept override {
+    anira_status after_inference(anira::ProcessorContext& ctx) noexcept override {
         m_counts->m_after.fetch_add(1);
         anira::Tensor tensor{};
         const bool as_promised = ctx.phase() == ANIRA_PHASE_AFTER_INFERENCE &&
@@ -1088,7 +1087,7 @@ public:
         if (!as_promised) { m_counts->m_broken.fetch_add(1); }
         return ANIRA_OK;
     }
-    anira_status post_process(anira::StageContext& ctx) noexcept override {
+    anira_status post_process(anira::ProcessorContext& ctx) noexcept override {
         m_counts->m_post.fetch_add(1);
         anira::RingView ring;
         anira::Tensor tensor{};
@@ -1101,9 +1100,9 @@ public:
         }
         float* const samples = tensor.data_f32();
         for (size_t n = 0; n < k_hop; ++n) { samples[n] *= m_scale; }
-        return anira::Stage::Prepared::post_process(ctx);
+        return anira::Processor::Prepared::post_process(ctx);
     }
-    void reset(anira::StageContext& ctx) noexcept override {
+    void reset(anira::ProcessorContext& ctx) noexcept override {
         m_counts->m_resets.fetch_add(1);
         // The role answers in RESET; a ring or a tensor would be refused, and recorded.
         anira::Role role = ANIRA_ROLE_FORCE32;
@@ -1120,9 +1119,9 @@ private:
 
 /// The registration: the mask, the promise, the kinds, what init and prepare do, and the
 /// counts of every Prepared it made, in prepare order.
-class CountingStage : public anira::Stage {
+class CountingProcessor : public anira::Processor {
 public:
-    explicit CountingStage(uint32_t mask) : m_mask(mask) {}
+    explicit CountingProcessor(uint32_t mask) : m_mask(mask) {}
 
     uint32_t phases() const noexcept override { return m_mask; }
     /// Both bits by default: every body here allocates nothing and blocks on nothing, and a
@@ -1134,15 +1133,17 @@ public:
         m_init_log_level = info.log_level();
         m_init_num_threads = info.num_threads();
         m_init_context = info.context();
-        if (m_init_throws) { throw anira::Error(ANIRA_ERROR_NOT_SUPPORTED, "the stage refuses"); }
+        if (m_init_throws) {
+            throw anira::Error(ANIRA_ERROR_NOT_SUPPORTED, "the processor refuses");
+        }
     }
 
-    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& info) override {
+    std::unique_ptr<anira::Processor::Prepared> prepare(const anira::PrepareInfo& info) override {
         ++m_prepared;
         auto counts = std::make_shared<PreparedCounts>();
         counts->m_handler = info.handler();
         counts->m_num_entries = info.num_entries();
-        // The handler counts as prepared while its stage prepares: the getter answers.
+        // The handler counts as prepared while its processor prepares: the getter answers.
         counts->m_num_entries_by_getter = anira_handler_num_entries(info.handler());
         counts->m_num_inputs = static_cast<uint32_t>(info.inputs().size());
         counts->m_num_outputs = static_cast<uint32_t>(info.outputs().size());
@@ -1155,9 +1156,9 @@ public:
         m_counts.push_back(counts);
         switch (m_mode) {
             case PrepareMode::ThrowError:
-                throw anira::Error(ANIRA_ERROR_CONFIG, "the stage refuses this plan");
+                throw anira::Error(ANIRA_ERROR_CONFIG, "the processor refuses this plan");
             case PrepareMode::ThrowRuntimeError:
-                throw std::runtime_error("the stage ran out of luck");
+                throw std::runtime_error("the processor ran out of luck");
             case PrepareMode::ThrowInt:
                 throw 7;  // no std::exception: what the trampoline must survive too
             case PrepareMode::ThrowBadAlloc: throw std::bad_alloc();
@@ -1180,7 +1181,7 @@ public:
     static constexpr std::array<const char*, 1> k_kinds{"model:entry"};
 
     uint32_t m_mask;
-    uint32_t m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
+    uint32_t m_flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
     float m_scale = 1.0F;
     bool m_consumes_entry = false;
     bool m_init_throws = false;
@@ -1254,48 +1255,43 @@ void expect_scaled_passthrough(anira_handler* h,
 
 }  // namespace
 
-// A Stage subclass end to end through a C-created handler: every phase of the mask runs once
+// A Processor subclass end to end through a C-created handler: every phase of the mask runs once
 // per chunk on the handler's Prepared with the context its phase promises, "call super" is
 // anira's default body, prepare sees the record (the handler, the report, the entry count, the
-// templates and the names), consumed_kinds joins the walk as the consumer "stage", the Prepared
+// templates and the names), consumed_kinds joins the walk as the consumer "processor", the Prepared
 // dies with the handler, and the shared_ptr the pipeline took is given back exactly once, when
 // the last carrier dies.
-TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
+TEST(AbiCxx, AProcessorSubclassRunsItsPhasesThroughACHandler) {
     const anira_test::Context context;
-    ModelConfig model = stage_stream_model();
-    model.model_ext(0, anira::ext::Entry{"forward"});  // consumed by the stage alone
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_all_phases);
-    stage->m_consumes_entry = true;
-    stage->m_scale = 0.5F;
-    EXPECT_EQ(stage.use_count(), 1);
+    ModelConfig model = processor_stream_model();
+    model.model_ext(0, anira::ext::Entry{"forward"});  // consumed by the processor alone
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_all_phases);
+    processor->m_consumes_entry = true;
+    processor->m_scale = 0.5F;
+    EXPECT_EQ(processor.use_count(), 1);
 
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
     anira_test::add_passthrough(pipe->native());
-    pipe->inference(model, {custom_row()});
-    {
-        const anira::stage::Custom custom(stage);
-        EXPECT_EQ(stage.use_count(), 2);
-        pipe->add(custom);
-        EXPECT_EQ(stage.use_count(), 3) << "the pipeline's carrier holds its own copy";
-    }
-    EXPECT_EQ(stage.use_count(), 2);
+    pipe->add_inference(model, {custom_row()});
+    pipe->add_processor(processor);
+    EXPECT_EQ(processor.use_count(), 2) << "the pipeline's carrier holds its own copy";
 
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(stage.use_count(), 2) << "the handler shares the pipeline's carrier";
+    EXPECT_EQ(processor.use_count(), 2) << "the handler shares the pipeline's carrier";
     // flags() reached the descriptor.
-    ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
-    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags,
-              ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS);
-    pipe.reset();  // the handler carries the stage alone now
-    EXPECT_EQ(stage.use_count(), 2);
-    EXPECT_EQ(stage->m_released.load(), 0);
+    ASSERT_NE(handler.m_handler->m_pipeline.m_processor, nullptr);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().flags,
+              ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS);
+    pipe.reset();  // the handler carries the processor alone now
+    EXPECT_EQ(processor.use_count(), 2);
+    EXPECT_EQ(processor->m_released.load(), 0);
 
     ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(stage->m_prepared, 1);
-    ASSERT_EQ(stage->m_counts.size(), 1U);
-    const std::shared_ptr<PreparedCounts> counts = stage->last_shared();
+    EXPECT_EQ(processor->m_prepared, 1);
+    ASSERT_EQ(processor->m_counts.size(), 1U);
+    const std::shared_ptr<PreparedCounts> counts = processor->last_shared();
     EXPECT_EQ(counts->m_handler, handler.m_handler);
     EXPECT_EQ(counts->m_num_entries, anira_handler_num_entries(handler.m_handler));
     EXPECT_EQ(counts->m_num_entries_by_getter, counts->m_num_entries);
@@ -1306,8 +1302,8 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
     EXPECT_EQ(counts->m_input_names[0], "in");
     EXPECT_EQ(counts->m_plans, 1U);
     ASSERT_EQ(counts->m_consumers.size(), 1U);
-    EXPECT_EQ(counts->m_consumers[0], "stage");
-    EXPECT_EQ(handler.m_handler->m_stage_prepared != nullptr, true)
+    EXPECT_EQ(counts->m_consumers[0], "processor");
+    EXPECT_EQ(handler.m_handler->m_processor_prepared != nullptr, true)
         << "the Prepared is the C pointer";
 
     std::vector<float> in;
@@ -1326,20 +1322,21 @@ TEST(AbiCxx, AStageSubclassRunsItsPhasesThroughACHandler) {
 
     handler.destroy();
     EXPECT_TRUE(counts->m_deleted.load()) << "the Prepared died with its handler";
-    EXPECT_EQ(stage->m_released.load(), 1);
-    EXPECT_EQ(stage.use_count(), 1) << "release deleted the carrier's copy";
+    EXPECT_EQ(processor->m_released.load(), 1);
+    EXPECT_EQ(processor.use_count(), 1) << "release deleted the carrier's copy";
 }
 
-// The mask decides, not the overrides: a stage of post_process alone leaves pre_process NULL
+// The mask decides, not the overrides: a processor of post_process alone leaves pre_process NULL
 // in the descriptor, so anira's default pre_process keeps running (the stream arrives) and the
-// stage's own pre_process, before_inference and after_inference are never called.
-TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
+// processor's own pre_process, before_inference and after_inference are never called.
+TEST(AbiCxx, APostOnlyProcessorLeavesTheDefaultPreProcessRunning) {
     const anira_test::Context context;
-    const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
-    stage->m_scale = 2.0F;
-    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                         anira::stage::Custom(stage)};
+    const ModelConfig model = processor_stream_model();
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_post_process);
+    processor->m_scale = 2.0F;
+    anira::Pipeline pipe;
+    pipe.add_inference(model, {custom_row()});
+    pipe.add_processor(processor);
     anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -1350,17 +1347,18 @@ TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
     drive(handler.m_handler, 3, in, out);
     ASSERT_FALSE(HasFatalFailure());
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
-    EXPECT_EQ(stage->last().m_pre.load(), 0);
-    EXPECT_EQ(stage->last().m_before.load(), 0);
-    EXPECT_EQ(stage->last().m_after.load(), 0);
-    EXPECT_EQ(stage->last().m_post.load(), 3);
-    EXPECT_EQ(stage->last().m_broken.load(), 0);
+    EXPECT_EQ(processor->last().m_pre.load(), 0);
+    EXPECT_EQ(processor->last().m_before.load(), 0);
+    EXPECT_EQ(processor->last().m_after.load(), 0);
+    EXPECT_EQ(processor->last().m_post.load(), 3);
+    EXPECT_EQ(processor->last().m_broken.load(), 0);
     expect_scaled_passthrough(handler.m_handler, in, out, 2.0F);
 
-    // A stage of no phase at all is one of prepare and release: both defaults keep running.
-    auto silent = std::make_shared<CountingStage>(0U);
-    anira::Pipeline quiet{anira::stage::Inference(model, {custom_row()}),
-                          anira::stage::Custom(silent)};
+    // A processor of no phase at all is one of prepare and release: both defaults keep running.
+    auto silent = std::make_shared<CountingProcessor>(0U);
+    anira::Pipeline quiet;
+    quiet.add_inference(model, {custom_row()});
+    quiet.add_processor(silent);
     anira_test::add_passthrough(quiet.native());
     CHandler plain(context, quiet);
     ASSERT_EQ(plain.m_status, ANIRA_OK) << plain.m_err.message;
@@ -1375,87 +1373,91 @@ TEST(AbiCxx, APostOnlyStageLeavesTheDefaultPreProcessRunning) {
     expect_scaled_passthrough(plain.m_handler, plain_in, plain_out, 1.0F);
 }
 
-// Pipeline::add refuses what it cannot describe, and a refused add keeps no copy of the stage.
-TEST(AbiCxx, AddRefusesANullStageAndAnUnknownPhaseBit) {
+// Pipeline::add_processor refuses what it cannot describe, and a refused add keeps no copy of
+// the processor.
+TEST(AbiCxx, AddProcessorRefusesANullProcessorAndAnUnknownPhaseBit) {
     anira::Pipeline pipe;
-    const Thrown null_stage =
-        thrown_by([&] { pipe.add(anira::stage::Custom(std::shared_ptr<anira::Stage>())); });
-    EXPECT_TRUE(null_stage.m_thrown);
-    EXPECT_EQ(null_stage.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
+    const Thrown null_processor =
+        thrown_by([&] { pipe.add_processor(std::shared_ptr<anira::Processor>()); });
+    EXPECT_TRUE(null_processor.m_thrown);
+    EXPECT_EQ(null_processor.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
 
-    auto stage = std::make_shared<CountingStage>(anira::Stage::phase_bit(ANIRA_PHASE_INFERENCE));
-    const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
+    auto processor =
+        std::make_shared<CountingProcessor>(anira::Processor::phase_bit(ANIRA_PHASE_INFERENCE));
+    const Thrown bit = thrown_by([&] { pipe.add_processor(processor); });
     EXPECT_TRUE(bit.m_thrown);
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bit.m_what.find("phases"), std::string::npos) << bit.m_what;
-    EXPECT_EQ(stage.use_count(), 1);
-    EXPECT_EQ(stage->m_released.load(), 0);
+    EXPECT_EQ(processor.use_count(), 1);
+    EXPECT_EQ(processor->m_released.load(), 0);
 
     // The C entry's own refusal: the copy made for the carrier dies with the throw, and
     // release is not called for an add that never happened.
     anira::Pipeline moved_from;
     const anira::Pipeline taken = std::move(moved_from);
-    stage->m_mask = anira::Stage::k_pre_process;
+    processor->m_mask = anira::Processor::k_pre_process;
     // A moved-from pipeline is a NULL anira_pipeline: the C entry refuses it.
     // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move) the point of the test
-    const Thrown refused = thrown_by([&] { moved_from.add(anira::stage::Custom(stage)); });
+    const Thrown refused = thrown_by([&] { moved_from.add_processor(processor); });
     EXPECT_TRUE(refused.m_thrown);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(refused.m_what.find("NULL pipeline"), std::string::npos) << refused.m_what;
-    EXPECT_EQ(stage.use_count(), 1);
-    EXPECT_EQ(stage->m_released.load(), 0);
+    EXPECT_EQ(processor.use_count(), 1);
+    EXPECT_EQ(processor->m_released.load(), 0);
     EXPECT_NE(taken.native(), nullptr);
 }
 
 // A throw never crosses the C boundary: prepare of the handler fails with the status of an
-// anira::Error, with ANIRA_ERROR_INTERNAL for anything else, the message names the stage, and
+// anira::Error, with ANIRA_ERROR_INTERNAL for anything else, the message names the processor, and
 // what() reaches the log. A null Prepared is ANIRA_ERROR_INTERNAL too: nothing could run the
 // phases. A refused prepare deletes nothing that was not returned, and unprepares nothing.
-TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
+TEST(AbiCxx, AThrowingProcessorPrepareFailsTheHandlersPrepare) {
     const anira_test::Context context;
     anira_test::RecordCollector collector;
-    const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
-    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                         anira::stage::Custom(stage)};
+    const ModelConfig model = processor_stream_model();
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_post_process);
+    anira::Pipeline pipe;
+    pipe.add_inference(model, {custom_row()});
+    pipe.add_processor(processor);
     anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = anira_test::explicit_contract();
 
-    stage->m_mode = PrepareMode::ThrowError;
+    processor->m_mode = PrepareMode::ThrowError;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::string_view(handler.m_err.message).find("the stage refused prepare"),
+    EXPECT_NE(std::string_view(handler.m_err.message).find("the processor refused prepare"),
               std::string_view::npos)
         << handler.m_err.message;
     EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
 
-    stage->m_mode = PrepareMode::ThrowRuntimeError;
+    processor->m_mode = PrepareMode::ThrowRuntimeError;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    stage->m_mode = PrepareMode::ThrowInt;
+    processor->m_mode = PrepareMode::ThrowInt;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    stage->m_mode = PrepareMode::ThrowBudget;
+    processor->m_mode = PrepareMode::ThrowBudget;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_BUDGET);
-    stage->m_mode = PrepareMode::ReturnNull;
+    processor->m_mode = PrepareMode::ReturnNull;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_INTERNAL);
-    EXPECT_NE(std::string_view(handler.m_err.message).find("the stage refused prepare"),
+    EXPECT_NE(std::string_view(handler.m_err.message).find("the processor refused prepare"),
               std::string_view::npos)
         << handler.m_err.message;
 #ifdef ENABLE_LOGGING
-    EXPECT_TRUE(collector.has("the stage's prepare threw: the stage refuses this plan", "native"));
-    EXPECT_TRUE(collector.has("prepare threw: the stage ran out of luck", "native"));
+    EXPECT_TRUE(
+        collector.has("the processor's prepare threw: the processor refuses this plan", "native"));
+    EXPECT_TRUE(collector.has("prepare threw: the processor ran out of luck", "native"));
     EXPECT_TRUE(collector.has("an exception that is no std::exception", "native"));
-    EXPECT_TRUE(collector.has("the stage's prepare returned no Prepared", "native"));
+    EXPECT_TRUE(collector.has("the processor's prepare returned no Prepared", "native"));
 #endif
     // Five refusals: nothing was returned, so nothing was deleted or unprepared.
-    ASSERT_EQ(stage->m_counts.size(), 5U);
-    for (const std::shared_ptr<PreparedCounts>& counts : stage->m_counts) {
+    ASSERT_EQ(processor->m_counts.size(), 5U);
+    for (const std::shared_ptr<PreparedCounts>& counts : processor->m_counts) {
         EXPECT_FALSE(counts->m_deleted.load());
     }
 
-    stage->m_mode = PrepareMode::Ok;
+    processor->m_mode = PrepareMode::Ok;
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
-    EXPECT_EQ(stage->m_prepared, 6);
+    EXPECT_EQ(processor->m_prepared, 6);
     std::vector<float> in;
     std::vector<float> out;
     drive(handler.m_handler, 2, in, out);
@@ -1463,77 +1465,79 @@ TEST(AbiCxx, AThrowingStagePrepareFailsTheHandlersPrepare) {
     expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
 }
 
-// Two pipelines that take one stage: a copy and a release per add.
-TEST(AbiCxx, OneStageInTwoPipelinesIsReleasedOncePerAdd) {
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
-    const anira::stage::Custom custom(stage);
+// Two pipelines that take one processor: a copy and a release per add.
+TEST(AbiCxx, OneProcessorInTwoPipelinesIsReleasedOncePerAdd) {
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_after_inference);
     {
         anira::Pipeline first;
         anira::Pipeline second;
-        first.add(custom);
-        second.add(custom);
-        EXPECT_EQ(stage.use_count(), 4);
-        EXPECT_EQ(stage->m_released.load(), 0);
+        first.add_processor(processor);
+        second.add_processor(processor);
+        EXPECT_EQ(processor.use_count(), 3);
+        EXPECT_EQ(processor->m_released.load(), 0);
     }
-    EXPECT_EQ(stage->m_released.load(), 2);
-    EXPECT_EQ(stage.use_count(), 2);
+    EXPECT_EQ(processor->m_released.load(), 2);
+    EXPECT_EQ(processor.use_count(), 1);
 }
 
-// A pipeline holds one custom stage: the second add throws ANIRA_ERROR_INVALID_STATE, keeps no
-// copy of the refused stage and never calls its release; the first stage is untouched.
-TEST(AbiCxx, ASecondCustomStageIsRefused) {
-    auto first = std::make_shared<CountingStage>(anira::Stage::k_post_process);
-    auto second = std::make_shared<CountingStage>(anira::Stage::k_after_inference);
+// A pipeline holds one custom processor: the second add throws ANIRA_ERROR_INVALID_STATE, keeps no
+// copy of the refused processor and never calls its release; the first processor is untouched.
+TEST(AbiCxx, ASecondCustomProcessorIsRefused) {
+    auto first = std::make_shared<CountingProcessor>(anira::Processor::k_post_process);
+    auto second = std::make_shared<CountingProcessor>(anira::Processor::k_after_inference);
     anira::Pipeline pipe;
-    pipe.add(anira::stage::Custom(first));
+    pipe.add_processor(first);
     EXPECT_EQ(first.use_count(), 2);
-    const Thrown refused = thrown_by([&] { pipe.add(anira::stage::Custom(second)); });
+    const Thrown refused = thrown_by([&] { pipe.add_processor(second); });
     EXPECT_TRUE(refused.m_thrown);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_STATE);
-    EXPECT_NE(refused.m_what.find("already has a stage"), std::string::npos) << refused.m_what;
+    EXPECT_NE(refused.m_what.find("already has a processor"), std::string::npos) << refused.m_what;
     EXPECT_EQ(second.use_count(), 1);
     EXPECT_EQ(second->m_released.load(), 0);
     EXPECT_EQ(first.use_count(), 2);
     EXPECT_EQ(first->m_released.load(), 0);
 }
 
-// flags() is the stage's promise: without ANIRA_STAGE_FLAG_REALTIME_PRE_POST a stage that fills
-// pre_process is refused at prepare under a Hard contract, by name; a bit the C header does
-// not define is refused at add; with the promise the same stage runs.
-TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
+// flags() is the processor's promise: without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST a processor
+// that fills pre_process is refused at prepare under a Hard contract, by name; a bit the C header
+// does not define is refused at add; with the promise the same processor runs.
+TEST(AbiCxx, TheRealTimePromiseOfAProcessorIsCheckedAtPrepare) {
     const anira_test::Context context;
-    const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_pre_process);
-    stage->m_flags = 0;
+    const ModelConfig model = processor_stream_model();
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_pre_process);
+    processor->m_flags = 0;
     {
-        anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                             anira::stage::Custom(stage)};
+        anira::Pipeline pipe;
+        pipe.add_inference(model, {custom_row()});
+        pipe.add_processor(processor);
         anira_test::add_passthrough(pipe.native());
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::string_view(handler.m_err.message).find("the stage: pre_process is filled"),
-                  std::string_view::npos)
-            << handler.m_err.message;
         EXPECT_NE(
-            std::string_view(handler.m_err.message).find("ANIRA_STAGE_FLAG_REALTIME_PRE_POST"),
+            std::string_view(handler.m_err.message).find("the processor: pre_process is filled"),
             std::string_view::npos)
             << handler.m_err.message;
-        EXPECT_TRUE(stage->m_counts.empty()) << "refused ahead of the stage's prepare";
+        EXPECT_NE(
+            std::string_view(handler.m_err.message).find("ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
+            std::string_view::npos)
+            << handler.m_err.message;
+        EXPECT_TRUE(processor->m_counts.empty()) << "refused ahead of the processor's prepare";
     }
-    stage->m_flags = 4U;
+    processor->m_flags = 4U;
     {
         anira::Pipeline pipe;
-        const Thrown bit = thrown_by([&] { pipe.add(anira::stage::Custom(stage)); });
+        const Thrown bit = thrown_by([&] { pipe.add_processor(processor); });
         EXPECT_TRUE(bit.m_thrown);
         EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
-        EXPECT_EQ(stage.use_count(), 1);
+        EXPECT_EQ(processor.use_count(), 1);
     }
-    stage->m_flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;  // read again by the next add
+    processor->m_flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;  // read again by the next add
     {
-        anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                             anira::stage::Custom(stage)};
+        anira::Pipeline pipe;
+        pipe.add_inference(model, {custom_row()});
+        pipe.add_processor(processor);
         anira_test::add_passthrough(pipe.native());
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -1543,8 +1547,9 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
         std::vector<float> out;
         drive(handler.m_handler, 2, in, out);
         ASSERT_FALSE(HasFatalFailure());
-        EXPECT_EQ(stage->last().m_pre.load(), 2);
-        EXPECT_EQ(stage->last().m_broken.load(), 0) << "the entry is below the count prepare read";
+        EXPECT_EQ(processor->last().m_pre.load(), 2);
+        EXPECT_EQ(processor->last().m_broken.load(), 0)
+            << "the entry is below the count prepare read";
         expect_scaled_passthrough(handler.m_handler, in, out, 1.0F);
     }
 }
@@ -1556,13 +1561,13 @@ TEST(AbiCxx, TheRealTimePromiseOfAStageIsCheckedAtPrepare) {
 // fires after all of them.
 TEST(AbiCxx, APreparedPerHandlerOwnsItsScratchAndDiesWithItsPrepare) {
     const anira_test::Context context;
-    const ModelConfig model = stage_stream_model();
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_all_phases);
+    const ModelConfig model = processor_stream_model();
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_all_phases);
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
     anira_test::add_passthrough(pipe->native());
-    pipe->inference(model, {custom_row()});
-    pipe->add(anira::stage::Custom(stage));
+    pipe->add_inference(model, {custom_row()});
+    pipe->add_processor(processor);
     CHandler first(context, *pipe);
     CHandler second(context, *pipe);
     ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
@@ -1571,13 +1576,13 @@ TEST(AbiCxx, APreparedPerHandlerOwnsItsScratchAndDiesWithItsPrepare) {
     const anira::ContractHandle contract = anira_test::explicit_contract();
     ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
     ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
-    ASSERT_EQ(stage->m_counts.size(), 2U);
-    const std::shared_ptr<PreparedCounts> of_first = stage->m_counts[0];
-    const std::shared_ptr<PreparedCounts> of_second = stage->m_counts[1];
+    ASSERT_EQ(processor->m_counts.size(), 2U);
+    const std::shared_ptr<PreparedCounts> of_first = processor->m_counts[0];
+    const std::shared_ptr<PreparedCounts> of_second = processor->m_counts[1];
     EXPECT_EQ(of_first->m_handler, first.m_handler);
     EXPECT_EQ(of_second->m_handler, second.m_handler);
-    EXPECT_NE(first.m_handler->m_stage_prepared, nullptr);
-    EXPECT_NE(first.m_handler->m_stage_prepared, second.m_handler->m_stage_prepared);
+    EXPECT_NE(first.m_handler->m_processor_prepared, nullptr);
+    EXPECT_NE(first.m_handler->m_processor_prepared, second.m_handler->m_processor_prepared);
 
     // Three chunks through the first handler, two through the second, on their own Prepared.
     std::vector<float> in_first;
@@ -1613,21 +1618,21 @@ TEST(AbiCxx, APreparedPerHandlerOwnsItsScratchAndDiesWithItsPrepare) {
     // A re-prepare of the first handler: its Prepared dies once and a new one takes over; the
     // second handler's lives on.
     ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
-    ASSERT_EQ(stage->m_counts.size(), 3U);
+    ASSERT_EQ(processor->m_counts.size(), 3U);
     EXPECT_TRUE(of_first->m_deleted.load());
     EXPECT_FALSE(of_second->m_deleted.load());
-    EXPECT_FALSE(stage->m_counts[2]->m_deleted.load());
-    EXPECT_EQ(first.m_handler->m_stage_prepared != nullptr, true);
-    EXPECT_EQ(stage->m_prepared, 3);
+    EXPECT_FALSE(processor->m_counts[2]->m_deleted.load());
+    EXPECT_EQ(first.m_handler->m_processor_prepared != nullptr, true);
+    EXPECT_EQ(processor->m_prepared, 3);
     // The destroy of each handler deletes its Prepared; release fires after the last.
     first.destroy();
-    EXPECT_TRUE(stage->m_counts[2]->m_deleted.load());
+    EXPECT_TRUE(processor->m_counts[2]->m_deleted.load());
     EXPECT_FALSE(of_second->m_deleted.load());
-    EXPECT_EQ(stage->m_released.load(), 0);
+    EXPECT_EQ(processor->m_released.load(), 0);
     second.destroy();
     EXPECT_TRUE(of_second->m_deleted.load());
-    EXPECT_EQ(stage->m_released.load(), 1);
-    EXPECT_EQ(stage.use_count(), 1);
+    EXPECT_EQ(processor->m_released.load(), 1);
+    EXPECT_EQ(processor.use_count(), 1);
 }
 
 namespace {
@@ -1635,9 +1640,9 @@ namespace {
 /// pre_process over an int16 input ring, written with the typed RingView: one hop of int16 out
 /// of the ring, float32 into the model tensor. Nothing in anira converts. The scratch is the
 /// Prepared's, one per handler.
-class Int16InputPrepared final : public anira::Stage::Prepared {
+class Int16InputPrepared final : public anira::Processor::Prepared {
 public:
-    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+    anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
         anira::Tensor tensor{};
         const anira_status exposed = ctx.input_tensor(0, tensor);
         if (exposed != ANIRA_OK) { return exposed; }
@@ -1659,11 +1664,12 @@ private:
     std::array<int16_t, k_hop> m_scratch{};
 };
 
-class Int16InputStage final : public anira::Stage {
+class Int16InputProcessor final : public anira::Processor {
 public:
     uint32_t phases() const noexcept override { return k_pre_process; }
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
-    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& /*info*/) override {
+    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+    std::unique_ptr<anira::Processor::Prepared> prepare(
+        const anira::PrepareInfo& /*info*/) override {
         return std::make_unique<Int16InputPrepared>();
     }
 };
@@ -1727,18 +1733,19 @@ TEST(AbiCxx, RingViewIsTypedByItsElement) {
     EXPECT_EQ(none.push_block(0, std::span<const int16_t>(in)), 0U);
 }
 
-// The same view inside a stage, end to end: an int16 ring declared on the contract needs a stage
-// that fills pre_process, and the C++ stage's mask is what satisfies prepare.
-TEST(AbiCxx, AnInt16RingThroughAConvertingStage) {
+// The same view inside a processor, end to end: an int16 ring declared on the contract needs a
+// processor that fills pre_process, and the C++ processor's mask is what satisfies prepare.
+TEST(AbiCxx, AnInt16RingThroughAConvertingProcessor) {
     const anira_test::Context context;
-    const ModelConfig model = stage_stream_model();
+    const ModelConfig model = processor_stream_model();
     // ZEROS: BYPASS would copy the int16 input ring into the float32 output ring.
     anira::ContractHandle contract =
         anira_test::explicit_contract(anira_test::k_block, anira_test::k_rate, ANIRA_MISS_ZEROS);
     contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
 
-    anira::Pipeline pipe{anira::stage::Inference(model, {custom_row()}),
-                         anira::stage::Custom(std::make_shared<Int16InputStage>())};
+    anira::Pipeline pipe;
+    pipe.add_inference(model, {custom_row()});
+    pipe.add_processor(std::make_shared<Int16InputProcessor>());
     anira_test::add_passthrough(pipe.native());
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -1822,7 +1829,7 @@ namespace {
 constexpr const char* k_cxx_engine_id = "org.example.cxx";
 constexpr const char* k_cxx_never_opened = "never-opened.bin";
 
-/// The mono stream of the stage tests, on one model entry the registered C++ engine serves.
+/// The mono stream of the processor tests, on one model entry the registered C++ engine serves.
 ModelConfig engine_stream_model() {
     ModelConfig model;
     model.add_model_path(k_cxx_engine_id, k_cxx_never_opened);
@@ -1854,7 +1861,7 @@ struct EngineLoadCounts {
 /// threads, kept by the registration beyond the Prepared's life (anira deletes the Prepared at
 /// unprepare; the test reads afterwards).
 struct EnginePreparedCounts {
-    // The record, read at prepare: the stage's.
+    // The record, read at prepare: the processor's.
     anira_handler* m_handler = nullptr;
     uint32_t m_num_entries = 0;
     bool m_exclusive = false;
@@ -2092,10 +2099,10 @@ std::unique_ptr<anira::Engine::Prepared> CountingLoaded::prepare(const anira::Pr
 
 }  // namespace
 
-// An Engine subclass end to end through a C-created handler: register_engine hands the
+// An Engine subclass end to end through a C-created handler: add_engine hands the
 // object's C engine a copy of the shared_ptr, a handler created from the pipeline carries it
 // on, init sees the facts of the core, load sees its record (the row, the variant's facts
-// through the getters, the templates, the names, one instance), prepare sees the stage's
+// through the getters, the templates, the names, one instance), prepare sees the processor's
 // record (the handler, its entry count, not exclusive), every block goes through process with
 // the context the records promise, the flags and the consumed kinds reach the plan report under
 // the engine's id, the Prepared and the Loaded die with the handler, and the shared_ptr is
@@ -2112,9 +2119,9 @@ TEST(AbiCxx, AnEngineSubclassRunsThroughACHandler) {
 
     std::optional<anira::Pipeline> pipe;
     pipe.emplace();
-    pipe->register_engine(engine);
+    pipe->add_engine(engine);
     EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its own copy";
-    pipe->inference(model);
+    pipe->add_inference(model);
     CHandler handler(context, *pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(engine.use_count(), 2) << "the handler shares the pipeline's C engine";
@@ -2213,7 +2220,7 @@ TEST(AbiCxx, AThrowingEngineLoadOrPrepareFailsTheHandlersPrepare) {
         auto engine = std::make_shared<CountingEngine>();
         engine->m_throw_at = where;
         anira::Pipeline pipe;
-        pipe.register_engine(engine).inference(model);
+        pipe.add_engine(engine).add_inference(model);
         CHandler handler(context, pipe);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
         const std::string refused = std::string("the engine 'org.example.cxx' refused ") + slot;
@@ -2278,9 +2285,9 @@ TEST(AbiCxx, AThrowingEngineLoadOrPrepareFailsTheHandlersPrepare) {
     }
 }
 
-// init runs once per registration (the stage's per Pipeline::add, the engine's per C engine),
-// at the first prepare of a handler that reaches it, with the facts of the core in effect (the
-// pool of the context, the context of that handler); a throw fails that prepare with its
+// init runs once per registration (the processor's per Pipeline::add_processor, the engine's per C
+// engine), at the first prepare of a handler that reaches it, with the facts of the core in effect
+// (the pool of the context, the context of that handler); a throw fails that prepare with its
 // status, the message names the slot, nothing is loaded or prepared behind it, and the next
 // prepare calls init again; release fires whether init ever ran or not.
 TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
@@ -2288,59 +2295,61 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
     const anira::ContractHandle contract = anira_test::explicit_contract();
     const ModelConfig model = engine_stream_model();
     auto engine = std::make_shared<CountingEngine>();
-    auto stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    auto processor = std::make_shared<CountingProcessor>(anira::Processor::k_post_process);
     engine->m_init_throws = true;
-    stage->m_init_throws = true;
+    processor->m_init_throws = true;
     {
-        const anira::Pipeline pipe{anira::stage::Inference(model).engine(engine),
-                                   anira::stage::Custom(stage)};
+        anira::Pipeline pipe;
+        pipe.add_engine(engine);
+        pipe.add_inference(model);
+        pipe.add_processor(processor);
         CHandler first(context, pipe);
         CHandler second(context, pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
         ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
-        EXPECT_EQ(engine->m_inited + stage->m_inited, 0) << "init belongs to the first prepare";
+        EXPECT_EQ(engine->m_inited + processor->m_inited, 0) << "init belongs to the first prepare";
 
-        // The stage's init comes first, before any model loads (the outermost level in), so
-        // the engine's is not reached while the stage refuses, and nothing is loaded behind a
+        // The processor's init comes first, before any model loads (the outermost level in), so
+        // the engine's is not reached while the processor refuses, and nothing is loaded behind a
         // refused init of either.
         EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
-        EXPECT_NE(std::string_view(first.m_err.message).find("the stage refused init"),
+        EXPECT_NE(std::string_view(first.m_err.message).find("the processor refused init"),
                   std::string_view::npos)
             << first.m_err.message;
-        EXPECT_EQ(stage->m_inited, 1);
-        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare waits for its init";
+        EXPECT_EQ(processor->m_inited, 1);
+        EXPECT_EQ(processor->m_prepared, 0) << "the processor's prepare waits for its init";
         EXPECT_EQ(engine->m_inited, 0) << "the prepare failed before the engine";
         EXPECT_EQ(engine->m_loaded, 0) << "nothing loaded behind a refused init";
-        stage->m_init_throws = false;
+        processor->m_init_throws = false;
         EXPECT_EQ(first.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
         EXPECT_NE(
             std::string_view(first.m_err.message).find("the engine 'org.example.cxx' refused init"),
             std::string_view::npos)
             << first.m_err.message;
-        EXPECT_EQ(stage->m_inited, 2) << "tried again";
+        EXPECT_EQ(processor->m_inited, 2) << "tried again";
         EXPECT_EQ(engine->m_inited, 1);
         EXPECT_EQ(engine->m_loaded, 0) << "nothing loaded behind a refused init";
-        EXPECT_EQ(stage->m_prepared, 0) << "the stage's prepare follows the loads";
+        EXPECT_EQ(processor->m_prepared, 0) << "the processor's prepare follows the loads";
         EXPECT_EQ(anira_handler_plan_report(first.m_handler), nullptr);
         engine->m_init_throws = false;
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
-        EXPECT_EQ(stage->m_inited, 2) << "initialised: not again";
+        EXPECT_EQ(processor->m_inited, 2) << "initialised: not again";
         EXPECT_EQ(engine->m_inited, 2) << "tried again";
         EXPECT_EQ(engine->m_loaded, 1);
         EXPECT_EQ(engine->m_prepared, 1);
-        EXPECT_EQ(stage->m_prepared, 1);
+        EXPECT_EQ(processor->m_prepared, 1);
         ASSERT_EQ(second.prepare(contract), ANIRA_OK) << second.m_err.message;
         ASSERT_EQ(first.prepare(contract), ANIRA_OK) << first.m_err.message;
         EXPECT_EQ(engine->m_inited, 2) << "once per C engine";
-        EXPECT_EQ(stage->m_inited, 2) << "once per add";
+        EXPECT_EQ(processor->m_inited, 2) << "once per add";
         // The facts: the pool of the context and the context of the handler whose prepare
         // reached the registrations.
         EXPECT_EQ(engine->m_init_num_threads, 2U);
         EXPECT_EQ(engine->m_init_context, context.m_context);
         EXPECT_EQ(engine->m_init_log_level, ANIRA_LOG_ERROR) << "the context's level";
-        EXPECT_EQ(stage->m_init_num_threads, 2U);
-        EXPECT_EQ(stage->m_init_context, context.m_context);
-        EXPECT_EQ(stage->m_init_log_level, ANIRA_LOG_ERROR);
+        EXPECT_EQ(processor->m_init_num_threads, 2U);
+        EXPECT_EQ(processor->m_init_context, context.m_context);
+        EXPECT_EQ(processor->m_init_log_level, ANIRA_LOG_ERROR);
         std::vector<float> in;
         std::vector<float> out;
         drive(first.m_handler, 2, in, out);
@@ -2348,33 +2357,36 @@ TEST(AbiCxx, InitRunsOncePerRegistrationAndAThrowFailsThePrepare) {
         expect_scaled_passthrough(first.m_handler, in, out, 1.0F);
     }
     EXPECT_EQ(engine->m_released.load(), 1);
-    EXPECT_EQ(stage->m_released.load(), 1);
+    EXPECT_EQ(processor->m_released.load(), 1);
 
     // Never prepared: released, never initialised.
     auto idle_engine = std::make_shared<CountingEngine>();
-    auto idle_stage = std::make_shared<CountingStage>(anira::Stage::k_post_process);
+    auto idle_processor = std::make_shared<CountingProcessor>(anira::Processor::k_post_process);
     {
-        const anira::Pipeline unused{anira::stage::Inference(model).engine(idle_engine),
-                                     anira::stage::Custom(idle_stage)};
+        anira::Pipeline unused;
+        unused.add_engine(idle_engine);
+        unused.add_inference(model);
+        unused.add_processor(idle_processor);
     }
-    EXPECT_EQ(idle_engine->m_inited + idle_stage->m_inited, 0);
+    EXPECT_EQ(idle_engine->m_inited + idle_processor->m_inited, 0);
     EXPECT_EQ(idle_engine->m_released.load(), 1) << "release owes nothing to init";
-    EXPECT_EQ(idle_stage->m_released.load(), 1);
+    EXPECT_EQ(idle_processor->m_released.load(), 1);
 }
 
-// The inference stage brings its engines along: stage::Inference::engine in an initializer
-// list of the pipeline and through Pipeline::add registers each one before the stage is added,
-// exactly as register_engine does, and the handler runs on it; a second pipeline registering the
-// same object while the first lives reuses its C engine (no second copy); a second registration
-// of the object on one pipeline is ANIRA_ERROR_INVALID_STATE and keeps no copy; release fires
-// once, for the one C engine, with its last reference.
-TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
+// An engine is the pipeline's: added with add_engine, it serves the model entry that names its
+// id, and the handler runs on it; a second pipeline adding the same object while the first lives
+// reuses its C engine (no second copy); a second addition of the object to one pipeline is
+// ANIRA_ERROR_INVALID_STATE and keeps no copy; release fires once, for the one C engine, with its
+// last reference.
+TEST(AbiCxx, AnEngineAddedToTwoPipelinesIsOneCEngine) {
     const anira_test::Context context;
     const ModelConfig model = engine_stream_model();
     auto engine = std::make_shared<CountingEngine>();
     engine->m_gain = 2.0F;
     {
-        const anira::Pipeline listed{anira::stage::Inference(model).engine(engine)};
+        anira::Pipeline listed;
+        listed.add_engine(engine);
+        listed.add_inference(model);
         EXPECT_EQ(engine.use_count(), 2) << "the object's C engine holds its copy";
         CHandler handler(context, listed);
         ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -2387,45 +2399,41 @@ TEST(AbiCxx, InferenceRegistersItsEnginesWhenTheStageIsAdded) {
         expect_scaled_passthrough(handler.m_handler, in, out, 2.0F);
         EXPECT_EQ(engine->last()->m_processed.load(), 2);
 
-        // Through add, on a second pipeline: the stage lists what it brings, the pipeline reuses
-        // the C engine the first one holds, and a second registration under the id on that
-        // pipeline is refused by the C entry.
+        // A second pipeline reuses the C engine the first one holds, and a second addition of
+        // the object to that pipeline is refused by the C entry.
         anira::Pipeline added;
-        anira::stage::Inference stage(model);
-        stage.engine(engine);
-        ASSERT_EQ(stage.engines().size(), 1U);
-        EXPECT_EQ(stage.engines()[0], engine);
-        EXPECT_EQ(stage.engines()[0]->id(), k_cxx_engine_id);
-        added.add(stage);
-        EXPECT_EQ(engine.use_count(), 3) << "the stage's copy; the C engine's copy is the first's";
-        const Thrown twice = thrown_by([&] { added.register_engine(engine); });
+        added.add_engine(engine);
+        added.add_inference(model);
+        EXPECT_EQ(engine->id(), k_cxx_engine_id);
+        EXPECT_EQ(engine.use_count(), 2) << "the C engine's copy is the first pipeline's";
+        const Thrown twice = thrown_by([&] { added.add_engine(engine); });
         EXPECT_TRUE(twice.m_thrown);
         EXPECT_EQ(twice.m_status, ANIRA_ERROR_INVALID_STATE);
         EXPECT_NE(twice.m_what.find("already added"), std::string::npos) << twice.m_what;
-        EXPECT_EQ(engine.use_count(), 3) << "a refused registration keeps no copy";
+        EXPECT_EQ(engine.use_count(), 2) << "a refused addition keeps no copy";
         EXPECT_EQ(engine->m_released.load(), 0);
     }
     EXPECT_EQ(engine->m_released.load(), 1) << "once, for the one C engine";
     EXPECT_EQ(engine.use_count(), 1);
 }
 
-// register_engine refuses what it cannot describe, and a refused registration keeps no copy
+// add_engine refuses what it cannot describe, and a refused addition keeps no copy
 // of the engine: a null engine before the C call; an id that is no reverse-URI name and a
 // flags() bit the C header does not define by the C engine's create, before the C engine
 // exists, so nothing is released; another object under an id the pipeline has by the C
 // addition, after the call created that object's C engine, which is dropped again and answered
 // by release().
-TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
+TEST(AbiCxx, AddEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     anira::Pipeline pipe;
     const Thrown null_engine =
-        thrown_by([&] { pipe.register_engine(std::shared_ptr<anira::Engine>()); });
+        thrown_by([&] { pipe.add_engine(std::shared_ptr<anira::Engine>()); });
     EXPECT_TRUE(null_engine.m_thrown);
     EXPECT_EQ(null_engine.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(null_engine.m_what.find("null engine"), std::string::npos) << null_engine.m_what;
 
     auto misnamed = std::make_shared<CountingEngine>("noreverseuri");
     EXPECT_EQ(misnamed->id(), "noreverseuri");
-    const Thrown bad_id = thrown_by([&] { pipe.register_engine(misnamed); });
+    const Thrown bad_id = thrown_by([&] { pipe.add_engine(misnamed); });
     EXPECT_TRUE(bad_id.m_thrown);
     EXPECT_EQ(bad_id.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bad_id.m_what.find("reverse-URI"), std::string::npos) << bad_id.m_what;
@@ -2434,7 +2442,7 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
 
     auto engine = std::make_shared<CountingEngine>();
     engine->m_flags = 16U;  // the bit above the four the C header defines
-    const Thrown bit = thrown_by([&] { pipe.register_engine(engine); });
+    const Thrown bit = thrown_by([&] { pipe.add_engine(engine); });
     EXPECT_TRUE(bit.m_thrown);
     EXPECT_EQ(bit.m_status, ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(bit.m_what.find("flags"), std::string::npos) << bit.m_what;
@@ -2442,13 +2450,13 @@ TEST(AbiCxx, RegisterEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
     EXPECT_EQ(engine->m_released.load(), 0) << "no C engine was created";
 
     engine->m_flags = ANIRA_ENGINE_FLAG_DYNAMIC_TIME;  // read again by the next registration
-    pipe.register_engine(engine);
+    pipe.add_engine(engine);
     EXPECT_EQ(engine.use_count(), 2);
 
     // Another object under the id the pipeline has: the registration creates its C engine, the
     // C addition refuses it, and that C engine goes again.
     auto twin = std::make_shared<CountingEngine>();
-    const Thrown taken = thrown_by([&] { pipe.register_engine(twin); });
+    const Thrown taken = thrown_by([&] { pipe.add_engine(twin); });
     EXPECT_TRUE(taken.m_thrown);
     EXPECT_EQ(taken.m_status, ANIRA_ERROR_INVALID_STATE);
     EXPECT_NE(taken.m_what.find("another object"), std::string::npos) << taken.m_what;
@@ -2469,7 +2477,7 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     engine->m_providers = {"coreml", "com.example.npu", "cpu"};
     engine->m_available = 0b101;  // coreml and cpu yes, the npu no
     anira::Pipeline pipe;
-    pipe.register_engine(engine).inference(engine_stream_model());
+    pipe.add_engine(engine).add_inference(engine_stream_model());
     const anira::PipelineCapabilities caps = pipe.capabilities(context.m_context);
     const std::vector<anira::BackendId> rows = caps.backends();
     EXPECT_EQ(engine->m_queried, 2) << "the count call and the fill call each run the query";
@@ -2504,7 +2512,7 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
                                   .engine_id = k_cxx_engine_id,
                                   .provider_id = "com.example.npu"};
     anira::Pipeline other;
-    other.register_engine(engine).inference(engine_stream_model(), {on_npu});
+    other.add_engine(engine).add_inference(engine_stream_model(), {on_npu});
     const CHandler refused(context, other);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_NOT_SUPPORTED) << refused.m_err.message;
     EXPECT_NE(std::string(refused.m_err.message).find("unavailable here"), std::string::npos)
@@ -2536,8 +2544,8 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
                                   .engine_id = k_cxx_engine_id,
                                   .provider_id = "com.example.npu"};
     anira::Pipeline pipe;
-    pipe.register_engine(engine);
-    pipe.inference(engine_stream_model(), {on_coreml, on_npu});
+    pipe.add_engine(engine);
+    pipe.add_inference(engine_stream_model(), {on_coreml, on_npu});
     CHandler handler(context, pipe);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
@@ -2564,8 +2572,8 @@ TEST(AbiCxx, ProvidersAreTheEnginesTwins) {
                                    .engine_id = k_cxx_engine_id,
                                    .provider_id = nullptr};
     anira::Pipeline other;
-    other.register_engine(engine);
-    other.inference(engine_stream_model(), {on_cuda});
+    other.add_engine(engine);
+    other.add_inference(engine_stream_model(), {on_cuda});
     const CHandler refused(context, other);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_NOT_SUPPORTED) << refused.m_err.message;
     EXPECT_NE(std::string(refused.m_err.message).find("'cuda'"), std::string::npos)
@@ -2590,7 +2598,7 @@ TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) 
         auto engine = std::make_shared<CountingEngine>();
         std::optional<anira::Pipeline> pipe;
         pipe.emplace();
-        pipe->register_engine(engine).inference(model);
+        pipe->add_engine(engine).add_inference(model);
         CHandler first(context, *pipe);
         CHandler second(context, *pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
@@ -2668,7 +2676,7 @@ TEST(AbiCxx, APreparedPerHandlerDiesWithItsUnprepareAndResetSeesEveryNewStream) 
         const ModelConfig model = engine_stream_model();
         auto engine = std::make_shared<CountingEngine>();
         anira::Pipeline pipe;
-        pipe.register_engine(engine).inference(model);
+        pipe.add_engine(engine).add_inference(model);
         CHandler first(context, pipe);
         CHandler second(context, pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
@@ -2716,8 +2724,8 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
         std::optional<anira::Pipeline> second_pipe;
         first_pipe.emplace();
         second_pipe.emplace();
-        first_pipe->register_engine(engine).inference(model);
-        second_pipe->register_engine(engine).inference(model);
+        first_pipe->add_engine(engine).add_inference(model);
+        second_pipe->add_engine(engine).add_inference(model);
         EXPECT_EQ(engine.use_count(), 2) << "one C engine, one copy";
         CHandler first(context, *first_pipe);
         CHandler second(context, *second_pipe);
@@ -2746,7 +2754,7 @@ TEST(AbiCxx, OneEngineObjectOnTwoPipelinesSharesOneLoadedModel) {
     EXPECT_EQ(engine.use_count(), 1);
     {
         anira::Pipeline again;
-        again.register_engine(engine);
+        again.add_engine(engine);
         EXPECT_EQ(engine.use_count(), 2) << "a fresh C engine";
     }
     EXPECT_EQ(engine->m_released.load(), 2);
@@ -2765,7 +2773,7 @@ TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
     {
         std::optional<anira::Pipeline> first_pipe;
         first_pipe.emplace();
-        first_pipe->register_engine(engine).inference(model);
+        first_pipe->add_engine(engine).add_inference(model);
         CHandler first(context, *first_pipe);
         ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
         first_pipe.reset();  // the handler carries the C engine alone now
@@ -2773,7 +2781,7 @@ TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
         EXPECT_EQ(engine->m_released.load(), 0);
 
         anira::Pipeline second_pipe;
-        second_pipe.register_engine(engine).inference(model);
+        second_pipe.add_engine(engine).add_inference(model);
         EXPECT_EQ(engine.use_count(), 2) << "the same C engine: no second copy";
         CHandler second(context, second_pipe);
         ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
@@ -2799,7 +2807,7 @@ TEST(AbiCxx, AHandlerOutlivingItsPipelineKeepsTheObjectsCEngine) {
 }
 
 // The enum alias is EngineKind: what a model config takes and answers for a built-in engine
-// (ANIRA_ENGINE_CUSTOM for a custom one), and what the stage context reports; the name Engine
+// (ANIRA_ENGINE_CUSTOM for a custom one), and what the processor context reports; the name Engine
 // is the class.
 TEST(AbiCxx, EngineKindIsTheEnumAlias) {
     static_assert(std::is_same_v<anira::EngineKind, anira_engine>);
@@ -2990,8 +2998,8 @@ anira::ContextConfig hpp_context_config(uint32_t threads = 2) {
 
 /// The stereo gain model on the custom row, with the pass-through engine object added.
 anira::Pipeline stereo_pipeline() {
-    anira::Pipeline pipe{
-        anira::stage::Inference(anira_test::stereo_gain_with_custom(), {custom_row()})};
+    anira::Pipeline pipe;
+    pipe.add_inference(anira_test::stereo_gain_with_custom(), {custom_row()});
     anira_test::add_passthrough(pipe.native());
     return pipe;
 }
@@ -3091,8 +3099,8 @@ TEST(AbiCxx, TheHandlerIsMoveOnlyAndPreparesFromEveryContractForm) {
     EXPECT_TRUE(async.m_thrown);
     EXPECT_EQ(async.m_status, ANIRA_ERROR_NOT_SUPPORTED) << async.m_what;
 
-    const anira::Pipeline no_engine{
-        anira::stage::Inference(anira_test::stereo_gain_with_custom(), {custom_row()})};
+    anira::Pipeline no_engine;
+    no_engine.add_inference(anira_test::stereo_gain_with_custom(), {custom_row()});
     const Thrown missing =
         thrown_by([&] { const anira::InferenceHandler refused(context, no_engine); });
     EXPECT_TRUE(missing.m_thrown) << "the custom row's engine is not in the pipeline";

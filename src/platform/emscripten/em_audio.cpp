@@ -3,7 +3,7 @@
 // Streamed slots, their buffers its planar host tensors (no copy), one process_multi call per
 // quantum over all of them, the miss rule is applied here, the Static inputs a
 // node serves arrive as AudioParams (scalars) or through a seqlock block per slot (tensors), and
-// a JavaScript stage of the handler runs through the trampolines on the worklet scope's
+// a JavaScript processor of the handler runs through the trampolines on the worklet scope's
 // registry. Compiled on the Wasm binary format only.
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
@@ -260,7 +260,7 @@ bool render(int num_inputs,
 
 // ---- the audio context's worklet thread and the processors, per context ----
 
-// The JavaScript stages of the worklet scope are built over its instance before the first
+// The JavaScript processors of the worklet scope are built over its instance before the first
 // quantum reaches them: the registry's boot, posted to the audio thread at every create. The
 // scope's Module gets its memory first, which the package's heap views are rebuilt from after a
 // growth (heap() of web/src/abi/bindings.ts; the worklet's Module starts without it, and it is a

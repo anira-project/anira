@@ -59,8 +59,9 @@ int main() {
     model.add_model("org.anira.install.copy");
     model.input(streamed("audio_in"));
     model.output(streamed("audio_out"));
-    const anira::Pipeline pipeline{
-        anira::stage::Inference(model).engine(std::make_shared<CopyEngine>())};
+    anira::Pipeline pipeline;
+    pipeline.add_engine(std::make_shared<CopyEngine>());
+    pipeline.add_inference(model);
     anira::InferenceHandler handler(context, pipeline);
     handler.prepare(anira::Hard{.block_min = 64,
                                 .block_max = 64,

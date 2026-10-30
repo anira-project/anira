@@ -12,9 +12,9 @@ Worklet node whose render callback is C.
 Three things carry over from a native host unchanged: the model and contract files
 (``*.model.json``, ``*.contract.json``; :js:meth:`ModelConfig.fromUrl` fetches a model file the
 way a native host opens it), the C ABI and its semantics, and the built-in ONNX Runtime engine.
-What a page adds is TypeScript: stages and inference engines written against the package, which
+What a page adds is TypeScript: processors and inference engines written against the package, which
 the scopes that run them (the main thread, the inference Workers' module, the worklet's module)
-define by name (:js:func:`~registry.defineStage`, :js:func:`~registry.defineEngine`), without rebuilding the
+define by name (:js:func:`~registry.defineProcessor`, :js:func:`~registry.defineEngine`), without rebuilding the
 WebAssembly module. The context config is the one place that differs: its worker module, the ES
 module every inference Worker imports first.
 

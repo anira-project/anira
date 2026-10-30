@@ -37,7 +37,7 @@ ANIRA_API anira::InferenceConfig make_inference_config(const anira_model_config&
                                                        const anira_contract& contract,
                                                        const anira_backend_id* candidates,
                                                        uint32_t num_candidates,
-                                                       const StageFacts* stages = nullptr,
+                                                       const ProcessorFacts* processors = nullptr,
                                                        const EngineFacts* engines = nullptr,
                                                        bool default_set = false);
 

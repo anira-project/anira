@@ -28,7 +28,7 @@ std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 // The three sizes of the steerable-nafx CNN. The hop follows the host buffer, which the fixed
 // window of a configuration file cannot, so the benchmark builds the model config in code with
 // the CNN builder of extras/models per buffer size; the contract comes from the size's contract
-// file. The CNN needs no stage: anira's default fill is its receptive-field window.
+// file. The CNN needs no processor: anira's default fill is its receptive-field window.
 constexpr std::array<CnnSize, 3> k_sizes{CnnSize::Full, CnnSize::Medium, CnnSize::Small};
 constexpr std::array<const char*, 3> k_contracts{k_cnn_contract_json,
                                                  k_medium_cnn_contract_json,
@@ -89,8 +89,9 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.
     m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
-    const anira::Pipeline pipeline{anira::stage::Inference(model_config, {candidate_of(engine)})
-                                       .engine(std::make_shared<BypassEngine>())};
+    anira::Pipeline pipeline;
+    pipeline.add_engine(std::make_shared<BypassEngine>());
+    pipeline.add_inference(model_config, {candidate_of(engine)});
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
     const anira::PlanReport report = m_inference_handler->prepare(contract);
     const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);

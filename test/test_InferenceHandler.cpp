@@ -1,7 +1,7 @@
 // anira::InferenceHandler of anira/anira.hpp end to end on GuitarLSTM (extras/models/hybrid-nn):
 // the model file, its contract with the host geometry, a Pipeline of the inference stage (the
 // engine of the instantiation, or the bypass engine of extras/models/BypassEngine.h) and the
-// model's windows (HybridNNStage), the handler's Hard entries over one planar float32 tensor.
+// model's windows (HybridNNProcessor), the handler's Hard entries over one planar float32 tensor.
 // The outputs are compared with the reference renders of the model directory, delayed by the
 // handler's latency; the bypass instantiations compare the input with itself.
 #include <anira/abi/enums.h>
@@ -29,7 +29,7 @@
 #include <vector>
 
 #include "../extras/models/BypassEngine.h"
-#include "../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../extras/models/model_files.h"
 #include "gtest/gtest.h"
 
@@ -93,7 +93,7 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
 
 /// One handler on GuitarLSTM: the model file plus the bypass engine's entry, the contract file
 /// with the instantiation's geometry, a Pipeline of the inference stage on the one engine of the
-/// instantiation and HybridNNStage, prepared.
+/// instantiation and HybridNNProcessor, prepared.
 struct HybridNnHandler {
     explicit HybridNnHandler(const InferenceTestParams& params,
                              anira_model_state state = ANIRA_MODEL_STATELESS,
@@ -109,9 +109,10 @@ struct HybridNnHandler {
                                          .engine = static_cast<uint32_t>(params.m_engine),
                                          .provider = ANIRA_PROVIDER_CPU,
                                          .engine_id = bypass ? k_bypass_engine_id : nullptr};
-        const anira::Pipeline pipeline{
-            anira::stage::Inference(m_model, {candidate}).engine(std::make_shared<BypassEngine>()),
-            anira::stage::Custom(std::make_shared<HybridNNStage>())};
+        anira::Pipeline pipeline;
+        pipeline.add_engine(std::make_shared<BypassEngine>());
+        pipeline.add_inference(m_model, {candidate});
+        pipeline.add_processor(std::make_shared<HybridNNProcessor>());
         m_handler = std::make_unique<anira::InferenceHandler>(m_context, pipeline);
         const anira::PlanReport report = m_handler->prepare(m_contract);
         EXPECT_EQ(report.num_plans(), 1U) << "one candidate, one plan";
@@ -531,9 +532,10 @@ TEST(InferenceHandlerDefaultPlan, StartsOnTheFirstEntryOfTheBuild) {
     model.add_model(k_bypass_engine_id);
     anira::ContractHandle contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
     contract.hard_geometry(256, 256, 44100);
-    const anira::Pipeline pipeline{
-        anira::stage::Inference(model).engine(std::make_shared<BypassEngine>()),
-        anira::stage::Custom(std::make_shared<HybridNNStage>())};
+    anira::Pipeline pipeline;
+    pipeline.add_engine(std::make_shared<BypassEngine>());
+    pipeline.add_inference(model);
+    pipeline.add_processor(std::make_shared<HybridNNProcessor>());
     anira::InferenceHandler handler(context, pipeline);
     const anira::PlanReport report = handler.prepare(contract);
     ASSERT_GE(report.num_plans(), 1U);

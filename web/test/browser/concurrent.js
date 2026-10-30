@@ -40,7 +40,7 @@ const handlers = async (anira, context, model, count, geometry) => {
   ).hardGeometry(geometry.quantum, geometry.burst, RATE)
   const out = []
   for (let i = 0; i < count; i++) {
-    const pipeline = Pipeline.create(anira).inference(model)
+    const pipeline = Pipeline.create(anira).addInference(model)
     const handler = InferenceHandler.create(context, pipeline)
     handler.prepare(contract)
     out.push(handler)

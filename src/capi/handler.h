@@ -27,7 +27,7 @@
 #include "engine.h"
 #include "handles.h"
 #include "port.h"
-#include "stage.h"
+#include "processor.h"
 
 namespace anira::capi {
 
@@ -67,10 +67,10 @@ struct anira_pipeline {
     /// one plan, on its pin or on the CPU path (validate.h matching_plans).
     bool m_default_set = false;
     bool m_has_inference = false;
-    /// The one stage of the pipeline (anira_pipeline_add_stage; a second call is refused), or
-    /// null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
-    /// the stage's release fires once, when the last of them dies.
-    std::shared_ptr<anira::capi::StageCarrier> m_stage;
+    /// The one processor of the pipeline (anira_pipeline_add_processor; a second call is refused),
+    /// or null. The carrier is shared with every copy of the pipeline (anira_handler_create's), so
+    /// the processor's release fires once, when the last of them dies.
+    std::shared_ptr<anira::capi::ProcessorCarrier> m_processor;
     /// The custom engines added to the pipeline (anira_pipeline_add_engine), in the order they
     /// were added, their ids distinct (an engine whose id the pipeline has is refused). The
     /// carriers are shared with the engine's handle, with every other pipeline the engine was
@@ -112,7 +112,7 @@ struct anira_handler {
     anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
                                                 ///< and m_pp
     /// The ports: per side one entry per tensor of the model config's list, indexed by slot
-    /// like everything else of the handler and the stage processor, and a variant of what the
+    /// like everything else of the handler and the processor runner, and a variant of what the
     /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
     /// ring), a static port (the stored whole-tensor value, in the spec's shape and dtype), a
     /// state port (the input half: the state's two buffers in the spec's shape and dtype, one
@@ -126,9 +126,9 @@ struct anira_handler {
     /// writes them: destroyed after.
     std::vector<anira::capi::Port> m_input_ports;
     std::vector<anira::capi::Port> m_output_ports;
-    std::unique_ptr<anira::PrePostProcessor> m_pp;       ///< the StageProcessor over
-                                                         ///< m_pipeline.m_stage, rebuilt by every
-                                                         ///< prepare (needs m_inference_config)
+    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the ProcessorRunner over
+                                                    ///< m_pipeline.m_processor, rebuilt by every
+                                                    ///< prepare (needs m_inference_config)
     std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
                                                          ///< unprepared (declared after m_pp:
                                                          ///< destroyed first)
@@ -143,7 +143,7 @@ struct anira_handler {
     /// distinct.
     std::vector<anira::capi::Plan> m_plans;
     anira_plan_report m_report;
-    std::atomic<bool> m_prepared{false};  ///< release before the engines' and the stage's
+    std::atomic<bool> m_prepared{false};  ///< release before the engines' and the processor's
                                           ///< prepares of a prepare, so the getters answer
                                           ///< inside them; acquire in every getter
     std::atomic<bool> m_runnable{false};  ///< release at the end of a successful prepare,
@@ -170,18 +170,18 @@ struct anira_handler {
     /// two Static entries are legal on an unprepared handler and need their bound).
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
-    /// The entries of the prepared session (the structs of its pool, what a stage context
+    /// The entries of the prepared session (the structs of its pool, what a processor context
     /// reports as the chunk's entry): set by prepare from the processor's table, 0 while
     /// unprepared. anira_handler_num_entries reads it.
     uint32_t m_num_entries = 0;
-    /// What the stage's prepare handed back for this handler (the out_prepared of
-    /// anira_stage_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
+    /// What the processor's prepare handed back for this handler (the out_prepared of
+    /// anira_processor_prepare_fn; NULL is a legal value): the `prepared` pointer every phase call,
     /// the reset and the unprepare of this handler receive beside the registration's user_data.
-    /// Held here for the unprepare and on the stage processor, which passes it per call.
-    void* m_stage_prepared = nullptr;
-    /// A successful stage prepare is outstanding: its unprepare is owed, once, when the session
+    /// Held here for the unprepare and on the processor runner, which passes it per call.
+    void* m_processor_prepared = nullptr;
+    /// A successful processor prepare is outstanding: its unprepare is owed, once, when the session
     /// is released (the next prepare, a failed prepare, destroy). A refused prepare never sets it.
-    bool m_stage_unprepare_owed = false;
+    bool m_processor_unprepare_owed = false;
     /// ANIRA_MISS_CALLBACK: the contract's pair, cached at prepare so that the driver thread
     /// reads two plain members and not the contract's variant.
     anira_miss_fn m_miss_fn = nullptr;

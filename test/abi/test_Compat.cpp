@@ -5,7 +5,7 @@
 // write, the getters of the live class on the same arguments, the normalisation table row by
 // row, the loader over the version-2 documents of test/support/v2_documents.h. Suite AbiCompat
 // is the runtime half: the PassthroughEngine against the 2.x BackendBase and the
-// LegacyProcessorStage on C handlers built through anira::Pipeline, against the live 2.x
+// LegacyProcessor on C handlers built through anira::Pipeline, against the live 2.x
 // handler where both run. A 2.x value and a shim value are compared by name through
 // same_backend, never by a cast: the 2.x enumerators depend on the engines of the build, the
 // shim's do not.
@@ -938,7 +938,8 @@ TEST(AbiCompatConfig, TheLoaderRefuses) {
               ANIRA_ERROR_CONFIG);
 }
 
-// ---- the runtime half: the pass-through and the stage (suite AbiCompat) ----------------------
+// ---- the runtime half: the pass-through and the processor (suite AbiCompat)
+// ----------------------
 
 namespace {
 
@@ -991,7 +992,7 @@ std::vector<anira_plan_info> plans_of(const anira_handler* handler) {
     return rows;
 }
 
-/// The backend a plan row runs on, as the stage context hands it to a processor.
+/// The backend a plan row runs on, as the processor context hands it to a processor.
 v2::InferenceBackend backend_of(const anira_plan_info& info) {
     return v2::to_backend(anira::EngineRef{
         .kind = static_cast<anira_engine>(info.engine),
@@ -1009,7 +1010,7 @@ constexpr size_t k_small_out = 4;
 // The pass-through is 2.x's BackendBase::process: output i a copy of input i of the same size,
 // zeros for a pair of other sizes and for an output beyond the inputs. Once on the kernel
 // (the engine's three levels against BackendBase over the same data), once through a C handler
-// built on an anira::Pipeline with the LegacyProcessorStage against the live 2.x handler, whose
+// built on an anira::Pipeline with the LegacyProcessor against the live 2.x handler, whose
 // CUSTOM row runs the 2.x base pass-through: the same blocks, bit for bit.
 TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
     const std::shared_ptr<v2::PassthroughEngine> engine = std::make_shared<v2::PassthroughEngine>();
@@ -1098,9 +1099,9 @@ TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
         2);
     v2::PrePostProcessor pp(config);
     anira::Pipeline pipeline;
-    pipeline.register_engine(engine);
-    pipeline.inference(config.model_config());
-    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    pipeline.add_engine(engine);
+    pipeline.add_inference(config.model_config());
+    pipeline.add_processor(std::make_shared<v2::LegacyProcessor>(pp));
     PipelineHandler handler(context, pipeline);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(contract_of(config, k_stream)), ANIRA_OK) << handler.m_err.message;
@@ -1229,9 +1230,9 @@ public:
 }  // namespace
 
 // The processor sees the backend of the chunk's plan in all four phases: CUSTOM on the custom
-// plan (the stage saw ANIRA_ENGINE_CUSTOM with anira.v2.custom), the engine's backend on a
+// plan (the processor saw ANIRA_ENGINE_CUSTOM with anira.v2.custom), the engine's backend on a
 // built-in plan. Every plan of the default candidate set is on the CPU path.
-TEST(AbiCompat, TheStageReceivesTheBackendOfThePlan) {
+TEST(AbiCompat, TheProcessorReceivesTheBackendOfThePlan) {
     const std::string stem =
         model_path("model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono");
     std::vector<v2::ModelData> rows;
@@ -1258,9 +1259,9 @@ TEST(AbiCompat, TheStageReceivesTheBackendOfThePlan) {
     RecordingProcessor pp(config);
     pp.set_input(1.F, 1, 0);
     anira::Pipeline pipeline;
-    pipeline.register_engine(std::make_shared<v2::PassthroughEngine>());
-    pipeline.inference(config.model_config());
-    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    pipeline.add_engine(std::make_shared<v2::PassthroughEngine>());
+    pipeline.add_inference(config.model_config());
+    pipeline.add_processor(std::make_shared<v2::LegacyProcessor>(pp));
     const anira_test::Context context;
     PipelineHandler handler(context, pipeline);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
@@ -1320,7 +1321,7 @@ public:
 
 }  // namespace
 
-// A throw never crosses the C boundary: the stage's trampoline turns an anira::Error into its
+// A throw never crosses the C boundary: the processor's trampoline turns an anira::Error into its
 // status and anything else into ANIRA_ERROR_ENGINE, which fails the chunk (zeros at its stream
 // position) and lands in anira_handler_rt_error; the handler keeps running (in 2.x the throw
 // reached the host).
@@ -1334,9 +1335,9 @@ TEST(AbiCompat, AThrowingProcessorFailsItsChunk) {
                                2);
     ThrowingProcessor pp(config);
     anira::Pipeline pipeline;
-    pipeline.register_engine(std::make_shared<v2::PassthroughEngine>());
-    pipeline.inference(config.model_config());
-    pipeline.add(anira::stage::Custom(std::make_shared<v2::LegacyProcessorStage>(pp)));
+    pipeline.add_engine(std::make_shared<v2::PassthroughEngine>());
+    pipeline.add_inference(config.model_config());
+    pipeline.add_processor(std::make_shared<v2::LegacyProcessor>(pp));
     const anira_test::Context context;
     PipelineHandler handler(context, pipeline);
     ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;

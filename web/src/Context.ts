@@ -12,7 +12,7 @@ export type ContextOptions = {
   threads?: number | 'auto'
   /**
    * The ES module every inference Worker imports before its loop: the JavaScript engines (and
-   * the Worker-side phases of stages) it defines with `defineEngine` / `defineStage` from
+   * the Worker-side phases of processors) it defines with `defineEngine` / `defineProcessor` from
    * `@anira-project/anira/scope`. Omitted: none (the module's built-in engines need none).
    */
   workerModule?: string | URL

@@ -64,7 +64,7 @@ endfunction()
 # targets one API and moves once.
 #   (a) through anira/compat/v2.hpp, the 2.x source-compatible face over the C ABI:
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
-#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Stages).
+#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Processors).
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
 #       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
 #       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
@@ -79,7 +79,7 @@ endfunction()
 #       onto the enabled-engines entry in PR 12).
 # test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
 # test/support/v2_handler.h is the 2.x handler those suites and the 2.x arms of test_abi
-# (test_Handler, test_HandlerTensor, test_Stage, test_Compat) drive; both go in PR 10b.
+# (test_Handler, test_HandlerTensor, test_Processor, test_Compat) drive; both go in PR 10b.
 
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
@@ -162,7 +162,7 @@ anira_add_test_binary(test_abi
 	abi/test_InstanceDispatch.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp
-	abi/test_Stage.cpp
+	abi/test_Processor.cpp
 	abi/test_Engine.cpp
 	abi/test_State.cpp
 	abi/test_Tensor.cpp

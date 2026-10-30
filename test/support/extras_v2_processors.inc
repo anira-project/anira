@@ -1,6 +1,6 @@
 // The two 2.x processors of the extras (extras/models/cnn/CNNPrePostProcessor.h and
 // extras/models/hybrid-nn/HybridNNPrePostProcessor.h as they were before the extras became 3.x
-// stages), verbatim, for test/abi/test_Compat.cpp: it includes this body twice, inside a
+// processors), verbatim, for test/abi/test_Compat.cpp: it includes this body twice, inside a
 // namespace whose alias `anira` names ::anira (the live 2.x classes) and inside one whose alias
 // names ::anira::v2 (the shim), so one text runs on both type sets. Not a header: no include
 // guard, no includes, the caller's namespace around it.

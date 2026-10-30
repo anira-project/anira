@@ -22,40 +22,40 @@
  * engine as ANIRA_ENGINE_CUSTOM with its id (anira_model_config_add_model_path,
  * anira_model_config_add_model_bytes) and a candidate of anira_pipeline_add_inference with the
  * same pair selects it; wherever the engine-provider pair travels a custom engine is
- * ANIRA_ENGINE_CUSTOM with its id (anira_backend_id, anira_plan_info; a stage reads it with
- * anira_stage_engine). An added engine no entry names is not a plan and not an error; an entry
- * whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
+ * ANIRA_ENGINE_CUSTOM with its id (anira_backend_id, anira_plan_info; a processor reads it with
+ * anira_processor_engine). An added engine no entry names is not a plan and not an error; an
+ * entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
  * anira_handler_create. Which of an engine's declared providers are usable here is its query's
  * answer (anira_engine_query_fn, a tail slot of the descriptor, the engine's own
  * GetAvailableProviders): anira_handler_create checks every candidate's provider of the engine
  * against it (and keeps the answer, which anira_handler_prepare checks the plans against again
  * without a query), and anira_pipeline_capabilities_backends / _edge report the engine's rows
  * beside the context's, so a custom engine's capabilities are declared, measured and visible as
- * a built-in engine's are. The lifecycle is the stage's (anira/abi/stage.h) with one level
- * more, the same words on both sides, from the outermost level in. init runs once per engine
- * object, at the first anira_handler_prepare that reaches it (a row of the engine survives
- * validation), with an anira_init_info (anira/abi/lifecycle.h: the log level and the thread
- * count in effect, the handler's context), before the engine's first load; a refused init fails
- * that prepare and the next one calls init again. load runs once per loaded model anira pools,
- * with an anira_engine_load_info (the variant, the entry's row, a template of every tensor on
- * the engine's side, the name each slot binds to, the shared call slots) and hands back a
- * loaded pointer: this is where the weights are loaded; unload frees them, when the last
- * handler holding the loaded model is re-prepared or destroyed. prepare runs once per handler
- * and loaded model the handler runs on, at anira_handler_prepare, with the anira_prepare_info
- * the stage's prepare receives (the handler, its plan report, its entry count, the model-end
- * templates, the canonical names and the flags of the prepare) and the loaded pointer, and
- * hands back a prepared pointer: what the engine keeps per handler, its own executor included
- * when the prepare carries ANIRA_PREPARE_EXCLUSIVE; unprepare gives it back, once per
- * successful prepare, at the handler's next prepare or its destroy, before the loaded model is
- * released. Every process and reset call receives the handler's prepared pointer beside the
- * engine's user_data, as (ctx, prepared, user_data), and the loaded pointer in the context
- * (anira_engine_ctx.loaded). release fires once, when the last reference to the engine dies
- * (its handle, the pipelines it was added to, their handlers, the loaded models), after every
- * unload, whether or not init ever ran. Two handlers share one loaded model when they run the
- * same engine object on an equal model configuration (the whole variant: every entry, spec and
- * extension the engine may read through load's record) resolved to equal tensors, on the same
- * provider, whichever pipelines they were created from; two engine objects never share, even
- * under one id with the same callbacks. The shared call slots of a loaded model are its
+ * a built-in engine's are. The lifecycle is the processor's (anira/abi/processor.h) with one
+ * level more, the same words on both sides, from the outermost level in. init runs once per
+ * engine object, at the first anira_handler_prepare that reaches it (a row of the engine
+ * survives validation), with an anira_init_info (anira/abi/lifecycle.h: the log level and the
+ * thread count in effect, the handler's context), before the engine's first load; a refused
+ * init fails that prepare and the next one calls init again. load runs once per loaded model
+ * anira pools, with an anira_engine_load_info (the variant, the entry's row, a template of
+ * every tensor on the engine's side, the name each slot binds to, the shared call slots) and
+ * hands back a loaded pointer: this is where the weights are loaded; unload frees them, when
+ * the last handler holding the loaded model is re-prepared or destroyed. prepare runs once per
+ * handler and loaded model the handler runs on, at anira_handler_prepare, with the
+ * anira_prepare_info the processor's prepare receives (the handler, its plan report, its entry
+ * count, the model-end templates, the canonical names and the flags of the prepare) and the
+ * loaded pointer, and hands back a prepared pointer: what the engine keeps per handler, its own
+ * executor included when the prepare carries ANIRA_PREPARE_EXCLUSIVE; unprepare gives it back,
+ * once per successful prepare, at the handler's next prepare or its destroy, before the loaded
+ * model is released. Every process and reset call receives the handler's prepared pointer
+ * beside the engine's user_data, as (ctx, prepared, user_data), and the loaded pointer in the
+ * context (anira_engine_ctx.loaded). release fires once, when the last reference to the engine
+ * dies (its handle, the pipelines it was added to, their handlers, the loaded models), after
+ * every unload, whether or not init ever ran. Two handlers share one loaded model when they run
+ * the same engine object on an equal model configuration (the whole variant: every entry, spec
+ * and extension the engine may read through load's record) resolved to equal tensors, on the
+ * same provider, whichever pipelines they were created from; two engine objects never share,
+ * even under one id with the same callbacks. The shared call slots of a loaded model are its
  * instances (anira_engine_load_info.instances, the model's max_instances, ANIRA_INSTANCES_AUTO
  * resolved to the pool's thread count): a process call of a handler whose model is stateless
  * claims one of them, and no two calls run at once on one instance. A model declared
@@ -66,10 +66,10 @@
  * prepare built. The engine binds by name where its side has names: the load record carries the
  * name each slot binds to (the entry's tensors record, else the canonical name), and an engine
  * that cannot bind a slot refuses load. process runs on an inference thread, in
- * ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the stage context (Tier
- * 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call): the
- * instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays in
- * slot order, State tensors included, the ticket, the per-call flags and the loaded pointer.
+ * ANIRA_PHASE_INFERENCE, over an anira_engine_ctx, the engine's twin of the processor context
+ * (Tier 1, 64 bytes, ANIRA_STRUCT_ENGINE_CTX, on anira's stack for the duration of the call):
+ * the instance of the loaded model the call runs on, the chunk's entry, the two tensor arrays
+ * in slot order, State tensors included, the ticket, the per-call flags and the loaded pointer.
  * The engine rule: read every extent and every memory handle (data pointer, byte_offset,
  * strides, domain) from the tensors of THIS call, never from a value kept at load or prepare,
  * and never assume a tensor is anira's own buffer (the halves of a declared State pair
@@ -185,14 +185,14 @@ typedef struct anira_engine_load_info {
 /**
  * @brief What a process or reset call of an engine sees. Tier 1: 64 bytes, frozen, identical on
  * every target; no struct_size. anira fills one on its own stack per call, like
- * anira_stage_ctx: the record and the arrays it names are valid until the callback
+ * anira_processor_ctx: the record and the arrays it names are valid until the callback
  * returns. The tensors are in the record, one descriptor per slot of either side in slot
  * order (the tensor's position in the model config's list of its side, State tensors
  * included): the engine reads every extent and every memory handle from them on every
  * call, the engine rule of the file comment. The loaded model the call runs on is in the
  * record too (loaded, what load handed back); the handler's prepared pointer travels
- * beside the record, as the stage's does. The per-call facts grow through the reserved
- * slots, never through a second typedef.
+ * beside the record, as the processor's does. The per-call facts grow through the
+ * reserved slots, never through a second typedef.
  */
 typedef struct anira_engine_ctx {
     /**
@@ -202,8 +202,8 @@ typedef struct anira_engine_ctx {
      */
     uint32_t instance;
     /**
-     * The chunk's position in the handler's inference queue (anira_stage_ctx.entry of the same
-     * chunk).
+     * The chunk's position in the handler's inference queue (anira_processor_ctx.entry of the
+     * same chunk).
      */
     uint32_t entry;
     /**
@@ -307,18 +307,18 @@ typedef void (ANIRA_CALL* anira_engine_unload_fn)(void* loaded, void* user_data)
  * @brief The prepare function of an engine: called by anira_handler_prepare on its caller's
  * thread, once per handler and loaded model the handler runs on, after the plan report
  * is built and while the handler already counts as prepared (its getters answer), with
- * the record the stage's prepare receives and the loaded pointer. It may allocate: this
- * is where an engine builds what it keeps per handler, its own executor (a session, an
- * interpreter, a method) included when the record carries ANIRA_PREPARE_EXCLUSIVE, since
- * the process calls of an exclusive handler claim no shared slot of the loaded model; a
- * handler whose model is stateless needs nothing here and may hand back NULL. Of anira
- * it may call the [callback-safe] entries, the handler's getters and the two Static
- * entries, never prepare, destroy or a Hard entry. The prepares and unprepares of one
- * loaded model never overlap: anira serialises them per loaded model, so two handlers
- * prepared on two threads reach the same loaded pointer one after the other (those of
- * different loaded models may run at once, each on its handler's thread). A status other
- * than ANIRA_OK fails anira_handler_prepare with that status, the message naming the
- * engine, and leaves the handler unprepared; unprepare is not called then.
+ * the record the processor's prepare receives and the loaded pointer. It may allocate:
+ * this is where an engine builds what it keeps per handler, its own executor (a session,
+ * an interpreter, a method) included when the record carries ANIRA_PREPARE_EXCLUSIVE,
+ * since the process calls of an exclusive handler claim no shared slot of the loaded
+ * model; a handler whose model is stateless needs nothing here and may hand back NULL.
+ * Of anira it may call the [callback-safe] entries, the handler's getters and the two
+ * Static entries, never prepare, destroy or a Hard entry. The prepares and unprepares of
+ * one loaded model never overlap: anira serialises them per loaded model, so two
+ * handlers prepared on two threads reach the same loaded pointer one after the other
+ * (those of different loaded models may run at once, each on its handler's thread). A
+ * status other than ANIRA_OK fails anira_handler_prepare with that status, the message
+ * naming the engine, and leaves the handler unprepared; unprepare is not called then.
  * @param info The record; valid until the callback returns.
  * @param loaded What the load of the model this handler runs on handed back.
  * @param user_data The descriptor's user_data.
@@ -439,8 +439,8 @@ typedef anira_status (ANIRA_CALL* anira_engine_query_fn)(const anira_init_info* 
  * struct_size into the refcounted anira_custom_engine, which every pipeline it is added
  * to and every handler created from them share. Tier 2: struct_size first, user_data
  * third (its offset never moves), no implicit padding (LP64 120 bytes, ILP32 72), growth
- * at the tail. The slots are listed as the stage's, from the innermost level out: the
- * per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the
+ * at the tail. The slots are listed as the processor's, from the innermost level out:
+ * the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the
  * providers the engine serves and the query that says which of them are usable here.
  * process is required; every other slot may be NULL.
  */

@@ -22,13 +22,13 @@
 // The model this plugin runs is picked at configure time (MODEL_TO_USE, see CMakeLists.txt).
 // Every variant is configured the same way: the model file and the contract file of a bundled
 // model (extras/models), a Pipeline of its inference stage (the model's engines and the bypass
-// engine, BypassEngine.h, behind the "BYPASS" setting) and, for the HybridNN model, the stage
-// that builds its windows (HybridNNStage.h), one anira::InferenceHandler on a Context, prepared
+// engine, BypassEngine.h, behind the "BYPASS" setting) and, for the HybridNN model, the processor
+// that builds its windows (HybridNNProcessor.h), one anira::InferenceHandler on a Context, prepared
 // with the Hard contract of the host's block. The "Backend Type" parameter picks a plan of the
 // PlanReport prepare returns. Variant 1 runs the CNN of variant 0 with every file compiled into
 // the plugin; variant 7 runs RAVE as an encoder and a decoder handler.
 #if MODEL_TO_USE == 2
-#include "../../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #endif
 #if MODEL_TO_USE == 1
 #include <BinaryData.h>
@@ -127,13 +127,14 @@ inline anira::ModelConfig with_bypass(anira::ModelConfig config) {
 }
 
 /// The pipeline of a model config: its inference stage, which carries the bypass engine, and
-/// the stage of the model when it has one of its own (the HybridNN windows; every other model
+/// the processor of the model when it has one of its own (the HybridNN windows; every other model
 /// takes anira's default fill and push).
 inline anira::Pipeline make_pipeline(const anira::ModelConfig& model) {
     anira::Pipeline pipeline;
-    pipeline.add(anira::stage::Inference(model).engine(std::make_shared<BypassEngine>()));
+    pipeline.add_engine(std::make_shared<BypassEngine>());
+    pipeline.add_inference(model);
 #if MODEL_TO_USE == 2
-    pipeline.add(anira::stage::Custom(std::make_shared<HybridNNStage>()));
+    pipeline.add_processor(std::make_shared<HybridNNProcessor>());
 #endif
     return pipeline;
 }

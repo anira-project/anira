@@ -342,7 +342,7 @@ export const anira_tensor = {
   },
 } as const
 
-export const anira_stage_ctx = {
+export const anira_processor_ctx = {
   size: 64,
   align: 8,
   fields: {

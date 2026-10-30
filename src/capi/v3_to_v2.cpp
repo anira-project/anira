@@ -54,11 +54,18 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
                                              const anira_contract& contract,
                                              const anira_backend_id* candidates,
                                              uint32_t num_candidates,
-                                             const StageFacts* stages,
+                                             const ProcessorFacts* processors,
                                              const EngineFacts* engines,
                                              bool default_set) {
     Derived derived;
-    validate(model, &contract, candidates, num_candidates, derived, stages, engines, default_set);
+    validate(model,
+             &contract,
+             candidates,
+             num_candidates,
+             derived,
+             processors,
+             engines,
+             default_set);
     return make_inference_config(model, contract, derived);
 }
 
@@ -156,7 +163,7 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
     // A model with a declared state pair is Stateful whatever it says: the state of inference
     // k is the input of inference k + 1, so the inferences of a session run one at a time and
     // in order (the session-exclusive processor and its dispatch gate), which is also what
-    // serialises the stage processor's feed, capture and re-initialisation of the state.
+    // serialises the processor runner's feed, capture and re-initialisation of the state.
     const auto is_state = [](const anira_tensor_spec& spec) {
         return spec.m_role == ANIRA_ROLE_STATE;
     };

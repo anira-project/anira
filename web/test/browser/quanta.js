@@ -57,7 +57,7 @@ const run = async () => {
         new URL(`${MODELS}gain.contract.json`, import.meta.url)
       )
     ).hardGeometry(geometry.quantum, geometry.burst, RATE)
-    const pipeline = Pipeline.create(anira).inference(model)
+    const pipeline = Pipeline.create(anira).addInference(model)
     const handler = InferenceHandler.create(context, pipeline)
     handler.prepare(contract)
     pipeline.destroy()

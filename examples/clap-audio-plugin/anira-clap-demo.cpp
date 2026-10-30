@@ -26,10 +26,14 @@ anira::ModelConfig hybridnn_with_bypass() {
     return config;
 }
 
-/// The inference stage (the model's engines and the bypass engine) and the model's windows.
+/// The bypass engine, the inference stage (the model's engines and the bypass engine) and the
+/// processor that builds the model's windows.
 anira::Pipeline make_pipeline(const anira::ModelConfig& model) {
-    return anira::Pipeline{anira::stage::Inference(model).engine(std::make_shared<BypassEngine>()),
-                           anira::stage::Custom(std::make_shared<HybridNNStage>())};
+    anira::Pipeline pipeline;
+    pipeline.add_engine(std::make_shared<BypassEngine>())
+        .add_inference(model)
+        .add_processor(std::make_shared<HybridNNProcessor>());
+    return pipeline;
 }
 
 }  // namespace

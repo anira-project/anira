@@ -1,5 +1,6 @@
-// anira/abi/stage.h: the ring accessors, the stage context and its six accessors, the descriptor
-// and its carrier, the default bodies and the processor a C-created handler runs them in.
+// anira/abi/processor.h: the ring accessors, the processor context and its six accessors, the
+// descriptor and its carrier, the default bodies and the processor a C-created handler runs them
+// in.
 //
 // A phase callback runs inside an ANIRA_NONBLOCKING entry (pre_process, post_process) or on an
 // inference thread (before_inference, after_inference), so every callback here is declared
@@ -19,7 +20,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
@@ -52,7 +53,7 @@
 #include "../support/v2_handler.h"
 #include "../support/v2_objects.h"
 #include "capi/port.h"
-#include "capi/stage.h"
+#include "capi/processor.h"
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -94,18 +95,19 @@ anira::ContractHandle zeros_contract(uint32_t block = static_cast<uint32_t>(k_ho
     return explicit_contract(block, anira_test::k_rate, ANIRA_MISS_ZEROS);
 }
 
-// ---- a pipeline with stages --------------------------------------------------------------------
+// ---- a pipeline with processors
+// --------------------------------------------------------------------
 
-/// anira_test::Handler's twin with a stage: the descriptors (at most one) go in before the
+/// anira_test::Handler's twin with a processor: the descriptors (at most one) go in before the
 /// handler is created, and the pipeline can be destroyed ahead of the handler. The custom row's
 /// engine is `custom` (a gate engine declared before this handler), else a pass-through of its
 /// own.
-struct StagedHandler {
-    StagedHandler(const Context& context,
-                  const ModelConfig& model,
-                  const std::vector<anira_stage_desc>& stages,
-                  std::span<const anira_backend_id> candidates = {},
-                  const anira_custom_engine* custom = nullptr) {
+struct ProcessorHandler {
+    ProcessorHandler(const Context& context,
+                     const ModelConfig& model,
+                     const std::vector<anira_processor_desc>& processors,
+                     std::span<const anira_backend_id> candidates = {},
+                     const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         if (custom != nullptr) {
             anira_test::add_engine(m_pipeline, custom);
@@ -121,17 +123,17 @@ struct StagedHandler {
                                                &m_err),
                   ANIRA_OK)
             << m_err.message;
-        for (const anira_stage_desc& stage : stages) {
-            EXPECT_EQ(anira_pipeline_add_stage(m_pipeline, &stage, &m_err), ANIRA_OK)
+        for (const anira_processor_desc& processor : processors) {
+            EXPECT_EQ(anira_pipeline_add_processor(m_pipeline, &processor, &m_err), ANIRA_OK)
                 << m_err.message;
         }
         m_create_status = anira_handler_create(context.m_context, m_pipeline, &m_handler, &m_err);
     }
-    ~StagedHandler() { destroy(); }
-    StagedHandler(const StagedHandler&) = delete;
-    StagedHandler& operator=(const StagedHandler&) = delete;
-    StagedHandler(StagedHandler&&) = delete;
-    StagedHandler& operator=(StagedHandler&&) = delete;
+    ~ProcessorHandler() { destroy(); }
+    ProcessorHandler(const ProcessorHandler&) = delete;
+    ProcessorHandler& operator=(const ProcessorHandler&) = delete;
+    ProcessorHandler(ProcessorHandler&&) = delete;
+    ProcessorHandler& operator=(ProcessorHandler&&) = delete;
 
     anira_status prepare(const anira::ContractHandle& contract) {
         m_err = ANIRA_ERROR_INIT;
@@ -155,11 +157,11 @@ struct StagedHandler {
 /// allocates nothing and blocks on nothing (the file comment), so the descriptors promise it,
 /// and a Hard contract takes a filled pre_process or post_process only with the promise. A
 /// case about the promise itself clears the bits.
-anira_stage_desc promising_stage(void* user_data) {
-    anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;
-    stage.user_data = user_data;
-    stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
-    return stage;
+anira_processor_desc promising_processor(void* user_data) {
+    anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;
+    processor.user_data = user_data;
+    processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+    return processor;
 }
 
 // ---- a stream in lockstep ----------------------------------------------------------------------
@@ -170,7 +172,7 @@ struct Stream {
     explicit Stream(anira_handler* handler) : m_handler(handler), m_face(handler) {}
 
     /// One block of the ramp; `settle` is the change the block leaves in the output ring (0
-    /// for an aligned stream, the hop when a stage pushed one hop too many).
+    /// for an aligned stream, the hop when a processor pushed one hop too many).
     void block(size_t settle = 0) {
         std::vector<float> data = anira_test::ramp(m_next++, k_hop);
         m_in.insert(m_in.end(), data.begin(), data.end());
@@ -217,7 +219,8 @@ void expect_same_stream(const std::vector<float>& actual, const std::vector<floa
     }
 }
 
-// ---- the recording stage -----------------------------------------------------------------------
+// ---- the recording processor
+// -----------------------------------------------------------------------
 
 constexpr size_t k_phases = 5;   // indexed by anira_phase up to AFTER_INFERENCE (4)
 constexpr size_t k_tensors = 4;  // the tensors per side the record has room for
@@ -225,17 +228,17 @@ constexpr size_t k_tensors = 4;  // the tensors per side the record has room for
 /// "Not asked": what a question a probe did not ask leaves in its status slot.
 constexpr anira_status k_not_asked = ANIRA_STATUS_FORCE32;
 
-/// What one stage saw and what it is told to do. The inference-thread phases write their own
+/// What one processor saw and what it is told to do. The inference-thread phases write their own
 /// entries only, and the test reads after the block's inference was collected.
 struct Probe {
     std::array<std::atomic<int>, k_phases> m_calls{};
-    std::array<anira_stage_ctx, k_phases> m_ctx{};
+    std::array<anira_processor_ctx, k_phases> m_ctx{};
     // What the six context accessors answered, per phase and slot. The probe asks like a
-    // correct stage: the role of every slot in every phase; the input ring in pre_process and
+    // correct processor: the role of every slot in every phase; the input ring in pre_process and
     // the output ring in post_process, of a Streamed slot only; the model end of a side in the
     // phases that expose it, and not of a State slot in the two host-end phases. A question
     // not asked leaves k_not_asked in its status and the zero in its answer, so the record is
-    // the table of what a phase exposes and what a stage may ask.
+    // the table of what a phase exposes and what a processor may ask.
     std::array<std::array<anira_status, k_tensors>, k_phases> m_input_role_status{};
     std::array<std::array<anira_status, k_tensors>, k_phases> m_output_role_status{};
     std::array<std::array<anira_role, k_tensors>, k_phases> m_input_roles{};
@@ -257,7 +260,7 @@ struct Probe {
     std::array<const char*, k_phases> m_provider_ids{};
     std::array<std::thread::id, k_phases> m_thread{};
     float m_static_input = -1.0F;  ///< element 0 of model input 1 as pre_process found it
-    // What the stage does in each phase: nothing, the default body (`m_defaults` times), and
+    // What the processor does in each phase: nothing, the default body (`m_defaults` times), and
     // the status it returns on its `m_fail_call`-th call of `m_fail_phase` (counted from 0).
     int m_defaults = 0;
     uint32_t m_fail_phase = ANIRA_PHASE_RELEASE;
@@ -268,7 +271,7 @@ struct Probe {
     float m_scale = 1.0F;  ///< post_process multiplies model output 0 by it before the default
 };
 
-anira_status ANIRA_CALL probe_phase(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL probe_phase(const anira_processor_ctx* ctx,
                                     void* /*prepared*/,
                                     void* user_data) ANIRA_NONBLOCKING {
     auto* probe = static_cast<Probe*>(user_data);
@@ -281,33 +284,36 @@ anira_status ANIRA_CALL probe_phase(const anira_stage_ctx* ctx,
     const bool pre = phase == ANIRA_PHASE_PRE_PROCESS;
     const bool post = phase == ANIRA_PHASE_POST_PROCESS;
     probe->m_engine_status.at(phase) =
-        anira_stage_engine(ctx, &probe->m_engines.at(phase), &probe->m_engine_ids.at(phase));
-    probe->m_provider_status.at(phase) =
-        anira_stage_provider(ctx, &probe->m_providers.at(phase), &probe->m_provider_ids.at(phase));
+        anira_processor_engine(ctx, &probe->m_engines.at(phase), &probe->m_engine_ids.at(phase));
+    probe->m_provider_status.at(phase) = anira_processor_provider(ctx,
+                                                                  &probe->m_providers.at(phase),
+                                                                  &probe->m_provider_ids.at(phase));
     for (uint32_t slot = 0; slot < ctx->num_inputs && slot < k_tensors; ++slot) {
         anira_role& role = probe->m_input_roles.at(phase).at(slot);
-        probe->m_input_role_status.at(phase).at(slot) = anira_stage_input_role(ctx, slot, &role);
+        probe->m_input_role_status.at(phase).at(slot) =
+            anira_processor_input_role(ctx, slot, &role);
         probe->m_input_ring_status.at(phase).at(slot) =
             pre && role == ANIRA_ROLE_STREAMED
-                ? anira_stage_input_ring(ctx, slot, &probe->m_input_rings.at(phase).at(slot))
+                ? anira_processor_input_ring(ctx, slot, &probe->m_input_rings.at(phase).at(slot))
                 : k_not_asked;
         const bool exposed =
             (pre && role != ANIRA_ROLE_STATE) || phase == ANIRA_PHASE_BEFORE_INFERENCE;
         probe->m_input_status.at(phase).at(slot) =
-            exposed ? anira_stage_input_tensor(ctx, slot, &probe->m_inputs.at(phase).at(slot))
+            exposed ? anira_processor_input_tensor(ctx, slot, &probe->m_inputs.at(phase).at(slot))
                     : k_not_asked;
     }
     for (uint32_t slot = 0; slot < ctx->num_outputs && slot < k_tensors; ++slot) {
         anira_role& role = probe->m_output_roles.at(phase).at(slot);
-        probe->m_output_role_status.at(phase).at(slot) = anira_stage_output_role(ctx, slot, &role);
+        probe->m_output_role_status.at(phase).at(slot) =
+            anira_processor_output_role(ctx, slot, &role);
         probe->m_output_ring_status.at(phase).at(slot) =
             post && role == ANIRA_ROLE_STREAMED
-                ? anira_stage_output_ring(ctx, slot, &probe->m_output_rings.at(phase).at(slot))
+                ? anira_processor_output_ring(ctx, slot, &probe->m_output_rings.at(phase).at(slot))
                 : k_not_asked;
         const bool exposed =
             (post && role != ANIRA_ROLE_STATE) || phase == ANIRA_PHASE_AFTER_INFERENCE;
         probe->m_output_status.at(phase).at(slot) =
-            exposed ? anira_stage_output_tensor(ctx, slot, &probe->m_outputs.at(phase).at(slot))
+            exposed ? anira_processor_output_tensor(ctx, slot, &probe->m_outputs.at(phase).at(slot))
                     : k_not_asked;
     }
     if (phase == ANIRA_PHASE_PRE_PROCESS && ctx->num_inputs > 1) {
@@ -323,15 +329,17 @@ anira_status ANIRA_CALL probe_phase(const anira_stage_ctx* ctx,
     }
     anira_status status = ANIRA_OK;
     for (int i = 0; i < probe->m_defaults && status == ANIRA_OK; ++i) {
-        if (phase == ANIRA_PHASE_PRE_PROCESS) { status = anira_stage_default_pre_process(ctx); }
-        if (phase == ANIRA_PHASE_POST_PROCESS) { status = anira_stage_default_post_process(ctx); }
+        if (phase == ANIRA_PHASE_PRE_PROCESS) { status = anira_processor_default_pre_process(ctx); }
+        if (phase == ANIRA_PHASE_POST_PROCESS) {
+            status = anira_processor_default_post_process(ctx);
+        }
     }
     return status;
 }
 
 // ---- prepare and release -----------------------------------------------------------------------
 
-/// What the stage's init and prepare saw of their records and what they do: the facts of the
+/// What the processor's init and prepare saw of their records and what they do: the facts of the
 /// core, the counts, the first template and name of either side (copied: the arrays die with
 /// the call), the statuses they return and the pointer prepare hands back.
 struct Lifetime {
@@ -380,7 +388,7 @@ anira_status ANIRA_CALL on_prepare(const anira_prepare_info* info,
     lifetime->m_flags = info->flags;
     lifetime->m_report = info->report;
     lifetime->m_plans = anira_plan_report_num_plans(info->report);
-    // A getter: the handler answers while its stage prepares.
+    // A getter: the handler answers while its processor prepares.
     lifetime->m_latency = anira_handler_get_latency(info->handler, 0);
     lifetime->m_struct_size = info->struct_size;
     lifetime->m_num_entries = info->num_entries;
@@ -433,24 +441,25 @@ public:
     }
 };
 
-// ---- a converting stage ------------------------------------------------------------------------
+// ---- a converting processor
+// ------------------------------------------------------------------------
 
-/// pre_process of a stage over an int16 input ring, written with the context accessors only: it
+/// pre_process of a processor over an int16 input ring, written with the context accessors only: it
 /// asks what slot 0 is, takes its ring and its model end, pops one hop of int16 into its scratch
 /// (user_data) and writes float32 into the model input. Nothing in anira converts.
-anira_status ANIRA_CALL int16_to_float(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL int16_to_float(const anira_processor_ctx* ctx,
                                        void* /*prepared*/,
                                        void* user_data) ANIRA_NONBLOCKING {
     auto* scratch = static_cast<std::array<int16_t, k_hop>*>(user_data);
     anira_role role = ANIRA_ROLE_FORCE32;
-    const anira_status asked = anira_stage_input_role(ctx, 0, &role);
+    const anira_status asked = anira_processor_input_role(ctx, 0, &role);
     if (asked != ANIRA_OK) { return asked; }
     if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
     anira_ring* ring = nullptr;
-    const anira_status has_ring = anira_stage_input_ring(ctx, 0, &ring);
+    const anira_status has_ring = anira_processor_input_ring(ctx, 0, &ring);
     if (has_ring != ANIRA_OK) { return has_ring; }
     anira_tensor tensor;
-    const anira_status exposed = anira_stage_input_tensor(ctx, 0, &tensor);
+    const anira_status exposed = anira_processor_input_tensor(ctx, 0, &tensor);
     if (exposed != ANIRA_OK) { return exposed; }
     float* samples = anira_tensor_data_f32(&tensor);
     if (samples == nullptr || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
@@ -477,7 +486,7 @@ bool all_zero(const anira_tensor& tensor) {
     return bytes == std::array<unsigned char, sizeof(anira_tensor)>{};
 }
 
-/// A ctx over a hand-filled StageFrame (src/capi/stage.h): one Streamed float32 tensor of
+/// A ctx over a hand-filled ProcessorFrame (src/capi/processor.h): one Streamed float32 tensor of
 /// `shape` at slot 0 of each side, both over `ring`, and with `with_state` a State tensor of
 /// the same shape at slot 1 of each side; the memory of the model ends owned here. What the
 /// processor fills per call, for the default bodies and the context accessors without a handler.
@@ -533,20 +542,20 @@ struct HandBuiltCtx {
     std::vector<anira::capi::Port> m_ports;
     std::vector<anira::BufferF> m_buffers;
     std::vector<anira_tensor> m_tensors;
-    anira::capi::StageFrame m_frame;
-    anira_stage_ctx m_ctx{};
+    anira::capi::ProcessorFrame m_frame;
+    anira_processor_ctx m_ctx{};
 };
 
 }  // namespace
 
 // ============================================================================================
-// anira_pipeline_add_stage
+// anira_pipeline_add_processor
 // ============================================================================================
 
 // One word per phase, the lower-case name of its value: what every message about a slot names
-// the phase by (a stage phase that fails, a refused init, load or prepare, a failed engine
+// the phase by (a processor phase that fails, a refused init, load or prepare, a failed engine
 // call); a value the enum does not name reads "unknown phase".
-TEST(AbiStage, EveryPhaseHasOneWord) {
+TEST(AbiProcessor, EveryPhaseHasOneWord) {
     const std::array<std::pair<anira_phase, const char*>, 13> expected{{
         {ANIRA_PHASE_PRE_PROCESS, "pre_process"},
         {ANIRA_PHASE_POST_PROCESS, "post_process"},
@@ -574,69 +583,70 @@ TEST(AbiStage, EveryPhaseHasOneWord) {
                  "unknown phase");
 }
 
-TEST(AbiStage, AddStageRefusals) {
+TEST(AbiProcessor, AddProcessorRefusals) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
     Lifetime lifetime;
-    anira_stage_desc stage = promising_stage(&lifetime);
-    stage.release = on_release;
+    anira_processor_desc processor = promising_processor(&lifetime);
+    processor.release = on_release;
 
-    EXPECT_EQ(anira_pipeline_add_stage(nullptr, &stage, &err), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(nullptr, &processor, &err),
+              ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
 
-    anira_stage_desc bad = stage;
-    bad.struct_size = static_cast<uint32_t>(offsetof(anira_stage_desc, user_data));
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_processor_desc bad = processor;
+    bad.struct_size = static_cast<uint32_t>(offsetof(anira_processor_desc, user_data));
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "struct_size"), nullptr) << err.message;
 
     // A flags bit the header does not define, low or high.
-    bad = stage;
+    bad = processor;
     bad.flags = 4U;
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "flags"), nullptr) << err.message;
-    bad.flags = 0x80000000U | ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    bad.flags = 0x80000000U | ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
 
-    bad = stage;
+    bad = processor;
     bad.num_consumed_kinds = 1;
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "consumed_kinds"), nullptr) << err.message;
     const std::array<const char*, 1> null_kind{nullptr};
     bad.consumed_kinds = null_kind.data();
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
 
-    bad = stage;
+    bad = processor;
     bad.abi_version = ANIRA_MAKE_ABI_VERSION(ANIRA_ABI_MAJOR + 1U, 0U);
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_ABI_VERSION);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_ABI_VERSION);
 
     // A refused call creates no carrier: nothing is released, now or at the destroy.
     anira_pipeline_destroy(pipeline);
     EXPECT_EQ(lifetime.m_released, 0);
 }
 
-// A pipeline holds one stage: the second add is refused by name, creates no carrier and never
-// calls its release; the first stage's release fires once, with the pipeline.
-TEST(AbiStage, ASecondStageIsRefused) {
+// A pipeline holds one processor: the second add is refused by name, creates no carrier and never
+// calls its release; the first processor's release fires once, with the pipeline.
+TEST(AbiProcessor, ASecondProcessorIsRefused) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_pipeline* pipeline = nullptr;
     ASSERT_EQ(anira_pipeline_create(&pipeline, &err), ANIRA_OK) << err.message;
     Lifetime first;
-    anira_stage_desc stage = promising_stage(&first);
-    stage.release = on_release;
-    ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
+    anira_processor_desc processor = promising_processor(&first);
+    processor.release = on_release;
+    ASSERT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_OK) << err.message;
 
     Lifetime second;
-    anira_stage_desc other = promising_stage(&second);
+    anira_processor_desc other = promising_processor(&second);
     other.release = on_release;
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &other, &err), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_NE(std::strstr(err.message, "already has a stage"), nullptr) << err.message;
-    // The same descriptor a second time is a second stage as well.
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_ERROR_INVALID_STATE);
-    // A malformed descriptor is reported as such, not as a second stage.
-    anira_stage_desc bad = other;
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &other, &err), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_NE(std::strstr(err.message, "already has a processor"), nullptr) << err.message;
+    // The same descriptor a second time is a second processor as well.
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_ERROR_INVALID_STATE);
+    // A malformed descriptor is reported as such, not as a second processor.
+    anira_processor_desc bad = other;
     bad.flags = 4U;
-    EXPECT_EQ(anira_pipeline_add_stage(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_pipeline_add_processor(pipeline, &bad, &err), ANIRA_ERROR_INVALID_ARGUMENT);
 
     anira_pipeline_destroy(pipeline);
     EXPECT_EQ(first.m_released, 1);
@@ -644,28 +654,28 @@ TEST(AbiStage, ASecondStageIsRefused) {
 }
 
 // A caller compiled against a shorter header hands over the three leading slots only: the
-// rest reads as ANIRA_STAGE_DESC_INIT, so the stage has no callback and no flags.
-TEST(AbiStage, AShortDescriptorReadsAsTheDefaults) {
+// rest reads as ANIRA_PROCESSOR_DESC_INIT, so the processor has no callback and no flags.
+TEST(AbiProcessor, AShortDescriptorReadsAsTheDefaults) {
     const Context context;
     Lifetime lifetime;
-    anira_stage_desc stage = promising_stage(&lifetime);
-    stage.prepare = on_prepare;  // beyond the struct_size below: not read
-    stage.struct_size =
-        static_cast<uint32_t>(offsetof(anira_stage_desc, user_data) + sizeof(void*));
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&lifetime);
+    processor.prepare = on_prepare;  // beyond the struct_size below: not read
+    processor.struct_size =
+        static_cast<uint32_t>(offsetof(anira_processor_desc, user_data) + sizeof(void*));
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(lifetime.m_prepared, 0);
-    ASSERT_NE(handler.m_handler->m_pipeline.m_stage, nullptr);
-    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().flags, 0U);
-    EXPECT_EQ(handler.m_handler->m_pipeline.m_stage->desc().prepare, nullptr);
+    ASSERT_NE(handler.m_handler->m_pipeline.m_processor, nullptr);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().flags, 0U);
+    EXPECT_EQ(handler.m_handler->m_pipeline.m_processor->desc().prepare, nullptr);
 }
 
 // ============================================================================================
 // The carrier: prepare and release
 // ============================================================================================
 
-TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
+TEST(AbiProcessor, PrepareSeesTheReportReleaseFiresOnce) {
     const Context context;
     Lifetime lifetime;
     anira_error err = ANIRA_ERROR_INIT;
@@ -679,11 +689,12 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
         << err.message;
     {
         // The descriptor dies with this scope: the carrier copied it.
-        anira_stage_desc stage = promising_stage(&lifetime);
-        stage.prepare = on_prepare;
-        stage.init = on_init;
-        stage.release = on_release;
-        ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
+        anira_processor_desc processor = promising_processor(&lifetime);
+        processor.prepare = on_prepare;
+        processor.init = on_init;
+        processor.release = on_release;
+        ASSERT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_OK)
+            << err.message;
     }
 
     // Two handlers and the pipeline share one carrier.
@@ -693,8 +704,8 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
         << err.message;
     ASSERT_EQ(anira_handler_create(context.m_context, pipeline, &second, &err), ANIRA_OK)
         << err.message;
-    ASSERT_NE(first->m_pipeline.m_stage, nullptr);
-    EXPECT_EQ(first->m_pipeline.m_stage.get(), second->m_pipeline.m_stage.get());
+    ASSERT_NE(first->m_pipeline.m_processor, nullptr);
+    EXPECT_EQ(first->m_pipeline.m_processor.get(), second->m_pipeline.m_processor.get());
     EXPECT_EQ(lifetime.m_prepared, 0) << "prepare belongs to anira_handler_prepare";
 
     const anira::ContractHandle contract = zeros_contract();
@@ -713,7 +724,8 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
     EXPECT_EQ(lifetime.m_report, anira_handler_plan_report(first));
     EXPECT_EQ(lifetime.m_plans, 1U);
     EXPECT_EQ(lifetime.m_latency, anira_handler_get_latency(first, 0));
-    EXPECT_GT(lifetime.m_latency, 0U) << "the handler counts as prepared while the stage prepares";
+    EXPECT_GT(lifetime.m_latency, 0U)
+        << "the handler counts as prepared while the processor prepares";
     // The rest of the record: the library's struct_size, the entry count, the two lists
     // with their canonical names, and a template of the model end of every slot (the
     // spec's dtype and shape at the pinned window, the slot's host domain, all-zero strides,
@@ -740,11 +752,11 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
     EXPECT_EQ(lifetime.m_prepared, 2) << "once per prepare";
     EXPECT_EQ(lifetime.m_inited, 1) << "init once per carrier";
 
-    // A stage that refuses fails the prepare with its status, and the handler is unprepared
+    // A processor that refuses fails the prepare with its status, and the handler is unprepared
     // afterwards.
     lifetime.m_return = ANIRA_ERROR_MODEL_LOAD;
     EXPECT_EQ(anira_handler_prepare(first, contract.native(), &err), ANIRA_ERROR_MODEL_LOAD);
-    EXPECT_NE(std::strstr(err.message, "the stage refused prepare"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "the processor refused prepare"), nullptr) << err.message;
     EXPECT_EQ(anira_handler_plan_report(first), nullptr);
     lifetime.m_return = ANIRA_OK;
 
@@ -756,10 +768,10 @@ TEST(AbiStage, PrepareSeesTheReportReleaseFiresOnce) {
     EXPECT_EQ(lifetime.m_released, 1) << "exactly once, with the last carrier";
 }
 
-// A stage that refuses init fails the prepare with its status ("the stage refused init"), its
-// prepare is not reached, and the next prepare calls init again; a stage that never saw a
+// A processor that refuses init fails the prepare with its status ("the processor refused init"),
+// its prepare is not reached, and the next prepare calls init again; a processor that never saw a
 // prepare is released without ever being initialised.
-TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
+TEST(AbiProcessor, ARefusedInitFailsThePrepareAndIsTriedAgain) {
     const Context context;
     Lifetime lifetime;
     anira_error err = ANIRA_ERROR_INIT;
@@ -771,11 +783,11 @@ TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
               ANIRA_OK)
         << err.message;
-    anira_stage_desc stage = promising_stage(&lifetime);
-    stage.prepare = on_prepare;
-    stage.init = on_init;
-    stage.release = on_release;
-    ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
+    anira_processor_desc processor = promising_processor(&lifetime);
+    processor.prepare = on_prepare;
+    processor.init = on_init;
+    processor.release = on_release;
+    ASSERT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_OK) << err.message;
     anira_handler* handler = nullptr;
     ASSERT_EQ(anira_handler_create(context.m_context, pipeline, &handler, &err), ANIRA_OK)
         << err.message;
@@ -783,10 +795,10 @@ TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
 
     lifetime.m_init_return = ANIRA_ERROR_NOT_SUPPORTED;
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_NOT_SUPPORTED);
-    EXPECT_NE(std::strstr(err.message, "the stage refused init"), nullptr) << err.message;
+    EXPECT_NE(std::strstr(err.message, "the processor refused init"), nullptr) << err.message;
     EXPECT_EQ(anira_handler_plan_report(handler), nullptr);
     EXPECT_EQ(lifetime.m_inited, 1);
-    EXPECT_EQ(lifetime.m_prepared, 0) << "the stage's prepare waits for its init";
+    EXPECT_EQ(lifetime.m_prepared, 0) << "the processor's prepare waits for its init";
     lifetime.m_init_return = ANIRA_OK;
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
     EXPECT_EQ(lifetime.m_inited, 2) << "tried again";
@@ -805,10 +817,11 @@ TEST(AbiStage, ARefusedInitFailsThePrepareAndIsTriedAgain) {
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
               ANIRA_OK)
         << err.message;
-    anira_stage_desc idle_stage = promising_stage(&idle);
-    idle_stage.init = on_init;
-    idle_stage.release = on_release;
-    ASSERT_EQ(anira_pipeline_add_stage(pipeline, &idle_stage, &err), ANIRA_OK) << err.message;
+    anira_processor_desc idle_processor = promising_processor(&idle);
+    idle_processor.init = on_init;
+    idle_processor.release = on_release;
+    ASSERT_EQ(anira_pipeline_add_processor(pipeline, &idle_processor, &err), ANIRA_OK)
+        << err.message;
     anira_pipeline_destroy(pipeline);
     EXPECT_EQ(idle.m_inited, 0);
     EXPECT_EQ(idle.m_released, 1) << "release owes nothing to init";
@@ -853,7 +866,7 @@ anira_status ANIRA_CALL per_handler_prepare(const anira_prepare_info* info,
     return ANIRA_OK;
 }
 
-anira_status ANIRA_CALL per_handler_phase(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL per_handler_phase(const anira_processor_ctx* ctx,
                                           void* prepared,
                                           void* user_data) ANIRA_NONBLOCKING {
     auto* registration = static_cast<Registration*>(user_data);
@@ -862,8 +875,10 @@ anira_status ANIRA_CALL per_handler_phase(const anira_stage_ctx* ctx,
     } else {
         static_cast<PerHandler*>(prepared)->m_phase_calls.fetch_add(1);
     }
-    if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) { return anira_stage_default_pre_process(ctx); }
-    if (ctx->phase == ANIRA_PHASE_POST_PROCESS) { return anira_stage_default_post_process(ctx); }
+    if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) { return anira_processor_default_pre_process(ctx); }
+    if (ctx->phase == ANIRA_PHASE_POST_PROCESS) {
+        return anira_processor_default_post_process(ctx);
+    }
     return ANIRA_OK;
 }
 
@@ -878,16 +893,16 @@ void ANIRA_CALL per_handler_release(void* user_data) {
 }
 
 /// Every slot filled: the four phases, prepare, unprepare and release over one registration.
-anira_stage_desc per_handler_stage(Registration& registration) {
-    anira_stage_desc stage = promising_stage(&registration);
-    stage.pre_process = per_handler_phase;
-    stage.post_process = per_handler_phase;
-    stage.before_inference = per_handler_phase;
-    stage.after_inference = per_handler_phase;
-    stage.prepare = per_handler_prepare;
-    stage.unprepare = per_handler_unprepare;
-    stage.release = per_handler_release;
-    return stage;
+anira_processor_desc per_handler_processor(Registration& registration) {
+    anira_processor_desc processor = promising_processor(&registration);
+    processor.pre_process = per_handler_phase;
+    processor.post_process = per_handler_phase;
+    processor.before_inference = per_handler_phase;
+    processor.after_inference = per_handler_phase;
+    processor.prepare = per_handler_prepare;
+    processor.unprepare = per_handler_unprepare;
+    processor.release = per_handler_release;
+    return processor;
 }
 
 }  // namespace
@@ -896,7 +911,7 @@ anira_stage_desc per_handler_stage(Registration& registration) {
 // every phase call of a handler receives that handler's (a per-chunk scratch behind it is never
 // the other handler's), while user_data is the shared registration. Each handler's unprepare
 // gets its own pointer back; release fires with the last carrier, after both.
-TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
+TEST(AbiProcessor, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
     const Context context;
     Registration registration;
     anira_error err = ANIRA_ERROR_INIT;
@@ -908,8 +923,8 @@ TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
     ASSERT_EQ(anira_pipeline_add_inference(pipeline, variants.data(), 1, nullptr, 0, &err),
               ANIRA_OK)
         << err.message;
-    const anira_stage_desc stage = per_handler_stage(registration);
-    ASSERT_EQ(anira_pipeline_add_stage(pipeline, &stage, &err), ANIRA_OK) << err.message;
+    const anira_processor_desc processor = per_handler_processor(registration);
+    ASSERT_EQ(anira_pipeline_add_processor(pipeline, &processor, &err), ANIRA_OK) << err.message;
     anira_handler* first = nullptr;
     anira_handler* second = nullptr;
     ASSERT_EQ(anira_handler_create(context.m_context, pipeline, &first, &err), ANIRA_OK)
@@ -926,9 +941,9 @@ TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
     const PerHandler& of_second = *registration.m_prepared[1];
     EXPECT_EQ(of_first.m_handler, first);
     EXPECT_EQ(of_second.m_handler, second);
-    EXPECT_EQ(first->m_stage_prepared, &of_first);
-    EXPECT_EQ(second->m_stage_prepared, &of_second);
-    EXPECT_NE(first->m_stage_prepared, second->m_stage_prepared);
+    EXPECT_EQ(first->m_processor_prepared, &of_first);
+    EXPECT_EQ(second->m_processor_prepared, &of_second);
+    EXPECT_NE(first->m_processor_prepared, second->m_processor_prepared);
 
     // Three chunks through the first handler, two through the second: the four phase calls of
     // a chunk land on its handler's prepared pointer and on no other.
@@ -961,11 +976,11 @@ TEST(AbiStage, TwoHandlersOfOnePipelineGetTheirOwnPreparedPointer) {
 // (once the old session is released, before the new prepare) and one at the destroy, each
 // receiving what the matching prepare handed back, in order; the phase calls of every session
 // landed on that session's pointer.
-TEST(AbiStage, UnprepareOncePerPrepare) {
+TEST(AbiProcessor, UnprepareOncePerPrepare) {
     const Context context;
     Registration registration;
-    const anira_stage_desc stage = per_handler_stage(registration);
-    StagedHandler handler(context, stream_model(), {stage});
+    const anira_processor_desc processor = per_handler_processor(registration);
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = zeros_contract();
     for (size_t round = 0; round < 3; ++round) {
@@ -973,7 +988,7 @@ TEST(AbiStage, UnprepareOncePerPrepare) {
         ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         ASSERT_EQ(registration.m_prepared.size(), round + 1);
         EXPECT_EQ(registration.m_unprepared.size(), round) << "the previous prepare was undone";
-        EXPECT_EQ(handler.m_handler->m_stage_prepared, registration.m_prepared.back().get());
+        EXPECT_EQ(handler.m_handler->m_processor_prepared, registration.m_prepared.back().get());
         Stream stream(handler.m_handler);
         stream.blocks(2);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
@@ -992,21 +1007,21 @@ TEST(AbiStage, UnprepareOncePerPrepare) {
     EXPECT_EQ(registration.m_released, 1);
 }
 
-// A prepare the stage refuses is never unprepared (nothing was prepared) and leaves the handler
+// A prepare the processor refuses is never unprepared (nothing was prepared) and leaves the handler
 // unprepared; a successful prepare before it is unprepared all the same, once, when the failed
 // prepare releases the old session, and so is one that a later prepare fails ahead of the
-// stage's prepare.
-TEST(AbiStage, ARefusedPrepareCallsNoUnprepare) {
+// processor's prepare.
+TEST(AbiProcessor, ARefusedPrepareCallsNoUnprepare) {
     const Context context;
     Registration registration;
-    const anira_stage_desc stage = per_handler_stage(registration);
-    StagedHandler handler(context, stream_model(), {stage});
+    const anira_processor_desc processor = per_handler_processor(registration);
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = zeros_contract();
     // Refused from the start: nothing to unprepare, ever.
     registration.m_return = ANIRA_ERROR_MODEL_LOAD;
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_MODEL_LOAD);
-    EXPECT_NE(std::strstr(handler.m_err.message, "the stage refused prepare"), nullptr)
+    EXPECT_NE(std::strstr(handler.m_err.message, "the processor refused prepare"), nullptr)
         << handler.m_err.message;
     EXPECT_EQ(registration.m_prepare_calls, 1);
     EXPECT_TRUE(registration.m_unprepared.empty());
@@ -1022,7 +1037,7 @@ TEST(AbiStage, ARefusedPrepareCallsNoUnprepare) {
     ASSERT_EQ(registration.m_unprepared.size(), 1U);
     EXPECT_EQ(registration.m_unprepared[0], registration.m_prepared[0].get());
     EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
-    // A prepare that fails before the stage's prepare runs (a contract the handler refuses:
+    // A prepare that fails before the processor's prepare runs (a contract the handler refuses:
     // ANIRA_MISS_CALLBACK without a function) undoes the previous one too, since the handler is
     // unprepared afterwards.
     registration.m_return = ANIRA_OK;
@@ -1031,7 +1046,7 @@ TEST(AbiStage, ARefusedPrepareCallsNoUnprepare) {
     const anira::ContractHandle refused =
         explicit_contract(static_cast<uint32_t>(k_hop), anira_test::k_rate, ANIRA_MISS_CALLBACK);
     EXPECT_TRUE(ANIRA_FAILED(handler.prepare(refused))) << handler.m_err.message;
-    EXPECT_EQ(registration.m_prepare_calls, 4) << "the stage's prepare did not run";
+    EXPECT_EQ(registration.m_prepare_calls, 4) << "the processor's prepare did not run";
     ASSERT_EQ(registration.m_unprepared.size(), 2U);
     EXPECT_EQ(registration.m_unprepared[1], registration.m_prepared[1].get());
     EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
@@ -1042,12 +1057,12 @@ TEST(AbiStage, ARefusedPrepareCallsNoUnprepare) {
 
 namespace {
 
-/// What the stage's reset slot saw, per call: the context, the thread, the pre_process calls
+/// What the processor's reset slot saw, per call: the context, the thread, the pre_process calls
 /// since the previous reset, the answers of the accessors for slot 0 (the role answers, a ring
 /// or a model tensor is refused) and the entry of the pre_process that followed.
 struct ResetLog {
     static constexpr size_t k_capacity = 8;
-    std::array<anira_stage_ctx, k_capacity> m_ctx{};
+    std::array<anira_processor_ctx, k_capacity> m_ctx{};
     std::array<std::thread::id, k_capacity> m_thread{};
     std::array<uint32_t, k_capacity> m_pre_since_last{};
     std::array<anira_status, k_capacity> m_role_status{};
@@ -1071,7 +1086,7 @@ anira_status ANIRA_CALL reset_log_prepare(const anira_prepare_info* /*info*/,
     return ANIRA_OK;
 }
 
-void ANIRA_CALL reset_log_reset(const anira_stage_ctx* ctx,
+void ANIRA_CALL reset_log_reset(const anira_processor_ctx* ctx,
                                 void* prepared,
                                 void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<ResetLog*>(user_data);
@@ -1082,17 +1097,17 @@ void ANIRA_CALL reset_log_reset(const anira_stage_ctx* ctx,
     log->m_thread.at(index) = std::this_thread::get_id();
     log->m_pre_since_last.at(index) = log->m_pre_since_reset.exchange(0);
     anira_role role = ANIRA_ROLE_FORCE32;
-    log->m_role_status.at(index) = anira_stage_input_role(ctx, 0, &role);
+    log->m_role_status.at(index) = anira_processor_input_role(ctx, 0, &role);
     log->m_role.at(index) = role;
     anira_ring* ring = nullptr;
-    log->m_ring_status.at(index) = anira_stage_input_ring(ctx, 0, &ring);
+    log->m_ring_status.at(index) = anira_processor_input_ring(ctx, 0, &ring);
     anira_tensor tensor;
-    log->m_input_tensor_status.at(index) = anira_stage_input_tensor(ctx, 0, &tensor);
-    log->m_output_tensor_status.at(index) = anira_stage_output_tensor(ctx, 0, &tensor);
+    log->m_input_tensor_status.at(index) = anira_processor_input_tensor(ctx, 0, &tensor);
+    log->m_output_tensor_status.at(index) = anira_processor_output_tensor(ctx, 0, &tensor);
     log->m_reset_pending.store(true);
 }
 
-anira_status ANIRA_CALL reset_log_pre_process(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL reset_log_pre_process(const anira_processor_ctx* ctx,
                                               void* /*prepared*/,
                                               void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<ResetLog*>(user_data);
@@ -1102,26 +1117,26 @@ anira_status ANIRA_CALL reset_log_pre_process(const anira_stage_ctx* ctx,
         const size_t index = log->m_resets.load() - 1;
         if (index < ResetLog::k_capacity) { log->m_pre_entry_after.at(index) = ctx->entry; }
     }
-    return anira_stage_default_pre_process(ctx);
+    return anira_processor_default_pre_process(ctx);
 }
 
 }  // namespace
 
-// The stage's reset runs for the first chunk of a new stream, before that chunk's pre_process
+// The processor's reset runs for the first chunk of a new stream, before that chunk's pre_process
 // and on its thread: once after prepare, once after anira_handler_reset, once after a
 // re-prepare, never mid-stream. Its context is that chunk's in ANIRA_PHASE_RESET (the entry the
 // pre_process that follows reports), the role answers, a ring or a model tensor is refused and
-// recorded (the stage's bug), and it receives this handler's prepared pointer.
-TEST(AbiStage, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
+// recorded (the processor's bug), and it receives this handler's prepared pointer.
+TEST(AbiProcessor, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
     const Context context;
     ResetLog log;
     int scratch = 0;
     log.m_prepared = &scratch;
-    anira_stage_desc stage = promising_stage(&log);
-    stage.pre_process = reset_log_pre_process;
-    stage.prepare = reset_log_prepare;
-    stage.reset = reset_log_reset;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&log);
+    processor.pre_process = reset_log_pre_process;
+    processor.prepare = reset_log_prepare;
+    processor.reset = reset_log_reset;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     const anira::ContractHandle contract = zeros_contract();
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
@@ -1137,7 +1152,7 @@ TEST(AbiStage, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
     EXPECT_EQ(log.m_pre_since_last.at(0), 0U) << "before the first pre_process";
     // anira_handler_reset is one generation bump: the next chunk is the first of a new stream.
     anira_handler_reset(h);
-    EXPECT_EQ(log.m_resets.load(), 1U) << "the reset entry calls the stage nothing";
+    EXPECT_EQ(log.m_resets.load(), 1U) << "the reset entry calls the processor nothing";
     {
         Stream stream(h);
         stream.blocks(3);
@@ -1160,7 +1175,7 @@ TEST(AbiStage, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
     EXPECT_EQ(log.m_foreign_prepared.load(), 0);
     for (size_t i = 0; i < 3; ++i) {
         SCOPED_TRACE("reset " + std::to_string(i));
-        const anira_stage_ctx& ctx = log.m_ctx.at(i);
+        const anira_processor_ctx& ctx = log.m_ctx.at(i);
         EXPECT_EQ(ctx.phase, static_cast<uint32_t>(ANIRA_PHASE_RESET));
         EXPECT_EQ(ctx.num_inputs, 1U);
         EXPECT_EQ(ctx.num_outputs, 1U);
@@ -1184,18 +1199,18 @@ TEST(AbiStage, ResetRunsBeforeTheFirstPreProcessOfANewStream) {
 // The context per phase
 // ============================================================================================
 
-TEST(AbiStage, CtxPerPhase) {
+TEST(AbiProcessor, CtxPerPhase) {
     const Context context;
     Probe probe;
-    probe.m_defaults = 1;  // the stage owns pre_process and post_process and calls the defaults
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.pre_process = probe_phase;
-    stage.post_process = probe_phase;
-    stage.before_inference = probe_phase;
-    stage.after_inference = probe_phase;
+    probe.m_defaults = 1;  // the processor owns pre_process and post_process and calls the defaults
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.pre_process = probe_phase;
+    processor.post_process = probe_phase;
+    processor.before_inference = probe_phase;
+    processor.after_inference = probe_phase;
     // The engines the bundled gain files load on, plus the custom row the handler starts on.
     const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
-    StagedHandler handler(context, anira_test::gain_with_custom(), {stage}, candidates);
+    ProcessorHandler handler(context, anira_test::gain_with_custom(), {processor}, candidates);
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
         << handler.m_err.message;
@@ -1225,7 +1240,7 @@ TEST(AbiStage, CtxPerPhase) {
     for (const uint32_t phase : phases) {
         SCOPED_TRACE("phase " + std::to_string(phase));
         EXPECT_EQ(probe.m_calls.at(phase).load(), 3);
-        const anira_stage_ctx& ctx = probe.m_ctx.at(phase);
+        const anira_processor_ctx& ctx = probe.m_ctx.at(phase);
         EXPECT_EQ(ctx.phase, phase);
         EXPECT_EQ(ctx.engine, info.engine);
         EXPECT_EQ(ctx.provider, info.provider);
@@ -1252,7 +1267,7 @@ TEST(AbiStage, CtxPerPhase) {
         EXPECT_EQ(probe.m_provider_ids.at(phase), info.provider_id);
         EXPECT_EQ(ctx.engine_id, probe.m_engine_ids.at(phase));
         EXPECT_EQ(ctx.provider_id, probe.m_provider_ids.at(phase));
-        // What a phase exposes, asked through the six accessors like a correct stage: the role
+        // What a phase exposes, asked through the six accessors like a correct processor: the role
         // of every slot in every phase; the input ring in pre_process and the output ring in
         // post_process, the session's own, of the Streamed tensor alone (the Static one has
         // none, and the probe does not ask); the model's inputs in pre_process and
@@ -1313,7 +1328,7 @@ TEST(AbiStage, CtxPerPhase) {
     ASSERT_EQ(gain.ndim, 1U);
     EXPECT_EQ(gain.shape[0], 1);
     EXPECT_EQ(probe.m_static_input, 0.5F)
-        << "every Static input is materialised ahead of the stages";
+        << "every Static input is materialised ahead of the processors";
     // pre_process and post_process run on the thread that drives the entry, the two hooks on
     // an inference thread.
     EXPECT_EQ(probe.m_thread.at(ANIRA_PHASE_PRE_PROCESS), std::this_thread::get_id());
@@ -1324,8 +1339,8 @@ TEST(AbiStage, CtxPerPhase) {
 
 namespace {
 
-/// What the stage of ASlotBeyondTheCountIsRecordedWithTheStagesName got for a slot no tensor
-/// has. Written on an inference thread.
+/// What the processor of ASlotBeyondTheCountIsRecordedWithTheProcessorsName got for a slot no
+/// tensor has. Written on an inference thread.
 struct Beyond {
     std::atomic<int32_t> m_role_status{ANIRA_OK};
     std::atomic<uint32_t> m_role{0};
@@ -1335,19 +1350,19 @@ struct Beyond {
     std::atomic<uint32_t> m_dtype{1};
 };
 
-anira_status ANIRA_CALL ask_beyond(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL ask_beyond(const anira_processor_ctx* ctx,
                                    void* /*prepared*/,
                                    void* user_data) ANIRA_NONBLOCKING {
     auto* beyond = static_cast<Beyond*>(user_data);
     const uint32_t slot = ctx->num_inputs;  // one beyond the last
     anira_role role = ANIRA_ROLE_STREAMED;
-    beyond->m_role_status.store(anira_stage_input_role(ctx, slot, &role));
+    beyond->m_role_status.store(anira_processor_input_role(ctx, slot, &role));
     beyond->m_role.store(static_cast<uint32_t>(role));
     anira_ring* ring = nullptr;
-    beyond->m_ring_status.store(anira_stage_input_ring(ctx, slot, &ring));
+    beyond->m_ring_status.store(anira_processor_input_ring(ctx, slot, &ring));
     if (ring != nullptr) { beyond->m_rings.fetch_add(1); }
     anira_tensor tensor;
-    beyond->m_status.store(anira_stage_input_tensor(ctx, slot, &tensor));
+    beyond->m_status.store(anira_processor_input_tensor(ctx, slot, &tensor));
     beyond->m_dtype.store(tensor.dtype);
     return ANIRA_OK;
 }
@@ -1355,16 +1370,16 @@ anira_status ANIRA_CALL ask_beyond(const anira_stage_ctx* ctx,
 }  // namespace
 
 // A slot at the side's count, asked in before_inference: the refusal reaches the handler's
-// rt_error from the inference thread, and the one latched record names the entry and the stage
-// that asked. The stage returned ANIRA_OK, so the chunk is not failed and the stream is whole.
-TEST(AbiStage, ASlotBeyondTheCountIsRecordedWithTheStagesName) {
+// rt_error from the inference thread, and the one latched record names the entry and the processor
+// that asked. The processor returned ANIRA_OK, so the chunk is not failed and the stream is whole.
+TEST(AbiProcessor, ASlotBeyondTheCountIsRecordedWithTheProcessorsName) {
     const Context context;
     anira_drain_log();
     RecordCollector collector;
     Beyond beyond;
-    anira_stage_desc stage = promising_stage(&beyond);
-    stage.before_inference = ask_beyond;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&beyond);
+    processor.before_inference = ask_beyond;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     Stream stream(handler.m_handler);
     stream.blocks(3);
@@ -1382,16 +1397,17 @@ TEST(AbiStage, ASlotBeyondTheCountIsRecordedWithTheStagesName) {
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "is out of range", "rt");
-    EXPECT_NE(record.m_message.find("anira_stage_input_role: the stage: slot 1 is out of range, "
-                                    "the model has 1 input tensors"),
-              std::string::npos)
+    EXPECT_NE(
+        record.m_message.find("anira_processor_input_role: the processor: slot 1 is out of range, "
+                              "the model has 1 input tensors"),
+        std::string::npos)
         << record.m_message;
 #endif
 }
 
 namespace {
 
-// A stage's prepare may call the two Static entries: no driver thread runs during prepare, and
+// A processor's prepare may call the two Static entries: no driver thread runs during prepare, and
 // the store is the handler's, so the value is what the first inference sees.
 anira_status ANIRA_CALL set_gain_in_prepare(const anira_prepare_info* info,
                                             void* /*user_data*/,
@@ -1413,15 +1429,15 @@ anira_status ANIRA_CALL set_gain_in_prepare(const anira_prepare_info* info,
 
 }  // namespace
 
-TEST(AbiStage, AStagesPrepareMaySetAStaticInput) {
+TEST(AbiProcessor, AProcessorsPrepareMaySetAStaticInput) {
     const Context context;
     Probe probe;
     probe.m_defaults = 1;
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.pre_process = probe_phase;
-    stage.prepare = set_gain_in_prepare;
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.pre_process = probe_phase;
+    processor.prepare = set_gain_in_prepare;
     const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
-    StagedHandler handler(context, anira_test::gain_with_custom(), {stage}, candidates);
+    ProcessorHandler handler(context, anira_test::gain_with_custom(), {processor}, candidates);
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
         << handler.m_err.message;
@@ -1437,7 +1453,7 @@ TEST(AbiStage, AStagesPrepareMaySetAStaticInput) {
 // The ring accessors
 // ============================================================================================
 
-TEST(AbiStage, RingAccessorsF32AndI16) {
+TEST(AbiProcessor, RingAccessorsF32AndI16) {
     const Context context;  // the real-time log queue is the core's
     anira_drain_log();
     RecordCollector collector;
@@ -1527,7 +1543,8 @@ TEST(AbiStage, RingAccessorsF32AndI16) {
     EXPECT_EQ(anira_test::count_records(collector, "nothing converts", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "nothing converts", "rt");
-    EXPECT_NE(record.m_message.find("anira_ring_push_block: the stage: dtype"), std::string::npos)
+    EXPECT_NE(record.m_message.find("anira_ring_push_block: the processor: dtype"),
+              std::string::npos)
         << record.m_message;
     EXPECT_EQ(record.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
@@ -1536,7 +1553,7 @@ TEST(AbiStage, RingAccessorsF32AndI16) {
 
 // anira_ring_pop_windows is the 2.x batched pop (PrePostProcessor::pop_samples_from_buffer with
 // num_batches), element for element.
-TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
+TEST(AbiProcessor, PopWindowsEqualsTheBatchedPop) {
     constexpr size_t k_new = 3;
     constexpr size_t k_old = 2;
     constexpr size_t k_offset = 1;
@@ -1584,10 +1601,10 @@ TEST(AbiStage, PopWindowsEqualsTheBatchedPop) {
 
 // The two pair accessors: the record's value fields and id slots as the processor fills them
 // (a custom engine's id beside ANIRA_ENGINE_CUSTOM, a custom provider's name beside
-// ANIRA_PROVIDER_CUSTOM; NULL beside every other value), the same through anira::StageContext;
+// ANIRA_PROVIDER_CUSTOM; NULL beside every other value), the same through anira::ProcessorContext;
 // the id out-parameter may be NULL; a NULL value out-parameter is refused and recorded, a NULL
 // ctx and a ctx without a frame are refused with nothing to record into, the outs reset.
-TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
+TEST(AbiProcessor, ThePairAccessorsAnswerThePlansPairs) {
     const Context context;  // the real-time log queue is the core's
     anira_drain_log();
     const RecordCollector collector;
@@ -1605,14 +1622,14 @@ TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
     anira_engine engine = ANIRA_ENGINE_FORCE32;
     anira_provider provider = ANIRA_PROVIDER_FORCE32;
     const char* id = "untouched";
-    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
+    EXPECT_EQ(anira_processor_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
     EXPECT_EQ(engine, ANIRA_ENGINE_ONNXRUNTIME);
     EXPECT_EQ(id, nullptr);
     id = "untouched";
-    EXPECT_EQ(anira_stage_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
+    EXPECT_EQ(anira_processor_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
     EXPECT_EQ(provider, ANIRA_PROVIDER_COREML);
     EXPECT_EQ(id, nullptr);
-    const anira::StageContext cxx(&built.m_ctx);
+    const anira::ProcessorContext cxx(&built.m_ctx);
     EXPECT_EQ(cxx.engine().kind, ANIRA_ENGINE_ONNXRUNTIME);
     EXPECT_TRUE(cxx.engine().id.empty());
     EXPECT_EQ(cxx.provider().kind, ANIRA_PROVIDER_COREML);
@@ -1624,13 +1641,14 @@ TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
     built.m_ctx.provider = ANIRA_PROVIDER_CUSTOM;
     built.m_ctx.engine_id = engine_id;
     built.m_ctx.provider_id = provider_id;
-    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
+    EXPECT_EQ(anira_processor_engine(&built.m_ctx, &engine, &id), ANIRA_OK);
     EXPECT_EQ(engine, ANIRA_ENGINE_CUSTOM);
     EXPECT_EQ(id, engine_id);
-    EXPECT_EQ(anira_stage_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
+    EXPECT_EQ(anira_processor_provider(&built.m_ctx, &provider, &id), ANIRA_OK);
     EXPECT_EQ(provider, ANIRA_PROVIDER_CUSTOM);
     EXPECT_EQ(id, provider_id);
-    EXPECT_EQ(anira_stage_engine(&built.m_ctx, &engine, nullptr), ANIRA_OK) << "the value alone";
+    EXPECT_EQ(anira_processor_engine(&built.m_ctx, &engine, nullptr), ANIRA_OK)
+        << "the value alone";
     EXPECT_EQ(engine, ANIRA_ENGINE_CUSTOM);
     EXPECT_EQ(cxx.engine().kind, ANIRA_ENGINE_CUSTOM);
     EXPECT_EQ(cxx.engine().id, "com.example.engine");
@@ -1638,23 +1656,24 @@ TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
     EXPECT_EQ(cxx.provider().id, "com.example.npu");
     EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "every question so far was a legal one";
 
-    // A NULL value out-parameter is the stage's bug: refused, recorded, the id reset.
+    // A NULL value out-parameter is the processor's bug: refused, recorded, the id reset.
     id = "untouched";
-    EXPECT_EQ(anira_stage_engine(&built.m_ctx, nullptr, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_engine(&built.m_ctx, nullptr, &id), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(id, nullptr);
     EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_provider(&built.m_ctx, nullptr, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_provider(&built.m_ctx, nullptr, nullptr),
+              ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.m_suppressed.load(), 1U) << "the second of the kind is counted";
 
     // No ctx, no frame: refused, the outs reset, nothing to record into.
     id = "untouched";
-    EXPECT_EQ(anira_stage_engine(nullptr, &engine, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_engine(nullptr, &engine, &id), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(engine, ANIRA_ENGINE_FORCE32);
     EXPECT_EQ(id, nullptr);
-    anira_stage_ctx frameless = built.m_ctx;
+    anira_processor_ctx frameless = built.m_ctx;
     frameless.frame = nullptr;
     id = "untouched";
-    EXPECT_EQ(anira_stage_provider(&frameless, &provider, &id), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_provider(&frameless, &provider, &id), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(provider, ANIRA_PROVIDER_FORCE32);
     EXPECT_EQ(id, nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 1U) << "a ctx without a frame records nothing";
@@ -1666,13 +1685,13 @@ TEST(AbiStage, ThePairAccessorsAnswerThePlansPairs) {
 
 // The six accessors over every phase of a hand-built context. A legal question answers
 // ANIRA_OK with the role, the ring or the descriptor. A ring or a model tensor the slot does not
-// have in this phase is the stage's bug, not an answer: ANIRA_ERROR_INVALID_STATE with the
+// have in this phase is the processor's bug, not an answer: ANIRA_ERROR_INVALID_STATE with the
 // out-parameter reset, recorded into the latch with one record per kind naming the entry, the
 // slot and the phase (the first of a kind is logged, the others counted).
 // A slot out of range and a NULL out are ANIRA_ERROR_INVALID_ARGUMENT, recorded the same way; a
 // NULL ctx and a ctx without a frame are refused with nothing to record into. The default
 // bodies over the same slots ask nothing a slot lacks and record nothing.
-TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
+TEST(AbiProcessor, ContextAccessorsAnswerAndRefuse) {
     const Context context;  // the real-time log queue is the core's
     anira_drain_log();
     RecordCollector collector;
@@ -1683,24 +1702,24 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     // Slot 0 Streamed over `ring`, slot 1 a State tensor, on both sides.
     HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, ring, {1, 1, 4}, /*with_state=*/true);
     built.m_frame.m_rt = &latch;
-    const anira_stage_ctx& ctx = built.m_ctx;
+    const anira_processor_ctx& ctx = built.m_ctx;
     anira_role role = ANIRA_ROLE_FORCE32;
     anira_ring* out_ring = nullptr;
     anira_tensor tensor;
 
     // pre_process, the legal questions: the role of every slot, the input ring and the model's
     // input of the Streamed slot.
-    EXPECT_EQ(anira_stage_input_role(&ctx, 0, &role), ANIRA_OK);
+    EXPECT_EQ(anira_processor_input_role(&ctx, 0, &role), ANIRA_OK);
     EXPECT_EQ(role, ANIRA_ROLE_STREAMED);
-    EXPECT_EQ(anira_stage_output_role(&ctx, 0, &role), ANIRA_OK);
+    EXPECT_EQ(anira_processor_output_role(&ctx, 0, &role), ANIRA_OK);
     EXPECT_EQ(role, ANIRA_ROLE_STREAMED);
-    EXPECT_EQ(anira_stage_input_role(&ctx, 1, &role), ANIRA_OK);
+    EXPECT_EQ(anira_processor_input_role(&ctx, 1, &role), ANIRA_OK);
     EXPECT_EQ(role, ANIRA_ROLE_STATE);
-    EXPECT_EQ(anira_stage_output_role(&ctx, 1, &role), ANIRA_OK);
+    EXPECT_EQ(anira_processor_output_role(&ctx, 1, &role), ANIRA_OK);
     EXPECT_EQ(role, ANIRA_ROLE_STATE);
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 0, &out_ring), ANIRA_OK);
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 0, &out_ring), ANIRA_OK);
     EXPECT_EQ(out_ring, &ring);
-    ASSERT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    ASSERT_EQ(anira_processor_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
     EXPECT_EQ(tensor.domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
     EXPECT_EQ(tensor.dtype, ANIRA_DTYPE_F32);
     ASSERT_EQ(tensor.ndim, 3U);
@@ -1713,23 +1732,23 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     // host end of a State slot. Each is INVALID_STATE with the out-parameter reset, and
     // recorded: the first of the kind is logged, the others are counted.
     out_ring = &ring;
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(out_ring, nullptr);
     EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(latch.m_suppressed.load(), 0U);
     out_ring = &ring;
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 1, &out_ring), ANIRA_ERROR_INVALID_STATE)
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 1, &out_ring), ANIRA_ERROR_INVALID_STATE)
         << "a State slot has no ring";
     EXPECT_EQ(out_ring, nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 1U);
     std::memset(&tensor, 0xff, sizeof(tensor));
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
     EXPECT_TRUE(all_zero(tensor)) << "an all-zero record";
     EXPECT_EQ(tensor.dtype, 0U);
     EXPECT_EQ(anira_tensor_data_f32(&tensor), nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 2U);
     std::memset(&tensor, 0xff, sizeof(tensor));
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_STATE)
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_STATE)
         << "a State input has no host end in pre_process";
     EXPECT_TRUE(all_zero(tensor));
     EXPECT_EQ(latch.rearm(), 3U);
@@ -1737,42 +1756,42 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     // The other phases: the role stays, the rings and the tensors follow the phase. Per phase
     // the legal questions, then the illegal ones, recorded and counted.
     built.expose(ANIRA_PHASE_BEFORE_INFERENCE);
-    EXPECT_EQ(anira_stage_input_role(&ctx, 0, &role), ANIRA_OK);
+    EXPECT_EQ(anira_processor_input_role(&ctx, 0, &role), ANIRA_OK);
     EXPECT_EQ(role, ANIRA_ROLE_STREAMED);
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 1, &tensor), ANIRA_OK)
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 1, &tensor), ANIRA_OK)
         << "before_inference exposes a State input";
     EXPECT_EQ(latch.rt_error(), ANIRA_OK);
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE)
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE)
         << "no ring outside pre_process";
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(latch.rearm(), 2U);
 
     built.expose(ANIRA_PHASE_AFTER_INFERENCE);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 1, &tensor), ANIRA_OK)
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 1, &tensor), ANIRA_OK)
         << "after_inference exposes a State output";
     EXPECT_EQ(latch.rt_error(), ANIRA_OK);
     // The model tensor's refusal first this time, so that its record is the one logged.
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(latch.rearm(), 2U);
 
     built.expose(ANIRA_PHASE_POST_PROCESS);
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 0, &out_ring), ANIRA_OK);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 0, &out_ring), ANIRA_OK);
     EXPECT_EQ(out_ring, &ring);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 0, &tensor), ANIRA_OK);
     EXPECT_EQ(latch.rt_error(), ANIRA_OK);
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 0, &out_ring), ANIRA_ERROR_INVALID_STATE);
     EXPECT_EQ(out_ring, nullptr);
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 1, &out_ring), ANIRA_ERROR_INVALID_STATE)
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 1, &out_ring), ANIRA_ERROR_INVALID_STATE)
         << "a State slot has no ring";
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 0, &tensor), ANIRA_ERROR_INVALID_STATE);
     std::memset(&tensor, 0xff, sizeof(tensor));
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_STATE)
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 1, &tensor), ANIRA_ERROR_INVALID_STATE)
         << "a State output has no host end in post_process";
     EXPECT_TRUE(all_zero(tensor));
     EXPECT_EQ(latch.rearm(), 3U);
@@ -1782,73 +1801,73 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     // logged, the others are counted.
     built.expose(ANIRA_PHASE_PRE_PROCESS);
     role = ANIRA_ROLE_STREAMED;
-    EXPECT_EQ(anira_stage_input_role(&ctx, 2, &role), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_input_role(&ctx, 2, &role), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(role, ANIRA_ROLE_FORCE32) << "no role";
     EXPECT_EQ(latch.rt_error(), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.m_suppressed.load(), 0U);
     role = ANIRA_ROLE_STREAMED;
-    EXPECT_EQ(anira_stage_output_role(&ctx, 2, &role), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_output_role(&ctx, 2, &role), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(role, ANIRA_ROLE_FORCE32);
     EXPECT_EQ(latch.m_suppressed.load(), 1U);
     out_ring = &ring;
-    EXPECT_EQ(anira_stage_input_ring(&ctx, 7, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_input_ring(&ctx, 7, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(out_ring, nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 2U);
     out_ring = &ring;
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 7, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 7, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(out_ring, nullptr);
     EXPECT_EQ(latch.m_suppressed.load(), 3U);
     std::memset(&tensor, 0xff, sizeof(tensor));
-    EXPECT_EQ(anira_stage_input_tensor(&ctx, 2, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_input_tensor(&ctx, 2, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_TRUE(all_zero(tensor));
     EXPECT_EQ(latch.m_suppressed.load(), 4U);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 2, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 2, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.m_suppressed.load(), 5U);
     // A NULL out, of each kind of accessor.
-    EXPECT_EQ(anira_stage_input_role(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_output_ring(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_output_tensor(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_input_role(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_output_ring(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_output_tensor(&ctx, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.rearm(), 8U);
 
     // A NULL ctx and a ctx without a frame: the refusal stands, the out-parameter is reset, and
     // there is no latch to record into.
-    anira_stage_ctx bare{};
+    anira_processor_ctx bare{};
     bare.phase = ANIRA_PHASE_PRE_PROCESS;
     bare.num_inputs = 1;
     bare.num_outputs = 1;
-    const std::array<const anira_stage_ctx*, 2> without_a_frame{nullptr, &bare};
-    for (const anira_stage_ctx* refused : without_a_frame) {
+    const std::array<const anira_processor_ctx*, 2> without_a_frame{nullptr, &bare};
+    for (const anira_processor_ctx* refused : without_a_frame) {
         role = ANIRA_ROLE_STREAMED;
-        EXPECT_EQ(anira_stage_input_role(refused, 0, &role), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_role(refused, 0, &role), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(role, ANIRA_ROLE_FORCE32);
         role = ANIRA_ROLE_STREAMED;
-        EXPECT_EQ(anira_stage_output_role(refused, 0, &role), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_output_role(refused, 0, &role), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(role, ANIRA_ROLE_FORCE32);
         out_ring = &ring;
-        EXPECT_EQ(anira_stage_input_ring(refused, 0, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_ring(refused, 0, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(out_ring, nullptr);
         out_ring = &ring;
-        EXPECT_EQ(anira_stage_output_ring(refused, 0, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_output_ring(refused, 0, &out_ring), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(out_ring, nullptr);
         std::memset(&tensor, 0xff, sizeof(tensor));
-        EXPECT_EQ(anira_stage_input_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_TRUE(all_zero(tensor));
-        EXPECT_EQ(anira_stage_output_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
-        EXPECT_EQ(anira_stage_input_role(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-        EXPECT_EQ(anira_stage_input_ring(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-        EXPECT_EQ(anira_stage_input_tensor(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_output_tensor(refused, 0, &tensor), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_role(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_ring(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+        EXPECT_EQ(anira_processor_input_tensor(refused, 0, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
     }
-    EXPECT_EQ(anira_stage_default_pre_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_default_pre_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
     bare.phase = ANIRA_PHASE_POST_PROCESS;
-    EXPECT_EQ(anira_stage_default_post_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_default_post_process(&bare), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(latch.rt_error(), ANIRA_OK);
 
     // The default bodies over the same two slots: the State slot is skipped, never asked for a
     // ring it lacks, so a default records nothing whatever the pipeline's slots are.
     built.expose(ANIRA_PHASE_PRE_PROCESS);
-    EXPECT_EQ(anira_stage_default_pre_process(&ctx), ANIRA_OK);
+    EXPECT_EQ(anira_processor_default_pre_process(&ctx), ANIRA_OK);
     built.expose(ANIRA_PHASE_POST_PROCESS);
-    EXPECT_EQ(anira_stage_default_post_process(&ctx), ANIRA_OK);
+    EXPECT_EQ(anira_processor_default_post_process(&ctx), ANIRA_OK);
     EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "a default body asks nothing a slot lacks";
 
     anira_drain_log();
@@ -1860,23 +1879,24 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
     const RecordCollector::Record no_ring =
         anira_test::find_record(collector, "has no ring in", "rt");
     EXPECT_NE(no_ring.m_message.find(
-                  "anira_stage_output_ring: the stage: slot 0 has no ring in pre_process"),
+                  "anira_processor_output_ring: the processor: slot 0 has no ring in pre_process"),
               std::string::npos)
         << no_ring.m_message;
     EXPECT_EQ(no_ring.m_flags, ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
     EXPECT_EQ(anira_test::count_records(collector, "has no model tensor in", "rt"), 1U);
     const RecordCollector::Record no_tensor =
         anira_test::find_record(collector, "has no model tensor in", "rt");
-    EXPECT_NE(no_tensor.m_message.find("anira_stage_input_tensor: the stage: slot 0 has no "
+    EXPECT_NE(no_tensor.m_message.find("anira_processor_input_tensor: the processor: slot 0 has no "
                                        "model tensor in after_inference"),
               std::string::npos)
         << no_tensor.m_message;
     EXPECT_EQ(anira_test::count_records(collector, "is out of range", "rt"), 1U);
     const RecordCollector::Record out_of_range =
         anira_test::find_record(collector, "is out of range", "rt");
-    EXPECT_NE(out_of_range.m_message.find("anira_stage_input_role: the stage: slot 2 is out of "
-                                          "range, the model has 2 input tensors"),
-              std::string::npos)
+    EXPECT_NE(
+        out_of_range.m_message.find("anira_processor_input_role: the processor: slot 2 is out of "
+                                    "range, the model has 2 input tensors"),
+        std::string::npos)
         << out_of_range.m_message;
     EXPECT_EQ(out_of_range.m_flags,
               ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION);
@@ -1889,9 +1909,9 @@ TEST(AbiStage, ContextAccessorsAnswerAndRefuse) {
 // The default bodies over a hand-built context
 // ============================================================================================
 
-// test_PrePostProcessor's HistoryFillsTheWindowHead over anira_stage_default_pre_process: a
+// test_PrePostProcessor's HistoryFillsTheWindowHead over anira_processor_default_pre_process: a
 // window of 8 with a hop of 4 is the previous hop followed by the new one.
-TEST(AbiStage, DefaultPreProcessFillsTheWindowHeadWithHistory) {
+TEST(AbiProcessor, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     constexpr size_t k_window = 8;
     constexpr size_t k_step = 4;
     anira::RingBuffer ring;
@@ -1901,27 +1921,27 @@ TEST(AbiStage, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     const float* window = built.data();
 
     for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(n + 1)); }
-    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
+    EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_step; ++n) {
         EXPECT_EQ(window[n], 0.0F) << "no history yet, sample " << n;
         EXPECT_EQ(window[k_step + n], static_cast<float>(n + 1));
     }
     for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(k_step + n + 1)); }
-    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
+    EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_window; ++n) {
         EXPECT_EQ(window[n], static_cast<float>(n + 1)) << "window sample " << n;
     }
 
     // Another phase than its own, and a NULL context.
     built.expose(ANIRA_PHASE_POST_PROCESS);
-    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_default_pre_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_stage_default_post_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_default_pre_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_processor_default_post_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
 // test_PrePostProcessor's MultichannelTensorIsNotAWindow: a [1, 4, 1] tensor holds more
 // elements than its hop, but per channel exactly the hop, so no history is mixed in.
-TEST(AbiStage, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
+TEST(AbiProcessor, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     anira::RingBuffer ring;
     ring.initialize_with_positions(4, 8);
     ring.set_owner(1, nullptr);
@@ -1929,13 +1949,13 @@ TEST(AbiStage, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     for (size_t channel = 0; channel < 4; ++channel) {
         ring.push_sample(channel, static_cast<float>(channel + 1));
     }
-    EXPECT_EQ(anira_stage_default_pre_process(&built.m_ctx), ANIRA_OK);
+    EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < 4; ++n) { EXPECT_EQ(built.data()[n], static_cast<float>(n + 1)); }
 }
 
 // A ring of another dtype than its tensor: that slot stays untouched, the status is CONFIG,
 // and the default records nothing itself.
-TEST(AbiStage, DefaultBodiesRefuseARingOfAnotherDtype) {
+TEST(AbiProcessor, DefaultBodiesRefuseARingOfAnotherDtype) {
     anira::RtLatch latch;
     anira::RingOwner owner;
     owner.m_rt = &latch;
@@ -1951,34 +1971,34 @@ TEST(AbiStage, DefaultBodiesRefuseARingOfAnotherDtype) {
     HandBuiltCtx pre(ANIRA_PHASE_PRE_PROCESS, in_ring, {1, 1, 4});
     pre.m_frame.m_rt = &latch;
     for (size_t n = 0; n < 4; ++n) { pre.data()[n] = 9.0F; }
-    EXPECT_EQ(anira_stage_default_pre_process(&pre.m_ctx), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(anira_processor_default_pre_process(&pre.m_ctx), ANIRA_ERROR_CONFIG);
     EXPECT_EQ(in_ring.available(0), 4U);
     EXPECT_EQ(pre.data()[0], 9.0F);
 
     HandBuiltCtx post(ANIRA_PHASE_POST_PROCESS, out_ring, {1, 1, 4});
     post.m_frame.m_rt = &latch;
-    EXPECT_EQ(anira_stage_default_post_process(&post.m_ctx), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(anira_processor_default_post_process(&post.m_ctx), ANIRA_ERROR_CONFIG);
     EXPECT_EQ(out_ring.available(0), 0U);
     EXPECT_EQ(latch.rt_error(), ANIRA_OK) << "the status is returned, not recorded";
 }
 
 // ============================================================================================
-// The stage in its phases
+// The processor in its phases
 // ============================================================================================
 
-// No stage fills pre_process or post_process: the default body of each runs, once per chunk.
-// A stage that fills them and calls the default itself gets the same stream, and the default
+// No processor fills pre_process or post_process: the default body of each runs, once per chunk.
+// A processor that fills them and calls the default itself gets the same stream, and the default
 // does not run a second time behind it (the rings would move two hops).
-// The default body runs iff the descriptor's slot is NULL: a stage of the hooks alone leaves
-// both defaults running (the stream arrives), a stage that fills pre_process and post_process
+// The default body runs iff the descriptor's slot is NULL: a processor of the hooks alone leaves
+// both defaults running (the stream arrives), a processor that fills pre_process and post_process
 // owns them and composes the default itself (once, so the count check stays quiet).
-TEST(AbiStage, TheDefaultBodyRunsIffTheSlotIsNull) {
+TEST(AbiProcessor, TheDefaultBodyRunsIffTheSlotIsNull) {
     const Context context;
     {
         Probe probe;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.before_inference = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.before_inference = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(6);
@@ -1991,10 +2011,10 @@ TEST(AbiStage, TheDefaultBodyRunsIffTheSlotIsNull) {
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.pre_process = probe_phase;
-        stage.post_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.pre_process = probe_phase;
+        processor.post_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(6);
@@ -2003,20 +2023,20 @@ TEST(AbiStage, TheDefaultBodyRunsIffTheSlotIsNull) {
         EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_PRE_PROCESS).load(), 6);
         EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_POST_PROCESS).load(), 6);
         EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK)
-            << "one hop per ring per chunk: the default did not run behind the stage";
+            << "one hop per ring per chunk: the default did not run behind the processor";
     }
 }
 
-// Composition is explicit, in the stage's own code: a post_process that works on the model
+// Composition is explicit, in the processor's own code: a post_process that works on the model
 // tensor first and then calls the default push moves exactly one hop of what it left there.
-TEST(AbiStage, OneStageComposesTheDefaultBehindItsOwnWork) {
+TEST(AbiProcessor, OneProcessorComposesTheDefaultBehindItsOwnWork) {
     const Context context;
     Probe probe;
     probe.m_scale = 2.0F;  // works on the tensor ...
     probe.m_defaults = 1;  // ... then pushes it through the default
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.post_process = probe_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.post_process = probe_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     Stream stream(handler.m_handler);
     stream.blocks(4);
@@ -2034,14 +2054,14 @@ TEST(AbiStage, OneStageComposesTheDefaultBehindItsOwnWork) {
 
 // A pre_process that pops nothing: anira discards the hop, so the stream stays aligned, and
 // says so once. The model input was never written, so the chunks deliver zeros.
-TEST(AbiStage, APreProcessThatPopsNothingIsRepairedAndRecorded) {
+TEST(AbiProcessor, APreProcessThatPopsNothingIsRepairedAndRecorded) {
     const Context context;
     anira_drain_log();
     RecordCollector collector;
     Probe probe;  // fills pre_process, calls no default
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.pre_process = probe_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.pre_process = probe_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     Stream stream(handler.m_handler);
     stream.blocks(4);
@@ -2057,7 +2077,7 @@ TEST(AbiStage, APreProcessThatPopsNothingIsRepairedAndRecorded) {
     EXPECT_EQ(anira_test::count_records(collector, "pre_process moved", "rt"), 1U);
     const RecordCollector::Record record =
         anira_test::find_record(collector, "pre_process moved", "rt");
-    EXPECT_NE(record.m_message.find("the stage: pre_process moved"), std::string::npos)
+    EXPECT_NE(record.m_message.find("the processor: pre_process moved"), std::string::npos)
         << record.m_message;
     EXPECT_NE(record.m_message.find("input tensor 0, channel 0 by 0 elements, the hop is 512"),
               std::string::npos)
@@ -2068,16 +2088,16 @@ TEST(AbiStage, APreProcessThatPopsNothingIsRepairedAndRecorded) {
 }
 
 // A pre_process that pops the ring twice (its own pop and the default's): more than the hop
-// left the ring, which nothing can undo; the hop-count check is the guard of a buggy stage.
-TEST(AbiStage, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
+// left the ring, which nothing can undo; the hop-count check is the guard of a buggy processor.
+TEST(AbiProcessor, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
     const Context context;
     anira_drain_log();
     RecordCollector collector;
     Probe probe;
     probe.m_defaults = 2;  // two pops of one chunk
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.pre_process = probe_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.pre_process = probe_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     // Two hops per block: the ring holds both when the first chunk is formed.
     ASSERT_EQ(handler.prepare(zeros_contract(static_cast<uint32_t>(2 * k_hop))), ANIRA_OK)
         << handler.m_err.message;
@@ -2094,7 +2114,7 @@ TEST(AbiStage, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
 #ifdef ENABLE_LOGGING
     const RecordCollector::Record record =
         anira_test::find_record(collector, "pre_process moved", "rt");
-    EXPECT_NE(record.m_message.find("the stage: pre_process moved"), std::string::npos)
+    EXPECT_NE(record.m_message.find("the processor: pre_process moved"), std::string::npos)
         << record.m_message;
     EXPECT_NE(record.m_message.find("by 1024 elements, the hop is 512"), std::string::npos)
         << record.m_message;
@@ -2105,15 +2125,15 @@ TEST(AbiStage, APreProcessThatPopsTwiceShiftsTheStreamAndIsRecorded) {
 
 // A post_process that pushes nothing is topped up with zeros; one that pushes twice has
 // shifted the output stream. Both are CONFIG with one record.
-TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
+TEST(AbiProcessor, APostProcessThatPushesTheWrongCountIsRecorded) {
     const Context context;
     {
         anira_drain_log();
         RecordCollector collector;
         Probe probe;  // fills post_process, calls no default
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.post_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.post_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(4);
@@ -2124,7 +2144,7 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
 #ifdef ENABLE_LOGGING
         const RecordCollector::Record record =
             anira_test::find_record(collector, "post_process moved", "rt");
-        EXPECT_NE(record.m_message.find("the stage: post_process moved"), std::string::npos)
+        EXPECT_NE(record.m_message.find("the processor: post_process moved"), std::string::npos)
             << record.m_message;
         EXPECT_NE(record.m_message.find("output tensor 0, channel 0 by 0 elements"),
                   std::string::npos)
@@ -2136,9 +2156,9 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
     {
         Probe probe;
         probe.m_defaults = 2;  // two pushes of one chunk
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.post_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.post_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.block(/*settle=*/k_hop);
@@ -2151,7 +2171,7 @@ TEST(AbiStage, APostProcessThatPushesTheWrongCountIsRecorded) {
 // A failing phase
 // ============================================================================================
 
-TEST(AbiStage, FailingPreProcessDeliversZerosAtTheStreamPosition) {
+TEST(AbiProcessor, FailingPreProcessDeliversZerosAtTheStreamPosition) {
     const Context context;
     anira_drain_log();
     RecordCollector collector;
@@ -2160,10 +2180,10 @@ TEST(AbiStage, FailingPreProcessDeliversZerosAtTheStreamPosition) {
     probe.m_fail_phase = ANIRA_PHASE_PRE_PROCESS;
     probe.m_fail_call = 2;                            // the third chunk, before it pops anything
     probe.m_fail_status = ANIRA_ERROR_OUT_OF_MEMORY;  // a status without a kind bit of its own
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.pre_process = probe_phase;
-    stage.before_inference = probe_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.pre_process = probe_phase;
+    processor.before_inference = probe_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     Stream stream(handler.m_handler);
     stream.blocks(6);
@@ -2177,13 +2197,14 @@ TEST(AbiStage, FailingPreProcessDeliversZerosAtTheStreamPosition) {
         << "the failed chunk was never submitted";
     anira_drain_log();
 #ifdef ENABLE_LOGGING
-    EXPECT_EQ(anira_test::count_records(collector, "the stage: pre_process returned", "rt"), 1U);
+    EXPECT_EQ(anira_test::count_records(collector, "the processor: pre_process returned", "rt"),
+              1U);
     EXPECT_EQ(anira_test::count_records(collector, "the hop is", "rt"), 0U)
         << "the repair of a failed phase is silent";
 #endif
 }
 
-TEST(AbiStage, FailingHooksDeliverZeros) {
+TEST(AbiProcessor, FailingHooksDeliverZeros) {
     const Context context;
     for (const uint32_t phase : {static_cast<uint32_t>(ANIRA_PHASE_BEFORE_INFERENCE),
                                  static_cast<uint32_t>(ANIRA_PHASE_AFTER_INFERENCE)}) {
@@ -2192,10 +2213,10 @@ TEST(AbiStage, FailingHooksDeliverZeros) {
         probe.m_fail_phase = phase;
         probe.m_fail_call = 1;
         probe.m_fail_status = ANIRA_ERROR_ENGINE;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.before_inference = probe_phase;
-        stage.after_inference = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.before_inference = probe_phase;
+        processor.after_inference = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(5);
@@ -2208,16 +2229,16 @@ TEST(AbiStage, FailingHooksDeliverZeros) {
     }
 }
 
-TEST(AbiStage, FailingPostProcessKeepsTheStreamAligned) {
+TEST(AbiProcessor, FailingPostProcessKeepsTheStreamAligned) {
     const Context context;
     Probe probe;
     probe.m_defaults = 1;
     probe.m_fail_phase = ANIRA_PHASE_POST_PROCESS;
     probe.m_fail_call = 1;  // fails before it pushes: anira tops the ring up with zeros
     probe.m_fail_status = ANIRA_ERROR_INVALID_STATE;
-    anira_stage_desc stage = promising_stage(&probe);
-    stage.post_process = probe_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&probe);
+    processor.post_process = probe_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     Stream stream(handler.m_handler);
     stream.blocks(5);
@@ -2227,31 +2248,33 @@ TEST(AbiStage, FailingPostProcessKeepsTheStreamAligned) {
 }
 
 // ============================================================================================
-// The real-time promise: anira_stage_desc.flags against the placement
+// The real-time promise: anira_processor_desc.flags against the placement
 // ============================================================================================
 
 // Under a Hard contract a filled pre_process, post_process or reset runs on the driving thread
-// (the reset right before the first pre_process of a new stream): the stage must promise
-// ANIRA_STAGE_FLAG_REALTIME_PRE_POST, else prepare is CONFIG naming the phase and the flag, and
+// (the reset right before the first pre_process of a new stream): the processor must promise
+// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, else prepare is CONFIG naming the phase and the flag, and
 // the handler stays unprepared. The hooks need no promise (an inference thread), and the promise
 // alone, without the hooks' bit, suffices for the three driving-thread slots.
-TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
+TEST(AbiProcessor, TheRealTimePromiseIsCheckedAtPrepare) {
     const Context context;
     const anira::ContractHandle contract = zeros_contract();
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.flags = 0;
-        stage.pre_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.flags = 0;
+        processor.pre_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: pre_process is filled"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: pre_process is filled"),
+                  nullptr)
             << handler.m_err.message;
         EXPECT_NE(std::strstr(handler.m_err.message, "pre_process"), nullptr)
             << handler.m_err.message;
-        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_STAGE_FLAG_REALTIME_PRE_POST"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
+                  nullptr)
             << handler.m_err.message;
         EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
         EXPECT_EQ(probe.m_calls.at(ANIRA_PHASE_PRE_PROCESS).load(), 0);
@@ -2260,10 +2283,10 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
         // post_process alone, with the hooks' bit only: the wrong promise.
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.flags = ANIRA_STAGE_FLAG_REALTIME_HOOKS;
-        stage.post_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        processor.post_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
         EXPECT_NE(std::strstr(handler.m_err.message, "post_process"), nullptr)
             << handler.m_err.message;
@@ -2271,11 +2294,11 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         // The hooks alone promise nothing and run: the promise is about the driving thread.
         Probe probe;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.flags = 0;
-        stage.before_inference = probe_phase;
-        stage.after_inference = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.flags = 0;
+        processor.before_inference = probe_phase;
+        processor.after_inference = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(3);
@@ -2287,15 +2310,16 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
         // reset alone runs on the driving thread too (right before the first pre_process of a
         // new stream): the same promise, else CONFIG naming reset.
         ResetLog log;
-        anira_stage_desc stage = promising_stage(&log);
-        stage.flags = 0;
-        stage.reset = reset_log_reset;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&log);
+        processor.flags = 0;
+        processor.reset = reset_log_reset;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: reset is filled"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: reset is filled"), nullptr)
             << handler.m_err.message;
-        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_STAGE_FLAG_REALTIME_PRE_POST"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST"),
+                  nullptr)
             << handler.m_err.message;
         EXPECT_EQ(anira_handler_plan_report(handler.m_handler), nullptr) << "left unprepared";
         EXPECT_EQ(log.m_resets.load(), 0U);
@@ -2303,22 +2327,22 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         // reset beside the hooks, with the hooks' bit alone: still the wrong promise.
         ResetLog log;
-        anira_stage_desc stage = promising_stage(&log);
-        stage.flags = ANIRA_STAGE_FLAG_REALTIME_HOOKS;
-        stage.reset = reset_log_reset;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&log);
+        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
+        processor.reset = reset_log_reset;
+        ProcessorHandler handler(context, stream_model(), {processor});
         EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_CONFIG);
-        EXPECT_NE(std::strstr(handler.m_err.message, "the stage: reset is filled"), nullptr)
+        EXPECT_NE(std::strstr(handler.m_err.message, "the processor: reset is filled"), nullptr)
             << handler.m_err.message;
     }
     {
         // reset under the promise: prepare passes and the reset runs once, at the stream's
         // start.
         ResetLog log;
-        anira_stage_desc stage = promising_stage(&log);
-        stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
-        stage.reset = reset_log_reset;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&log);
+        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+        processor.reset = reset_log_reset;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(3);
@@ -2329,11 +2353,11 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
     {
         Probe probe;
         probe.m_defaults = 1;
-        anira_stage_desc stage = promising_stage(&probe);
-        stage.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;
-        stage.pre_process = probe_phase;
-        stage.post_process = probe_phase;
-        StagedHandler handler(context, stream_model(), {stage});
+        anira_processor_desc processor = promising_processor(&probe);
+        processor.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;
+        processor.pre_process = probe_phase;
+        processor.post_process = probe_phase;
+        ProcessorHandler handler(context, stream_model(), {processor});
         ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         Stream stream(handler.m_handler);
         stream.blocks(3);
@@ -2344,12 +2368,12 @@ TEST(AbiStage, TheRealTimePromiseIsCheckedAtPrepare) {
 }
 
 // ============================================================================================
-// The entry: anira_stage_ctx.entry and anira_handler_num_entries
+// The entry: anira_processor_ctx.entry and anira_handler_num_entries
 // ============================================================================================
 
 namespace {
 
-/// What a stage saw of the entries: per phase, the entry and the block's first sample of every
+/// What a processor saw of the entries: per phase, the entry and the block's first sample of every
 /// call, in call order. The inference-thread phases write their own rows only.
 struct EntryLog {
     static constexpr size_t k_capacity = 16;
@@ -2359,7 +2383,7 @@ struct EntryLog {
     };
     std::array<std::array<Row, k_capacity>, k_phases> m_rows{};
     std::array<std::atomic<size_t>, k_phases> m_calls{};
-    uint32_t m_num_entries = 0;  ///< what the stage's prepare read
+    uint32_t m_num_entries = 0;  ///< what the processor's prepare read
 };
 
 anira_status ANIRA_CALL log_entry_prepare(const anira_prepare_info* info,
@@ -2372,20 +2396,20 @@ anira_status ANIRA_CALL log_entry_prepare(const anira_prepare_info* info,
 /// pre_process calls the default first, so that the model input holds the block; every phase
 /// then takes the entry and the first sample of the tensor its phase exposes (the model is a
 /// pass-through: the output holds the block too). post_process ends with the default push.
-anira_status ANIRA_CALL log_entry(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL log_entry(const anira_processor_ctx* ctx,
                                   void* /*prepared*/,
                                   void* user_data) ANIRA_NONBLOCKING {
     auto* log = static_cast<EntryLog*>(user_data);
     const uint32_t phase = ctx->phase;
     if (phase >= k_phases) { return ANIRA_ERROR_INTERNAL; }
     if (phase == ANIRA_PHASE_PRE_PROCESS) {
-        const anira_status popped = anira_stage_default_pre_process(ctx);
+        const anira_status popped = anira_processor_default_pre_process(ctx);
         if (popped != ANIRA_OK) { return popped; }
     }
     const bool inputs = phase == ANIRA_PHASE_PRE_PROCESS || phase == ANIRA_PHASE_BEFORE_INFERENCE;
     anira_tensor tensor;
-    const anira_status exposed = inputs ? anira_stage_input_tensor(ctx, 0, &tensor)
-                                        : anira_stage_output_tensor(ctx, 0, &tensor);
+    const anira_status exposed = inputs ? anira_processor_input_tensor(ctx, 0, &tensor)
+                                        : anira_processor_output_tensor(ctx, 0, &tensor);
     if (exposed != ANIRA_OK) { return exposed; }
     const float* data = anira_tensor_data_f32(&tensor);
     const size_t call = log->m_calls.at(phase).fetch_add(1);
@@ -2394,7 +2418,7 @@ anira_status ANIRA_CALL log_entry(const anira_stage_ctx* ctx,
         row.m_entry.store(ctx->entry);
         row.m_first.store(data != nullptr ? data[0] : -1.0F);
     }
-    return phase == ANIRA_PHASE_POST_PROCESS ? anira_stage_default_post_process(ctx) : ANIRA_OK;
+    return phase == ANIRA_PHASE_POST_PROCESS ? anira_processor_default_post_process(ctx) : ANIRA_OK;
 }
 
 /// A per-entry scratch: pre_process pops the hop into the chunk's slot of the scratch and
@@ -2414,7 +2438,7 @@ anira_status ANIRA_CALL scratch_prepare(const anira_prepare_info* info,
     return ANIRA_OK;
 }
 
-anira_status ANIRA_CALL scratch_phase(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL scratch_phase(const anira_processor_ctx* ctx,
                                       void* /*prepared*/,
                                       void* user_data) ANIRA_NONBLOCKING {
     auto* scratch = static_cast<Scratch*>(user_data);
@@ -2425,11 +2449,11 @@ anira_status ANIRA_CALL scratch_phase(const anira_stage_ctx* ctx,
     std::array<float, k_hop>& slot = scratch->m_slots[ctx->entry];
     if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) {
         anira_role role = ANIRA_ROLE_FORCE32;
-        const anira_status asked = anira_stage_input_role(ctx, 0, &role);
+        const anira_status asked = anira_processor_input_role(ctx, 0, &role);
         if (asked != ANIRA_OK) { return asked; }
         if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
         anira_ring* ring = nullptr;
-        const anira_status has_ring = anira_stage_input_ring(ctx, 0, &ring);
+        const anira_status has_ring = anira_processor_input_ring(ctx, 0, &ring);
         if (has_ring != ANIRA_OK) { return has_ring; }
         return anira_ring_pop_block(ring, 0, slot.data(), ANIRA_DTYPE_F32, k_hop) == k_hop
                    ? ANIRA_OK
@@ -2437,7 +2461,7 @@ anira_status ANIRA_CALL scratch_phase(const anira_stage_ctx* ctx,
     }
     if (ctx->phase == ANIRA_PHASE_BEFORE_INFERENCE) {
         anira_tensor tensor;
-        const anira_status exposed = anira_stage_input_tensor(ctx, 0, &tensor);
+        const anira_status exposed = anira_processor_input_tensor(ctx, 0, &tensor);
         if (exposed != ANIRA_OK) { return exposed; }
         float* samples = anira_tensor_data_f32(&tensor);
         if (samples == nullptr || anira_tensor_num_elements(&tensor) != k_hop) {
@@ -2450,28 +2474,28 @@ anira_status ANIRA_CALL scratch_phase(const anira_stage_ctx* ctx,
 
 }  // namespace
 
-// The entry is below anira_handler_num_entries, which the stage's prepare reads (0 while
+// The entry is below anira_handler_num_entries, which the processor's prepare reads (0 while
 // unprepared); it is the same in all four phases of a chunk and distinct across the chunks in
 // flight at once. A gate engine holds the inferences, so several chunks are in flight
 // together; a chunk formed after they completed reuses one of their entries.
-TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
+TEST(AbiProcessor, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
     const Context context(4);
     EntryLog log;
     anira_test::GateEngine gate;  // outlives the handler: declared first
-    anira_stage_desc stage = promising_stage(&log);
-    stage.prepare = log_entry_prepare;
-    stage.pre_process = log_entry;
-    stage.post_process = log_entry;
-    stage.before_inference = log_entry;
-    stage.after_inference = log_entry;
-    StagedHandler handler(context, stream_model(), {stage}, {}, gate.engine());
+    anira_processor_desc processor = promising_processor(&log);
+    processor.prepare = log_entry_prepare;
+    processor.pre_process = log_entry;
+    processor.post_process = log_entry;
+    processor.before_inference = log_entry;
+    processor.after_inference = log_entry;
+    ProcessorHandler handler(context, stream_model(), {processor}, {}, gate.engine());
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(anira_handler_num_entries(handler.m_handler), 0U) << "unprepared";
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     const uint32_t num_entries = anira_handler_num_entries(h);
     ASSERT_GE(num_entries, 2U);
-    EXPECT_EQ(log.m_num_entries, num_entries) << "the stage's prepare read the count";
+    EXPECT_EQ(log.m_num_entries, num_entries) << "the processor's prepare read the count";
     EXPECT_EQ(anira_handler_num_entries(nullptr), 0U);
 
     gate.m_open.store(false);
@@ -2540,17 +2564,17 @@ TEST(AbiStage, TheEntryIsStableWithinAChunkAndDistinctAcrossChunksInFlight) {
 }
 
 // Per-chunk scratch without an allocation: pre_process pops the window into the chunk's entry
-// of a scratch the stage sized in its prepare, before_inference transforms it from there into
+// of a scratch the processor sized in its prepare, before_inference transforms it from there into
 // the model input, on another thread. The output is exact, so the entry pre_process saw is the
 // entry before_inference saw, chunk by chunk.
-TEST(AbiStage, PerChunkScratchByEntry) {
+TEST(AbiProcessor, PerChunkScratchByEntry) {
     const Context context;
     Scratch scratch;
-    anira_stage_desc stage = promising_stage(&scratch);
-    stage.prepare = scratch_prepare;
-    stage.pre_process = scratch_phase;
-    stage.before_inference = scratch_phase;
-    StagedHandler handler(context, stream_model(), {stage});
+    anira_processor_desc processor = promising_processor(&scratch);
+    processor.prepare = scratch_prepare;
+    processor.pre_process = scratch_phase;
+    processor.before_inference = scratch_phase;
+    ProcessorHandler handler(context, stream_model(), {processor});
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(scratch.m_slots.size(), anira_handler_num_entries(handler.m_handler));
     Stream stream(handler.m_handler);
@@ -2564,7 +2588,7 @@ TEST(AbiStage, PerChunkScratchByEntry) {
 }
 
 // ============================================================================================
-// A pipeline without a stage is the 2.x default processor
+// A pipeline without a processor is the 2.x default processor
 // ============================================================================================
 
 // The extras' two 2.x processors (test/support/extras_v2_processors.inc) against the live 2.x
@@ -2577,7 +2601,7 @@ namespace anira = ::anira;
 // Differential, on a window longer than its hop (the receptive-field fill) and a backend whose
 // every output sample needs the history: the C handler, whose session sees the processor, against
 // a 2.x handler over the translated configuration, whose session sees the default processor.
-TEST(AbiStage, NoStageEqualsTheV2Default) {
+TEST(AbiProcessor, NoProcessorEqualsTheV2Default) {
     const Context context;
     const auto window = static_cast<int64_t>(2 * k_hop);
     const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
@@ -2623,8 +2647,8 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
 // The extras' 2.x CNN processor is anira's default fill: the same differential with the 2.x side
 // running CNNPrePostProcessor (the text of extras/models/cnn/CNNPrePostProcessor.h as it was,
 // test/support/extras_v2_processors.inc) in place of the default processor. So the CNN model needs
-// no stage on the C handler (extras/models/cnn has none).
-TEST(AbiStage, TheCnnProcessorIsTheDefault) {
+// no processor on the C handler (extras/models/cnn has none).
+TEST(AbiProcessor, TheCnnProcessorIsTheDefault) {
     const Context context;
     const auto window = static_cast<int64_t>(2 * k_hop);
     const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
@@ -2668,26 +2692,26 @@ TEST(AbiStage, TheCnnProcessorIsTheDefault) {
 }
 
 // ============================================================================================
-// What a stage changes at prepare
+// What a processor changes at prepare
 // ============================================================================================
 
-// A stage that declares "model:entry" consumes the entry extension of the custom row, which no
+// A processor that declares "model:entry" consumes the entry extension of the custom row, which no
 // adapter of anira reads: the handler is created, and the plan's extension row's consumer reads
-// "stage".
-TEST(AbiStage, ConsumedKindsJoinTheWalk) {
+// "processor".
+TEST(AbiProcessor, ConsumedKindsJoinTheWalk) {
     const Context context;
     ModelConfig model = stream_model();
     model.model_ext(0, anira::ext::Entry{"forward"});
     {
-        const StagedHandler refused(context, model, {});
+        const ProcessorHandler refused(context, model, {});
         EXPECT_EQ(refused.m_create_status, ANIRA_ERROR_EXTENSION_UNCONSUMED)
             << refused.m_err.message;
     }
     const std::array<const char*, 1> kinds{"model:entry"};
-    anira_stage_desc stage = promising_stage(nullptr);
-    stage.consumed_kinds = kinds.data();
-    stage.num_consumed_kinds = 1;
-    StagedHandler handler(context, model, {stage});
+    anira_processor_desc processor = promising_processor(nullptr);
+    processor.consumed_kinds = kinds.data();
+    processor.num_consumed_kinds = 1;
+    ProcessorHandler handler(context, model, {processor});
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
     const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
@@ -2698,34 +2722,34 @@ TEST(AbiStage, ConsumedKindsJoinTheWalk) {
     anira_plan_ext row = ANIRA_PLAN_EXT_INIT;
     ASSERT_EQ(anira_plan_report_exts(report, 0, sizeof(anira_plan_ext), &count, &row), ANIRA_OK);
     EXPECT_STREQ(row.kind, "entry");
-    EXPECT_STREQ(row.consumer, "stage");
+    EXPECT_STREQ(row.consumer, "processor");
     EXPECT_STREQ(row.host, "model 0");
 }
 
-// A ring dtype that differs from its spec's dtype is CONFIG at prepare, unless a stage fills
+// A ring dtype that differs from its spec's dtype is CONFIG at prepare, unless a processor fills
 // the phase that moves that ring.
-TEST(AbiStage, ARingOfAnotherDtypeNeedsAStageThatFillsThePhase) {
+TEST(AbiProcessor, ARingOfAnotherDtypeNeedsAProcessorThatFillsThePhase) {
     const Context context;
     anira::ContractHandle contract = zeros_contract();
     contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
 
     Handler refused(context, stream_model());
     EXPECT_EQ(refused.prepare(contract), ANIRA_ERROR_CONFIG);
-    EXPECT_NE(std::strstr(refused.m_err.message, "a stage that fills pre_process"), nullptr)
+    EXPECT_NE(std::strstr(refused.m_err.message, "a processor that fills pre_process"), nullptr)
         << refused.m_err.message;
 
-    // A stage on the other side does not help: post_process moves the output rings.
+    // A processor on the other side does not help: post_process moves the output rings.
     Probe probe;
     probe.m_defaults = 1;
-    anira_stage_desc post_only = promising_stage(&probe);
+    anira_processor_desc post_only = promising_processor(&probe);
     post_only.post_process = probe_phase;
-    StagedHandler wrong_side(context, stream_model(), {post_only});
+    ProcessorHandler wrong_side(context, stream_model(), {post_only});
     EXPECT_EQ(wrong_side.prepare(contract), ANIRA_ERROR_CONFIG);
 
     auto scratch = std::make_unique<std::array<int16_t, k_hop>>();
-    anira_stage_desc convert = promising_stage(scratch.get());
+    anira_processor_desc convert = promising_processor(scratch.get());
     convert.pre_process = int16_to_float;
-    StagedHandler handler(context, stream_model(), {convert});
+    ProcessorHandler handler(context, stream_model(), {convert});
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
     anira_handler* h = handler.m_handler;
     const size_t latency = anira_handler_get_latency(h, 0);
@@ -2761,7 +2785,7 @@ TEST(AbiStage, ARingOfAnotherDtypeNeedsAStageThatFillsThePhase) {
 }
 
 // ============================================================================================
-// The stages in front of an engine
+// The processors in front of an engine
 // ============================================================================================
 
 #if defined(USE_ONNXRUNTIME) || defined(USE_LIBTORCH) || defined(USE_EXECUTORCH) || \
@@ -2792,24 +2816,24 @@ void set_gain(anira_handler* handler, float gain_value) {
 
 }  // namespace
 
-// The converting stage of ARingOfAnotherDtypeNeedsAStageThatFillsThePhase in front of a real
-// engine: the bundled gain model on every engine of this build the file runs on, its input
-// ring int16, the host pushing int16 blocks, the stage writing float32 into the model input
+// The converting processor of ARingOfAnotherDtypeNeedsAProcessorThatFillsThePhase in front of a
+// real engine: the bundled gain model on every engine of this build the file runs on, its input
+// ring int16, the host pushing int16 blocks, the processor writing float32 into the model input
 // through the context accessors, the engine applying a gain of one half. Every output sample
 // is exact: the word over 32768, halved. TFLite included: its export of the gain model orders
 // the outputs [peak, processed_data] in the file, and the adapter runs the signature, whose
 // runner lists the keys output_0 (the stream) and output_1 (the peak) in that order, so output
 // slot 0 reads the stream; a swapped pair would fail the shape check at prepare.
-TEST(AbiStage, Int16RingWithAConvertingStageOnEveryEngine) {
+TEST(AbiProcessor, Int16RingWithAConvertingProcessorOnEveryEngine) {
     const Context context;
     for (const anira_engine engine : anira_test::oracle_engines()) {
         SCOPED_TRACE("engine " + std::to_string(static_cast<unsigned>(engine)));
         auto scratch = std::make_unique<std::array<int16_t, k_hop>>();
-        anira_stage_desc convert = promising_stage(scratch.get());
+        anira_processor_desc convert = promising_processor(scratch.get());
         convert.pre_process = int16_to_float;
         const std::array<anira_backend_id, 1> candidates = one_engine(engine);
         const ModelConfig model = ModelConfig::from_file(k_gain_model_json);
-        StagedHandler handler(context, model, {convert}, candidates);
+        ProcessorHandler handler(context, model, {convert}, candidates);
         ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
         anira::ContractHandle contract = anira_test::file_contract(k_gain_contract_json, k_hop);
         contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16);
@@ -2860,7 +2884,7 @@ TEST(AbiStage, Int16RingWithAConvertingStageOnEveryEngine) {
 
 namespace {
 
-/// What the stage of TensorsKeepTheStructsMemoryAcrossLibTorchInferences recorded per
+/// What the processor of TensorsKeepTheStructsMemoryAcrossLibTorchInferences recorded per
 /// chunk: the memory behind model input 0 in pre_process and behind model output 0 in
 /// post_process. Both phases run on the driving thread, in lockstep with the stream, so the
 /// arrays are plain and the test reads them after the run.
@@ -2872,25 +2896,27 @@ struct Pointers {
     size_t m_post = 0;
 };
 
-anira_status ANIRA_CALL record_then_default(const anira_stage_ctx* ctx,
+anira_status ANIRA_CALL record_then_default(const anira_processor_ctx* ctx,
                                             void* /*prepared*/,
                                             void* user_data) ANIRA_NONBLOCKING {
     auto* pointers = static_cast<Pointers*>(user_data);
     anira_tensor tensor;
     if (ctx->phase == ANIRA_PHASE_PRE_PROCESS) {
-        if (anira_stage_input_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+        if (anira_processor_input_tensor(ctx, 0, &tensor) != ANIRA_OK) {
+            return ANIRA_ERROR_INTERNAL;
+        }
         if (pointers->m_pre < Pointers::k_capacity) {
             pointers->m_inputs.at(pointers->m_pre) = tensor.handle.host.ptr;
         }
         ++pointers->m_pre;
-        return anira_stage_default_pre_process(ctx);
+        return anira_processor_default_pre_process(ctx);
     }
-    if (anira_stage_output_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
+    if (anira_processor_output_tensor(ctx, 0, &tensor) != ANIRA_OK) { return ANIRA_ERROR_INTERNAL; }
     if (pointers->m_post < Pointers::k_capacity) {
         pointers->m_outputs.at(pointers->m_post) = tensor.handle.host.ptr;
     }
     ++pointers->m_post;
-    return anira_stage_default_post_process(ctx);
+    return anira_processor_default_post_process(ctx);
 }
 
 }  // namespace
@@ -2901,15 +2927,15 @@ anira_status ANIRA_CALL record_then_default(const anira_stage_ctx* ctx,
 // pointer, and the default fill through that pointer is what the engine read, since the stream
 // is intact. The accessor still builds the tensor from the struct's descriptor of the moment,
 // so a descriptor that did move would be followed.
-TEST(AbiStage, TensorsKeepTheStructsMemoryAcrossLibTorchInferences) {
+TEST(AbiProcessor, TensorsKeepTheStructsMemoryAcrossLibTorchInferences) {
     const Context context;
     Pointers pointers;
-    anira_stage_desc stage = promising_stage(&pointers);
-    stage.pre_process = record_then_default;
-    stage.post_process = record_then_default;
+    anira_processor_desc processor = promising_processor(&pointers);
+    processor.pre_process = record_then_default;
+    processor.post_process = record_then_default;
     const std::array<anira_backend_id, 1> candidates = one_engine(ANIRA_ENGINE_LIBTORCH);
     const ModelConfig model = ModelConfig::from_file(k_gain_model_json);
-    StagedHandler handler(context, model, {stage}, candidates);
+    ProcessorHandler handler(context, model, {processor}, candidates);
     ASSERT_EQ(handler.m_create_status, ANIRA_OK) << handler.m_err.message;
     ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_hop)), ANIRA_OK)
         << handler.m_err.message;

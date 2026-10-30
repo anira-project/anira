@@ -24,8 +24,8 @@ globalThis[Symbol.for('anira.registry')] = {
     for (let i = 0; i < n; i++) module.HEAPF32[dst + i] = 2 * module.HEAPF32[src + i]
     return 0
   },
-  stage() {
-    throw new Error('em_pool runs no stage')
+  processor() {
+    throw new Error('em_pool runs no processor')
   },
   log() {},
 }

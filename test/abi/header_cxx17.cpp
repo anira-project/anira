@@ -37,7 +37,7 @@ static_assert(ANIRA_PHASE_BEFORE_INFERENCE == 2 && ANIRA_PHASE_INFERENCE == 3 &&
                   ANIRA_PHASE_AFTER_INFERENCE == 4,
               "before < inference < after");
 static_assert(ANIRA_PHASE_PREPARE == 5 && ANIRA_PHASE_RELEASE == 6, "the lifecycle phases");
-// The phases of the shared lifecycle, appended: the stage's reset slot and its unprepare,
+// The phases of the shared lifecycle, appended: the processor's reset slot and its unprepare,
 // then init (both descriptors), then the engine's model level, load and unload.
 static_assert(ANIRA_PHASE_RESET == 7 && ANIRA_PHASE_UNPREPARE == 8,
               "the phases of the shared lifecycle");
@@ -54,34 +54,35 @@ static_assert(std::is_same_v<decltype(anira_init_info::num_threads), uint32_t>,
 static_assert(ANIRA_PREPARE_EXCLUSIVE == k_bit0, "the exclusive bit of a prepare");
 static_assert(ANIRA_ENGINE_CALL_EXCLUSIVE == k_bit0, "the exclusive bit of an engine call");
 static_assert(ANIRA_ENGINE_FLAG_STATE_ALIAS == (k_bit0 << 3), "the fourth engine promise");
-// anira/abi/stage.h: the stage context is frozen at 64 bytes, eight scalars and four pointer
-// slots (the frame, the pair's two ids and a reserved one), and travels by value like the
+// anira/abi/processor.h: the processor context is frozen at 64 bytes, eight scalars and four
+// pointer slots (the frame, the pair's two ids and a reserved one), and travels by value like the
 // tensor.
-static_assert(sizeof(anira_stage_ctx) == 64 && alignof(anira_stage_ctx) == 8,
-              "anira_stage_ctx is frozen");
-static_assert(offsetof(anira_stage_ctx, frame) == 32 &&
-                  offsetof(anira_stage_ctx, engine_id) == 40 &&
-                  offsetof(anira_stage_ctx, provider_id) == 48 &&
-                  offsetof(anira_stage_ctx, reserved_ptr2) == 56,
+static_assert(sizeof(anira_processor_ctx) == 64 && alignof(anira_processor_ctx) == 8,
+              "anira_processor_ctx is frozen");
+static_assert(offsetof(anira_processor_ctx, frame) == 32 &&
+                  offsetof(anira_processor_ctx, engine_id) == 40 &&
+                  offsetof(anira_processor_ctx, provider_id) == 48 &&
+                  offsetof(anira_processor_ctx, reserved_ptr2) == 56,
               "the four pointer slots follow the eight scalars");
-static_assert(std::is_trivially_copyable_v<anira_stage_ctx> &&
-                  std::is_standard_layout_v<anira_stage_ctx>,
-              "anira_stage_ctx is a POD");
+static_assert(std::is_trivially_copyable_v<anira_processor_ctx> &&
+                  std::is_standard_layout_v<anira_processor_ctx>,
+              "anira_processor_ctx is a POD");
 // The frame of a context is anira's: opaque, and not to be written through.
-static_assert(std::is_same_v<decltype(anira_stage_ctx::frame), const void*>,
+static_assert(std::is_same_v<decltype(anira_processor_ctx::frame), const void*>,
               "frame is an opaque pointer to const");
-static_assert(std::is_same_v<decltype(anira_stage_desc::consumed_kinds), const char* const*>,
+static_assert(std::is_same_v<decltype(anira_processor_desc::consumed_kinds), const char* const*>,
               "consumed_kinds is an array of const strings");
 // The descriptor's callback slots are the named typedefs, the shared lifecycle's included.
-static_assert(std::is_same_v<decltype(anira_stage_desc::pre_process), anira_stage_fn> &&
-                  std::is_same_v<decltype(anira_stage_desc::reset), anira_stage_reset_fn> &&
-                  std::is_same_v<decltype(anira_stage_desc::prepare), anira_stage_prepare_fn> &&
-                  std::is_same_v<decltype(anira_stage_desc::unprepare), anira_stage_unprepare_fn> &&
-                  std::is_same_v<decltype(anira_stage_desc::release), anira_stage_release_fn>,
-              "the slots of anira_stage_desc");
-// anira/abi/engine.h: the engine context is frozen like the stage context, eight scalars and
+static_assert(
+    std::is_same_v<decltype(anira_processor_desc::pre_process), anira_processor_fn> &&
+        std::is_same_v<decltype(anira_processor_desc::reset), anira_processor_reset_fn> &&
+        std::is_same_v<decltype(anira_processor_desc::prepare), anira_processor_prepare_fn> &&
+        std::is_same_v<decltype(anira_processor_desc::unprepare), anira_processor_unprepare_fn> &&
+        std::is_same_v<decltype(anira_processor_desc::release), anira_processor_release_fn>,
+    "the slots of anira_processor_desc");
+// anira/abi/engine.h: the engine context is frozen like the processor context, eight scalars and
 // four pointer slots (the two tensor arrays and two reserved ones); the inputs are read and
-// the outputs written; the descriptor's slots are the named typedefs, listed as the stage's.
+// the outputs written; the descriptor's slots are the named typedefs, listed as the processor's.
 static_assert(sizeof(anira_engine_ctx) == 64 && alignof(anira_engine_ctx) == 8,
               "anira_engine_ctx is frozen");
 static_assert(offsetof(anira_engine_ctx, inputs) == 32 &&
@@ -137,15 +138,19 @@ static_assert(std::is_same_v<decltype(anira_plan_info::engine_flags), uint32_t>,
     tensor.handle.host.ptr = &checks;
     checks += tensor.release == nullptr && tensor.ndim == 0u ? 1 : 0;
     checks += d3d12.device == nullptr && webgpu.exec == ANIRA_EXEC_WORKER ? 1 : 0;
-    const anira_stage_desc stage = ANIRA_STAGE_DESC_INIT;  // the initializer as C++17 braces it
+    const anira_processor_desc processor = ANIRA_PROCESSOR_DESC_INIT;  // the initializer as C++17
+                                                                       // braces it
     // anira/abi/lifecycle.h: the two shared records as C++17 braces their initializers.
     const anira_prepare_info info = ANIRA_PREPARE_INFO_INIT;
     const anira_init_info init_info = ANIRA_INIT_INFO_INIT;
-    anira_stage_ctx ctx{};
+    anira_processor_ctx ctx{};
     ctx.ticket = ANIRA_TICKET_INVALID;
-    checks += stage.struct_size == sizeof(anira_stage_desc) && stage.user_data == nullptr ? 1 : 0;
-    checks += stage.flags == 0U && stage.release == nullptr && stage.init == nullptr ? 1 : 0;
-    checks += stage.reset == nullptr && stage.unprepare == nullptr ? 1 : 0;
+    checks +=
+        processor.struct_size == sizeof(anira_processor_desc) && processor.user_data == nullptr ? 1
+                                                                                                : 0;
+    checks +=
+        processor.flags == 0U && processor.release == nullptr && processor.init == nullptr ? 1 : 0;
+    checks += processor.reset == nullptr && processor.unprepare == nullptr ? 1 : 0;
     checks += info.struct_size == sizeof(anira_prepare_info) && info.handler == nullptr &&
                       info.num_entries == 0U && info.flags == 0U
                   ? 1
@@ -217,13 +222,13 @@ static_assert(std::is_invocable_r_v<anira_status,
                                     anira_handler*,
                                     uint32_t,
                                     const anira_tensor*>);
-// The stage entries: a ring accessor, a default body and the control-path add.
+// The processor entries: a ring accessor, a default body and the control-path add.
 static_assert(noexcept(anira_ring_pop_block(nullptr, 0, nullptr, ANIRA_DTYPE_F32, 0)));
-static_assert(noexcept(anira_stage_default_pre_process(nullptr)));
-static_assert(noexcept(anira_stage_input_role(nullptr, 0, nullptr)));
-static_assert(noexcept(anira_stage_output_ring(nullptr, 0, nullptr)));
-static_assert(noexcept(anira_stage_input_tensor(nullptr, 0, nullptr)));
-static_assert(noexcept(anira_pipeline_add_stage(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_processor_default_pre_process(nullptr)));
+static_assert(noexcept(anira_processor_input_role(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_processor_output_ring(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_processor_input_tensor(nullptr, 0, nullptr)));
+static_assert(noexcept(anira_pipeline_add_processor(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_create(nullptr, nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_custom_engine_destroy(nullptr)));
 static_assert(noexcept(anira_custom_engine_detach(nullptr)));
@@ -253,7 +258,7 @@ static_assert(noexcept(anira_contract_hard_num_latencies(nullptr)));
 static_assert(noexcept(anira_contract_hard_latency(nullptr, 0, nullptr, nullptr)));
 static_assert(noexcept(anira_context_config_log(nullptr, nullptr)));
 // The engine word on the public surface: the default provider and its read-back, the pair
-// getters and the stage's two pair accessors (a status, the value and the nullable id), the
+// getters and the processor's two pair accessors (a status, the value and the nullable id), the
 // renamed enumeration and the pair setters.
 static_assert(
     noexcept(anira_model_config_set_default_provider(nullptr, ANIRA_PROVIDER_NONE, nullptr)));
@@ -261,8 +266,8 @@ static_assert(noexcept(anira_model_config_default_provider(nullptr, nullptr, nul
 static_assert(noexcept(anira_model_config_default_engine(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_model_config_model_engine(nullptr, 0, nullptr, nullptr)));
 static_assert(noexcept(anira_model_config_model_provider(nullptr, 0, nullptr, nullptr)));
-static_assert(noexcept(anira_stage_engine(nullptr, nullptr, nullptr)));
-static_assert(noexcept(anira_stage_provider(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_processor_engine(nullptr, nullptr, nullptr)));
+static_assert(noexcept(anira_processor_provider(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_enabled_engines(0, nullptr, nullptr)));
 static_assert(noexcept(
     anira_model_config_set_default_engine(nullptr, ANIRA_ENGINE_CUSTOM, nullptr, nullptr)));
@@ -279,8 +284,8 @@ static_assert(std::is_invocable_r_v<anira_status,
                                     anira_engine*,
                                     const char**>);
 static_assert(std::is_invocable_r_v<anira_status,
-                                    decltype(&anira_stage_provider),
-                                    const anira_stage_ctx*,
+                                    decltype(&anira_processor_provider),
+                                    const anira_processor_ctx*,
                                     anira_provider*,
                                     const char**>);
 static_assert(
@@ -292,8 +297,8 @@ static_assert(std::is_invocable_r_v<anira_status,
                                     anira_axis_tag*,
                                     int64_t*>);
 // The callback typedef carries no real-time attribute: a plain function converts to it.
-static_assert(std::is_same_v<decltype(anira_stage_ctx::entry), uint32_t>);
-static_assert(std::is_same_v<decltype(anira_stage_desc::flags), uint32_t>);
+static_assert(std::is_same_v<decltype(anira_processor_ctx::entry), uint32_t>);
+static_assert(std::is_same_v<decltype(anira_processor_desc::flags), uint32_t>);
 static_assert(std::is_invocable_r_v<anira_status,
                                     decltype(&anira_handler_push_data),
                                     anira_handler*,

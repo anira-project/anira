@@ -66,7 +66,7 @@ const run = async () => {
   )
 
   const context = Context.create(anira, { threads: 1 })
-  const pipeline = Pipeline.create(anira).inference(model)
+  const pipeline = Pipeline.create(anira).addInference(model)
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)
   const latency = handler.getLatency()

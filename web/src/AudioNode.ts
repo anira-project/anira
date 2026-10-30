@@ -39,7 +39,8 @@ export type AudioNodeOptions = {
   waitMs?: number
   /**
    * Modules the context's `audioWorklet` loads first (`addModule`): the worklet-side code of the
-   * handler's JavaScript stage, which calls `defineStage` from `@anira-project/anira/scope`.
+   * handler's JavaScript processor, which calls `defineProcessor` from
+   * `@anira-project/anira/scope`.
    */
   workletModules?: (string | URL)[]
   /** How long to wait for the node (the worklet thread starts with the first one). */

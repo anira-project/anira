@@ -8,7 +8,7 @@
 #include <memory>
 #include <thread>
 
-#include "../../../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../../../extras/models/model_files.h"
 
 /* ============================================================ *
@@ -27,11 +27,11 @@
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 // The model to benchmark: its model file and contract file (extras/models/model_files.h),
-// loaded with the 3.x API, and the stage that chunks its input (HybridNNStage builds the
+// loaded with the 3.x API, and the processor that chunks its input (HybridNNProcessor builds the
 // model's windows). Pick another pair to benchmark another model:
 //   k_cnn_model_json / k_cnn_contract_json, k_rnn_model_json / k_rnn_contract_json,
 //   k_gain_model_json / k_gain_contract_json or k_stereo_gain_model_json /
-//   k_stereo_gain_contract_json, each without a stage (anira's default fill)
+//   k_stereo_gain_contract_json, each without a processor (anira's default fill)
 const anira::ModelConfig my_model_config = anira::ModelConfig::from_file(k_hybridnn_model_json);
 anira::ContractHandle my_contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
 
@@ -44,8 +44,9 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.
     m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
-    const anira::Pipeline pipeline{anira::stage::Inference(my_model_config),
-                                   anira::stage::Custom(std::make_shared<HybridNNStage>())};
+    anira::Pipeline pipeline;
+    pipeline.add_inference(my_model_config);
+    pipeline.add_processor(std::make_shared<HybridNNProcessor>());
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
     const anira::PlanReport report = m_inference_handler->prepare(my_contract);
     const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);

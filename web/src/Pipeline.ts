@@ -1,10 +1,10 @@
 import { type AniraBindings, heap } from './abi/bindings'
-import { ANIRA_STAGE_FLAG_REALTIME_PRE_POST } from './abi/enums'
+import { ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST } from './abi/enums'
 import type { InputSpec } from './staticInput'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
 
-/** A JavaScript engine of the pipeline (`anira_em_pipeline_register_js_engine`). */
+/** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_register_js_engine`). */
 export type EngineOptions = {
   /**
    * `ANIRA_ENGINE_FLAG_*`: the engine's promises (`ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL` for an
@@ -15,30 +15,30 @@ export type EngineOptions = {
   hooks?: number
 }
 
-/** The JavaScript stage of the pipeline (`anira_em_pipeline_add_js_stage`). */
-export type StageOptions = {
+/** The JavaScript processor of the pipeline (`anira_em_pipeline_add_js_processor`). */
+export type ProcessorOptions = {
   /**
-   * The phases that cross into JavaScript, an OR of `ANIRA_EM_HOOK_*` bits, each
-   * `1 << ANIRA_PHASE_*` (the index space of `anira::Stage::k_*`, plus the lifecycle phases a
-   * C++ stage fills as members: prepare, release, reset, unprepare, init).
+   * The phases that cross into JavaScript, an OR of `ANIRA_EM_PROCESSOR_HOOK_*` bits, each
+   * `1 << ANIRA_PHASE_*` (the index space of `anira::Processor::k_*`, plus the lifecycle phases a
+   * C++ processor fills as members: prepare, release, reset, unprepare, init).
    */
   phases: number
   /**
-   * `ANIRA_STAGE_FLAG_*`: the stage's real-time promise, stated. Default
-   * `ANIRA_STAGE_FLAG_REALTIME_PRE_POST` (a Hard contract requires it of a stage with a
+   * `ANIRA_PROCESSOR_FLAG_*`: the processor's real-time promise, stated. Default
+   * `ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST` (a Hard contract requires it of a processor with a
    * pre_process, post_process or reset hook, which run on the audio thread).
    */
   flags?: number
 }
 
 /**
- * A pipeline (`anira_pipeline`), the web twin of `anira::Pipeline`: the inference stage over
- * model configs and, optionally, a JavaScript stage and JavaScript engines, which the scopes
- * that run them define under the same name (`defineStage`, `defineEngine`). Where the web
- * differs: a stage and an engine are registered by name, their code living in each realm that
- * runs them (`addStage`, `registerEngine`; `add(stage)` and `register_engine(engine)` take the
- * objects in C++), and the pipeline is destroyed with `destroy()` once the handlers exist (a
- * handler copies it).
+ * A pipeline (`anira_pipeline`), the web twin of `anira::Pipeline`, one member per C entry:
+ * `addInference` (the inference stage over model configs), `addProcessor` (the custom stage, a
+ * JavaScript processor) and `addEngine` (a JavaScript engine the model entries name by id),
+ * which the scopes that run them define under the same name (`defineProcessor`,
+ * `defineEngine`). Where the web differs: a processor and an engine are named, their code living
+ * in each realm that runs them (`add_processor` and `add_engine` take the objects in C++), and
+ * the pipeline is destroyed with `destroy()` once the handlers exist (a handler copies it).
  */
 export class Pipeline {
   readonly abi: AniraBindings
@@ -58,7 +58,7 @@ export class Pipeline {
    * The inference stage over `models`, the variants (one in this pre-release), on the default
    * candidates: every engine of the build and every registered engine, on the CPU.
    */
-  inference(models: ModelConfig | ModelConfig[]): this {
+  addInference(models: ModelConfig | ModelConfig[]): this {
     const list = Array.isArray(models) ? models : [models]
     const m = this.abi.module
     const variants = m._malloc(list.length * 4)
@@ -79,7 +79,7 @@ export class Pipeline {
   }
 
   /** A JavaScript engine under its reverse-URI `id`, which the model entries name. */
-  registerEngine(id: string, options: EngineOptions = {}): this {
+  addEngine(id: string, options: EngineOptions = {}): this {
     this.abi.anira_em_pipeline_register_js_engine(
       this.pipeline,
       id,
@@ -90,13 +90,13 @@ export class Pipeline {
     return this
   }
 
-  /** The pipeline's one JavaScript stage, under `name`. */
-  addStage(name: string, options: StageOptions): this {
-    this.abi.anira_em_pipeline_add_js_stage(
+  /** The pipeline's one JavaScript processor, under `name`. */
+  addProcessor(name: string, options: ProcessorOptions): this {
+    this.abi.anira_em_pipeline_add_js_processor(
       this.pipeline,
       keyOf(name),
       options.phases,
-      options.flags ?? ANIRA_STAGE_FLAG_REALTIME_PRE_POST
+      options.flags ?? ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST
     )
     return this
   }

@@ -9,7 +9,7 @@
 // are all zero (a missed quantum: the tone never is) once the stream has started. Expected: 0.
 // While it streams: a load processor that is not anira's spins in every call and stalls in every
 // 16th, and the probe must measure the device's burst or more; then a second node whose JavaScript
-// stage spins 8 ms per inference streams too, and with both nodes held the probe measures the
+// processor spins 8 ms per inference streams too, and with both nodes held the probe measures the
 // device's burst exactly (unheld, logged). Then a node streaming at block_max = one quantum (which
 // misses where the burst exceeds its latency) is re-prepared mid-stream through audioNode.prepare
 // to a block_max past that latency: a plain handler.prepare is refused meanwhile, the output goes
@@ -18,7 +18,7 @@
 // is the size, the burst the device's, and a node at that geometry misses no quantum. The verdict
 // is window.anira_test_result.
 import {
-  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
   Anira,
   AniraError,
   Context,
@@ -32,7 +32,7 @@ import {
 } from '../../dist/index.js'
 
 const MODELS = '../../extras/models/model-pool/'
-const LOAD_STAGE = 'org.anira-test.load'
+const LOAD_PROCESSOR = 'org.anira-test.load'
 // The tap counts from this many seconds after the node starts, for this many seconds.
 const SETTLE_S = 0.75
 const MEASURE_S = 2
@@ -76,8 +76,8 @@ const TAP = `registerProcessor('anira-test-tap', class extends AudioWorkletProce
     return true
   }
 })
-// Load on the audio thread, as a model's JavaScript stage puts there: every call spins for a
-// moment, and every 16th call (once per callback of 16 quanta, where a stage's pre_process
+// Load on the audio thread, as a model's JavaScript processor puts there: every call spins for a
+// moment, and every 16th call (once per callback of 16 quanta, where a processor's pre_process
 // unfolds an inference's input) for longer. A message stops it.
 registerProcessor('anira-test-load', class extends AudioWorkletProcessor {
   constructor(options) {
@@ -98,8 +98,8 @@ registerProcessor('anira-test-load', class extends AudioWorkletProcessor {
   }
 })`
 
-// A stream through the gain config at `geometry`: the handler, its node, a tone and the tap;
-// with `load`, the pipeline carries load-stage.js's stage, which spins on the audio thread once
+// A stream through the gain config at `geometry`: the handler, its node, a tone and the tap; with
+// `load`, the pipeline carries load-processor.js's processor, which spins on the audio thread once
 // per inference.
 const stream = async (anira, audio, geometry, { load = false } = {}) => {
   const context = Context.create(anira, { threads: 1 })
@@ -117,8 +117,8 @@ const stream = async (anira, audio, geometry, { load = false } = {}) => {
     contract.native(),
     anira_miss_policy.ANIRA_MISS_ZEROS
   )
-  const pipeline = Pipeline.create(anira).inference(model)
-  if (load) pipeline.addStage(LOAD_STAGE, { phases: ANIRA_EM_HOOK_PRE })
+  const pipeline = Pipeline.create(anira).addInference(model)
+  if (load) pipeline.addProcessor(LOAD_PROCESSOR, { phases: ANIRA_EM_PROCESSOR_HOOK_PRE })
   const handler = InferenceHandler.create(context, pipeline)
   handler.prepare(contract)
   pipeline.destroy()
@@ -126,7 +126,7 @@ const stream = async (anira, audio, geometry, { load = false } = {}) => {
 
   const audioNode = await handler.createAudioNode(audio, {
     params: [1],
-    workletModules: load ? [new URL('./load-stage.js', import.meta.url)] : [],
+    workletModules: load ? [new URL('./load-processor.js', import.meta.url)] : [],
   })
   audioNode.params.get(1).value = 1
   const tap = new AudioWorkletNode(audio, 'anira-test-tap')
@@ -224,7 +224,7 @@ const run = async () => {
     )
   }
 
-  // The load in an anira node, held: a node whose JavaScript stage spins 8 ms per inference
+  // The load in an anira node, held: a node whose JavaScript processor spins 8 ms per inference
   // (one every 512 frames: four per callback of 2048) streams beside the first. Unheld the
   // probe sees that load (logged); holding both nodes leaves the audio thread quiet, and the
   // probe measures the device's burst exactly.
@@ -240,14 +240,14 @@ const run = async () => {
   }
   check(
     heldBursts.every((b) => b === device),
-    `a node with a stage spinning 8 ms per inference: held, the probe measures ` +
+    `a node with a processor spinning 8 ms per inference: held, the probe measures ` +
       `${heldBursts.join(', ')} frames, the device's ${device} (unheld: ${unheld})`
   )
   const resumed = await loaded.count()
   check(
     resumed.blocks > 0,
     `the held nodes stream again after the probe (${resumed.blocks} quanta counted, ` +
-      `${resumed.zeros} silent under the stage's load)`
+      `${resumed.zeros} silent under the processor's load)`
   )
   loaded.stop()
   sized.stop()

@@ -123,9 +123,9 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The two examples (web/examples/stage-and-engine, web/examples/model-file) against the built
+      # The two examples (web/examples/processor-and-engine, web/examples/model-file) against the built
       # package: tsc with strict over their files and the package's types, then their Vite builds
-      # (stage-and-engine's worker and worklet modules bundled into one script each), which the
+      # (processor-and-engine's worker and worklet modules bundled into one script each), which the
       # browser test runs.
       - name: build the examples
         working-directory: web
@@ -140,7 +140,7 @@ jobs:
 
       # The built package in headless Chromium and Firefox (served with COOP/COEP).
       # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm
-      # Workers importing a worker module with a JavaScript engine, a JavaScript stage in the
+      # Workers importing a worker module with a JavaScript engine, a JavaScript processor in the
       # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
       # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
       # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX

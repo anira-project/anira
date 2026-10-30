@@ -1,10 +1,10 @@
 // anira/abi/engine.h: the custom engine as an object (anira_custom_engine_create) added to
-// pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the stage's
+// pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the processor's
 // twin, sharing across pipelines, and the engine at run time through the three levels of its
 // lifecycle (anira/abi/lifecycle.h): a model entry naming an added id is a plan the C handler
 // runs through the engine's init (once per object, at the first prepare that reaches it), its
 // load (once per pooled model, a stateful one too), its prepare (once per handler, with the
-// stage's record), its process on every inference (an exclusive handler's calls flagged, on
+// processor's record), its process on every inference (an exclusive handler's calls flagged, on
 // what its prepare built) and its reset at a stream boundary, on every leg of the build (a
 // registered engine needs no built-in one).
 #include <anira/abi/build_info.h>
@@ -452,7 +452,7 @@ anira_status ANIRA_CALL gain_prepare(const anira_prepare_info* info,
     const PrepareWatch watch(*engine);
     ++engine->m_prepared;
     if (engine->m_refuse_prepare != ANIRA_OK) { return engine->m_refuse_prepare; }
-    // The record is the stage's (the handler, its report), the loaded pointer one load handed
+    // The record is the processor's (the handler, its report), the loaded pointer one load handed
     // back and unload has not received, and the record's lists are the load record's.
     auto* kept = static_cast<GainLoaded*>(loaded);
     if (info == nullptr || info->struct_size != sizeof(anira_prepare_info) ||
@@ -1101,7 +1101,7 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
 
     // The three levels, once each: init with the facts of the core (the level, the pool of
     // this context, the handler's context), load with the row's record, prepare with the
-    // stage's record and the loaded pointer.
+    // processor's record and the loaded pointer.
     ASSERT_EQ(gain.m_inited, 1);
     ASSERT_EQ(gain.m_loaded, 1);
     ASSERT_EQ(gain.m_prepared, 1);
@@ -2405,7 +2405,7 @@ TEST(AbiEngine, AMissingFileOnARealEngineIsModelLoadOrNoSuchFile) {
 
 // Two handlers of one pipeline over one model share one loaded model: the engine's load runs
 // once, with `instances` = the model's max_instances, its prepare once per handler with the
-// stage's record and that loaded pointer, and both handlers run on it (shared calls, a slot
+// processor's record and that loaded pointer, and both handlers run on it (shared calls, a slot
 // each). A stateful model is loaded once too: exclusivity is the handler's, not the model's,
 // so the load says 0 shared slots, each handler's prepare carries ANIRA_PREPARE_EXCLUSIVE and
 // builds what it runs on, and every call of theirs carries ANIRA_ENGINE_CALL_EXCLUSIVE with

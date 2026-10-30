@@ -121,8 +121,9 @@ configuration is built with the C++ builders of ``anira/anira.hpp``, and the mod
     // The model file, the context and the pipeline (the default candidate set)
     anira::ModelConfig model_config = anira::ModelConfig::from_file("multi_tensor.model.json");
     anira::Context context{anira::ContextConfig{}};
-    anira::InferenceHandler inference_handler(
-        context, anira::Pipeline{anira::stage::Inference(model_config)});
+    anira::Pipeline pipeline;
+    pipeline.add_inference(model_config);
+    anira::InferenceHandler inference_handler(context, pipeline);
 
     // Prepared with a Hard contract: the host's block size and sample rate, a 10 ms budget
     inference_handler.prepare(anira::Hard{.block_min = static_cast<double>(buffer_size),

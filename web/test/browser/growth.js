@@ -1,9 +1,9 @@
 // The module's memory grows (256 MiB to begin with, up to 2 GiB), and a growth gives the shared
 // memory a new, longer buffer: views made before it cover the old length only. Every scope reads
-// the heap through anira's heap(), which rebuilds them, the trampolines before each stage and
+// the heap through anira's heap(), which rebuilds them, the trampolines before each processor and
 // engine call. The pipeline of test.js: a JavaScript engine on a pool of two Wasm Workers
-// (pool-worker.js: its input times 2 * the Static gain) and a JavaScript stage in the worklet
-// (worklet-stage.js: halves the input), so the output is the input times the gain after the
+// (pool-worker.js: its input times 2 * the Static gain) and a JavaScript processor in the worklet
+// (worklet-processor.js: halves the input), so the output is the input times the gain after the
 // latency, exactly. Checked:
 // - offline: a node streams on a context whose worklet and Workers started before the growth;
 //   then the main thread creates handlers on the bundled gain config until the memory is far
@@ -17,7 +17,7 @@
 //   quantum missed after.
 // The verdict is window.anira_test_result.
 import {
-  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   AniraError,
@@ -37,8 +37,8 @@ const QUANTUM = 128
 const QUANTA = 96
 const GAIN = 0.5
 const ENGINE_ID = 'org.anira-test.pool-double'
-const STAGE = 'org.anira-test.half'
-const stageModule = new URL('./worklet-stage.js', import.meta.url)
+const PROCESSOR = 'org.anira-test.half'
+const processorModule = new URL('./worklet-processor.js', import.meta.url)
 
 const tone = (frames) => {
   const samples = new Float32Array(frames)
@@ -110,9 +110,9 @@ const run = async () => {
     ContractHandle.hard(anira, { blockMin: QUANTUM, blockMax, rate: RATE, budgetMs: 2 })
   const jsHandler = (contract) => {
     const pipeline = Pipeline.create(anira)
-      .inference(jsModel)
-      .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-      .addStage(STAGE, { phases: ANIRA_EM_HOOK_PRE })
+      .addInference(jsModel)
+      .addEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+      .addProcessor(PROCESSOR, { phases: ANIRA_EM_PROCESSOR_HOOK_PRE })
     try {
       const handler = InferenceHandler.create(context, pipeline)
       handler.prepare(contract)
@@ -125,7 +125,7 @@ const run = async () => {
     const audioNode = await handler.createAudioNode(audio, {
       params: [1],
       waitMs,
-      workletModules: [stageModule],
+      workletModules: [processorModule],
     })
     audioNode.params.get(1).value = GAIN
     return audioNode
@@ -162,7 +162,7 @@ const run = async () => {
   const grow = (beyond) => {
     const target = bytes() + beyond
     while (bytes() < target && fillers.length < 2000) {
-      const pipeline = Pipeline.create(anira).inference(gainModel)
+      const pipeline = Pipeline.create(anira).addInference(gainModel)
       const handler = InferenceHandler.create(context, pipeline)
       handler.prepare(gainContract)
       fillers.push(handler)

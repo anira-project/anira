@@ -1,13 +1,13 @@
-// The example: a JavaScript stage that applies a gain before the model (gain-stage.ts, in the
-// audio worklet), a JavaScript engine standing in for the model (double-engine.ts, on the
+// The example: a JavaScript processor that applies a gain before the model (gain-processor.ts, in
+// the audio worklet), a JavaScript engine standing in for the model (double-engine.ts, on the
 // context's inference Workers), and the gain as the model's Static input, the AudioParam of the
 // handler's audio node. Every piece is TypeScript over the npm package; nothing rebuilds the wasm.
 // Beside the model's (wet) path a dry path, delayed by the handler's latency.
 import {
-  ANIRA_EM_HOOK_PREPARE,
-  ANIRA_EM_HOOK_PRE,
-  ANIRA_EM_HOOK_RESET,
-  ANIRA_EM_HOOK_UNPREPARE,
+  ANIRA_EM_PROCESSOR_HOOK_PREPARE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
+  ANIRA_EM_PROCESSOR_HOOK_RESET,
+  ANIRA_EM_PROCESSOR_HOOK_UNPREPARE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   Context,
@@ -18,12 +18,12 @@ import {
   measureRenderGeometry,
   type AniraAudioNode,
 } from '@anira-project/anira'
-// The stage's module on this thread too: its prepare and unprepare run here.
-import { GAIN_SLOT, INPUT_GAIN_STAGE } from './gain-stage'
+// The processor's module on this thread too: its prepare and unprepare run here.
+import { GAIN_SLOT, INPUT_GAIN_PROCESSOR } from './gain-processor'
 import { DOUBLE_ENGINE } from './double-engine'
 // The worker module and the worklet module, each bundled into one script by Vite; their URLs.
 import workerModule from './double-engine.ts?worker&url'
-import stageModule from './gain-stage.ts?worker&url'
+import processorModule from './gain-processor.ts?worker&url'
 
 // The model's window: 128 samples per inference.
 const WINDOW = 128
@@ -85,16 +85,16 @@ export async function createGainExample(
     })
   )
 
-  // 3. The pipeline: the engine and the stage, under the names their modules define them by.
+  // 3. The pipeline: the engine and the processor, under the names their modules define them by.
   const pipeline = Pipeline.create(anira)
-    .inference(model)
-    .registerEngine(DOUBLE_ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-    .addStage(INPUT_GAIN_STAGE, {
+    .addInference(model)
+    .addEngine(DOUBLE_ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addProcessor(INPUT_GAIN_PROCESSOR, {
       phases:
-        ANIRA_EM_HOOK_PRE |
-        ANIRA_EM_HOOK_RESET |
-        ANIRA_EM_HOOK_PREPARE |
-        ANIRA_EM_HOOK_UNPREPARE,
+        ANIRA_EM_PROCESSOR_HOOK_PRE |
+        ANIRA_EM_PROCESSOR_HOOK_RESET |
+        ANIRA_EM_PROCESSOR_HOOK_PREPARE |
+        ANIRA_EM_PROCESSOR_HOOK_UNPREPARE,
     })
 
   // 4. The handler and its Hard contract: one render quantum per call, at the context's rate, in
@@ -113,11 +113,11 @@ export async function createGainExample(
   // An offline render waits for every inference: the Worker must be in its loop first.
   if (waitMs > 0) await context.ready()
 
-  // 5. The audio node: the stage's module loaded into the worklet, the gain an AudioParam.
+  // 5. The audio node: the processor's module loaded into the worklet, the gain an AudioParam.
   const audioNode = await handler.createAudioNode(audioContext, {
     params: [GAIN_SLOT],
     waitMs,
-    workletModules: [stageModule],
+    workletModules: [processorModule],
   })
   const gainParam = audioNode.params.get(GAIN_SLOT)!
   gainParam.value = gain

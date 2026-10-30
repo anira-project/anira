@@ -31,9 +31,9 @@ of section 1.5 are their file form.
      - The process: the inference thread pool, logging, the devices anira may use. Lives on
        the box; its file form is the context file.
    * - :cpp:class:`anira::InferenceHandler` with its :cpp:class:`anira::Pipeline`
-       (:cpp:class:`anira::Stage`)
+       (:cpp:class:`anira::Processor`)
      - The runtime: offloads inference to the thread pool and returns the processed audio to
-       the real-time thread, with the pipeline's one *stage* as custom pre- and
+       the real-time thread, with the pipeline's one *processor* as custom pre- and
        post-processing (section 2). It is the C++ face of the C handler of section 3.2
        (``anira_handler`` with its ``anira_pipeline``); sections 3 to 5 describe it. 2.x code
        that is not ported yet compiles against ``anira/compat/v2.hpp`` and runs on the same
@@ -98,7 +98,7 @@ The roles are:
   cache). The input half names the output half it is fed from (``"state_source"`` in a model
   file, ``anira_tensor_spec_set_state_source`` in C), and anira feeds and captures the state
   around every inference itself (section 3.4). A State spec may stand anywhere in its list and has a slot
-  like every other tensor (its position in the list, the number a stage sees it at too), but
+  like every other tensor (its position in the list, the number a processor sees it at too), but
   no Hard entry carries it: a single form that names its slot is
   ``ANIRA_ERROR_INVALID_ARGUMENT``, and its position in an array of a ``_multi`` form must
   hold the empty tensor. No Time axis, window, time ratio or latency; float32 in this
@@ -244,7 +244,7 @@ is part of the build is decided at prepare, not here, so one config serves every
   Runtime execution provider by its registered name, a LiteRT accelerator by its hardware,
   ``"gpu"`` or ``"npu"``, a custom engine's by its descriptor's list). Both axes follow one
   **pair rule** wherever the pair travels (a model entry, the defaults, a candidate, the plan
-  report, the capability rows, a provider option set, the stage context): the id is set if and
+  report, the capability rows, a provider option set, the processor context): the id is set if and
   only if the value is ``ANIRA_ENGINE_CUSTOM`` / ``ANIRA_PROVIDER_CUSTOM``; a built-in value
   takes none, and ``ANIRA_ENGINE_NONE`` and ``ANIRA_PROVIDER_NONE`` never do (a setter
   refuses any other combination with ``ANIRA_ERROR_INVALID_ARGUMENT``). ``ANIRA_PROVIDER_NONE``
@@ -466,9 +466,9 @@ minted again. On an Async handle it throws ``anira::Error`` with
   input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
   in anira converts: a name that is not a Streamed tensor is ``ANIRA_ERROR_CONFIG`` at
   prepare, and so is a ring dtype that differs from the spec's dtype (the model's), unless the
-  pipeline's stage fills the phase that moves that ring (``pre_process`` for an input,
+  pipeline's processor fills the phase that moves that ring (``pre_process`` for an input,
   ``post_process`` for an output; section 2) and so takes the conversion on itself: the ring
-  then holds the host's element type, the model tensor the spec's, and the stage moves
+  then holds the host's element type, the model tensor the spec's, and the processor moves
   between the two.
 - **Stream latency.** ``hard.latencies = {{"audio_out", 4096}}`` on the aggregate,
   ``contract.hard_latency("audio_out", 4096)`` on a handle
@@ -492,7 +492,7 @@ minted again. On an Async handle it throws ``anira::Error`` with
   pre-release; section 3.4).
   It is common to both contract kinds, like ``edge_cost``. The declared domain is where anira
   allocates the slot's ring, its model tensor, the Static store and the state buffers, and
-  where all four phases of the stage, the state feed and the capture work (section 2); the
+  where all four phases of the processor, the state feed and the capture work (section 2); the
   planner joins it to the engine's domain per slot with an edge (the plan report's slot rows
   carry it as ``domain_in`` of an input and ``domain_out`` of an output, the engine's domain
   on the other side), which is nothing where the two coincide, so a tensor declared in the
@@ -739,24 +739,24 @@ The JSON files of section 1.5 are the same three loaders: ``anira_model_config_f
 returns ``ANIRA_SUCCESS_UPGRADED`` and ``anira_model_config_take_legacy_contract`` hands out
 its Hard contract.
 
-2. Stages
----------
+2. Processors
+-------------
 
-A **stage** is the pre- and post-processing of a pipeline: the code that takes the host's data
+A **processor** is the pre- and post-processing of a pipeline: the code that takes the host's data
 to the model's tensors ahead of an inference and back behind it. It is a descriptor, not a
-class: ``anira_stage_desc`` of ``anira/abi/stage.h`` names up to four phase callbacks, a
-reset, a prepare, an unprepare and a release function, one ``user_data`` slot and the stage's
-real-time promise, and ``anira_pipeline_add_stage(pipe, &desc, &err)`` copies it (within
+class: ``anira_processor_desc`` of ``anira/abi/processor.h`` names up to four phase callbacks, a
+reset, a prepare, an unprepare and a release function, one ``user_data`` slot and the processor's
+real-time promise, and ``anira_pipeline_add_processor(pipe, &desc, &err)`` copies it (within
 ``struct_size``, with its strings) into a carrier that the pipeline and every handler created
 from it share, so ``release`` fires exactly once, with the last of them. A pipeline holds **at
-most one stage**: a second ``anira_pipeline_add_stage`` is ``ANIRA_ERROR_INVALID_STATE``, and
-the order relative to ``anira_pipeline_add_inference`` means nothing. The stage has no name:
+most one processor**: a second ``anira_pipeline_add_processor`` is ``ANIRA_ERROR_INVALID_STATE``, and
+the order relative to ``anira_pipeline_add_inference`` means nothing. The processor has no name:
 with one per pipeline a name would identify nothing, so every record about it says ``the
-stage``. Without a stage anira runs its default bodies, the windowing of a streamed model,
-which is all that most models need. A stage is for a model whose host data is not its
+processor``. Without a processor anira runs its default bodies, the windowing of a streamed model,
+which is all that most models need. A processor is for a model whose host data is not its
 model tensor as it stands: an integer stream a model reads as ``float32``, a spectrogram
 model, a batched sliding-window layout, a value normalised on the way in and denormalised on
-the way out. In C++ the same descriptor is a subclass of :cpp:class:`anira::Stage` (below);
+the way out. In C++ the same descriptor is a subclass of :cpp:class:`anira::Processor` (below);
 :doc:`custom_preprocessing` walks through the cases.
 
 **The phases of one chunk.** A chunk is one inference's worth of data, one hop of every
@@ -775,7 +775,7 @@ Streamed tensor. Its four phases run in this order:
 3. ``post_process``, on the thread where the host end is consumed: it takes the model tensor
    of every output slot back to the host end, the output ring.
 
-The edge sits directly before and after the engine and is anira's: a stage never crosses a
+The edge sits directly before and after the engine and is anira's: a processor never crosses a
 domain. Every phase works at the host end of every slot, in the domain the contract declares
 for that tensor (``host_domain``, section 1.3; host memory, the only domain this pre-release
 accepts), and the descriptor carries no domain of its own. In this pre-release every model
@@ -783,27 +783,27 @@ tensor is ``ANIRA_DTYPE_F32``, except a declared State pair, which takes any dty
 accepts (section 3.4).
 
 **NULL and filled slots.** A phase slot left ``NULL`` means anira's default body runs:
-``anira_stage_default_pre_process`` pops one hop per channel of every Streamed input from its
+``anira_processor_default_pre_process`` pops one hop per channel of every Streamed input from its
 ring into the model tensor (with the ring's history ahead of it where the window is longer
 than the hop, the receptive-field fill; channel ``c`` of a tensor of ``n`` elements per
-channel starts at element ``c * n``), ``anira_stage_default_post_process`` pushes one hop per
+channel starts at element ``c * n``), ``anira_processor_default_post_process`` pushes one hop per
 channel of every Streamed output from the model tensor into its ring; a Static slot is
 materialised ahead of ``pre_process`` and captured behind ``post_process`` by anira itself,
-and the two hooks have no default. A filled slot means the stage **owns the phase for every
+and the two hooks have no default. A filled slot means the processor **owns the phase for every
 slot with a host end**: what it does not handle itself it hands to the default body,
-explicitly, by calling ``anira_stage_default_pre_process(ctx)`` or
-``anira_stage_default_post_process(ctx)`` from its own code ("call super"). The defaults are
+explicitly, by calling ``anira_processor_default_pre_process(ctx)`` or
+``anira_processor_default_post_process(ctx)`` from its own code ("call super"). The defaults are
 real-time by construction, never touch a tensor of another role than Streamed, and return
 ``ANIRA_ERROR_CONFIG`` for a slot whose ring dtype is not its tensor's, leaving that slot
 untouched.
 
-**What a callback sees.** Every phase callback receives an ``anira_stage_ctx``, 64 bytes that
+**What a callback sees.** Every phase callback receives an ``anira_processor_ctx``, 64 bytes that
 anira fills on its own stack for the duration of the call: ``phase``, the ``engine`` and
 ``provider`` of the plan the chunk was submitted under, ``variant``, ``num_inputs`` and
 ``num_outputs`` (the lengths of the model config's two lists, State tensors included),
 ``ticket`` (``ANIRA_TICKET_INVALID`` under a Hard contract), ``entry`` (below) and an opaque
 ``frame`` that is anira's and is never dereferenced. Both pairs come whole through two
-accessors, ``anira_stage_engine(ctx, &engine, &id)`` and ``anira_stage_provider(ctx,
+accessors, ``anira_processor_engine(ctx, &engine, &id)`` and ``anira_processor_provider(ctx,
 &provider, &name)`` (the id ``NULL`` beside every value but CUSTOM, the plan report's
 ``engine_id`` and ``provider_id``; the id out-parameter may be ``NULL``; in C++
 ``ctx.engine()`` and ``ctx.provider()``, an :cpp:struct:`anira::EngineRef` and an
@@ -812,15 +812,15 @@ record: a callback asks **per slot**, the tensor's position in the model config'
 side (the one number every entry of section 3.2 uses), through six accessors,
 ``[callback-safe]`` and ``ANIRA_NONBLOCKING``:
 
-- ``anira_stage_input_role(ctx, slot, &role)`` / ``anira_stage_output_role``: what the
+- ``anira_processor_input_role(ctx, slot, &role)`` / ``anira_processor_output_role``: what the
   tensor is, the ``anira_role`` of its spec, the same answer in every phase; the first
-  question about a slot the stage does not know from its model config.
-- ``anira_stage_input_ring(ctx, slot, &ring)`` / ``anira_stage_output_ring``: the ring of a
+  question about a slot the processor does not know from its model config.
+- ``anira_processor_input_ring(ctx, slot, &ring)`` / ``anira_processor_output_ring``: the ring of a
   Streamed tensor in the phase that moves it, ``pre_process`` for an input and
   ``post_process`` for an output, for the ring accessors below.
-- ``anira_stage_input_tensor(ctx, slot, &tensor)`` / ``anira_stage_output_tensor``: fill a
+- ``anira_processor_input_tensor(ctx, slot, &tensor)`` / ``anira_processor_output_tensor``: fill a
   borrowed descriptor (section 3.3) of the *model end* of the slot, the tensor the engine
-  binds, for the stage to read or write. The inputs answer in ``pre_process`` (Streamed and
+  binds, for the processor to read or write. The inputs answer in ``pre_process`` (Streamed and
   Static; a State input has no host end there) and in ``before_inference`` (every role, the
   State inputs fed); the outputs in ``after_inference`` (every role, the State outputs not
   yet captured) and in ``post_process`` (Streamed and Static; a State output was captured
@@ -833,7 +833,7 @@ which it resets on any status but ``ANIRA_OK`` (``ANIRA_ROLE_FORCE32``, ``NULL``
 record). A slot always has a role. Asking for a ring or a model tensor the slot does not have
 in this phase (a ring of a Static or a State tensor, an input ring outside ``pre_process`` or
 an output ring outside ``post_process``, the host end of a State tensor in ``pre_process`` or
-``post_process``, a side outside its phases) is a **bug in the stage, not an answer**: a stage
+``post_process``, a side outside its phases) is a **bug in the processor, not an answer**: a processor
 knows what a slot is, from its model config or by asking the role first, so the accessor
 answers ``ANIRA_ERROR_INVALID_STATE`` and latches it into ``anira_handler_rt_error`` with one
 record per kind naming the entry, the slot and the phase, as it latches a slot out of range
@@ -843,7 +843,7 @@ still takes a ``NULL`` ring and returns 0 for it.
 **The entry.** ``ctx->entry`` is the in-flight entry this chunk occupies, ``0 ..
 anira_handler_num_entries(h) - 1``: the same value in all four phases of one chunk, distinct
 across the chunks in flight at once, reused once the chunk has completed. It is the index of a
-**per-chunk scratch** a stage sizes in its prepare function, where
+**per-chunk scratch** a processor sizes in its prepare function, where
 ``anira_handler_num_entries`` already answers (the handler counts as prepared there), so that
 what ``pre_process`` pops or computes is found again by ``before_inference`` on another
 thread, and what ``before_inference`` keeps by ``after_inference``, without an allocation: the
@@ -851,7 +851,7 @@ phases of an STFT that the inverse transform needs, or a window popped on the dr
 and transformed on the inference thread when the transform is too heavy for the audio
 callback.
 
-**The rings.** The rings stay inside anira; a stage moves elements through the ten
+**The rings.** The rings stay inside anira; a processor moves elements through the ten
 ``anira_ring`` accessors, ``[callback-safe]`` and ``ANIRA_NONBLOCKING``: ``anira_ring_dtype``
 and ``anira_ring_num_channels``, a ring's two facts; ``anira_ring_available`` and
 ``anira_ring_available_past``, the unread elements of one channel and the consumed ones the
@@ -865,7 +865,7 @@ nothing and records ``ANIRA_ERROR_CONFIG``, since **nothing in anira converts**,
 direction (a channel out of range: ``0`` and ``ANIRA_ERROR_INVALID_ARGUMENT``; a ``NULL``
 ring: ``0``; ``discard`` takes no dtype). A ring holds the ring dtype the contract declares
 for its tensor (``hard_ring_dtype``, section 1.3; ``ANIRA_DTYPE_F32`` unless declared), which
-may differ from the spec's dtype exactly when the stage fills the phase that moves that ring:
+may differ from the spec's dtype exactly when the processor fills the phase that moves that ring:
 prepare refuses the difference otherwise, and the default body refuses such a slot at run
 time. The channel count has no such exception, and neither has the domain.
 
@@ -875,7 +875,7 @@ ring must have gained exactly its hop. A shortfall is repaired so the stream sta
 (the missing elements are discarded from an input ring, an output ring is topped up with
 zeros); an excess cannot be undone. Either way ``anira_handler_rt_error`` reads
 ``ANIRA_ERROR_CONFIG`` and one latched record names the phase, the tensor and both counts. It
-is the guard of a stage that moves the wrong amount, not a policy.
+is the guard of a processor that moves the wrong amount, not a policy.
 
 **Failure.** A phase callback returns ``ANIRA_OK``, or any other status to fail its chunk: the
 status goes into ``anira_handler_rt_error`` with one latched record naming the phase, and the
@@ -883,76 +883,76 @@ chunk delivers zeros at its stream position. A failed ``pre_process`` is not sub
 engine; a failed ``before_inference`` or ``after_inference`` skips the rest and zeroes the
 model outputs (the State outputs are not captured, so the state keeps its last good value);
 after a failed ``post_process`` anira tops every Streamed output ring up to the chunk's hop
-with zeros, because a ring cannot take a push back. A prepare the stage refuses fails with
-``the stage refused prepare`` and its status. The consumer column of the ``anira_plan_ext``
-rows of the extensions the stage lists in ``consumed_kinds`` (``"<host>:<kind>"`` strings
-that join the consumed-or-fail walk) reads ``stage``.
+with zeros, because a ring cannot take a push back. A prepare the processor refuses fails with
+``the processor refused prepare`` and its status. The consumer column of the ``anira_plan_ext``
+rows of the extensions the processor lists in ``consumed_kinds`` (``"<host>:<kind>"`` strings
+that join the consumed-or-fail walk) reads ``processor``.
 
 **Static and State slots in the phases.** A Static input is a per-chunk snapshot: anira
 materialises the value of the handler's store (``anira_handler_set_static_input``, section
 3.2) into the model tensor when the chunk is formed, ahead of ``pre_process``, where
-``anira_stage_input_tensor`` reads it; a Static output is captured from the model tensor
+``anira_processor_input_tensor`` reads it; a Static output is captured from the model tensor
 behind ``post_process``. The write order of one chunk is therefore: materialise,
 ``pre_process``, bind the State pairs, ``before_inference``, the engine, ``after_inference``,
 flip the State pairs, ``post_process``, capture the Static outputs. Whoever writes last
-wins, and the store itself is written only by the host and by the capture, so a stage that
+wins, and the store itself is written only by the host and by the capture, so a processor that
 overwrites a Static input's model tensor changes that chunk and nothing else. A State slot
 (section 3.4) has no host end: ``pre_process`` and ``post_process`` get
 ``ANIRA_ERROR_INVALID_STATE`` for it, while the two hooks see it fed (an input: what the
-engine will get) and produced (an output: what the next inference will be fed), and a stage
+engine will get) and produced (an output: what the next inference will be fed), and a processor
 may read or alter either.
 
-**The real-time promise.** Whether a stage body is real-time is the stage's own promise,
-``anira_stage_desc.flags``, not a property of the callback type: ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``
+**The real-time promise.** Whether a processor body is real-time is the processor's own promise,
+``anira_processor_desc.flags``, not a property of the callback type: ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST``
 says ``pre_process``, ``post_process`` and ``reset`` allocate nothing, lock nothing and block on nothing;
-``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
-``0``, the value of ``ANIRA_STAGE_DESC_INIT``, promises nothing. ``anira_handler_prepare``
+``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says the same of ``before_inference`` and ``after_inference``;
+``0``, the value of ``ANIRA_PROCESSOR_DESC_INIT``, promises nothing. ``anira_handler_prepare``
 checks the promise against the placement: under a Hard contract a filled ``pre_process``,
-``post_process`` or ``reset`` runs on the driving thread and requires ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST``,
+``post_process`` or ``reset`` runs on the driving thread and requires ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST``,
 else prepare fails with ``ANIRA_ERROR_CONFIG`` naming the flag; under an Async
 contract everything runs on an inference thread and no bit is required; a bit the header does
-not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_stage``. anira's own
+not define is ``ANIRA_ERROR_INVALID_ARGUMENT`` at ``anira_pipeline_add_processor``. anira's own
 side is real-time whatever the flags say: the ring accessors, the six context accessors and
 the two default bodies are ``ANIRA_NONBLOCKING``, so a real-time body is composed of
 nonblocking calls, and an author who wants clang's compile-time check declares the callback
-``ANIRA_NONBLOCKING`` themselves (``anira_stage_fn`` carries no attribute, since the promise
-differs per stage).
+``ANIRA_NONBLOCKING`` themselves (``anira_processor_fn`` carries no attribute, since the promise
+differs per processor).
 
 **The lifecycle: init, prepare, prepared, reset, unprepare, release.** One registration serves
 every handler created from the pipeline, initialised once, and each handler is prepared on its
-own. ``init(info, user_data)`` runs once per registration (per ``anira_pipeline_add_stage``),
+own. ``init(info, user_data)`` runs once per registration (per ``anira_pipeline_add_processor``),
 on the caller of the first ``anira_handler_prepare`` of a handler of the pipeline, before that
 handler's prepare, with an ``anira_init_info`` (``anira/abi/lifecycle.h``, the header that
-holds the two records the stage and the engine descriptors share): the log level in effect,
+holds the two records the processor and the engine descriptors share): the log level in effect,
 the size of the inference thread pool (``0`` when the context brought its own threads) and
 the context of that handler, whose capabilities are legal to query, valid until the call
 returns. It may allocate and log, never call an entry that takes the lifecycle lock; what a
-stage keeps for its whole registration lives behind ``user_data``, whether init filled it or
-the caller did before ``anira_pipeline_add_stage``. A status other than ``ANIRA_OK`` fails
-that prepare with it (``the stage refused init``) and leaves the registration uninitialised,
-so the next prepare calls init again; ``NULL`` for a stage with nothing to initialise.
+processor keeps for its whole registration lives behind ``user_data``, whether init filled it or
+the caller did before ``anira_pipeline_add_processor``. A status other than ``ANIRA_OK`` fails
+that prepare with it (``the processor refused init``) and leaves the registration uninitialised,
+so the next prepare calls init again; ``NULL`` for a processor with nothing to initialise.
 ``prepare(info, user_data, &prepared)`` runs on the caller of ``anira_handler_prepare`` after
 the plan report is built, once per prepare of each handler, with an ``anira_prepare_info``
 (the same header): the handler, the plan report, ``num_entries``, a template of the model end
 of every slot of either list (the spec's dtype and shape at the pinned window, the slot's host
 domain, all-zero strides, no memory), the canonical names and the ``flags`` of the prepare
 (``ANIRA_PREPARE_EXCLUSIVE`` when the handler's inferences run one at a time and in order, a
-model declared stateful or with a declared State pair; informational for a stage), valid for
+model declared stateful or with a declared State pair; informational for a processor), valid for
 the duration of the call. It may allocate (this is where the per-entry scratch is sized, by
 ``num_entries``), may call the ``[callback-safe]`` entries, the handler's getters and the two
 Static entries, never ``prepare``, ``destroy`` or a Hard entry, and hands a pointer back
 through ``out_prepared``: this handler's ``prepared``, which every phase call
 (``(ctx, prepared, user_data)``), the reset and the unprepare of this handler receive beside
-the registration's ``user_data``. What the stage keeps per handler lives behind ``prepared``,
+the registration's ``user_data``. What the processor keeps per handler lives behind ``prepared``,
 never behind ``user_data``, which two handlers of one pipeline share (``NULL`` is a legal
-value). A status other than ``ANIRA_OK`` fails the prepare with it (``the stage refused
+value). A status other than ``ANIRA_OK`` fails the prepare with it (``the processor refused
 prepare``), and no unprepare follows. ``reset(ctx, prepared, user_data)`` runs for the first
 chunk of a new stream, after prepare and after ``anira_handler_reset``, before that chunk's
 ``pre_process`` and on its thread (under a Hard contract the driving thread, which the
-``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` promise covers), never mid-stream, with the chunk's
+``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` promise covers), never mid-stream, with the chunk's
 context in ``ANIRA_PHASE_RESET``, where the accessors answer the role only: a resampler, an
-overlap buffer or a filter's history the stage keeps between chunks starts over there;
-``NULL`` for a stage whose state is the rings' alone. ``unprepare(prepared, user_data)`` runs
+overlap buffer or a filter's history the processor keeps between chunks starts over there;
+``NULL`` for a processor whose state is the rings' alone. ``unprepare(prepared, user_data)`` runs
 once per successful prepare, at the next ``anira_handler_prepare`` of the handler (once the
 old session is released, before the new prepare; a prepare that fails earlier undoes the
 previous one too) and at ``anira_handler_destroy``, after the last phase call.
@@ -964,17 +964,17 @@ descriptor's (:doc:`custom_engines`).
 
 **An example: an int16 stream into a float model.** The host pushes ``int16`` samples
 (``hard_ring_dtype("in", ANIRA_DTYPE_I16)``, section 1.3), the model reads ``float32``.
-Without a stage, prepare refuses the contract; with this one, ``pre_process`` pops the hop as
+Without a processor, prepare refuses the contract; with this one, ``pre_process`` pops the hop as
 ``int16`` and converts, and ``post_process``, left ``NULL``, stays the default push. The
 scratch is sized per entry in ``prepare``, per handler, and handed back as the prepared
-pointer, so it is right for a stage whose phases hand data on, under a contract that forms
+pointer, so it is right for a processor whose phases hand data on, under a contract that forms
 chunks on several threads, and for two handlers created from one pipeline:
 
 .. code-block:: c
 
     #include <stdlib.h>
     #include <anira/abi/config.h>
-    #include <anira/abi/handler.h>   /* includes anira/abi/stage.h */
+    #include <anira/abi/handler.h>   /* includes anira/abi/processor.h */
 
     #define HOP ((size_t)512)
 
@@ -994,7 +994,7 @@ chunks on several threads, and for two handlers created from one pipeline:
     }
 
     /* Real-time: every anira call below is ANIRA_NONBLOCKING, and so is this body. */
-    static anira_status ANIRA_CALL convert_pre_process(const anira_stage_ctx* ctx,
+    static anira_status ANIRA_CALL convert_pre_process(const anira_processor_ctx* ctx,
                                                        void* prepared,
                                                        void* user_data) ANIRA_NONBLOCKING {
         int16_t* scratch = ((convert_scratch*)prepared)->samples + (size_t)ctx->entry * HOP;
@@ -1004,12 +1004,12 @@ chunks on several threads, and for two handlers created from one pipeline:
         anira_ring* ring = NULL;
         anira_role role = ANIRA_ROLE_FORCE32;
         anira_status st;
-        st = anira_stage_input_role(ctx, 0, &role);          /* what slot 0 is */
-        if (st != ANIRA_OK) { return st; }                   /* latched already: the stage's bug */
+        st = anira_processor_input_role(ctx, 0, &role);          /* what slot 0 is */
+        if (st != ANIRA_OK) { return st; }                   /* latched already: the processor's bug */
         if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
-        st = anira_stage_input_ring(ctx, 0, &ring);          /* the host's int16 ring */
+        st = anira_processor_input_ring(ctx, 0, &ring);          /* the host's int16 ring */
         if (st != ANIRA_OK) { return st; }
-        st = anira_stage_input_tensor(ctx, 0, &model);       /* the float32 model end */
+        st = anira_processor_input_tensor(ctx, 0, &model);       /* the float32 model end */
         if (st != ANIRA_OK) { return st; }
         samples = anira_tensor_data_f32(&model);
         if (samples == NULL || anira_ring_dtype(ring) != ANIRA_DTYPE_I16) {
@@ -1040,37 +1040,37 @@ prepare):
 
 .. code-block:: c
 
-    anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    desc.flags = ANIRA_STAGE_FLAG_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
+    anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
+    desc.flags = ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST;   /* required: pre_process runs on the driving thread */
     desc.pre_process = convert_pre_process;        /* post_process stays NULL: the default push */
     desc.prepare = convert_prepare;                /* per handler: hands the scratch back */
     desc.unprepare = convert_unprepare;            /* once per prepare: frees it */
-    anira_pipeline_add_stage(pipe, &desc, &err);  /* once per pipeline */
+    anira_pipeline_add_processor(pipe, &desc, &err);  /* once per pipeline */
 
-**The same in C++.** :cpp:class:`anira::Stage` of ``anira/anira.hpp`` is the descriptor with
+**The same in C++.** :cpp:class:`anira::Processor` of ``anira/anira.hpp`` is the descriptor with
 virtual functions in place of the function pointers, split as the C lifecycle is: the
-registration, ``anira::Stage``, states the phases the stage fills in ``phases()`` (only those
-reach the descriptor; the others stay ``NULL``, so a stage of ``post_process`` alone leaves
+registration, ``anira::Processor``, states the phases the processor fills in ``phases()`` (only those
+reach the descriptor; the others stay ``NULL``, so a processor of ``post_process`` alone leaves
 the default ``pre_process`` running) and its promise in ``flags()``, its
 ``init(const InitInfo&)`` runs once per registration, at the first prepare of a handler of
-the pipeline (the base class does nothing; an override builds what the stage keeps for its
+the pipeline (the base class does nothing; an override builds what the processor keeps for its
 whole registration as a member of the object), and its ``prepare(const PrepareInfo&)`` (the
 record as views: ``handler()``, ``report()``, ``num_entries()``, ``inputs()`` /
 ``outputs()``, the names, ``flags()`` and ``exclusive()``) returns a
-``std::unique_ptr<Stage::Prepared>``, the prepared object of that handler, on which the four
-phase functions and ``reset`` are the virtuals, each taking a :cpp:class:`anira::StageContext`
+``std::unique_ptr<Processor::Prepared>``, the prepared object of that handler, on which the four
+phase functions and ``reset`` are the virtuals, each taking a :cpp:class:`anira::ProcessorContext`
 with the six accessors as methods and :cpp:class:`anira::RingView` as the typed ring
 (``pop_block<T>`` over a ``std::span``; the element type names the dtype, and another type
 than the ring's moves nothing). ``init`` and ``prepare`` may throw (an ``anira::Error`` fails
 the prepare with its status, ``std::bad_alloc`` with ``ANIRA_ERROR_OUT_OF_MEMORY``, anything
 else with ``ANIRA_ERROR_INTERNAL``; a null return of ``prepare`` is ``ANIRA_ERROR_INTERNAL``
 too, and a throw of ``init`` leaves the registration to the next prepare). The base class is
-the default: ``Stage::Prepared::pre_process(ctx)`` is ``anira_stage_default_pre_process``,
-``Stage::Prepared::post_process(ctx)`` the default push, ``reset`` does nothing. Why the two
+the default: ``Processor::Prepared::pre_process(ctx)`` is ``anira_processor_default_pre_process``,
+``Processor::Prepared::post_process(ctx)`` the default push, ``reset`` does nothing. Why the two
 ownership spellings: the prepared object is anira's from ``prepare`` on (it is deleted at the
 C unprepare, so a ``std::unique_ptr`` says so), while the registration is shared by the
-pipeline and every handler created from it (a ``std::shared_ptr``). The stage is handed to an
-:cpp:class:`anira::Pipeline` as :cpp:class:`anira::stage::Custom` over that ``std::shared_ptr``,
+pipeline and every handler created from it (a ``std::shared_ptr``). The processor is handed to an
+:cpp:class:`anira::Pipeline` with ``add_processor`` over that ``std::shared_ptr``,
 which the pipeline's carrier shares, so the registration lives at least as long as the last
 pipeline or handler that carries it; ``release()`` runs once, when that carrier dies, whether
 init ever ran or not.
@@ -1082,21 +1082,21 @@ init ever ran or not.
     #include <vector>
     #include <anira/anira.hpp>
 
-    class Int16ToFloat : public anira::Stage {
+    class Int16ToFloat : public anira::Processor {
     public:
         uint32_t phases() const noexcept override { return k_pre_process; }   // post_process: the default
-        uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
         std::unique_ptr<Prepared> prepare(const anira::PrepareInfo& info) override;
 
     private:
         class Converter;
     };
 
-    class Int16ToFloat::Converter : public anira::Stage::Prepared {
+    class Int16ToFloat::Converter : public anira::Processor::Prepared {
     public:
         explicit Converter(uint32_t entries) : m_scratch(static_cast<size_t>(entries) * k_hop) {}
 
-        anira_status pre_process(anira::StageContext& ctx) noexcept override {
+        anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
             anira::Role role = ANIRA_ROLE_FORCE32;                       // what slot 0 is
             if (const anira_status st = ctx.input_role(0, role); st != ANIRA_OK) { return st; }
             if (role != ANIRA_ROLE_STREAMED) { return ANIRA_ERROR_CONFIG; }
@@ -1121,7 +1121,7 @@ init ever ran or not.
         std::vector<int16_t> m_scratch;
     };
 
-    std::unique_ptr<anira::Stage::Prepared> Int16ToFloat::prepare(const anira::PrepareInfo& info) {
+    std::unique_ptr<anira::Processor::Prepared> Int16ToFloat::prepare(const anira::PrepareInfo& info) {
         return std::make_unique<Converter>(info.num_entries());   // one per handler, its own scratch
     }
 
@@ -1130,8 +1130,9 @@ section 3.2:
 
 .. code-block:: cpp
 
-    anira::Pipeline pipe{anira::stage::Inference(cfg),   // the default candidate set
-                         anira::stage::Custom(std::make_shared<Int16ToFloat>())};
+    anira::Pipeline pipe;
+    pipe.add_inference(cfg)   // the default candidate set
+        .add_processor(std::make_shared<Int16ToFloat>());
     anira_handler* h = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
     anira_handler_create(context.native(), pipe.native(), &h, &err);   // then prepare with the contract
@@ -1139,7 +1140,7 @@ section 3.2:
 3. Inference Handler
 --------------------
 
-In your application, you create an :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``. It is the C++ face of the C handler of section 3.2 and manages the inference process, the threading and the real-time constraints: it is created on a context (section 3.1) from a :cpp:class:`anira::Pipeline`, the model configuration's inference stage and at most one stage of custom pre- and post-processing (section 2), and prepared with the contract (section 4).
+In your application, you create an :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``. It is the C++ face of the C handler of section 3.2 and manages the inference process, the threading and the real-time constraints: it is created on a context (section 3.1) from a :cpp:class:`anira::Pipeline`, the model configuration's inference stage and at most one processor of custom pre- and post-processing (section 2), and prepared with the contract (section 4).
 
 .. code-block:: cpp
 
@@ -1149,14 +1150,15 @@ In your application, you create an :cpp:class:`anira::InferenceHandler` of ``ani
     anira::ModelConfig model = anira::ModelConfig::from_file("model.model.json");
     anira::ContractHandle contract = anira::ContractHandle::from_file("model.contract.json");
 
-    // The model's inference stage on the default candidate set, with an optional custom stage
-    anira::Pipeline pipeline{anira::stage::Inference(model),
-                             anira::stage::Custom(std::make_shared<MyStage>())};
+    // The model's inference stage on the default candidate set, with an optional custom processor
+    anira::Pipeline pipeline;
+    pipeline.add_inference(model);
+    pipeline.add_processor(std::make_shared<MyProcessor>());
 
     // Create an InferenceHandler instance
     anira::InferenceHandler inference_handler(context, pipeline);
 
-The constructor copies what the pipeline holds (``anira_handler_create``): the pipeline, and the :cpp:class:`anira::Stage` and :cpp:class:`anira::Engine` objects the program holds, may go right after it, since the handler keeps what it runs alive. It throws ``anira::Error`` with the status and the reason (an engine the pipeline does not carry, a rule of the model configuration). The handler is move-only; its destructor drains its in-flight inferences (section 6). A custom :cpp:class:`anira::Engine` of the pipeline is one more candidate of the inference stage (``anira::stage::Inference(model, {row}).engine(engine)``, :doc:`custom_engines`).
+The constructor copies what the pipeline holds (``anira_handler_create``): the pipeline, and the :cpp:class:`anira::Processor` and :cpp:class:`anira::Engine` objects the program holds, may go right after it, since the handler keeps what it runs alive. It throws ``anira::Error`` with the status and the reason (an engine the pipeline does not carry, a rule of the model configuration). The handler is move-only; its destructor drains its in-flight inferences (section 6). A custom :cpp:class:`anira::Engine` belongs to the pipeline (``pipeline.add_engine(engine)``): one more implementation the inference stage's model entries name by its id (:doc:`custom_engines`).
 
 3.1. (Optional) Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -1254,13 +1256,14 @@ engine being skipped; a candidate's provider is checked for its syntax here and 
 availability at ``anira_handler_create``, against the context's capabilities for a built-in
 engine and against the descriptor's list for a custom one) / ``anira_pipeline_destroy``,
 copied by the handler that takes it and
-destroyable right after. A pipeline holds exactly one inference stage and at most one pre-
-and post-processing stage (section 2): ``anira_pipeline_add_stage`` copies an
-``anira_stage_desc`` of ``anira/abi/stage.h`` (up to four phase callbacks, a reset, a prepare,
-an unprepare, an init and a release function, one ``user_data`` slot and the stage's real-time
+destroyable right after. A pipeline holds exactly one inference stage and at most one
+processor, the custom pre- and post-processing (section 2): ``anira_pipeline_add_processor`` copies an
+``anira_processor_desc`` of ``anira/abi/processor.h`` (up to four phase callbacks, a reset, a prepare,
+an unprepare, an init and a release function, one ``user_data`` slot and the processor's real-time
 flags) into a carrier the pipeline and its handlers share, and a second call is
-``ANIRA_ERROR_INVALID_STATE``. A **custom engine** is part of the inference stage and never a
-stage of its own: it is one more implementation a candidate's ``engine_id`` resolves to, and
+``ANIRA_ERROR_INVALID_STATE``. A **custom engine** is the pipeline's, never a stage or a
+processor of its own: the inference stage's model entries name it by its id, it is one more
+implementation a candidate's ``engine_id`` resolves to, and
 its call runs in ``ANIRA_PHASE_INFERENCE`` (the phase of ``anira_phase`` between
 ``ANIRA_PHASE_BEFORE_INFERENCE`` and ``ANIRA_PHASE_AFTER_INFERENCE``) exactly as a built-in
 engine's does. It is an object: ``anira_custom_engine_create(engine_id, &desc, &engine, &err)``
@@ -1272,7 +1275,7 @@ be added to several pipelines, the engines of one pipeline have distinct ids, an
 ``anira_custom_engine_destroy`` may run right after the last addition, or the handle is
 detached (``anira_custom_engine_detach``) to add the engine to later pipelines for as long as
 something holds it. The lifecycle is the
-stage's with one level more, the model's, and the same words; the descriptor's slots, from
+processor's with one level more, the model's, and the same words; the descriptor's slots, from
 the innermost level out: ``process``, the engine call, the one required slot, on an inference
 thread over an ``anira_engine_ctx`` (the shared slot of the loaded model the call runs on,
 the chunk's ``entry``, one ``anira_tensor`` per slot of either side, State tensors included,
@@ -1280,7 +1283,7 @@ over the memory the engine reads and writes, the per-call ``flags`` and the ``lo
 pointer); ``reset``, the first inference of a new stream of an exclusive handler, right
 before its ``process``, on that handler's prepared pointer; ``prepare``, once per handler and
 loaded model the handler runs on, at ``anira_handler_prepare`` on its caller's thread, over
-the ``anira_prepare_info`` the stage's prepare receives (section 2) and the loaded pointer,
+the ``anira_prepare_info`` the processor's prepare receives (section 2) and the loaded pointer,
 handing back the ``prepared`` pointer every ``process``, ``reset`` and ``unprepare`` of that
 handler receives beside ``user_data`` (what an exclusive handler keeps per stream, its own
 executor included, is built here, since its calls claim no shared slot; a handler whose model
@@ -1338,17 +1341,17 @@ may then be destroyed by its creator; the handler keeps what it needs) and copie
 driver thread and never overlapped by another handler entry: it validates the configuration
 against the Hard contract (the rules of section 1.1 and the contract's own: geometry, an
 explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes
-and the host domains by canonical name, the stage's real-time promise against its placement),
+and the host domains by canonical name, the processor's real-time promise against its placement),
 loads the model of every candidate that has an entry (once per loaded model anira pools: a
 second handler on an equal model configuration resolved to equal tensors shares it, the pool
 rule above), sizes the rings for the block range and the latency, selects the plan of the
 variant's default engine (else plan 0), builds the plan report, prepares every registered
-engine's plan for this handler on its loaded model and, last, calls the stage's init (at the
+engine's plan for this handler on its loaded model and, last, calls the processor's init (at the
 first prepare of a handler of the pipeline) and its prepare function when the pipeline has a
-stage with one (a status other than ``ANIRA_OK`` from any of them fails the prepare with it);
+processor with one (a status other than ``ANIRA_OK`` from any of them fails the prepare with it);
 a second prepare replaces the session whole, a failed one leaves the handler unprepared.
 ``anira_handler_num_entries(h)`` then says how many chunks may be in flight at once, the size
-of a stage's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last
+of a processor's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last
 handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
 the core, so ``anira_shutdown`` is refused while one lives. What this pre-release refuses at
 prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, ``ANIRA_BUDGET_MEASURED`` and
@@ -1436,11 +1439,11 @@ chunk on: a chunk is stamped with the selection when it is submitted and keeps i
 pre-processing to its post-processing, so a chunk that is queued or in flight when the call
 lands finishes on the old plan, and exactly one engine runs for every chunk. An index out of
 range is a no-op recorded
-as ``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline``,
-``anira::stage::Inference`` and ``anira::PlanReport`` of ``anira/anira.hpp`` are the same
-objects (``anira::Pipeline pipe{anira::stage::Inference(cfg)};`` for the default candidate
-set, or ``anira::stage::Inference(cfg, {row})`` with ``anira::BackendId`` rows, the
-``anira_backend_id`` record with its ``struct_size``;
+as ``ANIRA_ERROR_CONFIG`` in ``anira_handler_rt_error``. In C++, ``anira::Pipeline`` and
+``anira::PlanReport`` of ``anira/anira.hpp`` are the same objects, the pipeline with one member
+per C entry (``pipe.add_inference(cfg)`` for the default candidate set, or
+``pipe.add_inference(cfg, {row})`` with ``anira::BackendId`` rows, the ``anira_backend_id``
+record with its ``struct_size``; ``pipe.add_processor(processor)``, ``pipe.add_engine(engine)``;
 ``anira::PlanReport(anira_handler_plan_report(h)).plans()``), and
 :cpp:class:`anira::InferenceHandler` is the handler (sections 4 and 5).
 
@@ -1504,15 +1507,15 @@ the lengths of the model config's two lists. A *slot* is one number everywhere: 
 position in the model config's input list or output list, which is what ``slot``,
 ``in_slot`` and ``out_slot``, the ``_multi`` arrays and their ``delivered`` counts,
 the latency vector (``0`` for an output that is not Streamed), the plan report's rows and
-the context accessors of a stage (``anira_stage_input_role`` and its siblings) all index by.
+the context accessors of a processor (``anira_processor_input_role`` and its siblings) all index by.
 The two lists are unrelated, so the single
 ``process`` forms name one slot per side: a model with ``data`` at input 1 and
 ``processed_data`` at output 0 calls ``anira_handler_process(h, &in, 1, &out, 0, &delivered)``.
 A host that does not want to hard-code a slot resolves it by the tensor's canonical name at
 setup, and asks what a slot is through the plan report: ``anira_plan_slot.role`` is the
-``anira_role`` of the slot's spec, which decides the entries that take the slot (a stage reads
+``anira_role`` of the slot's spec, which decides the entries that take the slot (a processor reads
 it in its ``prepare``, which receives the report, and per call from
-``anira_stage_input_role`` / ``anira_stage_output_role``).
+``anira_processor_input_role`` / ``anira_processor_output_role``).
 ``release``, ``manager_ctx`` and ``acquire`` are not read; the memory is borrowed until the
 call returns. Every tensor of a call is validated before anything is pushed, so a refusal
 writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a rank other than
@@ -1569,16 +1572,16 @@ as given). The handler keeps the value in a store of its own, sized and zeroed a
 
 - ``anira_handler_set_static_input(h, slot, &tensor)`` stores an input. Every inference
   submitted afterwards sees it whole (it is copied under a latch and materialised into the
-  model's input tensor when the chunk is formed, ahead of the stage's ``pre_process``, where
-  ``anira_stage_input_tensor`` reads it; section 2 has the write order of one chunk), so a
+  model's input tensor when the chunk is formed, ahead of the processor's ``pre_process``, where
+  ``anira_processor_input_tensor`` reads it; section 2 has the write order of one chunk), so a
   value set between two calls never tears.
 - ``anira_handler_get_static_output(h, slot, &out)`` reads the value the latest collected
   inference produced; all zeros before the first. A chunk that completed as zeros (dropped, or
-  failed in a stage or in the engine) captures nothing: the store holds what the model
+  failed in a processor or in the engine) captures nothing: the store holds what the model
   produced last.
 
 Both are ``[driver-thread]`` and ``ANIRA_NONBLOCKING``, legal from create on (a value set before
-prepare survives it) and from a stage's ``prepare``. "Fits" is a check, never a clamp: another
+prepare survives it) and from a processor's ``prepare``. "Fits" is a check, never a clamp: another
 rank or extent is ``ANIRA_ERROR_INVALID_ARGUMENT`` (there is no partial Static tensor and no
 count), another dtype ``ANIRA_ERROR_CONFIG``, ``ANIRA_TENSOR_PLANAR`` or an unknown flag
 ``ANIRA_ERROR_NOT_SUPPORTED``; a slot out of range or a Streamed or a State slot, NULL or
@@ -1681,7 +1684,7 @@ the caller's record: it zeroes all 216 bytes and then writes the domain, the dty
 the first ``ndim`` extents, its arm of the handle and the fence, so strides, byte offset,
 flags, ``manager_ctx`` and ``release`` are zero (a borrowed, packed tensor) until the producer
 sets them. They are ``[thread-safe]`` ``[callback-safe]`` and ``ANIRA_NONBLOCKING``: field
-fills, legal from a render thread and from inside a stage callback, and they consume nothing.
+fills, legal from a render thread and from inside a processor callback, and they consume nothing.
 They return nothing either: a dtype of ``0``, a rank above ``ANIRA_MAX_RANK``, a ``NULL`` shape
 with a rank above ``0`` or a negative extent (a run-time extent is a count, never
 ``ANIRA_DYNAMIC``) leave the record all-zero, which reads as dtype ``0`` and makes both data
@@ -1738,7 +1741,7 @@ refused, the caller keeps it.
 
 **The accessors.** ``anira_tensor_data_f32(&t)`` returns the first element, ``handle.host.ptr``
 plus ``byte_offset``, for a host or pinned tensor whose dtype is ``ANIRA_DTYPE_F32``, and
-``NULL`` for every other domain, every other dtype and a ``NULL`` base pointer: a stage that is
+``NULL`` for every other domain, every other dtype and a ``NULL`` base pointer: a processor that is
 handed a device tensor or a ``uint8`` tensor learns so from the ``NULL``, not from a crash.
 ``anira_tensor_data(&t, dtype)`` is the same read for any element type and returns ``NULL``
 unless ``dtype`` is the tensor's own; nothing converts. Neither looks at the strides: they are
@@ -1769,7 +1772,7 @@ dtype; ``anira_tensor_data`` and ``anira_tensor_data_f32`` return ``NULL`` for a
 Planar is a boundary representation of the two host domains: an entry accepts a planar tensor
 only where its own documentation says so, which is where it copies a host block; every other
 consumer, and every other domain, refuses the flag with ``ANIRA_ERROR_NOT_SUPPORTED``, and
-anira never hands a planar tensor to a stage, an engine or JavaScript. One block with strides
+anira never hands a planar tensor to a processor, an engine or JavaScript. One block with strides
 covers the other two host layouts: contiguous is all-zero strides (or ``{N, 1}``), interleaved
 is strides ``{1, C}`` assigned on the record after ``anira_tensor_init_host``.
 
@@ -1863,7 +1866,7 @@ unmeasured: call ``anira_tensor_init_metal(&tensor, ...)`` on a ``Tensor``.
 
 A model whose state is explicit, an output tensor that is the next inference's input (an
 exported GRU or LSTM hidden state, a streaming-convolution cache), declares the pair in its
-model config and anira runs the feedback itself: no stage is needed for it. Both halves carry
+model config and anira runs the feedback itself: no processor is needed for it. Both halves carry
 the role ``ANIRA_ROLE_STATE`` (``"role": "state"``), and the pairing is stated once, on the
 input, which names the output it is fed from: ``"state_source"`` in the model file,
 ``spec.state_source("state_out")`` on the builder, ``anira_tensor_spec_set_state_source(spec,
@@ -1899,10 +1902,10 @@ engine:
 State input, each in the spec's shape and dtype and starting on a 64-byte boundary, both
 zeroed at ``anira_handler_create`` and at every ``anira_handler_prepare``. anira copies
 nothing: on the inference thread, as the first step of every inference and ahead of the
-stage's ``before_inference``, the model's State input is bound to one buffer (the read side,
+processor's ``before_inference``, the model's State input is bound to one buffer (the read side,
 the state the last inference produced) and the model's State output of the pair to the other
 (the write side); the engine reads and writes the two through its tensors like any other
-slot; and as the last step, behind the stage's ``after_inference``, the pair flips, so what
+slot; and as the last step, behind the processor's ``after_inference``, the pair flips, so what
 this inference wrote is what the next one reads. Both steps are field fills, without an
 allocation or a lock, and ``ANIRA_PHASE_INFERENCE`` stays the engine call alone. Under a plan
 whose engine keeps its own aliasing (``ANIRA_ENGINE_FLAG_STATE_ALIAS``, :doc:`custom_engines`)
@@ -1982,11 +1985,11 @@ State output. The accumulator's stream therefore runs as ``anira_handler_process
 state is not host-readable in this pre-release (a tensor is either state or an ordinary
 output), and its initial value is zeros.
 
-**What a stage sees** (section 2): the two hooks see the state at its slot,
-``anira_stage_input_tensor`` in ``before_inference`` being the read side (what the engine will
-get) and ``anira_stage_output_tensor`` in ``after_inference`` the write side (what the next
+**What a processor sees** (section 2): the two hooks see the state at its slot,
+``anira_processor_input_tensor`` in ``before_inference`` being the read side (what the engine will
+get) and ``anira_processor_output_tensor`` in ``after_inference`` the write side (what the next
 inference will read), the two descriptors naming the pair's two buffers in turn from one
-inference to the next, and a stage may read or alter either; in ``pre_process`` and
+inference to the next, and a processor may read or alter either; in ``pre_process`` and
 ``post_process`` a State slot answers ``ANIRA_ERROR_INVALID_STATE``.
 
 **Validation**, at ``anira_handler_create`` and again at ``anira_handler_prepare``,
@@ -2316,13 +2319,13 @@ A single form never names a Static slot: ``set_static_input`` and the pop above 
 The call is wait-free and real-time safe for all handler configurations, including stateful (``ANIRA_MODEL_STATEFUL``) ones — it never sleeps, locks, allocates, or performs a syscall, and carries ``ANIRA_NONBLOCKING`` (clang's ``nonblocking`` attribute wherever clang has it, which RealtimeSanitizer builds enforce). It is ``anira_handler_reset``, which also clears :cpp:func:`anira::InferenceHandler::rt_error` and re-arms its latches (:doc:`logging`). Call it from the thread that drives :cpp:func:`anira::InferenceHandler::process` (or :cpp:func:`anira::InferenceHandler::push_data` / :cpp:func:`anira::InferenceHandler::pop_data`), or ensure no such call is concurrent — and never concurrently with :cpp:func:`anira::InferenceHandler::prepare` or destruction.
 
 ..  note::
-    :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom engine or a stage's ``before_inference`` / ``after_inference`` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own engine.
+    :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom engine or a processor's ``before_inference`` / ``after_inference`` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own engine.
 
 ..  note::
     Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
 
 ..  note::
-    What a reset re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_engines`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the stage's own state** (a resampler, an overlap buffer, a filter's history), through the stage's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp.
+    What a reset re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_engines`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the processor's own state** (a resampler, an overlap buffer, a filter's history), through the processor's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp.
 
 .. _usage-teardown:
 

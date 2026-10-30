@@ -57,7 +57,7 @@
 #                         and thread-local block, inside anira_inference_thread_run_loop
 #                         (the park on the wake word, the notify, the has_exited stop)
 
-set(_abi_headers export status version enums log tensor config context core thread lifecycle stage engine handler draft/tensor_platform)
+set(_abi_headers export status version enums log tensor config context core thread lifecycle processor engine handler draft/tensor_platform)
 # The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
 # other target, so the per-file wrappers include them everywhere.
 set(_abi_platform_headers anira_em)
@@ -396,7 +396,7 @@ if(NOT _abi_strict_flags MATCHES "/W4")
         target_compile_options(anira_header_cxx20 PRIVATE -Wshadow-field)
     endif()
 endif()
-# What a phase callback of an anira::Stage reaches (RingView, StageContext, the Tensor reads)
+# What a phase callback of an anira::Processor reaches (RingView, ProcessorContext, the Tensor reads)
 # must be nonblocking: header_cxx20.cpp calls all of it from an ANIRA_NONBLOCKING function, and
 # clang's function-effects analysis turns a method that allocates, locks or calls a function
 # that is not nonblocking into a compiler error. The compilers that have the analysis are those

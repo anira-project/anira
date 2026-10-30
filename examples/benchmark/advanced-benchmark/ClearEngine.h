@@ -2,8 +2,8 @@
 #define ANIRA_EXAMPLES_CLEARENGINE_H
 
 // The advanced benchmark's baseline engine: it runs no model and writes zeros into every output,
-// so a benchmark of it measures what anira's own path costs (the rings, the stage, the queue, the
-// inference thread) without an inference. A model config serves it with an entry without a
+// so a benchmark of it measures what anira's own path costs (the rings, the processor, the queue,
+// the inference thread) without an inference. A model config serves it with an entry without a
 // source (anira::ModelConfig::add_model(k_clear_engine_id)), which ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL
 // allows; process allocates nothing.
 

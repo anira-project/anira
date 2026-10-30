@@ -41,7 +41,7 @@ const release = (module, filler) => filler.blocks.forEach((ptr) => module._free(
 
 // A handler on the model; everything it needs is made before the heap is filled.
 const handlerOn = (anira, context, model, contract) => {
-  const pipeline = Pipeline.create(anira).inference(model)
+  const pipeline = Pipeline.create(anira).addInference(model)
   try {
     const handler = InferenceHandler.create(context, pipeline)
     handler.prepare(contract)

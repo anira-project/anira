@@ -6,7 +6,7 @@
  * of every tensor spec (DerivedSpec), the plan table (PlanKey, matching_plans: a model entry
  * on a provider per plan, and the default-set rule), and the per-slot facts it resolves from
  * the contract and the model (ring dtypes, host domains, declared state pairs). What the
- * pipeline's stage and engines mean to it arrives as StageFacts and EngineFacts. It is what
+ * pipeline's processor and engines mean to it arrives as ProcessorFacts and EngineFacts. It is what
  * anira_handler_create and anira_handler_prepare run before anything is loaded; the 2.x
  * configuration objects the scheduler still takes are made from its results by the bridge
  * (v3_to_v2.h). Private to src/capi (the tests reach it through the src/ include directory).
@@ -80,15 +80,15 @@ struct Derived {
     size_t m_anchor_index = 0;
 };
 
-/// What a pipeline's stage means to the validator (stage_facts() of stage.h builds it from the
-/// carrier; no stage is the default everywhere).
-struct StageFacts {
-    /// The stage fills pre_process: it pops the input rings itself, so the ring dtype of an
-    /// input may differ from its spec's dtype (the stage takes the difference on itself).
+/// What a pipeline's processor means to the validator (processor_facts() of processor.h builds it
+/// from the carrier; no processor is the default everywhere).
+struct ProcessorFacts {
+    /// The processor fills pre_process: it pops the input rings itself, so the ring dtype of an
+    /// input may differ from its spec's dtype (the processor takes the difference on itself).
     bool m_fills_pre = false;
-    /// The stage fills post_process: the same for the ring dtype of an output.
+    /// The processor fills post_process: the same for the ring dtype of an output.
     bool m_fills_post = false;
-    /// The stage as a consumer when it declares consumed kinds, named after it (m_name points
+    /// The processor as a consumer when it declares consumed kinds, named after it (m_name points
     /// into the carrier, which outlives the facts); it joins the consumed-or-fail walk behind
     /// anira's own adapters. Empty otherwise.
     std::vector<ExtConsumer> m_consumers;
@@ -104,7 +104,7 @@ struct EngineFacts {
     std::vector<std::string> m_ids;
     /// One consumer per registered engine that declares consumed kinds, keyed by its id
     /// (m_engine_id; m_name is the id too, pointing into the carrier, which outlives the
-    /// facts): it joins the consumed-or-fail walk beside the stage's consumer, reading its
+    /// facts): it joins the consumed-or-fail walk beside the processor's consumer, reading its
     /// "model:" kinds from its own entries and its other kinds from any host, while it is a
     /// candidate. Empty otherwise.
     std::vector<ExtConsumer> m_consumers;
@@ -117,10 +117,10 @@ struct EngineFacts {
     std::vector<uint32_t> m_flags;
 };
 
-/// The consumers a pipeline declares, in one vector: the stage's, then one per registered
+/// The consumers a pipeline declares, in one vector: the processor's, then one per registered
 /// engine that declares kinds (either may be NULL). What the extension walk of validate and
 /// the plan report's consumer column read.
-ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages,
+ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
                                                       const EngineFacts* engines);
 
 /// Whether a candidate names an engine: a built-in engine by its value, a custom engine by its
@@ -192,9 +192,9 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// plan once per candidate whose provider it accepts (matching_plans; under the default set,
 /// default_set, one plan per row on its pin or on the CPU path). Throws StatusError with
 /// ANIRA_ERROR_CONFIG for a rule the configuration breaks (no surviving row among them)
-/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `stages` is what the
-/// pipeline's stage adds (NULL: no stage, the bridge's case): the ring dtype rule
-/// relaxes for a side whose phase the stage fills, and the stage's consumed kinds join the
+/// and ANIRA_ERROR_NOT_SUPPORTED for what the 2.x runtime cannot do. `processors` is what the
+/// pipeline's processor adds (NULL: no processor, the bridge's case): the ring dtype rule
+/// relaxes for a side whose phase the processor fills, and the processor's consumed kinds join the
 /// extension walk. `engines` are the pipeline's registered engines (NULL: none, the bridge's
 /// case): a custom row naming one of their ids is a plan, and their consumed kinds join the
 /// walk; a custom row naming no registered id is ANIRA_ERROR_NOT_SUPPORTED, anira.v2.custom
@@ -205,7 +205,7 @@ ANIRA_API void validate(const anira_model_config& model,
                         const anira_backend_id* candidates,
                         uint32_t num_candidates,
                         Derived& out,
-                        const StageFacts* stages = nullptr,
+                        const ProcessorFacts* processors = nullptr,
                         const EngineFacts* engines = nullptr,
                         bool default_set = false);
 
@@ -213,7 +213,7 @@ ANIRA_API void validate(const anira_model_config& model,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
 /// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
-/// a stage fills the phase that moves that ring.
+/// a processor fills the phase that moves that ring.
 ANIRA_API anira::RingDtypes ring_dtypes_of(const anira_contract& contract,
                                            const anira_model_config& model);
 

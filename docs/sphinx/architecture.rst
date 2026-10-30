@@ -17,9 +17,9 @@ anira is designed with real-time audio applications in mind, focusing on determi
                       |
                       v
      +----------------+------------------+
-     |  Pipeline: inference stage + Stage |
-     | (ModelConfig, candidates, custom  |
-     |    pre- and post-processing)      |
+     |     Pipeline: inference stage     |
+     |  (ModelConfig, candidates) and a  |
+     |  Processor (custom pre-/post-)    |
      +----------------+------------------+
                       |
                       v
@@ -34,7 +34,7 @@ anira is designed with real-time audio applications in mind, focusing on determi
      | (LibTorch, ONNX, TensorFlow Lite) |       | (External libraries) |
      +-----------------------------------+       +----------------------+
 
-Every box is reachable from C11 through ``anira/abi/`` (``anira_handler``, ``anira_context``, ``anira_pipeline``, ``anira_stage_desc``, ``anira_engine_desc``); ``anira/anira.hpp`` is the header-only C++20 face over those entries, and the Hard contract (``anira::ContractHandle``) tells the handler how the stream runs.
+Every box is reachable from C11 through ``anira/abi/`` (``anira_handler``, ``anira_context``, ``anira_pipeline``, ``anira_processor_desc``, ``anira_engine_desc``); ``anira/anira.hpp`` is the header-only C++20 face over those entries, and the Hard contract (``anira::ContractHandle``) tells the handler how the stream runs.
 
 Key Design Principles
 ---------------------
@@ -85,11 +85,11 @@ The view of the process-wide core every handler runs on (``anira_context`` of ``
 :cpp:class:`anira::Pipeline`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-What a handler runs: the inference stage, the model configuration (:cpp:class:`anira::ModelConfig`: the model entries, the tensor specs, the state) with its candidate backends and custom engines, and at most one custom stage (:cpp:class:`anira::Stage`).
+What a handler runs: the inference stage, the model configuration (:cpp:class:`anira::ModelConfig`: the model entries, the tensor specs, the state) with its candidate backends and custom engines, and at most one custom processor (:cpp:class:`anira::Processor`).
 
 * Model entries and the engine or provider each runs on
 * Input and output tensor specs: roles, axes, windows, latencies
-* The stage's phases convert host blocks to model tensors and back where anira's default fill does not fit (:doc:`custom_preprocessing`)
+* The processor's phases convert host blocks to model tensors and back where anira's default fill does not fit (:doc:`custom_preprocessing`)
 
 :cpp:class:`anira::InferenceManager`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -115,10 +115,10 @@ Data Flow
 ---------
 
 1. **Audio Input:** The host application provides audio data to the InferenceHandler as host tensors
-2. **Pre-processing:** The stage (or anira's default fill) moves the host blocks into model tensors
+2. **Pre-processing:** The processor (or anira's default fill) moves the host blocks into model tensors
 3. **Scheduling:** The InferenceManager schedules the inference task
 4. **Inference:** The engine's adapter runs the model
-5. **Post-processing:** The stage (or anira's default) moves the results back into the output rings
+5. **Post-processing:** The processor (or anira's default) moves the results back into the output rings
 6. **Audio Output:** The processed audio is returned to the host application
 
 Threading Model

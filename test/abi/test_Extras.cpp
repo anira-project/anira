@@ -1,9 +1,9 @@
 // The 3.x extras on the C handler, through anira::Pipeline: extras/models/hybrid-nn/
-// HybridNNStage.h (the windows of the HybridNN model), extras/models/BypassEngine.h (the bypass
+// HybridNNProcessor.h (the windows of the HybridNN model), extras/models/BypassEngine.h (the bypass
 // of the bundled audio models) and examples/benchmark/advanced-benchmark/ClearEngine.h (the
 // benchmark baseline). The oracle is the stream itself: the bypass engine hands each window's
 // newest sample to the output, so the output is the input delayed by the handler's latency; a
-// test engine that hands out each window's oldest sample instead sees the history the stage put
+// test engine that hands out each window's oldest sample instead sees the history the processor put
 // ahead of it, 149 samples further back. Every block waits for its own inference, so no block is
 // missed and the comparison is exact.
 
@@ -24,7 +24,7 @@
 
 #include "../../examples/benchmark/advanced-benchmark/ClearEngine.h"
 #include "../../extras/models/BypassEngine.h"
-#include "../../extras/models/hybrid-nn/HybridNNStage.h"
+#include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../../extras/models/model_files.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -73,20 +73,21 @@ private:
 };
 
 /// A C handler over an anira::Pipeline: the inference stage on one engine, by id, and the
-/// stage when one is given.
+/// processor when one is given.
 struct PipelineHandler {
     PipelineHandler(const anira_test::Context& context,
                     const anira::ModelConfig& model,
                     const std::shared_ptr<anira::Engine>& engine,
-                    const std::shared_ptr<anira::Stage>& stage)
-        : m_engine(engine), m_stage(stage) {
+                    const std::shared_ptr<anira::Processor>& processor)
+        : m_engine(engine), m_processor(processor) {
         const anira::BackendId candidate{.struct_size = sizeof(anira_backend_id),
                                          .engine = ANIRA_ENGINE_CUSTOM,
                                          .provider = ANIRA_PROVIDER_CPU,
                                          .engine_id = engine->id().c_str()};
         anira::Pipeline pipeline;
-        pipeline.add(anira::stage::Inference(model, {candidate}).engine(engine));
-        if (stage) { pipeline.add(anira::stage::Custom(stage)); }
+        pipeline.add_engine(engine);
+        pipeline.add_inference(model, {candidate});
+        if (processor) { pipeline.add_processor(processor); }
         EXPECT_EQ(anira_handler_create(context.m_context, pipeline.native(), &m_handler, &m_err),
                   ANIRA_OK)
             << m_err.message;
@@ -97,7 +98,7 @@ struct PipelineHandler {
 
     // The registrations outlive the handler (they are the test's objects).
     std::shared_ptr<anira::Engine> m_engine;
-    std::shared_ptr<anira::Stage> m_stage;
+    std::shared_ptr<anira::Processor> m_processor;
     anira_handler* m_handler = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
 };
@@ -141,15 +142,15 @@ std::vector<float> delayed_input(size_t hop, size_t delay) {
 
 }  // namespace
 
-// The stage's windows end in the hop's new samples, in order: the bypass of each window's newest
-// sample delivers the input stream, delayed by the latency the handler reports.
-TEST(Extras, TheHybridNnStageAndTheBypassEngineDelayTheInput) {
+// The processor's windows end in the hop's new samples, in order: the bypass of each window's
+// newest sample delivers the input stream, delayed by the latency the handler reports.
+TEST(Extras, TheHybridNnProcessorAndTheBypassEngineDelayTheInput) {
     const anira_test::Context context;
     const anira::ModelConfig model = hybridnn_with(k_bypass_engine_id);
     const PipelineHandler handler(context,
                                   model,
                                   std::make_shared<BypassEngine>(),
-                                  std::make_shared<HybridNNStage>());
+                                  std::make_shared<HybridNNProcessor>());
     ASSERT_NE(handler.m_handler, nullptr);
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_handler_prepare(
@@ -167,13 +168,13 @@ TEST(Extras, TheHybridNnStageAndTheBypassEngineDelayTheInput) {
 // The history ahead of each window: its oldest sample is 149 samples before its newest, the
 // ring's history across the inferences included, so the oldest-sample engine delivers the input
 // delayed by the latency and the window's history.
-TEST(Extras, TheHybridNnStagePutsTheHistoryAheadOfEachWindow) {
+TEST(Extras, TheHybridNnProcessorPutsTheHistoryAheadOfEachWindow) {
     const anira_test::Context context;
     const anira::ModelConfig model = hybridnn_with(k_oldest_engine_id);
     const PipelineHandler handler(context,
                                   model,
                                   std::make_shared<OldestEngine>(),
-                                  std::make_shared<HybridNNStage>());
+                                  std::make_shared<HybridNNProcessor>());
     ASSERT_NE(handler.m_handler, nullptr);
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_handler_prepare(
@@ -190,9 +191,10 @@ TEST(Extras, TheHybridNnStagePutsTheHistoryAheadOfEachWindow) {
                                   0);
 }
 
-// The CNN needs no stage: anira's default fill is the receptive-field window the 2.x
-// CNNPrePostProcessor built (test_Stage's NoStageEqualsTheV2Default, TheCnnProcessorIsTheDefault).
-// The bypass of its 2048 newest samples delivers the input delayed by the latency.
+// The CNN needs no processor: anira's default fill is the receptive-field window the 2.x
+// CNNPrePostProcessor built (test_Processor's NoProcessorEqualsTheV2Default,
+// TheCnnProcessorIsTheDefault). The bypass of its 2048 newest samples delivers the input delayed by
+// the latency.
 TEST(Extras, TheBypassEngineDelaysTheCnnInput) {
     constexpr size_t k_cnn_hop = 2048;
     const anira_test::Context context;
@@ -220,7 +222,7 @@ TEST(Extras, TheClearEngineZeroesTheOutput) {
     const PipelineHandler handler(context,
                                   model,
                                   std::make_shared<ClearEngine>(),
-                                  std::make_shared<HybridNNStage>());
+                                  std::make_shared<HybridNNProcessor>());
     ASSERT_NE(handler.m_handler, nullptr);
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_handler_prepare(
