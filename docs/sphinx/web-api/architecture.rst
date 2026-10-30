@@ -150,7 +150,8 @@ rebuilds its own:
 
 ``heap`` needs the realm's memory: the main thread's ``Module.wasmMemory`` is the memory
 :js:meth:`Anira.create` passed, and anira's boot of an inference Worker and of the worklet sets
-the realm's (the glue keeps it to itself there). Pointers handed across realms are offsets, valid
+the realm's (their ``Module`` starts without it; ``wasmMemory`` is a runtime export of the
+module, so a Debug build's assertions leave the property writable there). Pointers handed across realms are offsets, valid
 in every realm; a view kept across calls (an engine's ``model.bytes``, a ``Float32Array`` a stage
 built in its ``prepare``) stays valid for the memory it covers, and one made over memory that
 existed then needs no rebuild.
