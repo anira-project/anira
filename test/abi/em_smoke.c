@@ -1,13 +1,11 @@
 /*
- * The node smoke test of anira/anira_em.h (WebAssembly only): one module instance, no Worker.
- * em_smoke.pre.js installs Module.anira before main runs; this file checks the hook version,
- * gives the instance a stack and thread-local block of its own (anira_em_init_instance), runs a
- * JavaScript stage (pre_process, post_process, reset, init, prepare, unprepare, release) and a
- * JavaScript engine (process, query) on one Hard handler, driving the inference queue itself
- * with anira_inference_thread_execute, catches a throwing hook in the trampoline, and receives
- * a log record through the JavaScript log hook. It also holds the thread-local budget of the
- * link: the block anira_em_alloc_thread_stack carves stays within 1024 bytes. Exit code 0 on
- * success; every failed check prints one line.
+ * The node smoke test of anira/anira_em.h (WebAssembly only): one thread, no Worker.
+ * em_smoke.pre.js installs the scope's registry before main runs; this file runs a JavaScript
+ * stage (pre_process, post_process, reset, init, prepare, unprepare, release) and a JavaScript
+ * engine (process, query) on one Hard handler, driving the inference queue itself with
+ * anira_inference_thread_execute, catches a throwing hook in the trampoline, and receives a log
+ * record through the JavaScript log hook. Exit code 0 on success; every failed check prints one
+ * line.
  */
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -29,7 +27,6 @@
 
 #define SMOKE_BLOCK 128u
 #define SMOKE_BLOCKS 16u
-#define SMOKE_TLS_BUDGET 1024u
 #define SMOKE_STAGE_KEY 3u
 #define SMOKE_THROWING_KEY 99u
 #define SMOKE_ENGINE_KEY 7u
@@ -52,22 +49,11 @@ EM_JS(void,
               recordMessage: record_message
           };
       })
-EM_JS(uint32_t, smoke_hook_version, (void), { return Module.anira.version >>> 0; })
 EM_JS(uint32_t, smoke_count, (const char* name), {
     return Module.smoke.counts[UTF8ToString(name)] >>> 0;
 })
 
 static int s_failures = 0;
-static _Thread_local int t_marker = 0;
-
-/* Out of line: within one function the compiler may keep a thread_local's address, which is
-   invariant on a thread but moves here, at anira_em_init_instance. */
-__attribute__((noinline)) static void set_marker(int value) {
-    *(volatile int*)&t_marker = value;
-}
-__attribute__((noinline)) static int get_marker(void) {
-    return *(volatile int*)&t_marker;
-}
 
 static void check(int ok, const char* what) {
     if (!ok) {
@@ -81,30 +67,6 @@ static void check_status(anira_status status, const anira_error* err, const char
         printf("FAILED: %s: %s (%s)\n", what, anira_status_string(status), err ? err->message : "");
         ++s_failures;
     }
-}
-
-/* The instance gets the stack region's thread-local block; its thread_local variables start
-   over from their initial values there. */
-static void check_instance_tls(void) {
-    const size_t tls_size = __builtin_wasm_tls_size();
-    printf("thread-local block of the link: %zu bytes (align %zu)\n",
-           tls_size,
-           (size_t)__builtin_wasm_tls_align());
-    check(tls_size <= SMOKE_TLS_BUDGET, "the thread-local block stays within its 1024-byte budget");
-    set_marker(42);
-    void* stack = anira_em_alloc_thread_stack(0);
-    check(stack != NULL, "anira_em_alloc_thread_stack(0) allocates");
-    if (stack == NULL) { return; }
-    check(((uintptr_t)stack % 16u) == 0, "the stack region is 16-byte aligned");
-    check(anira_em_init_instance(NULL, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
-          "anira_em_init_instance refuses a NULL base");
-    check(anira_em_init_instance(stack, 0) == ANIRA_OK, "anira_em_init_instance");
-    const uintptr_t base = (uintptr_t)__builtin_wasm_tls_base();
-    const uintptr_t top = (uintptr_t)stack + (size_t)4 * 1024 * 1024;
-    check(base >= top && base < top + 64u + tls_size,
-          "the thread-local block sits above the stack's top");
-    check(get_marker() == 0, "a thread_local starts from its initial value in the new block");
-    /* The region stays: it is this instance's thread-local block until the process exits. */
 }
 
 /* A throwing hook is caught in the trampoline and fails the call; nothing unwinds into C. */
@@ -261,6 +223,10 @@ static void check_pipeline(void) {
     anira_context_config* config = NULL;
     anira_context* context = NULL;
     check_status(anira_context_config_create(&config, &err), &err, "anira_context_config_create");
+    /* No pool: this test drives the queue itself (anira_inference_thread_execute). */
+    check_status(anira_context_config_set_threads(config, 0, ANIRA_WAIT_SPIN_BACKOFF),
+                 NULL,
+                 "anira_context_config_set_threads");
     check_status(anira_context_config_set_log_drain(config, ANIRA_LOG_DRAIN_MANUAL, 10),
                  NULL,
                  "anira_context_config_set_log_drain");
@@ -378,7 +344,7 @@ static void check_pipeline(void) {
     anira_context_config_destroy(config);
 }
 
-/* A record of the core reaches Module.anira.log while the hook is registered, none after. */
+/* A record of the core reaches the registry's log while the hook is registered, none after. */
 static void check_log_hook(void) {
     anira_em_set_log_hook(1u);
     anira_em_set_log_hook(1u); /* a repeated call changes nothing */
@@ -394,10 +360,6 @@ int main(void) {
                      (uint32_t)offsetof(anira_engine_ctx, outputs),
                      (uint32_t)offsetof(anira_log_record, level),
                      (uint32_t)offsetof(anira_log_record, message));
-    check(anira_em_hooks_version() == ANIRA_EM_HOOKS_VERSION, "anira_em_hooks_version");
-    check(smoke_hook_version() == anira_em_hooks_version(),
-          "Module.anira.version is the module's hook version");
-    check_instance_tls();
     check_throwing_hook();
     check_pipeline();
     check_log_hook();

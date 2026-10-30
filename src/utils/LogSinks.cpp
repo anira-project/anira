@@ -19,6 +19,10 @@
 #include <thread>
 #include <vector>
 
+#ifdef __EMSCRIPTEN__
+#include "../platform/emscripten/em_console.h"
+#endif
+
 namespace anira::detail {
 
 namespace {
@@ -173,6 +177,11 @@ bool inside_log_sink(LogSinkId id) noexcept {
 }
 
 void set_platform_sink_enabled(bool enabled) {
+#ifdef __EMSCRIPTEN__
+    // The platform sink of WebAssembly is the console by level (em_console.cpp); tanh-lib's
+    // own, stderr as console.error for every level, stays off there.
+    anira::em::set_console_sink_enabled(enabled);
+#else
     thl::Logger::LoggerConfig config = thl::Logger::get_config();
     if (config.m_platform_enabled == enabled) { return; }
     config.m_platform_enabled = enabled;
@@ -180,6 +189,7 @@ void set_platform_sink_enabled(bool enabled) {
     // Core::start_log_drain_locked): the core drains its own queue.
     config.m_rt_enabled = false;
     thl::Logger::set_config(config);
+#endif
 }
 
 }  // namespace anira::detail

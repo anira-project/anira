@@ -27,10 +27,12 @@ namespace anira {
  *   non-blocking syscall when a consumer is asleep) and a scheduler wakeup
  *   latency of typically a few microseconds.
  *
- * @note Blocking is not available on WebAssembly builds, where inference loops
- * are driven cooperatively by JS Workers and blocking is not possible. There,
- * Core::create_session and the JSON config loader coerce Blocking to
- * SpinBackoff and log a warning.
+ * @note Blocking is not available on WebAssembly builds. The pool's threads are
+ * Wasm Workers there, and the inference queue has no semaphore (InferenceQueue):
+ * an idle Worker parks on the core's wake word (memory.atomic.wait32, bounded,
+ * notified by every enqueue and every stop) under either strategy, which is what
+ * Blocking buys natively. Core::create_session and the JSON config loader coerce
+ * Blocking to SpinBackoff and log a warning.
  *
  * @note All sessions in a process share one inference thread pool, so only one
  * strategy can be in effect per process: the one of the first context or session created.
@@ -107,7 +109,9 @@ inline constexpr LogLevel default_log_level() {
  *   last, and by Core::shutdown()).
  * - Manual: no thread. The host pumps the queue itself by calling
  *   InferenceHandler::drain_log() (or Core::drain_log()) periodically, e.g. from
- *   a UI timer. The only mode on WebAssembly.
+ *   a UI timer. The only mode on WebAssembly, where a drain thread would be a Wasm
+ *   Worker, and the JavaScript log sink (anira_em_set_log_hook) is the page's, on
+ *   the main thread, which a Worker cannot call.
  */
 enum class LogDrain { Thread = 0, Manual = 1 };
 
@@ -121,7 +125,7 @@ inline const char* to_string(LogDrain log_drain) {
 
 /**
  * @brief Platform-dependent default log drain: Thread natively, Manual on
- * WebAssembly (no thread can run there).
+ * WebAssembly (the page's JavaScript sink runs on the main thread; see LogDrain).
  */
 inline constexpr LogDrain default_log_drain() {
 #ifdef __EMSCRIPTEN__
@@ -162,20 +166,12 @@ struct ANIRA_API LogConfig {
 };
 
 /**
- * @brief Platform-dependent default thread count: half of the available CPU
- * cores (minimum 1) on native builds, 0 on WebAssembly.
- *
- * On WebAssembly the core cannot run threads — InferenceThread owns no OS
- * thread there and inference loops are driven externally by JS Workers (see
- * Core::make_inference_thread()) — so the only meaningful pool size is 0.
+ * @brief The default thread count: half of the available CPU cores, at least 1 (on
+ * WebAssembly navigator.hardwareConcurrency; the pool's threads are Wasm Workers there).
  */
 inline unsigned int default_num_threads() noexcept {
-#ifdef __EMSCRIPTEN__
-    return 0;
-#else
     return (std::thread::hardware_concurrency() / 2 > 0) ? std::thread::hardware_concurrency() / 2
                                                          : 1;
-#endif
 }
 
 /**
@@ -213,15 +209,12 @@ struct ANIRA_API CoreConfig {
      * feature flags.
      *
      * @param num_threads Number of background inference threads to create.
-     *                   Default: half of available CPU cores (minimum 1) on native
-     *                   builds, 0 on WebAssembly (see default_num_threads()).
+     *                   Default: half of available CPU cores (minimum 1), on
+     *                   WebAssembly too (see default_num_threads()).
      *                   Pass 0 to opt out of the auto-managed pool and supply your
-     *                   own threads via Core::make_inference_thread() (required on
-     *                   WebAssembly, optional on native). On WebAssembly a nonzero
-     *                   value is coerced to 0 with a warning by Core::create_session
-     *                   and JsonConfigLoader — the core cannot run threads there;
-     *                   they are always supplied externally (e.g.
-     *                   AniraWeb.spinUpInferenceWorker()). When sessions already
+     *                   own threads via Core::make_inference_thread(). On
+     *                   WebAssembly the pool's threads are Wasm Workers, each of
+     *                   which imports m_em_worker_module first. When sessions already
      *                   exist, num_threads == 0 leaves the existing pool untouched —
      *                   it signals "no preference," not "shrink to zero." The pool
      *                   exists exactly while sessions exist: it is built by the first

@@ -11,6 +11,7 @@ validates it against the header conventions of docs/anira-v3-architecture.md
                                           include/anira/<file>, its body under __EMSCRIPTEN__
   web/src/abi/enums.ts                    the TypeScript mirror of enums and defines
   web/src/abi/layout.ts                   size, align and member offsets of the Tier-1 records
+  web/src/abi/bindings.ts                 one typed method per entry point over a module instance
   abi/symbols-<major>.txt                 the promised entry points, sorted
   abi/symbols-draft.txt                   the draft entry points, sorted
   abi/symbols-emscripten.txt              the entry points of the Emscripten platform header, sorted
@@ -1235,6 +1236,445 @@ def emit_layout_ts(reg: dict) -> str:
     return "\n".join(out)
 
 
+def ts_doc_text(text) -> str:
+    """Registry prose for a JSDoc block: no comment terminator inside it."""
+    return " ".join(str(text).split()).replace("*/", "*\\/")
+
+
+# Reserved words of JavaScript a registry parameter name could be: suffixed with _ in TS.
+TS_RESERVED = {"in", "function", "default", "new", "var", "let", "class", "enum", "const", "case", "switch",
+               "export", "import", "interface", "package", "private", "public", "static", "yield", "delete",
+               "this", "void", "with", "typeof", "instanceof", "return", "do", "if", "for", "while"}
+TS_INT64 = {"int64_t", "uint64_t"}
+TS_SCALARS = {"int8_t", "uint8_t", "int16_t", "uint16_t", "int32_t", "uint32_t", "int64_t", "uint64_t",
+              "size_t", "double", "float", "int", "uintptr_t", "intptr_t", "char"}
+
+
+def ts_binding_model(reg: dict) -> dict:
+    """The type vocabulary bindings.ts classifies parameters with."""
+    model = {"handles": set(), "records": set(), "enums": set(), "typedefs": {}, "callbacks": set()}
+    for _, ent in entities(reg):
+        kind = ent["kind"]
+        if kind == "handles":
+            model["handles"].update(ent.get("names", []))
+        elif kind in ("struct", "union"):
+            model["records"].add(ent["name"])
+        elif kind == "enum":
+            model["enums"].add(ent["name"])
+        elif kind == "typedef":
+            model["typedefs"][ent["name"]] = ent.get("type")
+        elif kind == "callback":
+            model["callbacks"].add(ent["name"])
+    return model
+
+
+def ts_value_kind(base: str, model: dict) -> str:
+    """How a C value of type `base` (no pointer) crosses: bool, i64, u64, f, i32, u32."""
+    if base == "anira_bool":
+        return "bool"
+    if base == "int64_t":
+        return "i64"
+    if base == "uint64_t":
+        return "u64"
+    if base in ("double", "float"):
+        return base
+    if base in ("int32_t", "int8_t", "int16_t", "int", "anira_status", "intptr_t"):
+        return "i32"
+    return "u32"
+
+
+def ts_type_of(kind: str) -> str:
+    return {"bool": "boolean", "i64": "bigint", "u64": "bigint"}.get(kind, "number")
+
+
+def ts_param_plan(fn: dict, model: dict) -> list[dict]:
+    """Classify the parameters of one entry for its binding. Roles: err (the anira_error, made
+    by the binding), str (a NUL-terminated UTF-8 string from a JS string), strlen (its byte
+    length, computed), out (a value the entry writes, returned), outstr (a const char* the entry
+    writes, returned as a string), json (the buf/cap/out_len triple of a _to_json, returned as
+    a string), value (an argument as it is). An enumeration entry (a uint32_t* count the caller
+    fills with the capacity) keeps every pointer as an argument."""
+    params = fn.get("params", [])
+    names = [p["name"] for p in params]
+    enumeration = any(p["type"] == "uint32_t*" and p["name"] == "count" for p in params)
+    to_json = "buf" in names and "cap" in names and "out_len" in names
+    plan = []
+    for i, p in enumerate(params):
+        t = " ".join(p["type"].split())
+        name = p["name"] + "_" if p["name"] in TS_RESERVED else p["name"]
+        row = {"c": p, "name": name, "doc": p.get("doc", "")}
+        base = t.rstrip("*").strip()
+        depth = len(t) - len(t.rstrip("*"))
+        const = base.startswith("const ")
+        bare = base[len("const "):] if const else base
+        if p.get("written_later"):
+            # The entry writes it after it returned (an asynchronous completion): a pointer the
+            # caller keeps alive, never a stack slot of the binding.
+            row["role"] = "value"
+            row["kind"] = "u32"
+        elif p["name"] == "err" and t == "anira_error*":
+            row["role"] = "err"
+        elif to_json and p["name"] in ("buf", "cap", "out_len"):
+            row["role"] = "json"
+        elif t == "const char*":
+            row["role"] = "str"
+        elif t == "size_t" and p["name"] == "len" and i > 0 and params[i - 1]["type"] == "const char*":
+            row["role"] = "strlen"
+        elif enumeration and depth > 0:
+            row["role"] = "value"
+            row["kind"] = "u32"
+        elif t == "const char**":
+            row["role"] = "outstr"
+        elif depth == 2 and not const and (bare in model["handles"] or bare == "void"):
+            row["role"] = "out"
+            row["kind"] = "u32"
+        elif t == "const void**":
+            row["role"] = "out"
+            row["kind"] = "u32"
+        elif depth == 1 and not const and (bare in TS_SCALARS or bare in model["enums"] or bare in model["typedefs"]
+                                           or bare in model["callbacks"]) and bare != "char":
+            row["role"] = "out"
+            row["kind"] = ts_value_kind(bare, model)
+        else:
+            row["role"] = "value"
+            row["kind"] = ts_value_kind(bare, model) if depth == 0 else "u32"
+        plan.append(row)
+    return plan
+
+
+def ts_raw_sig(fn: dict, model: dict) -> str:
+    """The raw export's TypeScript signature in AbiModule."""
+    args = []
+    for i, p in enumerate(fn.get("params", [])):
+        t = " ".join(p["type"].split())
+        kind = ts_value_kind(t, model) if not t.endswith("*") else "u32"
+        args.append(f"_{i}: {'bigint' if kind in ('i64', 'u64') else 'number'}")
+    ret = fn["returns"]
+    rkind = "void" if ret == "void" else ("u32" if ret.endswith("*") else ts_value_kind(ret, model))
+    rts = "void" if rkind == "void" else ("bigint" if rkind in ("i64", "u64") else "number")
+    return f"_{fn['name']}({', '.join(args)}): {rts}"
+
+
+def ts_read(kind: str, ptr: str) -> str:
+    return {
+        "bool": f"heap(m).HEAPU32[{ptr} >>> 2] !== 0",
+        "i64": f"heap(m).HEAP64[{ptr} >>> 3]",
+        "u64": f"heap(m).HEAPU64[{ptr} >>> 3]",
+        "double": f"heap(m).HEAPF64[{ptr} >>> 3]",
+        "float": f"heap(m).HEAPF32[{ptr} >>> 2]",
+        "i32": f"heap(m).HEAP32[{ptr} >>> 2]",
+        "u32": f"heap(m).HEAPU32[{ptr} >>> 2]",
+    }[kind]
+
+
+def ts_arg(row: dict) -> str:
+    kind = row.get("kind")
+    if kind == "bool":
+        return f"{row['name']} ? 1 : 0"
+    return row["name"]
+
+
+def ts_wrap_call(head: str, args: list[str], tail: str, indent: str) -> list[str]:
+    """`head(args)tail` on one line within TS_WIDTH, else one argument per line."""
+    one = f"{indent}{head}({', '.join(args)}){tail}"
+    if len(one) <= TS_WIDTH:
+        return [one]
+    return [f"{indent}{head}("] + [f"{indent}  {a}," for a in args[:-1]] + [f"{indent}  {args[-1]}", f"{indent}){tail}"]
+
+
+def emit_binding(fn: dict, model: dict) -> list[str]:
+    name = fn["name"]
+    plan = ts_param_plan(fn, model)
+    ret = fn["returns"]
+    status = ret == "anira_status"
+    has_err = any(r["role"] == "err" for r in plan)
+    outs = [r for r in plan if r["role"] in ("out", "outstr")]
+    to_json = any(r["role"] == "json" for r in plan)
+    params = [r for r in plan if r["role"] in ("value", "str")]
+
+    # The TypeScript signature and the result.
+    sig_params = []
+    for r in params:
+        nullable = "NULL" in r["doc"] or "Nullable" in r["doc"]
+        ts_t = ("string | null" if nullable else "string") if r["role"] == "str" else ts_type_of(r["kind"])
+        sig_params.append(f"{r['name']}: {ts_t}")
+    if to_json:
+        result_t = "string"
+    elif outs:
+        def out_t(r):
+            return "string | null" if r["role"] == "outstr" else ts_type_of(r["kind"])
+        if len(outs) == 1 and (status or ret == "void"):
+            result_t = out_t(outs[0])
+        else:
+            fields = [f"{r['c']['name']}: {out_t(r)}" for r in outs]
+            if not (status or ret == "void"):
+                fields.insert(0, "result: " + ts_ret_type(ret, model))
+            result_t = "{ " + "; ".join(fields) + " }"
+    elif ret == "void":
+        result_t = "void"
+    else:
+        result_t = ts_ret_type(ret, model)
+
+    # The doc block.
+    doc = ["  /**"]
+    for line in textwrap.wrap(ts_doc_text(fn.get("doc", "")), width=TS_WIDTH - 5, break_long_words=False, break_on_hyphens=False):
+        doc.append(f"   * {line}")
+    doc.append("   *")
+    for r in params:
+        for j, line in enumerate(textwrap.wrap(f"@param {r['name']} {ts_doc_text(r['doc'])}", width=TS_WIDTH - 5,
+                                               break_long_words=False, break_on_hyphens=False)):
+            doc.append(f"   * {line}" if j == 0 else f"   *   {line}")
+    returns = []
+    if outs or to_json:
+        returns.append("What the entry writes to " + ", ".join(r["c"]["name"] for r in outs or [r for r in plan if r["c"]["name"] == "buf"]) + ".")
+    elif fn.get("return_doc"):
+        returns.append(ts_doc_text(fn["return_doc"]))
+    if status:
+        returns.append("A failed status throws an AniraError" + (" with the entry's message." if has_err else "."))
+    if returns:
+        for j, line in enumerate(textwrap.wrap("@returns " + " ".join(returns), width=TS_WIDTH - 5,
+                                               break_long_words=False, break_on_hyphens=False)):
+            doc.append(f"   * {line}" if j == 0 else f"   *   {line}")
+    doc.append(f"   * Thread: {thread_line(fn)}")
+    doc.append("   */")
+
+    body: list[str] = []
+    frame = bool(outs or has_err or to_json or any(r["role"] == "str" for r in plan))
+    ind = "      " if frame else "    "
+    for r in plan:
+        if r["role"] == "str":
+            body.append(f"{ind}const {r['name']}_ = {r['name']} === null ? 0 : m.stringToUTF8OnStack({r['name']})")
+        elif r["role"] in ("out", "outstr"):
+            body.append(f"{ind}const {r['name']}_ = stackSlot(m)")
+        elif r["role"] == "err":
+            body.append(f"{ind}const err = stackError(m)")
+    if to_json:
+        body.append(f"{ind}const len = stackSlot(m)")
+    call_args = []
+    for r in plan:
+        role = r["role"]
+        if role == "str":
+            call_args.append(f"{r['name']}_")
+        elif role == "strlen":
+            prev = plan[plan.index(r) - 1]
+            call_args.append(f"{prev['name']} === null ? 0 : m.lengthBytesUTF8({prev['name']})")
+        elif role in ("out", "outstr"):
+            call_args.append(f"{r['name']}_")
+        elif role == "err":
+            call_args.append("err")
+        elif role == "json":
+            call_args.append({"buf": "buf", "cap": "cap", "out_len": "len"}[r["c"]["name"]])
+        else:
+            call_args.append(ts_arg(r))
+    check_tail = f", '{name}'" + (", err" if has_err else "")
+    if to_json:
+        body.append(f"{ind}let buf = 0")
+        body.append(f"{ind}let cap = 0")
+        body.append(f"{ind}const sized = m._{name}({', '.join(call_args)})")
+        body.append(f"{ind}if (sized !== anira_status.ANIRA_ERROR_BUFFER_TOO_SMALL) {{")
+        body.append(f"{ind}  checkStatus(m, sized{check_tail})")
+        body.append(f"{ind}}}")
+        body.append(f"{ind}cap = heap(m).HEAPU32[len >>> 2] + 1")
+        body.append(f"{ind}buf = m._malloc(cap)")
+        body.append(f"{ind}if (buf === 0) {{")
+        body.append(f"{ind}  throw new AniraError(anira_status.ANIRA_ERROR_OUT_OF_MEMORY, '{name}')")
+        body.append(f"{ind}}}")
+        body.append(f"{ind}try {{")
+        body.extend(ts_wrap_call("checkStatus", ["m", f"m._{name}({', '.join(call_args)})"] + check_tail[2:].split(", "), "", ind + "  "))
+        body.append(f"{ind}  return m.UTF8ToString(buf)")
+        body.append(f"{ind}}} finally {{")
+        body.append(f"{ind}  m._free(buf)")
+        body.append(f"{ind}}}")
+    else:
+        call = f"m._{name}"
+        if status:
+            lead = "" if outs else "return "
+            lines = ts_wrap_call(call, call_args, "", "")
+            single = f"{ind}{lead}checkStatus(m, {lines[0]}{check_tail})" if len(lines) == 1 else None
+            if single is not None and len(single) <= TS_WIDTH:
+                body.append(single)
+            else:
+                body.append(f"{ind}{lead}checkStatus(")
+                body.append(f"{ind}  m,")
+                body.extend(ts_wrap_call(call, call_args, ",", ind + "  "))
+                tail_args = check_tail[2:].split(", ")
+                for t in tail_args[:-1]:
+                    body.append(f"{ind}  {t},")
+                body.append(f"{ind}  {tail_args[-1]}")
+                body.append(f"{ind})")
+        elif ret == "void":
+            body.extend(ts_wrap_call(call, call_args, "", ind))
+        else:
+            conv = ts_ret_conv(ret, model)
+            head = "const result = " if outs else "return "
+            lines = ts_wrap_call(call, call_args, "", "")
+            if len(lines) == 1 and len(ind + head + conv.format(lines[0])) <= TS_WIDTH:
+                body.append(ind + head + conv.format(lines[0]))
+            else:
+                body.append(ind + head + conv.format("raw"))
+                body[-1:-1] = [ind + "const raw ="] + ts_wrap_call(call, call_args, "", ind + "  ")
+        if outs:
+            def read(r):
+                if r["role"] == "outstr":
+                    return f"readCString(m, heap(m).HEAPU32[{r['name']}_ >>> 2])"
+                return ts_read(r["kind"], f"{r['name']}_")
+            if len(outs) == 1 and (status or ret == "void"):
+                body.append(f"{ind}return {read(outs[0])}")
+            else:
+                body.append(f"{ind}return {{")
+                if not (status or ret == "void"):
+                    body.append(f"{ind}  result,")
+                for r in outs:
+                    body.append(f"{ind}  {r['c']['name']}: {read(r)},")
+                body.append(f"{ind}}}")
+
+    head = f"  {name}({', '.join(sig_params)}): {result_t} {{"
+    if len(head) > TS_WIDTH:
+        sig = [f"  {name}("] + [f"    {p}," for p in sig_params[:-1]] + [f"    {sig_params[-1]}", f"  ): {result_t} {{"]
+    else:
+        sig = [head]
+    out = doc + sig + ["    const m = this.module"]
+    if frame:
+        out += ["    const sp = m.stackSave()", "    try {"] + body + ["    } finally {", "      m.stackRestore(sp)", "    }"]
+    else:
+        out += body
+    out.append("  }")
+    return out
+
+
+def ts_ret_type(ret: str, model: dict) -> str:
+    if ret == "const char*":
+        return "string | null"
+    if ret.endswith("*"):
+        return "number"
+    return ts_type_of(ts_value_kind(ret, model))
+
+
+def ts_ret_conv(ret: str, model: dict) -> str:
+    """A format string that turns the raw return value {} into the binding's result."""
+    if ret == "const char*":
+        return "readCString(m, {})"
+    if ret.endswith("*"):
+        return "{} >>> 0"
+    kind = ts_value_kind(ret, model)
+    return {"bool": "{} !== 0", "u32": "{} >>> 0", "u64": "BigInt.asUintN(64, {})"}.get(kind, "{}")
+
+
+def emit_bindings_ts(reg: dict) -> str:
+    """web/src/abi/bindings.ts: one typed method per entry point of the registry (the promised,
+    draft and Emscripten ones, the module's exports) over a module instance. A string argument
+    is a JS string, copied to the instance's stack; the values an entry writes through its out
+    parameters are returned; the anira_error of an entry is made here and a failed status throws
+    an AniraError with its message (an entry without one throws with the status text); an
+    anira_bool is a boolean, a 64-bit integer a bigint, a pointer a number."""
+    model = ts_binding_model(reg)
+    fns = [ent for _, ent in entities(reg, "function")]
+    out = [
+        f"// {GENERATED_BANNER}",
+        "// One typed method per entry point of the module: the C name, the C argument order without",
+        "// the out parameters and the anira_error, which the binding makes on the instance's stack. A",
+        "// string argument is copied to that stack, a written value is returned (several as an object),",
+        "// a failed anira_status throws an AniraError, an anira_bool is a boolean, a 64-bit integer a",
+        "// bigint and a pointer or a size a number. An enumeration entry (a uint32_t* count) keeps its",
+        "// pointers as arguments.",
+        "",
+        "import { AniraError } from '../AniraError'",
+        "import { anira_status } from './enums'",
+        "",
+        "/** The raw exports and runtime methods of one module instance that the bindings call. */",
+        "export interface AbiModule {",
+    ]
+    for fn in fns:
+        out.append(f"  {ts_raw_sig(fn, model)}")
+    out += [
+        "  _malloc(bytes: number): number",
+        "  _free(ptr: number): void",
+        "  stackSave(): number",
+        "  stackRestore(ptr: number): void",
+        "  stackAlloc(bytes: number): number",
+        "  stringToUTF8OnStack(text: string): number",
+        "  lengthBytesUTF8(text: string): number",
+        "  UTF8ToString(ptr: number, maxBytes?: number): string",
+        "  HEAPU8: Uint8Array",
+        "  HEAP32: Int32Array",
+        "  HEAPU32: Uint32Array",
+        "  HEAPF32: Float32Array",
+        "  HEAPF64: Float64Array",
+        "  HEAP64: BigInt64Array",
+        "  HEAPU64: BigUint64Array",
+        "  emscriptenRegisterAudioObject(object: unknown): number",
+        "  emscriptenGetAudioObject(handle: number): unknown",
+        "  /** The instance's shared memory: passed on the main thread, set by anira's boot elsewhere. */",
+        "  wasmMemory?: WebAssembly.Memory",
+        "}",
+        "",
+        "/**",
+        " * `m`, its heap views over the memory as it is now. The memory is shared and grows (any",
+        " * thread's malloc may grow it): a growth gives `memory.buffer` a new, longer SharedArrayBuffer,",
+        " * and views made before it cover only the old length. Every heap access of the package goes",
+        " * through this helper, which rebuilds the views once after a growth (seven typed arrays: a",
+        " * small allocation, made in JavaScript, never by the C audio path).",
+        " */",
+        "export const heap = (m: AbiModule): AbiModule => {",
+        "  const memory = m.wasmMemory",
+        "  if (memory !== undefined && m.HEAPU8.buffer !== memory.buffer) {",
+        "    const b = memory.buffer",
+        "    m.HEAPU8 = new Uint8Array(b)",
+        "    m.HEAP32 = new Int32Array(b)",
+        "    m.HEAPU32 = new Uint32Array(b)",
+        "    m.HEAPF32 = new Float32Array(b)",
+        "    m.HEAPF64 = new Float64Array(b)",
+        "    m.HEAP64 = new BigInt64Array(b)",
+        "    m.HEAPU64 = new BigUint64Array(b)",
+        "  }",
+        "  return m",
+        "}",
+        "",
+        "// An 8-byte out slot on the stack, zeroed.",
+        "const stackSlot = (m: AbiModule): number => {",
+        "  const ptr = m.stackAlloc(8)",
+        "  heap(m).HEAPU32[ptr >>> 2] = 0",
+        "  heap(m).HEAPU32[(ptr >>> 2) + 1] = 0",
+        "  return ptr",
+        "}",
+        "",
+        "// An anira_error on the stack as ANIRA_ERROR_INIT leaves it: status 0, an empty message.",
+        "const stackError = (m: AbiModule): number => {",
+        "  const ptr = m.stackAlloc(520)",
+        "  heap(m).HEAPU32.fill(0, ptr >>> 2, (ptr >>> 2) + 3)",
+        "  return ptr",
+        "}",
+        "",
+        "const readCString = (m: AbiModule, ptr: number): string | null =>",
+        "  ptr === 0 ? null : m.UTF8ToString(ptr >>> 0)",
+        "",
+        "// A failed status throws: the entry's message when it wrote one, the status text otherwise.",
+        "const checkStatus = (m: AbiModule, status: number, entry: string, err = 0): number => {",
+        "  if (status >= 0) return status",
+        "  const message = err === 0 ? '' : m.UTF8ToString(err + 8, 512)",
+        "  const text = m.UTF8ToString(m._anira_status_string(status) >>> 0)",
+        "  throw new AniraError(status, `${entry}: ${message || text}`)",
+        "}",
+        "",
+        "/**",
+        " * The C ABI over one module instance: `new AniraBindings(module)` where `module` is the",
+        " * instance's Module (the main thread's, a Wasm Worker's or the audio worklet's).",
+        " */",
+        "export class AniraBindings {",
+        "  readonly module: AbiModule",
+        "",
+        "  constructor(module: AbiModule) {",
+        "    this.module = module",
+        "  }",
+    ]
+    for fn in fns:
+        out.append("")
+        out.extend(emit_binding(fn, model))
+    out.append("}")
+    out.append("")
+    return "\n".join(out)
+
+
 def emit_status_strings(reg: dict) -> str:
     status = next(e for _, e in entities(reg, "enum") if e["name"] == "anira_status")
     out = [f"/* {GENERATED_BANNER} */", "/* ANIRA_STATUS_TEXT(name, text): the static text anira_status_string() returns. */"]
@@ -1270,6 +1710,7 @@ def generate(reg: dict) -> dict[str, str]:
     files["abi/symbols-emscripten.txt"] = "".join(f"{n}\n" for n in emscripten)
     files["web/src/abi/exports_wasm.txt"] = "".join(f"_{n}\n" for n in ["malloc", "free"] + promised + draft + emscripten)
     files["web/src/abi/layout.ts"] = emit_layout_ts(reg)
+    files["web/src/abi/bindings.ts"] = emit_bindings_ts(reg)
     files["src/capi/generated/status_strings.inc"] = emit_status_strings(reg)
     files["src/capi/generated/struct_sizes.inc"] = emit_struct_sizes(reg)
     files["test/abi/generated/test_layout.c"] = emit_layout_test(reg)

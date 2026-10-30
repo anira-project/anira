@@ -227,17 +227,17 @@ Moreover, the following options are available:
 ### Anira Web (Web / JavaScript)
 
 Anira is available as the `@anira-project/anira` package for web applications: anira compiled
-to WebAssembly, whose exports are the C ABI (`_anira_*`) and the Emscripten companion
-`anira/anira_em.h`, and the TypeScript runtime around it (the module on one shared memory in
-the main thread, the inference Workers and the audio worklet, JavaScript engines and stages).
-The 3.x pre-release is on the `next` dist-tag:
+to WebAssembly with a thin typed layer over its C ABI. anira starts the page's threads from C on
+one shared memory (the context's inference threads are Wasm Workers, the audio path a Wasm Audio
+Worklet node whose render callback is C), stages and inference engines are written in
+TypeScript without rebuilding the module, and the model and contract files of a native host load
+unchanged. The 3.x pre-release is on the `next` dist-tag:
 
 ```bash
 npm install @anira-project/anira@next
 ```
 
-See the [Anira Web guides](https://anira-project.github.io/anira/web-api/index.html); in this
-pre-release configs and handlers are built with the raw `_anira_*` calls.
+See the [Anira Web guides](https://anira-project.github.io/anira/web-api/index.html).
 
 #### Building @anira-project/anira from source
 

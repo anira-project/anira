@@ -1,7 +1,8 @@
 name: build_web
 
 # The wasm build runs through the shared cmake-build-wasm action — the emsdk
-# pin lives there, shared across tanh-lab repos. The JS/TS npm package build
+# pin lives there, shared across tanh-lab repos (4.0.23: the prebuilt ONNX Runtime
+# archive the module links is built with it). The JS/TS npm package build
 # that follows is anira product code and stays here, in the same job, because
 # it consumes the wasm build outputs.
 
@@ -49,6 +50,23 @@ jobs:
         uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
           PRESET: wasm-abi
+
+      # The node gate anira_em_oom, config.html and the model-file example load a bundled model
+      # config (extras/models/model-pool/gain.model.json) and its model file: the fixture trees,
+      # restored from the cache warm_caches.yml keeps, else fetched at their pins.
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+      - name: fetch the model fixtures
+        run: cmake -P extras/fetch-models.cmake
 
       # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
       # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
@@ -105,26 +123,34 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The custom-worklet example (web/examples/custom-worklet) against the built package: tsc
-      # with strict over its files and the package's types, then its Vite build (the worklet
-      # bundled into one script), which the browser test runs.
+      # The two examples (web/examples/stage-and-engine, web/examples/model-file) against the built
+      # package: tsc with strict over their files and the package's types, then their Vite builds
+      # (stage-and-engine's worker and worklet modules bundled into one script each), which the
+      # browser test runs.
       - name: build the examples
         working-directory: web
         run: npm run examples
 
+      # A page that only names the ONNX Runtime Web engine (ONNXRUNTIME_WEB_ENGINE_ID from the root
+      # entry) must not bundle onnxruntime-web: no module the root or scope entry imports, and no
+      # chunk of the examples, carries its code.
+      - name: check the bundles carry no onnxruntime-web
+        working-directory: web
+        run: npm run check:bundle
+
       # The built package in headless Chromium and Firefox (served with COOP/COEP).
-      # web/test/browser/index.html: a JavaScript engine on an inference Worker that doubles its
-      # input times a Static gain, a Hard handler of block 128, an OfflineAudioContext rendered
-      # through the default worklet, which serves the gain (changed mid-render where the browser
-      # can suspend an offline render); the output must be the input times 2 * gain after the
-      # handler's latency, then the Worker stops and the worklet is disposed. ort.html: an ONNX
-      # model on the default Worker's ONNX Runtime Web engine. The example's check page: the
-      # same render through its own worklet and JavaScript stage. A load the browser refuses
-      # (Firefox's file:/// security error) fails the step too.
+      # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm
+      # Workers importing a worker module with a JavaScript engine, a JavaScript stage in the
+      # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
+      # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
+      # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX
+      # entry on the module's built-in ONNX Runtime engine. ort.html: the ONNX Runtime Web
+      # engine on a Worker. The example's check page, built and under Vite's dev server. A load
+      # the browser refuses (Firefox's file:/// security error) fails the step too.
       - name: browser test (headless Chromium and Firefox)
         working-directory: web
         run: |
-          npm install --no-save playwright@1.49.1
+          npm install --no-save playwright@1.64.1
           npx playwright install --with-deps chromium firefox
           node test/browser/run.mjs chromium
           node test/browser/run.mjs firefox

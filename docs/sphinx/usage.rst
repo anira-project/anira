@@ -582,10 +582,10 @@ contexts are reconciled against it).
 - **Devices.** ``cuda`` / ``gl`` / ``vulkan`` / ``metal`` / ``d3d12`` / ``webgpu`` declare the
   device blocks anira may use, each an ``ANIRA_*_DESC_INIT`` descriptor naming either a device
   anira creates and owns or a handle the host lends.
-- **WebAssembly.** The core cannot run threads on the web: use ``threads(0)`` (the workers
-  are created from JavaScript via ``AniraWeb.spinUpInferenceWorker()``) and drain the log
-  manually; ``webgpu`` throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a
-  JavaScript API.
+- **WebAssembly.** The pool's threads are Wasm Workers anira starts, each importing the
+  context's worker module first (``anira_em_context_config_set_worker_module``,
+  :doc:`web-api/architecture`); there is no drain thread, so drain the log manually. ``webgpu``
+  throws ``ANIRA_ERROR_NOT_SUPPORTED`` there, the browser's WebGPU being a JavaScript API.
 
 1.5. JSON files
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -629,7 +629,8 @@ document), so a typo never turns into a default.
 
 - ``models[]``: one entry per export, tagged by ``engine`` (``onnxruntime``, ``executorch``,
   ``litert``, ``libtorch``, ``tflite``, or the reverse-URI name of a custom engine) and,
-  when pinned, ``provider``; relative ``path`` values resolve against the file's directory
+  when pinned, ``provider``; ``path`` (required unless the entry's custom engine declares
+  ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``) values resolve, when relative, against the file's directory
   (``from_file``) or the ``base_dir`` argument (``from_json``); ``tensors`` holds the
   per-tensor records of section 1.2, keyed by *your* canonical name: a string is the export's
   name for the tensor, an object has ``name`` and ``layout`` (spec axis indices, ``"insert"``
@@ -1223,7 +1224,7 @@ For models whose inference time dominates the round trip, the throughput of both
     The configuration in effect is the first user's (a context or an instance); every later context or instance is reconciled against it: the log level (the most verbose request wins), the wait strategy, the drain mode, the queue capacity and the drain interval (the first wins, with a warning on a mismatch), and the thread count (the pool only shrinks, never grows, and never to zero). The thread pool exists exactly while :cpp:class:`anira::InferenceHandler` instances exist: the first instance builds it from the configuration in effect (its threads start with the first ``prepare()``), and destroying the last instance stops and joins every inference thread before its destructor returns. Once every context and instance is gone, the next configuration takes effect whole. For plugins this means the host may unload your library the moment the last instance is destroyed — see :ref:`plugin-library-unload` in the troubleshooting guide for the details and the Windows caveat.
 
 .. note::
-    On WebAssembly builds blocking waits are impossible — inference loops are driven cooperatively by JS Workers — so ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the core.
+    On WebAssembly builds ``ANIRA_WAIT_BLOCKING`` is coerced to ``ANIRA_WAIT_SPIN_BACKOFF`` with a warning by the core: the pool's threads are Wasm Workers and the inference queue has no semaphore there, so an idle Worker parks on the core's wake word (``memory.atomic.wait32``, notified by every enqueue) under either strategy, which is what blocking buys natively.
 
 anira logs through `tanh-lib <https://github.com/tanh-lab/tanh-lib>`_'s ``thl::Logger``. Every record carries an ``anira.<component>`` group (``anira.core``, ``anira.scheduler``, ``anira.config``, ``anira.capi``, ``anira.system``, ``anira.engine.<name>``, ``anira.web``), and anira never configures the sinks itself: where the messages end up is the host's decision, made with ``thl::Logger::set_config()`` / ``set_callback()``. By default tanh-lib writes to the platform log — ``os_log`` on macOS/iOS (visible in Console.app or ``log stream``), ``logcat`` on Android, stdout/stderr elsewhere; set ``LoggerConfig::m_console_enabled`` for a plain stdout/stderr console sink on Apple platforms.
 

@@ -767,7 +767,7 @@ headers:
       - kind: define
         name: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL
         value: "1u"
-        doc: "anira_engine_desc.flags bit: a model entry of this engine may have no source, neither a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this pre-release; consumed when a source-less entry can be built, in a later one."
+        doc: "anira_engine_desc.flags bit: a model entry of this engine may have no source, neither a path nor bytes (anira_model_config_add_model_path with a NULL path; a JSON entry without \"path\"). anira_handler_create refuses a source-less entry of any other engine with ANIRA_ERROR_CONFIG. Reported in anira_plan_info.engine_flags."
       - kind: define
         name: ANIRA_ENGINE_FLAG_REALTIME_SAFE
         value: "2u"
@@ -2017,14 +2017,14 @@ headers:
           - {type: anira_model_config*, name: config, doc: "The config."}
           - {type: anira_engine, name: engine, doc: "A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE)."}
           - {type: const char*, name: engine_id, doc: "The custom engine's reverse-URI id (must contain a '.'), copied, beside ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine."}
-          - {type: const char*, name: utf8_path, doc: "Model file path, UTF-8, copied."}
+          - {type: const char*, name: utf8_path, doc: "Model file path, UTF-8, copied; NULL for an entry without a source, which anira_handler_create admits for a custom engine that declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone (the JSON form: an entry without \"path\")."}
           - {type: uint32_t*, name: out_index, doc: "Receives the model index, or NULL."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.1"
         doc: "Appends a model entry that loads from a file, for the engine the pair names (the pair rule of anira_engine). Whether a built-in engine is in this build is decided at anira_handler_create (an entry of an engine the build lacks is skipped when the candidates leave it out, refused when they name it), so a config can name every engine a deployment might have. A custom engine is named by the id anira_custom_engine_create gave it; the entry and the engine's addition to the pipeline (anira_pipeline_add_engine) may come in either order, and an id no engine of the pipeline has is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create, naming the id."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM without an id or with an id without a '.'), or a NULL or empty path."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM without an id or with an id without a '.'), or an empty path."
       - kind: function
         name: anira_model_config_add_model_bytes
         returns: anira_status
@@ -2932,7 +2932,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Creates a context over this copy's core: reconciles the config into the core (see the file comment), registers the config's log sink so that it receives every record from here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and probes the capabilities. A device block on the config is refused in this pre-release. On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced with a warning, as the context file section says."
+        doc: "Creates a context over this copy's core: reconciles the config into the core (see the file comment), registers the config's log sink so that it receives every record from here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and probes the capabilities. A device block on the config is refused in this pre-release. On WebAssembly the pool's threads are Wasm Workers (anira_em_context_config_set_worker_module names the module they import); ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL with a warning."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out, ANIRA_ERROR_NOT_SUPPORTED for a device block, ANIRA_ERROR_EXTENSION_UNCONSUMED for a context extension nothing consumes."
       - kind: function
         name: anira_context_destroy
@@ -3125,10 +3125,10 @@ headers:
     doc: >-
       A host that configured its context with num_threads = 0 drives inference itself: it
       creates anira_inference_thread objects, bound to the core's queue, and either lets
-      anira start an OS thread for each (anira_inference_thread_start, native only) or runs
-      the loop on a thread of its own (anira_inference_thread_run_loop, the only form on
-      WebAssembly, where the thread is a Worker). The objects outlive the context that
-      created them and must be stopped before the library is unloaded.
+      anira start a thread for each (anira_inference_thread_start: an OS thread natively, a
+      Wasm Worker on WebAssembly) or runs the loop on a thread of its own
+      (anira_inference_thread_run_loop). The objects outlive the context that created them
+      and must be stopped before the library is unloaded.
     includes: ["<stdint.h>", "export.h", "status.h", "enums.h"]
     entities:
       - kind: function
@@ -3141,7 +3141,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Creates an inference thread bound to the core's queue. Nothing runs until anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the object is created on the main instance and run in a Worker."
+        doc: "Creates an inference thread bound to the core's queue. Nothing runs until anira_inference_thread_start or anira_inference_thread_run_loop."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context or out."
       - kind: function
         name: anira_inference_thread_run_loop
@@ -3171,7 +3171,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Native: spawns an OS thread at the inference-thread scheduling class (real-time where granted) that runs the loop. WebAssembly: marks the object running; the loop is entered by the Worker through anira_inference_thread_run_loop. A second start while the loop runs, and an operating system that refuses the thread, are returned, never silent: is_running stays 0 then."
+        doc: "Spawns a thread that runs the loop: natively an OS thread at the inference-thread scheduling class (real-time where granted), on WebAssembly a Wasm Worker on the module's memory, which imports the context's worker module (anira_em_context_config_set_worker_module) first. A second start while the loop runs, and an operating system or browser that refuses the thread, are returned, never silent: is_running stays 0 then."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL thread; ANIRA_ERROR_INVALID_STATE when it is already running; ANIRA_ERROR_OUT_OF_MEMORY when the operating system refused to create the thread (a thread limit or its stack)."
       - kind: function
         name: anira_inference_thread_stop
@@ -3181,7 +3181,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly: requests only; poll anira_inference_thread_has_exited."
+        doc: "Requests the loop to exit and joins the thread anira_inference_thread_start started (WebAssembly: waits for its Wasm Worker to leave the loop, then terminates it; a Worker still booting, its module's import or its engines' init in flight, is never terminated there: the stop cancels its boot and returns, the Worker finishes the boot without entering the loop, and a main-thread timer frees its region once it is done, terminating one that has not finished within 10 s and leaving its region allocated). A loop the host runs itself (anira_inference_thread_run_loop) is asked to return only; poll anira_inference_thread_has_exited."
       - kind: function
         name: anira_inference_thread_has_exited
         returns: anira_bool
@@ -3213,7 +3213,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "Nonzero while the loop is running (native: the OS thread exists and has not returned; WebAssembly: between start and stop)."
+        doc: "Nonzero while the loop is running (native: the OS thread exists and has not returned; WebAssembly: between start and stop, the Wasm Worker's import included)."
         return_doc: "The running flag."
       - kind: function
         name: anira_inference_thread_destroy
@@ -4375,7 +4375,7 @@ headers:
         status: promised
         since: "0.2"
         doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (geometry, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), checks every plan's provider against what its engine serves (a built-in engine's runtime as the context reports it now, so a context probed again since the create is seen; a custom engine's query as it answered at anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at anira_handler_create), runs the stage's init when it has not run yet (once per registration, before any model loads), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the stage's prepare function, when the pipeline has a stage with one, with an anira_prepare_info (the handler, the report, the entry count, a template of the model end of every slot and the canonical names) and keeps the prepared pointer it hands back for this handler (a status other than ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare). A second prepare replaces the previous session whole: the stage's unprepare of the previous prepare runs once the old session is released, before the new prepare. A failed prepare leaves the handler unprepared, the previous prepare's unprepare called all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while the stage does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose filled pre_process, post_process or reset carries no ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag)."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a stage's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler (WebAssembly: its render callback may be inside a process call; re-prepare through anira_em_audio_node_prepare)."
 
       - kind: function
         name: anira_handler_plan_report
@@ -4498,7 +4498,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "Pushes one block into the input ring of in_slot, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring of out_slot into the memory of out; the two sample counts may differ under a time ratio, and the two slots are independent (a model whose stream is input 1 and output 0 calls anira_handler_process(handler, in, 1, out, 0, delivered)). Accepts a planar tensor (ANIRA_TENSOR_PLANAR) as well as one block read by strides (interleaved is strides {1, channels}) or packed, for any channel count; each side has its own description and its own dtype, which must be its slot's ring dtype (nothing converts). A single form is the form of a Streamed slot: the single form of a Static slot is anira_handler_set_static_input / anira_handler_get_static_output, a State tensor is carried by no Hard entry, and an in_slot or out_slot that names a Static or a State tensor is refused (a generator with Static input 0 calls anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is validated before anything is pushed, so a refusal pushes nothing. Each tensor carries one host block of the geometry's block_max at most, ceil(b) samples of the block b on its slot's stream (the header doc): a larger shape[1] is refused, never cut to its tail. A block whose inference has not completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of the input block when in_slot is the anchored input's slot and zeros past it; any other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and the call returns ANIRA_MISSED, a success: the memory is valid and the stream stays time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss is not recorded. One tensor handed over as in and out is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory that overlap under two different descriptions (an interleaved input over planar views of the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx and acquire of the tensors are not read: the memory is borrowed until the call returns."
+        doc: "Pushes one block into the input ring of in_slot, submits whatever inferences are due, collects the completed ones without waiting and pops one block from the output ring of out_slot into the memory of out; the two sample counts may differ under a time ratio, and the two slots are independent (a model whose stream is input 1 and output 0 calls anira_handler_process(handler, in, 1, out, 0, delivered)). Accepts a planar tensor (ANIRA_TENSOR_PLANAR) as well as one block read by strides (interleaved is strides {1, channels}) or packed, for any channel count; each side has its own description and its own dtype, which must be its slot's ring dtype (nothing converts). A single form is the form of a Streamed slot: the single form of a Static slot is anira_handler_set_static_input / anira_handler_get_static_output, a State tensor is carried by no Hard entry, and an in_slot or out_slot that names a Static or a State tensor is refused (a generator with Static input 0 calls anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is validated before anything is pushed, so a refusal pushes nothing. Each tensor carries one host block of the geometry's block_max at most, ceil(b) samples of the block b on its slot's stream (the header doc): a larger shape[1] is refused, never cut to its tail. A block whose inference has not completed is an on_miss event: the contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of the input block when in_slot is the anchored input's slot and zeros past it; any other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and the call returns ANIRA_MISSED, a success: the memory is valid and the stream stays time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in anira_handler_rt_error; a miss is not recorded. One tensor handed over as in and out is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory that overlap under two different descriptions (an interleaved input over planar views of the same bytes) are undefined on an ANIRA_MISS_BYPASS miss. release, manager_ctx and acquire of the tensors are not read: the memory is borrowed until the call returns. A model with several Streamed inputs is driven by one call per host block over all of them (anira_handler_process_multi); separate single-slot calls per stream keep the streams aligned but lose ANIRA_MISS_BYPASS (the call that does not carry the anchored slot fills zeros on a miss) and the wait credit of ANIRA_WAIT_CONTRACT for that call."
         return_doc: "ANIRA_OK; ANIRA_MISSED for a missed block (out holds what the miss policy says); ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or tensor, an in_slot or out_slot out of range of its list or naming a Static or a State tensor, or a malformed tensor: a rank other than 2 (a zeroed tensor included), a domain other than ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, ANIRA_TENSOR_READ_ONLY on out, shape[0] other than the slot's channel count, a negative shape[1], and with shape[1] above 0: NULL memory, a plane count other than shape[0], a NULL plane, a negative stride, a stride of 0 on an axis longer than 1 unless every stride is 0, a channel that does not start on a multiple of the element size; and a shape[1] above one host block of block_max on the slot's stream (ceil of the block); ANIRA_ERROR_NOT_SUPPORTED for a flag bit this library does not know; ANIRA_ERROR_CONFIG for a dtype other than the slot's; ANIRA_ERROR_NOT_PREPARED before a successful prepare. A tensor is checked in the order rank, domain, flags, shape, dtype, memory and strides, then its count against the block, in before out. Every failure but the NULL handler is recorded in anira_handler_rt_error."
 
       - kind: function
@@ -4819,46 +4819,49 @@ headers:
   - file: anira_em.h
     platform: emscripten
     guard: ANIRA_ANIRA_EM_H
-    brief: "The Emscripten companion: the trampolines into the JavaScript hook object Module.anira, the JS log hook and the per-instance stacks."
+    brief: "The Emscripten companion: the trampolines into the JavaScript registry of each scope, the JS log hook, the context's worker module and the Wasm Audio Worklet node."
     doc: >-
       Outside WebAssembly this header declares nothing; under __EMSCRIPTEN__ it declares the
-      entries JavaScript needs beside the C ABI and cannot write itself. Each module instance
-      (the main thread's, an inference Worker's, the audio worklet's) has one hook object,
-      Module.anira, installed before instantiation: { version, stage(key, phase, a, b),
-      engine(key, phase, a, b), log(recordPtr), complete }, where version is
-      ANIRA_EM_HOOKS_VERSION and complete is reserved (Async, undriven). A JS stage or a JS
-      engine is a descriptor whose slots are C trampolines compiled into anira: each calls the
-      hook of the instance that runs the C call (the worklet for pre_process, post_process and
-      reset under a Hard contract, the Worker for before_inference, after_inference and the
-      engine's process, the main thread for init, prepare, unprepare, release and query) with
-      the stage's or engine's js_key, the anira_phase of the call and two pointers into the
-      shared memory, which JavaScript reads through web/src/abi/layout.ts. For a stage, a is
-      the anira_stage_ctx and b the prepared pointer in pre_process, post_process,
-      before_inference, after_inference and reset; a the anira_prepare_info and b the address
-      of the out_prepared slot in prepare; a the prepared pointer in unprepare; a the
-      anira_init_info in init; both 0 in release. For an engine, a is the anira_engine_ctx and
-      b the prepared pointer in ANIRA_PHASE_INFERENCE and ANIRA_PHASE_RESET; a the
-      anira_init_info and b the address of the uint64_t provider mask in ANIRA_PHASE_QUERY.
-      The hook returns an anira_status (a void slot ignores it). A hook that throws is caught
-      in the trampoline: the exception is reported once with console.error, not through the
-      anira log, which may be what threw, and the call returns ANIRA_ERROR_UNKNOWN (a stage)
-      or ANIRA_ERROR_ENGINE (an engine), which fails the chunk the usual way (zeros, the
-      real-time error latched); no JavaScript exception unwinds through a C frame. The
-      trampolines keep {js_key, the engine id} in a small heap record as the descriptor's
-      user_data and free it in the descriptor's release, which is always set for that
-      purpose. Every instance has a thread-local block of its own, and every instance but the
-      main one a stack: anira_em_alloc_thread_stack allocates both, anira_em_init_instance
-      installs the block as the instance's first call, so every thread_local of anira,
-      tanh-lib and the runtime (Emscripten's exception state among them) is per instance,
-      as it is per thread natively. A module without main() (AniraWeb, linked --no-entry)
-      starts without a usable block on the main instance too: its C++ exceptions trap until
-      one is installed, so the main instance makes the same call with a region of its own.
+      entries JavaScript needs beside the C ABI and cannot write itself. The module runs on
+      one shared memory in every thread of the page: the main thread, the Wasm Workers anira
+      starts (the context's pool, anira_inference_thread_start), the context's Wasm Audio
+      Worklet (anira_em_audio_node_create). Emscripten gives each its stack and thread-local
+      block. Each scope has one registry object, globalThis[Symbol.for('anira.registry')],
+      which the package's defineStage and defineEngine install: { version, stage(Module, key,
+      phase, a, b), engine(Module, key, phase, a, b, engineIdPtr), log(Module, recordPtr),
+      boot(Module) }, where version is ANIRA_EM_HOOKS_VERSION and Module the instance of the
+      scope. A JS stage or a JS engine is a descriptor whose slots are C trampolines compiled
+      into anira: each calls the registry of the scope that runs the C call (the worklet for
+      pre_process, post_process and reset under a Hard contract, an inference Worker for
+      before_inference, after_inference and the engine's process, the main thread for init,
+      prepare, unprepare, release and query) with the stage's or engine's js_key (the
+      package's keyOf of its name: the 32-bit FNV-1a hash of its UTF-16 code units, the same
+      in every scope; a registry refuses a second name whose key is taken), the anira_phase
+      of the call and
+      two pointers into the shared memory, which JavaScript reads through
+      web/src/abi/layout.ts. For a stage, a is the anira_stage_ctx and b the prepared pointer
+      in pre_process, post_process, before_inference, after_inference and reset; a the
+      anira_prepare_info and b the address of the out_prepared slot in prepare; a the prepared
+      pointer in unprepare; a the anira_init_info in init; both 0 in release. For an engine, a
+      is the anira_engine_ctx and b the prepared pointer in ANIRA_PHASE_INFERENCE and
+      ANIRA_PHASE_RESET; a the anira_init_info and b the address of the uint64_t provider mask
+      in ANIRA_PHASE_QUERY. The hook returns an anira_status (a void slot ignores it). A hook
+      that throws, and a scope without a registry, are caught in the trampoline: the exception
+      is reported with console.error (rate-limited, not through the anira log, which may be
+      what threw) and the call returns ANIRA_ERROR_UNKNOWN (a stage) or ANIRA_ERROR_ENGINE (an
+      engine), which fails the chunk the usual way (zeros, the real-time error latched); no
+      JavaScript exception unwinds through a C frame. The trampolines keep {js_key, the engine
+      id} in a small heap record as the descriptor's user_data and free it in the
+      descriptor's release, which is always set for that purpose. An inference Worker imports
+      the context's worker module (anira_em_context_config_set_worker_module) and awaits the
+      registry's boot before its loop; the worklet's registry is booted at every
+      anira_em_audio_node_create.
     includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h", "stage.h", "engine.h", "handler.h"]
     entities:
       - kind: define
         name: ANIRA_EM_HOOKS_VERSION
         value: "1u"
-        doc: "The layout of the hook object Module.anira: its version field, which the runtime compares with anira_em_hooks_version() at instantiation. Appended to, never reordered."
+        doc: "The layout of a scope's registry object (the version field of globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and their arguments. Appended to, never reordered."
       - kind: define
         name: ANIRA_EM_HOOK_PRE
         value: "1u"
@@ -4903,28 +4906,22 @@ headers:
         name: ANIRA_EM_ENGINE_HOOK_QUERY
         value: "2u"
         doc: "Engine hook bit: query crosses into the hook (ANIRA_PHASE_QUERY); unset, every listed provider is usable."
-      - kind: function
-        name: anira_em_hooks_version
-        returns: uint32_t
-        params: []
-        thread: thread-safe
-        nonblocking: true
-        status: promised
-        since: "0.2"
-        doc: "The hook-object layout this module was built for, ANIRA_EM_HOOKS_VERSION; the runtime refuses an instance whose Module.anira.version differs."
-        return_doc: "ANIRA_EM_HOOKS_VERSION."
+      - kind: define
+        name: ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS
+        value: "1u"
+        doc: "Audio node flag: the node may leave Streamed slots of the model unserved; their positions in the multi call stay empty tensors. Without it, every Streamed slot is served by exactly one input or output of the node."
       - kind: function
         name: anira_em_stage_desc_init
         returns: anira_status
         params:
           - {type: anira_stage_desc*, name: desc, doc: "The caller's descriptor, overwritten from ANIRA_STAGE_DESC_INIT."}
           - {type: uint32_t, name: js_key, doc: "The key the hook receives, the stage's entry in the instance's registry."}
-          - {type: uint32_t, name: hook_mask, doc: "An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into Module.anira.stage."}
+          - {type: uint32_t, name: hook_mask, doc: "An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into the scope registry's stage."}
           - {type: uint32_t, name: stage_flags, doc: "The descriptor's flags, the stage's real-time promise, which JavaScript cannot write into the descriptor itself: an OR of ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the pre_process, post_process and reset hooks allocate nothing, lock nothing and block on nothing) and ANIRA_STAGE_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise), or 0 for no promise. Stored as given: a bit the header does not define is refused by anira_pipeline_add_stage."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Fills a stage descriptor whose slots are the trampolines into Module.anira.stage: one per bit of hook_mask, every other slot NULL, the release slot always (it frees the record behind user_data, after the hook's release when ANIRA_EM_HOOK_RELEASE is set), and flags stage_flags. The promise is stated, never derived from the hook bits: under a Hard contract a stage with a pre_process, post_process or reset hook runs it on the driving thread (the audio worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless stage_flags carries ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The descriptor is for anira_pipeline_add_stage; one that is never added keeps its record, so anira_em_pipeline_add_js_stage is the call JavaScript makes."
+        doc: "Fills a stage descriptor whose slots are the trampolines into the scope registry's stage: one per bit of hook_mask, every other slot NULL, the release slot always (it frees the record behind user_data, after the hook's release when ANIRA_EM_HOOK_RELEASE is set), and flags stage_flags. The promise is stated, never derived from the hook bits: under a Hard contract a stage with a pre_process, post_process or reset hook runs it on the driving thread (the audio worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless stage_flags carries ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The descriptor is for anira_pipeline_add_stage; one that is never added keeps its record, so anira_em_pipeline_add_js_stage is the call JavaScript makes."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
       - kind: function
         name: anira_em_pipeline_add_js_stage
@@ -4951,7 +4948,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into Module.anira.engine, and whose release frees the record behind user_data without crossing into JavaScript. The init, load, unload, prepare and unprepare slots stay NULL: a JavaScript engine is ready when its Worker says so, before anira_handler_prepare. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
+        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init, load, unload, prepare and unprepare slots stay NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
       - kind: function
         name: anira_em_pipeline_register_js_engine
@@ -4976,34 +4973,97 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Registers Module.anira.log as a log sink of this module, beside the C sinks of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every record at any level the core logs reaches the hook, as an anira_log_record pointer the hook reads through layout.ts while it runs, on the instance that logs or drains (anira_drain_log). One registration for the whole module: the instances share one memory and so one sink list."
+        doc: "Registers the scope registries' log as a log sink of this module, beside the C sinks of the contexts (anira_context_config_set_log_sink works on WebAssembly too): every record at any level the core logs reaches the registry of the scope that logs or drains (anira_drain_log), as an anira_log_record pointer it reads through layout.ts while it runs. One registration for the whole module: the threads share one memory and so one sink list. While registered the hook takes the place of the platform sink, which on WebAssembly is the console by level (console.debug, .info, .warn, .error; tanh-lib's own stderr sink stays off), so a record reaches the console once: the same hold on the platform sink a context's ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK takes, released with the hook."
       - kind: function
-        name: anira_em_alloc_thread_stack
-        returns: void*
-        params:
-          - {type: size_t, name: bytes, doc: "The stack size, rounded up to 16; 0 for the default of 4 MiB."}
-        thread: main-thread
-        status: promised
-        since: "0.2"
-        doc: "Allocates the stack of a new module instance (an inference Worker's, the audio worklet's) together with its thread-local block: one malloc'd region, 16-byte aligned, the stack first and the block above its top, sized for this module's TLS segment (__builtin_wasm_tls_size). The instance sets its stack pointer to base + bytes and calls anira_em_init_instance(base, bytes) before anything else."
-        return_doc: "The base of the region, or NULL when it cannot be allocated."
-      - kind: function
-        name: anira_em_free_thread_stack
-        returns: void
-        params:
-          - {type: void*, name: base, doc: "What anira_em_alloc_thread_stack returned; NULL is a no-op."}
-        thread: main-thread
-        status: promised
-        since: "0.2"
-        doc: "Frees a region of anira_em_alloc_thread_stack, once the instance that ran on it has stopped calling into the module."
-      - kind: function
-        name: anira_em_init_instance
+        name: anira_em_context_config_set_worker_module
         returns: anira_status
         params:
-          - {type: void*, name: stack_base, doc: "What anira_em_alloc_thread_stack returned."}
-          - {type: size_t, name: bytes, doc: "The size passed to anira_em_alloc_thread_stack (0 for the default)."}
-        thread: thread-safe
+          - {type: anira_context_config*, name: config, doc: "The config."}
+          - {type: const char*, name: url, doc: "The absolute URL of an ES module, copied; NULL or empty for none."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Installs the thread-local block of the region as the calling instance's (__wasm_init_tls): its thread_local variables, anira's and tanh-lib's, start from their initial values in that block, private to the instance. Without it a second instance's thread-local block is the one at address 0, shared with every other uninitialised instance. The first call of every instance, on that instance's thread, before any other entry: a Worker's and the worklet's, with the region whose stack they run on, and the main instance's, with a region it allocates for the block (it keeps its own stack). A module linked without main() starts without a usable block, and Emscripten's exception state is thread-local: until this call a thrown and caught C++ exception (any refused call) traps."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL stack_base."
+        doc: "The one web-only field of a context config: the ES module every inference Worker imports before it enters its loop. The context's pool threads are Wasm Workers (as natively they are OS threads), and anira_inference_thread_start starts one for a user-driven thread; each imports this module first, which defines the JavaScript engines and stages of its scope on the registry globalThis[Symbol.for('anira.registry')] (the package's defineEngine and defineStage), and awaits the registry's boot (the engines' async init) before the loop. A module that fails to load is reported on the console and the Worker runs without it. Like the wait strategy, the first context's module is the one in effect for the process's pool; a later context naming another is warned about. Not part of the context config's JSON."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config."
+      - kind: function
+        name: anira_em_inference_threads_in_loop
+        returns: uint32_t
+        params: []
+        thread: thread-safe
+        nonblocking: true
+        status: promised
+        since: "0.2"
+        doc: "The inference threads inside their loops now, the pool's and the user-driven ones alike. A Wasm Worker anira starts enters its loop asynchronously, once the browser has started it (the main thread must yield to its event loop first) and its worker module is imported and booted: a host that waits for the inferences of a prepared handler on the main thread (an offline render, anira_handler_process_wait) first waits, yielding, until this reaches anira_num_inference_threads; natively the pool is inside its loops by the time anira_handler_prepare returns."
+        return_doc: "The count."
+      - kind: function
+        name: anira_em_audio_node_create
+        returns: anira_status
+        params:
+          - {type: anira_handler*, name: handler, doc: "A handler prepared under a Hard contract whose block range holds the context's render quantum; it must outlive the node (anira_em_audio_node_destroy first)."}
+          - {type: uint32_t, name: audio_context, doc: "The audio context: what emscriptenRegisterAudioObject returned for an AudioContext or an OfflineAudioContext."}
+          - {type: const uint32_t*, name: input_slots, doc: "num_input_slots Streamed input slots, input k of the node feeding the k-th; each input has the slot's channels (the node's channelCount is the largest of them, explicit, discrete; a slot reads its first channels). NULL: every Streamed input slot of the model, in slot order."}
+          - {type: uint32_t, name: num_input_slots, doc: "Their count, at most 32; ignored for NULL. 0 with a non-NULL list: a node without an input."}
+          - {type: const uint32_t*, name: output_slots, doc: "num_output_slots Streamed output slots, output k of the node playing the k-th with the slot's channels. NULL: every Streamed output slot of the model, in slot order."}
+          - {type: uint32_t, name: num_output_slots, doc: "Their count, at most 32; ignored for NULL."}
+          - {type: const uint32_t*, name: param_slots, doc: "num_param_slots input slots of float32 Static scalars (rank 1, one element), each driven by the AudioParam of its index ('0', '1', ...; k-rate, default 0); NULL for none."}
+          - {type: uint32_t, name: num_param_slots, doc: "Their count, at most 32."}
+          - {type: const uint32_t*, name: tensor_slots, doc: "num_tensor_slots Static input slots the main thread writes whole with anira_em_audio_node_set_static_input (any dtype, concrete extents); NULL for none."}
+          - {type: uint32_t, name: num_tensor_slots, doc: "Their count."}
+          - {type: uint32_t, name: flags, doc: "ANIRA_EM_AUDIO_NODE_FLAG_*; 0 for none."}
+          - {type: double, name: wait_ms, doc: "0: every quantum calls anira_handler_process_multi (a live context); above 0: anira_handler_process_multi_wait with this bound (an offline render that waits for every inference)."}
+          - {type: int32_t*, name: out_status, doc: "Written later: ANIRA_INCOMPLETE now, the creation's status once it completed (written last, with release ordering); the caller keeps the word alive until then.", written_later: true}
+          - {type: uint32_t*, name: out_node, doc: "Written later, before out_status: the node's handle (emscriptenGetAudioObject gives the AudioWorkletNode).", written_later: true}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Creates a Wasm Audio Worklet node that streams through the handler, asynchronously: the first node of a context starts the context's worklet thread (once; its stack stays the context's), a node of n AudioParams registers the processor anira-node-n once per context, and the node is created after both, from the main thread's event loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio thread, the C render callback hands the node's buffers to the handler as planar host tensors (no copy: the output tensor is the node's output), pushes an AudioParam's value to its Static input when it changed and a tensor slot's value the main thread wrote since the last push, and calls anira_handler_process_multi (or anira_handler_process_multi_wait) once for every Streamed slot it serves, an empty tensor at every other position, so a model with several streams keeps every guarantee of the multi form (ANIRA_MISS_BYPASS passes the anchored input through to every output, the wait credit of ANIRA_WAIT_CONTRACT, one anira_miss_fn call per block); the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success silences what an output was not delivered. Every Streamed slot of the model is served by exactly one input or output of the node, unless ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS leaves some out (their positions stay empty). Driving one handler from several nodes, one slot each, is not the supported form: the streams stay aligned, but a non-anchored call loses BYPASS (zeros on a miss), the wait credit and the miss callback's view of the block. A quantum other than the declared one is silence. A JavaScript stage of the handler runs its worklet phases on the worklet scope's registry, which the caller fills before (audioWorklet.addModule of a module that calls defineStage) and anira boots over the worklet's instance at every create. The render callback allocates nothing and locks nothing; nodes are at most 256 at once."
+        return_doc: "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a slot list longer than 32 or without its pointer, a slot listed twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
+      - kind: function
+        name: anira_em_audio_node_set_static_input
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create."}
+          - {type: uint32_t, name: slot, doc: "One of its tensor slots."}
+          - {type: const void*, name: bytes, doc: "The whole value, the spec's bytes in its layout; copied."}
+          - {type: size_t, name: size, doc: "Their count: exactly the spec's."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Writes a Static input a node serves, for the render callback to push before its next process call: a seqlock per slot (the main thread the one writer), so the audio thread never pushes a torn value and never waits; a write it overlaps is pushed at a later quantum, the handler keeping the previous value until then."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node, a slot it does not serve, NULL bytes or a size other than the spec's."
+      - kind: function
+        name: anira_em_audio_node_prepare
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create."}
+          - {type: const anira_contract*, name: contract, doc: "A Hard contract whose block range holds the context's render quantum; copied by the prepare."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Re-prepares the node's handler under contract while the node lives and its context runs: the way to change the geometry of a running node (a new block_max after the output device changed). The render callback is held off first: from its next quantum it outputs silence and leaves the handler alone, and this call waits (at most 5000 ms, on the main thread; the callback never waits) until the quantum in flight returned; then anira_handler_prepare's work runs, the node's state that depends on the prepare is rebuilt off the audio thread (the handler's empty tensors; its Static inputs are pushed again at the next quantum), and the callback resumes. The quanta in between are silence. anira_handler_prepare itself refuses while a node streams through the handler. Nothing allocates on the audio thread."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for an unknown node or a NULL contract; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the render quantum (the handler untouched); ANIRA_ERROR_INVALID_STATE when the render callback did not return within the bound (the handler untouched); otherwise anira_handler_prepare's statuses, after which a failed prepare leaves the handler unprepared and the node silent until a prepare succeeds."
+      - kind: function
+        name: anira_em_audio_node_hold
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create."}
+          - {type: int32_t, name: held, doc: "Nonzero holds the node, 0 releases it."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Holds the node's render callback off, or releases it: from its next quantum a held node outputs silence and leaves its handler alone (nothing pushed, nothing pulled, no inference started), as anira_em_audio_node_prepare holds it while it re-prepares; released, it streams on from where it was held. For a quiet audio thread while the page measures the context's render geometry. Does not wait for the quantum in flight. A hold and a re-prepare do not release each other's hold."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node."
+      - kind: function
+        name: anira_em_audio_node_destroy
+        returns: void
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create; an unknown one is a no-op."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Stops the node's render callback calling into the handler (a quantum inside it finishes first, at most its wait bound), disconnects the node and releases its handle; the callback outputs silence and lets the browser drop the node. Destroy the nodes before the handler they stream through."

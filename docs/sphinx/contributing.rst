@@ -250,7 +250,8 @@ The C headers under ``include/anira/abi/`` are generated, never edited by hand. 
 single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
 (or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
 registry against the header conventions of ``docs/anira-v3-architecture.md`` and
-rewrites the headers, ``web/src/abi/enums.ts`` and ``web/src/abi/layout.ts``, the symbol and
+rewrites the headers, ``web/src/abi/enums.ts``, ``web/src/abi/layout.ts`` and
+``web/src/abi/bindings.ts`` (one typed method per entry point, see below), the symbol and
 wasm export lists, the tables under ``src/capi/generated/`` (the status texts, and
 ``struct_sizes.inc`` behind ``anira_sizeof``) and ``test/abi/generated/``,
 ``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``. Commit the
@@ -261,8 +262,22 @@ pre-release) or breaking (a major). The generated files carry a ``.clang-format`
 ``DisableFormat`` (``include/anira/abi/``'s covers the ``draft/`` folder below it) and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
 untouched; ``layout.ts`` is emitted the way prettier prints it under ``web/.prettierrc``
-(check it with ``npx prettier --check src/abi/layout.ts``, and never run ``npm run format``:
-it rewrites the generated ``enums.ts``, which then fails ``--check``).
+(check it with ``npx prettier --check src/abi/layout.ts``), and ``web/.prettierignore`` lists
+the generated ``enums.ts`` and ``bindings.ts``, so ``npm run format`` leaves them as written.
+
+``bindings.ts`` is the TypeScript face of the C ABI: the class ``AniraBindings`` over one
+module instance, one method per entry point under its C name, derived from the registry's
+types alone. The ``anira_error*`` parameter is made by the binding on the instance's stack and
+a failed ``anira_status`` throws an ``AniraError`` with the entry's message (an entry without
+one throws with the status text); a ``const char*`` argument is a JS string copied to the
+stack (with its ``size_t len`` computed when one follows); what an entry writes through a
+non-const pointer to a scalar, an enum, a handle pointer or a ``const char*`` is returned (one
+value, or an object of them by parameter name); a ``_to_json`` returns its text; an
+``anira_bool`` is a ``boolean``, a 64-bit integer a ``bigint``, a pointer or a size a
+``number``. An enumeration entry (a ``uint32_t* count`` the caller sets to its capacity) keeps
+its pointers as arguments, and a record the caller passes in (a tensor, a descriptor, a
+capability row) is a pointer. A new entry needs no TypeScript: regenerating gives it its
+method.
 
 Entity kinds are ``verbatim``, ``typedef``, ``define``, ``enum``, ``handles``, ``struct``,
 ``union``, ``callback`` and ``function``. A struct field or a union arm has exactly one shape:
@@ -379,13 +394,24 @@ entry, a draft one included, needs its body in the same pull request, on Emscrip
 the one test option WebAssembly allows), whose gates run under node:
 ``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
 as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
-the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the hook object
-of ``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine
-through the trampolines of ``anira/anira_em.h`` on one instance and holds the link's
-thread-local block to 1024 bytes, and ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.mjs``),
-which runs a second instance in a ``worker_threads`` Worker inside
-``anira_inference_thread_run_loop`` (the park on the wake word, the notify, the ``has_exited``
-stop); the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
+``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine through
+the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
+a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
+(the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
+a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
+so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
+a context of two inference threads that anira starts as Wasm Workers, each importing
+``test/abi/em_pool_module.mjs`` (a JavaScript engine on the scope's registry) before its loop,
+``anira_em_console`` (``test/abi/em_console.c``), a consumer of the archive with no export
+list that logs one warning and must see it once, through ``console.warn``, and
+``anira_em_runtime`` (``test/abi/em_runtime.c``), a library module that links the archive with
+none of AniraWeb's flags and must still run a timer callback after a first one, and
+``anira_em_oom`` (``test/abi/em_oom.c``), which fills its heap (a fixed 512 MiB of its own
+link; AniraWeb's grows) and must see a
+handler on the bundled gain config refused with ``ANIRA_ERROR_OUT_OF_MEMORY``, then prepare once
+the memory is back (it reads the model fixtures: ``cmake -P extras/fetch-models.cmake``);
+the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
 ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).

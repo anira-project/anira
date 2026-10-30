@@ -6,6 +6,7 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <vector>
 
 #ifndef __EMSCRIPTEN__
@@ -33,12 +34,15 @@ class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting f
  * It manages a concurrent queue of inference requests and processes them with minimal
  * latency while maintaining thread safety and real-time performance guarantees.
  *
- * On native builds this owns a thl::core::Thread running at
- * thl::core::ThreadPriority::RealTime. Under Emscripten there is no owned OS thread — a JS Worker
- * drives the loop externally by calling run_loop(), and start()/stop()
- * simply flip an atomic flag. This is required because each WASM worker
- * instance shares memory with the main instance; spawning OS threads from
- * C++ inside a worker would interact badly with the shared allocator.
+ * On native builds start() runs the loop on a thl::core::Thread at
+ * thl::core::ThreadPriority::RealTime. On WebAssembly start() runs it on a Wasm Worker on the
+ * module's shared memory (src/platform/emscripten/em_worker.h), with a stack and thread-local
+ * block of its own, which first imports the worker module (set_worker_module(): the
+ * JavaScript engines and stages it defines) and then enters run_loop(); stop() waits for the
+ * worker to leave the loop and terminates it, or cancels the boot of a worker that has not
+ * entered it yet (em::cancel_boot: the worker finishes its boot, never enters, and the reaper
+ * frees its region). A host may instead drive the loop on a thread of
+ * its own by calling run_loop() without start(), on every platform.
  *
  * Dequeueing is deliberately done without a moodycamel::ConsumerToken: the
  * non-tokenized try_dequeue scans all producer sub-queues, so any enqueued
@@ -69,7 +73,7 @@ public:
      * @param wait_strategy How run_loop() waits for new work when the queue is
      *                      empty (anira_wait_strategy: spin with backoff, or block on
      *                      the queue's semaphore). Ignored on WebAssembly builds,
-     *                      where JS Workers drive the loop cooperatively.
+     *                      where an idle Wasm Worker parks on the wake word.
      */
     InferenceThread(InferenceQueue& next_inference,
                     anira_wait_strategy wait_strategy = ANIRA_WAIT_SPIN_BACKOFF);
@@ -119,11 +123,15 @@ public:
     void run_loop();
 
     /**
-     * @brief Starts the thread (native: a real-time priority OS thread running
-     * run_loop(); WebAssembly: marks the externally driven loop as running).
+     * @brief Starts the thread: a real-time priority OS thread running run_loop() (native), a
+     * Wasm Worker that imports the worker module and then runs run_loop() (WebAssembly).
      *
-     * @return False when the thread is already running, or (native) when the operating
-     *         system refused to create it; is_running() stays false in the latter case.
+     * @return False when the thread is already running, or when the operating system (native)
+     *         or the browser (WebAssembly) refused to create it; is_running() stays false in
+     *         the latter case.
+     * @throws std::exception (WebAssembly) when there is no memory for the Worker's region (its
+     *         stack and thread-locals): the C entries return it as ANIRA_ERROR_OUT_OF_MEMORY, and
+     *         is_running() stays false.
      */
     bool start();
 
@@ -140,15 +148,28 @@ public:
     void request_stop();
 
     /**
-     * @brief Stops the thread: asks run_loop() to return and, natively, joins it.
+     * @brief Stops the thread: asks run_loop() to return and joins it. WebAssembly: waits for
+     * the Wasm Worker to leave the loop and terminates it; a worker still booting is cancelled
+     * instead (it never enters the loop, and is terminated and freed by the reaper once its
+     * boot is over, never in the middle of it); a loop a host drives itself is asked to return
+     * only.
      */
     void stop();
+
+#ifdef __EMSCRIPTEN__
+    /**
+     * @brief WebAssembly: the URL of the ES module the Wasm Worker of start() imports before it
+     * enters the loop (anira_em_context_config_set_worker_module); empty for none. Read at
+     * start().
+     */
+    void set_worker_module(std::string url);
+#endif
 
     /// True once request_stop() or stop() was called; run_loop() polls this, and a thread that
     /// holds an instance of a loaded model reads it before every waiting job it takes.
     bool should_exit() const;
 
-    /// True from start() until run_loop() has returned (native) / until stop() (web).
+    /// True from start() until run_loop() has returned (native) / until stop() (WebAssembly).
     bool is_running() const;
 
     /**
@@ -166,12 +187,11 @@ public:
      *
      * Native: threads inside run_loop() right now — the auto-managed pool once started
      * plus any user-created threads; the same number as get_num_loop_active().
-     * WebAssembly: externally driven threads between start() and stop(); counted there
-     * (start() runs synchronously on the main instance) rather than at run_loop() entry,
-     * so the count is already visible when AniraWeb.spinUpInferenceWorker() returns,
-     * before the worker asynchronously enters its loop. The counters have static storage
-     * duration — on WebAssembly that is shared memory, so every WASM instance sees the
-     * same value.
+     * WebAssembly: threads between start() and stop(); counted there (start() creates the
+     * Wasm Worker synchronously) rather than at run_loop() entry, so the count is already
+     * visible when start() returns, before the Worker imports its module and enters its
+     * loop. The counters have static storage duration, in the module's shared memory, so
+     * every thread sees the same value.
      */
     static unsigned int get_num_active_threads();
 
@@ -207,7 +227,9 @@ public:
      * pool plus every user-created thread that runs the loop), for the bounded waits of
      * Core::new_data_request(): a wait whose completion no thread could ever signal ends
      * with Core::WaitOutcome::NoThread instead of running to its deadline. A host that
-     * drives execute() itself without run_loop() is not counted. Wait-free.
+     * drives execute() itself without run_loop() is not counted. WebAssembly: a thread of
+     * start() counts from the start on, while its Wasm Worker still imports its module (as
+     * natively the pool is inside its loops by the time a prepare returns). Wait-free.
      */
     static bool any_loop_active() noexcept;
 
@@ -419,8 +441,16 @@ private:
     std::atomic<bool> m_has_exited{false};  ///< Set by run_loop() on return, cleared on entry
     std::atomic<bool> m_in_loop{false};     ///< Set on run_loop() entry, cleared on return
 #ifdef __EMSCRIPTEN__
+    /// The Wasm Worker's entry: the loop (the bootstrap skips it when stop() cancelled the
+    /// worker during its boot).
+    static void enter_worker(void* self);
+
     std::atomic<bool> m_should_exit{false};
     std::atomic<bool> m_is_running{false};
+    std::string m_worker_module;      ///< What the Wasm Worker of start() imports first
+    int m_worker_id = 0;              ///< The Wasm Worker of start(); 0: none
+    void* m_worker_region = nullptr;  ///< Its stack and thread-local block
+    void* m_worker_boot = nullptr;    ///< Its bootstrap's record: the cancel, the left word
 #else
     thl::core::Thread m_thread;  ///< The OS thread; its stop flag is should_exit()
 #endif

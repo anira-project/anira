@@ -181,7 +181,9 @@ ANIRA_API bool inside_log_sink(LogSinkId id) noexcept;
 
 /**
  * @brief Switches thl::Logger's platform sink (stderr, logcat, os_log) on or off without
- * touching anything else of its configuration, and never starts its drain thread.
+ * touching anything else of its configuration, and never starts its drain thread. On
+ * WebAssembly the platform sink is anira's console sink by level instead (tanh-lib's stays off
+ * there: its stderr reaches the console as console.error for every level).
  * ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK of a context is applied through this.
  */
 ANIRA_API void set_platform_sink_enabled(bool enabled);

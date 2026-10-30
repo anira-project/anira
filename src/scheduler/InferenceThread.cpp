@@ -21,6 +21,14 @@
 #include "../utils/Backoff.h"
 #include "InstanceWaitList.h"
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten/emscripten.h>
+
+#include <string>
+
+#include "../platform/emscripten/em_worker.h"
+#endif
+
 namespace anira {
 
 namespace {
@@ -59,6 +67,11 @@ static_assert(sizeof(std::atomic<uint32_t>) == sizeof(int32_t) &&
 // blocking loop's exit-check interval).
 constexpr int64_t k_park_timeout_ns = 5'000'000;
 #endif
+#ifdef __EMSCRIPTEN__
+// How long stop() waits for a worker inside an engine call to leave the loop before it
+// terminates the worker regardless.
+constexpr double k_worker_stop_timeout_ms = 5000.0;
+#endif
 }  // namespace
 
 InferenceThread::InferenceThread(InferenceQueue& next_inference, anira_wait_strategy wait_strategy)
@@ -95,13 +108,36 @@ bool InferenceThread::is_running() const {
 }
 #else
 bool InferenceThread::start() {
-    m_should_exit.store(false, std::memory_order::release);
-    // Count only the false→true transition so repeated start() calls (and the
-    // stop() in the destructor of a never-started thread) keep the process-wide
-    // active count balanced; a repeated start() is reported, like the native one.
+    // A repeated start() is reported, like the native one; the counter moves with the
+    // false→true transition alone.
     if (m_is_running.exchange(true, std::memory_order::acq_rel)) { return false; }
+    m_should_exit.store(false, std::memory_order::release);
+    em::Worker worker;
+    try {
+        worker = em::start_worker(m_worker_module, &enter_worker, this);
+    } catch (...) {
+        m_is_running.store(false, std::memory_order::release);
+        throw;  // out of memory for the Worker: the caller's status
+    }
+    if (worker.m_id == 0) {
+        m_is_running.store(false, std::memory_order::release);
+        return false;
+    }
+    m_worker_id = worker.m_id;
+    m_worker_region = worker.m_region;
+    m_worker_boot = worker.m_boot;
     s_num_active_threads.fetch_add(1, std::memory_order::relaxed);
     return true;
+}
+
+void InferenceThread::enter_worker(void* self) {
+    // Called only when the worker's boot was not cancelled (em::cancel_boot), and the cancel and
+    // this entry race on the bootstrap's record, which outlives this object.
+    static_cast<InferenceThread*>(self)->run_loop();
+}
+
+void InferenceThread::set_worker_module(std::string url) {
+    m_worker_module = std::move(url);
 }
 
 void InferenceThread::request_stop() {
@@ -111,10 +147,33 @@ void InferenceThread::request_stop() {
 
 void InferenceThread::stop() {
     m_should_exit.store(true, std::memory_order::release);
+    notify_work();
+    em::Worker worker{m_worker_id, m_worker_region, m_worker_boot};
+    m_worker_id = 0;
+    m_worker_region = nullptr;
+    m_worker_boot = nullptr;
+    // A worker still importing its module or initialising its engines is never terminated
+    // there: the cancel hands it to the reaper (em_worker.cpp), which frees its memory once it
+    // finished its boot without entering the loop.
+    if (worker.m_id != 0 && !em::cancel_boot(worker)) {
+        // Inside the loop: the flag and the notify bring it out once its current job is done,
+        // and its JavaScript says when it ran its last C code.
+        const double start = emscripten_get_now();
+        while (!em::has_left(worker)) {
+            if (emscripten_get_now() - start > k_worker_stop_timeout_ms) {
+                ANIRA_LOG_ERROR(log_group::k_scheduler,
+                                "inference thread: the Wasm Worker did not leave its loop "
+                                "within %.0f ms of the stop (an engine call that does not "
+                                "return); it is terminated where it runs",
+                                k_worker_stop_timeout_ms);
+                break;
+            }
+        }
+        em::terminate_worker(worker, em::has_left(worker));
+    }
     if (m_is_running.exchange(false, std::memory_order::acq_rel)) {
         s_num_active_threads.fetch_sub(1, std::memory_order::relaxed);
     }
-    notify_work();
 }
 
 bool InferenceThread::should_exit() const {
@@ -145,6 +204,10 @@ unsigned int InferenceThread::get_num_loop_active() {
 bool InferenceThread::any_loop_active() noexcept {
     // A relaxed read: the waits re-check between poll iterations, so a thread leaving the
     // loop is seen at the next check.
+#ifdef __EMSCRIPTEN__
+    // A Wasm Worker of start() enters its loop once its module is imported: it will run.
+    if (s_num_active_threads.load(std::memory_order::relaxed) > 0) { return true; }
+#endif
     return s_num_loop_active.load(std::memory_order::relaxed) > 0;
 }
 

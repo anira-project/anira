@@ -10,11 +10,11 @@
  * @brief User-driven inference threads, the WebAssembly Worker's primitive.
  *
  * A host that configured its context with num_threads = 0 drives inference itself: it creates
- * anira_inference_thread objects, bound to the core's queue, and either lets anira start an OS
- * thread for each (anira_inference_thread_start, native only) or runs the loop on a thread of
- * its own (anira_inference_thread_run_loop, the only form on WebAssembly, where the thread is a
- * Worker). The objects outlive the context that created them and must be stopped before the
- * library is unloaded.
+ * anira_inference_thread objects, bound to the core's queue, and either lets anira start a
+ * thread for each (anira_inference_thread_start: an OS thread natively, a Wasm Worker on
+ * WebAssembly) or runs the loop on a thread of its own (anira_inference_thread_run_loop). The
+ * objects outlive the context that created them and must be stopped before the library is
+ * unloaded.
  */
 
 #include <stdint.h>
@@ -30,8 +30,7 @@ extern "C" {
 
 /**
  * @brief Creates an inference thread bound to the core's queue. Nothing runs until
- * anira_inference_thread_start or anira_inference_thread_run_loop; on WebAssembly the
- * object is created on the main instance and run in a Worker.
+ * anira_inference_thread_start or anira_inference_thread_run_loop.
  * @param context The context whose core the thread serves; the thread waits with the core's
  *        reconciled wait strategy, the first user's.
  * @param out Receives the object on success.
@@ -69,10 +68,11 @@ ANIRA_API anira_bool ANIRA_CALL anira_inference_thread_execute(anira_inference_t
                                                                ANIRA_NOEXCEPT;
 
 /**
- * @brief Native: spawns an OS thread at the inference-thread scheduling class (real-time where
- * granted) that runs the loop. WebAssembly: marks the object running; the loop is
- * entered by the Worker through anira_inference_thread_run_loop. A second start while
- * the loop runs, and an operating system that refuses the thread, are returned, never
+ * @brief Spawns a thread that runs the loop: natively an OS thread at the inference-thread
+ * scheduling class (real-time where granted), on WebAssembly a Wasm Worker on the
+ * module's memory, which imports the context's worker module
+ * (anira_em_context_config_set_worker_module) first. A second start while the loop runs,
+ * and an operating system or browser that refuses the thread, are returned, never
  * silent: is_running stays 0 then.
  * @param thread The object.
  * @param err Nullable.
@@ -87,8 +87,14 @@ ANIRA_API anira_status ANIRA_CALL anira_inference_thread_start(anira_inference_t
                                                                anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Requests the loop to exit. Native: joins the OS thread before returning. WebAssembly:
- * requests only; poll anira_inference_thread_has_exited.
+ * @brief Requests the loop to exit and joins the thread anira_inference_thread_start started
+ * (WebAssembly: waits for its Wasm Worker to leave the loop, then terminates it; a
+ * Worker still booting, its module's import or its engines' init in flight, is never
+ * terminated there: the stop cancels its boot and returns, the Worker finishes the boot
+ * without entering the loop, and a main-thread timer frees its region once it is done,
+ * terminating one that has not finished within 10 s and leaving its region allocated). A
+ * loop the host runs itself (anira_inference_thread_run_loop) is asked to return only;
+ * poll anira_inference_thread_has_exited.
  * @param thread The object.
  * @par Thread contract
  * [main-thread]
@@ -122,7 +128,7 @@ ANIRA_API anira_bool ANIRA_CALL anira_inference_thread_should_exit(const anira_i
 
 /**
  * @brief Nonzero while the loop is running (native: the OS thread exists and has not returned;
- * WebAssembly: between start and stop).
+ * WebAssembly: between start and stop, the Wasm Worker's import included).
  * @param thread The object.
  * @return The running flag.
  * @par Thread contract

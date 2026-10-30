@@ -1,105 +1,96 @@
-Custom Inference Backends
-=========================
+Custom Inference Engines
+========================
 
-A JavaScript engine is a class the inference Workers call in place of a built-in engine: the
-web twin of a C custom engine (:doc:`../custom_engines`). On the C side it is an
-``anira_engine_desc`` whose ``process`` (and, opted in, ``reset`` and ``query``) are trampolines
-into the hook object of the Worker that runs the inference, created under a reverse-URI id and
-added to the pipeline by ``_anira_em_pipeline_register_js_engine``. A model entry names the
-engine by that id; the pipeline runs it as ``ANIRA_ENGINE_CUSTOM``. Writing one takes three
-steps: the class, a worker file that knows it, the registration.
+An inference engine in TypeScript runs on the context's inference Workers, called synchronously
+from each Worker's loop; it is the counterpart of a C ``anira_engine_desc``
+(:doc:`../custom_engines`). The module's built-in ONNX Runtime engine needs none of this: a model
+entry ``"engine": "onnxruntime"`` runs on it as natively.
 
-Step 1: Implement the Engine
-----------------------------
+The Worker Module
+-----------------
 
-Subclass :js:class:`JSBackend`. ``init()`` loads what the engine needs; the Worker awaits it
-before it reports the engine registered, so the engine is ready before the host prepares the
-handler. ``process(ctx, prepared)`` runs once per inference on the Worker: ``ctx`` points at the
-call's ``anira_engine_ctx``, whose input and output tensors ``this.inputs(ctx)`` /
-``this.outputs(ctx)`` read through ``layout.ts`` (``_anira_tensor_data_f32``,
-``_anira_tensor_num_elements``). Return an ``anira_status``; a thrown exception fails the
-inference (``ANIRA_ERROR_ENGINE``, the chunk delivers zeros).
+Every inference Worker imports the context's worker module before it enters its loop, and
+awaits the boot of its scope's registry: the ``init`` of every engine the module defined. Define
+the engine there:
 
-.. code-block:: typescript
+.. literalinclude:: ../../../web/examples/stage-and-engine/double-engine.ts
+   :language: ts
 
-   // gain-engine.ts
-   import { JSBackend, anira_status } from '@anira-project/anira'
+and name the module in the context, bundled into one file (with Vite,
+``import workerModule from './double-engine.ts?worker&url'``):
 
-   export class GainEngine extends JSBackend {
-     override process(ctx: number): number {
-       const f32 = this.env.heap.f32
-       const [input] = this.inputs(ctx)
-       const [output] = this.outputs(ctx)
-       if (!input || !output || input.f32Index === 0 || output.f32Index === 0) {
-         return anira_status.ANIRA_ERROR_NOT_SUPPORTED // not host float32
-       }
-       for (let i = 0; i < output.numElements; i++) {
-         f32[output.f32Index + i] = 0.5 * f32[input.f32Index + i]
-       }
-       return anira_status.ANIRA_OK
-     }
-   }
+.. code-block:: ts
 
-``this.env`` holds the Worker's module and heap, the engine id, and the model config and entry
-index the engine was registered with; :js:class:`ONNXRuntimeWebBackend` reads its entry with
-``_anira_model_config_model_path`` (a URL it fetches) or ``_anira_model_config_model_bytes``.
+   const context = Context.create(anira, { threads: 2, workerModule })
 
-Step 2: A Worker File That Knows the Class
-------------------------------------------
+``init`` (optional, may be async) loads what the engine needs before the Worker's loop: a runtime
+instantiated. ``load(model)`` (optional, synchronous) receives the model entry the calls run, what
+a C engine's load reads of its row: ``model.bytes`` (a ``Uint8Array`` view of the shared memory,
+no copy; valid while the loaded model lives), else ``model.path``, or neither for an engine that
+declares ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``. It runs on each Worker before the first call on a
+loaded model; ``ModelConfig.fromUrl`` attaches the bytes of a JavaScript engine's entry, so the
+model file is fetched once, on the main thread, and every Worker reads the same memory.
+``process(ctx, prepared)`` runs once per inference (``prepared`` the loaded model's record, which
+:js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
+gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
+tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
+``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``registerEngine``) runs at a new stream of an exclusive
+handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
+can run here and runs on the main thread, so a page whose engine has one imports the module there
+as well. Each Worker builds its own instance, so an engine object is never shared between
+threads.
 
-The bundled worker knows ``ONNXRuntimeWebBackend`` only. Ship a worker file that hands your
-classes to anira's worker runtime:
+``process`` must be synchronous: the Worker's event loop does not run while it is in its loop, so
+an engine whose inference is a promise (onnxruntime-web's ``session.run()``, a WebGPU readback)
+cannot run there yet. :ref:`web-realms` says what an engine can reach once the Worker runs.
 
-.. code-block:: typescript
+Registering It
+--------------
 
-   // gain-worker.ts
-   import { setupInferenceWorker } from '@anira-project/anira'
-   import { GainEngine } from './gain-engine'
+The model entry names the engine by its reverse-URI id, and the pipeline registers it under that
+id:
 
-   setupInferenceWorker({ GainEngine })
+.. code-block:: ts
 
-Step 3: Register It
--------------------
+   const model = await ModelConfig.fromJson(anira, JSON.stringify({
+     models: [{ engine: 'org.example.double' }], // no path: the engine needs no model
+     // ...
+   }))
+   const pipeline = Pipeline.create(anira)
+     .addInference(model)
+     .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 
-On the main thread, register the engine on the pipeline before ``_anira_handler_create`` and
-spin the Workers up from your file:
+``flags`` states the engine's promises (``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: it reads no model
+file, so its model entry needs no ``path``). Register before ``Handler.create``: a handler copies the pipeline.
 
-.. code-block:: typescript
+ONNX Runtime Web
+----------------
 
-   const jsKey = await anira.registerJSEngine(pipeline, {
-     engineId: 'org.example.gain', // the model entry's "engine"
-     className: 'GainEngine',
-     modelConfigPtr: model,
-     engineFlags: 0, // ANIRA_ENGINE_FLAG_*: what the engine promises
-   })
-   const worker = await anira.spinUpInferenceWorker(
-     context,
-     new URL('./gain-worker.ts', import.meta.url)
-   )
+``@anira-project/anira/engines/onnxruntime-web`` wraps onnxruntime-web's own WebAssembly build
+as such an engine: its ``init`` loads onnxruntime-web's binary (``dist/wasm/
+ort-wasm-simd-threaded.wasm``), its ``load`` creates a session from the model entry's bytes
+(copied into onnxruntime-web's own heap, a separate module) or, for an entry with a path and no
+bytes, from a synchronous fetch of the path, and its ``process`` runs one float32 ORT tensor per
+model tensor of the call:
 
-The model entry: ``{ "engine": "org.example.gain", "path": "unused.bin" }`` (an engine that
-loads nothing from its entry may name any path; anira never opens a registered engine's
-path). ``engineFlags`` carries the descriptor flags JavaScript cannot write itself:
-``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``, ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``,
-``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``, ``ANIRA_ENGINE_FLAG_STATE_ALIAS`` (:doc:`../custom_engines`
-says what each promises). A registered engine has no providers list, so it serves
-``ANIRA_PROVIDER_CPU`` alone; ``hookMask`` adds ``ANIRA_EM_ENGINE_HOOK_RESET`` for an engine
-that keeps per-stream state of an exclusive handler. ``ANIRA_EM_ENGINE_HOOK_QUERY`` is refused
-here (a query runs on the main thread, and a registered engine has no providers list to answer
-for); see the lower level below.
+.. code-block:: ts
 
-Engines registered after a Worker started reach it too: ``registerJSEngine`` stops that
-Worker's thread, sends the registration, awaits the engine's ``init()`` and starts the thread
-again. ``unregisterJSEngine(jsKey)`` removes the Worker-side objects (their ``destroy()`` runs);
-the C engine stays with the pipeline and the handlers that hold it.
+   // the worker module
+   import { defineEngine } from '@anira-project/anira/scope'
+   import { ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb } from '@anira-project/anira/engines/onnxruntime-web'
 
-The Lower Level
----------------
+   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())
 
-``registerJSEngine`` is ``_anira_em_pipeline_register_js_engine(pipeline, engineId, jsKey,
-hookMask, engineFlags, err)`` plus the Worker registrations. A C or JavaScript caller that
-needs a providers list fills the descriptor with ``_anira_em_engine_desc_init(desc, jsKey,
-hookMask, engineFlags)``, sets the list, and calls ``_anira_custom_engine_create`` and
-``_anira_pipeline_add_engine`` itself; the query hook (``ANIRA_EM_ENGINE_HOOK_QUERY``) then runs
-on the main thread, so the main instance's :js:class:`HookRegistry` needs the engine object too
-(``anira.anira.hooks.engines.set(jsKey, engine)``).
+The model is the config's, stated once:
+
+.. code-block:: json
+
+   { "models": [{ "engine": "org.anira.onnxruntime-web", "path": "model.onnx" }], "inputs": [], "outputs": [] }
+
+``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
+each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
+(a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
+the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
+module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+that.

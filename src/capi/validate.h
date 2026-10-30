@@ -112,6 +112,9 @@ struct EngineFacts {
     /// engine without a list): where a neutral entry of the engine runs under the default set
     /// (home_provider).
     std::vector<std::vector<std::string>> m_providers;
+    /// The flags of each engine's descriptor, beside m_ids: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL
+    /// admits a model entry of the engine without a source.
+    std::vector<uint32_t> m_flags;
 };
 
 /// The consumers a pipeline declares, in one vector: the stage's, then one per registered

@@ -555,10 +555,10 @@ public:
      * @warning Not real-time safe while enabled. Requires at least one
      * inference thread to exist (Core::has_inference_threads()) — without
      * one the blocking waits could never complete, so the call is refused with
-     * a warning. On WebAssembly that means spinning up at least one inference
-     * worker (AniraWeb.spinUpInferenceWorker()) before enabling this mode; the
-     * waits there are busy-waits (spins), so run offline processing in a
-     * Worker or under an OfflineAudioContext rather than on the main thread.
+     * a warning. On WebAssembly that means a context with at least one thread
+     * (a Wasm Worker of the pool) before enabling this mode; the waits there are
+     * busy-waits (spins), so run offline processing in a Worker or under an
+     * OfflineAudioContext rather than on the main thread.
      * The check runs once at enable time: stopping all inference threads while
      * non-real-time mode is active re-creates the hang.
      */

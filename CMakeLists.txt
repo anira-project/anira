@@ -109,7 +109,11 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 if(ANIRA_BUILD_WASM)
     tanh_detect_emscripten()
     if(WASM)
-        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -matomics -msimd128 -mbulk-memory -sNO_DISABLE_EXCEPTION_CATCHING")
+        # -pthread: Emscripten's threaded libc and libc++ (real futex mutexes across the Wasm
+        # Workers and the audio worklet that share the module's memory; issue #212). Every
+        # object of the link carries it, the fetched dependencies' C and C++ included.
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -msimd128 -sNO_DISABLE_EXCEPTION_CATCHING")
+        set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pthread -msimd128")
     endif()
 endif()
 
@@ -354,7 +358,29 @@ target_sources(${PROJECT_NAME} PRIVATE
 # into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
 # empty on every other binary format, so the TU exists on Wasm alone.
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
-    target_sources(${PROJECT_NAME} PRIVATE src/platform/emscripten/em_hooks.cpp)
+    target_sources(${PROJECT_NAME} PRIVATE
+        src/platform/emscripten/em_audio.cpp
+        src/platform/emscripten/em_console.cpp
+        src/platform/emscripten/em_hooks.cpp
+        src/platform/emscripten/em_runtime.cpp
+        src/platform/emscripten/em_worker.cpp)
+    # Two objects every consumer's module needs whether or not it calls into them, so every
+    # link against anira references their anchors: the console sink (em_console.cpp), switched
+    # on by its TU's static constructor, and the runtime that never exits on its own
+    # (em_runtime.cpp, the noExitRuntime dependency).
+    target_link_options(${PROJECT_NAME} INTERFACE
+        "-Wl,--undefined=anira_em_console_anchor"
+        "-Wl,--undefined=anira_em_runtime_anchor"
+        # Out of memory is a status (ANIRA_ERROR_OUT_OF_MEMORY), not an abort: malloc returns
+        # NULL and operator new throws std::bad_alloc, which every entry's firewall turns into
+        # the status. Emscripten's default with a fixed memory (ALLOW_MEMORY_GROWTH=0) aborts
+        # the module instead. A consumer that prefers the abort passes -sABORTING_MALLOC=1
+        # after this (the last -s wins).
+        "SHELL:-s ABORTING_MALLOC=0")
+    # A Wasm executable that links the library (AniraWeb and the node gates of test/abi) peaks
+    # at about 4.9 GB while it links (anira_em_pool, measured on 2026-10-29); four at once ran a
+    # 16 GB CI runner out of memory. Those links join this Ninja pool, so at most two run at a time.
+    set_property(GLOBAL APPEND PROPERTY JOB_POOLS anira_wasm_link=2)
 endif()
 
 # Shared between the anira target and the isolated ExecuTorch object target below —

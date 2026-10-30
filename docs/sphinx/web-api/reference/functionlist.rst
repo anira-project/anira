@@ -2,62 +2,41 @@ Function list
 =============
 
 Module-level free functions exported by ``@anira-project/anira``. The C ABI itself is reached
-through the raw ``_anira_*`` exports of :js:attr:`AniraWeb.module`, documented with the C
-headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
+through :js:class:`AniraBindings` (``anira.abi``, generated from the registry), documented with
+the C headers (:doc:`../../usage`); the record offsets are in ``abi/layout.ts`` (exported as
 ``layout``) and the enums and defines in ``abi/enums.ts``.
 
-WASM bootstrap
---------------
+Stages and engines
+------------------
 
-.. js:autofunction:: createAniraWasm
+In every scope that runs one of their phases: the main thread, an inference Worker's module, a
+worklet's module (``@anira-project/anira/scope``).
 
-.. js:autofunction:: getWasmUrl
+.. js:autofunction:: registry.defineStage
 
-Instance stacks
----------------
+.. js:autofunction:: registry.defineEngine
 
-.. js:autofunction:: allocInstanceStack
+.. js:autofunction:: registry.keyOf
 
-.. js:autofunction:: freeInstanceStack
+.. js:autofunction:: registry.engineTensors
 
-.. js:autofunction:: enterInstance
+.. js:autofunction:: registry.engineModel
 
-.. js:autofunction:: installThreadLocalBlock
+.. js:autofunction:: registry.scopeRegistry
 
-Status and errors
------------------
+Audio
+-----
 
-.. js:autofunction:: callWithError
+.. js:autofunction:: AudioNode.createAudioNode
 
-.. js:autofunction:: checkStatus
+.. js:autofunction:: renderGeometry.measureRenderGeometry
 
-.. js:autofunction:: statusString
-
-Hook records
-------------
-
-.. js:autofunction:: readStageContext
-
-.. js:autofunction:: readLogRecord
-
-Workers
+Configs
 -------
 
-.. js:autofunction:: setupInferenceWorker
+.. js:autofunction:: ModelConfig.enabledEngines
 
-.. js:autofunction:: waitForWorkerMessage
+Log
+---
 
-.. js:autofunction:: request
-
-.. js:autofunction:: nextRequestId
-
-Helpers
--------
-
-.. js:autofunction:: getAniraVersion
-
-.. js:autofunction:: drainAniraLog
-
-.. js:autofunction:: startLogPump
-
-.. js:autofunction:: consoleLogSink
+.. js:autofunction:: Anira.consoleLogSink

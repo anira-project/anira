@@ -1,151 +1,175 @@
 Architecture
 ============
 
-``Anira Web`` is anira compiled to WebAssembly and the TypeScript runtime that spreads the
-module across the browser threads real-time inference needs: the main thread, the audio
-worklet thread, and one or more inference Worker threads.
+Anira Web runs the WebAssembly module on one shared ``WebAssembly.Memory`` in every thread of
+the page that needs it, and starts those threads the way native anira starts OS threads: from C.
 
-.. code-block:: text
+Three Kinds of Threads
+----------------------
 
-   ┌──────────────────┐    ┌────────────────────┐    ┌──────────────────────┐
-   │   Main thread    │    │ Inference Worker(s)│    │ Audio worklet thread │
-   │                  │    │                    │    │                      │
-   │  configs, the    │    │  run_loop of an    │    │  one handler process │
-   │  pipeline, the   │    │  inference thread: │    │  per render quantum  │
-   │  handler, the    │◀──▶│  the engine call   │◀──▶│  stage pre/post/     │
-   │  log pump, UI    │    │  (built-in ORT or  │    │  reset hooks         │
-   │  stage init/prep │    │  a JS engine),     │    │                      │
-   │                  │    │  before/after hooks│    │                      │
-   └──────────────────┘    └────────────────────┘    └──────────────────────┘
-            ▲                       ▲                          ▲
-            └───────────────────────┴──────────────────────────┘
-                       One shared WebAssembly.Memory
+The main thread
+   :js:meth:`Anira.create` instantiates the module here. The configuration happens here (the
+   context, the configs, the pipeline, the handler, its prepare), and so do the main-thread
+   phases of a JavaScript stage (``init``, ``prepare``, ``unprepare``, ``release``) and an
+   engine's ``query``. There is no log drain thread on the web: :js:meth:`Anira.startLogPump`
+   drains the real-time records on an interval.
 
-Module Instances on One Memory
-------------------------------
+The context's inference Workers
+   ``InferenceThread::start`` creates a Wasm Worker (``src/platform/emscripten/em_worker.cpp``):
+   Emscripten loads the module's glue into a module Worker on the same memory with a stack and a
+   thread-local block of its own. Its first JavaScript imports the context's worker module
+   (``anira_em_context_config_set_worker_module``, :js:class:`Context`'s ``workerModule``) and
+   awaits the boot of the Worker's registry (the JavaScript engines' ``init``), then it enters
+   ``run_loop``. While the queue is empty the loop parks on the wake word
+   (``memory.atomic.wait32``, at most 5 ms at a time); every enqueue and every stop notifies it.
+   ``num_threads`` and ``ANIRA_THREADS_AUTO`` size the pool as natively, and
+   ``anira_inference_thread_start`` starts a Worker for a user-driven thread. A Worker starts
+   only once the main thread yields to its event loop: :js:meth:`Context.ready` waits for every
+   Worker to be inside its loop (``anira_em_inference_threads_in_loop``). The last context's
+   destroy stops the pool: each Worker leaves its loop and is terminated. A Worker still booting
+   (loading the glue, importing the worker module, awaiting its engines' ``init``) is not
+   terminated there, which a browser reports as an error: the stop cancels its boot, the Worker
+   finishes it without entering the loop, and a main-thread timer frees its memory once it is
+   done (one that never finishes is terminated after 10 s, its 4 MiB region left allocated).
 
-Every thread instantiates the same module (``createAniraWasm``) on one shared
-``WebAssembly.Memory``, so a config, a handler, a ring or a tensor lives at the same heap
-address everywhere and a pointer is passed between threads as a number. The main instance is
-created by ``AniraWeb.create()``. Every other instance (each inference Worker, the worklet) runs
-on a stack and a thread-local block of its own: the main thread allocates both
-(``_anira_em_alloc_thread_stack``), the instance's first C call installs them
-(``_anira_em_init_instance``), so the ``thread_local`` variables of anira, tanh-lib and the
-runtime are per instance, as they are per thread natively. The main instance installs a block
-of its own the same way (the module has no ``main()``, so none exists at instantiation, and
-the runtime's exception state lives there). Setup crosses threads by ``postMessage``; the
-real-time path uses only the shared memory and its atomics.
+The audio thread
+   :js:meth:`Handler.createAudioNode` creates a Wasm Audio Worklet node
+   (``anira_em_audio_node_create``, ``src/platform/emscripten/em_audio.cpp``). The first node of
+   an audio context starts the context's worklet thread (Emscripten loads the glue into its
+   AudioWorkletGlobalScope), a node of *n* AudioParams registers the processor
+   ``anira-node-n`` once per context, and the render callback of every node is C
+   (:doc:`audio_nodes`).
 
-JavaScript Reaches anira Through the C ABI
-------------------------------------------
+The memory is shared, so a config, a handler, a ring or a tensor lives at one address in every
+thread and a pointer crosses as a number. ``std::mutex`` is a real futex mutex across the
+threads (the module links ``-pthread``); the audio thread never waits on one.
 
-The module's exports are the C ABI: ``aniraWeb.module._anira_context_create(...)`` is the
-same call a C host makes (:doc:`../usage`), with pointers as numbers. Records are read and
-written only through the generated offsets of ``abi/layout.ts`` (``layout.anira_tensor``,
-``layout.anira_engine_ctx``, …), enums and defines come from ``abi/enums.ts``, and an
-``anira_error`` is read by :js:func:`callWithError`, which throws an :js:class:`AniraError`.
-The :js:class:`Heap` holds the views over the memory and the ``>>> 0`` rule: a pointer, a
-``size_t`` or a ``uint32_t`` an export returns arrives as a signed 32-bit number, so it is
-made unsigned before use.
+The Scope Registry
+------------------
 
-The Hook Object and the Trampolines
------------------------------------
+What runs in JavaScript (a stage, an engine, the log) is reached through the trampolines of
+``anira/anira_em.h``: a JavaScript stage or engine is a C descriptor whose slots are trampolines
+compiled into anira. Each calls the registry of the scope that runs the C call,
+``globalThis[Symbol.for('anira.registry')]``, with the instance's ``Module``, the stage's or
+engine's key, the ``anira_phase`` and two pointers. The key is :js:func:`~registry.keyOf` of the name (the
+32-bit FNV-1a hash of its UTF-16 code units), the same in every scope; a registry refuses to
+define a second name whose key is taken, with an error naming both: a stage defined under one name on the main thread and in the worklet is one
+stage with one instance per scope, built over the scope's ``env`` (its bindings and its
+``Module``). :js:func:`~registry.defineStage` and :js:func:`~registry.defineEngine` install the registry.
 
-What runs in JavaScript (a stage, an engine, the log) is reached through the Emscripten
-companion ``anira/anira_em.h``. Each instance has one hook object, ``Module.anira``
-(``{ version, stage, engine, log }``), installed before instantiation over that instance's
-:js:class:`HookRegistry`, which maps a ``js_key`` to the stage or engine object. A JavaScript
-stage or engine is a descriptor whose slots are C trampolines compiled into anira: each calls
-the hook of the instance that runs the C call, so
+A hook that throws is caught in the trampoline and reported on the console (rate-limited); the
+call fails the usual way (zeros, the real-time error latched). No JavaScript exception unwinds
+through a C frame.
 
-* ``preProcess``, ``postProcess`` and ``reset`` of a stage run in the worklet (under a Hard
-  contract the driving thread is the audio thread),
-* ``beforeInference`` / ``afterInference`` and an engine's ``process`` run on the inference
-  Worker that dequeued the job,
-* a stage's ``init``, ``prepare``, ``unprepare`` and ``release`` run on the main thread.
+Where Each Phase Runs
+---------------------
 
-Every request to a Worker or the worklet carries a request id its reply and its error echo,
-so concurrent requests on one target never answer or fail each other. The same ``js_key``
-therefore names one object per instance: :js:meth:`AniraWeb.addJSStage`
-puts the main-thread object into the main registry and has every Worker construct the class
-for its own registry; the worklet constructs it from its ``stageClasses``. A stage released
-on the main thread (its last carrier died) is dropped from every instance's registry. What an
-instance could never serve is refused at registration: a stage with main-thread bits and no
-main-thread object, an engine with the query bit, a worklet configured without the stage its
-handler's pipeline runs there. A hook that throws
-is caught in its trampoline, reported once with ``console.error``, and fails the call
-(``ANIRA_ERROR_UNKNOWN`` for a stage, ``ANIRA_ERROR_ENGINE`` for an engine): the chunk
-delivers zeros and the handler's real-time error is latched, as for a failing C callback.
+.. list-table::
+   :header-rows: 1
 
-Main Thread
------------
+   * - Phase
+     - Scope
+   * - stage ``preProcess``, ``postProcess``, ``reset`` (Hard contract)
+     - the audio worklet (a ``workletModules`` module of :js:meth:`Handler.createAudioNode`)
+   * - stage ``beforeInference``, ``afterInference``; engine ``process``, ``reset``
+     - the inference Workers (the context's ``workerModule``)
+   * - stage ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``
+     - the main thread
 
-The main thread builds the configuration with raw calls: a context config and context (no
-pool threads on the web: the Workers bring them), a model config (in code or from JSON), a
-pipeline with the inference stage and, optionally, a JavaScript stage and JavaScript engines,
-the handler, the contract, ``anira_handler_prepare``. It also owns the log: there is no drain
-thread on the web, so ``startLogPump`` drains the real-time queue on an interval, and
-:js:meth:`AniraWeb.setLogHook` routes the records of every instance to one callback.
+A stage whose phases span scopes is one module imported in each: ``web/examples/
+stage-and-engine/gain-stage.ts`` allocates its per-handler memory in ``prepare`` on the main
+thread and reads it in ``preProcess`` in the worklet, through the ``prepared`` pointer.
 
-Inference Workers
------------------
+.. _web-realms:
 
-``await aniraWeb.spinUpInferenceWorker(contextPtr)`` creates a user-driven inference thread of
-the context's core on the main instance (``_anira_inference_thread_create``) and a Worker that
-runs it: the Worker instantiates the module, enters its stack, registers the JavaScript
-engines and Worker-side stages (an engine's ``init()`` is awaited), and calls
-``_anira_inference_thread_run_loop`` inside its message handler. Spin up more Workers to run
-more inferences at once.
+What an Inference Worker and the Worklet Can See
+------------------------------------------------
 
-While the queue is empty the loop parks on the wake word (``memory.atomic.wait32``, at most
-5 ms at a time) instead of spinning a core; every enqueue and every stop notifies it.
+Every inference Worker and the AudioWorkletGlobalScope is a JavaScript realm of its own: its own
+globals, its own module graph, its own instance of the module's glue. Only the WebAssembly memory
+is shared. No closure, object or class of the main thread reaches a Worker or the worklet, so a
+stage or an engine is defined in the realm that runs it, by the module that realm imports (the
+context's worker module, a ``workletModules`` module), and a pool of *N* threads builds *N*
+instances of each engine: *N* model loads.
 
-The stop protocol has no message: ``_anira_inference_thread_stop`` requests the exit and the
-main thread polls ``_anira_inference_thread_has_exited`` (a shared-memory flag) on a
-``setTimeout`` until the Worker left the loop; only then is
-``_anira_inference_thread_destroy`` legal. :js:class:`InferenceThread` and
-``InferenceWorker.stop()`` implement it. A Worker handles no message while it is inside the
-loop, so ``AniraWeb`` stops the thread, sends a registration, and starts it again whenever an
-engine or stage is added later.
+A Worker runs the engines' ``init`` (which may be asynchronous: a fetch, a runtime to
+instantiate) and then enters the C loop, which blocks: it parks on ``memory.atomic.wait32`` while
+the queue is empty and calls ``process`` synchronously when work arrives. From then until the stop
+the Worker's event loop never runs again: no promise continuation, no ``onmessage``, no
+``setTimeout`` and no ``fetch`` completion. ``process`` is therefore synchronous; ``init`` may be
+``async``.
 
-The engine a Worker calls is either the ONNX Runtime compiled into the module
-(``ANIRA_ENGINE_ONNXRUNTIME`` on ``ANIRA_PROVIDER_CPU``, from model bytes) or a JavaScript
-engine: :js:class:`ONNXRuntimeWebBackend` (``org.anira.onnxruntime-web``) or your own
-:js:class:`JSBackend` subclass, see :doc:`custom_inference_backends`.
+Once the Workers run, what reaches a stage or an engine is what the shared memory carries:
 
-Audio Worklet Thread
---------------------
+* the model's Static inputs (``setStaticInput``, an AudioParam of the node, a seqlock block per
+  tensor);
+* a stage's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by every
+  phase in every realm;
+* an engine's model entry, read by anira's load on the main thread and handed to every call as
+  ``prepared`` (``load(model)``, :js:func:`~registry.engineModel`: the bytes the config's
+  loader attached, a view of the shared memory);
+* a block of the page's own in the WebAssembly heap (``anira.module._malloc``), coordinated with
+  ``Atomics``.
 
-The worklet streams through a prepared handler: one ``_anira_handler_process`` per render
-quantum over planar input and output tensors it builds once. The handler's Hard contract
-declares ``block_min = block_max =`` the render quantum (128 frames); a call above the declared
-block is refused, so the worklet builds its tensors at configure for the declared
-quantum and, when the browser renders another one, outputs silence and reports it
-(``onQuantumChange``): the host re-prepares the handler with the new block, then the worklet
-rebuilds its tensors in its message handler, never in ``process()``, which allocates
-nothing. The worklet
-never waits unless asked to (``waitMs``, ``_anira_handler_process_wait``). See
-:doc:`custom_audio_worklets`.
+A running inference Worker takes no ``postMessage``. The worklet realm has no ``fetch`` and no
+``performance`` (``createAudioNode`` loads a polyfill of ``performance.now`` for the module's
+clock).
 
-Customization
--------------
+.. note::
+   None of this is new in 3.x. In 2.x ``setupInferenceWorker`` ran ``runLoop`` inside the Worker's
+   ``onmessage``, which blocked that Worker's event loop in the same way, ``JSBackendBase.process``
+   was synchronous, and the ONNX Runtime Web backend ran through onnxruntime-web's synchronous C
+   API (``_OrtRun``), as the 3.x engine does.
 
-1. :doc:`custom_audio_worklets` — extend :js:class:`AniraAudioWorkletBase` to stream more
-   slots, add ``AudioParam`` handling or host a JavaScript stage's pre/post/reset.
-2. :doc:`custom_pre_post_processing` — a JavaScript stage (``anira_em_pipeline_add_js_stage``)
-   that owns the pre/post phases or the hooks around the inference.
-3. :doc:`custom_inference_backends` — a JavaScript engine
-   (``anira_em_pipeline_register_js_engine``) run by the inference Workers.
+.. warning::
+   **Asynchronous engines are not supported.** An inference that completes as a promise cannot
+   run in ``process``: onnxruntime-web's ``session.run()``, a WebGPU readback (``mapAsync``),
+   tfjs's ``data()``. They are planned for M3, with the Async contract: an engine that completes a
+   job later.
+
+The Memory and Its Views
+------------------------
+
+The memory grows (:ref:`the memory <web-memory>`: 256 MiB to begin with, up to 2 GiB), and any
+thread's malloc may grow it: in practice the main thread's, where handlers are created and
+prepared; the audio path in C allocates nothing, so the audio thread never grows it. A growth
+gives the shared memory a new, longer ``SharedArrayBuffer``, and every realm reads the heap
+through typed-array views it made over the old one, which cover the old length only. Each realm
+rebuilds its own:
+
+* Emscripten's glue, built with ``-pthread`` and growth, checks its views at every heap access
+  of its own (``growMemViews()``; the worklet's ``process()`` re-creates its output views when
+  the buffer changed) and with them the instance's ``Module.HEAP*``;
+* the package's code reads the heap through ``heap(module)`` of the bindings, which compares the
+  views' buffer with ``memory.buffer`` and rebuilds the seven views once after a growth. The
+  generated bindings call it at every access, the typed layer's classes too, and the stage and
+  engine trampolines before every call into a JavaScript stage or engine, so a stage's or an
+  engine's ``module.HEAPF32`` is current for the memory that existed when its call began. The
+  rebuild is a small JavaScript allocation, at most once per realm and growth: on the audio
+  thread, in a JavaScript stage's realm, the first call after a growth makes it.
+
+``heap`` needs the realm's memory: the main thread's ``Module.wasmMemory`` is the memory
+:js:meth:`Anira.create` passed, and anira's boot of an inference Worker and of the worklet sets
+the realm's (the glue keeps it to itself there). Pointers handed across realms are offsets, valid
+in every realm; a view kept across calls (an engine's ``model.bytes``, a ``Float32Array`` a stage
+built in its ``prepare``) stays valid for the memory it covers, and one made over memory that
+existed then needs no rebuild.
+
+The Bindings
+------------
+
+``web/src/abi/bindings.ts`` is generated by ``tools/abi/gen.py`` from ``abi/anira.yml``: the
+class :js:class:`AniraBindings`, one method per entry point under its C name, derived from the
+registry's types, so no hand-written wrapper can drift from the ABI. A string crosses as a JS
+string, the out parameters are returned, the ``anira_error`` is made on the stack and a failed
+status throws an :js:class:`AniraError`. Records are read through the generated offsets of
+``abi/layout.ts``; the enums and defines are ``abi/enums.ts``. The classes of the package
+(:js:class:`Context`, :js:class:`Pipeline`, ...) are a few lines each over these methods.
 
 Lifecycle and Cleanup
 ---------------------
 
-C objects are freed by their ``_destroy`` entries, never by the garbage collector. Tear down in
-the reverse order of creation: dispose the worklet (``await aniraWeb.disposeAudioWorklet(node)``:
-the worklet frees its tensors and stops calling into the module, then its stack is freed),
-stop the Workers (``await worker.stop()``, which destroys the thread and frees the Worker's
-stack once the Worker said it destroyed its engines), then ``_anira_handler_destroy``,
-``_anira_pipeline_destroy``, ``_anira_contract_destroy``, ``_anira_model_config_destroy``,
-``_anira_context_destroy`` and ``_anira_context_config_destroy``. A JavaScript stage's
-``release`` runs when its last carrier dies, a JavaScript engine's C object when the pipeline
-and the handlers holding it are gone; ``unregisterJSEngine`` removes the Worker-side object.
+C objects are freed by their ``destroy``, never by the garbage collector. Tear down in the
+reverse order: the audio nodes (their render callbacks stop calling the handler), the handlers,
+the configs, the contexts (the last one stops the pool). A context and a pipeline may be
+destroyed while their handlers live: a handler holds what it needs.

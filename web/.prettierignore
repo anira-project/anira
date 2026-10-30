@@ -2,3 +2,5 @@ dist
 licenses
 node_modules
 wasm
+src/abi/enums.ts
+src/abi/bindings.ts

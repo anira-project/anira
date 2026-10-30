@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>anira model file</title>
+  </head>
+  <body>
+    <h1>A model file on the built-in engine</h1>
+    <p>
+      A tone through the bundled SimpleGainNetwork config, its gain the model's Static
+      input.
+    </p>
+    <button id="start">Start</button>
+    <label for="gain">Gain</label>
+    <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5" />
+    <script type="module">
+      import { mountModelFileExample } from './main.ts'
+      mountModelFileExample(
+        document.getElementById('start'),
+        document.getElementById('gain'),
+        new URL('/extras/models/model-pool/', location.href)
+      )
+    </script>
+  </body>
+</html>

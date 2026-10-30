@@ -623,10 +623,10 @@ struct InferenceData {
  * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *
- * On WebAssembly builds the plain ConcurrentQueue is used: inference loops
- * are driven cooperatively by JS Workers across WASM instances that share
- * memory via postMessage, so there is no pthreads runtime to block on, and a
- * blocked worker could not service its JS event loop anyway.
+ * On WebAssembly builds the plain ConcurrentQueue is used: the pool's threads
+ * are Wasm Workers on the module's shared memory, and an idle Worker parks on
+ * the core's wake word (memory.atomic.wait32, notified by every enqueue)
+ * instead of a semaphore, under either wait strategy.
  */
 #ifdef __EMSCRIPTEN__
 using InferenceQueue = moodycamel::ConcurrentQueue<InferenceData>;

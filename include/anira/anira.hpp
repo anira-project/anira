@@ -1340,6 +1340,20 @@ public:
                       err);
         return index;
     }
+    /// An entry without a source for a custom engine that declares
+    /// ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL (a NULL path): the engine computes without a model file.
+    uint32_t add_model(std::string_view engine_id) {
+        anira_error err{};
+        uint32_t index = 0;
+        detail::check(anira_model_config_add_model_path(m_config,
+                                                        ANIRA_ENGINE_CUSTOM,
+                                                        std::string(engine_id).c_str(),
+                                                        nullptr,
+                                                        &index,
+                                                        &err),
+                      err);
+        return index;
+    }
     /// Bytes for a built-in engine: copied, or borrowed until the last carrier of the bytes
     /// dies (this config, a set_model_bytes replacement, later the handler that copied the
     /// config), when release(bytes, ctx), if given, is called exactly once.

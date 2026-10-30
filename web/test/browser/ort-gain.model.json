@@ -1,0 +1,36 @@
+{
+  "models": [
+    {
+      "engine": "org.anira.onnxruntime-web",
+      "path": "../../extras/models/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.onnx"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [
+        ["batch", 1],
+        ["channel", 1],
+        ["time", 512]
+      ],
+      "window": { "min": 512, "max": 512 }
+    },
+    { "name": "gain", "dtype": "float32", "role": "static", "axes": [["any", 1]] }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "float32",
+      "role": "streamed",
+      "axes": [
+        ["batch", 1],
+        ["channel", 1],
+        ["time", 512]
+      ],
+      "window": { "min": 512, "max": 512 }
+    },
+    { "name": "gain_out", "dtype": "float32", "role": "static", "axes": [["any", 1]] }
+  ]
+}

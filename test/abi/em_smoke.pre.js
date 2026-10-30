@@ -1,8 +1,8 @@
-// The hook object of em_smoke.c's module instance, installed before main runs, as the runtime
-// installs Module.anira before instantiation. It counts every crossing in Module.smoke.counts;
-// the stage composes anira's default bodies, the engine doubles its input into its output, and
-// the stage key em_smoke.c calls with 99 throws. Offsets come from em_smoke.c (offsetof), set
-// into Module.smoke.layout before the first crossing.
+// The registry of em_smoke.c's scope (globalThis[Symbol.for('anira.registry')], what the
+// package's defineStage and defineEngine install), installed before main runs. It counts every
+// crossing in Module.smoke.counts; the stage composes anira's default bodies, the engine doubles
+// its input into its output, and the stage key em_smoke.c calls with 99 throws. Offsets come from
+// em_smoke.c (offsetof), set into Module.smoke.layout before the first crossing.
 Module.smoke = {
   layout: null,
   counts: {
@@ -44,9 +44,10 @@ const PHASE = {
 };
 const THROWING_KEY = 99;
 
-Module.anira = {
+globalThis[Symbol.for('anira.registry')] = {
   version: 1,
-  stage(key, phase, a, b) {
+  boot() {},
+  stage(module, key, phase, a, b) {
     const counts = Module.smoke.counts;
     if (key === THROWING_KEY) {
       counts.thrown += 1;
@@ -78,7 +79,7 @@ Module.anira = {
     }
     return -1;
   },
-  engine(key, phase, a, b) {
+  engine(module, key, phase, a, b) {
     const counts = Module.smoke.counts;
     const layout = Module.smoke.layout;
     if (phase === PHASE.QUERY) {
@@ -101,7 +102,7 @@ Module.anira = {
     }
     return 0;
   },
-  log(record) {
+  log(module, record) {
     // Records the core buffered before the hook was registered arrive too: count the test's own.
     const layout = Module.smoke.layout;
     const message = UTF8ToString(HEAPU32[(record + layout.recordMessage) >>> 2]);
@@ -109,5 +110,4 @@ Module.anira = {
       Module.smoke.counts.log += 1;
     }
   },
-  complete: undefined,
 };

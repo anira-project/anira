@@ -760,14 +760,15 @@ anira_status ANIRA_CALL anira_model_config_add_model_path(anira_model_config* co
         status != ANIRA_OK) {
         return status;
     }
-    ANIRA_CAPI_REQUIRE(non_empty(utf8_path),
+    // NULL: an entry without a source (ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, checked at create).
+    ANIRA_CAPI_REQUIRE(utf8_path == nullptr || non_empty(utf8_path),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "model entry: NULL or empty path");
+                       "model entry: an empty path (NULL for an entry without a source)");
     anira::capi::ModelEntry entry;
     entry.m_engine = engine;
     entry.m_engine_id = engine_id != nullptr ? engine_id : "";
-    entry.m_path = utf8_path;
+    entry.m_path = utf8_path != nullptr ? utf8_path : "";
     return add_entry(config, std::move(entry), out_index, err);
 } catch (...) { return translate_exception(err, __func__); }
 

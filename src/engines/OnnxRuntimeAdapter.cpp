@@ -46,6 +46,16 @@ namespace {
 
 constexpr const char* k_engine = anira::capi::engine_word(ANIRA_ENGINE_ONNXRUNTIME);
 
+// The status of an ONNX Runtime failure: out of memory where the runtime caught a
+// std::bad_alloc, else `otherwise`. The message text is the only signal ORT gives: it reports a
+// bad_alloc as an Ort::Exception whose message ends in "std::bad_alloc", and its C API has no
+// error code of its own for out of memory.
+anira_status ort_status(const Ort::Exception& e, anira_status otherwise) {
+    return std::string_view(e.what()).find("bad_alloc") != std::string_view::npos
+               ? ANIRA_ERROR_OUT_OF_MEMORY
+               : otherwise;
+}
+
 // Maps anira's log level to the severity of the ONNX Runtime environment.
 // Debug maps to VERBOSE, ONNX Runtime's most detailed severity.
 OrtLoggingLevel to_ort_logging_level(anira::LogLevel log_level) {
@@ -222,11 +232,14 @@ protected:
             to_ort_logging_level(static_cast<anira::LogLevel>(info.log_level));
         try {
 #ifdef USE_ANIRA_WEB
-            // No session-owned threads in WebAssembly: the environment carries a global thread
-            // pool of one intra-op thread the sessions run on. The environment copies the
-            // threading options, which die with this scope.
+            // No session-owned threads in WebAssembly: the environment carries global thread
+            // pools of one thread each, the calling one, so ONNX Runtime creates no pthread (the
+            // module links -pthread; a pthread started from the browser's main thread runs only
+            // once that thread yields, so the join at the environment's release would never
+            // return). The environment copies the threading options, which die with this scope.
             Ort::ThreadingOptions threading;
             threading.SetGlobalIntraOpNumThreads(1);
+            threading.SetGlobalInterOpNumThreads(1);
             m_env = Ort::Env(threading, severity, "Default");
 #else
             m_env = Ort::Env(severity, "Default");
@@ -329,7 +342,7 @@ Instance::Instance(std::shared_ptr<const SharedEnvironment> shared, const Model&
                                                        model.m_num_bytes,
                                                        m_shared->m_options);
         } catch (const Ort::Exception& e) {
-            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+            throw StatusError(ort_status(e, ANIRA_ERROR_MODEL_LOAD),
                               model_file::message(k_engine, model_file::k_memory, e.what()));
         }
     } else {
@@ -345,7 +358,7 @@ Instance::Instance(std::shared_ptr<const SharedEnvironment> shared, const Model&
                                                        ort_path.c_str(),
                                                        m_shared->m_options);
         } catch (const Ort::Exception& e) {
-            throw StatusError(ANIRA_ERROR_MODEL_LOAD,
+            throw StatusError(ort_status(e, ANIRA_ERROR_MODEL_LOAD),
                               model_file::message(k_engine, modelpath, e.what()));
         }
     }
@@ -469,7 +482,7 @@ void Instance::warm_up(uint32_t iterations) {
             run(ctx);
         } catch (const Ort::Exception& e) {
             // A warm-up that fails fails prepare: the model cannot run.
-            throw StatusError(ANIRA_ERROR_ENGINE,
+            throw StatusError(ort_status(e, ANIRA_ERROR_ENGINE),
                               model_file::message(k_engine, "warm-up", e.what()));
         }
     }
