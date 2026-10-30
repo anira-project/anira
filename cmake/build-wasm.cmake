@@ -95,14 +95,15 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   JOB_POOL_LINK anira_wasm_link
 )
 
-# The glue's one construct that has Vite's dev server inject its client (the pthread pool's
-# literal worker URL), rewritten to go through locateFile: cmake/wasm-glue-rewrite.cmake.
+# The glue for Vite's dev server: its one construct that has the dev server inject its client
+# (the pthread pool's literal worker URL) rewritten to go through locateFile, and the Wasm
+# Workers' import of the worker module marked /* @vite-ignore */: cmake/wasm-glue-rewrite.cmake.
 add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND}
         "-DGLUE=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.js"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wasm-glue-rewrite.cmake"
     VERBATIM
-    COMMENT "Rewriting the pthread worker URL of ${ANIRA_WASM_TARGET_NAME}.js for Vite's dev server")
+    COMMENT "Rewriting ${ANIRA_WASM_TARGET_NAME}.js for Vite's dev server")
 
 # ==============================================================================
 # Bundle license files from native deps that get statically linked into the

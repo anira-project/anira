@@ -124,9 +124,11 @@ EM_JS(void,
           Module['wasmMemory'] = wasmMemory;
           var url = module_url ? UTF8ToString(module_url) : "";
           // A template literal: Vite's dev server rewrites a dynamic import of a bare variable
-          // into one through its client, which a worklet scope cannot load
-          // (cmake/wasm-glue-rewrite.cmake). clang-format would split `${url}` into `$ { url }`,
-          // which is no longer an interpolation.
+          // into one through its client, which a worklet scope cannot load. Vite cannot analyse
+          // either form and warns of it unless the call carries a @vite-ignore comment, which
+          // cannot be written here (the preprocessor strips the comments of an EM_JS body):
+          // cmake/wasm-glue-rewrite.cmake inserts it into the linked glue. clang-format would
+          // split `${url}` into `$ { url }`, which is no longer an interpolation.
           // clang-format off
           var loaded = url ? import(`${url}`) : Promise.resolve();
           // clang-format on
