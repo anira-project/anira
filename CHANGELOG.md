@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     - the core's warning for a log-queue capacity out of range (the C setter clamps, and `test_ReadBack` pins that);
     - the manager's clamp of a custom latency below the model's own (the C prepare refuses that contract; `ClampsToInternalModelLatency` asserts the refusal);
     - the empty plan table (the validator refuses a pipeline with no plan).
+  - **The logger and ExecuTorch entry-point suites run on C handlers too.** `anira_test::Instance` (a context and a prepared handler over the mono pass-through) is shared by every suite that only needs a live session. `ExecuTorchModelFunction` names the method through the model entry's `entry` extension.
 - **Examples:** lean over `anira.hpp`.
   - **Backend choice (JUCE and CLAP):** the parameter listener stores the choice in an atomic. `processBlock` / `process` applies it through `PlanReport::find` and `set_plan`, over the report of the last prepare (nothing changes when the build or the model has no such plan). This replaces the plan tables built at prepare.
   - **Pipeline:** one chained expression, `Pipeline().add_engine(...).add_inference(...).add_processor(...)`, in the handler's initializer.

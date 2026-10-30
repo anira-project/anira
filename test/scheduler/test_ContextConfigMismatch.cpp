@@ -8,7 +8,6 @@
 // log level in effect) the outcome too.
 
 #include <anira/abi/enums.h>
-#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <tanh/core/Logger.h>
 
@@ -35,20 +34,14 @@ struct ContextFields {
 
 // One "plugin instance": a context over `fields` and a handler over the mono pass-through.
 // Prepared on construction, like a host would.
-struct Instance {
+struct Instance : anira_test::Instance {
     explicit Instance(const ContextFields& fields)
-        : m_context(fields.m_threads,
-                    fields.m_wait,
-                    fields.m_level,
-                    ANIRA_LOG_DRAIN_THREAD,
-                    fields.m_drain_interval_ms,
-                    fields.m_queue_capacity) {
-        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
-            << m_handler.m_err.message;
-    }
-
-    anira_test::Context m_context;
-    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
+        : anira_test::Instance(fields.m_threads,
+                               fields.m_wait,
+                               fields.m_level,
+                               ANIRA_LOG_DRAIN_THREAD,
+                               fields.m_drain_interval_ms,
+                               fields.m_queue_capacity) {}
 };
 
 // Fields whose log level lets the diagnostics through to the sinks. The

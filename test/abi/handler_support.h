@@ -520,6 +520,29 @@ struct Handler {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
+/// One "plugin instance": a context over its own config (Context's arguments) and a handler
+/// over the mono pass-through (mono_stream_model), prepared on construction under the explicit
+/// contract, so that a session (and with it the pool) exists.
+struct Instance {
+    explicit Instance(uint32_t threads = 2,
+                      anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF,
+                      anira_log_level level = ANIRA_LOG_ERROR,
+                      anira_log_drain drain = ANIRA_LOG_DRAIN_MANUAL,
+                      uint32_t interval_ms = 10,
+                      uint32_t queue_capacity = 0)
+        : m_context(threads, wait, level, drain, interval_ms, queue_capacity) {
+        EXPECT_EQ(m_handler.prepare(explicit_contract()), ANIRA_OK) << m_handler.m_err.message;
+    }
+    ~Instance() = default;
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) = delete;
+    Instance& operator=(Instance&&) = delete;
+
+    Context m_context;
+    Handler m_handler{m_context, mono_stream_model()};
+};
+
 // ---- data, waiting, comparing ------------------------------------------------------------------
 
 /// Block block_index of a deterministic ramp: distinct across blocks, exactly representable.

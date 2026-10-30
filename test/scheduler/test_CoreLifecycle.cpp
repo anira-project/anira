@@ -1,10 +1,8 @@
 #include <anira/abi/enums.h>
-#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 
 #include <chrono>
-#include <cstdint>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -25,17 +23,9 @@ using namespace anira;
 
 namespace {
 
-// One "plugin instance": a context asking for `threads` pool threads and a handler over the
+// One "plugin instance": a context asking for a number of pool threads and a handler over the
 // mono pass-through, prepared on construction so its pool threads are running.
-struct Instance {
-    explicit Instance(uint32_t threads = 2) : m_context(threads) {
-        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
-            << m_handler.m_err.message;
-    }
-
-    anira_test::Context m_context;
-    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
-};
+using anira_test::Instance;
 
 // The pool's threads count themselves as active when they enter their loop, i.e.
 // asynchronously after prepare(); only the join side (count 0) is synchronous, and

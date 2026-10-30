@@ -7,11 +7,15 @@
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/utils/InferenceBackend.h>
+#include <anira/abi/context.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/utils/JsonConfigLoader.h>
 #include <gtest/gtest.h>
 
+#include <anira/anira.hpp>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -21,35 +25,54 @@
 #include <thread>
 #include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/handler_support.h"
 
 namespace {
 
 constexpr size_t k_size = 64;
 constexpr int k_timeout_secs = 5;
 
-anira::InferenceConfig make_config(const std::string& model_function) {
-    const std::vector<anira::ModelData> model_data = {
-        {std::string(ANIRA_EXTRAS_MODELS_DIR
-                     "/model-pool/example-models/SimpleGainNetwork/models") +
-             "/simple_gain_network_multifunction.pte",
-         anira::InferenceBackend::EXECUTORCH,
-         model_function},
+// The multi-function program on [1, 1, 64] in and out, its entry point the method named (none:
+// the file's default).
+anira::ModelConfig make_model(const std::string& model_function) {
+    anira::ModelConfig model;
+    const uint32_t row = model.add_model_path(
+        ANIRA_ENGINE_EXECUTORCH,
+        std::string(ANIRA_EXTRAS_MODELS_DIR "/model-pool/example-models/SimpleGainNetwork/models") +
+            "/simple_gain_network_multifunction.pte");
+    if (!model_function.empty()) {
+        model.model_ext(row, anira::ext::Entry{.name = model_function});
+    }
+    const auto stream = [](const char* name) {
+        anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+        spec.axis(0, ANIRA_AXIS_BATCH, 1)
+            .axis(1, ANIRA_AXIS_CHANNEL, 1)
+            .axis(2, ANIRA_AXIS_TIME, static_cast<int64_t>(k_size))
+            .window(static_cast<int64_t>(k_size), static_cast<int64_t>(k_size), 0);
+        return spec;
     };
-    const std::vector<anira::TensorShape> tensor_shapes = {
-        {{{1, 1, static_cast<int64_t>(k_size)}}, {{1, 1, static_cast<int64_t>(k_size)}}},
-    };
-    return {model_data, tensor_shapes, 5.0F};
+    model.input(stream("in"));
+    model.output(stream("out"));
+    return model;
 }
 
 // Push one block of ones and wait until its inference result has been consumed
 // back into the ring (available samples return to the pre-push level).
-void process_block(anira_test::V2Handler& handler, std::vector<float>& io) {
-    std::array<float*, 1> channels = {io.data()};
-    const size_t prev = handler.get_available_samples(0);
-    handler.process(channels.data(), k_size);
+void process_block(anira_handler* handler, std::vector<float>& io) {
+    const std::array<float*, 1> channels = {io.data()};
+    const std::array<int64_t, 2> shape{1, static_cast<int64_t>(k_size)};
+    anira_tensor block{};
+    anira_tensor_init_host_planar(&block,
+                                  static_cast<const void*>(channels.data()),
+                                  1,
+                                  ANIRA_DTYPE_F32,
+                                  2,
+                                  shape.data());
+    const size_t prev = anira_test::available(handler);
+    size_t delivered = 0;
+    ASSERT_EQ(anira_handler_process(handler, &block, 0, &block, 0, &delivered), ANIRA_OK);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_secs);
-    while (handler.get_available_samples(0) != prev) {
+    while (anira_test::available(handler) != prev) {
         ASSERT_LT(std::chrono::steady_clock::now(), deadline) << "timed out waiting for inference";
         std::this_thread::sleep_for(std::chrono::microseconds(50));
     }
@@ -58,17 +81,26 @@ void process_block(anira_test::V2Handler& handler, std::vector<float>& io) {
 // Stream ones through the configured method until the latency drains, then
 // return the steady-state output value.
 float steady_state_output(const std::string& model_function) {
-    anira::InferenceConfig config = make_config(model_function);
-    anira::PrePostProcessor pp(config);
-    anira_test::V2Handler handler(pp, config);
-    handler.prepare({static_cast<float>(k_size), 48000.0F});
-    handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
+    const anira_test::Context context(2);
+    const std::vector<anira_backend_id> executorch{{.struct_size = sizeof(anira_backend_id),
+                                                    .engine = ANIRA_ENGINE_EXECUTORCH,
+                                                    .provider = ANIRA_PROVIDER_CPU,
+                                                    .engine_id = nullptr}};
+    anira_test::Handler handler(context, make_model(model_function), executorch);
+    EXPECT_EQ(handler.prepare(anira_test::explicit_contract(k_size,
+                                                            anira_test::k_rate,
+                                                            ANIRA_MISS_BYPASS,
+                                                            0.0,
+                                                            /*budget_ms=*/5.0)),
+              ANIRA_OK)
+        << handler.m_err.message;
 
-    const int warmup_blocks = static_cast<int>(handler.get_latency() / k_size) + 2;
+    const int warmup_blocks =
+        static_cast<int>(anira_handler_get_latency(handler.m_handler, 0) / k_size) + 2;
     std::vector<float> io;
     for (int i = 0; i < warmup_blocks + 1; ++i) {
         io.assign(k_size, 1.0F);
-        process_block(handler, io);
+        process_block(handler.m_handler, io);
     }
     for (size_t i = 1; i < k_size; ++i) {
         EXPECT_FLOAT_EQ(io[i], io[0]) << "output not uniform at sample " << i;

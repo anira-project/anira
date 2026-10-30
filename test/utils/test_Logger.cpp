@@ -1,10 +1,7 @@
 #include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/log.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
@@ -13,51 +10,50 @@
 #include <mutex>
 #include <string>
 #include <thread>
-#include <vector>
 
+#include "../abi/handler_support.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
-// anira logs through thl::Logger. CoreConfig::m_log.m_level becomes the logger's
+// anira logs through thl::Logger. The context config's log level becomes the logger's
 // runtime level; the real-time paths log into a queue the core owns, drained by a
-// core-owned low-priority thread (LogDrain::Thread) or by the host (LogDrain::Manual).
+// core-owned low-priority thread (ANIRA_LOG_DRAIN_THREAD) or by the host
+// (ANIRA_LOG_DRAIN_MANUAL, anira_drain_log). The sessions are C handlers' over the mono
+// pass-through.
 
 namespace {
 
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-}
+// What a context asks of the core: these tests vary the wait strategy, the level and the
+// drain.
+struct LogFields {
+    uint32_t m_threads = 2;
+    anira_wait_strategy m_wait = ANIRA_WAIT_SPIN_BACKOFF;
+    anira_log_level m_level = ANIRA_LOG_ERROR;
+    anira_log_drain m_drain = ANIRA_LOG_DRAIN_THREAD;
+    uint32_t m_interval_ms = 10;
+};
 
 // One blocking inference thread: spinning real-time-priority threads would starve the
 // low-priority drain thread on the small CI VMs (3 vCPUs), which is what Low means —
 // the tests are about the mechanism, not about CPU contention.
-CoreConfig make_core_config(LogDrain drain, LogLevel level = LogLevel::Error) {
-    CoreConfig config(1, WaitStrategy::Blocking, level);
-    config.m_log.m_drain = drain;
-    config.m_log.m_drain_interval_ms = 1;
-    return config;
+LogFields make_log_fields(anira_log_drain drain, anira_log_level level = ANIRA_LOG_ERROR) {
+    return LogFields{.m_threads = 1,
+                     .m_wait = ANIRA_WAIT_BLOCKING,
+                     .m_level = level,
+                     .m_drain = drain,
+                     .m_interval_ms = 1};
 }
 
-struct Instance {
-    explicit Instance(const CoreConfig& core_config = CoreConfig(2))
-        : m_handler(m_pp_processor, m_inference_config, core_config) {
-        m_handler.prepare(HostConfig(512, 48000));
-    }
-
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler;
+// One "plugin instance" over the fields.
+struct Instance : anira_test::Instance {
+    explicit Instance(const LogFields& fields = {})
+        : anira_test::Instance(fields.m_threads,
+                               fields.m_wait,
+                               fields.m_level,
+                               fields.m_drain,
+                               fields.m_interval_ms) {}
 };
 
 using anira_test::RecordCollector;
@@ -85,11 +81,11 @@ TEST(Logger, LevelMapsOntoThlLogger) {
 
 TEST(Logger, ContextConfigLevelIsAppliedToThlLogger) {
     {
-        const Instance instance{CoreConfig(2, WaitStrategy::SpinBackoff, LogLevel::Error)};
+        const Instance instance{LogFields{.m_level = ANIRA_LOG_ERROR}};
         EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Error);
     }
     {
-        const Instance instance{CoreConfig(2, WaitStrategy::SpinBackoff, LogLevel::Debug)};
+        const Instance instance{LogFields{.m_level = ANIRA_LOG_DEBUG}};
         EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Debug);
     }
 }
@@ -98,7 +94,7 @@ TEST(Logger, RtQueueExistsExactlyWhileTheCoreDoes) {
     // Sessions come and go; the queue (and the real-time sites' pointer to it) stays
     // with the core, so no real-time path can ever find it missing.
     {
-        const Instance instance{make_core_config(LogDrain::Thread)};
+        const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_THREAD)};
         EXPECT_NE(::anira::detail::rt_log_queue_slot().load(), nullptr);
     }
     EXPECT_NE(::anira::detail::rt_log_queue_slot().load(), nullptr);
@@ -112,11 +108,11 @@ TEST(Logger, RtQueueExistsExactlyWhileTheCoreDoes) {
 TEST(Logger, TheCoreNeverStartsTanhLibsOwnDrainThread) {
     // The core sets the logger's platform identity through set_config(), which would
     // also start tanh-lib's drain thread over its default real-time queue if the config
-    // asked for it. anira drains its own queue (LogDrain::Thread or Manual); a thread
+    // asked for it. anira drains its own queue (on its own thread or the host's); a thread
     // the core does not own would survive every session and, inside a plugin, the
     // host's unload of the module (LibraryUnload on the Windows static legs).
     {
-        const Instance instance{make_core_config(LogDrain::Thread)};
+        const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_THREAD)};
         EXPECT_FALSE(thl::Logger::rt::is_running())
             << "tanh-lib's default drain thread runs while a session exists";
     }
@@ -127,7 +123,7 @@ TEST(Logger, TheCoreNeverStartsTanhLibsOwnDrainThread) {
 #ifndef __EMSCRIPTEN__
 TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
     RecordCollector collector;
-    const Instance instance{make_core_config(LogDrain::Thread)};
+    const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_THREAD)};
     // Error level: the only one tanh-lib compiles in for Release builds.
     ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "rt record %d from the test", 42);
     EXPECT_TRUE(collector.wait_for("rt record 42 from the test"));
@@ -146,7 +142,7 @@ TEST(Logger, ThreadDrainDeliversRtRecordsWhileASessionExists) {
 TEST(Logger, ThreadDrainFlushesOnLastSessionRelease) {
     RecordCollector collector;
     {
-        const Instance instance{make_core_config(LogDrain::Thread)};
+        const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_THREAD)};
         ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "queued right before release");
     }
     // release_session stops and joins the drain thread, which flushes the queue.
@@ -156,11 +152,11 @@ TEST(Logger, ThreadDrainFlushesOnLastSessionRelease) {
 
 TEST(Logger, ManualDrainDeliversOnlyWhenTheHostPumps) {
     RecordCollector collector;
-    Instance instance{make_core_config(LogDrain::Manual)};
+    const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_MANUAL)};
     ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "manual record %d", 7);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
     EXPECT_FALSE(collector.has("manual record 7")) << "nobody should have drained yet";
-    EXPECT_GE(instance.m_handler.drain_log(), 1U);
+    EXPECT_GE(anira_drain_log(), 1U);
     EXPECT_TRUE(collector.has("manual record 7"));
     EXPECT_EQ(Core::drain_log(), 0U);
 }
@@ -168,7 +164,7 @@ TEST(Logger, ManualDrainDeliversOnlyWhenTheHostPumps) {
 TEST(Logger, ManualDrainFlushesOnLastSessionRelease) {
     RecordCollector collector;
     {
-        const Instance instance{make_core_config(LogDrain::Manual)};
+        const Instance instance{make_log_fields(ANIRA_LOG_DRAIN_MANUAL)};
         ANIRA_LOG_RT_ERROR(log_group::k_scheduler, "manual record before release");
     }
     EXPECT_TRUE(collector.has("manual record before release"));

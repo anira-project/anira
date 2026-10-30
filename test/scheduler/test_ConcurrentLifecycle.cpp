@@ -1,4 +1,3 @@
-#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 
 #include <atomic>
@@ -32,15 +31,7 @@ namespace {
 
 // One "plugin instance": a context of two threads and a handler over the mono pass-through,
 // prepared on construction so the session is registered with the shared core.
-struct Instance {
-    Instance() {
-        EXPECT_EQ(m_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
-            << m_handler.m_err.message;
-    }
-
-    anira_test::Context m_context{2};
-    anira_test::Handler m_handler{m_context, anira_test::mono_stream_model()};
-};
+using anira_test::Instance;
 
 // Spin gate so two threads hit their critical action as close to
 // simultaneously as the scheduler allows.
