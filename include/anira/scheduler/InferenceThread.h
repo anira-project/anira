@@ -26,6 +26,12 @@ class Loaded;  // src/engines/Adapter.h: the loaded model whose shared instances
 }  // namespace engine
 class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting for an instance
 
+/// The 2.x scheduler's own classes. The public thread class of the 3.x C++ face is
+/// anira::InferenceThread of <anira/anira.hpp>; this one is the library's, in its own
+/// namespace so that no class of namespace anira is defined both in libanira and in the
+/// header-only anira.hpp.
+namespace scheduler {
+
 /**
  * @brief Thread class for executing neural network inference operations.
  *
@@ -455,6 +461,8 @@ private:
     thl::core::Thread m_thread;  ///< The OS thread; its stop flag is should_exit()
 #endif
 };
+
+}  // namespace scheduler
 
 }  // namespace anira
 

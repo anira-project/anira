@@ -449,12 +449,12 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     // The twins read the count of threads inside run_loop, which the started thread enters
     // asynchronously: poll that count, not only the flag.
     while ((anira_inference_thread_is_running(thread) == 0U ||
-            anira::InferenceThread::get_num_loop_active() == 0) &&
+            anira::scheduler::InferenceThread::get_num_loop_active() == 0) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_NE(anira_inference_thread_is_running(thread), 0U);
-    ASSERT_GT(anira::InferenceThread::get_num_loop_active(), 0U);
+    ASSERT_GT(anira::scheduler::InferenceThread::get_num_loop_active(), 0U);
     const Pull served = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(served.m_status, ANIRA_OK);
     EXPECT_EQ(served.m_received, k_hop);

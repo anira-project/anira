@@ -326,7 +326,7 @@ TEST(AbiInstanceDispatch, WaitingJobsCountAsInFlight) {
     const anira_test::DestroyFirst destroy_first(handler, &engine);
     ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
     ASSERT_GE(anira_test::session_of(handler.m_handler)->m_num_structs, 3U);
-    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 0U);
+    EXPECT_EQ(anira::scheduler::InferenceThread::get_num_in_flight(), 0U);
 
     engine.m_open.store(false);
     for (int block = 0; block < 3; ++block) { push_block(handler.m_handler); }
@@ -338,21 +338,22 @@ TEST(AbiInstanceDispatch, WaitingJobsCountAsInFlight) {
     const anira::InstanceWaitList& waiting =
         *anira_test::session_of(handler.m_handler)->m_plans[0].m_waiting;
     const auto deadline = Clock::now() + std::chrono::seconds(anira_test::k_wait_s);
-    while ((waiting.num_waiting() != 2U || anira::InferenceThread::get_num_in_flight() != 3U) &&
+    while ((waiting.num_waiting() != 2U ||
+            anira::scheduler::InferenceThread::get_num_in_flight() != 3U) &&
            Clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
     EXPECT_EQ(waiting.num_waiting(), 2U) << "the two jobs behind the held instance";
-    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 3U)
+    EXPECT_EQ(anira::scheduler::InferenceThread::get_num_in_flight(), 3U)
         << "the held inference and the two waiting jobs";
     EXPECT_EQ(engine.m_calls.load(), 0);
 
     engine.m_open.store(true);
     EXPECT_TRUE(wait_for_calls(engine, 3));
-    while (anira::InferenceThread::get_num_in_flight() > 0U && Clock::now() < deadline) {
+    while (anira::scheduler::InferenceThread::get_num_in_flight() > 0U && Clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::microseconds(100));
     }
-    EXPECT_EQ(anira::InferenceThread::get_num_in_flight(), 0U);
+    EXPECT_EQ(anira::scheduler::InferenceThread::get_num_in_flight(), 0U);
 }
 
 // The default of max_instances is ANIRA_INSTANCES_AUTO: stored as the sentinel (the read-back

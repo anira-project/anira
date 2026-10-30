@@ -558,7 +558,7 @@ public:
      *
      * @return Unique pointer to a new user-owned InferenceThread.
      */
-    static std::unique_ptr<InferenceThread> make_inference_thread();
+    static std::unique_ptr<scheduler::InferenceThread> make_inference_thread();
 
     /**
      * @brief Number of inference threads currently active in the process.
@@ -982,10 +982,10 @@ private:
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
-    SessionElement* __doxygen_force_0;   ///< Placeholder for Doxygen to find SessionElement class
-                                         ///< documentation
-    InferenceThread* __doxygen_force_1;  ///< Placeholder for Doxygen to find InferenceThread class
-                                         ///< documentation
+    SessionElement* __doxygen_force_0;  ///< Placeholder for Doxygen to find SessionElement class
+                                        ///< documentation
+    scheduler::InferenceThread* __doxygen_force_1;  ///< Placeholder for Doxygen to find
+                                                    ///< InferenceThread class documentation
     InferenceData* __doxygen_force_2;  ///< Placeholder for Doxygen to find InferenceData structure
                                        ///< documentation
 #endif

@@ -435,7 +435,7 @@ void ANIRA_CALL anira_em_set_log_hook(anira_bool enable) ANIRA_NOEXCEPT try {
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
 uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
-    return anira::InferenceThread::get_num_loop_active();
+    return anira::scheduler::InferenceThread::get_num_loop_active();
 }
 
 anira_status ANIRA_CALL anira_em_context_config_set_worker_module(anira_context_config* config,

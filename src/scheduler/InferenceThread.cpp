@@ -74,6 +74,8 @@ constexpr double k_worker_stop_timeout_ms = 5000.0;
 #endif
 }  // namespace
 
+namespace scheduler {
+
 InferenceThread::InferenceThread(InferenceQueue& next_inference, anira_wait_strategy wait_strategy)
     : m_next_inference(next_inference), m_wait_strategy(wait_strategy) {}
 
@@ -754,5 +756,7 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
         .m_context = this};
     return slot.m_prepared->run(ctx, &buffers, reset_first, stop);
 }
+
+}  // namespace scheduler
 
 }  // namespace anira

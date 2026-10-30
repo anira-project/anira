@@ -98,10 +98,9 @@ struct Core::State {
     unsigned int m_num_handlers = 0;  ///< Registered 3.x handlers (register_handler()): users
                                       ///< of the core from create to destroy, prepared or not
 
-    std::vector<std::unique_ptr<InferenceThread>> m_thread_pool;  ///< Inference thread pool;
-                                                                  ///< non-empty exactly while
-                                                                  ///< the registry is non-empty
-                                                                  ///< (or until shutdown())
+    /// Inference thread pool; non-empty exactly while the registry is non-empty (or until
+    /// shutdown())
+    std::vector<std::unique_ptr<scheduler::InferenceThread>> m_thread_pool;
 
     anira_context_config m_core_config;  ///< Configuration in effect: the sanitized copy of
                                          ///< the first user's config of the current
@@ -202,14 +201,14 @@ constexpr std::chrono::milliseconds k_unload_wait_for_inferences{2000};
 // hang the host for good, returning would unmap the code under it, so the hook writes the rule
 // to stderr (not through anira's log queue or sinks, which may be gone or be what is stuck) and
 // aborts.
-void wait_for_inferences_or_abort(const std::vector<const InferenceThread*>& pool) {
+void wait_for_inferences_or_abort(const std::vector<const scheduler::InferenceThread*>& pool) {
     const auto deadline = std::chrono::steady_clock::now() + k_unload_wait_for_inferences;
     const auto threads_in_loop = [&pool]() {
         return static_cast<unsigned int>(std::ranges::count_if(
             pool,
-            [](const InferenceThread* thread) { return thread->is_in_loop(); }));
+            [](const scheduler::InferenceThread* thread) { return thread->is_in_loop(); }));
     };
-    unsigned int in_flight = InferenceThread::get_num_in_flight();
+    unsigned int in_flight = scheduler::InferenceThread::get_num_in_flight();
     unsigned int running = threads_in_loop();
     while (in_flight > 0 || running > 0) {
         if (std::chrono::steady_clock::now() >= deadline) {
@@ -229,7 +228,7 @@ void wait_for_inferences_or_abort(const std::vector<const InferenceThread*>& poo
             std::abort();
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        in_flight = InferenceThread::get_num_in_flight();
+        in_flight = scheduler::InferenceThread::get_num_in_flight();
         running = threads_in_loop();
     }
 }
@@ -256,11 +255,11 @@ void UnloadHook::run() {
         // as it always did. The threads are kept by the pool, which only shutdown() below
         // empties, so their pointers outlive the wait.
         Core::State& state = *static_cast<Core::State*>(existing);
-        std::vector<const InferenceThread*> pool;
+        std::vector<const scheduler::InferenceThread*> pool;
         {
             const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
             pool.reserve(state.m_thread_pool.size());
-            for (const std::unique_ptr<InferenceThread>& thread : state.m_thread_pool) {
+            for (const std::unique_ptr<scheduler::InferenceThread>& thread : state.m_thread_pool) {
                 thread->request_stop();
                 pool.push_back(thread.get());
             }
@@ -348,7 +347,8 @@ bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions
 // (a job whose model is busy waits on the model's InstanceWaitList, not on a thread), and a
 // thread that holds an instance takes no more waiting jobs once told (it gives each up), so a
 // join waits for the inferences inside an engine and nothing else.
-void stop_and_join(std::vector<std::unique_ptr<InferenceThread>>& pool, size_t first = 0) {
+void stop_and_join(std::vector<std::unique_ptr<scheduler::InferenceThread>>& pool,
+                   size_t first = 0) {
     for (size_t i = first; i < pool.size(); ++i) { pool[i]->request_stop(); }
     pool.erase(pool.begin() + static_cast<ptrdiff_t>(first), pool.end());
 }
@@ -697,8 +697,8 @@ void Core::resize_pool_locked(State& state, unsigned int new_num_threads) {
     if (new_num_threads > current_num_threads) {
         for (unsigned int i = current_num_threads; i < new_num_threads; ++i) {
             state.m_thread_pool.emplace_back(
-                std::make_unique<InferenceThread>(state.m_next_inference,
-                                                  state.m_core_config.m_wait));
+                std::make_unique<scheduler::InferenceThread>(state.m_next_inference,
+                                                             state.m_core_config.m_wait));
 #ifdef __EMSCRIPTEN__
             state.m_thread_pool.back()->set_worker_module(state.m_core_config.m_em_worker_module);
 #endif
@@ -1134,8 +1134,8 @@ bool Core::release_core_if_idle() {
     // registered context or handler is a user; on WebAssembly a Worker may still be inside
     // its loop after the main instance stopped it.
     if (!state.m_sessions.empty() || state.m_num_contexts > 0 || state.m_num_handlers > 0 ||
-        !state.m_thread_pool.empty() || InferenceThread::get_num_active_threads() > 0 ||
-        InferenceThread::get_num_loop_active() > 0) {
+        !state.m_thread_pool.empty() || scheduler::InferenceThread::get_num_active_threads() > 0 ||
+        scheduler::InferenceThread::get_num_loop_active() > 0) {
         return false;
     }
     void* expected = existing;
@@ -1370,7 +1370,7 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
                     while (!done) {
                         done = next.m_done_semaphore.try_acquire_until(
                             std::chrono::steady_clock::now() + k_forever_slice);
-                        if (!done && !InferenceThread::any_loop_active()) {
+                        if (!done && !scheduler::InferenceThread::any_loop_active()) {
                             return WaitOutcome::NoThread;
                         }
                     }
@@ -1381,7 +1381,9 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
             } else {
                 done = next.m_done_atomic.exchange(false, std::memory_order::acquire);
                 while (!done && !try_once) {
-                    if (!InferenceThread::any_loop_active()) { return WaitOutcome::NoThread; }
+                    if (!scheduler::InferenceThread::any_loop_active()) {
+                        return WaitOutcome::NoThread;
+                    }
                     if (!forever && std::chrono::steady_clock::now() >= wait_until) { break; }
                     std::this_thread::sleep_for(k_poll);
                     done = next.m_done_atomic.exchange(false, std::memory_order::acquire);
@@ -1523,7 +1525,7 @@ bool Core::enqueue_inference_or_drop(
                                 "Dropping the inference and zero-filling its output.");
         session->complete_with_zeros(thread_safe_struct);
     } else {
-        InferenceThread::notify_work();
+        scheduler::InferenceThread::notify_work();
     }
     return enqueued;
 }
@@ -1615,7 +1617,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
             }
         }
         // The other sessions' jobs are back in the queue: a parked thread takes them now.
-        if (!inference_stack.empty()) { InferenceThread::notify_work(); }
+        if (!inference_stack.empty()) { scheduler::InferenceThread::notify_work(); }
 
         // seq_cst: pairs with the worker's seq_cst read of m_initialized, which the caller
         // stored false before this drain: a worker that read it true is counted until it
@@ -1696,7 +1698,7 @@ InferenceQueue& Core::get_static_inference_queue() {
     return get_state().m_next_inference;
 }
 
-std::unique_ptr<InferenceThread> Core::make_inference_thread() {
+std::unique_ptr<scheduler::InferenceThread> Core::make_inference_thread() {
     State& state = get_state();
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
     watch_process_exit();  // as for the pool (start_thread_pool_locked)
@@ -1712,7 +1714,7 @@ std::unique_ptr<InferenceThread> Core::make_inference_thread() {
         worker_module = state.m_core_config.m_em_worker_module;
 #endif
     }
-    auto thread = std::make_unique<InferenceThread>(state.m_next_inference, wait);
+    auto thread = std::make_unique<scheduler::InferenceThread>(state.m_next_inference, wait);
 #ifdef __EMSCRIPTEN__
     thread->set_worker_module(std::move(worker_module));
 #endif
@@ -1720,7 +1722,7 @@ std::unique_ptr<InferenceThread> Core::make_inference_thread() {
 }
 
 unsigned int Core::get_num_inference_threads() {
-    return InferenceThread::get_num_active_threads();
+    return scheduler::InferenceThread::get_num_active_threads();
 }
 
 bool Core::has_inference_threads() {
@@ -1734,7 +1736,7 @@ bool Core::has_inference_threads() {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
         pool_exists = !state.m_thread_pool.empty();
     }
-    return pool_exists || InferenceThread::get_num_active_threads() > 0;
+    return pool_exists || scheduler::InferenceThread::get_num_active_threads() > 0;
 }
 
 }  // namespace anira

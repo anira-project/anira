@@ -61,8 +61,8 @@ add_custom_target(breathe-apidocs
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_thread_safe_struct.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_plan_slot.rst
-    # anira::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_thread_1_1_instance_hold.rst
+    # anira::scheduler::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1scheduler_1_1_inference_thread_1_1_instance_hold.rst
     # anira::Stage::Prepared, anira::Engine::Loaded, anira::Engine::Prepared and
     # anira::ext::ProviderOptions::Set are documented inside their outer class's page (breathe
     # lists the nested class there); a page of their own would declare every member twice.

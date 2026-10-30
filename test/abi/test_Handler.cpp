@@ -1195,8 +1195,9 @@ TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     });
     // The loop count, a wait-free read: the pool's size is read under the lifecycle lock,
     // which the stop holds while it joins.
-    EXPECT_TRUE(wait_until([]() { return anira::InferenceThread::get_num_loop_active() == 1U; },
-                           std::chrono::seconds(2)))
+    EXPECT_TRUE(
+        wait_until([]() { return anira::scheduler::InferenceThread::get_num_loop_active() == 1U; },
+                   std::chrono::seconds(2)))
         << "the idle thread did not leave at the stop";
     EXPECT_EQ(gate.m_calls.load(), 0) << "the holder is still inside the engine";
     EXPECT_FALSE(stopped.load()) << "the stop joins the holder, whose inference still runs";

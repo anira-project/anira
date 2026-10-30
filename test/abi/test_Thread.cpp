@@ -104,11 +104,11 @@ TEST(AbiInferenceThread, RunLoopOnTheCallersOwnThread) {
         << err.message;
     std::thread worker([thread] { anira_inference_thread_run_loop(thread); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_s);
-    while (InferenceThread::get_num_loop_active() == 0 &&
+    while (scheduler::InferenceThread::get_num_loop_active() == 0 &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_GE(InferenceThread::get_num_loop_active(), 1U);
+    EXPECT_GE(scheduler::InferenceThread::get_num_loop_active(), 1U);
     EXPECT_EQ(anira_inference_thread_has_exited(thread), 0U);
     EXPECT_EQ(Core::release_core_if_idle(), false) << "a thread inside its loop uses the core";
     anira_inference_thread_stop(thread);

@@ -588,7 +588,7 @@ anira_status process_tensors_wait_body(anira_handler& handler,
                                        double timeout_ms,
                                        const char* entry,
                                        const size_t*& counts) noexcept {
-    if (!anira::InferenceThread::any_loop_active()) {
+    if (!anira::scheduler::InferenceThread::any_loop_active()) {
         counts = handler.m_manager->process_nowait(inputs, outputs);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
@@ -610,7 +610,7 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
                                    double timeout_ms,
                                    const char* entry,
                                    const size_t*& counts) noexcept {
-    if (!anira::InferenceThread::any_loop_active()) {
+    if (!anira::scheduler::InferenceThread::any_loop_active()) {
         counts = handler.m_manager->pop_data(outputs);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
