@@ -1,4 +1,4 @@
-import type { AniraBindings } from './abi/bindings'
+import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_DTYPE_F32 } from './abi/enums'
 import { anira_tensor } from './abi/layout'
 import { createAudioNode, type AniraAudioNode, type AudioNodeOptions } from './AudioNode'
@@ -54,10 +54,10 @@ export class Handler {
     const data = m._malloc(values.length * 4 + 8 + anira_tensor.size)
     if (data === 0) throw new RangeError('anira: out of memory for a Static input')
     try {
-      m.HEAPF32.set(Float32Array.from(values), data >>> 2)
+      heap(m).HEAPF32.set(Float32Array.from(values), data >>> 2)
       const shape = data + values.length * 4
       const aligned = (shape + 7) & ~7
-      m.HEAP64[aligned >>> 3] = BigInt(values.length)
+      heap(m).HEAP64[aligned >>> 3] = BigInt(values.length)
       const tensor = aligned + 8
       this.abi.anira_tensor_init_host(tensor, data, ANIRA_DTYPE_F32, 1, aligned)
       this.abi.anira_handler_set_static_input(this.ptr, slot, tensor)

@@ -1,4 +1,4 @@
-import type { AniraBindings } from './abi/bindings'
+import { type AniraBindings, heap } from './abi/bindings'
 import { anira_bytes_ownership, anira_engine } from './abi/enums'
 
 /** Anything that carries the typed C ABI of the main instance (an `Anira`). */
@@ -51,13 +51,15 @@ export const enabledEngines = (abi: AniraBindings): Set<number> => {
   if (rows === 0) throw new RangeError('anira: out of memory listing the enabled engines')
   try {
     const count = rows + capacity * BACKEND_ROW_BYTES
-    m.HEAPU8.fill(0, rows, count)
-    m.HEAPU32[count >>> 2] = capacity
+    heap(m).HEAPU8.fill(0, rows, count)
+    heap(m).HEAPU32[count >>> 2] = capacity
     abi.anira_enabled_engines(BACKEND_ROW_BYTES, count, rows)
     const engines = new Set<number>()
-    const n = Math.min(m.HEAPU32[count >>> 2], capacity)
+    const n = Math.min(heap(m).HEAPU32[count >>> 2], capacity)
     for (let i = 0; i < n; i++) {
-      engines.add(m.HEAPU32[(rows + i * BACKEND_ROW_BYTES + BACKEND_ENGINE_OFFSET) >>> 2])
+      engines.add(
+        heap(m).HEAPU32[(rows + i * BACKEND_ROW_BYTES + BACKEND_ENGINE_OFFSET) >>> 2]
+      )
     }
     return engines
   } finally {
@@ -170,7 +172,7 @@ export class ModelConfig {
     if (ptr === 0)
       throw new RangeError(`anira: out of memory for ${bytes.length} model bytes`)
     try {
-      m.HEAPU8.set(bytes, ptr)
+      heap(m).HEAPU8.set(bytes, ptr)
       this.abi.anira_model_config_set_model_bytes(
         this.ptr,
         index,

@@ -1,11 +1,15 @@
-import { AniraBindings, type AbiModule } from './abi/bindings'
+import { AniraBindings, type AbiModule, heap } from './abi/bindings'
 import { anira_phase, anira_status } from './abi/enums'
 import { anira_engine_ctx, anira_log_record, anira_tensor } from './abi/layout'
 
 /**
  * What a stage or an engine is constructed with, in the scope that runs it (the main thread, an
  * inference Worker, the audio worklet): the typed C ABI of that scope's module instance and the
- * instance itself (its heap views: `module.HEAPF32`, ...).
+ * instance itself (its heap views: `module.HEAPF32`, ...). The memory grows, and the views of
+ * a scope are rebuilt by `heap(module)`: the trampolines call it before each call into a stage
+ * or an engine (a rebuild at most once after a growth, seven typed arrays: on the audio thread a
+ * small JavaScript allocation, never one by the C audio path), so `module.HEAPF32` is current
+ * there for memory that existed when the call began.
  */
 export type ScopeEnv = {
   abi: AniraBindings
@@ -189,7 +193,7 @@ export class Registry {
       }
       return anira_status.ANIRA_OK
     }
-    const stage = this.stageOf(module, key)
+    const stage = this.stageOf(heap(module), key)
     switch (phase) {
       case p.ANIRA_PHASE_PRE_PROCESS:
         return stage.preProcess
@@ -226,7 +230,7 @@ export class Registry {
     b: number,
     idPtr: number
   ): number {
-    const engine = this.engineOf(module, key, idPtr)
+    const engine = this.engineOf(heap(module), key, idPtr)
     const p = anira_phase
     switch (phase) {
       case p.ANIRA_PHASE_INFERENCE: {
@@ -310,19 +314,19 @@ export const engineTensors = (
       out.push({
         ptr,
         elements,
-        f32: data === 0 ? null : new Float32Array(m.HEAPF32.buffer, data, elements),
+        f32: data === 0 ? null : new Float32Array(heap(m).HEAPF32.buffer, data, elements),
       })
     }
     return out
   }
   return {
     inputs: read(
-      m.HEAPU32[(ctx + f.inputs.offset) >>> 2],
-      m.HEAPU32[(ctx + f.num_inputs.offset) >>> 2]
+      heap(m).HEAPU32[(ctx + f.inputs.offset) >>> 2],
+      heap(m).HEAPU32[(ctx + f.num_inputs.offset) >>> 2]
     ),
     outputs: read(
-      m.HEAPU32[(ctx + f.outputs.offset) >>> 2],
-      m.HEAPU32[(ctx + f.num_outputs.offset) >>> 2]
+      heap(m).HEAPU32[(ctx + f.outputs.offset) >>> 2],
+      heap(m).HEAPU32[(ctx + f.num_outputs.offset) >>> 2]
     ),
   }
 }
@@ -337,13 +341,13 @@ const ENGINE_MODEL_PATH = 12
 /** The model entry of an engine call's `prepared` record (see `EngineModel`). */
 export const engineModel = (env: ScopeEnv, prepared: number): EngineModel => {
   const m = env.module
-  const word = (offset: number) => m.HEAPU32[(prepared + offset) >>> 2]
+  const word = (offset: number) => heap(m).HEAPU32[(prepared + offset) >>> 2]
   const bytes = word(ENGINE_MODEL_BYTES)
   const size = word(ENGINE_MODEL_SIZE)
   const path = word(ENGINE_MODEL_PATH)
   return {
     row: word(ENGINE_MODEL_ROW),
-    bytes: bytes === 0 ? null : new Uint8Array(m.HEAPU8.buffer, bytes, size),
+    bytes: bytes === 0 ? null : new Uint8Array(heap(m).HEAPU8.buffer, bytes, size),
     path: path === 0 ? null : m.UTF8ToString(path),
   }
 }
@@ -353,10 +357,10 @@ export const logRecordAt = (module: AbiModule, record: number): LogRecord => {
   const f = anira_log_record.fields
   const text = (ptr: number) => (ptr === 0 ? '' : module.UTF8ToString(ptr))
   return {
-    level: module.HEAPU32[(record + f.level.offset) >>> 2],
-    flags: module.HEAPU32[(record + f.flags.offset) >>> 2],
-    sequence: module.HEAPU64[(record + f.sequence.offset) >>> 3],
-    group: text(module.HEAPU32[(record + f.group.offset) >>> 2]),
-    message: text(module.HEAPU32[(record + f.message.offset) >>> 2]),
+    level: heap(module).HEAPU32[(record + f.level.offset) >>> 2],
+    flags: heap(module).HEAPU32[(record + f.flags.offset) >>> 2],
+    sequence: heap(module).HEAPU64[(record + f.sequence.offset) >>> 3],
+    group: text(heap(module).HEAPU32[(record + f.group.offset) >>> 2]),
+    message: text(heap(module).HEAPU32[(record + f.message.offset) >>> 2]),
   }
 }

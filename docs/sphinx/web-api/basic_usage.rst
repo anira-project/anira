@@ -44,6 +44,10 @@ A failed call throws an :js:class:`AniraError` with the entry's message.
 The hook replaces the module's platform sink (the console by level), so each record reaches
 the console once, through the console method of its level (:doc:`../logging`).
 
+:js:meth:`Anira.create` makes the module's shared memory: 256 MiB growing to 2 GiB as handlers
+need it, ``{ memory: { initial, maximum } }`` to size it, equal sizes to fix it
+(:ref:`the memory <web-memory>`).
+
 2. A Context
 ------------
 

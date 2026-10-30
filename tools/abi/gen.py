@@ -1357,13 +1357,13 @@ def ts_raw_sig(fn: dict, model: dict) -> str:
 
 def ts_read(kind: str, ptr: str) -> str:
     return {
-        "bool": f"m.HEAPU32[{ptr} >>> 2] !== 0",
-        "i64": f"m.HEAP64[{ptr} >>> 3]",
-        "u64": f"m.HEAPU64[{ptr} >>> 3]",
-        "double": f"m.HEAPF64[{ptr} >>> 3]",
-        "float": f"m.HEAPF32[{ptr} >>> 2]",
-        "i32": f"m.HEAP32[{ptr} >>> 2]",
-        "u32": f"m.HEAPU32[{ptr} >>> 2]",
+        "bool": f"heap(m).HEAPU32[{ptr} >>> 2] !== 0",
+        "i64": f"heap(m).HEAP64[{ptr} >>> 3]",
+        "u64": f"heap(m).HEAPU64[{ptr} >>> 3]",
+        "double": f"heap(m).HEAPF64[{ptr} >>> 3]",
+        "float": f"heap(m).HEAPF32[{ptr} >>> 2]",
+        "i32": f"heap(m).HEAP32[{ptr} >>> 2]",
+        "u32": f"heap(m).HEAPU32[{ptr} >>> 2]",
     }[kind]
 
 
@@ -1474,7 +1474,7 @@ def emit_binding(fn: dict, model: dict) -> list[str]:
         body.append(f"{ind}if (sized !== anira_status.ANIRA_ERROR_BUFFER_TOO_SMALL) {{")
         body.append(f"{ind}  checkStatus(m, sized{check_tail})")
         body.append(f"{ind}}}")
-        body.append(f"{ind}cap = m.HEAPU32[len >>> 2] + 1")
+        body.append(f"{ind}cap = heap(m).HEAPU32[len >>> 2] + 1")
         body.append(f"{ind}buf = m._malloc(cap)")
         body.append(f"{ind}if (buf === 0) {{")
         body.append(f"{ind}  throw new AniraError(anira_status.ANIRA_ERROR_OUT_OF_MEMORY, '{name}')")
@@ -1516,7 +1516,7 @@ def emit_binding(fn: dict, model: dict) -> list[str]:
         if outs:
             def read(r):
                 if r["role"] == "outstr":
-                    return f"readCString(m, m.HEAPU32[{r['name']}_ >>> 2])"
+                    return f"readCString(m, heap(m).HEAPU32[{r['name']}_ >>> 2])"
                 return ts_read(r["kind"], f"{r['name']}_")
             if len(outs) == 1 and (status or ret == "void"):
                 body.append(f"{ind}return {read(outs[0])}")
@@ -1604,20 +1604,44 @@ def emit_bindings_ts(reg: dict) -> str:
         "  HEAPU64: BigUint64Array",
         "  emscriptenRegisterAudioObject(object: unknown): number",
         "  emscriptenGetAudioObject(handle: number): unknown",
+        "  /** The instance's shared memory: passed on the main thread, set by anira's boot elsewhere. */",
+        "  wasmMemory?: WebAssembly.Memory",
+        "}",
+        "",
+        "/**",
+        " * `m`, its heap views over the memory as it is now. The memory is shared and grows (any",
+        " * thread's malloc may grow it): a growth gives `memory.buffer` a new, longer SharedArrayBuffer,",
+        " * and views made before it cover only the old length. Every heap access of the package goes",
+        " * through this helper, which rebuilds the views once after a growth (seven typed arrays: a",
+        " * small allocation, made in JavaScript, never by the C audio path).",
+        " */",
+        "export const heap = (m: AbiModule): AbiModule => {",
+        "  const memory = m.wasmMemory",
+        "  if (memory !== undefined && m.HEAPU8.buffer !== memory.buffer) {",
+        "    const b = memory.buffer",
+        "    m.HEAPU8 = new Uint8Array(b)",
+        "    m.HEAP32 = new Int32Array(b)",
+        "    m.HEAPU32 = new Uint32Array(b)",
+        "    m.HEAPF32 = new Float32Array(b)",
+        "    m.HEAPF64 = new Float64Array(b)",
+        "    m.HEAP64 = new BigInt64Array(b)",
+        "    m.HEAPU64 = new BigUint64Array(b)",
+        "  }",
+        "  return m",
         "}",
         "",
         "// An 8-byte out slot on the stack, zeroed.",
         "const stackSlot = (m: AbiModule): number => {",
         "  const ptr = m.stackAlloc(8)",
-        "  m.HEAPU32[ptr >>> 2] = 0",
-        "  m.HEAPU32[(ptr >>> 2) + 1] = 0",
+        "  heap(m).HEAPU32[ptr >>> 2] = 0",
+        "  heap(m).HEAPU32[(ptr >>> 2) + 1] = 0",
         "  return ptr",
         "}",
         "",
         "// An anira_error on the stack as ANIRA_ERROR_INIT leaves it: status 0, an empty message.",
         "const stackError = (m: AbiModule): number => {",
         "  const ptr = m.stackAlloc(520)",
-        "  m.HEAPU32.fill(0, ptr >>> 2, (ptr >>> 2) + 3)",
+        "  heap(m).HEAPU32.fill(0, ptr >>> 2, (ptr >>> 2) + 3)",
         "  return ptr",
         "}",
         "",

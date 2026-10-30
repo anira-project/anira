@@ -1,4 +1,4 @@
-import type { AniraBindings } from './abi/bindings'
+import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_STAGE_FLAG_REALTIME_PRE_POST } from './abi/enums'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
@@ -55,7 +55,7 @@ export class Pipeline {
     const variants = m._malloc(list.length * 4)
     if (variants === 0) throw new RangeError('anira: out of memory for the variants')
     try {
-      list.forEach((model, i) => (m.HEAPU32[(variants >>> 2) + i] = model.ptr))
+      list.forEach((model, i) => (heap(m).HEAPU32[(variants >>> 2) + i] = model.ptr))
       this.abi.anira_pipeline_add_inference(this.ptr, variants, list.length, 0, 0)
     } finally {
       m._free(variants)

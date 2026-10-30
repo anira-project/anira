@@ -3,7 +3,7 @@
 // C ABI, the enums and the record layouts, and nothing that loads the module or touches a
 // window. The main entry re-exports all of it.
 export * from './registry'
-export { AniraBindings, type AbiModule } from './abi/bindings'
+export { AniraBindings, type AbiModule, heap } from './abi/bindings'
 export * from './abi/enums'
 export * as layout from './abi/layout'
 export { AniraError } from './AniraError'

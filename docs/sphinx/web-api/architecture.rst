@@ -127,6 +127,34 @@ clock).
    tfjs's ``data()``. They are planned for M3, with the Async contract: an engine that completes a
    job later.
 
+The Memory and Its Views
+------------------------
+
+The memory grows (:ref:`the memory <web-memory>`: 256 MiB to begin with, up to 2 GiB), and any
+thread's malloc may grow it: in practice the main thread's, where handlers are created and
+prepared; the audio path in C allocates nothing, so the audio thread never grows it. A growth
+gives the shared memory a new, longer ``SharedArrayBuffer``, and every realm reads the heap
+through typed-array views it made over the old one, which cover the old length only. Each realm
+rebuilds its own:
+
+* Emscripten's glue, built with ``-pthread`` and growth, checks its views at every heap access
+  of its own (``growMemViews()``; the worklet's ``process()`` re-creates its output views when
+  the buffer changed) and with them the instance's ``Module.HEAP*``;
+* the package's code reads the heap through ``heap(module)`` of the bindings, which compares the
+  views' buffer with ``memory.buffer`` and rebuilds the seven views once after a growth. The
+  generated bindings call it at every access, the typed layer's classes too, and the stage and
+  engine trampolines before every call into a JavaScript stage or engine, so a stage's or an
+  engine's ``module.HEAPF32`` is current for the memory that existed when its call began. The
+  rebuild is a small JavaScript allocation, at most once per realm and growth: on the audio
+  thread, in a JavaScript stage's realm, the first call after a growth makes it.
+
+``heap`` needs the realm's memory: the main thread's ``Module.wasmMemory`` is the memory
+:js:meth:`Anira.create` passed, and anira's boot of an inference Worker and of the worklet sets
+the realm's (the glue keeps it to itself there). Pointers handed across realms are offsets, valid
+in every realm; a view kept across calls (an engine's ``model.bytes``, a ``Float32Array`` a stage
+built in its ``prepare``) stays valid for the memory it covers, and one made over memory that
+existed then needs no rebuild.
+
 The Bindings
 ------------
 

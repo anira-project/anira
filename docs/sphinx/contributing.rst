@@ -407,7 +407,8 @@ a context of two inference threads that anira starts as Wasm Workers, each impor
 list that logs one warning and must see it once, through ``console.warn``, and
 ``anira_em_runtime`` (``test/abi/em_runtime.c``), a library module that links the archive with
 none of AniraWeb's flags and must still run a timer callback after a first one, and
-``anira_em_oom`` (``test/abi/em_oom.c``), which fills the fixed 512 MiB heap and must see a
+``anira_em_oom`` (``test/abi/em_oom.c``), which fills its heap (a fixed 512 MiB of its own
+link; AniraWeb's grows) and must see a
 handler on the bundled gain config refused with ``ANIRA_ERROR_OUT_OF_MEMORY``, then prepare once
 the memory is back (it reads the model fixtures: ``cmake -P extras/fetch-models.cmake``);
 the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of

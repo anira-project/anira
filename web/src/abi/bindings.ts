@@ -271,20 +271,44 @@ export interface AbiModule {
   HEAPU64: BigUint64Array
   emscriptenRegisterAudioObject(object: unknown): number
   emscriptenGetAudioObject(handle: number): unknown
+  /** The instance's shared memory: passed on the main thread, set by anira's boot elsewhere. */
+  wasmMemory?: WebAssembly.Memory
+}
+
+/**
+ * `m`, its heap views over the memory as it is now. The memory is shared and grows (any
+ * thread's malloc may grow it): a growth gives `memory.buffer` a new, longer SharedArrayBuffer,
+ * and views made before it cover only the old length. Every heap access of the package goes
+ * through this helper, which rebuilds the views once after a growth (seven typed arrays: a
+ * small allocation, made in JavaScript, never by the C audio path).
+ */
+export const heap = (m: AbiModule): AbiModule => {
+  const memory = m.wasmMemory
+  if (memory !== undefined && m.HEAPU8.buffer !== memory.buffer) {
+    const b = memory.buffer
+    m.HEAPU8 = new Uint8Array(b)
+    m.HEAP32 = new Int32Array(b)
+    m.HEAPU32 = new Uint32Array(b)
+    m.HEAPF32 = new Float32Array(b)
+    m.HEAPF64 = new Float64Array(b)
+    m.HEAP64 = new BigInt64Array(b)
+    m.HEAPU64 = new BigUint64Array(b)
+  }
+  return m
 }
 
 // An 8-byte out slot on the stack, zeroed.
 const stackSlot = (m: AbiModule): number => {
   const ptr = m.stackAlloc(8)
-  m.HEAPU32[ptr >>> 2] = 0
-  m.HEAPU32[(ptr >>> 2) + 1] = 0
+  heap(m).HEAPU32[ptr >>> 2] = 0
+  heap(m).HEAPU32[(ptr >>> 2) + 1] = 0
   return ptr
 }
 
 // An anira_error on the stack as ANIRA_ERROR_INIT leaves it: status 0, an empty message.
 const stackError = (m: AbiModule): number => {
   const ptr = m.stackAlloc(520)
-  m.HEAPU32.fill(0, ptr >>> 2, (ptr >>> 2) + 3)
+  heap(m).HEAPU32.fill(0, ptr >>> 2, (ptr >>> 2) + 3)
   return ptr
 }
 
@@ -970,7 +994,7 @@ export class AniraBindings {
         'anira_tensor_spec_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -1232,7 +1256,7 @@ export class AniraBindings {
         'anira_contract_create_hard',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -1258,7 +1282,7 @@ export class AniraBindings {
         'anira_contract_create_async',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -1724,7 +1748,7 @@ export class AniraBindings {
         'anira_context_config_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -2074,7 +2098,7 @@ export class AniraBindings {
         'anira_model_config_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -2128,7 +2152,7 @@ export class AniraBindings {
         'anira_model_config_add_model_path',
         err
       )
-      return m.HEAPU32[out_index_ >>> 2]
+      return heap(m).HEAPU32[out_index_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -2186,7 +2210,7 @@ export class AniraBindings {
         'anira_model_config_add_model_bytes',
         err
       )
-      return m.HEAPU32[out_index_ >>> 2]
+      return heap(m).HEAPU32[out_index_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -2281,8 +2305,8 @@ export class AniraBindings {
         'anira_model_config_model_engine'
       )
       return {
-        engine: m.HEAPU32[engine_ >>> 2],
-        engine_id: readCString(m, m.HEAPU32[engine_id_ >>> 2]),
+        engine: heap(m).HEAPU32[engine_ >>> 2],
+        engine_id: readCString(m, heap(m).HEAPU32[engine_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -2374,8 +2398,8 @@ export class AniraBindings {
         'anira_model_config_model_provider'
       )
       return {
-        provider: m.HEAPU32[provider_ >>> 2],
-        provider_id: readCString(m, m.HEAPU32[provider_id_ >>> 2]),
+        provider: heap(m).HEAPU32[provider_ >>> 2],
+        provider_id: readCString(m, heap(m).HEAPU32[provider_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -2418,8 +2442,8 @@ export class AniraBindings {
         'anira_model_config_model_bytes'
       )
       return {
-        bytes: m.HEAPU32[bytes_ >>> 2],
-        size: m.HEAPU32[size_ >>> 2],
+        bytes: heap(m).HEAPU32[bytes_ >>> 2],
+        size: heap(m).HEAPU32[size_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -2892,7 +2916,7 @@ export class AniraBindings {
         'anira_job_options_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3056,7 +3080,7 @@ export class AniraBindings {
         'anira_model_config_from_json',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3084,7 +3108,7 @@ export class AniraBindings {
         'anira_model_config_from_json_file',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3110,7 +3134,7 @@ export class AniraBindings {
       if (sized !== anira_status.ANIRA_ERROR_BUFFER_TOO_SMALL) {
         checkStatus(m, sized, 'anira_model_config_to_json')
       }
-      cap = m.HEAPU32[len >>> 2] + 1
+      cap = heap(m).HEAPU32[len >>> 2] + 1
       buf = m._malloc(cap)
       if (buf === 0) {
         throw new AniraError(anira_status.ANIRA_ERROR_OUT_OF_MEMORY, 'anira_model_config_to_json')
@@ -3149,7 +3173,7 @@ export class AniraBindings {
         m._anira_model_config_take_legacy_contract(config, out_),
         'anira_model_config_take_legacy_contract'
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3185,7 +3209,7 @@ export class AniraBindings {
         'anira_context_config_from_json',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3210,7 +3234,7 @@ export class AniraBindings {
       if (sized !== anira_status.ANIRA_ERROR_BUFFER_TOO_SMALL) {
         checkStatus(m, sized, 'anira_context_config_to_json')
       }
-      cap = m.HEAPU32[len >>> 2] + 1
+      cap = heap(m).HEAPU32[len >>> 2] + 1
       buf = m._malloc(cap)
       if (buf === 0) {
         throw new AniraError(anira_status.ANIRA_ERROR_OUT_OF_MEMORY, 'anira_context_config_to_json')
@@ -3261,7 +3285,7 @@ export class AniraBindings {
         'anira_contract_from_json',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3338,8 +3362,8 @@ export class AniraBindings {
         'anira_tensor_spec_axis'
       )
       return {
-        tag: m.HEAPU32[tag_ >>> 2],
-        extent: m.HEAP64[extent_ >>> 3],
+        tag: heap(m).HEAPU32[tag_ >>> 2],
+        extent: heap(m).HEAP64[extent_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -3370,9 +3394,9 @@ export class AniraBindings {
         'anira_tensor_spec_window'
       )
       return {
-        window_min: m.HEAP64[window_min_ >>> 3],
-        window_max: m.HEAP64[window_max_ >>> 3],
-        overlap: m.HEAP64[overlap_ >>> 3],
+        window_min: heap(m).HEAP64[window_min_ >>> 3],
+        window_max: heap(m).HEAP64[window_max_ >>> 3],
+        overlap: heap(m).HEAP64[overlap_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -3398,8 +3422,8 @@ export class AniraBindings {
         'anira_tensor_spec_time_ratio'
       )
       return {
-        num: m.HEAP64[num_ >>> 3],
-        den: m.HEAP64[den_ >>> 3],
+        num: heap(m).HEAP64[num_ >>> 3],
+        den: heap(m).HEAP64[den_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -3509,8 +3533,8 @@ export class AniraBindings {
         'anira_model_config_default_engine'
       )
       return {
-        engine: m.HEAPU32[engine_ >>> 2],
-        engine_id: readCString(m, m.HEAPU32[engine_id_ >>> 2]),
+        engine: heap(m).HEAPU32[engine_ >>> 2],
+        engine_id: readCString(m, heap(m).HEAPU32[engine_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -3542,8 +3566,8 @@ export class AniraBindings {
         'anira_model_config_default_provider'
       )
       return {
-        provider: m.HEAPU32[provider_ >>> 2],
-        provider_id: readCString(m, m.HEAPU32[provider_id_ >>> 2]),
+        provider: heap(m).HEAPU32[provider_ >>> 2],
+        provider_id: readCString(m, heap(m).HEAPU32[provider_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -3712,9 +3736,9 @@ export class AniraBindings {
         'anira_contract_hard_geometry'
       )
       return {
-        block_min: m.HEAPF64[block_min_ >>> 3],
-        block_max: m.HEAPF64[block_max_ >>> 3],
-        rate: m.HEAPF64[rate_ >>> 3],
+        block_min: heap(m).HEAPF64[block_min_ >>> 3],
+        block_max: heap(m).HEAPF64[block_max_ >>> 3],
+        rate: heap(m).HEAPF64[rate_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -3741,8 +3765,8 @@ export class AniraBindings {
         'anira_contract_hard_budget'
       )
       return {
-        kind: m.HEAPU32[kind_ >>> 2],
-        explicit_ms: m.HEAPF64[explicit_ms_ >>> 3],
+        kind: heap(m).HEAPU32[kind_ >>> 2],
+        explicit_ms: heap(m).HEAPF64[explicit_ms_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -3769,8 +3793,8 @@ export class AniraBindings {
         'anira_contract_hard_warmup'
       )
       return {
-        mode: m.HEAPU32[mode_ >>> 2],
-        iterations: m.HEAPU32[iterations_ >>> 2],
+        mode: heap(m).HEAPU32[mode_ >>> 2],
+        iterations: heap(m).HEAPU32[iterations_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -3794,7 +3818,7 @@ export class AniraBindings {
         m._anira_contract_hard_on_miss(contract, policy_),
         'anira_contract_hard_on_miss'
       )
-      return m.HEAPU32[policy_ >>> 2]
+      return heap(m).HEAPU32[policy_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -3821,8 +3845,8 @@ export class AniraBindings {
         'anira_contract_hard_miss_fn'
       )
       return {
-        fn: m.HEAPU32[fn_ >>> 2],
-        user_data: m.HEAPU32[user_data_ >>> 2],
+        fn: heap(m).HEAPU32[fn_ >>> 2],
+        user_data: heap(m).HEAPU32[user_data_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -3846,7 +3870,7 @@ export class AniraBindings {
         m._anira_contract_hard_wait_ratio(contract, ratio_),
         'anira_contract_hard_wait_ratio'
       )
-      return m.HEAPF64[ratio_ >>> 3]
+      return heap(m).HEAPF64[ratio_ >>> 3]
     } finally {
       m.stackRestore(sp)
     }
@@ -3891,8 +3915,8 @@ export class AniraBindings {
         'anira_contract_hard_ring_dtype'
       )
       return {
-        canonical: readCString(m, m.HEAPU32[canonical_ >>> 2]),
-        dtype: m.HEAPU32[dtype_ >>> 2],
+        canonical: readCString(m, heap(m).HEAPU32[canonical_ >>> 2]),
+        dtype: heap(m).HEAPU32[dtype_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -3937,8 +3961,8 @@ export class AniraBindings {
         'anira_contract_hard_latency'
       )
       return {
-        canonical: readCString(m, m.HEAPU32[canonical_ >>> 2]),
-        samples: m.HEAPU32[samples_ >>> 2],
+        canonical: readCString(m, heap(m).HEAPU32[canonical_ >>> 2]),
+        samples: heap(m).HEAPU32[samples_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -3978,8 +4002,8 @@ export class AniraBindings {
         'anira_context_config_threads'
       )
       return {
-        num_threads: m.HEAPU32[num_threads_ >>> 2],
-        wait: m.HEAPU32[wait_ >>> 2],
+        num_threads: heap(m).HEAPU32[num_threads_ >>> 2],
+        wait: heap(m).HEAPU32[wait_ >>> 2],
       }
     } finally {
       m.stackRestore(sp)
@@ -4035,7 +4059,7 @@ export class AniraBindings {
         'anira_context_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4386,7 +4410,7 @@ export class AniraBindings {
         'anira_inference_thread_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4779,7 +4803,7 @@ export class AniraBindings {
     try {
       const out_ = stackSlot(m)
       checkStatus(m, m._anira_stage_input_role(ctx, slot, out_), 'anira_stage_input_role')
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4807,7 +4831,7 @@ export class AniraBindings {
         m._anira_stage_output_role(ctx, slot, out_),
         'anira_stage_output_role'
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4833,7 +4857,7 @@ export class AniraBindings {
     try {
       const out_ = stackSlot(m)
       checkStatus(m, m._anira_stage_input_ring(ctx, slot, out_), 'anira_stage_input_ring')
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4861,7 +4885,7 @@ export class AniraBindings {
         m._anira_stage_output_ring(ctx, slot, out_),
         'anira_stage_output_ring'
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -4961,8 +4985,8 @@ export class AniraBindings {
         'anira_stage_engine'
       )
       return {
-        engine: m.HEAPU32[engine_ >>> 2],
-        engine_id: readCString(m, m.HEAPU32[engine_id_ >>> 2]),
+        engine: heap(m).HEAPU32[engine_ >>> 2],
+        engine_id: readCString(m, heap(m).HEAPU32[engine_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -4991,8 +5015,8 @@ export class AniraBindings {
         'anira_stage_provider'
       )
       return {
-        provider: m.HEAPU32[provider_ >>> 2],
-        provider_id: readCString(m, m.HEAPU32[provider_id_ >>> 2]),
+        provider: heap(m).HEAPU32[provider_ >>> 2],
+        provider_id: readCString(m, heap(m).HEAPU32[provider_id_ >>> 2]),
       }
     } finally {
       m.stackRestore(sp)
@@ -5070,7 +5094,7 @@ export class AniraBindings {
       const out_ = stackSlot(m)
       const err = stackError(m)
       checkStatus(m, m._anira_pipeline_create(out_, err), 'anira_pipeline_create', err)
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5246,7 +5270,7 @@ export class AniraBindings {
         'anira_custom_engine_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5461,7 +5485,7 @@ export class AniraBindings {
         'anira_handler_create',
         err
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5809,7 +5833,7 @@ export class AniraBindings {
         m._anira_handler_process(handler, in_, in_slot, out, out_slot, delivered_),
         'anira_handler_process'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5880,7 +5904,7 @@ export class AniraBindings {
         ),
         'anira_handler_process_multi'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5961,7 +5985,7 @@ export class AniraBindings {
         m._anira_handler_pop_data(handler, out, slot, delivered_),
         'anira_handler_pop_data'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -5994,7 +6018,7 @@ export class AniraBindings {
         m._anira_handler_pop_data_multi(handler, outputs, num_outputs, delivered_),
         'anira_handler_pop_data_multi'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -6147,7 +6171,7 @@ export class AniraBindings {
         m._anira_handler_get_available_samples(handler, slot, channel, out_),
         'anira_handler_get_available_samples'
       )
-      return m.HEAPU32[out_ >>> 2]
+      return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -6252,7 +6276,7 @@ export class AniraBindings {
         ),
         'anira_handler_process_wait'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -6298,7 +6322,7 @@ export class AniraBindings {
         ),
         'anira_handler_process_multi_wait'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -6336,7 +6360,7 @@ export class AniraBindings {
         m._anira_handler_pop_data_wait(handler, out, slot, delivered_, timeout_ms),
         'anira_handler_pop_data_wait'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }
@@ -6375,7 +6399,7 @@ export class AniraBindings {
         ),
         'anira_handler_pop_data_multi_wait'
       )
-      return m.HEAPU32[delivered_ >>> 2]
+      return heap(m).HEAPU32[delivered_ >>> 2]
     } finally {
       m.stackRestore(sp)
     }

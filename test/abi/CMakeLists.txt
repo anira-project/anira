@@ -319,9 +319,10 @@ if(_abi_on_wasm)
         "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
     set_property(TARGET anira_em_runtime APPEND PROPERTY LINK_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
-    # Out of memory as a status: a consumer with AniraWeb's fixed 512 MiB and nothing of its own
-    # about malloc (the library's INTERFACE options make malloc return NULL) fills the heap and
-    # must see a handler on the bundled gain config refused, then prepare once freed.
+    # Out of memory as a status: a consumer with a fixed 512 MiB (AniraWeb's grows to 2 GiB; a
+    # fixed size fills fast) and nothing of its own about malloc (the library's INTERFACE options
+    # make malloc return NULL) fills the heap and must see a handler on the bundled gain config
+    # refused, then prepare once freed.
     add_executable(anira_em_oom em_oom.c)
     anira_abi_consumer_target(anira_em_oom C)
     target_link_libraries(anira_em_oom PRIVATE anira::anira)

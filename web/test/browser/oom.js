@@ -1,12 +1,14 @@
-// Out of memory is an error the page can catch, not an abort of the module. The module's memory is
-// fixed (512 MiB, ALLOW_MEMORY_GROWTH=0) and links ABORTING_MALLOC=0, so malloc returns NULL and
-// operator new throws std::bad_alloc, which every C entry's firewall turns into
-// ANIRA_ERROR_OUT_OF_MEMORY. The page fills the heap with _malloc blocks until malloc returns 0,
-// then creates and prepares a handler on the bundled gain config (the built-in ONNX Runtime
-// engine): an AniraError with ANIRA_ERROR_OUT_OF_MEMORY, whichever allocation runs out first (the
-// pool's Worker region, the session, its rings). It frees the filler, and a handler prepares as
-// before. The same filler measures what the first context's core takes. The verdict is
-// window.anira_test_result; run.mjs fails the page on any uncaught exception.
+// Out of memory is an error the page can catch, not an abort of the module. The page creates the
+// module with a fixed memory (Anira.create({ memory: { initial, maximum } }), both 512 MiB: no
+// growth, so the heap fills in moments; with the default the memory grows to 2 GiB first) and the
+// module links ABORTING_MALLOC=0, so malloc returns NULL and operator new throws std::bad_alloc,
+// which every C entry's firewall turns into ANIRA_ERROR_OUT_OF_MEMORY. The page fills the heap with
+// _malloc blocks until malloc returns 0, then creates and prepares a handler on the bundled gain
+// config (the built-in ONNX Runtime engine): an AniraError with ANIRA_ERROR_OUT_OF_MEMORY,
+// whichever allocation runs out first (the pool's Worker region, the session, its rings). It frees
+// the filler, and a handler prepares as before. The same filler measures what the first context's
+// core takes. The verdict is window.anira_test_result; run.mjs fails the page on any uncaught
+// exception.
 import {
   Anira,
   AniraError,
@@ -50,7 +52,8 @@ const handlerOn = (anira, context, model, contract) => {
 const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
-  const anira = await Anira.create()
+  // A fixed size, so the heap fills fast: the memory grows to 2 GiB by default.
+  const anira = await Anira.create({ memory: { initial: 512 * MIB, maximum: 512 * MIB } })
   anira.setLogHook(() => {}) // the refusals log; not shown
   const m = anira.module
 

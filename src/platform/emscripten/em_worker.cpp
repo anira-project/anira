@@ -107,9 +107,11 @@ size_t round_up(size_t bytes, size_t align) {
 
 }  // namespace
 
-// The worker's first JavaScript: import the module (the engines and stages it defines on the
-// scope's registry, globalThis[Symbol.for('anira.registry')]), await the registry's boot over
-// this instance (its JavaScript engines' init), then call the entry through the table, and
+// The worker's first JavaScript: give the scope's Module its memory (the package's heap views are
+// rebuilt from it after a growth, heap() of web/src/abi/bindings.ts; the glue keeps it to itself
+// in a Worker), import the module (the engines and stages it defines on the scope's registry,
+// globalThis[Symbol.for('anira.registry')]), await the registry's boot over this instance (its
+// JavaScript engines' init), then call the entry through the table, and
 // once it returned store 1 to `left` from JavaScript, after the last C frame of the worker. The
 // import and the boot are asynchronous: the entry runs from a later task of the worker.
 EM_JS_DEPS(anira_em_worker, "$getWasmTableEntry,$UTF8ToString");
@@ -118,6 +120,7 @@ EM_JS(void,
       anira_em_js_boot_worker,
       (const char* module_url, uintptr_t enter, void* boot, int32_t* left),
       {
+          Module['wasmMemory'] = wasmMemory;
           var url = module_url ? UTF8ToString(module_url) : "";
           // A template literal: Vite's dev server rewrites a dynamic import of a bare variable
           // into one through its client, which a worklet scope cannot load

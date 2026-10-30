@@ -1,4 +1,4 @@
-import type { AniraBindings } from './abi/bindings'
+import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS, anira_status } from './abi/enums'
 import type { Contract } from './Contract'
 import type { WithAbi } from './ModelConfig'
@@ -118,7 +118,7 @@ const writeSlots = (
   const m = abi.module
   const ptr = m._malloc(Math.max(1, slots.length) * 4)
   if (ptr === 0) throw new RangeError('anira: out of memory for the node options')
-  slots.forEach((slot, i) => (m.HEAPU32[(ptr >>> 2) + i] = slot))
+  slots.forEach((slot, i) => (heap(m).HEAPU32[(ptr >>> 2) + i] = slot))
   return ptr
 }
 
@@ -174,19 +174,19 @@ export const createAudioNode = async (
     settled = false
     // The creation completes on this thread's event loop: the worklet thread, the processor.
     const deadline = performance.now() + (options.timeoutMs ?? 10000)
-    let status = Atomics.load(m.HEAP32, words >>> 2)
+    let status = Atomics.load(heap(m).HEAP32, words >>> 2)
     while (status === anira_status.ANIRA_INCOMPLETE) {
       if (performance.now() > deadline) {
         throw new Error('anira: the audio node was not created in time')
       }
       await delay(1)
-      status = Atomics.load(m.HEAP32, words >>> 2)
+      status = Atomics.load(heap(m).HEAP32, words >>> 2)
     }
     settled = true
     if (status < 0) {
       throw new Error(`anira: the audio node could not be created (status ${status})`)
     }
-    const handle = m.HEAPU32[(words + 4) >>> 2]
+    const handle = heap(m).HEAPU32[(words + 4) >>> 2]
     const node = m.emscriptenGetAudioObject(handle) as AudioWorkletNode
     const paramMap = new Map<number, AudioParam>()
     params.forEach((slot, i) => {
@@ -204,7 +204,7 @@ export const createAudioNode = async (
         const ptr = m._malloc(bytes.length)
         if (ptr === 0) throw new RangeError('anira: out of memory for a Static input')
         try {
-          m.HEAPU8.set(bytes, ptr)
+          heap(m).HEAPU8.set(bytes, ptr)
           abi.anira_em_audio_node_set_static_input(handle, slot, ptr, bytes.length)
         } finally {
           m._free(ptr)

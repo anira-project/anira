@@ -38,6 +38,14 @@ endif()
 # browser's main thread runs only once that thread yields, so a join there never returns.
 # INCOMING_MODULE_JS_API names every Module property the package passes at instantiation
 # (emsdk 6 reads neither wasmMemory nor wasmBinary by default).
+# Memory: one imported shared memory that grows (Anira.create makes it: 256 MiB to begin with,
+# the core and a small handler; 2 GiB at most). A shared memory cannot move, so the browser
+# reserves its maximum as address space when it is created, and the pages are committed as they
+# are touched. MAXIMUM_MEMORY is the heap's ceiling for malloc (getHeapMax): a page's smaller
+# maximum fails the growth earlier, and a larger one is capped here. 2 GiB keeps every heap
+# address below 2^31, where the package's `>>> 2` indexing and the glue need no unsigned pointers.
+# With -pthread the glue reads the heap through a check per access (growMemViews; Emscripten
+# warns pthreads-mem-growth); the package's own code goes through heap() of web/src/abi/bindings.ts.
 # A library's runtime never exits: EXIT_RUNTIME=0 here, and the noExitRuntime symbol that makes
 # keepRuntimeAlive() honour it comes with the library itself (src/platform/emscripten/
 # em_runtime.cpp), for this module and every other that links anira.
@@ -51,9 +59,10 @@ set(ANIRA_WASM_LINK_FLAGS "\
   --emit-tsd=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.d.ts \
   -s STACK_OVERFLOW_CHECK=0 \
   -s IMPORTED_MEMORY=1 \
-  -s INITIAL_MEMORY=536870912 \
+  -s INITIAL_MEMORY=268435456 \
   -s SHARED_MEMORY=1 \
-  -s ALLOW_MEMORY_GROWTH=0 \
+  -s ALLOW_MEMORY_GROWTH=1 \
+  -s MAXIMUM_MEMORY=2147483648 \
   -s MALLOC=emmalloc \
   -s EXPORT_ES6=1 \
   -s MODULARIZE=1 \
