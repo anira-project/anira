@@ -104,6 +104,17 @@ must run when it is measured (:doc:`audio_nodes`).
    :end-before: // [handler]
    :dedent:
 
+Every prepare starts the handler on the config's default plan. A host that runs another one
+looks its index up in the report with :js:meth:`PlanReport.find`, which takes the fields of
+``anira::PlanQuery`` (``variant``, ``engine``, ``engineId``, ``provider``, ``providerId``; a field
+left out matches every plan): ``{ engine: anira_engine.ANIRA_ENGINE_ONNXRUNTIME }`` for a built-in
+engine, ``{ engine: anira_engine.ANIRA_ENGINE_CUSTOM, engineId: 'org.example.double' }`` for a
+JavaScript engine, ``{ provider }`` for a provider whatever its engine. It returns null when no
+plan matches and throws an :js:class:`AniraError` for a query against the pair rule (an id beside
+a built-in value, ``ANIRA_ENGINE_CUSTOM`` without one), and the index goes to
+:js:meth:`InferenceHandler.setPlan`. A re-prepare starts on the default again, so the example
+picks its plan in the report of every prepare.
+
 5. The Audio Node
 -----------------
 

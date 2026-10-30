@@ -101,6 +101,7 @@ export const anira_struct_id = {
   ANIRA_STRUCT_PLAN_INFO: 10,
   ANIRA_STRUCT_BACKEND_ID: 11,
   ANIRA_STRUCT_ENGINE_CTX: 12,
+  ANIRA_STRUCT_PLAN_QUERY: 13,
 } as const
 /** @internal */
 export type anira_struct_id = (typeof anira_struct_id)[keyof typeof anira_struct_id]
@@ -411,6 +412,7 @@ export const ANIRA_PREPARE_EXCLUSIVE = 1
 export const ANIRA_ENGINE_CALL_EXCLUSIVE = 1
 export const ANIRA_LOG_RECORD_REALTIME = 1
 export const ANIRA_LOG_RECORD_CONTRACT_VIOLATION = 2
+export const ANIRA_VARIANT_ANY = 4294967295
 export const ANIRA_EM_HOOKS_VERSION = 2
 export const ANIRA_EM_PROCESSOR_HOOK_PRE = 1
 export const ANIRA_EM_PROCESSOR_HOOK_POST = 2

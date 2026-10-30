@@ -66,14 +66,14 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
         pipeline.add_inference(my_model_config);
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(my_contract);
-        const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);
+        const uint32_t plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}).value();
         m_inference_handler->set_plan(plan);
 
         // Initialize the repetition (sizes the buffer, tracks the configuration, optional sleep)
         initialize_repetition(my_model_config, my_contract.hard(), plan, true);
 
 .. note::
-    The ``initialize_repetition`` method sets up the benchmark fixture over the prepared handler: it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32 tensor), tracks configuration changes, and optionally sleeps between repetitions for thermal stability. The first parameter is the model configuration, the second the Hard contract the handler was prepared with (its ``block_max`` and ``rate``), the third the plan of the report that is measured, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions. ``ProcessBlockFixture::plan_of(report, engine, engine_id)`` returns the index of the report's plan on an engine (a custom engine by its id) and throws ``std::invalid_argument`` when the report has none.
+    The ``initialize_repetition`` method sets up the benchmark fixture over the prepared handler: it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32 tensor), tracks configuration changes, and optionally sleeps between repetitions for thermal stability. The first parameter is the model configuration, the second the Hard contract the handler was prepared with (its ``block_max`` and ``rate``), the third the plan of the report that is measured, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions. :cpp:func:`anira::PlanReport::find` returns the index of the report's first plan on an engine (a custom engine by its id), ``std::nullopt`` when the report has none; a pipeline with one candidate has one plan, plan 0.
 
 2. Measure Process Method Runtime
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -267,7 +267,7 @@ Test different buffer sizes by passing arguments during registration:
         pipeline.add_inference(my_model_config);
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(my_contract);
-        const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);
+        const uint32_t plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}).value();
         m_inference_handler->set_plan(plan);
 
         initialize_repetition(my_model_config, my_contract.hard(), plan);
@@ -297,8 +297,7 @@ For complex configuration testing, define argument combinations using a custom f
     // custom engine (examples/benchmark/advanced-benchmark measures its ClearEngine, which
     // runs no model, as the baseline)
     std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-    const std::vector<anira::EngineRef>& benchmark_engines();  // anira::enabled_engines() + the clear engine
-    anira::BackendId candidate_of(const anira::EngineRef& engine);  // the engine on the CPU path
+    const std::vector<anira::BackendId>& benchmark_backends();  // anira::enabled_engines() + the clear engine
     // One model per index. The shapes follow the buffer size, which the fixed windows of the
     // configuration files cannot, so the benchmark builds each model config in code (the
     // builders of extras/models/cnn/CNNConfig.h and friends) and loads the model's contract
@@ -310,9 +309,9 @@ For complex configuration testing, define argument combinations using a custom f
     static void Arguments(::benchmark::internal::Benchmark* b) {
         for (int i = 0; i < buffer_sizes.size(); ++i) {
             for (int j = 0; j < num_models; ++j) {
-                for (int k = 0; k < benchmark_engines().size(); ++k) {
+                for (int k = 0; k < benchmark_backends().size(); ++k) {
                     // Skip incompatible combinations (e.g., ONNX + stateful RNN)
-                    if (!(j == 2 && benchmark_engines()[k].kind == ANIRA_ENGINE_ONNXRUNTIME)) {
+                    if (!(j == 2 && benchmark_backends()[k].engine == ANIRA_ENGINE_ONNXRUNTIME)) {
                         b->Args({buffer_sizes[i], j, k});
                     }
                 }
@@ -322,23 +321,20 @@ For complex configuration testing, define argument combinations using a custom f
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
         // Extract configuration from arguments
-        const anira::EngineRef engine = benchmark_engines()[state.range(2)];
+        const anira::BackendId backend = benchmark_backends()[state.range(2)];
         const char* contract_json = nullptr;
         const anira::ModelConfig model = model_config_of(state.range(1), get_buffer_size(), contract_json);
         anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
         contract.hard_geometry(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
 
-        // Setup with selected configuration: the one engine as the single candidate
+        // Setup with selected configuration: the one backend as the single candidate
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
         anira::Pipeline pipeline;
-        pipeline.add_engine(std::make_shared<ClearEngine>())
-            .add_inference(model, {candidate_of(engine)});
+        pipeline.add_engine(std::make_shared<ClearEngine>()).add_inference(model, {backend});
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
-        const anira::PlanReport report = m_inference_handler->prepare(contract);
-        const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);
-        m_inference_handler->set_plan(plan);
+        m_inference_handler->prepare(contract);
 
-        initialize_repetition(model, contract.hard(), plan);
+        initialize_repetition(model, contract.hard(), 0);  // the one candidate: plan 0
 
         // ... measurement loop
     }
@@ -369,7 +365,8 @@ To measure only pre/post-processing overhead without actual inference, run a cus
         m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
         const anira::PlanReport report = m_inference_handler->prepare(hard);
         m_inference_handler->set_plan(
-            ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_CUSTOM, k_clear_engine_id));
+            report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_clear_engine_id}})
+                .value());
 
         // ... measurement loop ...
     }

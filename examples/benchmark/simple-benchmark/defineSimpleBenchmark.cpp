@@ -49,7 +49,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
     pipeline.add_processor(std::make_shared<HybridNNProcessor>());
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
     const anira::PlanReport report = m_inference_handler->prepare(my_contract);
-    const uint32_t plan = ProcessBlockFixture::plan_of(report, ANIRA_ENGINE_ONNXRUNTIME);
+    const uint32_t plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}).value();
     m_inference_handler->set_plan(plan);
 
     initialize_repetition(my_model_config, my_contract.hard(), plan);

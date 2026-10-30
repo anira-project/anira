@@ -86,7 +86,7 @@ export type LogRecord = {
 
 /**
  * The key a processor name or an engine id crosses the C ABI as (the `js_key` of
- * `anira_em_pipeline_add_js_processor` and `anira_em_pipeline_register_js_engine`): the 32-bit
+ * `anira_em_pipeline_add_js_processor` and `anira_em_pipeline_add_js_engine`): the 32-bit
  * FNV-1a hash of its UTF-16 code units, the same in every scope, so a processor defined under one
  * name on the main thread, the Workers and the worklet is one processor.
  */

@@ -1415,7 +1415,15 @@ pre-release: host to host, zero-copy, recipe ``"host"``, the wait strategy the c
 how the plan bound the slot to the engine's tensor, ``ANIRA_BINDING_NAME``,
 ``ANIRA_BINDING_POSITION`` or ``ANIRA_BINDING_ENGINE`` for a registered engine, which received
 the names and bound itself) and the
-``anira_plan_ext`` rows of the extensions it consumes. Every successful prepare also logs the
+``anira_plan_ext`` rows of the extensions it consumes. ``anira_plan_report_find(report,
+&query, &plan)`` looks a plan up instead of walking the rows: the first plan, in dense-index
+order, with every property an ``anira_plan_query`` names (``ANIRA_PLAN_QUERY_INIT`` matches every
+plan; ``variant`` a variant or ``ANIRA_VARIANT_ANY``; ``backend.engine`` an engine or
+``ANIRA_ENGINE_NONE``, a custom one with its ``engine_id``; ``backend.provider`` a provider or
+``ANIRA_PROVIDER_NONE``, a custom one with its ``provider_id``), ``ANIRA_ERROR_NOT_SUPPORTED``
+when none has them. It allocates nothing and is ``[thread-safe]`` and ``ANIRA_NONBLOCKING``
+while the report is valid, so a host resolves a backend choice where it applies it. Every
+successful prepare also logs the
 report as Info records of the group ``anira.capi`` (set the context's log level to
 ``ANIRA_LOG_INFO`` or ``ANIRA_LOG_DEBUG`` to see them): a head line with the counts and the
 selected plan, then one record per plan, per slot and per consumed extension:
@@ -2096,17 +2104,13 @@ The plans are the pipeline's candidates that run here, one per model entry whose
 - ``ANIRA_ENGINE_EXECUTORCH`` - ExecuTorch programs (``"executorch"``)
 - ``ANIRA_ENGINE_CUSTOM`` - a custom engine of the pipeline under its reverse-URI id (an ``anira_engine_desc`` made an engine object, or an :cpp:class:`anira::Engine` in C++, :doc:`custom_engines`)
 
-The handler starts on the plan of the default engine; to run another one, pick its index from the report:
+The handler starts on the plan of the default engine; to run another one, look its index up in the report with :cpp:func:`anira::PlanReport::find` (an :cpp:struct:`anira::PlanQuery` names the engine, the provider or the variant; ``anira_plan_report_find`` in C), or walk ``report.plans()``:
 
 .. code-block:: cpp
 
     const anira::PlanReport report = inference_handler.prepare(contract);
-    const std::vector<anira_plan_info> plans = report.plans();
-    for (uint32_t i = 0; i < plans.size(); ++i) {
-        if (plans[i].engine == ANIRA_ENGINE_ONNXRUNTIME) {
-            inference_handler.set_plan(i);
-            break;
-        }
+    if (const std::optional<uint32_t> plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}})) {
+        inference_handler.set_plan(*plan);
     }
 
 :cpp:func:`anira::InferenceHandler::set_plan` is thread-safe and ``ANIRA_NONBLOCKING``, so a UI thread may switch while audio runs, but not while ``prepare`` runs, which rebuilds the report (a host that switches from one thread and prepares from another serialises the two itself). The switch applies from the next submitted chunk on; an index out of range is a no-op recorded as ``ANIRA_ERROR_CONFIG`` in :cpp:func:`anira::InferenceHandler::rt_error`. :cpp:func:`anira::InferenceHandler::get_plan` reads the selection back.

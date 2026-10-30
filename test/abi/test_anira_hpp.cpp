@@ -965,6 +965,64 @@ TEST(AbiCxx, PlanReportRoundTripsOverAPreparedHandler) {
     anira_handler_destroy(h);
 }
 
+// PlanReport::find over the default candidate set of the bundled gain model plus the custom
+// row: for every engine of the build, and for the custom engine by its id, the first row of the
+// report on it (nullopt for an engine without a row); a provider alone; the variant; a query
+// that breaks the pair rule is nullopt; a null report finds nothing.
+TEST(AbiCxx, PlanReportFindIsTheFirstRowWithTheQuerysProperties) {
+    anira::Context context(anira::ContextConfig{}.threads(2).log_level(ANIRA_LOG_ERROR));
+    const anira::ModelConfig model = anira_test::gain_with_custom(false);
+    anira::Pipeline pipe;
+    anira_test::add_passthrough(pipe.native());
+    pipe.add_inference(model);
+    anira::InferenceHandler handler(context, pipe);
+    const anira::PlanReport report = handler.prepare(anira_test::explicit_contract());
+    const std::vector<anira_plan_info> plans = report.plans();
+    ASSERT_FALSE(plans.empty());
+    const auto first_on = [&](uint32_t engine, const char* engine_id) -> std::optional<uint32_t> {
+        for (uint32_t i = 0; i < plans.size(); ++i) {
+            const bool same_id = engine_id == nullptr
+                                     ? plans[i].engine_id == nullptr
+                                     : plans[i].engine_id != nullptr &&
+                                           std::string_view(plans[i].engine_id) == engine_id;
+            if (plans[i].engine == engine && same_id) { return i; }
+        }
+        return std::nullopt;
+    };
+    for (const anira::EngineKind engine : {ANIRA_ENGINE_LIBTORCH,
+                                           ANIRA_ENGINE_ONNXRUNTIME,
+                                           ANIRA_ENGINE_TFLITE,
+                                           ANIRA_ENGINE_LITERT,
+                                           ANIRA_ENGINE_EXECUTORCH}) {
+        EXPECT_EQ(report.find({.backend = {engine}}), first_on(engine, nullptr))
+            << "engine " << static_cast<int>(engine);
+    }
+    const std::optional<uint32_t> custom = first_on(ANIRA_ENGINE_CUSTOM, anira_test::k_custom);
+    ASSERT_TRUE(custom.has_value());
+    EXPECT_EQ(report.find(
+                  {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = anira_test::k_custom}}),
+              custom);
+    EXPECT_EQ(
+        report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = "org.example.none"}}),
+        std::nullopt);
+    // Every plan of this report runs on the CPU path: the provider alone finds the first.
+    EXPECT_EQ(report.find({.backend = {.provider = ANIRA_PROVIDER_CPU}}), 0U);
+    EXPECT_EQ(report.find({.backend = {.provider = ANIRA_PROVIDER_COREML}}), std::nullopt);
+    EXPECT_EQ(report.find({}), 0U) << "the empty query matches every plan";
+    EXPECT_EQ(report.find({.variant = 0}), 0U);
+    EXPECT_EQ(report.find({.variant = 1}), std::nullopt);
+    EXPECT_EQ(report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM}}), std::nullopt)
+        << "a custom engine without its id breaks the pair rule";
+    // What the examples do: the plan of a backend choice, applied with set_plan.
+    const std::optional<uint32_t> plan = handler.plan_report().find(
+        {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = anira_test::k_custom}});
+    ASSERT_TRUE(plan.has_value());
+    const uint32_t index = plan.value_or(0U);
+    EXPECT_EQ(handler.set_plan(index), ANIRA_OK);
+    EXPECT_EQ(handler.get_plan(), index);
+    EXPECT_EQ(anira::PlanReport(nullptr).find({}), std::nullopt);
+}
+
 // ---- processors
 // ------------------------------------------------------------------------------------
 //

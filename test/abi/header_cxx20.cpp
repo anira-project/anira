@@ -600,6 +600,16 @@ anira_status hard_entries_probe(anira::InferenceHandler& handler) noexcept ANIRA
     return ANIRA_FAILED(status) || handler.get_latency(0) > 0 ? status : handler.rt_error();
 }
 
+// The lookup of a backend choice on the thread that applies it: PlanReport::find is
+// nonblocking, the query an aggregate with designated initializers.
+std::optional<uint32_t> find_probe(const anira::PlanReport& report) noexcept ANIRA_NONBLOCKING {
+    const std::optional<uint32_t> engine =
+        report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}});
+    const std::optional<uint32_t> provider =
+        report.find({.backend = {.provider = ANIRA_PROVIDER_COREML}});
+    return engine.has_value() ? engine : provider;
+}
+
 // The budget of a Hard aggregate is required: no Hard without one, a duration is an explicit
 // budget, Budget::measured() the measured one.
 static_assert(!std::is_default_constructible_v<anira::Hard>);
@@ -719,6 +729,7 @@ int anira_header_cxx20_probe() {
                       ? 1
                       : 0;
         checks += hard_entries_probe(handler) == ANIRA_OK ? 1 : 0;
+        checks += find_probe(handler.plan_report()).value_or(0U) > 0 ? 1 : 0;
         checks += handler.get_latencies().size() + handler.get_latency() > 0 ? 1 : 0;
         const anira::Tensor waited_block{};
         const std::array<anira::Tensor, 1> waited_slots{waited_block};

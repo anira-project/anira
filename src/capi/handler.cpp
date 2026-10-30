@@ -103,6 +103,63 @@ constexpr uint32_t k_plan_slot_head = 8 * sizeof(uint32_t);
 constexpr uint32_t k_plan_ext_head = 2 * sizeof(uint32_t);
 // The fixed head of anira_backend_id: struct_size, engine, provider.
 constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
+// The fixed head of anira_plan_query: struct_size, variant.
+constexpr uint32_t k_plan_query_head = 2 * sizeof(uint32_t);
+
+/// The query as the caller's header holds it: every field its record (or its backend record)
+/// ends before reads as ANIRA_PLAN_QUERY_INIT holds it.
+anira_plan_query readable_query(const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
+    anira_plan_query read = ANIRA_PLAN_QUERY_INIT;
+    read.variant = query.variant;
+    const size_t backend_at = offsetof(anira_plan_query, backend);
+    if (query.struct_size < backend_at + k_backend_id_head) { return read; }
+    const anira_backend_id& backend = query.backend;
+    // The backend record carries its own struct_size; the readable part is what both the
+    // query's and the backend's sizes cover.
+    const size_t readable = std::min<size_t>(query.struct_size - backend_at, backend.struct_size);
+    if (readable < k_backend_id_head) { return read; }
+    read.backend.engine = backend.engine;
+    read.backend.provider = backend.provider;
+    if (readable >= offsetof(anira_backend_id, engine_id) + sizeof(const char*)) {
+        read.backend.engine_id = backend.engine_id;
+    }
+    if (readable >= offsetof(anira_backend_id, provider_id) + sizeof(const char*)) {
+        read.backend.provider_id = backend.provider_id;
+    }
+    return read;
+}
+
+/// Two NUL-terminated names are equal (NULL equals nothing).
+bool same_name(const char* a, const char* b) noexcept ANIRA_NONBLOCKING {
+    if (a == nullptr || b == nullptr) { return false; }
+    while (*a != '\0' && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+/// Whether a plan has every property the (readable) query names.
+bool matches(const anira_plan_info& plan,
+             const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
+    if (query.variant != ANIRA_VARIANT_ANY && plan.variant != query.variant) { return false; }
+    const anira_backend_id& backend = query.backend;
+    if (backend.engine != ANIRA_ENGINE_NONE) {
+        if (plan.engine != backend.engine) { return false; }
+        if (backend.engine == ANIRA_ENGINE_CUSTOM &&
+            !same_name(plan.engine_id, backend.engine_id)) {
+            return false;
+        }
+    }
+    if (backend.provider != ANIRA_PROVIDER_NONE) {
+        if (plan.provider != backend.provider) { return false; }
+        if (backend.provider == ANIRA_PROVIDER_CUSTOM &&
+            !same_name(plan.provider_id, backend.provider_id)) {
+            return false;
+        }
+    }
+    return true;
+}
 // The three leading slots of a callback descriptor: struct_size, abi_version, user_data.
 constexpr uint32_t k_processor_desc_head =
     offsetof(anira_processor_desc, user_data) + sizeof(void*);
@@ -2521,6 +2578,30 @@ anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report* report,
     }
     return enumerate_rows(report->m_exts[plan], k_plan_ext_head, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
+                                               const anira_plan_query* query,
+                                               uint32_t* plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (report == nullptr || query == nullptr || plan == nullptr ||
+        query->struct_size < k_plan_query_head) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira_plan_query read = readable_query(*query);
+    // The pair rule of each axis: an id exactly beside its CUSTOM value.
+    const anira_backend_id& backend = read.backend;
+    if ((backend.engine == ANIRA_ENGINE_CUSTOM) != (backend.engine_id != nullptr) ||
+        (backend.provider == ANIRA_PROVIDER_CUSTOM) != (backend.provider_id != nullptr)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const std::vector<anira_plan_info>& plans = report->m_plans;
+    for (size_t i = 0; i < plans.size(); ++i) {
+        if (matches(plans[i], read)) {
+            *plan = static_cast<uint32_t>(i);
+            return ANIRA_OK;
+        }
+    }
+    return ANIRA_ERROR_NOT_SUPPORTED;
+}
 
 // ==== the plan selection ======================================================================
 

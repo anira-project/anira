@@ -11,7 +11,6 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <vector>
 
 namespace anira::benchmark {
@@ -22,7 +21,7 @@ namespace anira::benchmark {
  * The ProcessBlockFixture is a Google Benchmark fixture over the anira.hpp handler: a benchmark
  * body creates the Context, the Pipeline and the InferenceHandler (m_context,
  * m_inference_handler), prepares it with the Hard contract of the swept buffer size, selects
- * the plan to measure from the PlanReport (plan_of) with InferenceHandler::set_plan, and calls
+ * the plan to measure (PlanReport::find) with InferenceHandler::set_plan, and calls
  * initialize_repetition. Each iteration then pushes one buffer of random samples through
  * InferenceHandler::process (process_buffer) and waits until the inference of that buffer has
  * been collected (buffer_processed), which is the time the iteration reports.
@@ -103,16 +102,6 @@ public:
      * summary of the benchmark instance
      */
     void repetition_step(int total_repetitions = 0);
-
-    /**
-     * @brief The plan of a report that runs one engine (a custom engine by its id): the dense
-     * index InferenceHandler::set_plan takes
-     *
-     * @throws std::invalid_argument when no plan of the report runs the engine
-     */
-    static uint32_t plan_of(const anira::PlanReport& report,
-                            anira::EngineKind engine,
-                            std::string_view engine_id = {});
 
     /// The context of the benchmark's handler; created by the benchmark body.
     inline static std::unique_ptr<anira::Context> m_context = nullptr;

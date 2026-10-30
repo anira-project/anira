@@ -252,12 +252,12 @@ ANIRA_API anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* d
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_register_js_engine(anira_pipeline* pipeline,
-                                                                       const char* engine_id,
-                                                                       uint32_t js_key,
-                                                                       uint32_t hook_mask,
-                                                                       uint32_t engine_flags,
-                                                                       anira_error* err) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline* pipeline,
+                                                                  const char* engine_id,
+                                                                  uint32_t js_key,
+                                                                  uint32_t hook_mask,
+                                                                  uint32_t engine_flags,
+                                                                  anira_error* err) ANIRA_NOEXCEPT;
 
 /**
  * @brief Registers the scope registries' log as a log sink of this module, beside the C sinks

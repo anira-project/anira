@@ -43,18 +43,18 @@ them at runtime, also while audio runs:
     :linenos:
 
     const anira::PlanReport report = inference_handler.prepare(contract);
-    const std::vector<anira_plan_info> plans = report.plans();
 
     // The plan on ONNX Runtime; the other engines are ANIRA_ENGINE_LIBTORCH (PyTorch),
     // ANIRA_ENGINE_LITERT (the default TensorFlow Lite family backend), ANIRA_ENGINE_TFLITE
     // (the legacy TensorFlow Lite backend, -DANIRA_WITH_TFLITE=ON, mutually exclusive with
     // LiteRT) and ANIRA_ENGINE_EXECUTORCH (.pte programs exported with torch.export)
-    for (uint32_t i = 0; i < plans.size(); ++i) {
-        if (plans[i].engine == ANIRA_ENGINE_ONNXRUNTIME) { inference_handler.set_plan(i); }
+    if (auto plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}})) {
+        inference_handler.set_plan(*plan);
     }
 
     // A custom engine is added to the pipeline under its id (see "Custom Engines"), and its
-    // plan reports ANIRA_ENGINE_CUSTOM with that id in plans[i].engine_id
+    // plan is found by that id: report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM,
+    // .engine_id = "com.example.engine"}})
 
 Multi Tensor Processing Example
 -------------------------------

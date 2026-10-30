@@ -201,14 +201,14 @@ static void check_unpromised_processor(anira_context* context, const anira_contr
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check_status(anira_em_pipeline_register_js_engine(pipeline,
-                                                      SMOKE_ENGINE_ID,
-                                                      SMOKE_ENGINE_KEY,
-                                                      0,
-                                                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-                                                      &err),
+    check_status(anira_em_pipeline_add_js_engine(pipeline,
+                                                 SMOKE_ENGINE_ID,
+                                                 SMOKE_ENGINE_KEY,
+                                                 0,
+                                                 ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 &err),
                  &err,
-                 "anira_em_pipeline_register_js_engine");
+                 "anira_em_pipeline_add_js_engine");
     check_status(anira_em_pipeline_add_js_processor(pipeline,
                                                     SMOKE_PROCESSOR_KEY,
                                                     ANIRA_EM_PROCESSOR_HOOK_PRE,
@@ -257,10 +257,10 @@ static void check_pipeline(void) {
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check(anira_em_pipeline_register_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
+    check(anira_em_pipeline_add_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
               ANIRA_ERROR_INVALID_ARGUMENT,
-          "anira_em_pipeline_register_js_engine refuses an id without a '.'");
-    check_status(anira_em_pipeline_register_js_engine(
+          "anira_em_pipeline_add_js_engine refuses an id without a '.'");
+    check_status(anira_em_pipeline_add_js_engine(
                      pipeline,
                      SMOKE_ENGINE_ID,
                      SMOKE_ENGINE_KEY,
@@ -268,7 +268,7 @@ static void check_pipeline(void) {
                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE,
                      &err),
                  &err,
-                 "anira_em_pipeline_register_js_engine");
+                 "anira_em_pipeline_add_js_engine");
     check_status(anira_em_pipeline_add_js_processor(
                      pipeline,
                      SMOKE_PROCESSOR_KEY,

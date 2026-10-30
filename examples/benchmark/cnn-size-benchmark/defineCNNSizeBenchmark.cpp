@@ -34,35 +34,26 @@ constexpr std::array<const char*, 3> k_contracts{k_cnn_contract_json,
                                                  k_medium_cnn_contract_json,
                                                  k_small_cnn_contract_json};
 
-/// The engines a run benchmarks: every engine of this build, and the bypass engine
-/// (BypassEngine.h, the newest samples of the window to the output) as the baseline without a
-/// model.
-const std::vector<anira::EngineRef>& benchmark_engines() {
-    static const std::vector<anira::EngineRef> engines = [] {
-        std::vector<anira::EngineRef> list;
-        for (const anira::BackendId& row : anira::enabled_engines()) {
-            list.push_back({.kind = static_cast<anira::EngineKind>(row.engine)});
-        }
-        list.push_back({.kind = ANIRA_ENGINE_CUSTOM, .id = k_bypass_engine_id});
+/// The backends a run benchmarks, one candidate each: every engine of this build on the CPU
+/// path, and the bypass engine (BypassEngine.h, the newest samples of the window to
+/// the output) as the baseline without a model.
+const std::vector<anira::BackendId>& benchmark_backends() {
+    static const std::vector<anira::BackendId> backends = [] {
+        std::vector<anira::BackendId> list = anira::enabled_engines();
+        list.push_back({.struct_size = sizeof(anira::BackendId),
+                        .engine = ANIRA_ENGINE_CUSTOM,
+                        .provider = ANIRA_PROVIDER_CPU,
+                        .engine_id = k_bypass_engine_id});
         return list;
     }();
-    return engines;
-}
-
-/// The one candidate of a run: the engine benchmarked, on the CPU path, so the handler loads
-/// that engine's model alone.
-anira::BackendId candidate_of(const anira::EngineRef& engine) {
-    return {.struct_size = sizeof(anira::BackendId),
-            .engine = static_cast<uint32_t>(engine.kind),
-            .provider = ANIRA_PROVIDER_CPU,
-            .engine_id = engine.id.empty() ? nullptr : engine.id.data()};
+    return backends;
 }
 
 // define the buffer sizes, model sizes and engines to be used in the benchmark
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i) {
         for (int j = 0; j < k_sizes.size(); ++j) {
-            for (int k = 0; k < benchmark_engines().size(); ++k) {
+            for (int k = 0; k < benchmark_backends().size(); ++k) {
                 b->Args({buffer_sizes[i], j, k});
             }
         }
@@ -77,9 +68,9 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     // The buffer size (state.range(0) of the google benchmark, read through get_buffer_size()),
-    // the model size (state.range(1)) and the engine (state.range(2)) of this run.
+    // the model size (state.range(1)) and the backend (state.range(2)) of this run.
     const auto size = static_cast<size_t>(state.range(1));
-    const anira::EngineRef engine = benchmark_engines()[static_cast<size_t>(state.range(2))];
+    const anira::BackendId backend = benchmark_backends()[static_cast<size_t>(state.range(2))];
     anira::ModelConfig model_config = cnn_model_config(get_buffer_size(), k_sizes[size]);
     model_config.add_model(k_bypass_engine_id);  // the bypass needs no model file
     anira::ContractHandle contract = anira::ContractHandle::from_file(k_contracts[size]);
@@ -91,13 +82,11 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
     anira::Pipeline pipeline;
     pipeline.add_engine(std::make_shared<BypassEngine>());
-    pipeline.add_inference(model_config, {candidate_of(engine)});
+    pipeline.add_inference(model_config, {backend});
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
-    const anira::PlanReport report = m_inference_handler->prepare(contract);
-    const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);
-    m_inference_handler->set_plan(plan);
+    m_inference_handler->prepare(contract);
 
-    initialize_repetition(model_config, contract.hard(), plan);
+    initialize_repetition(model_config, contract.hard(), 0);  // the one candidate: plan 0
 
     for (auto _ : state) {
         push_random_samples_in_buffer();

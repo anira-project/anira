@@ -77,6 +77,7 @@ const allPages = [
   'test/browser/index.html',
   'test/browser/ort.html',
   'test/browser/config.html',
+  'test/browser/plan-find.html',
   'test/browser/streams.html',
   'test/browser/boot-stop.html',
   'test/browser/concurrent.html',

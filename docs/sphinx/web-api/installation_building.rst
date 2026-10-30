@@ -294,19 +294,19 @@ Once ``anira/web/wasm/`` is populated, build the npm package:
    npm run build          # tsc && vite build
    # npm run dev          # rebuild on changes (vite build --watch)
 
-The build runs ``tsc`` for type-checking and then ``vite build`` to
-produce ESM output in ``anira/web/dist/``. ``vite-plugin-static-copy``
-copies the WASM artifacts from ``wasm/`` into ``dist/wasm/`` so they are
-included in the published package. ``npm test`` runs the unit tests (node, no build needed),
-``npm run examples`` type-checks and builds ``web/examples/processor-and-engine`` and
-``web/examples/model-file``, and ``node test/browser/run.mjs chromium`` (or ``firefox``, with
-Playwright installed; CI uses 1.64.1, Chromium 156 and Firefox 157) runs the browser test: the
-package's pages (``quanta.html``: offline contexts of render sizes 256 and 480 where the browser
-takes ``renderSizeHint``), the examples' check pages built, processor-and-engine's under Vite's dev
-server, and in Chromium a live ``AudioContext`` (``live.html``: the burst ``measureRenderGeometry``
-measures against the device's, idle, beside load and with a loaded node held, no quantum missed
-at it, a running node re-prepared to it, and contexts of render sizes 256, 480 and
-``"hardware"``; headless Firefox keeps a live context suspended). The test's ``config.html`` and
-the model-file example load the bundled ``extras/models`` configs and their model files; fetch
-those first with ``cmake -P extras/fetch-models.cmake``.
+The build runs ``tsc`` for type-checking and then ``vite build`` to produce ESM output in
+``anira/web/dist/``. ``vite-plugin-static-copy`` copies the WASM artifacts from ``wasm/`` into
+``dist/wasm/`` so they are included in the published package. ``npm test`` runs the unit tests
+(node, no build needed), ``npm run examples`` type-checks and builds
+``web/examples/processor-and-engine`` and ``web/examples/model-file``, and ``node
+test/browser/run.mjs chromium`` (or ``firefox``, with Playwright installed; CI uses 1.64.1, Chromium
+156 and Firefox 157) runs the browser test: the package's pages (``quanta.html``: offline contexts
+of render sizes 256 and 480 where the browser takes ``renderSizeHint``), the examples' check pages
+built, processor-and-engine's under Vite's dev server, and in Chromium a live ``AudioContext``
+(``live.html``: the burst ``measureRenderGeometry`` measures against the device's, idle, beside load
+and with a loaded node held, no quantum missed at it, a running node re-prepared to it, and contexts
+of render sizes 256, 480 and ``"hardware"``; headless Firefox keeps a live context suspended). The
+test's ``config.html``, ``plan-find.html`` and the model-file example load the bundled
+``extras/models`` configs and their model files; fetch those first with ``cmake -P
+extras/fetch-models.cmake``.
 

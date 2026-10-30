@@ -160,6 +160,7 @@ anira_pipeline_capabilities_edge
 anira_pipeline_create
 anira_pipeline_destroy
 anira_plan_report_exts
+anira_plan_report_find
 anira_plan_report_num_plans
 anira_plan_report_plans
 anira_plan_report_slots

@@ -16,9 +16,7 @@
 #include <iostream>
 #include <ratio>
 #include <span>
-#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -72,23 +70,6 @@ size_t channels_of(const anira::SpecView& spec) {
 ProcessBlockFixture::ProcessBlockFixture() = default;
 
 ProcessBlockFixture::~ProcessBlockFixture() = default;
-
-uint32_t ProcessBlockFixture::plan_of(const anira::PlanReport& report,
-                                      anira::EngineKind engine,
-                                      std::string_view engine_id) {
-    const std::vector<anira_plan_info> plans = report.plans();
-    for (uint32_t i = 0; i < plans.size(); ++i) {
-        if (plans[i].engine != static_cast<uint32_t>(engine)) { continue; }
-        if (engine == ANIRA_ENGINE_CUSTOM &&
-            (plans[i].engine_id == nullptr || engine_id != plans[i].engine_id)) {
-            continue;
-        }
-        return i;
-    }
-    throw std::invalid_argument(
-        "ProcessBlockFixture::plan_of: no plan of the report runs the "
-        "engine");
-}
 
 void ProcessBlockFixture::initialize_iteration() {
     m_prev_num_received_samples = 0;

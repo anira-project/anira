@@ -2,8 +2,21 @@
 
 #include <array>
 #include <cstdint>
-#include <optional>
 #include <span>
+
+namespace {
+
+/// The plan a "Backend Type" choice names (PluginParameters::backendTypes).
+anira::PlanQuery backend_query(const juce::String& choice) {
+    if (choice == "LIBTORCH") { return {.backend = {.engine = ANIRA_ENGINE_LIBTORCH}}; }
+    if (choice == "ONNX") { return {.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}; }
+    if (choice == "TFLITE") { return {.backend = {.engine = ANIRA_ENGINE_TFLITE}}; }
+    if (choice == "LITERT") { return {.backend = {.engine = ANIRA_ENGINE_LITERT}}; }
+    if (choice == "EXECUTORCH") { return {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}}; }
+    return {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}};
+}
+
+}  // namespace
 
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
@@ -20,20 +33,18 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  nullptr,
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
-    // The context, the model configs, the contracts and the handlers are initialised in the
-    // header, from the files.
     , dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
 {
+    for (const juce::String& choice : PluginParameters::backendTypes) {
+        backend_queries.push_back(backend_query(choice));
+    }
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
-    // The gain tensor: the model's Static input [1], over gain_value.
-    const std::array<int64_t, 1> gain_extents{1};
-    gain_tensor = anira::Tensor::from_host(&gain_value, ANIRA_DTYPE_F32, gain_extents);
+    gain_tensor = anira::Tensor::from_host(&gain_value, ANIRA_DTYPE_F32, std::array<int64_t, 1>{1});
 #endif
 #if MODEL_TO_USE == 7
     for (size_t i = 0; i < latent_space.size(); ++i) { latent_space_ptrs[i] = &latent_space[i]; }
-    const std::array<int64_t, 2> latent_extents{4, 1};
     latent = anira::Tensor::from_host_planar<float>(std::span<float* const>(latent_space_ptrs),
-                                                    latent_extents);
+                                                    std::array<int64_t, 2>{4, 1});
 #endif
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
@@ -111,41 +122,26 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     // The host geometry completes the contract: a fixed block of samplesPerBlock samples at
     // sampleRate (a block_min of 1 would allow smaller blocks, at the price of more latency).
-    // prepare returns the plan report, whose plans the "Backend Type" parameter picks from.
+    // The decoder of variant 7 anchors on its audio output, so it takes the same geometry.
     const auto block = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
-    contract.hard_geometry(block, block, sampleRate);
-    backend_plans.assign(inference_handler.prepare(contract));
+    model.prepare(block, sampleRate);
 #else
-    contract_encoder.hard_geometry(block, block, sampleRate);
-    backend_plans_encoder.assign(inference_handler_encoder.prepare(contract_encoder));
-    // The decoder anchors on its audio output (rave_funk_drum_decoder.model.json), so its
-    // geometry is the same block and rate; its latent input follows at one frame per 2048
-    // samples.
-    contract_decoder.hard_geometry(block, block, sampleRate);
-    backend_plans_decoder.assign(inference_handler_decoder.prepare(contract_decoder));
+    encoder.prepare(block, sampleRate);
+    decoder.prepare(block, sampleRate);
 #endif
 
-    // The audio tensor over the host's channels, built once per geometry: processBlock sets
-    // the channel pointers and the block length of each call.
     const auto num_channels = static_cast<size_t>(getTotalNumInputChannels());
-    const std::array<int64_t, 2> extents{static_cast<int64_t>(num_channels),
-                                         static_cast<int64_t>(samplesPerBlock)};
     audio = anira::Tensor::from_host_planar<float>(
         std::span<float* const>(channels.data(), num_channels),
-        extents);
+        std::array<int64_t, 2>{static_cast<int64_t>(num_channels), samplesPerBlock});
 
 #if MODEL_TO_USE != 7
-    int new_latency = (int)inference_handler.get_latency();  // The 0th tensor is the audio data
-                                                             // tensor, so we only need the first
-                                                             // element of the latency vector
+    const int new_latency = static_cast<int>(model.handler.get_latency());
 #else
-    // Encoder latency must be multiplied by 2048, because the encoder compresses the audio data by
-    // a factor of 2048 in the time domain.
-    int new_latency_encoder = (int)inference_handler_encoder.get_latency() * 2048;
-    int new_latency_decoder = (int)inference_handler_decoder.get_latency();
-    int new_latency = new_latency_encoder + new_latency_decoder;  // The total latency is the sum of
-                                                                  // the latencies of both encoders
+    // The encoder's latency is in latent frames of 2048 samples.
+    const int new_latency =
+        static_cast<int>(encoder.handler.get_latency() * 2048 + decoder.handler.get_latency());
 #endif
 
     setLatencySamples(new_latency);
@@ -186,36 +182,34 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     dry_wet_mixer.pushDrySamples(buffer);
 
-    // The audio tensor over this call's buffer: its channel pointers and its length.
-    for (size_t c = 0; c < static_cast<size_t>(buffer.getNumChannels()) && c < channels.size();
-         ++c) {
-        channels[c] = buffer.getWritePointer(static_cast<int>(c));
+    for (int c = 0; c < buffer.getNumChannels(); ++c) {
+        channels[static_cast<size_t>(c)] = buffer.getWritePointer(c);
     }
     audio.shape[1] = buffer.getNumSamples();
 
+    // The backend choice: the plan of the report that runs it (an engine this build or the
+    // model lacks has none, and the choice changes nothing). The report is the last prepare's,
+    // and prepareToPlay never runs beside this callback.
+    const anira::PlanQuery& query = backend_queries[static_cast<size_t>(backend.load())];
 #if MODEL_TO_USE != 7
+    model.select(query);
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
-    // The gain parameter into the model's Static input, from this (the driving) thread.
     gain_value = gain.load();
-    inference_handler.set_static_input(1, gain_tensor);
+    model.handler.set_static_input(1, gain_tensor);
 #endif
-    // In place: the same tensor is the input and the output block.
-    inference_handler.process(audio, 0, audio, 0);
+    model.handler.process(audio, 0, audio, 0);  // in place
 #else
-    // For the RAVE model, we need to process the encoder and decoder separately.
+    encoder.select(query);
+    decoder.select(query);
+    // The encoder takes the audio and gives one latent frame per 2048 samples, which the
+    // decoder turns back into audio.
     m_count_input_samples += buffer.getNumSamples();
-    inference_handler_encoder.push_data(audio, 0);
-    // Only pop data from the encoder when we have enough samples needed for one time step in the
-    // latent space vector (2048 samples).
+    encoder.handler.push_data(audio, 0);
     while (m_count_input_samples >= 2048) {
         size_t received_samples = 0;
-        inference_handler_encoder.pop_data(latent, 0, &received_samples);
-        if (received_samples == 0) {
-            std::cout << "No data received from encoder!" << std::endl;
-            break;
-        } else {
-            m_count_input_samples -= 2048;
-        }
+        encoder.handler.pop_data(latent, 0, &received_samples);
+        if (received_samples == 0) { break; }
+        m_count_input_samples -= 2048;
         // Make some latent space modulation :)
         latent_space[0] += static_cast<float>(
             parameters.getParameterAsValue(PluginParameters::LATENT_0_ID.getParamID()).getValue());
@@ -225,19 +219,13 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
             parameters.getParameterAsValue(PluginParameters::LATENT_2_ID.getParamID()).getValue());
         latent_space[3] += static_cast<float>(
             parameters.getParameterAsValue(PluginParameters::LATENT_3_ID.getParamID()).getValue());
-        latent.shape[1] = static_cast<int64_t>(received_samples);
-        inference_handler_decoder.push_data(latent, 0);
-        latent.shape[1] = 1;
+        decoder.handler.push_data(latent, 0);
     }
-    inference_handler_decoder.pop_data(audio, 0);
+    decoder.handler.pop_data(audio, 0);
 #endif
 
     dry_wet_mixer.mixWetSamples(buffer);
 
-#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
-    // The simple-gain models also output their peak gain, a Static output (slot 1):
-    // inference_handler.get_static_output(1, peak_tensor) reads it on this thread.
-#endif
     if (isNonRealtime()) { processesNonRealtime(buffer); }
 }
 
@@ -268,21 +256,7 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
     if (parameterID == PluginParameters::DRY_WET_ID.getParamID()) {
         dry_wet_mixer.setWetMixProportion(newValue);
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
-        // The choice names an engine; the handler runs the plan of the report that runs it
-        // (an engine this build or the model lacks has none, and the setting changes nothing).
-        const int choice = static_cast<int>(newValue);
-#if MODEL_TO_USE != 7
-        if (const std::optional<uint32_t> plan = backend_plans.plan_of(choice)) {
-            inference_handler.set_plan(*plan);
-        }
-#else
-        if (const std::optional<uint32_t> plan = backend_plans_encoder.plan_of(choice)) {
-            inference_handler_encoder.set_plan(*plan);
-        }
-        if (const std::optional<uint32_t> plan = backend_plans_decoder.plan_of(choice)) {
-            inference_handler_decoder.set_plan(*plan);
-        }
-#endif
+        backend.store(static_cast<int>(newValue));
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         gain.store(newValue);

@@ -229,6 +229,7 @@ typedef enum anira_struct_id {
     ANIRA_STRUCT_PLAN_INFO = 10,  /**< anira_plan_info (Tier 2). */
     ANIRA_STRUCT_BACKEND_ID = 11,  /**< anira_backend_id (Tier 2). */
     ANIRA_STRUCT_ENGINE_CTX = 12,  /**< anira_engine_ctx (64 bytes). */
+    ANIRA_STRUCT_PLAN_QUERY = 13,  /**< anira_plan_query (Tier 2). */
     ANIRA_STRUCT_ID_FORCE32 = 0x7fffffff
 } anira_struct_id;
 

@@ -79,14 +79,16 @@ Key files:
     and 5 SimpleGainNetwork in mono and stereo, 6 RAVE funk drum, 7 RAVE as an encoder and a
     decoder handler. Every variant is configured by the lines above; what changes is the
     pair of files and, for GuitarLSTM, the ``HybridNNProcessor`` of the pipeline. The "Backend Type"
-    parameter picks a plan of the ``PlanReport`` that ``prepare`` returns
-    (``InferenceHandler::set_plan``), and the gain of variants 4 and 5 is the model's Static input
+    parameter stores its choice in an atomic, and ``processBlock`` applies it: the plan of the
+    ``PlanReport`` that ``prepare`` returned that runs the chosen engine
+    (``PlanReport::find``, then ``InferenceHandler::set_plan``; nothing changes when the build or
+    the model has no such plan). The gain of variants 4 and 5 is the model's Static input
     (``set_static_input``). Variant 1
     reads nothing from disk: the model file, the contract file and the four exports go into
     JUCE's ``BinaryData``, the model config is loaded from the embedded text
-    (``ModelConfig::from_json``) and each entry's source is swapped for the embedded bytes of
-    its engine (``set_model_bytes``, ``ANIRA_BYTES_BORROW``), so the description of the model
-    stays in the file. Variant 7's decoder anchors on its audio output
+    (``ModelConfig::from_json``) and each entry's source is swapped for the embedded file of the
+    same name as its path (``set_model_bytes``, ``ANIRA_BYTES_BORROW``), one loop over the entries,
+    so the description of the model stays in the file. Variant 7's decoder anchors on its audio output
     (``rave_funk_drum_decoder.model.json``), so both handlers prepare with the host's block and
     rate; the latent frames pass from the encoder's ``pop_data`` to the decoder's ``push_data``
     as one planar tensor. A 2.x configuration file goes through the same loaders (:ref:`migration-json`).

@@ -244,6 +244,37 @@ typedef struct anira_plan_info {
 #define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL)
 
 /**
+ * @brief The variant of an anira_plan_query that matches every variant (0 is a variant: the
+ * first of the inference stage).
+ */
+#define ANIRA_VARIANT_ANY 0xffffffffu
+
+/**
+ * @brief What anira_plan_report_find looks for: every field names one property a plan must
+ * have, or matches every plan. variant is ANIRA_VARIANT_ANY or a variant index. backend
+ * names the engine (ANIRA_ENGINE_NONE: any engine; ANIRA_ENGINE_CUSTOM with engine_id:
+ * the custom engine of that id) and the provider (ANIRA_PROVIDER_NONE: any provider;
+ * ANIRA_PROVIDER_CUSTOM with provider_id: the custom provider of that name), each axis
+ * under the pair rule of anira_engine and anira_provider. Tier 2, struct_size first, as
+ * is backend's own: a caller whose header ends before a field, or whose backend record
+ * ends before engine_id or provider_id, gets that field read as ANIRA_PLAN_QUERY_INIT
+ * holds it (any). An input; anira never writes it.
+ */
+typedef struct anira_plan_query {
+    uint32_t struct_size;  /**< sizeof(anira_plan_query) of the caller's header. */
+    uint32_t variant;  /**< The variant index of the inference stage, or ANIRA_VARIANT_ANY. */
+    /**
+     * The engine and the provider; ANIRA_ENGINE_NONE and ANIRA_PROVIDER_NONE match every engine
+     * and every provider.
+     */
+    anira_backend_id backend;
+} anira_plan_query;
+/**
+ * @brief Every plan: any variant, any engine, any provider.
+ */
+#define ANIRA_PLAN_QUERY_INIT ANIRA_INIT(anira_plan_query, sizeof(anira_plan_query), ANIRA_VARIANT_ANY, {sizeof(anira_backend_id), ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, NULL})
+
+/**
  * @brief Creates an empty pipeline. A pipeline holds exactly one inference stage
  * (anira_pipeline_add_inference) and at most one processor, the custom pre- and
  * post-processing (anira_pipeline_add_processor). Value-like: copied by
@@ -746,6 +777,33 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report
                                                          uint32_t element_size,
                                                          uint32_t* count,
                                                          anira_plan_ext* out) ANIRA_NOEXCEPT;
+
+/**
+ * @brief The first plan, in dense-index order, that has every property the query names: the
+ * variant unless ANIRA_VARIANT_ANY, the engine unless ANIRA_ENGINE_NONE (a custom engine
+ * by ANIRA_ENGINE_CUSTOM and its engine_id, compared as a string), the provider unless
+ * ANIRA_PROVIDER_NONE (a custom provider by ANIRA_PROVIDER_CUSTOM and its provider_id,
+ * compared as a string). What a host looks the plan of a backend choice up with, from
+ * the thread that picks it: the index goes to anira_handler_set_plan. Reads the report's
+ * rows and nothing else: no allocation, no lock. Callable from any thread while the
+ * report is valid (until the handler's next prepare or its destroy).
+ * @param report The report.
+ * @param query What the plan must have; ANIRA_PLAN_QUERY_INIT matches every plan.
+ * @param plan Receives the dense index of the first matching plan; untouched when none matches.
+ * @return ANIRA_OK with the index in plan; ANIRA_ERROR_NOT_SUPPORTED when no plan of the report
+ *         matches (none of this handler's plans runs what the query names here);
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL report, query or plan, a query whose
+ *         struct_size is below its head (struct_size and variant), or a backend that breaks the
+ *         pair rule (ANIRA_ENGINE_CUSTOM without an engine_id or an engine_id beside another
+ *         engine; ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another
+ *         provider).
+ * @par Thread contract
+ * [thread-safe] ANIRA_NONBLOCKING
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
+                                                         const anira_plan_query* query,
+                                                         uint32_t* plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING;
 
 /**
  * @brief Selects the plan the next submitted chunk runs on: one relaxed store, never planning.

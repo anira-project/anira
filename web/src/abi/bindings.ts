@@ -219,6 +219,7 @@ export interface AbiModule {
   _anira_plan_report_plans(_0: number, _1: number, _2: number, _3: number): number
   _anira_plan_report_slots(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
   _anira_plan_report_exts(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_plan_report_find(_0: number, _1: number, _2: number): number
   _anira_handler_set_plan(_0: number, _1: number): number
   _anira_handler_get_plan(_0: number): number
   _anira_handler_process(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
@@ -245,7 +246,7 @@ export interface AbiModule {
   _anira_em_processor_desc_init(_0: number, _1: number, _2: number, _3: number): number
   _anira_em_pipeline_add_js_processor(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number): number
-  _anira_em_pipeline_register_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
+  _anira_em_pipeline_add_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
   _anira_em_set_log_hook(_0: number): void
   _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
   _anira_em_inference_threads_in_loop(): number
@@ -5732,6 +5733,37 @@ export class AniraBindings {
   }
 
   /**
+   * The first plan, in dense-index order, that has every property the query names: the
+   * variant unless ANIRA_VARIANT_ANY, the engine unless ANIRA_ENGINE_NONE (a custom
+   * engine by ANIRA_ENGINE_CUSTOM and its engine_id, compared as a string), the provider
+   * unless ANIRA_PROVIDER_NONE (a custom provider by ANIRA_PROVIDER_CUSTOM and its
+   * provider_id, compared as a string). What a host looks the plan of a backend choice up
+   * with, from the thread that picks it: the index goes to anira_handler_set_plan. Reads
+   * the report's rows and nothing else: no allocation, no lock. Callable from any thread
+   * while the report is valid (until the handler's next prepare or its destroy).
+   *
+   * @param report The report.
+   * @param query What the plan must have; ANIRA_PLAN_QUERY_INIT matches every plan.
+   * @returns What the entry writes to plan. A failed status throws an AniraError.
+   * Thread: [thread-safe] ANIRA_NONBLOCKING
+   */
+  anira_plan_report_find(report: number, query: number): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const plan_ = stackSlot(m)
+      checkStatus(
+        m,
+        m._anira_plan_report_find(report, query, plan_),
+        'anira_plan_report_find'
+      )
+      return heap(m).HEAPU32[plan_ >>> 2]
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
    * Selects the plan the next submitted chunk runs on: one relaxed store, never planning.
    * The selection is a single atomic value, the dense index itself, so callers on several
    * threads cannot leave anira_handler_get_plan and the running engine in disagreement,
@@ -6692,7 +6724,7 @@ export class AniraBindings {
    *   failed status throws an AniraError with the entry's message.
    * Thread: [main-thread]
    */
-  anira_em_pipeline_register_js_engine(
+  anira_em_pipeline_add_js_engine(
     pipeline: number,
     engine_id: string,
     js_key: number,
@@ -6706,7 +6738,7 @@ export class AniraBindings {
       const err = stackError(m)
       return checkStatus(
         m,
-        m._anira_em_pipeline_register_js_engine(
+        m._anira_em_pipeline_add_js_engine(
           pipeline,
           engine_id_,
           js_key,
@@ -6714,7 +6746,7 @@ export class AniraBindings {
           engine_flags,
           err
         ),
-        'anira_em_pipeline_register_js_engine',
+        'anira_em_pipeline_add_js_engine',
         err
       )
     } finally {

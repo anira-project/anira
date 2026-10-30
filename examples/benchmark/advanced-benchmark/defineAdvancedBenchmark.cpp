@@ -34,40 +34,32 @@ std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
 // model's contract file.
 constexpr int k_num_models = 3;
 
-/// The engines a run benchmarks: every engine of this build, and the clear engine
-/// (ClearEngine.h, zeros without a model) as the baseline of anira's own path.
-const std::vector<anira::EngineRef>& benchmark_engines() {
-    static const std::vector<anira::EngineRef> engines = [] {
-        std::vector<anira::EngineRef> list;
-        for (const anira::BackendId& row : anira::enabled_engines()) {
-            list.push_back({.kind = static_cast<anira::EngineKind>(row.engine)});
-        }
-        list.push_back({.kind = ANIRA_ENGINE_CUSTOM, .id = k_clear_engine_id});
+/// The backends a run benchmarks, one candidate each: every engine of this build on the CPU
+/// path, and the clear engine (ClearEngine.h, zeros) of anira's own path as the baseline without a
+/// model.
+const std::vector<anira::BackendId>& benchmark_backends() {
+    static const std::vector<anira::BackendId> backends = [] {
+        std::vector<anira::BackendId> list = anira::enabled_engines();
+        list.push_back({.struct_size = sizeof(anira::BackendId),
+                        .engine = ANIRA_ENGINE_CUSTOM,
+                        .provider = ANIRA_PROVIDER_CPU,
+                        .engine_id = k_clear_engine_id});
         return list;
     }();
-    return engines;
+    return backends;
 }
 
 /// The model config of `model` at `buffer_size`, with the clear engine's entry, and its
 /// contract file.
 anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json);
 
-/// The one candidate of a run: the engine benchmarked, on the CPU path, so the handler loads
-/// that engine's model alone.
-anira::BackendId candidate_of(const anira::EngineRef& engine) {
-    return {.struct_size = sizeof(anira::BackendId),
-            .engine = static_cast<uint32_t>(engine.kind),
-            .provider = ANIRA_PROVIDER_CPU,
-            .engine_id = engine.id.empty() ? nullptr : engine.id.data()};
-}
-
 // define the buffer sizes, models and engines to be used in the benchmark
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i) {
         for (int j = 0; j < k_num_models; ++j) {
-            for (int k = 0; k < benchmark_engines().size(); ++k) {
+            for (int k = 0; k < benchmark_backends().size(); ++k) {
                 const bool is_stateful_rnn = (j == 2);
-                const anira::EngineKind engine = benchmark_engines()[k].kind;
+                const uint32_t engine = benchmark_backends()[k].engine;
                 // ONNX Runtime does not support the stateful RNN; its ExecuTorch export is fixed
                 // at a 2048-sample chunk and cannot follow the varying buffer size.
                 const bool skip = is_stateful_rnn && (engine == ANIRA_ENGINE_ONNXRUNTIME ||
@@ -86,9 +78,9 @@ typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
     // The buffer size (state.range(0) of the google benchmark, read through get_buffer_size()),
-    // the model (state.range(1)) and the engine (state.range(2)) of this run.
+    // the model (state.range(1)) and the backend (state.range(2)) of this run.
     const int model = static_cast<int>(state.range(1));
-    const anira::EngineRef engine = benchmark_engines()[static_cast<size_t>(state.range(2))];
+    const anira::BackendId backend = benchmark_backends()[static_cast<size_t>(state.range(2))];
     const char* contract_json = nullptr;
     const anira::ModelConfig model_config =
         model_config_of(model, get_buffer_size(), contract_json);
@@ -101,17 +93,15 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
     anira::Pipeline pipeline;
     pipeline.add_engine(std::make_shared<ClearEngine>());
-    pipeline.add_inference(model_config, {candidate_of(engine)});
+    pipeline.add_inference(model_config, {backend});
     if (model == 1) {
         // GuitarLSTM's windows; the CNN and the LSTM take anira's default fill.
         pipeline.add_processor(std::make_shared<HybridNNProcessor>());
     }
     m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
-    const anira::PlanReport report = m_inference_handler->prepare(contract);
-    const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);
-    m_inference_handler->set_plan(plan);
+    m_inference_handler->prepare(contract);
 
-    initialize_repetition(model_config, contract.hard(), plan);
+    initialize_repetition(model_config, contract.hard(), 0);  // the one candidate: plan 0
 
     for (auto _ : state) {
         push_random_samples_in_buffer();

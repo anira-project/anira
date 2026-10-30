@@ -2116,6 +2116,31 @@ inline bool has_core() noexcept {
 // ---- plan report (section 6) ---------------------------------------------------------------
 
 /**
+ * @brief What PlanReport::find looks for, the anira_plan_query of anira_plan_report_find as an
+ * aggregate: every field names one property a plan must have, or matches every plan.
+ * `report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}})` finds the first plan on ONNX
+ * Runtime, `report.find({.backend = {.provider = ANIRA_PROVIDER_COREML}})` the first on Core ML
+ * whatever its engine, `report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id =
+ * "com.example.engine"}})` the first on that custom engine.
+ */
+// NOLINTBEGIN(readability-identifier-naming) the aggregate spells anira_plan_query's field names
+struct PlanQuery {
+    /// The backend axes; NONE matches every engine or every provider. A custom engine is
+    /// ANIRA_ENGINE_CUSTOM with its engine_id, a custom provider ANIRA_PROVIDER_CUSTOM with its
+    /// provider_id (the pair rule: an id exactly beside its CUSTOM value).
+    struct Backend {
+        EngineKind engine = ANIRA_ENGINE_NONE;
+        Provider provider = ANIRA_PROVIDER_NONE;
+        const char* engine_id = nullptr;
+        const char* provider_id = nullptr;
+    };
+    /// The variant of the inference stage; ANIRA_VARIANT_ANY matches every variant.
+    uint32_t variant = ANIRA_VARIANT_ANY;
+    Backend backend{};
+};
+// NOLINTEND(readability-identifier-naming)
+
+/**
  * @brief A view of a handler's anira_plan_report (valid until its next prepare or destroy):
  * the rows copied into vectors through the stride-explicit enumerators. Plan 0 is the only
  * plan of a single-candidate pipeline; the budget is the row field anira_plan_info::budget_ms.
@@ -2156,6 +2181,26 @@ public:
                 return anira_plan_report_exts(m_report, plan, sizeof(anira_plan_ext), count, out);
             },
             "anira_plan_report_exts");
+    }
+
+    /// anira_plan_report_find: the dense index of the first plan with every property the
+    /// query names, std::nullopt when none has them (or for a query that breaks the pair
+    /// rule). Allocation-free; callable from any thread while the report is valid, so a host
+    /// looks the plan of a backend choice up where it applies it (set_plan).
+    std::optional<uint32_t> find(const PlanQuery& query) const noexcept ANIRA_NONBLOCKING {
+        const anira_plan_query native_query{
+            .struct_size = sizeof(anira_plan_query),
+            .variant = query.variant,
+            .backend = {.struct_size = sizeof(anira_backend_id),
+                        .engine = static_cast<uint32_t>(query.backend.engine),
+                        .provider = static_cast<uint32_t>(query.backend.provider),
+                        .engine_id = query.backend.engine_id,
+                        .provider_id = query.backend.provider_id}};
+        uint32_t plan = 0;
+        if (anira_plan_report_find(m_report, &native_query, &plan) != ANIRA_OK) {
+            return std::nullopt;
+        }
+        return plan;
     }
 
     const anira_plan_report* native() const noexcept { return m_report; }

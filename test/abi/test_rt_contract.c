@@ -107,6 +107,22 @@ size_t anira_rt_contract_hard(anira_handler* handler,
     return total;
 }
 
+/* A backend choice applied on the driver thread: the plan of a report the host fetched at
+   prepare, looked up and selected, both nonblocking. */
+/* NOLINTNEXTLINE(misc-use-internal-linkage) */
+anira_status anira_rt_contract_select(anira_handler* handler,
+                                      const anira_plan_report* report) ANIRA_NONBLOCKING;
+anira_status anira_rt_contract_select(anira_handler* handler,
+                                      const anira_plan_report* report) ANIRA_NONBLOCKING {
+    anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
+    uint32_t plan = 0u;
+    query.backend.engine = ANIRA_ENGINE_ONNXRUNTIME;
+    if (anira_plan_report_find(report, &query, &plan) != ANIRA_OK) {
+        return ANIRA_ERROR_NOT_SUPPORTED;
+    }
+    return anira_handler_set_plan(handler, plan);
+}
+
 /* anira/abi/config.h: a backup function of ANIRA_MISS_CALLBACK as a host writes one. It fills
    channel 0 of every requested float32 output with the first sample of input 0 and declines a
    block it cannot fill. */

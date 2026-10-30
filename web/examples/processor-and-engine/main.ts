@@ -168,17 +168,6 @@ export async function createGainExample(
   }
 }
 
-// The page's AudioContext: renderSizeHint "hardware" where the browser has render sizes (Web
-// Audio API, Render Quantum Sizes; renderQuantumSize is their feature test), so the context
-// renders at the size the browser deems best for the device. Elsewhere one quantum is 128 frames.
-const contextOptions = (): AudioContextOptions => {
-  const options: AudioContextOptions & { renderSizeHint?: 'hardware' } = {
-    sampleRate: 48000,
-  }
-  if ('renderQuantumSize' in AudioContext.prototype) options.renderSizeHint = 'hardware'
-  return options
-}
-
 /** The page: a tone through the example, its gain on a slider, started and stopped by a button. */
 export function mountGainExample(
   button: HTMLButtonElement,
@@ -193,7 +182,16 @@ export function mountGainExample(
       running = null
       button.textContent = 'Start'
     } else {
-      const audioContext = new AudioContext(contextOptions())
+      // The page's AudioContext: renderSizeHint "hardware" where the browser has render sizes
+      // (Web Audio API, Render Quantum Sizes; renderQuantumSize is their feature test), so the
+      // context renders at the size the browser deems best for the device. Elsewhere one
+      // quantum is 128 frames.
+      const options: AudioContextOptions & { renderSizeHint?: 'hardware' } = {
+        sampleRate: 48000,
+      }
+      if ('renderQuantumSize' in AudioContext.prototype)
+        options.renderSizeHint = 'hardware'
+      const audioContext = new AudioContext(options)
       await audioContext.resume() // the burst is measured on a running context
       const example = await createGainExample(audioContext, {
         gain: Number(slider.value),

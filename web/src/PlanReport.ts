@@ -1,6 +1,28 @@
 import { type AniraBindings, heap } from './abi/bindings'
 import { AniraError } from './AniraError'
-import { anira_status } from './abi/enums'
+import {
+  ANIRA_VARIANT_ANY,
+  anira_engine,
+  anira_provider,
+  anira_status,
+} from './abi/enums'
+
+/**
+ * What `PlanReport.find` looks for (`anira_plan_query`, as `anira::PlanQuery`): every field
+ * names one property the plan must have; a field left out matches every plan.
+ */
+export type PlanQuery = {
+  /** The variant index of the inference stage; any variant when left out. */
+  variant?: number
+  /** `anira_engine`; any engine when left out; `ANIRA_ENGINE_CUSTOM` beside `engineId`. */
+  engine?: number
+  /** The registered id of a custom engine (`engine` `ANIRA_ENGINE_CUSTOM`). */
+  engineId?: string
+  /** `anira_provider`; any provider when left out; `ANIRA_PROVIDER_CUSTOM` beside `providerId`. */
+  provider?: number
+  /** The name of a custom provider (`provider` `ANIRA_PROVIDER_CUSTOM`). */
+  providerId?: string
+}
 
 /** One plan of a report (`anira_plan_info`): the engine and provider it runs on, its budget. */
 export type PlanInfo = {
@@ -78,6 +100,9 @@ const PLAN_SLOT = {
   binding: 44,
 }
 const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
+// anira_plan_query and the anira_backend_id it holds at 8.
+const PLAN_QUERY = { size: 28, variant: 4, backend: 8 }
+const BACKEND_ID = { size: 20, engine: 4, provider: 8, engineId: 12, providerId: 16 }
 
 /**
  * The plan report of a handler's last prepare (`anira_plan_report`): one plan per model entry
@@ -162,6 +187,54 @@ export class PlanReport {
         consumer: this.text(heap(m).HEAPU32[(row + PLAN_EXT.consumer) >>> 2]),
       })
     )
+  }
+
+  /**
+   * The first plan, in plan order, that has every property the query names
+   * (`anira_plan_report_find`, as `anira::PlanReport::find`): the index `InferenceHandler.setPlan`
+   * takes, or null when no plan has them (where C++ returns an empty optional). Allocates
+   * nothing on the heap. A query against the pair rule (`ANIRA_ENGINE_CUSTOM` without
+   * `engineId`, an id beside a built-in value) throws an AniraError.
+   */
+  find(query: PlanQuery = {}): number | null {
+    if (this.report === 0) {
+      throw new AniraError(
+        anira_status.ANIRA_ERROR_INVALID_ARGUMENT,
+        'anira: the plan report of a handler that is not prepared'
+      )
+    }
+    const m = this.abi.module
+    const sp = m.stackSave()
+    try {
+      const engineId =
+        query.engineId === undefined ? 0 : m.stringToUTF8OnStack(query.engineId)
+      const providerId =
+        query.providerId === undefined ? 0 : m.stringToUTF8OnStack(query.providerId)
+      const q = m.stackAlloc(PLAN_QUERY.size)
+      const b = q + PLAN_QUERY.backend
+      const u32 = heap(m).HEAPU32
+      u32[q >>> 2] = PLAN_QUERY.size
+      u32[(q + PLAN_QUERY.variant) >>> 2] = query.variant ?? ANIRA_VARIANT_ANY
+      u32[b >>> 2] = BACKEND_ID.size
+      u32[(b + BACKEND_ID.engine) >>> 2] = query.engine ?? anira_engine.ANIRA_ENGINE_NONE
+      u32[(b + BACKEND_ID.provider) >>> 2] =
+        query.provider ?? anira_provider.ANIRA_PROVIDER_NONE
+      u32[(b + BACKEND_ID.engineId) >>> 2] = engineId
+      u32[(b + BACKEND_ID.providerId) >>> 2] = providerId
+      try {
+        return this.abi.anira_plan_report_find(this.report, q)
+      } catch (error) {
+        if (
+          error instanceof AniraError &&
+          error.status === anira_status.ANIRA_ERROR_NOT_SUPPORTED
+        ) {
+          return null
+        }
+        throw error
+      }
+    } finally {
+      m.stackRestore(sp)
+    }
   }
 
   /** The `anira_plan_report*` the raw entries take (0 for a handler that is not prepared). */

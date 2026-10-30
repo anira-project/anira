@@ -415,12 +415,12 @@ anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* desc,
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_status ANIRA_CALL anira_em_pipeline_register_js_engine(anira_pipeline* pipeline,
-                                                             const char* engine_id,
-                                                             uint32_t js_key,
-                                                             uint32_t hook_mask,
-                                                             uint32_t engine_flags,
-                                                             anira_error* err) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline* pipeline,
+                                                        const char* engine_id,
+                                                        uint32_t js_key,
+                                                        uint32_t hook_mask,
+                                                        uint32_t engine_flags,
+                                                        anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE((hook_mask & ~k_engine_hooks) == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,

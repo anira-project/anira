@@ -4,7 +4,7 @@ import type { InputSpec } from './staticInput'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
 
-/** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_register_js_engine`). */
+/** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_add_js_engine`). */
 export type EngineOptions = {
   /**
    * `ANIRA_ENGINE_FLAG_*`: the engine's promises (`ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL` for an
@@ -80,7 +80,7 @@ export class Pipeline {
 
   /** A JavaScript engine under its reverse-URI `id`, which the model entries name. */
   addEngine(id: string, options: EngineOptions = {}): this {
-    this.abi.anira_em_pipeline_register_js_engine(
+    this.abi.anira_em_pipeline_add_js_engine(
       this.pipeline,
       id,
       keyOf(id),

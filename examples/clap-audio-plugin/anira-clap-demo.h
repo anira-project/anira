@@ -3,12 +3,9 @@
 
 #include <anira/anira.hpp>
 #include <array>
-#include <atomic>
 #include <clap/helpers/plugin-proxy.hh>
 #include <clap/helpers/plugin.hh>
 #include <cstdint>
-#include <iostream>
-#include <memory>
 #include <unordered_map>
 
 #include "../../extras/models/BypassEngine.h"
@@ -68,27 +65,20 @@ private:
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;
 
-    // The configuration: the model file and the contract file of GuitarLSTM (extras/models,
-    // loaded with anira/anira.hpp) plus the entry of the bypass engine (BypassEngine.h), a
-    // Pipeline of the inference stage and the model's windows (HybridNNProcessor.h), and one
-    // handler on the plugin's context. The model config outlives the handler, so it is declared
-    // first.
+    // GuitarLSTM (the model file and the contract file of extras/models) with the entry of the
+    // bypass engine, on one handler; the plan report of the last activate, where the Backend
+    // choice is looked up.
     anira::Context m_context{anira::ContextConfig{}};
     anira::ModelConfig m_model_config;
     anira::ContractHandle m_contract;
     anira::InferenceHandler m_inference_handler;
+    anira::PlanReport m_plan_report{nullptr};
 
-    // The plan of the handler's report behind each Backend choice, filled at activate (the
-    // bypass plan where the build or the model lacks the engine), read by the audio thread.
-    std::array<std::atomic<uint32_t>, 6> m_backend_plans{};
-    // The host's input as one planar tensor over its channel pointer, built at activate;
-    // process points it at the block of each call.
+    // The host's input as one planar tensor over its channel pointer.
     std::array<float*, 1> m_channels{};
     anira::Tensor m_audio{};
 
     utils::DryWetMixer m_dry_wet_mixer;
-
-    enum Backend { OnnxRuntime, LibTorch, TensorFlowLite, Bypassed, LiteRt, ExecuTorch };
 };
 
 }  // namespace clap_plugin_example

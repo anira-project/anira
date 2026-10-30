@@ -465,6 +465,8 @@ _Static_assert(offsetof(anira_plan_ext, struct_size) == 0, "anira_plan_ext.struc
 
 _Static_assert(offsetof(anira_plan_info, struct_size) == 0, "anira_plan_info.struct_size first");
 
+_Static_assert(offsetof(anira_plan_query, struct_size) == 0, "anira_plan_query.struct_size first");
+
 int main(void) {
     printf("struct anira_error size %u align %u\n", (unsigned)sizeof(anira_error), (unsigned)_Alignof(anira_error));
     printf("field anira_error.status offset %u size %u\n", (unsigned)offsetof(anira_error, status), (unsigned)sizeof(((const anira_error*)0)->status));

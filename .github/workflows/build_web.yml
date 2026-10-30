@@ -51,9 +51,9 @@ jobs:
         with:
           PRESET: wasm-abi
 
-      # The node gate anira_em_oom, config.html and the model-file example load a bundled model
-      # config (extras/models/model-pool/gain.model.json) and its model file: the fixture trees,
-      # restored from the cache warm_caches.yml keeps, else fetched at their pins.
+      # The node gate anira_em_oom, config.html, plan-find.html and the model-file example load a
+      # bundled model config (extras/models/model-pool/gain.model.json) and its model file: the
+      # fixture trees, restored from the cache warm_caches.yml keeps, else fetched at their pins.
       - name: restore the model fixtures
         uses: actions/cache/restore@v4
         with:
@@ -144,9 +144,10 @@ jobs:
       # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
       # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
       # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX
-      # entry on the module's built-in ONNX Runtime engine. ort.html: the ONNX Runtime Web
-      # engine on a Worker. The example's check page, built and under Vite's dev server. A load
-      # the browser refuses (Firefox's file:/// security error) fails the step too.
+      # entry on the module's built-in ONNX Runtime engine. plan-find.html: PlanReport.find over
+      # that config and a JavaScript engine's entry, setPlan on its answer. ort.html: the ONNX
+      # Runtime Web engine on a Worker. The example's check page, built and under Vite's dev
+      # server. A load the browser refuses (Firefox's file:/// security error) fails the step too.
       - name: browser test (headless Chromium and Firefox)
         working-directory: web
         run: |
