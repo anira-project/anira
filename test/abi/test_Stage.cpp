@@ -10,7 +10,6 @@
 // deterministic whatever the pool does.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/build_info.h>
 #include <anira/abi/context.h>
@@ -51,6 +50,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "capi/port.h"
 #include "capi/stage.h"
 #include "capi/words.h"
@@ -2587,7 +2587,7 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
     {
         anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
         core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira::InferenceHandler v2(pp, config_2x, v_backend, core_config);
+        anira_test::V2Handler v2(pp, config_2x, v_backend, core_config);
         v2.prepare(
             anira::HostConfig(static_cast<float>(k_hop), static_cast<float>(anira_test::k_rate)));
         v2.set_inference_backend(anira::InferenceBackend::CUSTOM);

@@ -1,4 +1,4 @@
-// anira/compat/v2.hpp against the live 2.x classes, which stay public until the cut-over: the
+// anira/compat/v2.hpp against the live 2.x classes (the handler is anira_test::V2Handler): the
 // same arguments on both sides, every getter compared. Suite AbiCompatConfig is the
 // configuration half (the enum and its conversions, ModelData, TensorShape, ProcessingSpec,
 // InferenceConfig, JsonConfigLoader, ContextConfig): the upgrade of what the constructors
@@ -11,7 +11,6 @@
 // shim's do not.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
@@ -51,11 +50,10 @@
 #include <utility>
 #include <vector>
 
-#include "../../extras/models/cnn/CNNPrePostProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
 #include "../support/log_record_collector.h"
 #include "../support/rtsan_disabled.h"
 #include "../support/v2_documents.h"
+#include "../support/v2_handler.h"
 #include "fixtures.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -1126,7 +1124,7 @@ TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
         0.F,
         2);
     anira::PrePostProcessor pp_2x(config_2x);
-    anira::InferenceHandler handler_2x(pp_2x, config_2x, oracle_core_config());
+    anira_test::V2Handler handler_2x(pp_2x, config_2x, oracle_core_config());
     handler_2x.prepare(
         anira::HostConfig(static_cast<float>(k_stream), static_cast<float>(anira_test::k_rate)));
 
@@ -1750,7 +1748,7 @@ struct Pair {
 
     anira::InferenceConfig m_old;
     anira::PrePostProcessor m_old_pp;
-    anira::InferenceHandler m_old_handler;
+    anira_test::V2Handler m_old_handler;
     v2::InferenceConfig m_shim;
     v2::PrePostProcessor m_pp;
     v2::InferenceHandler m_handler;
@@ -1779,7 +1777,7 @@ struct KernelPair {
     anira::InferenceConfig m_old;
     anira::PrePostProcessor m_old_pp;
     KernelBackend<Kernel> m_backend;
-    anira::InferenceHandler m_old_handler;
+    anira_test::V2Handler m_old_handler;
     v2::InferenceConfig m_shim;
     v2::PrePostProcessor m_pp;
     KernelEngine<Kernel> m_engine;
@@ -2692,7 +2690,7 @@ TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
     anira::InferenceConfig old = make_old(args);
     anira::PrePostProcessor old_pp(old);
     KernelBackend<GainKernel> backend(old, GainKernel{});
-    anira::InferenceHandler old_handler(old_pp, old, backend, oracle_core_config());
+    anira_test::V2Handler old_handler(old_pp, old, backend, oracle_core_config());
     v2::InferenceConfig config = make_shim(args);
     v2::PrePostProcessor pp(config);
     KernelEngine<GainKernel> engine;
@@ -2737,100 +2735,18 @@ TEST(AbiCompat, ACustomEngineWithoutAUsableProviderIsConfig) {
 
 // ---- the 2.x processors, copied (cases 3, 4), and the forms' own rules (cases 14, 15) ---------
 
-// The extras' 2.x processors are included as they are for the 2.x side; the shim side compiles
-// the same class bodies, pasted verbatim, against anira::v2 through a namespace alias, so one
-// text runs on both type sets (a diff of the bodies against the extras headers is the review).
-// NOLINTBEGIN: verbatim copies of extras/models/cnn/CNNPrePostProcessor.h and
-// extras/models/hybrid-nn/HybridNNPrePostProcessor.h
+// The extras' 2.x processors, one text compiled twice (test/support/extras_v2_processors.inc):
+// against the live 2.x classes in v2x_copy and against anira::v2 in compat_copy, each through a
+// namespace alias.
+namespace v2x_copy {
+namespace anira = ::anira;
+#include "../support/extras_v2_processors.inc"
+}  // namespace v2x_copy
+
 namespace compat_copy {
 namespace anira = ::anira::v2;
-
-class CNNPrePostProcessor : public anira::PrePostProcessor {
-public:
-    using anira::PrePostProcessor::PrePostProcessor;
-
-    virtual void pre_process(
-        std::vector<anira::RingBuffer>& input,
-        std::vector<anira::BufferF>& output,
-        [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        pop_samples_from_buffer(input[0],
-                                output[0],
-                                m_inference_config.get_tensor_output_size()[0],
-                                m_inference_config.get_tensor_input_size()[0] -
-                                    m_inference_config.get_tensor_output_size()[0]);
-    }
-};
-
-class HybridNNPrePostProcessor : public anira::PrePostProcessor {
-public:
-    using anira::PrePostProcessor::PrePostProcessor;
-
-    virtual void pre_process(
-        std::vector<anira::RingBuffer>& input,
-        std::vector<anira::BufferF>& output,
-        [[maybe_unused]] anira::InferenceBackend current_inference_backend) override {
-        int64_t num_batches = 0;
-        int64_t num_input_samples = 0;
-        int64_t num_output_samples = 0;
-
-        bool channels_last = false;
-        anira::InferenceBackend channels_last_backend = anira::InferenceBackend::CUSTOM;
-#ifdef USE_TFLITE
-        if (current_inference_backend == anira::InferenceBackend::TFLITE) {
-            channels_last = true;
-            channels_last_backend = anira::InferenceBackend::TFLITE;
-        }
-#endif
-#ifdef USE_LITERT
-        if (current_inference_backend == anira::InferenceBackend::LITERT) {
-            channels_last = true;
-            channels_last_backend = anira::InferenceBackend::LITERT;
-        }
-#endif
-        if (channels_last) {
-            num_batches = m_inference_config.get_tensor_input_shape(channels_last_backend)[0][0];
-            num_input_samples =
-                m_inference_config.get_tensor_input_shape(channels_last_backend)[0][1];
-            num_output_samples =
-                m_inference_config.get_tensor_output_shape(channels_last_backend)[0][1];
-        } else {
-            num_batches = m_inference_config.get_tensor_input_shape()[0][0];
-            num_input_samples = m_inference_config.get_tensor_input_shape()[0][2];
-            num_output_samples = m_inference_config.get_tensor_output_shape()[0][1];
-        }
-        if (
-#ifdef USE_LIBTORCH
-            current_inference_backend != anira::InferenceBackend::LIBTORCH &&
-#endif
-#ifdef USE_ONNXRUNTIME
-            current_inference_backend != anira::InferenceBackend::ONNX &&
-#endif
-#ifdef USE_TFLITE
-            current_inference_backend != anira::InferenceBackend::TFLITE &&
-#endif
-#ifdef USE_LITERT
-            current_inference_backend != anira::InferenceBackend::LITERT &&
-#endif
-#ifdef USE_EXECUTORCH
-            current_inference_backend != anira::InferenceBackend::EXECUTORCH &&
-#endif
-            current_inference_backend != anira::InferenceBackend::CUSTOM) {
-            throw std::runtime_error("Invalid inference backend");
-        }
-
-        for (size_t batch = 0; batch < (size_t)num_batches; batch++) {
-            size_t base_index = batch * (size_t)num_input_samples;
-            pop_samples_from_buffer(input[0],
-                                    output[0],
-                                    (size_t)num_output_samples,
-                                    (size_t)(num_input_samples - num_output_samples),
-                                    base_index);
-        }
-    }
-};
-
+#include "../support/extras_v2_processors.inc"
 }  // namespace compat_copy
-// NOLINTEND
 
 namespace {
 
@@ -2848,7 +2764,7 @@ struct ProcessorPair {
 
     anira::InferenceConfig m_old;
     OldProcessor m_old_pp;
-    anira::InferenceHandler m_old_handler;
+    anira_test::V2Handler m_old_handler;
     v2::InferenceConfig m_shim;
     Processor m_pp;
     v2::InferenceHandler m_handler;
@@ -2909,7 +2825,7 @@ TEST(AbiCompat, CnnMatchesThroughTheCopiedProcessor) {
     if (anira_test::oracle_engines().empty()) {
         GTEST_SKIP() << "no built-in engine in this build";
     }
-    ProcessorPair<CNNPrePostProcessor, compat_copy::CNNPrePostProcessor> pair(
+    ProcessorPair<v2x_copy::CNNPrePostProcessor, compat_copy::CNNPrePostProcessor> pair(
         without_litert(cnn_arguments()));
     pair.m_old_handler.prepare(anira::HostConfig(2048.F, static_cast<float>(anira_test::k_rate)));
     pair.m_handler.prepare(v2::HostConfig(2048.F, static_cast<float>(anira_test::k_rate)));
@@ -2923,7 +2839,7 @@ TEST(AbiCompat, HybridNnMatchesThroughTheCopiedProcessor) {
     if (anira_test::oracle_engines().empty()) {
         GTEST_SKIP() << "no built-in engine in this build";
     }
-    ProcessorPair<HybridNNPrePostProcessor, compat_copy::HybridNNPrePostProcessor> pair(
+    ProcessorPair<v2x_copy::HybridNNPrePostProcessor, compat_copy::HybridNNPrePostProcessor> pair(
         without_litert(hybridnn_arguments()));
     pair.m_old_handler.prepare(anira::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
     pair.m_handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));

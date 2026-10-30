@@ -1,7 +1,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/Buffer.h>
@@ -12,6 +11,7 @@
 #include <thread>
 
 #include "../../extras/models/model_files.h"
+#include "../support/v2_handler.h"
 #include "../support/v2_objects.h"
 #include "gtest/gtest.h"
 
@@ -21,8 +21,9 @@
 constexpr int k_user_thread_timeout_s = 30;
 
 using namespace anira;
+using anira_test::V2Handler;
 
-// Drives an InferenceHandler with no auto-pool threads — the caller creates
+// Drives a V2Handler with no auto-pool threads — the caller creates
 // and manages the InferenceThread that actually runs inference. This is the
 // same pattern the wasm build uses under the hood (one JS Worker per
 // InferenceThread), now available natively as first-party. The model is the
@@ -39,7 +40,7 @@ TEST(UserManagedInferenceThread, ProcessesAudioWithoutAutoPool) {
     // Zero auto-pool threads — the user owns the threading.
     CoreConfig const core_config(0);
 
-    InferenceHandler inference_handler(pp_processor, inference_config, core_config);
+    V2Handler inference_handler(pp_processor, inference_config, core_config);
 
     auto user_thread = Core::make_inference_thread();
     ASSERT_NE(user_thread, nullptr);

@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 
+#include "../support/v2_handler.h"
 #include "capi/capi_internal.h"
 
 using anira::capi::firewall_probe;
@@ -70,7 +71,6 @@ TEST(AbiFirewall, LongMessagesAreTruncatedAndTerminated) {
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
@@ -199,7 +199,7 @@ TEST(AbiFirewallLogging, AFailingEntryDrainsTheRealTimeQueueFirst) {
         0.f,
         2);
     anira::PrePostProcessor pp_processor(inference_config);
-    anira::InferenceHandler handler(pp_processor, inference_config, core_config);
+    anira_test::V2Handler handler(pp_processor, inference_config, core_config);
     handler.prepare(anira::HostConfig(512, 48000));
 
     FreshCollector collector;

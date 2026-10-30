@@ -1,12 +1,10 @@
-// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the still-public 2.x
-// anira::InferenceHandler as the in-binary oracle. Both handlers drive the same bundled model
-// (gain on the custom plan's pass-through engine on every leg; the CNN where an engine is
-// present) block
-// by block, each waiting for its own inference, so no block is ever missed and the outputs are
-// compared bit for bit.
+// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the 2.x handler
+// (anira_test::V2Handler, test/support/v2_handler.h) as the in-binary oracle. Both handlers drive
+// the same bundled model (gain on the custom plan's pass-through engine on every leg; the CNN where
+// an engine is present) block by block, each waiting for its own inference, so no block is ever
+// missed and the outputs are compared bit for bit.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -42,6 +40,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "capi/port.h"
 #include "capi/words.h"
 #include "float_face.h"
@@ -364,7 +363,7 @@ struct Oracle {
     Handler m_c;
     anira::InferenceConfig m_config_2x;
     anira::PrePostProcessor m_pp;
-    anira::InferenceHandler m_v2;
+    anira_test::V2Handler m_v2;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()

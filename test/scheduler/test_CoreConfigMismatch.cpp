@@ -9,7 +9,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
@@ -20,9 +19,11 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -48,7 +49,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler;
+    V2Handler m_handler;
 };
 
 // A config whose log level lets the diagnostics through to the sinks. The

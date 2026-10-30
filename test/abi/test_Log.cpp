@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
@@ -15,8 +14,10 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -48,7 +49,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler;
+    V2Handler m_handler;
 };
 
 using anira_test::RecordCollector;

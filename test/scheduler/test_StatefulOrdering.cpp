@@ -1,7 +1,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/SessionElement.h>
@@ -20,9 +19,11 @@
 #include <thread>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 // =============================================================================
 // A stateful custom backend that tracks execution order.
@@ -138,7 +139,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     CoreConfig core_config;
     core_config.m_num_threads = 4;
 
-    InferenceHandler handler(pp_processor, config, backend, core_config);
+    V2Handler handler(pp_processor, config, backend, core_config);
 
     HostConfig const host_config(params.m_host_buffer_size, params.m_sample_rate);
     handler.prepare(host_config);

@@ -68,15 +68,18 @@ endfunction()
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
 #       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
 #       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
-#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal (test_abi's
-#       internal probes and the v2_objects.h oracle arms, PR 12).
-#   (d) retired with their subject: test_PrePostProcessor (folded into test_Stage),
-#       test_JsonConfigLoader and its Errors suite (PR 10, with the 2.x loader class),
-#       test_Bridge / test_Translate (PR 10, into test_Prepare), test_HighPriorityThread (PR 12).
+#       test_OneSidedStreaming on the 2.x session, PR 8), test_PrePostProcessor (the 2.x
+#       default processor's window fill, in test_scheduler since PR 10), and test_capi_internal
+#       (test_abi's internal probes and the 2.x arms, PR 12).
+#   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
+#       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
+#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_Translate,
+#       test_PrePostProcessor, and every use of the two support headers below.
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
 # test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
-# test/support/extras_fixtures.h serves the TUs of (b) and (d) until they go.
+# test/support/v2_handler.h is the 2.x handler those suites and the 2.x arms of test_abi
+# (test_Handler, test_HandlerTensor, test_Stage, test_Compat) drive; both go in PR 10b.
 
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
@@ -90,6 +93,9 @@ anira_add_test_binary(test_utils
 	test_CoreConfig.cpp
 	test_InferenceConfig.cpp
 )
+# test_Logger drives a 2.x session through test/support/v2_handler.h, which includes the
+# scheduler's private helpers.
+target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_scheduler
 	scheduler/test_PlanSwitch.cpp
@@ -107,6 +113,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
+	test_PrePostProcessor.cpp
 )
 # handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
 # and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
@@ -127,7 +134,6 @@ anira_add_test_binary(test_handler
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
-	test_PrePostProcessor.cpp
 )
 
 # The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the

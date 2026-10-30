@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
@@ -16,9 +15,11 @@
 #include <thread>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 // Regression tests for issue #106: Core::create_session() used to count the
 // session before doing the work that can throw (loading the model in a backend
@@ -73,7 +74,7 @@ void expect_next_handler_lifecycle_intact() {
     {
         InferenceConfig inference_config = make_custom_config();
         PrePostProcessor pp_processor(inference_config);
-        InferenceHandler handler(pp_processor, inference_config, CoreConfig(2));
+        V2Handler handler(pp_processor, inference_config, CoreConfig(2));
         handler.prepare(HostConfig(512, 48000));
         EXPECT_EQ(Core::get_num_sessions(), 1);
         EXPECT_TRUE(wait_for_num_inference_threads(2));
@@ -98,18 +99,18 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
         if (i == 0) {
             EXPECT_THROW(
                 {
-                    const InferenceHandler handler(pp_processor,
-                                                   inference_config,
-                                                   throwing_processor,
-                                                   CoreConfig(2));
+                    const V2Handler handler(pp_processor,
+                                            inference_config,
+                                            throwing_processor,
+                                            CoreConfig(2));
                 },
                 std::runtime_error);
         } else {
             EXPECT_ANY_THROW({
-                const InferenceHandler handler(pp_processor,
-                                               inference_config,
-                                               throwing_processor,
-                                               CoreConfig(2));
+                const V2Handler handler(pp_processor,
+                                        inference_config,
+                                        throwing_processor,
+                                        CoreConfig(2));
             });
         }
         expect_clean_slate();
@@ -123,7 +124,7 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
 
     InferenceConfig live_config = make_custom_config();
     PrePostProcessor live_pp(live_config);
-    InferenceHandler live_handler(live_pp, live_config, CoreConfig(2));
+    V2Handler live_handler(live_pp, live_config, CoreConfig(2));
     live_handler.prepare(HostConfig(512, 48000));
     ASSERT_TRUE(wait_for_num_inference_threads(2));
 
@@ -131,10 +132,7 @@ TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
     PrePostProcessor pp_processor(inference_config);
     ThrowingProcessor throwing_processor(inference_config);
     EXPECT_ANY_THROW({
-        const InferenceHandler handler(pp_processor,
-                                       inference_config,
-                                       throwing_processor,
-                                       CoreConfig(2));
+        const V2Handler handler(pp_processor, inference_config, throwing_processor, CoreConfig(2));
     });
 
     EXPECT_EQ(Core::get_num_sessions(), 1);
@@ -163,7 +161,7 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
         PrePostProcessor pp_processor(inference_config);
 
         EXPECT_ANY_THROW(
-            { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
+            { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
     }
     std::filesystem::remove(model_path);
 
@@ -203,7 +201,7 @@ void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* e
         42.66f);
     PrePostProcessor pp_processor(inference_config);
     const anira::StatusError error = status_error_of(
-        [&] { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
+        [&] { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
     EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE) << error.what();
     const std::string what = error.what();
     EXPECT_NE(what.find(engine), std::string::npos) << what;
@@ -250,7 +248,7 @@ TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
             42.66f);
         PrePostProcessor pp_processor(inference_config);
         const anira::StatusError error = status_error_of(
-            [&] { const InferenceHandler handler(pp_processor, inference_config, CoreConfig(2)); });
+            [&] { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD) << error.what();
         const std::string what = error.what();
         EXPECT_EQ(what.rfind("onnxruntime: ", 0), 0) << "the engine name leads: " << what;

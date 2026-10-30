@@ -9,7 +9,6 @@
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -44,6 +43,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -516,7 +516,7 @@ inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t slot = 
 }
 
 /// The 2.x twin of wait_for_block.
-inline void wait_for_block(anira::InferenceHandler& handler, size_t prev) {
+inline void wait_for_block(anira_test::V2Handler& handler, size_t prev) {
     const auto start = std::chrono::steady_clock::now();
     while (handler.get_available_samples(0) != prev) {
         if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
@@ -532,7 +532,7 @@ inline void wait_for_push(anira_handler* handler, size_t prev, size_t block) {
     wait_for_available(handler, prev + block);
 }
 
-inline void wait_for_push(anira::InferenceHandler& handler, size_t prev, size_t block) {
+inline void wait_for_push(anira_test::V2Handler& handler, size_t prev, size_t block) {
     wait_for_block(handler, prev + block);
 }
 

@@ -2,7 +2,6 @@
 // serving a 2.x session.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -22,9 +21,11 @@
 #include <thread>
 
 #include "../../extras/models/model_files.h"
+#include "../support/v2_handler.h"
 #include "../support/v2_objects.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -129,7 +130,7 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
     PrePostProcessor pp_processor(inference_config);
     // Zero auto-pool threads, like the context: the user owns the threading.
     const CoreConfig core_config(0, WaitStrategy::SpinBackoff, LogLevel::Error);
-    InferenceHandler inference_handler(pp_processor, inference_config, core_config);
+    V2Handler inference_handler(pp_processor, inference_config, core_config);
 
     anira_inference_thread* thread = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
