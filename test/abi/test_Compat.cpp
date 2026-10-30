@@ -374,6 +374,96 @@ void expect_getters_equal(anira::InferenceConfig& old, const v2::InferenceConfig
     }
 }
 
+/// The 2.x constructor's getters as closed forms of its arguments, against the shim: the shapes
+/// as given (the universal row, else the first; a backend's own row, else the universal one),
+/// the tensor sizes the products of the first row's shapes, a processing vector as given when
+/// it has one entry per tensor and defaulted otherwise (one channel, the size over the
+/// channels, latency 0), one processor when session-exclusive or below one, every entry in
+/// order. The backends asked are this build's, as on the 2.x side.
+void expect_getters_of(const Arguments& args, const v2::InferenceConfig& shim) {
+    ASSERT_FALSE(args.m_shapes.empty());
+    const auto universal = std::ranges::find_if(args.m_shapes, [](const Shapes& row) {
+        return !row.m_backend.has_value();
+    });
+    const Shapes& canonical = universal != args.m_shapes.end() ? *universal : args.m_shapes[0];
+    EXPECT_EQ(shim.get_tensor_input_shape(), canonical.m_inputs);
+    EXPECT_EQ(shim.get_tensor_output_shape(), canonical.m_outputs);
+    const auto products = [](const v2::TensorShapeList& shapes) {
+        std::vector<size_t> sizes;
+        for (const std::vector<int64_t>& shape : shapes) {
+            size_t size = 1;
+            for (const int64_t extent : shape) { size *= static_cast<size_t>(extent); }
+            sizes.push_back(size);
+        }
+        return sizes;
+    };
+    const std::vector<size_t> in_size = products(args.m_shapes[0].m_inputs);
+    const std::vector<size_t> out_size = products(args.m_shapes[0].m_outputs);
+    EXPECT_EQ(shim.get_tensor_input_size(), in_size);
+    EXPECT_EQ(shim.get_tensor_output_size(), out_size);
+    const auto or_default = [](const std::vector<size_t>& given,
+                               size_t count,
+                               const std::function<size_t(size_t)>& value_of) {
+        if (given.size() == count) { return given; }
+        std::vector<size_t> out(count);
+        for (size_t j = 0; j < count; ++j) { out[j] = value_of(j); }
+        return out;
+    };
+    const auto one = [](size_t /*j*/) { return size_t{1}; };
+    const std::vector<size_t> in_channels = or_default(args.m_in_channels, in_size.size(), one);
+    const std::vector<size_t> out_channels = or_default(args.m_out_channels, out_size.size(), one);
+    EXPECT_EQ(shim.get_preprocess_input_channels(), in_channels);
+    EXPECT_EQ(shim.get_postprocess_output_channels(), out_channels);
+    EXPECT_EQ(shim.get_preprocess_input_size(),
+              or_default(args.m_in_sizes, in_size.size(), [&](size_t j) {
+                  return in_size[j] / in_channels[j];
+              }));
+    EXPECT_EQ(shim.get_postprocess_output_size(),
+              or_default(args.m_out_sizes, out_size.size(), [&](size_t j) {
+                  return out_size[j] / out_channels[j];
+              }));
+    EXPECT_EQ(
+        shim.get_internal_model_latency(),
+        or_default(args.m_latencies, out_size.size(), [](size_t /*j*/) { return size_t{0}; }));
+    EXPECT_FLOAT_EQ(shim.m_max_inference_time, args.m_max_inference_time);
+    EXPECT_EQ(shim.m_warm_up, args.m_warm_up);
+    EXPECT_EQ(shim.m_session_exclusive_processor, args.m_exclusive);
+    EXPECT_FLOAT_EQ(shim.m_blocking_ratio, args.m_blocking_ratio);
+    EXPECT_EQ(shim.m_num_parallel_processors,
+              args.m_exclusive ? 1U : std::max(args.m_processors, 1U));
+    for (const v2::InferenceBackend backend : k_backends) {
+        if (!v2::is_available(backend)) { continue; }
+        SCOPED_TRACE(v2::to_engine(backend).kind);
+        const auto own = std::ranges::find_if(args.m_shapes, [backend](const Shapes& row) {
+            return row.m_backend == backend;
+        });
+        const Shapes& shapes = own != args.m_shapes.end() ? *own : canonical;
+        EXPECT_EQ(shim.get_tensor_input_shape(backend), shapes.m_inputs);
+        EXPECT_EQ(shim.get_tensor_output_shape(backend), shapes.m_outputs);
+        const auto row = std::ranges::find_if(args.m_rows, [backend](const Row& entry) {
+            return entry.m_backend == backend;
+        });
+        const v2::ModelData* entry = shim.get_model_data(backend);
+        ASSERT_EQ(entry != nullptr, row != args.m_rows.end());
+        EXPECT_FALSE(shim.is_model_binary(backend));
+        if (entry == nullptr) {
+            EXPECT_EQ(shim.get_model_function(backend), "");
+            continue;
+        }
+        EXPECT_EQ(shim.get_model_function(backend), row->m_function);
+        EXPECT_EQ(shim.get_model_path(backend), row->m_path);
+        EXPECT_EQ(entry->m_backend, backend);
+        EXPECT_EQ(entry->m_size, row->m_path.size());
+        EXPECT_FALSE(entry->m_is_binary);
+    }
+    ASSERT_EQ(shim.m_model_data.size(), args.m_rows.size());
+    for (size_t i = 0; i < args.m_rows.size(); ++i) {
+        EXPECT_EQ(shim.m_model_data[i].m_backend, args.m_rows[i].m_backend)
+            << "model_data[" << i << "]";
+        EXPECT_EQ(shim.m_model_data[i].m_model_function, args.m_rows[i].m_function);
+    }
+}
+
 /// Raises the log level to Warning for a scope, so that the shim's warnings are delivered in
 /// every build type, and puts the previous level back.
 struct WarningLevel {
@@ -498,6 +588,7 @@ TEST(AbiCompatConfig, TheGettersMatchTheLiveClass) {
         anira::InferenceConfig old = make_old(args);
         const v2::InferenceConfig shim = make_shim(args);
         expect_getters_equal(old, shim);
+        expect_getters_of(args, shim);
     }
 }
 
@@ -687,6 +778,7 @@ TEST(AbiCompatConfig, TheNormalisationTable) {
         const v2::InferenceConfig shim = make_shim(args);
         EXPECT_EQ(shim.get_preprocess_input_channels(), (std::vector<size_t>{1}));
         expect_getters_equal(old, shim);
+        expect_getters_of(args, shim);
     }
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.has("preprocess_input_channels has 3 entries", "native"));
@@ -808,16 +900,93 @@ TEST(AbiCompatConfig, TheContextConfigMintsAndReadsBack) {
 
 // ---- JsonConfigLoader ------------------------------------------------------------------------
 
+namespace {
+
+/// What a version-2 document of v2_documents.h spells, as the constructors' arguments (every
+/// entry, in this build or not: the loader keeps them all), and the context's thread count
+/// (none: the document has no context_config).
+struct Document {
+    const char* m_name;
+    std::string m_text;
+    Arguments m_args;
+    std::optional<unsigned> m_threads;
+};
+
+std::vector<Document> v2_documents() {
+    const std::string gain =
+        model_path("model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono");
+    const std::string rave = model_path("third-party/ircam-acids/RAVE/rave_funk_drum.ts");
+    // 2.x's default count, which the shim reads back for a document without one.
+    const unsigned processors = v2::InferenceConfig::Defaults::num_parallel_processors();
+    Arguments gain_args;
+    gain_args.m_rows = {{v2::LIBTORCH, gain + ".pt"},
+                        {v2::ONNX, gain + ".onnx"},
+                        {v2::TFLITE, gain + ".tflite"},
+                        {v2::LITERT, gain + ".tflite"},
+                        {v2::EXECUTORCH, gain + ".pte"}};
+    gain_args.m_shapes = {{{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::TFLITE},
+                          {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, v2::LITERT},
+                          {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}, std::nullopt}};
+    gain_args.m_in_channels = {1, 1};
+    gain_args.m_out_channels = {1, 1};
+    gain_args.m_in_sizes = {512, 0};
+    gain_args.m_out_sizes = {512, 0};
+    gain_args.m_warm_up = 1;
+    gain_args.m_processors = processors;
+
+    Arguments rave_args;
+    rave_args.m_rows = {{v2::LIBTORCH, rave}};
+    rave_args.m_shapes = {{{{1, 1, 2048}}, {{1, 1, 2048}}, std::nullopt}};
+    rave_args.m_in_channels = {1};
+    rave_args.m_out_channels = {1};
+    rave_args.m_in_sizes = {2048};
+    rave_args.m_out_sizes = {2048};
+    rave_args.m_latencies = {2048};
+    rave_args.m_max_inference_time = 42.66F;
+    rave_args.m_warm_up = 5;
+    rave_args.m_exclusive = true;
+    rave_args.m_processors = processors;
+
+    Arguments encoder_args = rave_args;
+    encoder_args.m_rows = {{v2::LIBTORCH, rave, "encode"}};
+    encoder_args.m_shapes = {{{{1, 1, 2048}}, {{1, 4, 1}}, std::nullopt}};
+    encoder_args.m_out_channels = {4};
+    encoder_args.m_in_sizes = {};
+    encoder_args.m_out_sizes = {};
+    encoder_args.m_latencies = {};
+
+    Arguments decoder_args = rave_args;
+    decoder_args.m_rows = {{v2::LIBTORCH, rave, "decode"}};
+    decoder_args.m_shapes = {{{{1, 4, 1}}, {{1, 1, 2048}}, std::nullopt}};
+    decoder_args.m_in_channels = {4};
+    decoder_args.m_in_sizes = {1};
+
+    return {{.m_name = "gain",
+             .m_text = anira_test::gain_v2_document(),
+             .m_args = gain_args,
+             .m_threads = 1U},
+            {.m_name = "rave",
+             .m_text = anira_test::rave_funk_drum_v2_document(),
+             .m_args = rave_args,
+             .m_threads = 1U},
+            {.m_name = "encoder",
+             .m_text = anira_test::rave_funk_drum_encoder_v2_document(),
+             .m_args = encoder_args,
+             .m_threads = std::nullopt},
+            {.m_name = "decoder",
+             .m_text = anira_test::rave_funk_drum_decoder_v2_document(),
+             .m_args = decoder_args,
+             .m_threads = std::nullopt}};
+}
+
+}  // namespace
+
 // The four version-2 documents through the istream constructor, against the live loader: the
 // context's thread count where the document sets it, and every getter of the configuration.
 TEST(AbiCompatConfig, TheLoaderMatchesTheLiveLoader) {
-    for (const auto& [name, text] : std::vector<std::pair<const char*, std::string>>{
-             {"gain", anira_test::gain_v2_document()},
-             {"rave", anira_test::rave_funk_drum_v2_document()},
-             {"encoder", anira_test::rave_funk_drum_encoder_v2_document()},
-             {"decoder", anira_test::rave_funk_drum_decoder_v2_document()},
-         }) {
-        SCOPED_TRACE(name);
+    for (const Document& document : v2_documents()) {
+        const std::string& text = document.m_text;
+        SCOPED_TRACE(document.m_name);
         std::istringstream old_stream(text);
         anira::JsonConfigLoader old_loader(old_stream);
         std::istringstream shim_stream(text);
@@ -829,7 +998,9 @@ TEST(AbiCompatConfig, TheLoaderMatchesTheLiveLoader) {
         ASSERT_NE(shim_context, nullptr);
         if (text.find("\"context_config\"") != std::string::npos) {
             EXPECT_EQ(shim_context->m_num_threads, old_context->m_num_threads);
+            EXPECT_EQ(shim_context->m_num_threads, document.m_threads.value_or(0U));
         } else {
+            EXPECT_FALSE(document.m_threads.has_value());
             EXPECT_EQ(shim_context->m_num_threads, v2::ContextConfig::k_threads_auto);
         }
         EXPECT_EQ(shim_loader.get_context_config(), nullptr) << "once, as in 2.x";
@@ -839,10 +1010,14 @@ TEST(AbiCompatConfig, TheLoaderMatchesTheLiveLoader) {
         if (old == nullptr) {
             // The document's only engine is not in this build: 2.x dropped the row and gave up.
             ASSERT_NE(shim, nullptr);
+            EXPECT_TRUE(std::ranges::none_of(document.m_args.m_rows, [](const Row& row) {
+                return v2::is_available(row.m_backend);
+            }));
             continue;
         }
         ASSERT_NE(shim, nullptr);
         EXPECT_EQ(shim_loader.get_inference_config(), nullptr) << "once, as in 2.x";
+        expect_getters_of(document.m_args, *shim);
         // Only the rows of this build: 2.x dropped the others, the shim keeps them as entries.
         for (const v2::InferenceBackend backend : k_backends) {
             const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
@@ -1129,6 +1304,7 @@ TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
     handler_2x.prepare(
         anira::HostConfig(static_cast<float>(k_stream), static_cast<float>(anira_test::k_rate)));
 
+    anira_test::DelayLine line(anira_handler_get_latency(handler.m_handler, 0));
     bool delivered_signal = false;
     for (size_t k = 1; k <= 12; ++k) {
         const std::vector<float> in = anira_test::ramp(k, k_stream);
@@ -1171,7 +1347,9 @@ TEST(AbiCompat, ThePassthroughEngineIsTheBackendBase) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
         EXPECT_EQ(delivered[0], v_num_out[0]) << "block " << k;
+        EXPECT_EQ(delivered[0], k_stream) << "block " << k;
         anira_test::expect_same_block(c0, v0, k);
+        anira_test::expect_same_block(c0, line.next(in), k);
         anira_test::expect_same_block(c2, v2_out, k);
         anira_test::expect_all(c2, 0.F, "an output without an input");
         for (size_t j = 0; j < k_small_out; ++j) {
@@ -1808,11 +1986,15 @@ TEST_P(AbiCompatForm, GainMatchesOnEveryPlan) {
     pair.set_gain(0.5F);
     size_t k = 1;
     float previous_static = pair.m_pp.get_output(1, 0);
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     for (const auto& [old_backend_value, backend] : oracle_backends()) {
         SCOPED_TRACE(static_cast<uint32_t>(backend));
         pair.m_old_handler.set_inference_backend(old_backend_value);
         pair.m_handler.set_inference_backend(backend);
         EXPECT_EQ(pair.m_handler.get_inference_backend(), backend);
+        // The custom plan's pass-through copies the stream and the gain; the gain model's
+        // engines multiply by the gain and answer the peak of the window.
+        const bool pass_through = backend == v2::CUSTOM;
         for (size_t i = 0; i < 20; ++i, ++k) {
             std::vector<float> c;
             std::vector<float> v;
@@ -1826,6 +2008,10 @@ TEST_P(AbiCompatForm, GainMatchesOnEveryPlan) {
             EXPECT_EQ(n_c, anira_test::k_block) << "block " << k;
             anira_test::expect_same_block(c, v, k);
             expect_same_static(pair.m_pp, pair.m_old_pp, c_static, v_static, previous_static, k);
+            const std::vector<float> in = anira_test::ramp(k);
+            anira_test::expect_same_block(c, line.next(in, pass_through ? 1.F : 0.5F), k);
+            EXPECT_EQ(previous_static, pass_through ? 0.5F : anira_test::gain_peak(in, 0.5F))
+                << "block " << k << ": the settled Static output";
         }
     }
     EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
@@ -1848,12 +2034,21 @@ INSTANTIATE_TEST_SUITE_P(Forms,
 // Case 2: a switch of backend before every block, on both sides: the same backend reads back
 // (compared by name) and the same samples come out.
 TEST(AbiCompat, SetInferenceBackendSwitchesLikeTheOracle) {
-    Pair pair(oracle_gain_arguments());
+    const Arguments args = oracle_gain_arguments();
+    Pair pair(args);
     pair.prepare();
     pair.set_gain(1.F);
     EXPECT_TRUE(same_backend(pair.m_old_handler.get_inference_backend(),
                              pair.m_handler.get_inference_backend()))
         << "the 2.x initial rule";
+    // The 2.x initial rule: the first entry this build runs, else CUSTOM.
+    const auto first_built_in = std::ranges::find_if(args.m_rows, [](const Row& row) {
+        return row.m_backend != v2::CUSTOM;
+    });
+    EXPECT_EQ(pair.m_handler.get_inference_backend(),
+              first_built_in != args.m_rows.end() ? first_built_in->m_backend : v2::CUSTOM);
+    // A gain of 1: every plan answers the stream behind the latency.
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     const auto backends = oracle_backends();
     for (size_t k = 1; k <= 24; ++k) {
         const auto& [old_backend_value, backend] = backends[k % backends.size()];
@@ -1871,7 +2066,10 @@ TEST(AbiCompat, SetInferenceBackendSwitchesLikeTheOracle) {
         const size_t n_v = run_gain_block(pair.m_old_handler, Form::InPlace, k, 1.F, v, v_static);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         EXPECT_EQ(n_c, n_v);
+        EXPECT_EQ(n_c, anira_test::k_block);
+        EXPECT_EQ(pair.m_handler.get_inference_backend(), backend) << "block " << k;
         anira_test::expect_same_block(c, v, k);
+        anira_test::expect_same_block(c, line.next(anira_test::ramp(k)), k);
     }
 }
 
@@ -1885,6 +2083,7 @@ TEST(AbiCompat, ACustomEngineMatchesACustomBackend) {
     // The kernel's Static output is the gain of its inference (expect_same_static: a fast
     // runner saw the shim's call at block 17's gain and the 2.x call still at block 16's).
     float previous_static = pair.m_pp.get_output(1, 0);
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     for (size_t k = 1; k <= 20; ++k) {
         const float gain = 0.25F * static_cast<float>(k % 5);
         std::vector<float> c;
@@ -1899,9 +2098,11 @@ TEST(AbiCompat, ACustomEngineMatchesACustomBackend) {
         anira_test::expect_same_block(c, v, k);
         expect_same_static(pair.m_pp, pair.m_old_pp, c_static, v_static, previous_static, k);
         EXPECT_EQ(previous_static, gain) << "block " << k << ": the kernel's Static output";
+        anira_test::expect_same_block(c, line.next(anira_test::ramp(k), gain), k);
     }
     EXPECT_GT(pair.m_engine.m_calls.load(), 0);
     EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
+    EXPECT_EQ(pair.m_engine.m_calls.load(), 20) << "one inference per block, no warm-up";
 }
 
 // Case 6: the Static values travel through the processor's atomics on both sides: set with
@@ -1910,6 +2111,7 @@ TEST(AbiCompat, StaticInputsAndOutputsAgree) {
     KernelPair<GainKernel> pair(gain_custom_arguments(), GainKernel{});
     pair.prepare();
     EXPECT_EQ(pair.m_pp.get_output(1, 0), 0.F) << "zero until an inference is collected";
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     for (size_t k = 1; k <= 12; ++k) {
         const auto gain = static_cast<float>(k);
         pair.m_pp.set_input(gain, 1, 0);
@@ -1923,6 +2125,8 @@ TEST(AbiCompat, StaticInputsAndOutputsAgree) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         anira_test::expect_same_block(c, v, k);
         EXPECT_EQ(pair.m_pp.get_output(1, 0), pair.m_old_pp.get_output(1, 0)) << "block " << k;
+        anira_test::expect_same_block(c, line.next(anira_test::ramp(k), gain), k);
+        EXPECT_EQ(pair.m_pp.get_output(1, 0), gain) << "block " << k;
     }
     EXPECT_NE(pair.m_pp.get_output(1, 0), 0.F);
 }
@@ -1998,10 +2202,14 @@ TEST(AbiCompat, AvailableSamplesAgree) {
         EXPECT_EQ(pair.m_handler.get_available_samples(0),
                   pair.m_old_handler.get_available_samples(0))
             << "block " << k;
+        EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_handler.get_latency(0))
+            << "block " << k << ": a settled block leaves the latency waiting";
     }
     pair.m_handler.reset();
     pair.m_old_handler.reset();
     EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_old_handler.get_available_samples(0));
+    EXPECT_EQ(pair.m_handler.get_available_samples(0), pair.m_handler.get_latency(0))
+        << "the priming re-seeded";
     EXPECT_EQ(pair.m_handler.get_available_samples(1), 0U) << "a Static output has no ring";
     EXPECT_EQ(pair.m_handler.get_available_samples(9), 0U) << "out of range";
 }
@@ -2016,6 +2224,9 @@ TEST(AbiCompat, LatencyFiguresAgree) {
         const std::vector<unsigned> c = pair.m_handler.get_latency_vector();
         const std::vector<unsigned> v = pair.m_old_handler.get_latency_vector();
         EXPECT_EQ(c, v);
+        // The closed form at 512 samples, 48 kHz and a 5 ms budget: one hop without a wait
+        // ratio, ratio 1 waits for the inference in the block and needs none.
+        EXPECT_EQ(c, (std::vector<unsigned>{ratio == 0.F ? 512U : 0U, 0U}));
         ASSERT_EQ(c.size(), 2U);
         EXPECT_EQ(pair.m_handler.get_latency(0), c[0]);
         EXPECT_EQ(pair.m_handler.get_latency(1), 0U);
@@ -2029,6 +2240,7 @@ TEST(AbiCompat, ResetReSeedsTheStreamOnBothSides) {
     Pair pair(gain_custom_arguments());
     pair.prepare();
     pair.set_gain(1.F);
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     for (size_t round = 0; round < 2; ++round) {
         for (size_t k = 1; k <= 5; ++k) {
             std::vector<float> c;
@@ -2039,9 +2251,11 @@ TEST(AbiCompat, ResetReSeedsTheStreamOnBothSides) {
             run_gain_block(pair.m_old_handler, Form::Separate, k, 1.F, v, unused);
             ASSERT_FALSE(::testing::Test::HasFatalFailure());
             anira_test::expect_same_block(c, v, (round * 10) + k);
+            anira_test::expect_same_block(c, line.next(anira_test::ramp(k)), (round * 10) + k);
         }
         pair.m_handler.reset();
         pair.m_old_handler.reset();
+        line.reset();
     }
     EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
 }
@@ -2078,6 +2292,13 @@ TEST(AbiCompat, NonRealtimeIsDeterministic) {
             v = pull(pair.m_old_handler);
         }
         anira_test::expect_same_block(c, v, k);
+        // The closed form: one hop of 2048 samples of latency, silent; then every hop holds the
+        // parameter of the call that completed the hop before it (call 4m - 1 sets 4m).
+        constexpr size_t k_blocks_per_hop = 2048 / anira_test::k_block;
+        const size_t hop = k / k_blocks_per_hop;
+        anira_test::expect_all(c,
+                               static_cast<float>(hop * k_blocks_per_hop),
+                               "the generator's stream");
     }
     EXPECT_EQ(pair.m_engine.m_calls.load(), pair.m_backend.m_calls.load());
     EXPECT_EQ(pair.m_handler.rt_error(), ANIRA_OK);
@@ -2104,6 +2325,7 @@ TEST(AbiCompat, PopDataWithDeadlineReturnsByTheDeadline) {
                 anira_test::k_block,
                 std::chrono::steady_clock::now() + std::chrono::milliseconds(50));
             EXPECT_EQ(c, v);
+            EXPECT_EQ(c, 0U) << "ratio 1 has no latency: nothing is primed to pop";
         }
     }
 }
@@ -2143,6 +2365,8 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     const anira::HostConfig old_host(512.F, static_cast<float>(anira_test::k_rate));
     const v2::HostConfig host(512.F, static_cast<float>(anira_test::k_rate));
     const auto run_two_outputs = [&pair](size_t blocks) {
+        // Output 0 copies the input behind its latency; output 1 has no input to copy.
+        anira_test::DelayLine line(pair.m_handler.get_latency(0));
         for (size_t k = 1; k <= blocks; ++k) {
             const std::vector<float> in = anira_test::ramp(k);
             const auto drive =
@@ -2171,6 +2395,8 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
             anira_test::expect_same_block(c0, v0, k);
             anira_test::expect_same_block(c1, v1, k);
             if (k <= 2) { anira_test::expect_all(c1, 0.F, "the primed latency of output 1"); }
+            anira_test::expect_same_block(c0, line.next(in), k);
+            anira_test::expect_all(c1, 0.F, "an output without an input");
         }
     };
 
@@ -2178,6 +2404,7 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     pair.m_handler.prepare(host, 1024, 1);
     EXPECT_EQ(pair.m_handler.get_latency(1), 1024U);
     EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector());
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), (std::vector<unsigned>{512, 1024}));
     run_two_outputs(6);
     ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
@@ -2186,6 +2413,7 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     EXPECT_EQ(pair.m_handler.get_latency(0), 512U);
     EXPECT_EQ(pair.m_handler.get_latency(1), 1024U);
     EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector());
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), (std::vector<unsigned>{512, 1024}));
     run_two_outputs(6);
     ASSERT_FALSE(::testing::Test::HasFatalFailure());
 
@@ -2193,6 +2421,7 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     pair.m_handler.prepare(host);
     EXPECT_EQ(pair.m_handler.get_latency_vector(), pair.m_old_handler.get_latency_vector())
         << "a plain prepare returns to the computed figures";
+    EXPECT_EQ(pair.m_handler.get_latency_vector(), (std::vector<unsigned>{512, 512}));
     EXPECT_NE(pair.m_handler.get_latency(1), 1024U);
 
     EXPECT_THROW(pair.m_old_handler.prepare(old_host, 128U, 5), std::invalid_argument);
@@ -2211,6 +2440,7 @@ TEST(AbiCompat, CustomLatencyMatchesTheOracle) {
     EXPECT_EQ(floor_pair.m_handler.get_latency(0), 256U);
     EXPECT_EQ(floor_pair.m_handler.get_latency_vector(),
               floor_pair.m_old_handler.get_latency_vector());
+    EXPECT_EQ(floor_pair.m_handler.get_latency_vector(), (std::vector<unsigned>{256, 768}));
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.has("is below the internal model latency 256; clamping", "native"));
 #endif
@@ -2329,6 +2559,8 @@ TEST(AbiCompat, AFractionalBlockMatchesTheOracle) {
         pair.m_handler.prepare(v2::HostConfig(static_cast<float>(block), 100.F));
         const std::vector<unsigned> latency = pair.m_handler.get_latency_vector();
         ASSERT_EQ(latency, pair.m_old_handler.get_latency_vector());
+        EXPECT_EQ(latency, (std::vector<unsigned>{10U}))
+            << "the closed form, one latent hop at 100 Hz";
         ASSERT_EQ(latency.size(), 1U);
         EXPECT_GT(latency[0], 0U);
         ASSERT_EQ(pair.m_handler.get_available_samples(0),
@@ -2361,6 +2593,16 @@ TEST(AbiCompat, AFractionalBlockMatchesTheOracle) {
             ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
             EXPECT_EQ(out_new, out_old) << "call " << k;
             EXPECT_EQ(out_new[num_out], -1.F) << "nothing past the block";
+            // The closed form: the latency's silence, then latent n (from 1) as k_upsample
+            // samples of the value n.
+            for (size_t i = 0; i < num_out; ++i) {
+                const size_t sample = popped - num_out + i;
+                // The latent number, a whole count: the division truncates on purpose.
+                const size_t latent =
+                    sample < latency[0] ? 0 : ((sample - latency[0]) / k_upsample) + 1;
+                const auto expected = static_cast<float>(latent);
+                EXPECT_EQ(out_new[i], expected) << "call " << k << ", sample " << sample;
+            }
             latent_out +=
                 static_cast<size_t>(std::count_if(out_new.begin(),
                                                   out_new.begin() + static_cast<ptrdiff_t>(num_out),
@@ -2405,6 +2647,7 @@ TEST(AbiCompat, ReAnchoringRebuildsTheHandler) {
     EXPECT_NE(pair.m_handler.native(), first) << "a new C handler";
     EXPECT_TRUE(pair.m_shim.model_config().anchor().empty()) << "the caller's config is untouched";
     pair.set_gain(1.F);
+    anira_test::DelayLine line(pair.m_handler.get_latency(0));
     for (size_t k = 1; k <= 8; ++k) {
         std::vector<float> c;
         std::vector<float> v;
@@ -2414,6 +2657,7 @@ TEST(AbiCompat, ReAnchoringRebuildsTheHandler) {
         run_gain_block(pair.m_old_handler, Form::InPlace, k, 1.F, v, unused);
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         anira_test::expect_same_block(c, v, k);
+        anira_test::expect_same_block(c, line.next(anira_test::ramp(k)), k);
     }
 }
 
@@ -2706,6 +2950,7 @@ TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
     EXPECT_STREQ(plans[0].provider_id, "com.example.npu");
     EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
     float previous_static = pp.get_output(1, 0);
+    anira_test::DelayLine line(handler.get_latency(0));
     for (size_t k = 1; k <= 8; ++k) {
         std::vector<float> c;
         std::vector<float> v;
@@ -2717,6 +2962,8 @@ TEST(AbiCompat, ACustomEngineOffTheCpuPathRunsOnItsFirstProvider) {
         ASSERT_FALSE(::testing::Test::HasFatalFailure());
         anira_test::expect_same_block(c, v, k);
         expect_same_static(pp, old_pp, c_static, v_static, previous_static, k);
+        anira_test::expect_same_block(c, line.next(anira_test::ramp(k), 0.5F), k);
+        EXPECT_EQ(previous_static, 0.5F) << "block " << k << ": the kernel's Static output";
     }
 }
 

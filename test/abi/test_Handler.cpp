@@ -75,6 +75,10 @@ constexpr std::array<Form, 5> k_forms{Form::InPlace,
                                       Form::PushPop,
                                       Form::PushPopMulti};
 
+/// The latency of the bundled gain model under its contract at 512 samples and 48 kHz (a
+/// 5 ms budget, no wait ratio): the closed form of LatencyCalculator, one hop.
+constexpr uint32_t k_gain_latency = 512U;
+
 /// The 2.x side's core config: the same threads, wait strategy and drain as the Context
 /// default, so the two users reconcile without a mismatch warning.
 anira::CoreConfig oracle_core_config() {
@@ -160,10 +164,12 @@ struct Oracle {
         anira_test::expect_inference_config_eq(m_c.m_handler->m_inference_config, m_config_2x);
         m_num_inputs = m_c.m_handler->m_num_inputs;
         m_num_outputs = m_c.m_handler->m_num_outputs;
+        if (m_sample_wise) { m_line.emplace(anira_handler_get_latency(h(), 0)); }
         if (m_num_outputs > 1) {
             m_previous_gain_out = c_static_output(1);
             EXPECT_EQ(m_previous_gain_out, m_pp.get_output(1, 0))
                 << "the Static outputs at prepare";
+            EXPECT_EQ(m_previous_gain_out, 0.0F) << "zero until an inference is collected";
         }
     }
 
@@ -202,6 +208,10 @@ struct Oracle {
         const float gain_in_v = 1.0F;
         float gain_out_c = -1.0F;
         float gain_out_v = -1.0F;
+        // The Static output of a block carrying the gain: the custom plan's pass-through copies
+        // the gain, the gain model's engines answer the peak of the window.
+        const float expected_static =
+            m_pass_through ? gain_in_c : anira_test::gain_peak(in, gain_in_c);
 
         const size_t prev_c = anira_test::available(h());
         const size_t prev_v = m_v2.get_available_samples(0);
@@ -275,6 +285,8 @@ struct Oracle {
                     const float v_settled = m_pp.get_output(1, 0);
                     EXPECT_EQ(c_settled, v_settled)
                         << "block " << k << ": the settled Static outputs";
+                    EXPECT_EQ(c_settled, expected_static)
+                        << "block " << k << ": the settled Static output";
                     EXPECT_TRUE(gain_out_c == before || gain_out_c == c_settled)
                         << "block " << k << ": the C call answered " << gain_out_c
                         << ", neither the previous " << before << " nor the settled " << c_settled;
@@ -330,11 +342,20 @@ struct Oracle {
                 m_v2.push_data(v_in.data(), v_num_in.data());
                 wait_for_push(m_v2, prev_v, block);
                 n_v = m_v2.pop_data(v_outs.data(), v_num_out.data())[0];
-                if (m_num_outputs > 1) { EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k; }
+                if (m_num_outputs > 1) {
+                    EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k;
+                    EXPECT_EQ(gain_out_c, expected_static) << "block " << k;
+                }
                 c = c_out;
                 v = v_out;
                 break;
             }
+        }
+        // The closed form of the block: the multi forms carry the Static gain, the others leave
+        // the store at its value (zero until a call carries one).
+        if (form == Form::Multi || form == Form::PushPopMulti) { m_static_gain = gain_in_c; }
+        if (m_line.has_value()) {
+            m_expected = m_line->next(in, m_pass_through ? 1.0F : m_static_gain);
         }
     }
 
@@ -352,12 +373,14 @@ struct Oracle {
             EXPECT_EQ(n_c, n_v) << "block " << k;
             EXPECT_EQ(n_c, block) << "block " << k;
             expect_same_block(c, v, k);
+            if (m_line.has_value()) { expect_same_block(c, m_expected, k); }
         }
     }
 
     void reset() {
         anira_handler_reset(h());
         m_v2.reset();
+        if (m_line.has_value()) { m_line->reset(); }
     }
 
     Handler m_c;
@@ -369,6 +392,13 @@ struct Oracle {
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
     float m_previous_gain_out = 0.0F;  ///< the settled Static output after the last Multi block
     size_t m_next_block = 1;
+    /// Whether the model maps every sample on its own (the gain model): then prepare() builds
+    /// the closed form, and every block is checked against it too.
+    bool m_sample_wise = false;
+    std::optional<anira_test::DelayLine> m_line;
+    std::vector<float> m_expected;  ///< the closed form of the last block run_block() ran
+    bool m_pass_through = true;     ///< the running plan copies (the custom plan)
+    float m_static_gain = 0.0F;     ///< the Static gain input the engines multiply by
 };
 
 /// A prepared gain oracle on the custom plan.
@@ -377,7 +407,10 @@ struct GainOracle : Oracle {
         : Oracle(context,
                  gain_with_custom(default_custom),
                  custom_candidates(),
-                 anira_test::config_2x_of(k_gain_model_json, k_gain_contract_json, true)) {}
+                 anira_test::config_2x_of(k_gain_model_json, k_gain_contract_json, true)) {
+        m_sample_wise = true;
+        m_pass_through = default_custom;
+    }
 };
 
 }  // namespace
@@ -542,7 +575,7 @@ TEST(AbiHandler, ProcessMatchesTheTwoPointXHandlerOnTheCustomPlan) {
     oracle.m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
     ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
     ASSERT_EQ(anira_handler_get_latency(oracle.h(), 0), oracle.m_v2.get_latency(0));
-    ASSERT_GT(anira_handler_get_latency(oracle.h(), 0), 0U);
+    ASSERT_EQ(anira_handler_get_latency(oracle.h(), 0), k_gain_latency);
     oracle.run_blocks(32, k_block, Form::InPlace);
 
     // The custom row is the last entry of gain_with_custom, and the rows keep entry order.
@@ -566,6 +599,7 @@ TEST(AbiHandler, SetPlanSwitchesLikeSetInferenceBackend) {
             EXPECT_EQ(anira_handler_set_plan(oracle.h(), i), ANIRA_OK);
             EXPECT_EQ(anira_handler_get_plan(oracle.h()), i);
             oracle.m_v2.set_inference_backend(backend_of(info[i]));
+            oracle.m_pass_through = info[i].engine == static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
             oracle.run_blocks(16, k_block, Form::InPlace);
             oracle.reset();
         }
@@ -717,6 +751,7 @@ TEST(AbiHandler, SingleMultiPushAndPopFormsAgree) {
             if (reference.empty()) { reference = c; }
             expect_same_block(c, reference, k);
             expect_same_block(v, reference, k);
+            expect_same_block(c, oracles[i]->m_expected, k);
         }
     }
 }
@@ -794,6 +829,7 @@ TEST(AbiHandler, LatencyVectorIsIndexAlignedWithZeroForStaticOutputs) {
     EXPECT_EQ(count, 2U);
     EXPECT_EQ(anira_handler_get_latencies(h, nullptr, out.data()), ANIRA_ERROR_INVALID_ARGUMENT);
 
+    EXPECT_EQ(out[0], k_gain_latency);
     const std::vector<unsigned int> v2 = oracle.m_v2.get_latency_vector();
     ASSERT_EQ(v2.size(), 2U);
     EXPECT_EQ(v2[0], out[0]);

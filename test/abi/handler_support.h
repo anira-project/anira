@@ -24,12 +24,15 @@
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <initializer_list>
 #include <memory>
 #include <mutex>
@@ -598,6 +601,43 @@ inline void wait_for_push(anira_handler* handler, size_t prev, size_t block) {
 
 inline void wait_for_push(anira_test::V2Handler& handler, size_t prev, size_t block) {
     wait_for_block(handler, prev + block);
+}
+
+/// The closed form of a stream through a model that maps every sample on its own (the gain
+/// model, a pass-through) when every block's inference is waited for: the processed input
+/// delayed by the reported latency, silence first. Fed the input blocks in order since the
+/// prepare (or the last reset), each with the factor the plan that ran it applies (the gain an
+/// engine of the gain model multiplies by; 1 for a pass-through, which copies), it answers each
+/// output block. A plan switch between blocks keeps the line: what is in flight comes out as
+/// it was processed.
+class DelayLine {
+public:
+    explicit DelayLine(size_t latency = 0) : m_latency(latency) { reset(); }
+
+    /// The stream restarts: the latency's silence comes first again.
+    void reset() { m_pending.assign(m_latency, 0.0F); }
+
+    std::vector<float> next(std::span<const float> in, float factor = 1.0F) {
+        for (const float sample : in) { m_pending.push_back(sample * factor); }
+        std::vector<float> out(m_pending.begin(),
+                               m_pending.begin() + static_cast<std::ptrdiff_t>(in.size()));
+        m_pending.erase(m_pending.begin(),
+                        m_pending.begin() + static_cast<std::ptrdiff_t>(in.size()));
+        return out;
+    }
+
+    size_t latency() const noexcept { return m_latency; }
+
+private:
+    size_t m_latency;
+    std::deque<float> m_pending;
+};
+
+/// The Static output of the gain model's engines for one window: the peak, max |x * gain|.
+inline float gain_peak(std::span<const float> in, float gain) {
+    float peak = 0.0F;
+    for (const float sample : in) { peak = std::max(peak, std::abs(sample * gain)); }
+    return peak;
 }
 
 /// Bit equality per sample.
