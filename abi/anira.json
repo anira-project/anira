@@ -1,5 +1,14 @@
 {
   "abi_file_major": 0,
+  "umbrellas": [
+    {
+      "file": "anira_all.h",
+      "guard": "ANIRA_ALL_H",
+      "scope": "all",
+      "brief": "Every header of the C ABI, the draft headers and the platform companions included.",
+      "doc": "The promised headers of anira/abi/, the draft headers of anira/abi/draft/ (outside the ABI promise: their entry points are declarations until measured) and the platform companions (anira/anira_em.h, which declares nothing outside WebAssembly). For a host that wants the whole surface with one include; a host that stays inside the promise includes the headers it uses."
+    }
+  ],
   "headers": [
     {
       "file": "export.h",

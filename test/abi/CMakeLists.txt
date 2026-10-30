@@ -8,7 +8,8 @@
 #                         terminator and every Tier-1 sizeof/offsetof with _Static_assert;
 #                         its printed table is diffed against abi/layout-<major>.txt
 #   anira_header_c11      gate 4: every header of _abi_headers, alone and together, as C11
-#                         under the strict flags with no anira define at all
+#                         under the strict flags with no anira define at all; the platform
+#                         companions and the generated umbrellas alone
 #   anira_header_cxx17    gate 4: the same as C++17
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
@@ -54,6 +55,8 @@ set(_abi_headers export status version enums log tensor config context core thre
 # The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
 # other target, so the per-file wrappers include them everywhere.
 set(_abi_platform_headers anira_em)
+# The umbrellas the registry generates (`umbrellas:`), beside the platform headers.
+set(_abi_umbrella_headers anira_all)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -152,7 +155,7 @@ foreach(_h IN LISTS _abi_headers)
     list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
     list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
-foreach(_h IN LISTS _abi_platform_headers)
+foreach(_h IN LISTS _abi_platform_headers _abi_umbrella_headers)
     anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
         "#include <anira/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
     anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"

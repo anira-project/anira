@@ -24,15 +24,31 @@
 # target: `file: anira_<name>.h` lands in include/anira/ beside the umbrellas, with its own
 # `guard:`; its body is compiled only under __EMSCRIPTEN__ (an empty header elsewhere; Doxygen,
 # which predefines DOXYGEN, sees it on every host), it
-# declares functions, callbacks, typedefs and defines only, nothing may include it, and its
-# names go to abi/symbols-emscripten.txt and the wasm export list, never to
-# symbols-<major>.txt, the link probe or the layout test.
+# declares functions, callbacks, typedefs and defines only, no header of the registry includes
+# it (an umbrella of scope `all` does), and its names go to abi/symbols-emscripten.txt and the
+# wasm export list, never to symbols-<major>.txt, the link probe or the layout test.
+#
+# `umbrellas` lists the umbrella headers, generated into include/anira/ beside the platform
+# headers: each includes, in registry order, every promised header (`scope: promised`: neither
+# draft nor platform) or every header of the registry (`scope: all`).
 #
 # Content transcribed from the architecture document's C blocks; where the document
 # left a value implicit (the Tier-1 struct ids 4..6) the choice is stated in the doc
 # field of the entity.
 
 abi_file_major: 0
+
+umbrellas:
+  - file: anira_all.h
+    guard: ANIRA_ALL_H
+    scope: all
+    brief: "Every header of the C ABI, the draft headers and the platform companions included."
+    doc: >-
+      The promised headers of anira/abi/, the draft headers of anira/abi/draft/ (outside the
+      ABI promise: their entry points are declarations until measured) and the platform
+      companions (anira/anira_em.h, which declares nothing outside WebAssembly). For a host that
+      wants the whole surface with one include; a host that stays inside the promise includes the
+      headers it uses.
 
 headers:
   # ----------------------------------------------------------------------------
