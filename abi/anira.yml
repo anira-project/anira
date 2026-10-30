@@ -5047,6 +5047,18 @@ headers:
         doc: "Re-prepares the node's handler under contract while the node lives and its context runs: the way to change the geometry of a running node (a new block_max after the output device changed). The render callback is held off first: from its next quantum it outputs silence and leaves the handler alone, and this call waits (at most 5000 ms, on the main thread; the callback never waits) until the quantum in flight returned; then anira_handler_prepare's work runs, the node's state that depends on the prepare is rebuilt off the audio thread (the handler's empty tensors; its Static inputs are pushed again at the next quantum), and the callback resumes. The quanta in between are silence. anira_handler_prepare itself refuses while a node streams through the handler. Nothing allocates on the audio thread."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for an unknown node or a NULL contract; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the render quantum (the handler untouched); ANIRA_ERROR_INVALID_STATE when the render callback did not return within the bound (the handler untouched); otherwise anira_handler_prepare's statuses, after which a failed prepare leaves the handler unprepared and the node silent until a prepare succeeds."
       - kind: function
+        name: anira_em_audio_node_hold
+        returns: anira_status
+        params:
+          - {type: uint32_t, name: node, doc: "A node of anira_em_audio_node_create."}
+          - {type: int32_t, name: held, doc: "Nonzero holds the node, 0 releases it."}
+          - {type: anira_error*, name: err, doc: "Nullable."}
+        thread: main-thread
+        status: promised
+        since: "0.2"
+        doc: "Holds the node's render callback off, or releases it: from its next quantum a held node outputs silence and leaves its handler alone (nothing pushed, nothing pulled, no inference started), as anira_em_audio_node_prepare holds it while it re-prepares; released, it streams on from where it was held. For a quiet audio thread while the page measures the context's render geometry. Does not wait for the quantum in flight. A hold and a re-prepare do not release each other's hold."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node."
+      - kind: function
         name: anira_em_audio_node_destroy
         returns: void
         params:

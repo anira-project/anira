@@ -1,8 +1,9 @@
-// The render geometry (src/renderGeometry.ts): the run detector of the probe on synthetic
-// timestamps, and what measureRenderGeometry reads of a context without measuring.
+// The render geometry (src/renderGeometry.ts): the probe's run detector and its early stop on
+// synthetic timestamps, and what measureRenderGeometry decides without measuring.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { longestRun, measureRenderGeometry } from '../src/renderGeometry'
+import type { AniraAudioNode } from '../src/AudioNode'
+import { evenlyPaced, longestRun, measureRenderGeometry } from '../src/renderGeometry'
 
 const RATE = 48000
 
@@ -118,9 +119,44 @@ test('a loaded audio thread: the runs stay whole, never shorter than the callbac
 
 test('callbacks of a size that is no multiple of the quantum: the largest run', () => {
   const quantumMs = (128 / RATE) * 1000
-  // 480 frames (10 ms) per callback: 4, 4, 4, 3 quanta; 441 frames: 3 or 4 quanta (CI).
+  // 480 frames (10 ms) per callback: 4, 4, 4, 3 quanta; 441 frames: 3 or 4 quanta (CI);
+  // 192 frames (4 ms): 2 or 1.
   assert.equal(longestRun(loaded([4, 4, 4, 3], 10, 0.05, 40), quantumMs), 4)
   assert.equal(longestRun(loaded([4, 3, 4, 3, 3], 9.1875, 0.3, 40), quantumMs), 4)
+  assert.equal(longestRun(loaded([2, 1], 4, 0.05, 80), quantumMs), 2)
+  // A quantum of 2048 over a callback of 1024: one call every second callback, evenly.
+  const large = (2048 / RATE) * 1000
+  assert.equal(longestRun(loaded([1], large, 0.05, 12), large), 1)
+})
+
+test('the early stop: evenly paced calls, one quantum per callback, within about 50 ms', () => {
+  const quantumMs = (128 / RATE) * 1000
+  const paced = loaded([1], quantumMs, 0.05, 200)
+  // The first call at which the probe stops: after 50 ms of evenly paced calls.
+  const stop = Array.from(paced, (_, i) => i).find((i) =>
+    evenlyPaced(paced, quantumMs, i + 1)
+  )
+  assert.ok(
+    stop !== undefined && paced[stop] - paced[0] >= 50 && paced[stop] - paced[0] < 60
+  )
+  // A quantum larger than the callback: 4 gaps of 42.7 ms.
+  const large = (2048 / RATE) * 1000
+  assert.ok(evenlyPaced(loaded([1], large, 0.05, 5), large))
+  assert.ok(!evenlyPaced(loaded([1], large, 0.05, 4), large), 'three gaps are too few')
+  // Runs never stop it, loaded or not, nor callbacks of a size that is no multiple of the
+  // quantum; nor do evenly paced calls just after a run.
+  const prefixes = (times: number[]) =>
+    times.some((_, i) => evenlyPaced(times, quantumMs, i + 1))
+  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 0.05, 20)))
+  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 2.0, 20)))
+  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 0.5, 20, 16, 8)))
+  assert.ok(!prefixes(loaded([4, 3, 4, 3, 3], 9.1875, 0.3, 60)))
+  assert.ok(!prefixes(loaded([2, 1], 4, 0.05, 80)))
+  const after = [
+    ...loaded([16], 16 * quantumMs, 0.05, 1),
+    ...loaded([1], quantumMs, 0.05, 30),
+  ]
+  assert.ok(!evenlyPaced(after, quantumMs, 20))
 })
 
 test('an evenly paced context late once: one quantum, or the quanta it caught up', () => {
@@ -130,37 +166,47 @@ test('an evenly paced context late once: one quantum, or the quanta it caught up
   assert.equal(longestRun(loaded([1], quantumMs, 0.05, 200, 97, 8), quantumMs), 4)
 })
 
-test('measureRenderGeometry reads what it can without measuring', async () => {
-  const offline = { sampleRate: RATE } as unknown as BaseAudioContext
-  assert.deepEqual(await measureRenderGeometry(offline), { quantum: 128, burst: 128 })
-  const chromium = {
-    sampleRate: RATE,
-    state: 'running',
-    baseLatency: 2048 / RATE,
-  } as unknown as BaseAudioContext
-  assert.deepEqual(await measureRenderGeometry(chromium), { quantum: 128, burst: 2048 })
-  // renderQuantumSize honoured; a burst reported in frames rounds up to whole quanta.
-  const sized = {
-    sampleRate: 44100,
-    state: 'running',
-    baseLatency: 0.01,
-    renderQuantumSize: 256,
-  } as unknown as BaseAudioContext
-  assert.deepEqual(await measureRenderGeometry(sized), { quantum: 256, burst: 512 })
-  // renderSizeHint "hardware": the quantum is the device buffer, the burst one quantum.
-  const hardware = {
-    sampleRate: RATE,
-    state: 'running',
-    baseLatency: 2048 / RATE,
-    renderQuantumSize: 2048,
-  } as unknown as BaseAudioContext
-  assert.deepEqual(await measureRenderGeometry(hardware), { quantum: 2048, burst: 2048 })
+test("measureRenderGeometry: the quantum is the context's, an offline burst one quantum", async () => {
+  // An OfflineAudioContext renders quantum by quantum: nothing to measure.
+  const offline = (renderQuantumSize?: number) =>
+    ({
+      sampleRate: RATE,
+      renderQuantumSize,
+      startRendering: () => {},
+    }) as unknown as BaseAudioContext
+  assert.deepEqual(await measureRenderGeometry(offline()), { quantum: 128, burst: 128 })
+  assert.deepEqual(await measureRenderGeometry(offline(256)), {
+    quantum: 256,
+    burst: 256,
+  })
+  // renderSizeHint "hardware" before the context runs: no size yet.
+  await assert.rejects(measureRenderGeometry(offline(0)), /no render quantum size yet/)
 })
 
 test('measuring needs a running context', async () => {
-  const gecko = { sampleRate: RATE, state: 'suspended', baseLatency: 0 }
+  const live = { sampleRate: RATE, state: 'suspended' }
   await assert.rejects(
-    measureRenderGeometry(gecko as unknown as BaseAudioContext),
+    measureRenderGeometry(live as unknown as BaseAudioContext),
     /needs a running context/
   )
+})
+
+test('the nodes held while measuring are released whatever happens', async () => {
+  const calls: string[] = []
+  const node = (name: string) =>
+    ({
+      hold: (held: boolean) => calls.push(`${name} ${held}`),
+    }) as unknown as AniraAudioNode
+  // A running context whose probe module fails to load: the measurement fails, the nodes are
+  // released all the same.
+  const failing = {
+    sampleRate: RATE,
+    state: 'running',
+    audioWorklet: { addModule: () => Promise.reject(new Error('no module')) },
+  } as unknown as BaseAudioContext
+  await assert.rejects(
+    measureRenderGeometry(failing, { hold: [node('a'), node('b')] }),
+    /no module/
+  )
+  assert.deepEqual(calls, ['a true', 'b true', 'a false', 'b false'])
 })

@@ -66,6 +66,13 @@ export type AniraAudioNode = {
    * through the handler (`anira_em_audio_node_prepare`).
    */
   prepare(contract: Contract): void
+  /**
+   * Hold the node (true) or release it (false): a held node outputs silence and leaves its
+   * handler alone (nothing pushed or pulled, no inference started); released, it streams on from
+   * where it was held. `measureRenderGeometry` holds the nodes of its `hold` option while it
+   * measures, so the audio thread is quiet (`anira_em_audio_node_hold`).
+   */
+  hold(held: boolean): void
   /** Stop the node calling the handler and release it (`anira_em_audio_node_destroy`). */
   destroy(): void
 }
@@ -205,6 +212,9 @@ export const createAudioNode = async (
       },
       prepare(contract) {
         abi.anira_em_audio_node_prepare(handle, contract.ptr)
+      },
+      hold(held) {
+        abi.anira_em_audio_node_hold(handle, held ? 1 : 0)
       },
       destroy() {
         abi.anira_em_audio_node_destroy(handle)

@@ -135,10 +135,10 @@ export async function createGainExample(
     dry.delayTime.value = handler.latency() / audioContext.sampleRate
   }
   applyLatency()
-  // After an output-device change: measure again (the probe; Chromium keeps the old device's
-  // baseLatency) and re-prepare the running node, then re-read the latency.
+  // After an output-device change: measure again with the node held (its rendering would hide
+  // the callback's run) and re-prepare the running node, then re-read the latency.
   const remeasure = async () => {
-    const g = await measureRenderGeometry(audioContext, { probe: true })
+    const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
     contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract)
     applyLatency()
@@ -167,6 +167,17 @@ export async function createGainExample(
   }
 }
 
+// The page's AudioContext: renderSizeHint "hardware" where the browser has render sizes (Web
+// Audio API, Render Quantum Sizes; renderQuantumSize is their feature test), so the context
+// renders at the size the browser deems best for the device. Elsewhere one quantum is 128 frames.
+const contextOptions = (): AudioContextOptions => {
+  const options: AudioContextOptions & { renderSizeHint?: 'hardware' } = {
+    sampleRate: 48000,
+  }
+  if ('renderQuantumSize' in AudioContext.prototype) options.renderSizeHint = 'hardware'
+  return options
+}
+
 /** The page: a tone through the example, its gain on a slider, started and stopped by a button. */
 export function mountGainExample(
   button: HTMLButtonElement,
@@ -181,7 +192,7 @@ export function mountGainExample(
       running = null
       button.textContent = 'Start'
     } else {
-      const audioContext = new AudioContext({ sampleRate: 48000 })
+      const audioContext = new AudioContext(contextOptions())
       await audioContext.resume() // the burst is measured on a running context
       const example = await createGainExample(audioContext, {
         gain: Number(slider.value),

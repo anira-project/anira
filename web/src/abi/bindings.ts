@@ -252,6 +252,7 @@ export interface AbiModule {
   _anira_em_audio_node_create(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number, _8: number, _9: number, _10: number, _11: number, _12: number, _13: number, _14: number): number
   _anira_em_audio_node_set_static_input(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_audio_node_prepare(_0: number, _1: number, _2: number): number
+  _anira_em_audio_node_hold(_0: number, _1: number, _2: number): number
   _anira_em_audio_node_destroy(_0: number): void
   _malloc(bytes: number): number
   _free(ptr: number): void
@@ -6936,6 +6937,36 @@ export class AniraBindings {
         m,
         m._anira_em_audio_node_prepare(node, contract, err),
         'anira_em_audio_node_prepare',
+        err
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
+   * Holds the node's render callback off, or releases it: from its next quantum a held
+   * node outputs silence and leaves its handler alone (nothing pushed, nothing pulled, no
+   * inference started), as anira_em_audio_node_prepare holds it while it re-prepares;
+   * released, it streams on from where it was held. For a quiet audio thread while the
+   * page measures the context's render geometry. Does not wait for the quantum in flight.
+   * A hold and a re-prepare do not release each other's hold.
+   *
+   * @param node A node of anira_em_audio_node_create.
+   * @param held Nonzero holds the node, 0 releases it.
+   * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node. A failed
+   *   status throws an AniraError with the entry's message.
+   * Thread: [main-thread]
+   */
+  anira_em_audio_node_hold(node: number, held: number): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const err = stackError(m)
+      return checkStatus(
+        m,
+        m._anira_em_audio_node_hold(node, held, err),
+        'anira_em_audio_node_hold',
         err
       )
     } finally {

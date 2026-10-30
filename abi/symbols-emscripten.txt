@@ -1,5 +1,6 @@
 anira_em_audio_node_create
 anira_em_audio_node_destroy
+anira_em_audio_node_hold
 anira_em_audio_node_prepare
 anira_em_audio_node_set_static_input
 anira_em_context_config_set_worker_module

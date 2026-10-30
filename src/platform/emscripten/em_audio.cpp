@@ -101,12 +101,17 @@ struct NodeSlot {
     std::atomic<uint32_t> m_generation{0};
     std::atomic<uint32_t> m_open{0};
     std::atomic<uint32_t> m_busy{0};
-    /// 1 while anira_em_audio_node_prepare re-prepares the handler: the callback outputs silence
-    /// and leaves the handler alone (the same handshake as the destroy's, with m_open kept).
+    /// Nonzero while the node is held: the callback outputs silence and leaves the handler alone.
+    /// k_held_prepare while anira_em_audio_node_prepare re-prepares the handler (the same
+    /// handshake as the destroy's, with m_open kept), k_held_page while the page holds it
+    /// (anira_em_audio_node_hold); neither releases the other.
     std::atomic<uint32_t> m_held{0};
     NodeState* m_state = nullptr;  ///< written on the main thread while closed
     EMSCRIPTEN_AUDIO_WORKLET_NODE_T m_node = 0;
 };
+
+constexpr uint32_t k_held_prepare = 1;
+constexpr uint32_t k_held_page = 2;
 
 std::array<NodeSlot, k_max_nodes> s_nodes;
 
@@ -168,7 +173,7 @@ bool render(int num_inputs,
         return false;  // destroyed: the browser may let the node go
     }
     if (slot.m_held.load(std::memory_order::seq_cst) != 0) {
-        // Re-preparing on the main thread: silence, the handler untouched.
+        // Held (re-preparing on the main thread, or by the page): silence, the handler untouched.
         slot.m_busy.store(0, std::memory_order::seq_cst);
         silence(num_outputs, outputs);
         return true;
@@ -842,9 +847,9 @@ anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
                        block_max);
     // Hold the callback off: from its next quantum it outputs silence; wait until the one in
     // flight returns. Then nothing on the audio thread touches the handler or this state.
-    slot.m_held.store(1, std::memory_order::seq_cst);
+    slot.m_held.fetch_or(k_held_prepare, std::memory_order::seq_cst);
     if (!wait_until_idle(slot, 5000.0)) {
-        slot.m_held.store(0, std::memory_order::seq_cst);
+        slot.m_held.fetch_and(~k_held_prepare, std::memory_order::seq_cst);
         ANIRA_CAPI_REQUIRE(false,
                            err,
                            ANIRA_ERROR_INVALID_STATE,
@@ -856,7 +861,7 @@ anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
     } catch (...) {
         // Unprepared: the callback's process calls fail into silence until a prepare succeeds.
         copy_empty_tensors(state);
-        slot.m_held.store(0, std::memory_order::seq_cst);
+        slot.m_held.fetch_and(~k_held_prepare, std::memory_order::seq_cst);
         throw;
     }
     // What depends on the prepare, rebuilt off the audio thread: the handler's empty tensors,
@@ -866,8 +871,25 @@ anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
     for (auto& block : state.m_blocks) {
         if (block->m_sequence.load(std::memory_order::acquire) != 0) { block->m_pushed = ~0U; }
     }
-    slot.m_held.store(0, std::memory_order::seq_cst);
+    slot.m_held.fetch_and(~k_held_prepare, std::memory_order::seq_cst);
     return ANIRA_OK;
+} catch (...) { return translate_exception(err, __func__); }
+
+anira_status ANIRA_CALL anira_em_audio_node_hold(uint32_t node,
+                                                 int32_t held,
+                                                 anira_error* err) ANIRA_NOEXCEPT try {
+    for (NodeSlot& s : s_nodes) {
+        if (s.m_node != static_cast<int>(node) || s.m_open.load() == 0 || s.m_state == nullptr) {
+            continue;
+        }
+        if (held != 0) {
+            s.m_held.fetch_or(k_held_page, std::memory_order::seq_cst);
+        } else {
+            s.m_held.fetch_and(~k_held_page, std::memory_order::seq_cst);
+        }
+        return ANIRA_OK;
+    }
+    ANIRA_CAPI_REQUIRE(false, err, ANIRA_ERROR_INVALID_ARGUMENT, "audio node: no node %u", node);
 } catch (...) { return translate_exception(err, __func__); }
 
 void ANIRA_CALL anira_em_audio_node_destroy(uint32_t node) ANIRA_NOEXCEPT try {

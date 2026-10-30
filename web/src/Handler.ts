@@ -2,7 +2,6 @@ import type { AniraBindings } from './abi/bindings'
 import { ANIRA_DTYPE_F32 } from './abi/enums'
 import { anira_tensor } from './abi/layout'
 import { createAudioNode, type AniraAudioNode, type AudioNodeOptions } from './AudioNode'
-import { reportedBurst } from './renderGeometry'
 import type { Context } from './Context'
 import type { Contract } from './Contract'
 import type { Pipeline } from './Pipeline'
@@ -16,8 +15,6 @@ export class Handler {
   readonly abi: AniraBindings
   /** The `anira_handler*` the raw entries take. */
   readonly ptr: number
-  /** The `block_max` of the Hard contract of the last `prepare`; undefined before one. */
-  blockMax: number | undefined
 
   private constructor(abi: AniraBindings, ptr: number) {
     this.abi = abi
@@ -39,11 +36,6 @@ export class Handler {
    */
   prepare(contract: Contract): this {
     this.abi.anira_handler_prepare(this.ptr, contract.ptr)
-    try {
-      this.blockMax = this.abi.anira_contract_hard_geometry(contract.ptr).block_max
-    } catch {
-      this.blockMax = undefined // not a Hard contract: no audio node streams through it
-    }
     return this
   }
 
@@ -75,30 +67,15 @@ export class Handler {
   }
 
   /**
-   * A Wasm Audio Worklet node that streams through this handler (`createAudioNode`). Warns when
-   * the prepared `block_max` is below the burst the context reports (Chromium's `baseLatency`;
-   * `measureRenderGeometry` measures it everywhere): such a handler misses quanta live.
+   * A Wasm Audio Worklet node that streams through this handler (`createAudioNode`). Prepare the
+   * handler with the geometry `measureRenderGeometry` measures on the context first: a handler
+   * whose `block_max` is below the context's burst misses quanta live.
    */
-  async createAudioNode(
+  createAudioNode(
     audioContext: BaseAudioContext,
     options: AudioNodeOptions = {}
   ): Promise<AniraAudioNode> {
-    const burst = reportedBurst(audioContext)
-    if (burst !== null && this.blockMax !== undefined && this.blockMax < burst) {
-      console.warn(
-        `anira: the handler is prepared for blocks up to ${this.blockMax} frames, but this ` +
-          `context renders bursts of ${burst} frames: inferences cannot complete within a ` +
-          `burst and quanta will miss. Prepare with the geometry of measureRenderGeometry().`
-      )
-    }
-    const node = await createAudioNode(this, audioContext, this.ptr, options)
-    const prepare = node.prepare.bind(node)
-    // The node's re-prepare is this handler's prepare: keep the block range it was given.
-    node.prepare = (contract: Contract) => {
-      prepare(contract)
-      this.blockMax = this.abi.anira_contract_hard_geometry(contract.ptr).block_max
-    }
-    return node
+    return createAudioNode(this, audioContext, this.ptr, options)
   }
 
   destroy(): void {

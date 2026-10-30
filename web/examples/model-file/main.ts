@@ -112,16 +112,17 @@ export async function createModelFileExample(
   // [latency]
 
   // [device]
-  // After an output-device change the burst may differ (Chromium keeps the baseLatency of the
-  // device the context was created on, so measure with the probe): re-prepare the running node
-  // with the new geometry and re-read the latency for the dry path.
+  // After an output-device change the burst may differ (the quantum does not: it is the
+  // context's for life): measure again with the node held, so its rendering does not hide the
+  // callback's run, re-prepare the running node with the new geometry and re-read the latency
+  // for the dry path.
   const applyGeometry = (g: RenderGeometry) => {
     contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract) // holds the node off (silence) while the handler re-prepares
     applyLatency()
   }
   const remeasure = async () =>
-    applyGeometry(await measureRenderGeometry(audioContext, { probe: true }))
+    applyGeometry(await measureRenderGeometry(audioContext, { hold: [audioNode] }))
   // [device]
 
   // [teardown]
@@ -149,6 +150,19 @@ export async function createModelFileExample(
   }
 }
 
+// [context-options]
+// The page's AudioContext: renderSizeHint "hardware" where the browser has render sizes (Web
+// Audio API, Render Quantum Sizes; renderQuantumSize is their feature test), so the context
+// renders at the size the browser deems best for the device. Elsewhere one quantum is 128 frames.
+const contextOptions = (): AudioContextOptions => {
+  const options: AudioContextOptions & { renderSizeHint?: 'hardware' } = {
+    sampleRate: 48000,
+  }
+  if ('renderQuantumSize' in AudioContext.prototype) options.renderSizeHint = 'hardware'
+  return options
+}
+// [context-options]
+
 /** The page: a tone through the model, its gain on a slider, started and stopped by a button. */
 export function mountModelFileExample(
   button: HTMLButtonElement,
@@ -164,7 +178,7 @@ export function mountModelFileExample(
       running = null
       button.textContent = 'Start'
     } else {
-      const audioContext = new AudioContext({ sampleRate: 48000 })
+      const audioContext = new AudioContext(contextOptions())
       await audioContext.resume() // the burst is measured on a running context
       const example = await createModelFileExample(audioContext, {
         modelsUrl,

@@ -32,37 +32,43 @@ The handler is prepared under a Hard contract whose block range is the context's
 geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
 
 ``quantum``, the smallest block
-   The frames of one ``process()`` call: the context's ``renderQuantumSize`` where the browser has
-   it, else 128. A context's render size is set at construction (``renderSizeHint``: an integer
-   "between 1 sample frame and 6 times the context sample rate, inclusive", Web Audio API,
-   *Supported Render Quantum Sizes*; ``"hardware"`` lets the browser pick the device's size) and
-   only its effect, ``renderQuantumSize``, is observable.
+   The frames of every ``process()`` call: the context's ``renderQuantumSize``, else 128 where
+   the browser has no such attribute (Firefox and Safari today). It is fixed for the context's
+   life, an output-device change (``setSinkId``) included: "the size of each block remaining
+   constant for the lifetime of a BaseAudioContext" (Web Audio API, `Rendering an Audio Graph
+   <https://webaudio.github.io/web-audio-api/#rendering-loop>`_). A context's size is chosen at
+   construction (``renderSizeHint``: an integer "between 1 sample frame and 6 times the context
+   sample rate, inclusive", `Supported Render Quantum Sizes
+   <https://webaudio.github.io/web-audio-api/#render-quantum-sizes>`_, or ``"hardware"``, the size
+   the browser deems best for the current configuration). A ``"hardware"`` context reports 0
+   until it runs, and ``measureRenderGeometry`` refuses it then.
 ``burst``, the largest block
-   The frames the context renders back to back. A live ``AudioContext`` renders each device
-   callback as a run of quanta with no time between them (2048 frames, 16 quanta, in headless
-   Chromium; the device buffer on real hardware). An inference started in a run cannot complete
-   before the run's next quantum, so a handler prepared for one quantum alone misses most quanta
-   live; with ``block_max`` the burst, the latency the handler reports covers the run and every
-   quantum is served. Chromium reports the burst as ``baseLatency`` (``audio_context.cc``: the
-   larger of the destination's frames per buffer and the render quantum, over the rate, fixed
-   when the context is constructed), which ``measureRenderGeometry`` returns at once, rounded up
-   to whole quanta: a device buffer need not be a multiple of the quantum (441 frames, 9.1875 ms
-   at 48 kHz, on a CI runner, which renders 3 or 4 quanta per callback: a burst of 512). Gecko's
-   ``baseLatency`` is 0 by its definition (no buffering between the graph and the audio
-   subsystem), and its ``outputLatency`` is the output's delay, not the callback's size; there a
-   probe ``AudioWorklet`` watches ``process()`` calls for about 300 ms (after a 100 ms lead-in)
-   and takes the longest run of back-to-back calls, a run ending where a gap reaches halfway from
-   one quantum's duration to the longest gap between callbacks: on a loaded audio thread (a
-   model's JavaScript stage, a preempted thread) some calls inside a run are late by
-   milliseconds, and only one late by about half the time between callbacks splits its run. Its
-   errors lean long: two callbacks merge into one run where the gap between them is short (640
-   frames against the 512 above, on a loaded CI runner), which only sizes the handler larger. It
-   reports short only where a late call splits every callback it watches, or where the graph
-   renders so slowly that no gap between callbacks is left (the context then barely keeps up).
-   The probe needs a running context, so ``await context.resume()`` first. An
-   ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum.
+   The frames the context renders back to back. A live ``AudioContext`` renders each callback
+   of the audio system as a run of quanta with no time between them (2048 frames, 16 quanta, in
+   headless Chromium; the device buffer on real hardware). An inference started in a run cannot
+   complete before the run's next quantum, so a handler prepared for one quantum alone misses
+   most quanta live; with ``block_max`` the burst, the latency the handler reports covers the run
+   and every quantum is served. The callback's size is never exposed: the spec calls it "a
+   varying number of sample-frames" (`Rendering an Audio Graph
+   <https://webaudio.github.io/web-audio-api/#rendering-loop>`_), and no attribute gives it across
+   browsers (Chromium's ``baseLatency`` is its callback buffer and keeps the first device's after
+   ``setSinkId``, Safari's is one quantum, Firefox's is 0). So the burst is always measured: a
+   probe ``AudioWorklet`` watches ``process()`` calls and takes the longest run of back-to-back
+   calls: "A running AudioContext can be used to infer the user's audio hardware buffer size via
+   AudioWorklet timing" (`Privacy Considerations
+   <https://webaudio.github.io/web-audio-api/#privacy-considerations>`_, on the ``"hardware"``
+   render size). A run ends where a gap reaches halfway from one quantum's duration to the longest gap
+   between callbacks, so a call late by a few milliseconds inside a run does not split it. The
+   burst is a whole number of quanta: a callback whose size is no multiple of the quantum renders
+   a varying number of them, and the largest counts (441 frames, 9.1875 ms at 48 kHz on a CI
+   runner: 3 or 4 quanta of 128, a burst of 512), and a quantum at least the callback's size is
+   rendered one call per callback or fewer, a burst of one quantum. An ``OfflineAudioContext``
+   renders quantum by quantum: its burst is one quantum, nothing to measure.
 
-The geometry is explicit: the page measures it and declares it.
+The probe needs a running context, so ``await context.resume()`` first. It costs time once,
+after the page's start (its Play click): about 50 ms where the calls are evenly paced (one
+quantum per callback, which it then reports), else 400 ms (a 100 ms lead-in, then a 300 ms
+window). The geometry is explicit: the page measures it and declares it.
 
 .. literalinclude:: ../../../web/examples/model-file/main.ts
    :language: ts
@@ -78,14 +84,22 @@ The handler's latency then covers the burst. A dry path beside the model's waits
    :end-before: // [latency]
    :dedent:
 
-:js:meth:`Handler.createAudioNode` warns on the console when the prepared ``block_max`` is
-below the burst the context reports (Chromium); nothing re-prepares on its own.
+Nothing re-prepares on its own, and :js:meth:`Handler.createAudioNode` cannot tell a block range
+too small for the context: measure first.
 
 .. tip::
-   Where the browser takes it, ``new AudioContext({ renderSizeHint: 'hardware' })`` renders one
-   quantum of the device's size per callback, evenly spaced: the burst is one quantum
-   (``block_min == block_max``), the lowest-latency setup. Feature-detect it
-   (``context.renderQuantumSize > 0``), never assume it.
+   Create the context with ``renderSizeHint: 'hardware'`` where the browser has render sizes
+   (feature-detect: ``'renderQuantumSize' in AudioContext.prototype``): it renders at the size
+   the browser deems best for the device instead of a fixed 128 (Chromium chooses 128; Firefox's
+   patches for it, bug 2034508, the audio system's smallest callback). A quantum of the
+   callback's size is one ``process()`` call per callback, a burst of one quantum
+   (``block_min == block_max``), and the probe reports it within about 50 ms.
+
+   .. literalinclude:: ../../../web/examples/model-file/main.ts
+      :language: ts
+      :start-after: // [context-options]
+      :end-before: // [context-options]
+      :dedent:
 
 Changing the Geometry of a Running Node
 ---------------------------------------
@@ -100,9 +114,20 @@ In headless Chromium the hold lasts about 2 ms, under one burst. Read the handle
 again afterwards.
 
 Device changes
-   Chromium keeps the ``baseLatency`` of the device the context was created on, so after an
-   output-device change the page measures with the probe, declares the new geometry and
-   re-prepares through the node:
+   An output-device change may change the burst (the callback's size), never the quantum. The
+   page measures again with its streaming nodes held (``hold``: each outputs silence and leaves
+   its handler alone while the probe watches, then streams on, whatever happens), declares the
+   new geometry and re-prepares through the node:
+
+   .. code-block:: ts
+
+      const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
+      contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
+      audioNode.prepare(contract)
+
+   A node's rendering on the audio thread hides the callback's runs from the probe: in headless
+   Chromium a node whose JavaScript stage spins 8 ms per inference made the probe measure 512
+   frames of the device's 2048; held, it measured 2048. The model-file example does the same:
 
    .. literalinclude:: ../../../web/examples/model-file/main.ts
       :language: ts

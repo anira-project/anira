@@ -452,6 +452,25 @@ ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
+ * @brief Holds the node's render callback off, or releases it: from its next quantum a held
+ * node outputs silence and leaves its handler alone (nothing pushed, nothing pulled, no
+ * inference started), as anira_em_audio_node_prepare holds it while it re-prepares;
+ * released, it streams on from where it was held. For a quiet audio thread while the
+ * page measures the context's render geometry. Does not wait for the quantum in flight.
+ * A hold and a re-prepare do not release each other's hold.
+ * @param node A node of anira_em_audio_node_create.
+ * @param held Nonzero holds the node, 0 releases it.
+ * @param err Nullable.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node.
+ * @par Thread contract
+ * [main-thread]
+ * @since ABI 0.2
+ */
+ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_hold(uint32_t node,
+                                                           int32_t held,
+                                                           anira_error* err) ANIRA_NOEXCEPT;
+
+/**
  * @brief Stops the node's render callback calling into the handler (a quantum inside it
  * finishes first, at most its wait bound), disconnects the node and releases its handle;
  * the callback outputs silence and lets the browser drop the node. Destroy the nodes

@@ -10813,6 +10813,33 @@
         },
         {
           "kind": "function",
+          "name": "anira_em_audio_node_hold",
+          "returns": "anira_status",
+          "params": [
+            {
+              "type": "uint32_t",
+              "name": "node",
+              "doc": "A node of anira_em_audio_node_create."
+            },
+            {
+              "type": "int32_t",
+              "name": "held",
+              "doc": "Nonzero holds the node, 0 releases it."
+            },
+            {
+              "type": "anira_error*",
+              "name": "err",
+              "doc": "Nullable."
+            }
+          ],
+          "thread": "main-thread",
+          "status": "promised",
+          "since": "0.2",
+          "doc": "Holds the node's render callback off, or releases it: from its next quantum a held node outputs silence and leaves its handler alone (nothing pushed, nothing pulled, no inference started), as anira_em_audio_node_prepare holds it while it re-prepares; released, it streams on from where it was held. For a quiet audio thread while the page measures the context's render geometry. Does not wait for the quantum in flight. A hold and a re-prepare do not release each other's hold.",
+          "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown node."
+        },
+        {
+          "kind": "function",
           "name": "anira_em_audio_node_destroy",
           "returns": "void",
           "params": [
