@@ -65,17 +65,14 @@
 // 8, where the ring kept the tail or the request missed) were rewritten within the block, and
 // their transcripts recorded again, once, with that change: every transcript of the golden file,
 // each up to its first rewritten call byte for byte the earlier recording (the block-size
-// scenario declares two hops, so its transcripts differ from the first line). The 2.x copy
-// path (anira::InferenceManager through the 2.x float face, the PlanarFloatAdapter and the
-// NonStreamableRouter that anira_test::V2Handler owns) takes any count and is untouched, so it
-// is the referee of the rewritten transcripts: V2Rig below drives every script call for call
-// through that face, and AbiHandlerCopyOracle.MatchesTheV2CopyPath compares what both paths
-// observed (see "The 2.x twin").
+// scenario declares two hops, so its transcripts differ from the first line). The copy path
+// below the C entries (the tensor stems of the handler's own anira::InferenceManager, through
+// the 2.x float face: the PlanarFloatAdapter and the NonStreamableRouter) takes any count and
+// is untouched by the block rule, so it is the referee of the rewritten transcripts:
+// ManagerTwin below drives every script call for call through that face, and
+// AbiHandlerCopyOracle.MatchesTheManagerCopyPath compares what both observed (see "The manager
+// twin").
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
@@ -83,8 +80,6 @@
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -94,7 +89,6 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "../support/NonStreamableRouter.h"
@@ -109,64 +103,17 @@ namespace {
 
 namespace oracle = anira_test::oracle;
 using anira::ModelConfig;
-using anira::TensorSpec;
 
-constexpr uint32_t k_hop = 8;      // the window of every streamed tensor, and the contract's block
-constexpr double k_rate = 800.0;   // a hop lasts 10 ms, the explicit budget below is 1 ms
-constexpr size_t k_unset = 77777;  // what a delivered count holds before its call
+constexpr uint32_t k_hop = oracle::k_hop;  // the window of every streamed tensor, the block
+constexpr size_t k_unset = 77777;          // what a delivered count holds before its call
 /// The block of the block-size scenario: two hops, so that a block may be above the hop.
 constexpr uint32_t k_two_hops = 2 * k_hop;
 
-// ---- the models --------------------------------------------------------------------------------
-// Engine-free: the one model path is the custom row, and its engine is the gate added to the
-// pipeline, which runs the pass-through (tensor i of the output is tensor i of the input).
+using oracle::Model;
 
-TensorSpec streamed(std::string_view name, int64_t channels) {
-    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
-    spec.axis(0, ANIRA_AXIS_BATCH, 1)
-        .axis(1, ANIRA_AXIS_CHANNEL, channels)
-        .axis(2, ANIRA_AXIS_TIME, k_hop)
-        .window(k_hop, k_hop, 0);
-    return spec;
-}
-
-TensorSpec static_values(std::string_view name, int64_t count) {
-    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
-    spec.axis(0, ANIRA_AXIS_ANY, 1).axis(1, ANIRA_AXIS_ANY, count);
-    return spec;
-}
-
-/// Two channels in, two channels out.
-ModelConfig stereo_model() {
-    ModelConfig model;
-    model.add_model_path(anira_test::k_custom, "custom-processor");
-    model.input(streamed("in", 2));
-    model.output(streamed("out", 2));
-    model.max_instances(2);
-    return model;
-}
-
-/// A three-channel stream and three Static values on either side.
-ModelConfig multi_model() {
-    ModelConfig model;
-    model.add_model_path(anira_test::k_custom, "custom-processor");
-    model.input(streamed("in", 3));
-    model.input(static_values("values_in", 3));
-    model.output(streamed("out", 3));
-    model.output(static_values("values_out", 3));
-    model.max_instances(2);
-    return model;
-}
-
-/// Four Static values in, one streamed channel out: the anchor is the output.
-ModelConfig generator_model() {
-    ModelConfig model;
-    model.add_model_path(anira_test::k_custom, "custom-processor");
-    model.input(static_values("param", 4));
-    model.output(streamed("out", 1));
-    model.max_instances(2);
-    return model;
-}
+// The models are those of copy_oracle.h (engine-free: the one model path is the custom row, and
+// its engine is the gate added to the pipeline, which runs the pass-through, tensor i of the
+// output being tensor i of the input), the contract its recording contract.
 
 // ---- the rig -----------------------------------------------------------------------------------
 
@@ -219,15 +166,6 @@ constexpr CallOptions k_in_place_gate_closed{.m_in_place = true,
                                              .m_settle = false,
                                              .m_wait = false};
 
-/// What the custom row's engine computes behind the gate.
-enum class Model { PassThrough, ParamRamp };
-
-/// The gate engine of a Model.
-std::unique_ptr<anira_test::GateEngine> gate_of(Model model) {
-    if (model == Model::ParamRamp) { return std::make_unique<oracle::ParamRampEngine>(); }
-    return std::make_unique<anira_test::GateEngine>();
-}
-
 /// "OK", "MISSED" or "status(<n>)". Not anira_status_string: its wording is documentation and
 /// may change.
 std::string status_text(anira_status status) {
@@ -245,44 +183,19 @@ const char* policy_name(anira_miss_policy policy) {
     }
 }
 
-/// The first line of both transcripts: what prepare left.
-std::string prepared_line(const std::vector<unsigned int>& latencies,
-                          const anira::SessionElement& session) {
-    std::string line = "latency=[";
-    for (size_t i = 0; i < latencies.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(latencies[i]);
-    }
-    line += "] send_capacity=[";
-    for (size_t i = 0; i < session.m_send_buffer.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(session.m_send_buffer[i].get_num_samples());
-    }
-    line += "] recv_capacity=[";
-    for (size_t i = 0; i < session.m_receive_buffer.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(session.m_receive_buffer[i].get_num_samples());
-    }
-    return line + "] structs=" + std::to_string(session.m_num_structs) + " " +
-           oracle::format_rings(session);
-}
-
 class HandlerRig {
 public:
-    /// Blocks of 1 to `block_max` samples: the twin of HostConfig(block_max, k_rate, true).
+    /// Blocks of 1 to `block_max` samples (oracle::recording_contract).
     HandlerRig(const ModelConfig& model,
                anira_miss_policy policy,
                Model engine = Model::PassThrough,
                uint32_t block_max = k_hop)
-        : m_gate(gate_of(engine)), m_handler(m_context, model, m_candidates, {}, m_gate->engine()) {
-        anira::ContractHandle contract =
-            anira_test::explicit_contract(block_max, k_rate, policy, 0.0, 1.0);
-        contract.hard_geometry(1, block_max, k_rate);
-        const anira_status prepared = m_handler.prepare(contract);
-        EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
-        if (prepared != ANIRA_OK) { return; }
-        anira_handler* handler = m_handler.m_handler;
+        : m_handler(model, oracle::recording_contract(policy, block_max), engine) {
+        if (!m_handler.ready()) { return; }
+        anira_handler* handler = m_handler.handler();
         m_face = std::make_unique<anira_test::FloatFace>(handler);
-        m_session = anira_test::session_of(handler);
-        if (m_session == nullptr) { return; }
-        m_gate->m_open.store(false);
+        m_session = &m_handler.session();
+        m_handler.gate().m_open.store(false);
         m_positions.assign(handler->m_num_inputs, 0);
 
         std::vector<unsigned int> latencies;
@@ -290,17 +203,14 @@ public:
         for (uint32_t i = 0; i < handler->m_num_outputs; ++i) {
             latencies.push_back(anira_handler_get_latency(handler, i));
         }
-        m_transcript.add(prepared_line(latencies, *m_session));
-        m_neutral.add(prepared_line(latencies, *m_session));
-    }
-    /// The gate opens and the handler is destroyed (which drains the in-flight work) before
-    /// the gate dies: what anira_test::DestroyFirst does for a Handler on the stack.
-    ~HandlerRig() {
-        m_gate->m_open.store(true);
-        m_handler.destroy();
+        m_transcript.add(oracle::prepared_line(latencies, *m_session));
+        m_neutral.add(oracle::prepared_line(latencies, *m_session));
     }
     HandlerRig(const HandlerRig&) = delete;
     HandlerRig& operator=(const HandlerRig&) = delete;
+    HandlerRig(HandlerRig&&) = delete;
+    HandlerRig& operator=(HandlerRig&&) = delete;
+    ~HandlerRig() = default;
 
     /// "process_f32": anira_handler_process, one slot, separate memory.
     void process(size_t num_in, size_t num_out, uint32_t slot = 0, CallOptions options = k_plain) {
@@ -326,7 +236,7 @@ public:
                                        count,
                                        ANIRA_WAIT_FOREVER)
                 : m_face->process(in.planes(), num_in, out.planes(), num_out, slot, count);
-        m_gate->m_open.store(false);
+        m_handler.gate().m_open.store(false);
         add_header(entry("process_f32", options) + " slot=" + std::to_string(slot) +
                        " in=" + std::to_string(num_in) + " out=" + std::to_string(num_out),
                    status,
@@ -357,7 +267,7 @@ public:
                                                           count,
                                                           ANIRA_WAIT_FOREVER)
                            : m_face->process_inplace(data.planes(), num_samples, slot, count);
-        m_gate->m_open.store(false);
+        m_handler.gate().m_open.store(false);
         add_header(entry("process_f32_inplace", options) + " slot=" + std::to_string(slot) +
                        " n=" + std::to_string(num_samples),
                    status,
@@ -379,7 +289,7 @@ public:
         const size_t call = ++m_calls;
         const size_t shared_length = options.m_in_place ? out_counts[0] : 0;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(config(), m_positions, in_counts, shared_length, call);
+            oracle::make_inputs(input_ports(), m_positions, in_counts, shared_length, call);
         const oracle::Snapshot inputs_before = oracle::snapshot(inputs);
         std::vector<const float* const*> in_planes;
         for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -403,7 +313,7 @@ public:
                                                                            out_planes.data(),
                                                                            out_counts.data(),
                                                                            delivered.data());
-        m_gate->m_open.store(false);
+        m_handler.gate().m_open.store(false);
         deliver_num_out(status, delivered, num_out);
         std::string what = entry("process_f32_multi", options) +
                            " in=" + oracle::format_counts(in_counts) +
@@ -426,7 +336,7 @@ public:
         if (const anira::capi::StaticSlot* store = static_input(slot); store != nullptr) {
             const anira_tensor tensor = anira_test::whole_f32(in.planes()[0], store->shape());
             const anira_status status =
-                anira_handler_set_static_input(m_handler.m_handler, slot, &tensor);
+                anira_handler_set_static_input(m_handler.handler(), slot, &tensor);
             add_header("set_static_input slot=" + std::to_string(slot), status, "", call);
             add_neutral(call, status, "static");
             EXPECT_EQ(runs_of(in), in_before) << "call " << call << ": the input was written";
@@ -449,7 +359,7 @@ public:
         const std::vector<size_t> in_counts = whole(recorded_in, /*inputs=*/true);
         const size_t call = ++m_calls;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(config(), m_positions, in_counts, 0, call);
+            oracle::make_inputs(input_ports(), m_positions, in_counts, 0, call);
         const oracle::Snapshot inputs_before = oracle::snapshot(inputs);
         std::vector<const float* const*> in_planes;
         for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -473,7 +383,7 @@ public:
             oracle::SlotBlock out(1, store->num_elements());
             const anira_tensor tensor = anira_test::whole_f32(out.planes()[0], store->shape());
             const anira_status status =
-                anira_handler_get_static_output(m_handler.m_handler, slot, &tensor);
+                anira_handler_get_static_output(m_handler.handler(), slot, &tensor);
             add_header("get_static_output slot=" + std::to_string(slot), status, "", call);
             add_neutral(call, status, "static");
             add_block("out" + std::to_string(slot), out, store->num_elements(), false);
@@ -489,7 +399,7 @@ public:
             options.m_wait
                 ? m_face->pop_data_wait(out.planes(), num_out, slot, count, ANIRA_WAIT_FOREVER)
                 : m_face->pop_data(out.planes(), num_out, slot, count);
-        m_gate->m_open.store(false);
+        m_handler.gate().m_open.store(false);
         add_header(entry("pop_data_f32", options) + " slot=" + std::to_string(slot) +
                        " out=" + std::to_string(num_out),
                    status,
@@ -519,7 +429,7 @@ public:
                                               delivered.data(),
                                               ANIRA_WAIT_FOREVER)
                 : m_face->pop_data_multi(out_planes.data(), out_counts.data(), delivered.data());
-        m_gate->m_open.store(false);
+        m_handler.gate().m_open.store(false);
         deliver_num_out(status, delivered, num_out);
         std::string what =
             entry("pop_data_f32_multi", options) + " out=" + oracle::format_counts(out_counts);
@@ -532,7 +442,7 @@ public:
 
     void reset() {
         if (m_session == nullptr) { return; }
-        anira_handler_reset(m_handler.m_handler);
+        anira_handler_reset(m_handler.handler());
         const std::string line =
             "#" + std::to_string(++m_calls) + " reset " + oracle::format_rings(*m_session);
         m_transcript.add(line);
@@ -542,22 +452,24 @@ public:
     /// Opens the gate until every submitted inference is collected.
     void settle() {
         if (m_session == nullptr) { return; }
-        oracle::settle(*m_gate, *m_session, [this] { anira_test::available(m_handler.m_handler); });
+        oracle::settle(m_handler.gate(), *m_session, [this] {
+            anira_test::available(m_handler.handler());
+        });
         m_transcript.add("  settled: " + oracle::format_rings(*m_session));
         m_neutral.add("  settled: " + oracle::format_rings(*m_session));
     }
 
     const oracle::Transcript& transcript() const { return m_transcript; }
-    /// What both copy paths observe (see "The 2.x twin").
+    /// What both copy paths observe (see "The manager twin").
     const oracle::Transcript& neutral() const { return m_neutral; }
 
 private:
     /// The store of a Static slot, NULL for a Streamed one.
     const anira::capi::StaticSlot* static_input(uint32_t slot) const {
-        return anira::capi::static_slot(m_handler.m_handler->m_input_ports, slot);
+        return anira::capi::static_slot(m_handler.handler()->m_input_ports, slot);
     }
     const anira::capi::StaticSlot* static_output(uint32_t slot) const {
-        return anira::capi::static_slot(m_handler.m_handler->m_output_ports, slot);
+        return anira::capi::static_slot(m_handler.handler()->m_output_ports, slot);
     }
 
     /// The recorded counts of a multi form with every Static count above 0 replaced by the
@@ -578,7 +490,7 @@ private:
     /// generator), the pop of the recorded request.
     void set_then_get(uint32_t slot, size_t num_out, bool in_place, const CallOptions& options) {
         const size_t call = ++m_calls;
-        anira_handler* handler = m_handler.m_handler;
+        anira_handler* handler = m_handler.handler();
         const anira::capi::StaticSlot* in_store = static_input(slot);
         oracle::SlotBlock in = input_block(slot, in_store->num_elements(), call);
         const std::vector<std::vector<float>> in_before = runs_of(in);
@@ -613,7 +525,7 @@ private:
                 options.m_wait
                     ? m_face->pop_data_wait(out.planes(), num_out, slot, count, ANIRA_WAIT_FOREVER)
                     : m_face->pop_data(out.planes(), num_out, slot, count);
-            m_gate->m_open.store(false);
+            m_handler.gate().m_open.store(false);
             if (status == ANIRA_OK) { status = popped; }
             add_header("set_static_input+" + entry("pop_data_f32", options) +
                            " slot=" + std::to_string(slot) + " out=" + std::to_string(num_out),
@@ -631,7 +543,7 @@ private:
     /// every submitted inference collected, its own included, and the gate closes again
     /// behind it with nothing in flight.
     void open_gate_for(const CallOptions& options) {
-        if (options.m_wait) { m_gate->m_open.store(true); }
+        if (options.m_wait) { m_handler.gate().m_open.store(true); }
     }
 
     /// The count protocol of the removed _f32 multi forms, reproduced here (see the file
@@ -648,17 +560,18 @@ private:
         return options.m_wait ? name + "_wait" : name;
     }
 
-    const anira::InferenceConfig& config() const { return m_handler.m_handler->m_inference_config; }
+    const std::vector<anira::capi::Port>& input_ports() const { return m_handler.input_ports(); }
+    const std::vector<anira::capi::Port>& output_ports() const { return m_handler.output_ports(); }
 
     size_t output_channels(uint32_t slot) const {
-        return config().get_postprocess_output_channels()[slot];
+        return oracle::channels_of(output_ports(), slot);
     }
 
     /// The memory of one input slot, its ramp continued (the single forms and the Static
     /// entries, whose count is the slot's element count).
     oracle::SlotBlock input_block(uint32_t slot, size_t count, size_t call) {
-        oracle::SlotBlock block(config().get_preprocess_input_channels()[slot], count);
-        const bool is_streamed = config().get_preprocess_input_size()[slot] > 0;
+        oracle::SlotBlock block(oracle::channels_of(input_ports(), slot), count);
+        const bool is_streamed = oracle::is_streamed(input_ports(), slot);
         for (size_t channel = 0; channel < block.channels(); ++channel) {
             for (size_t i = 0; i < count; ++i) {
                 block.run(channel)[i] =
@@ -686,8 +599,7 @@ private:
                       std::vector<float* const*>& out_planes) const {
         outputs.reserve(out_counts.size());
         for (size_t slot = 0; slot < out_counts.size(); ++slot) {
-            outputs.emplace_back(config().get_postprocess_output_channels()[slot],
-                                 out_counts[slot]);
+            outputs.emplace_back(oracle::channels_of(output_ports(), slot), out_counts[slot]);
             const bool unused = options.m_null_unused && out_counts[slot] == 0;
             const bool shared = options.m_in_place && slot == 0 && !inputs.empty();
             float* const* planes = shared ? inputs[0].planes() : outputs[slot].planes();
@@ -702,7 +614,7 @@ private:
                      const std::vector<float* const*>& out_planes) {
         for (size_t slot = 0; slot < out_counts.size(); ++slot) {
             if (out_planes[slot] == nullptr) { continue; }
-            const bool streamed = config().get_postprocess_output_size()[slot] > 0;
+            const bool streamed = oracle::is_streamed(output_ports(), slot);
             if (options.m_in_place && slot == 0 && !inputs.empty()) {
                 add_block("io0", inputs[0], out_counts[0], streamed);
             } else {
@@ -717,7 +629,7 @@ private:
                (delivered == k_unset ? std::string("unset") : std::to_string(delivered));
     }
 
-    /// The neutral word of a single form's count: what the 2.x twin prints for it.
+    /// The neutral word of a single form's count: what the manager twin prints for it.
     static std::string streamed_text(size_t delivered, const CallOptions& options) {
         if (options.m_null_delivered) { return "streamed=?"; }
         return "streamed=[" + std::to_string(delivered) + "]";
@@ -727,9 +639,7 @@ private:
     std::string streamed_text(const std::vector<size_t>& delivered) const {
         std::vector<size_t> streamed;
         for (size_t slot = 0; slot < delivered.size(); ++slot) {
-            if (config().get_postprocess_output_size()[slot] > 0) {
-                streamed.push_back(delivered[slot]);
-            }
+            if (oracle::is_streamed(output_ports(), slot)) { streamed.push_back(delivered[slot]); }
         }
         return "streamed=" + oracle::format_counts(streamed);
     }
@@ -756,20 +666,13 @@ private:
                     size_t call) {
         std::string header = "#" + std::to_string(call) + " " + what + " -> " + status_text(status);
         if (!counts.empty()) { header += " " + counts; }
-        header += " rt_error=" + status_text(anira_handler_rt_error(m_handler.m_handler));
+        header += " rt_error=" + status_text(anira_handler_rt_error(m_handler.handler()));
         m_transcript.add(header + " " + oracle::format_rings(*m_session));
     }
 
-    anira_test::Context m_context;
-    /// The custom rows only: the models name no engine.
-    std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
-                                                .engine = ANIRA_ENGINE_CUSTOM,
-                                                .provider = ANIRA_PROVIDER_CPU,
-                                                .engine_id = anira_test::k_custom}};
-    std::unique_ptr<anira_test::GateEngine> m_gate;  ///< before the handler, which dies first
-    anira_test::Handler m_handler;
+    oracle::HandlerSession m_handler;               ///< the handler, prepared; dies last
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< built after prepare; borrows m_handler
-    std::shared_ptr<anira::SessionElement> m_session;
+    anira::SessionElement* m_session = nullptr;     ///< the handler's; NULL when the prepare failed
 
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far
     size_t m_calls = 0;
@@ -777,87 +680,48 @@ private:
     oracle::Transcript m_neutral;
 };
 
-// ---- the 2.x twin ------------------------------------------------------------------------------
-// The referee of the transcripts: every call of a script driven through the 2.x copy path, the
-// anira::InferenceManager of a 2.x configuration (the twin of the C model, the twins of
-// test/scheduler/test_CopyPathOracle.cpp) through the float face anira_test::V2Handler owns
-// (the PlanarFloatAdapter presents the channel pointers, the NonStreamableRouter stores and
-// reads back the Static slots around every stem call), which takes any count. V2Rig has the
-// call surface of HandlerRig and makes each call as the C entry it mirrors does: the same stem
-// (process_nowait, process_wait, push_data, pop_data, pop_data_wait) over the same counts and
-// the same memory, the gate open for a _wait twin; a single form carries its slot and leaves
-// the others out; a Static slot carried alone (the C Static entries) goes through the router
-// with every streamed count 0. Its neutral transcript holds what both paths observe: the first
-// line of the golden transcripts, per call its status (MISSED is the manager's miss flag), the
-// delivered counts of its Streamed outputs and the rings it left, the rows of every Streamed
-// output it was handed, and every "settled:" and reset line. A Static value is left out: the
-// C ABI changed what a Static tensor is by decision (the file comment), and a pass-through
-// model never lets it reach a Streamed slot (the generator reads element 0, which both carry).
+// ---- the manager twin --------------------------------------------------------------------------
+// The referee of the transcripts: every call of a script driven through the copy path below the
+// C entries, the tensor stems of a C handler's own anira::InferenceManager (the same model and
+// contract as HandlerRig's, a handler of its own), through the 2.x float face (the
+// PlanarFloatAdapter presents the channel pointers, the NonStreamableRouter stores and reads back
+// the Static slots around every stem call, over the handler's Static ports), which takes any
+// count. ManagerTwin has the call surface of HandlerRig and makes each call as the C entry it
+// mirrors does: the same stem (process_nowait, process_wait, push_data, pop_data, pop_data_wait)
+// over the same counts and the same memory, the gate open for a _wait twin; a single form
+// carries its slot and leaves the others out; a Static slot carried alone (the C Static
+// entries) goes through the router with every streamed count 0. Its neutral transcript holds
+// what both observe: the first line of the golden transcripts, per call its status (MISSED is
+// the manager's miss flag), the delivered counts of its Streamed outputs and the rings it left,
+// the rows of every Streamed output it was handed, and every "settled:" and reset line. A
+// Static value is left out: the C ABI changed what a Static tensor is by decision (the file
+// comment), and a pass-through model never lets it reach a Streamed slot (the generator reads
+// element 0, which both carry).
 
-/// The 2.x configuration of a C model of this file, its every figure the C model's.
-anira::InferenceConfig v2_config(anira::TensorShape shape, anira::ProcessingSpec spec) {
-    return {std::vector<anira::ModelData>{
-                anira::ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-            std::vector<anira::TensorShape>{std::move(shape)},
-            std::move(spec),
-            1.F,    // max_inference_time, in ms: the contract's explicit budget
-            0,      // warm_up
-            false,  // session_exclusive_processor
-            0.F,    // blocking_ratio: the contract's wait ratio
-            2};     // num_parallel_processors: max_instances
-}
-
-anira::InferenceConfig v2_stereo_config() {
-    return v2_config(anira::TensorShape({{1, 2, k_hop}}, {{1, 2, k_hop}}),
-                     anira::ProcessingSpec({2}, {2}));
-}
-
-anira::InferenceConfig v2_multi_config() {
-    return v2_config(anira::TensorShape({{1, 3, k_hop}, {1, 3}}, {{1, 3, k_hop}, {1, 3}}),
-                     anira::ProcessingSpec({3, 1}, {3, 1}, {k_hop, 0}, {k_hop, 0}));
-}
-
-anira::InferenceConfig v2_generator_config() {
-    return v2_config(anira::TensorShape({{1, 4}}, {{1, 1, k_hop}}),
-                     anira::ProcessingSpec({1}, {1}, {0}, {k_hop}));
-}
-
-std::unique_ptr<anira_test::GateBackend> v2_gate_of(Model model, anira::InferenceConfig& config) {
-    if (model == Model::ParamRamp) { return std::make_unique<oracle::ParamRampGate>(config); }
-    return std::make_unique<anira_test::GateBackend>(config);
-}
-
-class V2Rig {
+class ManagerTwin {
 public:
-    V2Rig(anira::InferenceConfig config,
-          anira_miss_policy policy,
-          Model model = Model::PassThrough,
-          uint32_t block_max = k_hop)
-        : m_config(std::move(config))
-        , m_pp(m_config)
-        , m_gate(v2_gate_of(model, m_config))
-        , m_manager(m_pp, m_config, m_gate.get(), anira::CoreConfig(2))
-        , m_positions(m_config.get_tensor_input_shape().size(), 0) {
-        m_manager.set_miss_policy(policy);
-        m_manager.prepare(
-            anira::HostConfig(static_cast<float>(block_max), static_cast<float>(k_rate), true));
-        m_adapter.prepare(m_config);
-        m_router.prepare();
-        for (const std::shared_ptr<anira::SessionElement>& session : anira::Core::get_sessions()) {
-            if (session->m_session_id == m_manager.get_session_id()) { m_session = session; }
-        }
-        if (m_session == nullptr) {
-            ADD_FAILURE() << "the manager's session is not registered";
-            return;
-        }
-        m_gate->m_open.store(false);
-        m_neutral.add(prepared_line(m_manager.get_latency(), *m_session));
+    ManagerTwin(const ModelConfig& model,
+                anira_miss_policy policy,
+                Model engine = Model::PassThrough,
+                uint32_t block_max = k_hop)
+        : m_handler(model, oracle::recording_contract(policy, block_max), engine) {
+        if (!m_handler.ready()) { return; }
+        m_manager = &m_handler.manager();
+        m_session = &m_handler.session();
+        m_adapter.prepare(m_handler.input_ports(), m_handler.output_ports());
+        m_router = std::make_unique<anira::NonStreamableRouter>(*m_manager,
+                                                                m_handler.input_ports(),
+                                                                m_handler.output_ports());
+        m_router->prepare();
+        m_positions.assign(m_handler.input_ports().size(), 0);
+        m_handler.gate().m_open.store(false);
+        m_neutral.add(oracle::prepared_line(m_manager->get_latency(), *m_session));
     }
-    ~V2Rig() { m_gate->m_open.store(true); }  // before the manager releases the session
-    V2Rig(const V2Rig&) = delete;
-    V2Rig& operator=(const V2Rig&) = delete;
-    V2Rig(V2Rig&&) = delete;
-    V2Rig& operator=(V2Rig&&) = delete;
+    ManagerTwin(const ManagerTwin&) = delete;
+    ManagerTwin& operator=(const ManagerTwin&) = delete;
+    ManagerTwin(ManagerTwin&&) = delete;
+    ManagerTwin& operator=(ManagerTwin&&) = delete;
+    ~ManagerTwin() = default;
 
     void process(size_t num_in, size_t num_out, uint32_t slot = 0, CallOptions options = k_plain) {
         call_single(num_in, num_out, slot, /*in_place=*/false, options);
@@ -875,8 +739,11 @@ public:
         const std::vector<size_t> out_counts = whole(recorded_out, /*inputs=*/false);
         const size_t call = ++m_calls;
         const size_t shared_length = options.m_in_place ? out_counts[0] : 0;
-        std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, shared_length, call);
+        std::vector<oracle::SlotBlock> inputs = oracle::make_inputs(m_handler.input_ports(),
+                                                                    m_positions,
+                                                                    in_counts,
+                                                                    shared_length,
+                                                                    call);
         std::vector<const float* const*> in_planes = input_planes(inputs, in_counts, options);
         std::vector<oracle::SlotBlock> outputs;
         std::vector<float* const*> out_planes;
@@ -888,12 +755,12 @@ public:
         open_gate_for(options);
         anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
         const size_t* delivered =
-            options.m_wait ? m_router.process_wait(in_tensors,
-                                                   out_tensors,
-                                                   std::chrono::steady_clock::duration::max(),
-                                                   outcome)
-                           : m_router.process_nowait(in_tensors, out_tensors);
-        m_gate->m_open.store(false);
+            options.m_wait ? m_router->process_wait(in_tensors,
+                                                    out_tensors,
+                                                    std::chrono::steady_clock::duration::max(),
+                                                    outcome)
+                           : m_router->process_nowait(in_tensors, out_tensors);
+        m_handler.gate().m_open.store(false);
         add_neutral(call, streamed_text(delivered));
         add_outputs(out_counts, options, inputs, outputs, out_planes);
         if (options.m_settle) { settle(); }
@@ -903,13 +770,13 @@ public:
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
         const bool is_static = !streamed_input(slot);
-        std::vector<size_t> in_counts(m_config.get_tensor_input_shape().size(), 0);
-        in_counts[slot] = is_static ? m_config.get_tensor_input_size()[slot] : num_in;
+        std::vector<size_t> in_counts(num_inputs(), 0);
+        in_counts[slot] = is_static ? input_values(slot) : num_in;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, 0, call);
+            oracle::make_inputs(m_handler.input_ports(), m_positions, in_counts, 0, call);
         const std::vector<const float* const*> in_planes =
             input_planes(inputs, in_counts, k_null_unused);
-        m_router.push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
+        m_router->push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
         m_neutral.add("#" + std::to_string(call) + " OK " + (is_static ? "static" : "push") + " " +
                       oracle::format_rings(*m_session));
         if (options.m_settle) { settle(); }
@@ -920,9 +787,9 @@ public:
         const std::vector<size_t> in_counts = whole(recorded_in, /*inputs=*/true);
         const size_t call = ++m_calls;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, 0, call);
+            oracle::make_inputs(m_handler.input_ports(), m_positions, in_counts, 0, call);
         const std::vector<const float* const*> in_planes = input_planes(inputs, in_counts, options);
-        m_router.push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
+        m_router->push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
         m_neutral.add("#" + std::to_string(call) + " OK push " + oracle::format_rings(*m_session));
         if (options.m_settle) { settle(); }
     }
@@ -937,7 +804,7 @@ public:
             if (options.m_settle) { settle(); }
             return;
         }
-        oracle::SlotBlock out(m_config.get_postprocess_output_channels()[slot], num_out);
+        oracle::SlotBlock out(output_channels(slot), num_out);
         const size_t count = pop_streamed(slot, out, num_out, options);
         add_neutral(call, single_text(count, options));
         m_neutral.add_block("out" + std::to_string(slot), out, num_out);
@@ -957,11 +824,11 @@ public:
         open_gate_for(options);
         anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
         const size_t* delivered =
-            options.m_wait ? m_router.pop_data_wait(out_tensors,
-                                                    std::chrono::steady_clock::duration::max(),
-                                                    outcome)
-                           : m_router.pop_data(out_tensors);
-        m_gate->m_open.store(false);
+            options.m_wait ? m_router->pop_data_wait(out_tensors,
+                                                     std::chrono::steady_clock::duration::max(),
+                                                     outcome)
+                           : m_router->pop_data(out_tensors);
+        m_handler.gate().m_open.store(false);
         add_neutral(call, streamed_text(delivered));
         add_outputs(out_counts, options, no_inputs, outputs, out_planes);
         if (options.m_settle) { settle(); }
@@ -969,26 +836,40 @@ public:
 
     void reset() {
         if (m_session == nullptr) { return; }
-        m_manager.reset();
+        m_manager->reset();
         m_neutral.add("#" + std::to_string(++m_calls) + " reset " +
                       oracle::format_rings(*m_session));
     }
 
     void settle() {
         if (m_session == nullptr) { return; }
-        oracle::settle(*m_gate, *m_session, [this] { m_manager.get_available_samples(0, 0); });
+        oracle::settle(m_handler.gate(), *m_session, [this] {
+            m_manager->get_available_samples(0, 0);
+        });
         m_neutral.add("  settled: " + oracle::format_rings(*m_session));
     }
 
     const oracle::Transcript& neutral() const { return m_neutral; }
 
 private:
+    size_t num_inputs() const { return m_handler.input_ports().size(); }
+    size_t num_outputs() const { return m_handler.output_ports().size(); }
     bool streamed_input(size_t slot) const {
-        return m_config.get_preprocess_input_size()[slot] > 0;
+        return oracle::is_streamed(m_handler.input_ports(), slot);
     }
     bool streamed_output(size_t slot) const {
-        return m_config.get_postprocess_output_size()[slot] > 0;
+        return oracle::is_streamed(m_handler.output_ports(), slot);
     }
+    size_t output_channels(size_t slot) const {
+        return oracle::channels_of(m_handler.output_ports(), slot);
+    }
+    /// The element count of a Static slot (0 for any other).
+    static size_t values_of(const std::vector<anira::capi::Port>& ports, size_t slot) {
+        const anira::capi::StaticSlot* store = anira::capi::static_slot(ports, slot);
+        return store != nullptr ? store->num_elements() : 0;
+    }
+    size_t input_values(size_t slot) const { return values_of(m_handler.input_ports(), slot); }
+    size_t output_values(size_t slot) const { return values_of(m_handler.output_ports(), slot); }
 
     /// HandlerRig::whole(): a carried Static slot is its whole tensor.
     std::vector<size_t> whole(const std::vector<size_t>& recorded, bool inputs) const {
@@ -996,8 +877,7 @@ private:
         for (size_t slot = 0; slot < counts.size(); ++slot) {
             const bool streamed = inputs ? streamed_input(slot) : streamed_output(slot);
             if (streamed || counts[slot] == 0) { continue; }
-            counts[slot] = inputs ? m_config.get_tensor_input_size()[slot]
-                                  : m_config.get_tensor_output_size()[slot];
+            counts[slot] = inputs ? input_values(slot) : output_values(slot);
         }
         return counts;
     }
@@ -1013,22 +893,20 @@ private:
                      const CallOptions& options) {
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
-        const size_t num_inputs = m_config.get_tensor_input_shape().size();
-        const size_t num_outputs = m_config.get_tensor_output_shape().size();
         if (!streamed_input(slot)) {
-            std::vector<size_t> in_counts(num_inputs, 0);
-            in_counts[slot] = m_config.get_tensor_input_size()[slot];
+            std::vector<size_t> in_counts(num_inputs(), 0);
+            in_counts[slot] = input_values(slot);
             std::vector<oracle::SlotBlock> inputs =
-                oracle::make_inputs(m_config, m_positions, in_counts, 0, call);
+                oracle::make_inputs(m_handler.input_ports(), m_positions, in_counts, 0, call);
             const std::vector<const float* const*> in_planes =
                 input_planes(inputs, in_counts, k_null_unused);
-            m_router.push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
+            m_router->push_data(m_adapter.present_inputs(in_planes.data(), in_counts.data()));
             if (!streamed_output(slot)) {
                 pop_static(slot);
                 m_neutral.add("#" + std::to_string(call) + " OK static " +
                               oracle::format_rings(*m_session));
             } else {
-                oracle::SlotBlock out(m_config.get_postprocess_output_channels()[slot], num_out);
+                oracle::SlotBlock out(output_channels(slot), num_out);
                 const size_t count = pop_streamed(slot, out, num_out, options);
                 add_neutral(call, single_text(count, options));
                 m_neutral.add_block("out" + std::to_string(slot), out, num_out);
@@ -1036,17 +914,17 @@ private:
             if (options.m_settle) { settle(); }
             return;
         }
-        std::vector<size_t> in_counts(num_inputs, 0);
+        std::vector<size_t> in_counts(num_inputs(), 0);
         in_counts[slot] = num_in;
-        std::vector<size_t> out_counts(num_outputs, 0);
+        std::vector<size_t> out_counts(num_outputs(), 0);
         out_counts[slot] = num_out;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, 0, call);
+            oracle::make_inputs(m_handler.input_ports(), m_positions, in_counts, 0, call);
         const std::vector<const float* const*> in_planes =
             input_planes(inputs, in_counts, k_null_unused);
-        oracle::SlotBlock separate(m_config.get_postprocess_output_channels()[slot], num_out);
+        oracle::SlotBlock separate(output_channels(slot), num_out);
         oracle::SlotBlock& out = in_place ? inputs[slot] : separate;
-        std::vector<float* const*> out_planes(num_outputs, nullptr);
+        std::vector<float* const*> out_planes(num_outputs(), nullptr);
         out_planes[slot] = out.planes();
         const anira_tensor* in_tensors =
             m_adapter.present_inputs(in_planes.data(), in_counts.data());
@@ -1055,12 +933,12 @@ private:
         open_gate_for(options);
         anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
         const size_t* delivered =
-            options.m_wait ? m_router.process_wait(in_tensors,
-                                                   out_tensors,
-                                                   std::chrono::steady_clock::duration::max(),
-                                                   outcome)
-                           : m_router.process_nowait(in_tensors, out_tensors);
-        m_gate->m_open.store(false);
+            options.m_wait ? m_router->process_wait(in_tensors,
+                                                    out_tensors,
+                                                    std::chrono::steady_clock::duration::max(),
+                                                    outcome)
+                           : m_router->process_nowait(in_tensors, out_tensors);
+        m_handler.gate().m_open.store(false);
         add_neutral(call, single_text(delivered[slot], options));
         m_neutral.add_block((in_place ? "io" : "out") + std::to_string(slot), out, num_out);
         if (options.m_settle) { settle(); }
@@ -1071,37 +949,35 @@ private:
                         oracle::SlotBlock& out,
                         size_t num_out,
                         const CallOptions& options) {
-        const size_t num_outputs = m_config.get_tensor_output_shape().size();
-        std::vector<size_t> out_counts(num_outputs, 0);
+        std::vector<size_t> out_counts(num_outputs(), 0);
         out_counts[slot] = num_out;
-        std::vector<float* const*> out_planes(num_outputs, nullptr);
+        std::vector<float* const*> out_planes(num_outputs(), nullptr);
         out_planes[slot] = out.planes();
         const anira_tensor* out_tensors =
             m_adapter.present_outputs(out_planes.data(), out_counts.data());
         open_gate_for(options);
         anira::Core::WaitOutcome outcome = anira::Core::WaitOutcome::Done;
         const size_t* delivered =
-            options.m_wait ? m_router.pop_data_wait(out_tensors,
-                                                    std::chrono::steady_clock::duration::max(),
-                                                    outcome)
-                           : m_router.pop_data(out_tensors);
-        m_gate->m_open.store(false);
+            options.m_wait ? m_router->pop_data_wait(out_tensors,
+                                                     std::chrono::steady_clock::duration::max(),
+                                                     outcome)
+                           : m_router->pop_data(out_tensors);
+        m_handler.gate().m_open.store(false);
         return delivered[slot];
     }
 
     /// The read of one Static output slot alone (anira_handler_get_static_output).
     void pop_static(uint32_t slot) {
-        const size_t num_outputs = m_config.get_tensor_output_shape().size();
-        std::vector<size_t> out_counts(num_outputs, 0);
-        out_counts[slot] = m_config.get_tensor_output_size()[slot];
+        std::vector<size_t> out_counts(num_outputs(), 0);
+        out_counts[slot] = output_values(slot);
         oracle::SlotBlock out(1, out_counts[slot]);
-        std::vector<float* const*> out_planes(num_outputs, nullptr);
+        std::vector<float* const*> out_planes(num_outputs(), nullptr);
         out_planes[slot] = out.planes();
-        m_router.pop_data(m_adapter.present_outputs(out_planes.data(), out_counts.data()));
+        m_router->pop_data(m_adapter.present_outputs(out_planes.data(), out_counts.data()));
     }
 
     void open_gate_for(const CallOptions& options) {
-        if (options.m_wait) { m_gate->m_open.store(true); }
+        if (options.m_wait) { m_handler.gate().m_open.store(true); }
     }
 
     static std::vector<const float* const*> input_planes(std::vector<oracle::SlotBlock>& inputs,
@@ -1122,8 +998,7 @@ private:
                       std::vector<float* const*>& out_planes) const {
         outputs.reserve(out_counts.size());
         for (size_t slot = 0; slot < out_counts.size(); ++slot) {
-            outputs.emplace_back(m_config.get_postprocess_output_channels()[slot],
-                                 out_counts[slot]);
+            outputs.emplace_back(output_channels(slot), out_counts[slot]);
             const bool unused = options.m_null_unused && out_counts[slot] == 0;
             const bool shared = options.m_in_place && slot == 0 && !inputs.empty();
             float* const* planes = shared ? inputs[0].planes() : outputs[slot].planes();
@@ -1153,25 +1028,23 @@ private:
 
     std::string streamed_text(const size_t* delivered) const {
         std::vector<size_t> streamed;
-        for (size_t slot = 0; slot < m_config.get_tensor_output_shape().size(); ++slot) {
+        for (size_t slot = 0; slot < num_outputs(); ++slot) {
             if (streamed_output(slot)) { streamed.push_back(delivered[slot]); }
         }
         return "streamed=" + oracle::format_counts(streamed);
     }
 
     void add_neutral(size_t call, const std::string& counts) {
-        const anira_status status = m_manager.last_block_missed() ? ANIRA_MISSED : ANIRA_OK;
+        const anira_status status = m_manager->last_block_missed() ? ANIRA_MISSED : ANIRA_OK;
         m_neutral.add("#" + std::to_string(call) + " " + status_text(status) + " " + counts + " " +
                       oracle::format_rings(*m_session));
     }
 
-    anira::InferenceConfig m_config;
-    anira::PrePostProcessor m_pp;
-    std::unique_ptr<anira_test::GateBackend> m_gate;  ///< before the manager, which dies first
-    anira::InferenceManager m_manager;
+    oracle::HandlerSession m_handler;              ///< the session, prepared; dies last
+    anira::InferenceManager* m_manager = nullptr;  ///< the handler's; NULL when the prepare failed
+    anira::SessionElement* m_session = nullptr;    ///< likewise
     anira::PlanarFloatAdapter m_adapter;
-    anira::NonStreamableRouter m_router{m_manager, m_pp, m_config};
-    std::shared_ptr<anira::SessionElement> m_session;
+    std::unique_ptr<anira::NonStreamableRouter> m_router;  ///< over the handler's Static ports
     std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far
     size_t m_calls = 0;
     oracle::Transcript m_neutral;
@@ -1180,18 +1053,18 @@ private:
 /// The two neutral transcripts line by line; a difference names the call it happened in.
 void expect_same_observations(const char* name,
                               const oracle::Transcript& handler,
-                              const oracle::Transcript& v2) {
+                              const oracle::Transcript& twin) {
     const std::vector<std::string>& c_lines = handler.lines();
-    const std::vector<std::string>& v2_lines = v2.lines();
-    EXPECT_EQ(c_lines.size(), v2_lines.size()) << name << ": the number of lines";
+    const std::vector<std::string>& twin_lines = twin.lines();
+    EXPECT_EQ(c_lines.size(), twin_lines.size()) << name << ": the number of lines";
     constexpr size_t k_max_reports = 6;
     size_t reports = 0;
     std::string_view call = "(before the first call)";
-    for (size_t i = 0; i < c_lines.size() && i < v2_lines.size(); ++i) {
+    for (size_t i = 0; i < c_lines.size() && i < twin_lines.size(); ++i) {
         if (!c_lines[i].empty() && c_lines[i].front() == '#') { call = c_lines[i]; }
-        if (c_lines[i] == v2_lines[i]) { continue; }
+        if (c_lines[i] == twin_lines[i]) { continue; }
         ADD_FAILURE() << name << ", line " << i << ", in the call\n    " << call
-                      << "\n  C entries: " << c_lines[i] << "\n  2.x path:  " << v2_lines[i];
+                      << "\n  C entries: " << c_lines[i] << "\n  the stems: " << twin_lines[i];
         if (++reports == k_max_reports) {
             ADD_FAILURE() << name << ": further differences are not reported";
             break;
@@ -1203,7 +1076,7 @@ void expect_same_observations(const char* name,
 // The scripts of test/scheduler/test_CopyPathOracle.cpp, through the C entries, with every call
 // kept within the declared block (the file comment). The figures (latency, ring capacities,
 // structs) are printed by the golden transcripts. Each script runs on a HandlerRig against its
-// golden transcript and on both rigs against each other (MatchesTheV2CopyPath).
+// golden transcript and on both rigs against each other (MatchesTheManagerCopyPath).
 
 /// Blocks below, at and above the hop (the block is two hops, k_two_hops), a block of 0
 /// samples, separate memory and in place, a NULL delivered pointer, two calls whose counts
@@ -1369,35 +1242,34 @@ void generator_script(Rig& rig) {
 }
 
 void run_block_sizes(anira_miss_policy policy, const char* name, std::string_view golden) {
-    HandlerRig rig(stereo_model(), policy, Model::PassThrough, k_two_hops);
+    HandlerRig rig(oracle::stereo_model(), policy, Model::PassThrough, k_two_hops);
     block_sizes_script(rig);
     oracle::expect_golden(name, golden, rig.transcript());
 }
 
 void run_starved_blocks(anira_miss_policy policy, const char* name, std::string_view golden) {
-    HandlerRig rig(stereo_model(), policy);
+    HandlerRig rig(oracle::stereo_model(), policy);
     starved_blocks_script(rig);
     oracle::expect_golden(name, golden, rig.transcript());
 }
 
 void run_push_pop(anira_miss_policy policy, const char* name, std::string_view golden) {
-    HandlerRig rig(stereo_model(), policy);
+    HandlerRig rig(oracle::stereo_model(), policy);
     push_pop_script(rig);
     oracle::expect_golden(name, golden, rig.transcript());
 }
 
 void run_multi_slot(anira_miss_policy policy, const char* name, std::string_view golden) {
-    HandlerRig rig(multi_model(), policy);
+    HandlerRig rig(oracle::multi_model(), policy);
     multi_slot_script(rig);
     oracle::expect_golden(name, golden, rig.transcript());
 }
 
-/// One script on both copy paths, one after the other (the C handler is destroyed before the
-/// 2.x manager is built), and their neutral transcripts compared.
+/// One script on both copy paths, one after the other (the C entries' handler is destroyed
+/// before the twin's is built), and their neutral transcripts compared.
 template <typename Script>
 void expect_twins(const char* name,
                   const ModelConfig& model,
-                  anira::InferenceConfig v2_config,
                   anira_miss_policy policy,
                   Model engine,
                   uint32_t block_max,
@@ -1408,13 +1280,13 @@ void expect_twins(const char* name,
         script(rig);
         handler = rig.neutral();
     }
-    oracle::Transcript v2;
+    oracle::Transcript twin;
     {
-        V2Rig rig(std::move(v2_config), policy, engine, block_max);
+        ManagerTwin rig(model, policy, engine, block_max);
         script(rig);
-        v2 = rig.neutral();
+        twin = rig.neutral();
     }
-    expect_same_observations(name, handler, v2);
+    expect_same_observations(name, handler, twin);
 }
 
 }  // namespace
@@ -1460,7 +1332,7 @@ TEST(AbiHandlerCopyOracle, MultiSlotWithStaticTensors) {
 
 // The _wait twins (waiting_twins_script).
 TEST(AbiHandlerCopyOracle, WaitingTwins) {
-    HandlerRig rig(multi_model(), ANIRA_MISS_HOLD_LAST);
+    HandlerRig rig(oracle::multi_model(), ANIRA_MISS_HOLD_LAST);
     waiting_twins_script(rig);
     oracle::expect_golden("k_handler_waiting_twins",
                           oracle::k_handler_waiting_twins,
@@ -1469,16 +1341,16 @@ TEST(AbiHandlerCopyOracle, WaitingTwins) {
 
 // A generator pulled by its pops (generator_script).
 TEST(AbiHandlerCopyOracle, GeneratorPulledByItsPops) {
-    HandlerRig rig(generator_model(), ANIRA_MISS_ZEROS, Model::ParamRamp);
+    HandlerRig rig(oracle::generator_model(), ANIRA_MISS_ZEROS, Model::ParamRamp);
     generator_script(rig);
     oracle::expect_golden("k_handler_generator", oracle::k_handler_generator, rig.transcript());
 }
 
-// Every script on the C entries and on the 2.x copy path, which takes any count and is
-// untouched by the C ABI: what the two observe is the same, call for call (V2Rig). It is the
-// evidence that the golden transcripts are the copy path's and not a recording of whatever the
-// C entries do.
-TEST(AbiHandlerCopyOracle, MatchesTheV2CopyPath) {
+// Every script on the C entries and on the copy path below them, which takes any count and is
+// untouched by the block rule: what the two observe is the same, call for call (ManagerTwin). It
+// is the evidence that the golden transcripts are the copy path's and not a recording of
+// whatever the C entries do.
+TEST(AbiHandlerCopyOracle, MatchesTheManagerCopyPath) {
     const auto block_sizes = [](auto& rig) { block_sizes_script(rig); };
     const auto starved = [](auto& rig) { starved_blocks_script(rig); };
     const auto push_pop = [](auto& rig) { push_pop_script(rig); };
@@ -1487,44 +1359,38 @@ TEST(AbiHandlerCopyOracle, MatchesTheV2CopyPath) {
          {ANIRA_MISS_ZEROS, ANIRA_MISS_HOLD_LAST, ANIRA_MISS_BYPASS}) {
         SCOPED_TRACE(policy_name(policy));
         expect_twins("block sizes",
-                     stereo_model(),
-                     v2_stereo_config(),
+                     oracle::stereo_model(),
                      policy,
                      Model::PassThrough,
                      k_two_hops,
                      block_sizes);
         expect_twins("starved blocks",
-                     stereo_model(),
-                     v2_stereo_config(),
+                     oracle::stereo_model(),
                      policy,
                      Model::PassThrough,
                      k_hop,
                      starved);
         expect_twins("multi slot",
-                     multi_model(),
-                     v2_multi_config(),
+                     oracle::multi_model(),
                      policy,
                      Model::PassThrough,
                      k_hop,
                      multi_slot);
         expect_twins("push pop",
-                     stereo_model(),
-                     v2_stereo_config(),
+                     oracle::stereo_model(),
                      policy,
                      Model::PassThrough,
                      k_hop,
                      push_pop);
     }
     expect_twins("waiting twins",
-                 multi_model(),
-                 v2_multi_config(),
+                 oracle::multi_model(),
                  ANIRA_MISS_HOLD_LAST,
                  Model::PassThrough,
                  k_hop,
                  [](auto& rig) { waiting_twins_script(rig); });
     expect_twins("generator",
-                 generator_model(),
-                 v2_generator_config(),
+                 oracle::generator_model(),
                  ANIRA_MISS_ZEROS,
                  Model::ParamRamp,
                  k_hop,

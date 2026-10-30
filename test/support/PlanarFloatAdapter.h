@@ -35,6 +35,8 @@
 #include <cstdint>
 #include <vector>
 
+#include "capi/port.h"
+
 namespace anira {
 
 class PlanarFloatAdapter {
@@ -56,16 +58,28 @@ public:
     void prepare(const InferenceConfig& inference_config) {
         make_side(m_inputs,
                   m_input_planes,
-                  inference_config.get_tensor_input_shape().size(),
-                  inference_config.get_preprocess_input_size(),
-                  inference_config.get_preprocess_input_channels(),
+                  channels_of(inference_config.get_preprocess_input_size(),
+                              inference_config.get_preprocess_input_channels()),
                   static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
         make_side(m_outputs,
                   m_output_planes,
-                  inference_config.get_tensor_output_shape().size(),
-                  inference_config.get_postprocess_output_size(),
-                  inference_config.get_postprocess_output_channels(),
+                  channels_of(inference_config.get_postprocess_output_size(),
+                              inference_config.get_postprocess_output_channels()),
                   0U);
+    }
+
+    /**
+     * @brief Sizes the adapter for a prepared C handler: one tensor per port of either side,
+     * with the channel count of a Streamed slot's stream port (1 for every other slot, which is
+     * one run of values). Allocates: after the handler's prepare, never on the driver thread.
+     */
+    void prepare(const std::vector<capi::Port>& input_ports,
+                 const std::vector<capi::Port>& output_ports) {
+        make_side(m_inputs,
+                  m_input_planes,
+                  channels_of(input_ports),
+                  static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
+        make_side(m_outputs, m_output_planes, channels_of(output_ports), 0U);
     }
 
     /**
@@ -170,18 +184,39 @@ private:
         }
     }
 
+    /// The channels per slot of a 2.x side: a non-streamable slot (no stream size) has no ring
+    /// and is one run of values.
+    static std::vector<size_t> channels_of(const std::vector<size_t>& stream_sizes,
+                                           const std::vector<size_t>& stream_channels) {
+        std::vector<size_t> channels(stream_sizes.size(), 1);
+        for (size_t slot = 0; slot < stream_sizes.size(); ++slot) {
+            if (stream_sizes[slot] > 0) { channels[slot] = stream_channels[slot]; }
+        }
+        return channels;
+    }
+
+    /// The channels per slot of a C handler's side: a stream port's channel count, 1 for every
+    /// other port.
+    static std::vector<size_t> channels_of(const std::vector<capi::Port>& ports) {
+        std::vector<size_t> channels(ports.size(), 1);
+        for (size_t slot = 0; slot < ports.size(); ++slot) {
+            if (const capi::StreamPort* stream = capi::stream_port(ports, slot)) {
+                channels[slot] = stream->m_channels;
+            }
+        }
+        return channels;
+    }
+
     static void make_side(std::vector<anira_tensor>& tensors,
                           std::vector<std::vector<void*>>& planes,
-                          size_t num_slots,
-                          const std::vector<size_t>& stream_sizes,
-                          const std::vector<size_t>& stream_channels,
+                          const std::vector<size_t>& slot_channels,
                           uint32_t flags) {
+        const size_t num_slots = slot_channels.size();
         planes.clear();
         planes.reserve(num_slots);
         tensors.assign(num_slots, anira_tensor{});
         for (size_t slot = 0; slot < num_slots; ++slot) {
-            // A non-streamable slot (no stream size) has no ring and is one run of values.
-            const size_t channels = stream_sizes[slot] == 0 ? 1 : stream_channels[slot];
+            const size_t channels = slot_channels[slot];
             planes.emplace_back(channels, nullptr);
             const std::array<int64_t, 2> shape{static_cast<int64_t>(channels), 0};
             anira_tensor_init_host_planar(&tensors[slot],

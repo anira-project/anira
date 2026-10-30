@@ -78,6 +78,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Tests: the white-box suites leave the 2.x runtime** (the core on the 3.x types).
+  - **The copy-path recordings run on C handlers' own sessions** (`anira_test::oracle::HandlerSession`, `test/support/copy_oracle.h`). `CopyPathOracle` and `TensorStems` drive the tensor stems of a C handler's `InferenceManager` directly, below the C entries and their block rule, over the C twins of the 2.x configurations the transcripts were recorded on. `NonStreamableRouter` keeps the Static values in the handler's Static ports, and `PlanarFloatAdapter` is sized from the ports. `AbiHandlerCopyOracle.MatchesTheV2CopyPath` is now `MatchesTheManagerCopyPath`, with the same stems of a C handler as its referee. The 2.x `GateBackend` and the gates built over it are gone. Both goldens are unchanged.
 - **Examples:** lean over `anira.hpp`.
   - **Backend choice (JUCE and CLAP):** the parameter listener stores the choice in an atomic. `processBlock` / `process` applies it through `PlanReport::find` and `set_plan`, over the report of the last prepare (nothing changes when the build or the model has no such plan). This replaces the plan tables built at prepare.
   - **Pipeline:** one chained expression, `Pipeline().add_engine(...).add_inference(...).add_processor(...)`, in the handler's initializer.

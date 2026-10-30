@@ -3,8 +3,7 @@
 // their lifetimes, the bundled gain model with the custom row, the hand-built generator and
 // channel-mismatch models, the contracts, the block data, the waits, the engines a custom row
 // runs on (the pass-through every Handler adds under anira.v2.custom, the gate engines of the
-// C rigs), the 2.x GateBackend the oracles' 2.x arms still take, and the guard that destroys
-// the handler before a gate engine's rig dies.
+// C rigs), and the guard that destroys the handler before a gate engine's rig dies.
 #ifndef ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
@@ -19,11 +18,9 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
@@ -599,31 +596,6 @@ inline RecordCollector::Record find_record(RecordCollector& collector,
     }
     return {};
 }
-
-// ---- the 2.x gate ------------------------------------------------------------------------------
-
-/// The 2.x twin of GateEngine for the 2.x arms of the oracles (copy_oracle.h, the 2.x rigs of
-/// test_CopyPathOracle and test_TensorStems): holds every submitted inference on its inference
-/// thread while the gate is closed, so the driver's next block finds the output ring starved.
-/// Opens itself on destruction so a stuck inference cannot hang the session release.
-class GateBackend : public anira::BackendBase {
-public:
-    explicit GateBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
-    ~GateBackend() override { m_open.store(true); }
-    GateBackend(const GateBackend&) = delete;
-    GateBackend& operator=(const GateBackend&) = delete;
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        while (!m_open.load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
-        anira::BackendBase::process(input, output, std::move(session));
-        ++m_calls;
-    }
-
-    std::atomic<bool> m_open{true};
-    std::atomic<int> m_calls{0};
-};
 
 /// Declared right after the Handler a gate engine runs in, so at scope exit it runs first: it
 /// opens the held gate so the in-flight inference can finish, then destroys the handler, which

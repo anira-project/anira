@@ -15,8 +15,8 @@
 //
 //   FloatFace      one call per block over a prepared handler. It owns an
 //                  anira::PlanarFloatAdapter (test/support/PlanarFloatAdapter.h, the adapter
-//                  the 2.x anira::InferenceHandler presents its channel pointers through),
-//                  prepared from the handler's own InferenceConfig, and makes every call the
+//                  the 2.x anira::InferenceHandler presented its channel pointers through),
+//                  prepared from the handler's own ports, and makes every call the
 //                  same way: present the channel pointers, call the tensor entry of the same
 //                  name. A single form hands over the tensors of its slot; a slot a multi form
 //                  does not carry (a count of 0) is an empty tensor with NULL planes, whose
@@ -104,12 +104,12 @@ anira_tensor whole_f32(Sample* values, std::initializer_list<int64_t> shape) {
 }
 
 /// The one-call float face over a prepared handler. Construct it after a successful
-/// anira_handler_prepare (it reads the handler's InferenceConfig) and again after a later
+/// anira_handler_prepare (it reads the handler's ports) and again after a later
 /// prepare that changes the slots. The handler is borrowed.
 class FloatFace {
 public:
     explicit FloatFace(anira_handler* handler) : m_handler(handler) {
-        m_adapter.prepare(handler->m_inference_config);
+        m_adapter.prepare(handler->m_input_ports, handler->m_output_ports);
         m_inputs.resize(handler->m_num_inputs);
         m_outputs.resize(handler->m_num_outputs);
     }
