@@ -6,4 +6,4 @@ scopes that run them define under the same names (:js:func:`~registry.defineStag
 
 .. js:autoclass:: Pipeline.Pipeline
    :short-name:
-   :members: create, ptr, addInference, registerEngine, addStage, destroy
+   :members: create, inference, registerEngine, addStage, native, destroy

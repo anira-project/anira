@@ -6,8 +6,8 @@ import type { WithAbi } from './ModelConfig'
 export type ContextOptions = {
   /**
    * The pool: this many inference threads, which anira starts as Wasm Workers; `'auto'` for half
-   * the cores (`ANIRA_THREADS_AUTO`), 0 for none (a host that drives inference itself). Default
-   * the context config's, as natively: `ANIRA_THREADS_AUTO` (or the `json`'s value).
+   * the cores (`ANIRA_THREADS_AUTO`). Default the context config's, as natively:
+   * `ANIRA_THREADS_AUTO` (or the `json`'s value).
    */
   threads?: number | 'auto'
   /**
@@ -26,18 +26,20 @@ const pageUrl = (): string | undefined =>
   (globalThis as { location?: { href: string } }).location?.href
 
 /**
- * A context (`anira_context`): the core the handlers run on and its pool of inference threads,
- * Wasm Workers on the web. The worker module is the one web-only field of a context config. The
- * log is drained by the host (`ANIRA_LOG_DRAIN_MANUAL`: `anira.startLogPump()`).
+ * A context (`anira_context`), the web twin of `anira::Context`: the core the handlers run on
+ * and its pool of inference threads, Wasm Workers on the web. Where the web differs: the
+ * options are the context config's fields in one object (`anira::ContextConfig` on the C++
+ * side), the worker module is a web-only field, the log is drained by the host
+ * (`ANIRA_LOG_DRAIN_MANUAL`: `anira.startLogPump()`), `ready()` waits for the Workers, which
+ * start only once the main thread yields, and the context is destroyed with `destroy()`.
  */
 export class Context {
   readonly abi: AniraBindings
-  /** The `anira_context*` the raw entries take. */
-  readonly ptr: number
+  private readonly context: number
 
-  private constructor(abi: AniraBindings, ptr: number) {
+  private constructor(abi: AniraBindings, context: number) {
     this.abi = abi
-    this.ptr = ptr
+    this.context = context
   }
 
   static create(anira: WithAbi, options: ContextOptions = {}): Context {
@@ -76,8 +78,12 @@ export class Context {
     }
   }
 
-  /** The pool's size (`anira_num_inference_threads`). */
-  get threads(): number {
+  /**
+   * The size of the core's inference thread pool (`anira_num_inference_threads`; the free
+   * function `anira::num_inference_threads()` in C++, a member here, where the module is
+   * reached through a context).
+   */
+  numInferenceThreads(): number {
     return this.abi.anira_num_inference_threads()
   }
 
@@ -88,7 +94,7 @@ export class Context {
    */
   async ready(timeoutMs = 10000): Promise<void> {
     const deadline = performance.now() + timeoutMs
-    while (this.abi.anira_em_inference_threads_in_loop() < this.threads) {
+    while (this.abi.anira_em_inference_threads_in_loop() < this.numInferenceThreads()) {
       if (performance.now() > deadline) {
         throw new Error('anira: the inference Workers did not start in time')
       }
@@ -96,8 +102,13 @@ export class Context {
     }
   }
 
+  /** The `anira_context*` the raw entries take. */
+  native(): number {
+    return this.context
+  }
+
   /** Destroy the context; the last one stops the pool. */
   destroy(): void {
-    this.abi.anira_context_destroy(this.ptr)
+    this.abi.anira_context_destroy(this.context)
   }
 }

@@ -1,5 +1,6 @@
 import { type AniraBindings, heap } from './abi/bindings'
 import { anira_bytes_ownership, anira_engine } from './abi/enums'
+import type { InputSpec } from './staticInput'
 
 /** Anything that carries the typed C ABI of the main instance (an `Anira`). */
 export type WithAbi = { readonly abi: AniraBindings }
@@ -7,14 +8,21 @@ export type WithAbi = { readonly abi: AniraBindings }
 /** What a loader fetches with: `globalThis.fetch` or a stand-in of its shape. */
 export type Fetcher = (input: string | URL, init?: RequestInit) => Promise<Response>
 
+/**
+ * An engine as the pair names it, `anira::EngineRef`: the `anira_engine` value, and beside
+ * `ANIRA_ENGINE_CUSTOM` the custom engine's reverse-URI id, empty for every other value.
+ */
+export type EngineRef = {
+  kind: number
+  id: string
+}
+
 /** One model entry of a config file, as `fetchModel` sees it. */
 export type ModelEntry = {
   /** The entry's position in the config's `models`. */
   index: number
-  /** Its `anira_engine` (the config's default engine where the entry names none). */
-  engine: number
-  /** The reverse-URI id of a custom engine (`ANIRA_ENGINE_CUSTOM`), null otherwise. */
-  engineId: string | null
+  /** Its engine (the config's default engine where the entry names none). */
+  engine: EngineRef
   /** The path as the file spells it. */
   path: string
   /** The path resolved against the config's URL: what is fetched. */
@@ -79,21 +87,22 @@ const pageUrl = (): string | undefined =>
   (globalThis as { location?: { href: string } }).location?.href
 
 /**
- * A model config (`anira_model_config`) built from the same JSON file a native host loads. The
- * file is parsed with `anira_model_config_from_json` and every model entry whose engine runs
- * here gets its file fetched relative to the config's URL and attached as bytes, so one
- * `*.model.json` (the bundled `extras/models` ones among them) serves native and web unchanged.
- * Destroy it once the handlers built from it are prepared (a config is copied where it is
+ * A model config (`anira_model_config`), the web twin of `anira::ModelConfig`, built from the
+ * same JSON file a native host loads. The file is parsed with `anira_model_config_from_json`
+ * and every model entry whose engine runs here gets its file fetched relative to the config's
+ * URL and attached as bytes, so one `*.model.json` (the bundled `extras/models` ones among them)
+ * serves native and web unchanged. Where the web differs: `fromUrl` and `fromJson` fetch the
+ * model files (a browser has no file system to load them from), and the config is destroyed
+ * with `destroy()` once the handlers built from it are prepared (a config is copied where it is
  * used) or no longer needed.
  */
 export class ModelConfig {
   readonly abi: AniraBindings
-  /** The `anira_model_config*` the raw entries take. */
-  readonly ptr: number
+  private readonly config: number
 
-  private constructor(abi: AniraBindings, ptr: number) {
+  private constructor(abi: AniraBindings, config: number) {
     this.abi = abi
-    this.ptr = ptr
+    this.config = config
   }
 
   /** Wrap a config pointer this object then owns (destroys). */
@@ -134,14 +143,15 @@ export class ModelConfig {
       const fetchModel =
         options.fetchModel ??
         ((entry: ModelEntry) =>
-          entry.engine === anira_engine.ANIRA_ENGINE_CUSTOM || enabled.has(entry.engine))
-      const defaults = abi.anira_model_config_default_engine(config.ptr)
-      const count = abi.anira_model_config_model_count(config.ptr)
+          entry.engine.kind === anira_engine.ANIRA_ENGINE_CUSTOM ||
+          enabled.has(entry.engine.kind))
+      const defaults = abi.anira_model_config_default_engine(config.config)
+      const count = abi.anira_model_config_model_count(config.config)
       for (let index = 0; index < count; index++) {
-        const path = abi.anira_model_config_model_path(config.ptr, index)
+        const path = abi.anira_model_config_model_path(config.config, index)
         if (path === null) continue
         let { engine, engine_id: engineId } = abi.anira_model_config_model_engine(
-          config.ptr,
+          config.config,
           index
         )
         if (engine === anira_engine.ANIRA_ENGINE_NONE) {
@@ -150,13 +160,12 @@ export class ModelConfig {
         }
         const entry: ModelEntry = {
           index,
-          engine,
-          engineId,
+          engine: { kind: engine, id: engineId ?? '' },
           path,
           url: new URL(path, baseUrl),
         }
         if (!fetchModel(entry)) continue
-        config.attachBytes(index, await readBytes(fetcher, entry.url))
+        config.setModelBytes(index, await readBytes(fetcher, entry.url))
       }
     } catch (error) {
       config.destroy()
@@ -165,8 +174,12 @@ export class ModelConfig {
     return config
   }
 
-  /** Replace model entry `index`'s source with `bytes`, copied into the config. */
-  attachBytes(index: number, bytes: Uint8Array): void {
+  /**
+   * Replace model entry `index`'s source with `bytes`, copied into the config
+   * (`anira_model_config_set_model_bytes` with `ANIRA_BYTES_COPY`; the copy is the one
+   * ownership the web takes); chains, as `anira::ModelConfig::set_model_bytes`.
+   */
+  setModelBytes(index: number, bytes: Uint8Array): this {
     const m = this.abi.module
     const ptr = m._malloc(bytes.length)
     if (ptr === 0)
@@ -174,7 +187,7 @@ export class ModelConfig {
     try {
       heap(m).HEAPU8.set(bytes, ptr)
       this.abi.anira_model_config_set_model_bytes(
-        this.ptr,
+        this.config,
         index,
         ptr,
         bytes.length,
@@ -185,14 +198,35 @@ export class ModelConfig {
     } finally {
       m._free(ptr)
     }
+    return this
   }
 
   /** The config in v3 spelling (`anira_model_config_to_json`). */
   toJson(): string {
-    return this.abi.anira_model_config_to_json(this.ptr)
+    return this.abi.anira_model_config_to_json(this.config)
+  }
+
+  /** @internal The dtype and extents of every input tensor, in slot order. */
+  inputSpecs(): InputSpec[] {
+    const specs: InputSpec[] = []
+    const n = this.abi.anira_model_config_num_inputs(this.config)
+    for (let i = 0; i < n; i++) {
+      const spec = this.abi.anira_model_config_input(this.config, i)
+      const shape: number[] = []
+      for (let a = 0; a < this.abi.anira_tensor_spec_ndim(spec); a++) {
+        shape.push(Number(this.abi.anira_tensor_spec_axis(spec, a).extent))
+      }
+      specs.push({ dtype: this.abi.anira_tensor_spec_dtype(spec), shape })
+    }
+    return specs
+  }
+
+  /** The `anira_model_config*` the raw entries take. */
+  native(): number {
+    return this.config
   }
 
   destroy(): void {
-    this.abi.anira_model_config_destroy(this.ptr)
+    this.abi.anira_model_config_destroy(this.config)
   }
 }

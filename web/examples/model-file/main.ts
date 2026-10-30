@@ -8,14 +8,14 @@
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
 } from '@anira-project/anira'
 // [module]
-import type { AniraAudioNode, RenderGeometry } from '@anira-project/anira'
+import type { AniraAudioNode, PlanReport, RenderGeometry } from '@anira-project/anira'
 
 /** The model's Static input `gain`: input slot 1 of the config. */
 export const GAIN_SLOT = 1
@@ -29,7 +29,9 @@ export type ModelFileExample = {
   /** The dry path's delay: the handler's latency, so the dry signal lines up with the wet. */
   dry: DelayNode
   /** The handler's latency in samples: the wet output is the input this much later. */
-  latency: () => number
+  getLatency: () => number
+  /** The plan report of the handler's last prepare. */
+  planReport: () => PlanReport
   /** The gain's AudioParam: set, ramp or automate it. */
   gain: AudioParam
   /** Re-prepare the running node at `geometry`, then delay the dry path by the new latency. */
@@ -56,7 +58,7 @@ export async function createModelFileExample(
 ): Promise<ModelFileExample> {
   // [log]
   const anira = await Anira.create() // the module on this thread, a shared 512 MiB memory
-  anira.setLogHook() // records to the console (pass a callback for your own sink)
+  anira.setLogSink() // records to the console (pass a callback for your own sink)
   const stopLogPump = anira.startLogPump() // the web has no drain thread
   // [log]
 
@@ -71,13 +73,17 @@ export async function createModelFileExample(
   // quanta back to back), so the latency the handler reports covers it.
   const geometry = await measureRenderGeometry(audioContext)
   const contract = (
-    await Contract.fromUrl(anira, new URL('gain.contract.json', modelsUrl))
-  ).setGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
+    await ContractHandle.fromUrl(anira, new URL('gain.contract.json', modelsUrl))
+  ).hardGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
   // [configs]
 
   // [handler]
-  const pipeline = Pipeline.create(anira).addInference(model)
-  const handler = Handler.create(context, pipeline).prepare(contract)
+  const pipeline = Pipeline.create(anira).inference(model)
+  const handler = InferenceHandler.create(context, pipeline)
+  const report = handler.prepare(contract) // the plans this prepare compiled
+  for (const plan of report.plans()) {
+    console.log(`plan: engine ${plan.engine}, ${plan.budgetMs} ms budget`)
+  }
   pipeline.destroy() // the handler copied it
   // [handler]
   // An offline render waits for every inference: the Workers must be in their loops first.
@@ -103,7 +109,7 @@ export async function createModelFileExample(
     .connect(new GainNode(audioContext, { gain: dryLevel }))
     .connect(output)
   const applyLatency = () => {
-    const latency = handler.latency() // samples
+    const latency = handler.getLatency() // samples
     // The value setter is setValueAtTime(value, currentTime), and reads back at once.
     dry.delayTime.value = latency / audioContext.sampleRate
     console.log(`latency: ${latency} samples`)
@@ -117,7 +123,7 @@ export async function createModelFileExample(
   // callback's run, re-prepare the running node with the new geometry and re-read the latency
   // for the dry path.
   const applyGeometry = (g: RenderGeometry) => {
-    contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
+    contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract) // holds the node off (silence) while the handler re-prepares
     applyLatency()
   }
@@ -142,7 +148,8 @@ export async function createModelFileExample(
     output,
     audioNode,
     dry,
-    latency: () => handler.latency(),
+    getLatency: () => handler.getLatency(),
+    planReport: () => handler.planReport(),
     gain: gainParam,
     applyGeometry,
     remeasure,

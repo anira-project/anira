@@ -1,7 +1,9 @@
 import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS, anira_status } from './abi/enums'
-import type { Contract } from './Contract'
+import type { ContractHandle } from './ContractHandle'
+import { staticInputBytes, type InputSpec } from './staticInput'
 import type { WithAbi } from './ModelConfig'
+import { PlanReport } from './PlanReport'
 
 /** How `createAudioNode` builds the node (`anira_em_audio_node_create`). */
 export type AudioNodeOptions = {
@@ -53,19 +55,22 @@ export type AniraAudioNode = {
   /** The AudioParam of each `params` slot. */
   readonly params: ReadonlyMap<number, AudioParam>
   /**
-   * Write one of the `staticInputs` whole: a typed array or `DataView` of exactly the spec's
-   * bytes, or plain numbers as float32. The render callback pushes it before its next process
-   * call, never torn (`anira_em_audio_node_set_static_input`).
+   * Write one of the `staticInputs` whole, in the spec's dtype, as
+   * `InferenceHandler.setStaticInput` takes it: a typed array of the spec's element type, any
+   * `ArrayBufferView` of exactly the spec's bytes, or plain numbers converted to its element
+   * type. The render callback pushes it before its next process call, never torn
+   * (`anira_em_audio_node_set_static_input`).
    */
   setStaticInput(slot: number, values: ArrayBufferView | ArrayLike<number>): void
   /**
    * Re-prepare the node's handler under `contract` while the node streams: the way to change the
    * geometry of a running node (`measureRenderGeometry` again after an output-device change).
    * The render callback is held off (silence) while the handler re-prepares, then resumes; read
-   * the handler's latency again afterwards. `handler.prepare` refuses while a node streams
-   * through the handler (`anira_em_audio_node_prepare`).
+   * the handler's latency again afterwards. Returns the plan report of this prepare, as
+   * `InferenceHandler.prepare` does. `handler.prepare` refuses while a node streams through the
+   * handler (`anira_em_audio_node_prepare`).
    */
-  prepare(contract: Contract): void
+  prepare(contract: ContractHandle): PlanReport
   /**
    * Hold the node (true) or release it (false): a held node outputs silence and leaves its
    * handler alone (nothing pushed or pulled, no inference started); released, it streams on from
@@ -127,13 +132,15 @@ const writeSlots = (
  * range holds the context's render quantum): the render callback is C
  * (`anira_em_audio_node_create`), one input per Streamed input slot and one output per Streamed
  * output slot it serves (all of them by default), their buffers the handler's tensors, one
- * `anira_handler_process_multi` per quantum over all of them, the miss rule applied there. Works on an `AudioContext` and an `OfflineAudioContext`. Destroy the node
- * before the handler.
+ * `anira_handler_process_multi` per quantum over all of them, the miss rule applied there.
+ * Works on an `AudioContext` and an `OfflineAudioContext`. Destroy the node before the handler.
+ * `inputs` are the handler's input specs, which `setStaticInput` writes in.
  */
 export const createAudioNode = async (
   anira: WithAbi,
   audioContext: BaseAudioContext,
   handler: number,
+  inputs: readonly InputSpec[],
   options: AudioNodeOptions = {}
 ): Promise<AniraAudioNode> => {
   const { abi } = anira
@@ -198,9 +205,7 @@ export const createAudioNode = async (
       handle,
       params: paramMap,
       setStaticInput(slot, values) {
-        const bytes = ArrayBuffer.isView(values)
-          ? new Uint8Array(values.buffer, values.byteOffset, values.byteLength)
-          : new Uint8Array(Float32Array.from(values).buffer)
+        const bytes = staticInputBytes(inputs[slot], values)
         const ptr = m._malloc(bytes.length)
         if (ptr === 0) throw new RangeError('anira: out of memory for a Static input')
         try {
@@ -211,7 +216,8 @@ export const createAudioNode = async (
         }
       },
       prepare(contract) {
-        abi.anira_em_audio_node_prepare(handle, contract.ptr)
+        abi.anira_em_audio_node_prepare(handle, contract.native())
+        return new PlanReport(abi, abi.anira_handler_plan_report(handler))
       },
       hold(held) {
         abi.anira_em_audio_node_hold(handle, held ? 1 : 0)

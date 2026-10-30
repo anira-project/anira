@@ -37,11 +37,14 @@ Adding It to the Pipeline
 .. code-block:: ts
 
    pipeline.addStage('org.example.my-stage', {
-     hooks: ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_PREPARE | ANIRA_EM_HOOK_UNPREPARE,
+     phases:
+       ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_PREPARE | ANIRA_EM_HOOK_UNPREPARE,
    })
 
-``hooks`` names the phases that cross into JavaScript; a phase without its bit runs anira's
-default and never crosses. ``flags`` is the stage's real-time promise, stated, never derived:
+``phases`` names the phases that cross into JavaScript; a phase without its bit runs anira's
+default and never crosses. Each bit is ``1 << ANIRA_PHASE_*``, one index space with
+``anira::Stage::k_*`` of ``anira.hpp`` (``ANIRA_EM_HOOK_AFTER`` is ``Stage::k_after_inference``,
+16), the lifecycle phases (prepare, release, reset, unprepare, init) above the data phases. ``flags`` is the stage's real-time promise, stated, never derived:
 the default ``ANIRA_STAGE_FLAG_REALTIME_PRE_POST`` says ``preProcess``, ``postProcess`` and
 ``reset`` allocate nothing, lock nothing and wait for nothing, which a Hard contract requires of
 them (they run on the audio thread); ``ANIRA_STAGE_FLAG_REALTIME_HOOKS`` says the same of

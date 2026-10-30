@@ -8,8 +8,8 @@
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
@@ -23,7 +23,7 @@ const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   const anira = await Anira.create()
-  anira.setLogHook(() => {})
+  anira.setLogSink(() => {})
   const context = Context.create(anira, { threads: 1 })
   const model = await ModelConfig.fromUrl(
     anira,
@@ -52,16 +52,17 @@ const run = async () => {
         `{ quantum: ${geometry.quantum}, burst: ${geometry.burst} }`
     )
     const contract = (
-      await Contract.fromUrl(
+      await ContractHandle.fromUrl(
         anira,
         new URL(`${MODELS}gain.contract.json`, import.meta.url)
       )
-    ).setGeometry(geometry.quantum, geometry.burst, RATE)
-    const pipeline = Pipeline.create(anira).addInference(model)
-    const handler = Handler.create(context, pipeline).prepare(contract)
+    ).hardGeometry(geometry.quantum, geometry.burst, RATE)
+    const pipeline = Pipeline.create(anira).inference(model)
+    const handler = InferenceHandler.create(context, pipeline)
+    handler.prepare(contract)
     pipeline.destroy()
     contract.destroy()
-    const latency = handler.latency()
+    const latency = handler.getLatency()
     const audioNode = await handler.createAudioNode(audio, { params: [1], waitMs: 500 })
     audioNode.params.get(1).value = GAIN
 

@@ -39,7 +39,7 @@ const run = async (): Promise<Result> => {
   example.output.connect(audio.destination)
   source.start(0)
   const rendered = (await audio.startRendering()).getChannelData(0)
-  const latency = example.latency()
+  const latency = example.getLatency()
 
   // The gain of sample i of input block `block`: the stage ramps over the block the new gain
   // arrives in.

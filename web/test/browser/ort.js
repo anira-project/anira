@@ -13,8 +13,8 @@
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
 } from '../../dist/index.js'
@@ -36,11 +36,16 @@ const requests = async (pathname) =>
 // rendered energy.
 const renderGain = async (anira, context, model) => {
   const pipeline = Pipeline.create(anira)
-    .addInference(model)
+    .inference(model)
     .registerEngine(ONNXRUNTIME_WEB_ENGINE_ID)
-  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
-  const handler = Handler.create(context, pipeline).prepare(contract)
-  const latency = handler.latency()
+  const contract = ContractHandle.hard(anira, {
+    blockMin: QUANTUM,
+    rate: RATE,
+    budgetMs: 2,
+  })
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
+  const latency = handler.getLatency()
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const audioNode = await handler.createAudioNode(audio, { params: [1], waitMs: 500 })
@@ -73,7 +78,7 @@ const run = async () => {
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
 
   const anira = await Anira.create()
-  anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
+  anira.setLogSink((record) => console.log(`[anira ${record.group}] ${record.message}`))
   const model = await ModelConfig.fromUrl(
     anira,
     new URL('./ort-gain.model.json', import.meta.url)
@@ -101,7 +106,7 @@ const run = async () => {
       `(worst error ${single.worst})`
   )
   context.destroy()
-  check(context.threads === 0, 'the Workers stopped with the context')
+  check(context.numInferenceThreads() === 0, 'the Workers stopped with the context')
 
   // Two intra-op threads per inference: each Worker's runtime starts a Worker of its own.
   const threaded = Context.create(anira, {
@@ -120,7 +125,10 @@ const run = async () => {
       `${two.latency} samples (worst error ${two.worst}, energy ${two.energy.toFixed(2)})`
   )
   threaded.destroy()
-  check(threaded.threads === 0, 'with numThreads 2 the Workers stopped with the context')
+  check(
+    threaded.numInferenceThreads() === 0,
+    'with numThreads 2 the Workers stopped with the context'
+  )
 
   model.destroy()
   return { checks }

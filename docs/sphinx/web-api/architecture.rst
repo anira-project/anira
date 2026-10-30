@@ -33,7 +33,7 @@ The context's inference Workers
    done (one that never finishes is terminated after 10 s, its 4 MiB region left allocated).
 
 The audio thread
-   :js:meth:`Handler.createAudioNode` creates a Wasm Audio Worklet node
+   :js:meth:`InferenceHandler.createAudioNode` creates a Wasm Audio Worklet node
    (``anira_em_audio_node_create``, ``src/platform/emscripten/em_audio.cpp``). The first node of
    an audio context starts the context's worklet thread (Emscripten loads the glue into its
    AudioWorkletGlobalScope), a node of *n* AudioParams registers the processor
@@ -70,7 +70,8 @@ Where Each Phase Runs
    * - Phase
      - Scope
    * - stage ``preProcess``, ``postProcess``, ``reset`` (Hard contract)
-     - the audio worklet (a ``workletModules`` module of :js:meth:`Handler.createAudioNode`)
+     - the audio worklet (a ``workletModules`` module of
+       :js:meth:`InferenceHandler.createAudioNode`)
    * - stage ``beforeInference``, ``afterInference``; engine ``process``, ``reset``
      - the inference Workers (the context's ``workerModule``)
    * - stage ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``

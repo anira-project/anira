@@ -22,8 +22,8 @@ import {
   Anira,
   AniraError,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_status,
@@ -63,7 +63,7 @@ const run = async () => {
     } catch (error) {
       refusals.push(
         error instanceof AniraError &&
-          error.code === anira_status.ANIRA_ERROR_INVALID_ARGUMENT
+          error.status === anira_status.ANIRA_ERROR_INVALID_ARGUMENT
           ? 'refused'
           : `${error}`
       )
@@ -75,7 +75,7 @@ const run = async () => {
       `above 2 GiB with an AniraError (${refusals.join(', ')})`
   )
   const anira = await Anira.create()
-  anira.setLogHook(() => {})
+  anira.setLogSink(() => {})
   const bytes = () => anira.memory.buffer.byteLength
   const initial = bytes()
   check(initial === 256 * MIB, `the memory starts at ${initial / MIB} MiB`)
@@ -107,14 +107,16 @@ const run = async () => {
     })
   )
   const jsContract = (blockMax = QUANTUM) =>
-    Contract.hard(anira, { blockMin: QUANTUM, blockMax, rate: RATE, budgetMs: 2 })
+    ContractHandle.hard(anira, { blockMin: QUANTUM, blockMax, rate: RATE, budgetMs: 2 })
   const jsHandler = (contract) => {
     const pipeline = Pipeline.create(anira)
-      .addInference(jsModel)
+      .inference(jsModel)
       .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-      .addStage(STAGE, { hooks: ANIRA_EM_HOOK_PRE })
+      .addStage(STAGE, { phases: ANIRA_EM_HOOK_PRE })
     try {
-      return Handler.create(context, pipeline).prepare(contract)
+      const handler = InferenceHandler.create(context, pipeline)
+      handler.prepare(contract)
+      return handler
     } finally {
       pipeline.destroy()
     }
@@ -151,14 +153,19 @@ const run = async () => {
     new URL(`${MODELS}gain.model.json`, import.meta.url)
   )
   const gainContract = (
-    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
-  ).setGeometry(QUANTUM, QUANTUM, RATE)
+    await ContractHandle.fromUrl(
+      anira,
+      new URL(`${MODELS}gain.contract.json`, import.meta.url)
+    )
+  ).hardGeometry(QUANTUM, QUANTUM, RATE)
   const fillers = []
   const grow = (beyond) => {
     const target = bytes() + beyond
     while (bytes() < target && fillers.length < 2000) {
-      const pipeline = Pipeline.create(anira).addInference(gainModel)
-      fillers.push(Handler.create(context, pipeline).prepare(gainContract))
+      const pipeline = Pipeline.create(anira).inference(gainModel)
+      const handler = InferenceHandler.create(context, pipeline)
+      handler.prepare(gainContract)
+      fillers.push(handler)
       pipeline.destroy()
     }
   }
@@ -174,10 +181,10 @@ const run = async () => {
     grow(256 * MIB)
     const after = jsHandler(jsContract())
     check(
-      bytes() >= startedAt + 256 * MIB && after.ptr >= startedAt,
+      bytes() >= startedAt + 256 * MIB && after.native() >= startedAt,
       `the memory grew from ${startedAt / MIB} to ${bytes() / MIB} MiB through ` +
         `${fillers.length} handlers; the handler made after it lies above the old end ` +
-        `(at ${(after.ptr / MIB).toFixed(0)} MiB)`
+        `(at ${(after.native() / MIB).toFixed(0)} MiB)`
     )
     const second = await node(after, audio, 500)
     const samples = tone(frames)
@@ -190,8 +197,8 @@ const run = async () => {
     merger.connect(audio.destination)
     source.start(0)
     const rendered = await audio.startRendering()
-    const w1 = worstOf(rendered.getChannelData(0), samples, before.latency())
-    const w2 = worstOf(rendered.getChannelData(1), samples, after.latency())
+    const w1 = worstOf(rendered.getChannelData(0), samples, before.getLatency())
+    const w2 = worstOf(rendered.getChannelData(1), samples, after.getLatency())
     check(
       w1 < 1e-6 && w2 < 1e-6,
       `after the growth both nodes render exact, through the Workers and the worklet (worst ` +
@@ -239,7 +246,7 @@ const run = async () => {
     }
     const rendered = (await audio.startRendering()).getChannelData(0)
     finished = true
-    const latency = handler.latency()
+    const latency = handler.getLatency()
     // Exact but where the node output silence: the quanta it was held for the re-prepare, and
     // with the timer (Firefox) the quanta whose inferences missed while the main thread created
     // the handlers that grew the memory, which the render does not wait for. A stale heap view

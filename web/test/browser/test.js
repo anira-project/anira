@@ -17,8 +17,8 @@ import {
   Anira,
   AniraError,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_status,
@@ -81,7 +81,7 @@ const run = async () => {
   const counter = consoleCounter(BLOCKING_WARNING)
   const anira = await Anira.create()
   const hook = (record) => console.log(`[anira ${record.group}] ${record.message}`)
-  anira.setLogHook(hook)
+  anira.setLogSink(hook)
   check(anira.version.length > 0, `the module is anira ${anira.version}`)
 
   warnOnce(anira.abi)
@@ -90,14 +90,14 @@ const run = async () => {
     `with the log hook set a warning reaches the console once, through the hook ` +
       `(${JSON.stringify(counter.counts)})`
   )
-  anira.setLogHook(null)
+  anira.setLogSink(null)
   warnOnce(anira.abi)
   check(
     counter.total() === 2 && counter.counts.log === 1 && counter.counts.warn === 1,
     `without the hook it reaches the console once, through the platform sink as console.warn ` +
       `(${JSON.stringify(counter.counts)})`
   )
-  anira.setLogHook(hook)
+  anira.setLogSink(hook)
 
   // The bindings throw a refused call as an AniraError with the entry's message.
   let thrown = null
@@ -108,7 +108,7 @@ const run = async () => {
   }
   check(
     thrown instanceof AniraError &&
-      thrown.code === anira_status.ANIRA_ERROR_JSON &&
+      thrown.status === anira_status.ANIRA_ERROR_JSON &&
       thrown.message.startsWith('anira_model_config_from_json: '),
     `a refused call throws an AniraError (${thrown?.message})`
   )
@@ -141,16 +141,21 @@ const run = async () => {
     })
   )
   const pipeline = Pipeline.create(anira)
-    .addInference(model)
+    .inference(model)
     .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-    .addStage(STAGE, { hooks: ANIRA_EM_HOOK_PRE })
-  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
-  const handler = Handler.create(context, pipeline).prepare(contract)
-  const latency = handler.latency()
+    .addStage(STAGE, { phases: ANIRA_EM_HOOK_PRE })
+  const contract = ContractHandle.hard(anira, {
+    blockMin: QUANTUM,
+    rate: RATE,
+    budgetMs: 2,
+  })
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
+  const latency = handler.getLatency()
   // The first session built the pool.
   check(
-    context.threads === THREADS,
-    `the context's pool has ${context.threads} Wasm Workers`
+    context.numInferenceThreads() === THREADS,
+    `the context's pool has ${context.numInferenceThreads()} Wasm Workers`
   )
   // An offline render waits for every inference: the Workers must be in their loops first.
   await context.ready()
@@ -192,7 +197,8 @@ const run = async () => {
   handler.destroy()
 
   // The same gain as a tensor slot the main thread writes whole: a constant 0.5.
-  const second = Handler.create(context, pipeline).prepare(contract)
+  const second = InferenceHandler.create(context, pipeline)
+  second.prepare(contract)
   const audio2 = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const tensorNode = await second.createAudioNode(audio2, {
     staticInputs: [1],
@@ -223,7 +229,7 @@ const run = async () => {
   contract.destroy()
   model.destroy()
   context.destroy()
-  check(context.threads === 0, 'the last context stopped the pool')
+  check(context.numInferenceThreads() === 0, 'the last context stopped the pool')
   return { checks }
 }
 

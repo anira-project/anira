@@ -10401,62 +10401,62 @@
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOKS_VERSION",
-          "value": "1u",
-          "doc": "The layout of a scope's registry object (the version field of globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and their arguments. Appended to, never reordered."
+          "value": "2u",
+          "doc": "The layout of a scope's registry object (the version field of globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and their arguments. Appended to, never reordered. 2: the stage hook bits are 1u << ANIRA_PHASE_* (one index space with anira.hpp's Stage::k_* phase bits); 1 numbered them 1u << n in their own order."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_PRE",
           "value": "1u",
-          "doc": "Stage hook bit: pre_process crosses into the hook (ANIRA_PHASE_PRE_PROCESS). An unset bit leaves the slot NULL, so that phase runs anira's default body and never crosses into JavaScript."
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_PRE_PROCESS: pre_process crosses into the hook. An unset bit leaves the slot NULL, so that phase runs anira's default body and never crosses into JavaScript. The bits are the phases' own (anira.hpp's Stage::k_pre_process is the same value): one index space."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_POST",
           "value": "2u",
-          "doc": "Stage hook bit: post_process crosses into the hook (ANIRA_PHASE_POST_PROCESS)."
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_POST_PROCESS: post_process crosses into the hook."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_BEFORE",
           "value": "4u",
-          "doc": "Stage hook bit: before_inference crosses into the hook (ANIRA_PHASE_BEFORE_INFERENCE)."
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_BEFORE_INFERENCE: before_inference crosses into the hook."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_AFTER",
-          "value": "8u",
-          "doc": "Stage hook bit: after_inference crosses into the hook (ANIRA_PHASE_AFTER_INFERENCE)."
+          "value": "16u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_AFTER_INFERENCE: after_inference crosses into the hook (bit 3, ANIRA_PHASE_INFERENCE, is no stage phase)."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_PREPARE",
-          "value": "16u",
-          "doc": "Stage hook bit: prepare crosses into the hook (ANIRA_PHASE_PREPARE)."
+          "value": "32u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_PREPARE: prepare crosses into the hook."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_RELEASE",
-          "value": "32u",
-          "doc": "Stage hook bit: release crosses into the hook (ANIRA_PHASE_RELEASE) before the trampolines' record is freed."
+          "value": "64u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_RELEASE: release crosses into the hook before the trampolines' record is freed. A lifecycle phase, above the data phases."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_RESET",
-          "value": "64u",
-          "doc": "Stage hook bit: reset crosses into the hook (ANIRA_PHASE_RESET), the first chunk of a new stream, for a stage that keeps per-stream state."
+          "value": "128u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_RESET: reset crosses into the hook, the first chunk of a new stream, for a stage that keeps per-stream state."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_UNPREPARE",
-          "value": "128u",
-          "doc": "Stage hook bit: unprepare crosses into the hook (ANIRA_PHASE_UNPREPARE)."
+          "value": "256u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_UNPREPARE: unprepare crosses into the hook."
         },
         {
           "kind": "define",
           "name": "ANIRA_EM_HOOK_INIT",
-          "value": "256u",
-          "doc": "Stage hook bit: init crosses into the hook (ANIRA_PHASE_INIT)."
+          "value": "512u",
+          "doc": "Stage hook bit, 1u << ANIRA_PHASE_INIT: init crosses into the hook."
         },
         {
           "kind": "define",

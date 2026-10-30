@@ -11,15 +11,21 @@ class over the C handle:
 1. instantiate the module (:js:class:`Anira`) and route the log,
 2. a context (:js:class:`Context`): the pool of inference Workers,
 3. the model config and the contract, from the same files a native host loads
-   (:js:class:`ModelConfig`, :js:class:`Contract`),
-4. the pipeline and the handler (:js:class:`Pipeline`, :js:class:`Handler`),
-5. the audio node (:js:meth:`Handler.createAudioNode`),
+   (:js:class:`ModelConfig`, :js:class:`ContractHandle`),
+4. the pipeline and the handler (:js:class:`Pipeline`, :js:class:`InferenceHandler`),
+5. the audio node (:js:meth:`InferenceHandler.createAudioNode`),
 6. the teardown.
 
-The calls are the C ABI's, typed: every class keeps its handle in ``ptr`` and the module's
-bindings in ``abi`` (:js:class:`AniraBindings`, one method per ``anira_*`` entry, generated from
-the ABI registry), so anything the classes do not cover is one ``anira.abi.anira_*`` call away.
-A failed call throws an :js:class:`AniraError` with the entry's message.
+The classes are ``anira.hpp``'s in TypeScript: the same class names and the same member words
+(``InferenceHandler.getLatency`` for ``get_latency``, ``ContractHandle.hardGeometry`` for
+``hard_geometry``), the same return values (``prepare`` returns the :js:class:`PlanReport`) and
+defaults; where the web differs (``Anira.create``, the worker module, ``Context.ready``, the
+audio node, ``measureRenderGeometry``, ``fromUrl``, the log pump, ``destroy()`` instead of RAII,
+a thrown :js:class:`AniraError` instead of a returned status), the class's doc comment says so.
+Each class hands out its C handle with ``native()``, and the module's bindings are in ``abi``
+(:js:class:`AniraBindings`, one method per ``anira_*`` entry, generated from the ABI registry),
+so anything the classes do not cover is one ``anira.abi.anira_*`` call away. A failed call throws
+an :js:class:`AniraError` with the entry's message and its ``status``.
 
 .. note::
    The page must be cross-origin isolated (``Cross-Origin-Opener-Policy: same-origin``,
@@ -87,10 +93,10 @@ from the render quantum up to the context's burst at the context's rate. A live 
 a device callback's worth of quanta back to back, so ``block_max`` must cover that burst for the
 inferences to keep up; the latency the handler reports then covers it too, and a live context
 must run when it is measured (:doc:`audio_nodes`).
-:js:meth:`ModelConfig.fromJson` and :js:meth:`Contract.hard` build the same in code.
+:js:meth:`ModelConfig.fromJson` and :js:meth:`ContractHandle.hard` build the same in code.
 
-4. The Pipeline and the Handler
--------------------------------
+4. The Pipeline and the InferenceHandler
+----------------------------------------
 
 .. literalinclude:: ../../../web/examples/model-file/main.ts
    :language: ts

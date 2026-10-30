@@ -983,12 +983,12 @@ path is a Wasm Audio Worklet node whose render callback is C.
   config: ``await ModelConfig.fromUrl(anira, url)`` reads the 3.x model file a native host reads
   (a 2.x JSON document is read too, :ref:`migration-json`) and fetches its model files.
 - ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
-  ``Contract.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate: sampleRate, budgetMs })``
-  with ``g = await measureRenderGeometry(context)``, or a contract file (``Contract.fromUrl``,
-  then ``setGeometry``): the render quantum is the smallest block, the context's burst of quanta
-  the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
+  ``ContractHandle.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate, budgetMs })``
+  with ``g = await measureRenderGeometry(context)``, or a contract file
+  (``ContractHandle.fromUrl``, then ``hardGeometry``): the render quantum is the smallest block,
+  the context's burst of quanta the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
 - ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
-  ``Pipeline.create(anira).addInference(model)``, ``Handler.create(context, pipeline)`` and
+  ``Pipeline.create(anira).inference(model)``, ``InferenceHandler.create(context, pipeline)`` and
   ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core
   and its pool.
 - ``inferenceHandler.process(...)`` in a worklet becomes the handler's audio node,

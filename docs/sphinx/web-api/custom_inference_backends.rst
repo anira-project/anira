@@ -57,11 +57,12 @@ id:
      // ...
    }))
    const pipeline = Pipeline.create(anira)
-     .addInference(model)
+     .inference(model)
      .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 
 ``flags`` states the engine's promises (``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: it reads no model
-file, so its model entry needs no ``path``). Register before ``Handler.create``: a handler copies the pipeline.
+file, so its model entry needs no ``path``). Register before ``InferenceHandler.create``: a
+handler copies the pipeline.
 
 ONNX Runtime Web
 ----------------

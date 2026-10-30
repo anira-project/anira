@@ -64,58 +64,63 @@ extern "C" {
 /**
  * @brief The layout of a scope's registry object (the version field of
  * globalThis[Symbol.for('anira.registry')]): the functions the trampolines call and
- * their arguments. Appended to, never reordered.
+ * their arguments. Appended to, never reordered. 2: the stage hook bits are 1u <<
+ * ANIRA_PHASE_* (one index space with anira.hpp's Stage::k_* phase bits); 1 numbered
+ * them 1u << n in their own order.
  */
-#define ANIRA_EM_HOOKS_VERSION 1u
+#define ANIRA_EM_HOOKS_VERSION 2u
 
 /**
- * @brief Stage hook bit: pre_process crosses into the hook (ANIRA_PHASE_PRE_PROCESS). An unset
- * bit leaves the slot NULL, so that phase runs anira's default body and never crosses
- * into JavaScript.
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_PRE_PROCESS: pre_process crosses into the hook. An
+ * unset bit leaves the slot NULL, so that phase runs anira's default body and never
+ * crosses into JavaScript. The bits are the phases' own (anira.hpp's
+ * Stage::k_pre_process is the same value): one index space.
  */
 #define ANIRA_EM_HOOK_PRE 1u
 
 /**
- * @brief Stage hook bit: post_process crosses into the hook (ANIRA_PHASE_POST_PROCESS).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_POST_PROCESS: post_process crosses into the hook.
  */
 #define ANIRA_EM_HOOK_POST 2u
 
 /**
- * @brief Stage hook bit: before_inference crosses into the hook (ANIRA_PHASE_BEFORE_INFERENCE).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_BEFORE_INFERENCE: before_inference crosses into the
+ * hook.
  */
 #define ANIRA_EM_HOOK_BEFORE 4u
 
 /**
- * @brief Stage hook bit: after_inference crosses into the hook (ANIRA_PHASE_AFTER_INFERENCE).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_AFTER_INFERENCE: after_inference crosses into the
+ * hook (bit 3, ANIRA_PHASE_INFERENCE, is no stage phase).
  */
-#define ANIRA_EM_HOOK_AFTER 8u
+#define ANIRA_EM_HOOK_AFTER 16u
 
 /**
- * @brief Stage hook bit: prepare crosses into the hook (ANIRA_PHASE_PREPARE).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_PREPARE: prepare crosses into the hook.
  */
-#define ANIRA_EM_HOOK_PREPARE 16u
+#define ANIRA_EM_HOOK_PREPARE 32u
 
 /**
- * @brief Stage hook bit: release crosses into the hook (ANIRA_PHASE_RELEASE) before the
- * trampolines' record is freed.
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_RELEASE: release crosses into the hook before the
+ * trampolines' record is freed. A lifecycle phase, above the data phases.
  */
-#define ANIRA_EM_HOOK_RELEASE 32u
+#define ANIRA_EM_HOOK_RELEASE 64u
 
 /**
- * @brief Stage hook bit: reset crosses into the hook (ANIRA_PHASE_RESET), the first chunk of a
- * new stream, for a stage that keeps per-stream state.
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_RESET: reset crosses into the hook, the first chunk
+ * of a new stream, for a stage that keeps per-stream state.
  */
-#define ANIRA_EM_HOOK_RESET 64u
+#define ANIRA_EM_HOOK_RESET 128u
 
 /**
- * @brief Stage hook bit: unprepare crosses into the hook (ANIRA_PHASE_UNPREPARE).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_UNPREPARE: unprepare crosses into the hook.
  */
-#define ANIRA_EM_HOOK_UNPREPARE 128u
+#define ANIRA_EM_HOOK_UNPREPARE 256u
 
 /**
- * @brief Stage hook bit: init crosses into the hook (ANIRA_PHASE_INIT).
+ * @brief Stage hook bit, 1u << ANIRA_PHASE_INIT: init crosses into the hook.
  */
-#define ANIRA_EM_HOOK_INIT 256u
+#define ANIRA_EM_HOOK_INIT 512u
 
 /**
  * @brief Engine hook bit: reset crosses into the hook (ANIRA_PHASE_RESET). process always

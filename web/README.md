@@ -27,8 +27,8 @@ streamed through the handler's audio node:
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
@@ -36,7 +36,7 @@ import {
 
 const audioContext = new AudioContext({ sampleRate: 48000 })
 const anira = await Anira.create()
-anira.setLogHook()
+anira.setLogSink()
 anira.startLogPump()
 
 const context = Context.create(anira) // a pool of Wasm Workers, half the cores
@@ -45,12 +45,11 @@ const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
 await audioContext.resume() // the geometry is measured on a running context
 const geometry = await measureRenderGeometry(audioContext) // the render quantum, the burst
 const contract = (
-  await Contract.fromUrl(anira, '/models/gain.contract.json')
-).setGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
-const handler = Handler.create(
-  context,
-  Pipeline.create(anira).addInference(model)
-).prepare(contract)
+  await ContractHandle.fromUrl(anira, '/models/gain.contract.json')
+).hardGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
+const handler = InferenceHandler.create(context, Pipeline.create(anira).inference(model))
+const report = handler.prepare(contract) // the plans, as anira::InferenceHandler::prepare
+console.log(`${report.numPlans()} plan(s), latency ${handler.getLatency()} samples`)
 
 const audioNode = await handler.createAudioNode(audioContext, { params: [1] })
 audioNode.params.get(1)!.value = 0.5 // the model's Static gain
@@ -82,7 +81,7 @@ import workerModule from './double-engine.ts?worker&url'
 
 const context = Context.create(anira, { threads: 2, workerModule })
 const pipeline = Pipeline.create(anira)
-  .addInference(model)
+  .inference(model)
   .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 ```
 
@@ -90,6 +89,10 @@ A JavaScript engine reads its model entry in each Worker (`load(model)`: the byt
 `ModelConfig.fromUrl` attached, a view of the shared memory), so a model file is fetched once:
 `defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())` runs the model the config names for
 `org.anira.onnxruntime-web`. With Vite, also exclude `onnxruntime-web` from `optimizeDeps`.
+
+The classes and their members are the ones of `anira.hpp` (`InferenceHandler.getLatency` for
+`get_latency`, `ContractHandle.hardGeometry` for `hard_geometry`); each class's doc comment names
+where the web differs (the audio node, the worker module, `fromUrl`, `destroy()`).
 
 `web/examples/model-file/` in the repository is the quick example as a page, and
 `web/examples/stage-and-engine/` a complete page with a TypeScript stage and engine, both bundled

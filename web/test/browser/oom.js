@@ -13,8 +13,8 @@ import {
   Anira,
   AniraError,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_status,
@@ -41,9 +41,11 @@ const release = (module, filler) => filler.blocks.forEach((ptr) => module._free(
 
 // A handler on the model; everything it needs is made before the heap is filled.
 const handlerOn = (anira, context, model, contract) => {
-  const pipeline = Pipeline.create(anira).addInference(model)
+  const pipeline = Pipeline.create(anira).inference(model)
   try {
-    return Handler.create(context, pipeline).prepare(contract)
+    const handler = InferenceHandler.create(context, pipeline)
+    handler.prepare(contract)
+    return handler
   } finally {
     pipeline.destroy()
   }
@@ -54,7 +56,7 @@ const run = async () => {
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   // A fixed size, so the heap fills fast: the memory grows to 2 GiB by default.
   const anira = await Anira.create({ memory: { initial: 512 * MIB, maximum: 512 * MIB } })
-  anira.setLogHook(() => {}) // the refusals log; not shown
+  anira.setLogSink(() => {}) // the refusals log; not shown
   const m = anira.module
 
   const empty = fill(m)
@@ -65,8 +67,11 @@ const run = async () => {
     new URL(`${MODELS}gain.model.json`, import.meta.url)
   )
   const contract = (
-    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
-  ).setGeometry(128, 128, 48000)
+    await ContractHandle.fromUrl(
+      anira,
+      new URL(`${MODELS}gain.contract.json`, import.meta.url)
+    )
+  ).hardGeometry(128, 128, 48000)
   const first = handlerOn(anira, context, model, contract)
   first.destroy()
   const withCore = fill(m)
@@ -89,7 +94,7 @@ const run = async () => {
   }
   check(
     refused instanceof AniraError &&
-      refused.code === anira_status.ANIRA_ERROR_OUT_OF_MEMORY,
+      refused.status === anira_status.ANIRA_ERROR_OUT_OF_MEMORY,
     `with the heap full a handler is refused: ${refused?.message ?? 'not refused'}`
   )
   handler?.destroy()
@@ -98,8 +103,8 @@ const run = async () => {
   // Memory back: the next handler prepares, and so does the one after.
   const again = handlerOn(anira, context, model, contract)
   check(
-    again.latency() > 0,
-    `with the memory freed a handler prepares (latency ${again.latency()})`
+    again.getLatency() > 0,
+    `with the memory freed a handler prepares (latency ${again.getLatency()})`
   )
   again.destroy()
   const after = fill(m)

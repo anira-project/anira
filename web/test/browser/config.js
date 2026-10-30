@@ -11,8 +11,8 @@
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_engine,
@@ -30,41 +30,46 @@ const run = async () => {
 
   const anira = await Anira.create()
   const { abi } = anira
-  anira.setLogHook((record) => console.log(`[anira ${record.group}] ${record.message}`))
+  anira.setLogSink((record) => console.log(`[anira ${record.group}] ${record.message}`))
 
   const model = await ModelConfig.fromUrl(
     anira,
     new URL(`${MODELS}gain.model.json`, import.meta.url)
   )
-  const entries = abi.anira_model_config_model_count(model.ptr)
+  const entries = abi.anira_model_config_model_count(model.native())
   const entryOf = (engine) =>
     [...Array(entries).keys()].find(
-      (i) => abi.anira_model_config_model_engine(model.ptr, i).engine === engine
+      (i) => abi.anira_model_config_model_engine(model.native(), i).engine === engine
     )
   const onnx = entryOf(anira_engine.ANIRA_ENGINE_ONNXRUNTIME)
   check(
-    onnx !== undefined && abi.anira_model_config_model_path(model.ptr, onnx) === null,
+    onnx !== undefined &&
+      abi.anira_model_config_model_path(model.native(), onnx) === null,
     `the ONNX Runtime entry (${onnx} of ${entries}) carries its fetched bytes`
   )
   const libtorch = entryOf(anira_engine.ANIRA_ENGINE_LIBTORCH)
   check(
     libtorch !== undefined &&
-      abi.anira_model_config_model_path(model.ptr, libtorch) !== null,
+      abi.anira_model_config_model_path(model.native(), libtorch) !== null,
     'an entry of an engine this module lacks keeps its path, unfetched'
   )
   // The file leaves the geometry to the host: the render quantum at the context's rate.
   const contract = (
-    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
-  ).setGeometry(QUANTUM, QUANTUM, RATE)
+    await ContractHandle.fromUrl(
+      anira,
+      new URL(`${MODELS}gain.contract.json`, import.meta.url)
+    )
+  ).hardGeometry(QUANTUM, QUANTUM, RATE)
   check(
-    abi.anira_contract_hard_budget(contract.ptr).explicit_ms === 5,
+    abi.anira_contract_hard_budget(contract.native()).explicit_ms === 5,
     'the contract file is read as written (budget 5 ms)'
   )
 
   const context = Context.create(anira, { threads: 1 })
-  const pipeline = Pipeline.create(anira).addInference(model)
-  const handler = Handler.create(context, pipeline).prepare(contract)
-  const latency = handler.latency()
+  const pipeline = Pipeline.create(anira).inference(model)
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
+  const latency = handler.getLatency()
   check(
     true,
     `the handler prepared on the built-in ONNX Runtime engine (latency ${latency})`

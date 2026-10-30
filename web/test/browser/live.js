@@ -22,8 +22,8 @@ import {
   Anira,
   AniraError,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_miss_policy,
@@ -108,15 +108,19 @@ const stream = async (anira, audio, geometry, { load = false } = {}) => {
     new URL(`${MODELS}gain.model.json`, import.meta.url)
   )
   const contract = (
-    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
-  ).setGeometry(geometry.quantum, geometry.burst, audio.sampleRate)
+    await ContractHandle.fromUrl(
+      anira,
+      new URL(`${MODELS}gain.contract.json`, import.meta.url)
+    )
+  ).hardGeometry(geometry.quantum, geometry.burst, audio.sampleRate)
   anira.abi.anira_contract_hard_set_on_miss(
-    contract.ptr,
+    contract.native(),
     anira_miss_policy.ANIRA_MISS_ZEROS
   )
-  const pipeline = Pipeline.create(anira).addInference(model)
-  if (load) pipeline.addStage(LOAD_STAGE, { hooks: ANIRA_EM_HOOK_PRE })
-  const handler = Handler.create(context, pipeline).prepare(contract)
+  const pipeline = Pipeline.create(anira).inference(model)
+  if (load) pipeline.addStage(LOAD_STAGE, { phases: ANIRA_EM_HOOK_PRE })
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
   pipeline.destroy()
   await context.ready()
 
@@ -167,7 +171,7 @@ const run = async () => {
   )
 
   const anira = await Anira.create()
-  anira.setLogHook(() => {}) // the misses of the one-quantum run warn; not shown
+  anira.setLogSink(() => {}) // the misses of the one-quantum run warn; not shown
   const stopLogPump = anira.startLogPump()
 
   // The geometry, measured. The oracle is Chromium's baseLatency, its callback buffer, in whole
@@ -190,7 +194,7 @@ const run = async () => {
   check(
     counts.blocks > 0 && counts.zeros === 0,
     `at quantum ${geometry.quantum}, burst ${geometry.burst}: ${counts.zeros} of ` +
-      `${counts.blocks} quanta missed (latency ${sized.handler.latency()})`
+      `${counts.blocks} quanta missed (latency ${sized.handler.getLatency()})`
   )
 
   // The probe beside load that is not anira's (nothing to hold): a load processor spins in
@@ -253,7 +257,7 @@ const run = async () => {
   // the latency of 128/128; not one of 512).
   const small = await stream(anira, audio, { quantum, burst: quantum })
   const before = await small.count()
-  const latencyBefore = small.handler.latency()
+  const latencyBefore = small.handler.getLatency()
   if (geometry.burst > latencyBefore) {
     check(
       before.zeros > 0,
@@ -275,19 +279,19 @@ const run = async () => {
   }
   check(
     refused instanceof AniraError &&
-      refused.code === anira_status.ANIRA_ERROR_INVALID_STATE,
+      refused.status === anira_status.ANIRA_ERROR_INVALID_STATE,
     `a plain handler.prepare is refused while the node streams (${refused?.message})`
   )
   // Four bursts, doubled until past the latency before: the latency covers block_max, so it
   // changes.
   let blockMax = 4 * geometry.burst
   while (blockMax <= latencyBefore) blockMax *= 2
-  small.contract.setGeometry(geometry.quantum, blockMax, audio.sampleRate)
+  small.contract.hardGeometry(geometry.quantum, blockMax, audio.sampleRate)
   const held = performance.now()
   small.audioNode.prepare(small.contract)
   const heldMs = performance.now() - held
   const after = await small.count()
-  const latencyAfter = small.handler.latency()
+  const latencyAfter = small.handler.getLatency()
   check(
     after.blocks > 0 && after.zeros === 0,
     `re-prepared mid-stream through the node to block_max ${blockMax}: ${after.zeros} of ` +

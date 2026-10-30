@@ -74,7 +74,12 @@ static void check_throwing_hook(void) {
     anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
     check(anira_em_stage_desc_init(NULL, 0, ANIRA_EM_HOOK_PRE, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_stage_desc_init refuses a NULL desc");
-    check(anira_em_stage_desc_init(&desc, 0, 512u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
+    /* The bits are 1u << ANIRA_PHASE_*: the inference phase (bit 3) is no stage phase, and
+       nothing lies above init (bit 9). */
+    check(anira_em_stage_desc_init(&desc, 0, 1u << ANIRA_PHASE_INFERENCE, 0) ==
+              ANIRA_ERROR_INVALID_ARGUMENT,
+          "anira_em_stage_desc_init refuses the inference phase's bit");
+    check(anira_em_stage_desc_init(&desc, 0, 1024u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_stage_desc_init refuses an undefined bit");
     check_status(anira_em_stage_desc_init(&desc, SMOKE_THROWING_KEY, ANIRA_EM_HOOK_PRE, 0),
                  NULL,

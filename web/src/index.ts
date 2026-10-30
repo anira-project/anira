@@ -8,9 +8,11 @@ export * from './scope'
 export * from './Anira'
 export * from './Context'
 export * from './ModelConfig'
-export * from './Contract'
+export * from './ContractHandle'
 export * from './Pipeline'
-export * from './Handler'
+export * from './InferenceHandler'
+export * from './PlanReport'
+export type { InputSpec } from './staticInput'
 export * from './AudioNode'
 export {
   measureRenderGeometry,

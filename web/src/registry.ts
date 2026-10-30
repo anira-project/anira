@@ -110,14 +110,14 @@ const status = (result: number | void): number => (result ?? anira_status.ANIRA_
  * module of the instance that runs the call; an inference Worker awaits `boot` before its loop.
  */
 export class Registry {
-  readonly version = 1
+  readonly version = 2
   /** @hidden */
   private readonly stages = new Map<number, Entry<StageFactory, Stage>>()
   /** @hidden */
   private readonly engines = new Map<number, Entry<EngineFactory, Engine>>()
   private env: ScopeEnv | null = null
   /** The scope's log sink (`anira_em_set_log_hook`); none: the records are not shown here. */
-  logHook: ((record: LogRecord) => void) | null = null
+  logSink: ((record: LogRecord) => void) | null = null
 
   defineStage(name: string, factory: StageFactory): number {
     return this.define(this.stages, name, factory)
@@ -262,7 +262,7 @@ export class Registry {
 
   /** The log hook's target. */
   log(module: AbiModule, record: number): void {
-    if (this.logHook) this.logHook(logRecordAt(module, record))
+    if (this.logSink) this.logSink(logRecordAt(module, record))
   }
 }
 

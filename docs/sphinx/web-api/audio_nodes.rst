@@ -2,7 +2,7 @@ Audio Nodes
 ===========
 
 A handler streams audio through a Wasm Audio Worklet node: ``await handler.createAudioNode(
-audioContext, options)`` (:js:meth:`Handler.createAudioNode`, the C entry
+audioContext, options)`` (:js:meth:`InferenceHandler.createAudioNode`, the C entry
 ``anira_em_audio_node_create``). The node works on an ``AudioContext`` and an
 ``OfflineAudioContext``; connect ``audioNode.node`` into the graph.
 
@@ -101,8 +101,8 @@ The handler's latency then covers the burst. A dry path beside the model's waits
    :end-before: // [latency]
    :dedent:
 
-Nothing re-prepares on its own, and :js:meth:`Handler.createAudioNode` cannot tell a block range
-too small for the context: measure first.
+Nothing re-prepares on its own, and :js:meth:`InferenceHandler.createAudioNode` cannot tell a
+block range too small for the context: measure first.
 
 .. tip::
    Create the context with ``renderSizeHint: 'hardware'`` where the browser has render sizes
@@ -127,8 +127,9 @@ render callback may be inside a process call. The node's callback is held off fi
 silence for those quanta and leaves the handler alone), the main thread waits until the quantum
 in flight returned (bounded; the audio thread never waits), the handler re-prepares, the node's
 state that depends on the prepare is rebuilt off the audio thread, and the callback resumes.
-In headless Chromium the hold lasts about 2 ms, under one burst. Read the handler's latency
-again afterwards.
+In headless Chromium the hold lasts about 2 ms, under one burst. It returns the
+:js:class:`PlanReport` of that prepare, as :js:meth:`InferenceHandler.prepare` does; read the
+handler's latency again afterwards (``handler.getLatency()``).
 
 Device changes
    An output-device change may change the burst (the callback's size), never the quantum. The
@@ -139,7 +140,7 @@ Device changes
    .. code-block:: ts
 
       const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-      contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
+      contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
       audioNode.prepare(contract)
 
    A node's rendering on the audio thread hides the callback's runs from the probe: in headless
@@ -213,8 +214,10 @@ Options
    pushes its value to the handler each quantum it changed.
 ``staticInputs``
    Static inputs of any shape and dtype the main thread writes whole,
-   ``audioNode.setStaticInput(slot, values)`` (a typed array of the spec's bytes, or numbers as
-   float32): a seqlock block per slot, so the callback never pushes a torn value and never waits.
+   ``audioNode.setStaticInput(slot, values)`` (in the spec's dtype, as
+   :js:meth:`InferenceHandler.setStaticInput` takes it: a typed array of the spec's element type,
+   any view of exactly the spec's bytes, or plain numbers converted to it): a seqlock block per
+   slot, so the callback never pushes a torn value and never waits.
 ``waitMs``
    0 (the default): never wait, a live context. Above 0: wait up to this long per quantum for its
    inference; ``await context.ready()`` first.

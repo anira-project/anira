@@ -11,8 +11,8 @@ import {
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
@@ -37,7 +37,7 @@ export type GainExample = {
   /** The dry path's delay: the handler's latency. */
   dry: DelayNode
   /** The handler's latency in samples: the wet output is the input this much later. */
-  latency: () => number
+  getLatency: () => number
   /** The gain's AudioParam: set, ramp or automate it. */
   gain: AudioParam
   /** Measure the context's geometry again and re-prepare: after the output device changed. */
@@ -55,7 +55,7 @@ export async function createGainExample(
 ): Promise<GainExample> {
   // 1. The module, its log.
   const anira = await Anira.create()
-  anira.setLogHook()
+  anira.setLogSink()
   const stopLogPump = anira.startLogPump()
 
   // 2. A context whose pool of Wasm Workers imports the engine's module, and the model
@@ -87,10 +87,10 @@ export async function createGainExample(
 
   // 3. The pipeline: the engine and the stage, under the names their modules define them by.
   const pipeline = Pipeline.create(anira)
-    .addInference(model)
+    .inference(model)
     .registerEngine(DOUBLE_ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
     .addStage(INPUT_GAIN_STAGE, {
-      hooks:
+      phases:
         ANIRA_EM_HOOK_PRE |
         ANIRA_EM_HOOK_RESET |
         ANIRA_EM_HOOK_PREPARE |
@@ -101,13 +101,14 @@ export async function createGainExample(
   //    bursts up to the context's (a live context renders a device callback's worth of quanta
   //    back to back; the latency the handler reports covers it).
   const geometry = await measureRenderGeometry(audioContext)
-  const contract = Contract.hard(anira, {
+  const contract = ContractHandle.hard(anira, {
     blockMin: geometry.quantum,
     blockMax: geometry.burst,
     rate: audioContext.sampleRate,
     budgetMs: 2,
   })
-  const handler = Handler.create(context, pipeline).prepare(contract)
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
   pipeline.destroy()
   // An offline render waits for every inference: the Worker must be in its loop first.
   if (waitMs > 0) await context.ready()
@@ -132,14 +133,14 @@ export async function createGainExample(
     .connect(output)
   // The value setter is setValueAtTime(value, currentTime), and reads back at once.
   const applyLatency = () => {
-    dry.delayTime.value = handler.latency() / audioContext.sampleRate
+    dry.delayTime.value = handler.getLatency() / audioContext.sampleRate
   }
   applyLatency()
   // After an output-device change: measure again with the node held (its rendering would hide
   // the callback's run) and re-prepare the running node, then re-read the latency.
   const remeasure = async () => {
     const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-    contract.setGeometry(g.quantum, g.burst, audioContext.sampleRate)
+    contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract)
     applyLatency()
   }
@@ -160,7 +161,7 @@ export async function createGainExample(
     output,
     audioNode,
     dry,
-    latency: () => handler.latency(),
+    getLatency: () => handler.getLatency(),
     gain: gainParam,
     remeasure,
     teardown,

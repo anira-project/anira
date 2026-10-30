@@ -144,6 +144,18 @@ constexpr uint32_t k_stage_hooks = ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST | ANIR
                                    ANIRA_EM_HOOK_RELEASE | ANIRA_EM_HOOK_RESET |
                                    ANIRA_EM_HOOK_UNPREPARE | ANIRA_EM_HOOK_INIT;
 constexpr uint32_t k_engine_hooks = ANIRA_EM_ENGINE_HOOK_RESET | ANIRA_EM_ENGINE_HOOK_QUERY;
+// The stage hook bits are the phases' own (ANIRA_EM_HOOKS_VERSION 2): one index space with
+// anira.hpp's Stage::k_* bits.
+static_assert(ANIRA_EM_HOOK_PRE == 1U << ANIRA_PHASE_PRE_PROCESS &&
+                  ANIRA_EM_HOOK_POST == 1U << ANIRA_PHASE_POST_PROCESS &&
+                  ANIRA_EM_HOOK_BEFORE == 1U << ANIRA_PHASE_BEFORE_INFERENCE &&
+                  ANIRA_EM_HOOK_AFTER == 1U << ANIRA_PHASE_AFTER_INFERENCE &&
+                  ANIRA_EM_HOOK_PREPARE == 1U << ANIRA_PHASE_PREPARE &&
+                  ANIRA_EM_HOOK_RELEASE == 1U << ANIRA_PHASE_RELEASE &&
+                  ANIRA_EM_HOOK_RESET == 1U << ANIRA_PHASE_RESET &&
+                  ANIRA_EM_HOOK_UNPREPARE == 1U << ANIRA_PHASE_UNPREPARE &&
+                  ANIRA_EM_HOOK_INIT == 1U << ANIRA_PHASE_INIT,
+              "a stage hook bit is 1 << its anira_phase");
 // What the hook of a stage returns when it throws: the phase fails, its chunk delivers zeros.
 constexpr anira_status k_stage_thrown = ANIRA_ERROR_UNKNOWN;
 constexpr anira_status k_engine_thrown = ANIRA_ERROR_ENGINE;

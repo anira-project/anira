@@ -11,8 +11,9 @@ Anira Web is the TypeScript / WebAssembly distribution of Anira. It is made up o
 * a thin TypeScript layer over it: the bindings generated from the ABI registry
   (:js:class:`AniraBindings`), the generated mirrors of the C headers (``abi/enums.ts``,
   ``abi/layout.ts``), a few classes over the handles (:js:class:`Anira`, :js:class:`Context`,
-  :js:class:`ModelConfig`, :js:class:`Contract`, :js:class:`Pipeline`, :js:class:`Handler`) and
-  the registry a scope defines its JavaScript stages and engines on.
+  :js:class:`ModelConfig`, :js:class:`ContractHandle`, :js:class:`Pipeline`,
+  :js:class:`InferenceHandler`, :js:class:`PlanReport`) and the registry a scope defines its
+  JavaScript stages and engines on.
 
 The sections below cover how to consume the published package, what a bundler and a server must
 do for it, and how to build the WASM module and the TypeScript package from source.
@@ -51,7 +52,7 @@ The package is published as ESM only, with three entry points:
 
 .. code-block:: ts
 
-   import { Anira, Context, ModelConfig, Pipeline, Handler, Contract } from '@anira-project/anira'
+   import { Anira, Context, ContractHandle, InferenceHandler, ModelConfig, Pipeline } from '@anira-project/anira'
 
 What the Page Needs
 -------------------
