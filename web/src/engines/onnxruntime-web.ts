@@ -48,6 +48,16 @@ export type OnnxRuntimeWebOptions = {
    * started with fails its init.
    */
   numThreads?: number
+  /**
+   * Inferences the engine runs over zeros of the model's input shapes right after it creates a
+   * session (a dynamic extent taken as 1), so the stream's first inferences do not pay
+   * onnxruntime-web's first-run setup. Default 0. anira's warm-up (a contract's
+   * `"warmup": { "fixed": n }`) runs on its built-in engines only; a JavaScript engine warms
+   * itself. With `model` the session, and so the warm-up, comes in the engine's init, before
+   * the inference Worker's loop; over the model entry it comes with the entry, at the first
+   * call.
+   */
+  warmup?: number
 }
 
 /** The ONNX Runtime Web wasm module's C API, as far as the engine calls it. */
@@ -162,6 +172,12 @@ class OnnxRuntimeWebEngine implements Engine {
         `onnxruntime-web: numThreads must be a whole number of at least 1, not ${numThreads}`
       )
     }
+    const warmup = this.options.warmup ?? 0
+    if (!Number.isInteger(warmup) || warmup < 0) {
+      throw new Error(
+        `onnxruntime-web: warmup must be a whole number of at least 0, not ${warmup}`
+      )
+    }
     if (ortRuntime !== null && ortRuntime.numThreads !== numThreads) {
       throw new Error(
         `onnxruntime-web: this Worker's runtime runs ${ortRuntime.numThreads} thread(s); an ` +
@@ -223,6 +239,21 @@ class OnnxRuntimeWebEngine implements Engine {
     ort.stackRestore(sp)
     this.inputs = this.metadata(0, numInputs)
     this.outputs = this.metadata(numInputs, numOutputs)
+    this.warmUp(this.options.warmup ?? 0)
+  }
+
+  // `iterations` runs over zeros of the inputs' shapes, a dynamic extent taken as 1.
+  private warmUp(iterations: number): void {
+    const inputs = this.inputs.map((meta) => {
+      const dims = meta.dims.map((d) => (d < 0 ? 1 : d))
+      const elements = dims.reduce((product, d) => product * d, 1)
+      return { data: new Float32Array(elements), elements, dims }
+    })
+    for (let k = 0; k < iterations; k++) {
+      if (!this.run(inputs, () => {})) {
+        throw new Error(`onnxruntime-web: warm-up run failed: ${this.lastError()}`)
+      }
+    }
   }
 
   process(ctx: number): number {
@@ -232,22 +263,52 @@ class OnnxRuntimeWebEngine implements Engine {
     if (inputs.some((t) => t.f32 === null) || outputs.some((t) => t.f32 === null)) {
       return anira_status.ANIRA_ERROR_NOT_SUPPORTED // float32 host tensors alone
     }
+    const ok = this.run(
+      inputs.slice(0, this.inputs.length).map((input, i) => ({
+        data: input.f32!,
+        elements: input.elements,
+        dims: resolveDims(this.inputs[i].dims, input.elements),
+      })),
+      (results) => {
+        const P = ort.PTR_SIZE
+        for (let i = 0; i < Math.min(outputs.length, results.length); i++) {
+          if (results[i] === 0) continue
+          const info = ort.stackAlloc(4 * P)
+          ort._OrtGetTensorData(results[i], info, info + P, info + 2 * P, info + 3 * P)
+          const data = Number(ort.getValue(info + P, '*'))
+          outputs[i].f32!.set(
+            new Float32Array(ort.HEAPU8.buffer, data, outputs[i].elements)
+          )
+        }
+      }
+    )
+    return ok ? anira_status.ANIRA_OK : anira_status.ANIRA_ERROR_ENGINE
+  }
+
+  // One _OrtRun: each input's `elements` floats copied into ORT's heap and shaped `dims`, the
+  // output tensors handed to `read` before they are released. False when ORT fails.
+  private run(
+    inputs: { data: Float32Array; elements: number; dims: number[] }[],
+    read: (results: number[]) => void
+  ): boolean {
+    const ort = this.ort!
     const tensors: number[] = []
     const buffers: number[] = []
     const P = ort.PTR_SIZE
     const sp = ort.stackSave()
     try {
-      for (let i = 0; i < Math.min(inputs.length, this.inputs.length); i++) {
-        const input = inputs[i]
+      for (const input of inputs) {
         const bytes = input.elements * 4
         const data = ort._malloc(bytes)
         buffers.push(data)
-        new Float32Array(ort.HEAPU8.buffer, data, input.elements).set(input.f32!)
-        const dims = resolveDims(this.inputs[i].dims, input.elements)
+        new Float32Array(ort.HEAPU8.buffer, data, input.elements).set(
+          input.data.subarray(0, input.elements)
+        )
+        const dims = input.dims
         const shape = ort.stackAlloc(dims.length * P)
         dims.forEach((d, k) => ort.setValue(shape + k * P, d, P === 4 ? 'i32' : 'i64'))
         const tensor = ort._OrtCreateTensor(1, data, bytes, shape, dims.length, 1)
-        if (tensor === 0) return anira_status.ANIRA_ERROR_ENGINE
+        if (tensor === 0) return false
         tensors.push(tensor)
       }
       const inNames = ort.stackAlloc(this.inputs.length * P)
@@ -276,17 +337,9 @@ class OnnxRuntimeWebEngine implements Engine {
         Number(ort.getValue(outValues + i * P, '*'))
       )
       try {
-        if (failed !== 0) return anira_status.ANIRA_ERROR_ENGINE
-        for (let i = 0; i < Math.min(outputs.length, results.length); i++) {
-          if (results[i] === 0) continue
-          const info = ort.stackAlloc(4 * P)
-          ort._OrtGetTensorData(results[i], info, info + P, info + 2 * P, info + 3 * P)
-          const data = Number(ort.getValue(info + P, '*'))
-          outputs[i].f32!.set(
-            new Float32Array(ort.HEAPU8.buffer, data, outputs[i].elements)
-          )
-        }
-        return anira_status.ANIRA_OK
+        if (failed !== 0) return false
+        read(results)
+        return true
       } finally {
         for (const result of results) if (result !== 0) ort._OrtReleaseTensor(result)
       }
