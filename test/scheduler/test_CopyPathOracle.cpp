@@ -7,7 +7,7 @@
 // counts, the miss flag, every float a call wrote and every float it left alone.
 //
 // The manager takes host tensors only now. The float face is anira::PlanarFloatAdapter
-// (src/scheduler/PlanarFloatAdapter.h), which anira::InferenceHandler owns, and the rig drives
+// (test/support/PlanarFloatAdapter.h), which the 2.x handler owned, and the rig drives
 // it the way that class does: the adapter presents the channel pointers, the
 // tensor stem of the same name runs on its tensors (the seven: process, process_nowait,
 // process_wait, push_data, pop_data, its deadline form, pop_data_wait), and deliver_counts()
@@ -16,8 +16,8 @@
 // manager's miss flag, the outcome of a wait.
 //
 // The non-streamable (Static) tensors of a block are the 2.x face's own business: the stems
-// move streamed slots, and anira::NonStreamableRouter (src/scheduler/NonStreamableRouter.h),
-// which anira::InferenceHandler owns beside the adapter, stores and reads back the others around
+// move streamed slots, and anira::NonStreamableRouter (test/support/NonStreamableRouter.h),
+// which anira_test::V2Handler owns beside the adapter, stores and reads back the others around
 // every stem call, with the clamp, the clamped count and the miss rules the transcripts pin.
 // The rig calls every stem through it, as that class does.
 //
@@ -45,11 +45,11 @@
 #include <vector>
 
 #include "../abi/handler_support.h"
+#include "../support/NonStreamableRouter.h"
+#include "../support/PlanarFloatAdapter.h"
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
-#include "scheduler/NonStreamableRouter.h"
-#include "scheduler/PlanarFloatAdapter.h"
 
 using namespace anira;
 

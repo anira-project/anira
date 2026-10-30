@@ -30,10 +30,6 @@ if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     find_package(GTest REQUIRED)
 endif()
 
-if (ANIRA_WITH_BENCHMARK)
-    find_package(benchmark REQUIRED)
-endif()
-
 # The engine targets anira::<engine> — the same files anira links, with the engine's
 # include directories and definitions — defined from this prefix. anira links them
 # PRIVATE; link one yourself only if your own code calls that engine. Before

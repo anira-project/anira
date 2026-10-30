@@ -471,8 +471,8 @@ TEST(AbiCompatConfig, TheConstructorUpgradesLikeTheDocument) {
     if (!legacy.has_value()) { FAIL() << "the upgrade holds no legacy contract"; }
     const anira::Hard expected = legacy->hard();
     const anira::Hard actual = shim.hard();
-    EXPECT_EQ(actual.budget, ANIRA_BUDGET_EXPLICIT);
-    EXPECT_EQ(actual.budget_value, expected.budget_value);
+    EXPECT_EQ(actual.budget.kind(), ANIRA_BUDGET_EXPLICIT);
+    EXPECT_EQ(actual.budget.value(), expected.budget.value());
     EXPECT_EQ(actual.warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(actual.warmup_iterations, 1U);
     EXPECT_EQ(actual.on_miss, ANIRA_MISS_ZEROS);

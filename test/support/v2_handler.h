@@ -11,7 +11,8 @@
 // session, and the differential arms of test_abi (test_Handler, test_HandlerTensor, test_Stage,
 // test_Compat), which compare the C entries and anira/compat/v2.hpp with it. It goes with the 2.x
 // configuration types when the core takes the 3.x ones (PR 10b). Header-inline: the two helpers
-// it holds are header-inline too, and every white-box binary has src/ on its include path.
+// it holds (test/support/PlanarFloatAdapter.h, test/support/NonStreamableRouter.h) are
+// header-inline too, and every white-box binary has src/ on its include path.
 #ifndef ANIRA_TEST_SUPPORT_V2_HANDLER_H
 #define ANIRA_TEST_SUPPORT_V2_HANDLER_H
 
@@ -34,8 +35,8 @@
 #include <string>
 #include <vector>
 
-#include "scheduler/NonStreamableRouter.h"
-#include "scheduler/PlanarFloatAdapter.h"
+#include "NonStreamableRouter.h"
+#include "PlanarFloatAdapter.h"
 
 namespace anira_test {
 

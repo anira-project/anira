@@ -3,12 +3,12 @@
 
 /*
  * The float face of the host<->ring copy path. InferenceManager takes host blocks as one
- * anira_tensor per slot and nothing else; the 2.x class anira::InferenceHandler, which holds
- * float channel pointers, presents them through this adapter, which it owns. The C ABI has no
- * float face: its Hard entries take host tensors, and a C host builds its own planar tensor
- * with anira_tensor_init_host_planar. Private to src/ (InferenceHandler is the consumer;
- * test_scheduler and test_abi have src/ on their include path and drive the C entries through
- * it as a float host would): header-inline, not installed, not exported.
+ * anira_tensor per slot and nothing else; the 2.x handler, which holds float channel
+ * pointers, presents them through this adapter, which it owns (anira_test::V2Handler,
+ * test/support/v2_handler.h, since the library's 2.x class left it). The C ABI has no float
+ * face: its Hard entries take host tensors, and a C host builds its own planar tensor with
+ * anira_tensor_init_host_planar. A test helper: the copy-oracle rigs and test_abi's float face
+ * drive the C entries through it as a float host would; header-inline, in no library.
  *
  * prepare() builds one planar float32 tensor per slot, complete but for what a call brings:
  * rank 2, shape {channels, 0}, ANIRA_TENSOR_PLANAR over the adapter's own plane array (the

@@ -54,7 +54,7 @@ endif()
 if(ANIRA_WITH_BENCHMARK AND BUILD_SHARED_LIBS)
     list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:benchmark::benchmark>")
     if(NOT ANIRA_WITH_TESTS)
-        # gtest_main is linked into anira for the benchmark fixtures as well.
+        # gtest_main is linked into anira for the benchmark executables as well.
         list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:gtest>" "$<TARGET_FILE:gtest_main>")
     endif()
 endif()

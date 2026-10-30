@@ -576,6 +576,35 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
     return moved;
 }
 
+// The Hard entries of anira.hpp's handler from a nonblocking function: under
+// -Werror=function-effects a forwarder without ANIRA_NONBLOCKING fails here.
+anira_status hard_entries_probe(anira::InferenceHandler& handler) noexcept ANIRA_NONBLOCKING {
+    const anira::Tensor block{};
+    const std::array<anira::Tensor, 1> slots{block};
+    size_t delivered = 0;
+    anira_status status = handler.process(block, 0, block, 0, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.process(slots, slots, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.push_data(block, 0);
+    status = ANIRA_FAILED(status) ? status : handler.push_data(slots);
+    status = ANIRA_FAILED(status) ? status : handler.pop_data(block, 0, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.pop_data(slots, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.set_static_input(1, block);
+    status = ANIRA_FAILED(status) ? status : handler.get_static_output(1, block);
+    size_t available = 0;
+    status = ANIRA_FAILED(status) ? status : handler.get_available_samples(0, 0, &available);
+    handler.reset();
+    status = ANIRA_FAILED(status) ? status : handler.set_plan(handler.get_plan());
+    anira::log_rt(ANIRA_LOG_INFO, "probe", "the hard entries", 1, 2);
+    return ANIRA_FAILED(status) || handler.get_latency(0) > 0 ? status : handler.rt_error();
+}
+
+// The budget of a Hard aggregate is required: no Hard without one, a duration is an explicit
+// budget, Budget::measured() the measured one.
+static_assert(!std::is_default_constructible_v<anira::Hard>);
+static_assert(!std::is_default_constructible_v<anira::Budget>);
+static_assert(std::is_convertible_v<std::chrono::milliseconds, anira::Budget>);
+static_assert(std::is_aggregate_v<anira::Hard>);
+
 }  // namespace
 
 // Exported on purpose, so that the TU holds a symbol a linker would see; the
@@ -583,9 +612,13 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
 int anira_header_cxx20_probe();  // NOLINT(misc-use-internal-linkage)
 int anira_header_cxx20_probe() {
     // The aggregates as a consumer spells them; the defaults stand for what is not named.
-    const anira::Hard hard{.block_min = 64, .block_max = 2048, .rate = 48000.0};
+    const anira::Hard hard{.block_min = 64,
+                           .block_max = 2048,
+                           .rate = 48000.0,
+                           .budget = std::chrono::milliseconds(5)};
     // The two maps in their place between wait_ratio and edge_cost.
-    const anira::Hard typed{.wait_ratio = 0.5,
+    const anira::Hard typed{.budget = anira::Budget::measured(),
+                            .wait_ratio = 0.5,
                             .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
                             .latencies = {{"audio_out", 4096}},
                             .edge_cost = ANIRA_EDGE_COST_STRICT};
@@ -672,6 +705,41 @@ int anira_header_cxx20_probe() {
         checks += caps.backends().empty() ? 0 : 1;
         checks += caps.edge(ANIRA_DOMAIN_HOST, caps.backends().front()).available == 1U ? 1 : 0;
         const anira::Pipeline with_engine{anira::stage::Inference(model).engine(probe_engine)};
+        // The handler half: a handler on the pipeline, prepared with each contract form, its
+        // Hard entries reached from a nonblocking function, the _wait twins, an inference
+        // thread the host drives.
+        anira::InferenceHandler handler(running, with_engine);
+        const anira::PlanReport prepared = handler.prepare(hard);
+        checks += handler.prepare(minted).num_plans() + handler.prepare(contract).num_plans() +
+                              prepared.num_plans() + handler.plan_report().num_plans() +
+                              handler.num_entries() >
+                          0
+                      ? 1
+                      : 0;
+        checks += hard_entries_probe(handler) == ANIRA_OK ? 1 : 0;
+        checks += handler.get_latencies().size() + handler.get_latency() > 0 ? 1 : 0;
+        const anira::Tensor waited_block{};
+        const std::array<anira::Tensor, 1> waited_slots{waited_block};
+        size_t waited = 0;
+        checks +=
+            handler.process_wait(waited_block, 0, waited_block, 0, ANIRA_WAIT_FOREVER, &waited) ==
+                    ANIRA_OK
+                ? 1
+                : 0;
+        checks += handler.process_wait(waited_slots, waited_slots, ANIRA_WAIT_CONTRACT) == ANIRA_OK
+                      ? 1
+                      : 0;
+        checks += handler.pop_data_wait(waited_block, 0, 10.0) == ANIRA_OK ? 1 : 0;
+        checks += handler.pop_data_wait(waited_slots, 10.0, &waited) == ANIRA_OK ? 1 : 0;
+        checks += handler.native() != nullptr ? 1 : 0;
+        anira::InferenceThread thread(running);
+        thread.start();
+        thread.stop();
+        thread.run_loop();
+        checks += thread.execute() || thread.is_running() || thread.should_exit() ||
+                          thread.has_exited() || thread.native() != nullptr
+                      ? 1
+                      : 0;
         const anira::stage::Inference brings(model);
         checks += brings.engines().empty() ? 1 : 0;
         const anira::EngineKind kind = model.model_engine(0).kind;

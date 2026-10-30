@@ -2,22 +2,12 @@
  * Gate 4 (docs/anira-v3-architecture.md, section 6a): every C header in one C11
  * translation unit under -std=c11 -Wall -Wextra -Werror -pedantic (or /std:c11 /W4 /WX),
  * with no anira define at all, exercising each _INIT initializer and the macros a C host
- * uses. The per-file wrappers test/abi/CMakeLists.txt generates cover self-containment.
+ * uses, through the umbrella a C host includes (<anira/anira.h>, every promised header) plus
+ * the draft header and the platform companion it leaves out. The per-file wrappers
+ * test/abi/CMakeLists.txt generates cover self-containment.
  */
-#include <anira/abi/config.h>
-#include <anira/abi/context.h>
-#include <anira/abi/core.h>
 #include <anira/abi/draft/tensor_platform.h>
-#include <anira/abi/engine.h>
-#include <anira/abi/enums.h>
-#include <anira/abi/export.h>
-#include <anira/abi/handler.h>
-#include <anira/abi/log.h>
-#include <anira/abi/stage.h>
-#include <anira/abi/status.h>
-#include <anira/abi/tensor.h>
-#include <anira/abi/thread.h>
-#include <anira/abi/version.h>
+#include <anira/anira.h>
 #include <anira/anira_em.h>
 #include <stddef.h>
 #include <string.h>

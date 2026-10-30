@@ -67,7 +67,7 @@
 // each up to its first rewritten call byte for byte the earlier recording (the block-size
 // scenario declares two hops, so its transcripts differ from the first line). The 2.x copy
 // path (anira::InferenceManager through the 2.x float face, the PlanarFloatAdapter and the
-// NonStreamableRouter that anira::InferenceHandler owns) takes any count and is untouched, so it
+// NonStreamableRouter that anira_test::V2Handler owns) takes any count and is untouched, so it
 // is the referee of the rewritten transcripts: V2Rig below drives every script call for call
 // through that face, and AbiHandlerCopyOracle.MatchesTheV2CopyPath compares what both paths
 // observed (see "The 2.x twin").
@@ -97,13 +97,13 @@
 #include <utility>
 #include <vector>
 
+#include "../support/NonStreamableRouter.h"
+#include "../support/PlanarFloatAdapter.h"
 #include "../support/copy_oracle.h"
 #include "capi/port.h"
 #include "float_face.h"
 #include "handler_copy_oracle_golden.h"
 #include "handler_support.h"
-#include "scheduler/NonStreamableRouter.h"
-#include "scheduler/PlanarFloatAdapter.h"
 
 namespace {
 
@@ -780,7 +780,7 @@ private:
 // ---- the 2.x twin ------------------------------------------------------------------------------
 // The referee of the transcripts: every call of a script driven through the 2.x copy path, the
 // anira::InferenceManager of a 2.x configuration (the twin of the C model, the twins of
-// test/scheduler/test_CopyPathOracle.cpp) through the float face anira::InferenceHandler owns
+// test/scheduler/test_CopyPathOracle.cpp) through the float face anira_test::V2Handler owns
 // (the PlanarFloatAdapter presents the channel pointers, the NonStreamableRouter stores and
 // reads back the Static slots around every stem call), which takes any count. V2Rig has the
 // call surface of HandlerRig and makes each call as the C entry it mirrors does: the same stem

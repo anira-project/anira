@@ -1,21 +1,36 @@
+/*
+ * anira/anira.h -- generated from abi/anira.yml by tools/abi/gen.py.
+ * Do not edit: change the registry and run `python3 tools/abi/gen.py --repo . --write`.
+ */
+// clang-format off
 #ifndef ANIRA_H
 #define ANIRA_H
 
-#include "InferenceConfig.h"
-#include "InferenceHandler.h"
-#include "PrePostProcessor.h"
-#include "backends/BackendBase.h"
-#include "scheduler/Core.h"
-#include "scheduler/InferenceManager.h"
-#include "scheduler/InferenceThread.h"
-#include "scheduler/LatencyCalculator.h"
-#include "scheduler/SessionElement.h"
-#include "system/HighPriorityThread.h"
-#include "utils/Buffer.h"
-#include "utils/HostConfig.h"
-#include "utils/InferenceBackend.h"
-#include "utils/JsonConfigLoader.h"
-#include "utils/RingBuffer.h"
-#include "utils/Semaphore.h"
+/**
+ * @file anira.h
+ * @brief The C ABI of anira 3: every promised header of anira/abi/, in one include.
+ *
+ * The umbrella of the C11 headers, for a C host and for C++ that calls the C entries: what the
+ * ABI promises, in registry order. The draft headers (anira/abi/draft/) and the platform
+ * companion anira/anira_em.h are not included (anira/anira_all.h includes them). The C++20 face
+ * over the same entries is anira/anira.hpp; a program written against the 2.x C++ classes
+ * includes anira/compat/v2.hpp.
+ */
 
-#endif  // ANIRA_H
+#include <anira/abi/export.h>  // IWYU pragma: export
+#include <anira/abi/status.h>  // IWYU pragma: export
+#include <anira/abi/version.h>  // IWYU pragma: export
+#include <anira/abi/enums.h>  // IWYU pragma: export
+#include <anira/abi/log.h>  // IWYU pragma: export
+#include <anira/abi/tensor.h>  // IWYU pragma: export
+#include <anira/abi/config.h>  // IWYU pragma: export
+#include <anira/abi/context.h>  // IWYU pragma: export
+#include <anira/abi/core.h>  // IWYU pragma: export
+#include <anira/abi/thread.h>  // IWYU pragma: export
+#include <anira/abi/lifecycle.h>  // IWYU pragma: export
+#include <anira/abi/stage.h>  // IWYU pragma: export
+#include <anira/abi/engine.h>  // IWYU pragma: export
+#include <anira/abi/handler.h>  // IWYU pragma: export
+
+#endif /* ANIRA_H */
+// clang-format on

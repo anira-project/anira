@@ -2,6 +2,13 @@
   "abi_file_major": 0,
   "umbrellas": [
     {
+      "file": "anira.h",
+      "guard": "ANIRA_H",
+      "scope": "promised",
+      "brief": "The C ABI of anira 3: every promised header of anira/abi/, in one include.",
+      "doc": "The umbrella of the C11 headers, for a C host and for C++ that calls the C entries: what the ABI promises, in registry order. The draft headers (anira/abi/draft/) and the platform companion anira/anira_em.h are not included (anira/anira_all.h includes them). The C++20 face over the same entries is anira/anira.hpp; a program written against the 2.x C++ classes includes anira/compat/v2.hpp."
+    },
+    {
       "file": "anira_all.h",
       "guard": "ANIRA_ALL_H",
       "scope": "all",

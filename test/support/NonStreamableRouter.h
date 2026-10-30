@@ -2,7 +2,7 @@
 #define ANIRA_NONSTREAMABLEROUTER_H
 
 /*
- * The 2.x face's own route for its non-streamable tensors. anira::InferenceHandler takes a
+ * The 2.x face's own route for its non-streamable tensors. The 2.x handler takes a
  * non-streamable tensor inside its float*** blocks, as a count of values beside the sample
  * counts of the streamed slots, and keeps doing so; the copy core (InferenceManager's tensor
  * stems) moves streamed slots only and never reads the tensor of another. This helper stands
@@ -29,10 +29,10 @@
  * ANIRA_MISS_CALLBACK is a 3.x contract's and no 2.x face sets one; here a missed block under
  * that policy is zeroed like a ZEROS miss.
  *
- * Private to src/ (InferenceHandler is the consumer; test_scheduler has src/ on its include
- * path and drives the recorded scenarios through it): header-inline, not installed, not
- * exported. prepare() allocates; every other function is legal on the driver thread wherever
- * the stem it wraps is.
+ * A test helper (the library's 2.x handler was its consumer; anira_test::V2Handler and the
+ * copy-oracle rigs are, over the scheduler's private headers, src/ on their include path):
+ * header-inline, in no library. prepare() allocates; every other function is legal on the driver
+ * thread wherever the stem it wraps is.
  */
 
 #include <anira/InferenceConfig.h>
@@ -50,7 +50,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "TensorRun.h"
+#include "scheduler/TensorRun.h"
 
 namespace anira {
 

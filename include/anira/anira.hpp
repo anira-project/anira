@@ -4,22 +4,25 @@
  * C entries of anira/abi/config.h, one C call per method, every failure an anira::Error.
  *
  * Header-only and not ABI-stable: it is compiled into the user's binary, so the promise it
- * carries is the C ABI's. Nothing here is exported from libanira, nothing here touches the
- * 2.x C++ classes (it includes no anira/system, anira/utils or third-party header), and it
- * can be included beside <anira/anira.h>.
+ * carries is the C ABI's. Nothing here is exported from libanira, and libanira defines no
+ * class of namespace anira that this header declares (the library's own scheduler thread is
+ * anira::scheduler::InferenceThread). It includes no anira/system, anira/utils or third-party
+ * header, and it can be included beside <anira/anira.h>, the C umbrella.
  *
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
  * contract configuration, job options) with their read-back (SpecView, the ModelConfig
  * getters, ContractHandle::hard()), the Context over the core, the pipeline half of section 6
- * (Pipeline, stage::Inference, stage::Custom and PlanReport), the stages and the custom
- * engines of section 7 (Stage, Stage::Prepared, StageContext and RingView over
+ * (Pipeline, stage::Inference, stage::Custom and PlanReport), the handler half of section 6
+ * (InferenceHandler over anira/abi/handler.h: prepare returning the PlanReport, the Hard
+ * entries and their _wait twins over Tensor, the Static pair, the latencies, reset, rt_error,
+ * set_plan / get_plan; InferenceThread over anira/abi/thread.h; log_rt), the stages and the
+ * custom engines of section 7 (Stage, Stage::Prepared, StageContext and RingView over
  * anira/abi/stage.h; Engine, Engine::Loaded, Engine::Prepared, EngineLoadInfo and
  * EngineContext over anira/abi/engine.h, registered through Pipeline::register_engine or
  * stage::Inference::engine; InitInfo and PrepareInfo, the records both share, over
  * anira/abi/lifecycle.h) and the runtime tensor of section 1: Tensor and SyncToken, the C
- * structs of anira/abi/tensor.h with factories on them. The InferenceHandler class and the
- * _wait twins arrive with the runtime cut-over; until then a handler is driven through the C
- * entries of anira/abi/handler.h.
+ * structs of anira/abi/tensor.h with factories on them. The Async entries (submit, poll,
+ * Ticket) arrive with the Async pump.
  *
  * Deviations from the architecture document, section 6 (stated here and on the docs page):
  * anira::JsonConfigLoader is not declared (the 2.x class of that name is still in every
@@ -41,8 +44,8 @@
  * on a Tensor); Stage is the registration and Stage::Prepared what its prepare returns per
  * handler, the C lifecycle's prepared pointer as a class on which the phases and reset run and
  * which anira deletes at unprepare; Stage::init takes an InitInfo and Stage::prepare a
- * PrepareInfo, the C records as views, whose handler is the anira_handler* (no handler class
- * yet); a Stage states the phases
+ * PrepareInfo, the C records as views, whose handler is the anira_handler* (a stage of a
+ * handler created through C has no InferenceHandler object); a Stage states the phases
  * it fills in phases(), because the C descriptor tells a filled phase from a NULL one, and its
  * real-time promise in flags() (anira_stage_desc::flags); StageContext has
  * input_tensor / output_tensor filling a Tensor, the C accessors, in place of model_input /
@@ -56,7 +59,13 @@
  * returns per loaded model (EngineLoadInfo the record), Engine::Prepared what the Loaded's
  * prepare returns per handler (PrepareInfo the record, the stage's) and EngineContext the
  * per-call context, and the enum alias of anira_engine is EngineKind, so that the class may
- * carry the name.
+ * carry the name; InferenceHandler's Hard entries take Tensor descriptors only, as the C entries
+ * do (the document's float*** spelling is not declared: a float host builds its planar tensors
+ * once with Tensor::from_host_planar), the forms return the C status (the multi forms write one
+ * delivered count per output slot), the latency vector is get_latencies(), the C entry's name,
+ * the 2.x survivors (the static thread count, a member drain_log) are the free functions
+ * num_inference_threads() and drain_log(), and set_model / set_backend arrive with the variant
+ * axis (a later pre-release): select a plan of the PlanReport with set_plan.
  *
  * Requirements: C++20 with exceptions; std::filesystem, which on Apple platforms means a
  * deployment target of macOS 10.15 / iOS 13 or later.
@@ -82,13 +91,15 @@
 
 #if !defined(__cpp_exceptions) && !defined(_CPPUNWIND)
 #error \
-    "anira.hpp throws anira::Error; build with exceptions until ANIRA_CXX_NO_EXCEPTIONS lands (v3.0.0-alpha.2)"
+    "anira.hpp throws anira::Error; build with exceptions (ANIRA_CXX_NO_EXCEPTIONS is not available yet)"
 #endif
 
-#if defined(ANIRA_CXX_NO_EXCEPTIONS) || defined(ANIRA_CXX_MANUAL_INIT) || \
-    defined(ANIRA_NO_PROTOTYPES)
+#if defined(ANIRA_CXX_NO_EXCEPTIONS)
+#error "ANIRA_CXX_NO_EXCEPTIONS (the Result<T> mode) is not available in this pre-release"
+#endif
+#if defined(ANIRA_CXX_MANUAL_INIT) || defined(ANIRA_NO_PROTOTYPES)
 #error \
-    "ANIRA_CXX_NO_EXCEPTIONS, ANIRA_CXX_MANUAL_INIT and ANIRA_NO_PROTOTYPES land with the handler half (v3.0.0-alpha.2)"
+    "ANIRA_CXX_MANUAL_INIT and ANIRA_NO_PROTOTYPES do not exist: anira links its entry points (no anira_get_proc_address)"
 #endif
 
 #include <anira/abi/config.h>
@@ -882,6 +893,39 @@ private:
 
 // NOLINTBEGIN(readability-identifier-naming) the aggregates spell the document's field names
 
+/**
+ * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
+ * aggregate always names it (`Hard{.block_max = 512, .rate = 48000, .budget = 5ms}`), as the
+ * web package's budgetMs. A std::chrono duration converts to an explicit budget
+ * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); Budget::measured()
+ * is the budget the warm-up measures (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses
+ * with ANIRA_ERROR_NOT_SUPPORTED in this pre-release.
+ */
+class Budget {
+public:
+    /// An explicit budget of `value` per inference.
+    template <class Rep, class Period>
+    // NOLINTNEXTLINE(google-explicit-constructor) a duration is a budget: `.budget = 5ms`
+    Budget(std::chrono::duration<Rep, Period> value) noexcept
+        : m_kind(ANIRA_BUDGET_EXPLICIT)
+        , m_value(std::chrono::duration_cast<std::chrono::nanoseconds>(value)) {}
+    /// The budget the warm-up measures (refused at prepare in this pre-release).
+    static Budget measured() noexcept {
+        return {ANIRA_BUDGET_MEASURED, std::chrono::nanoseconds{}};
+    }
+    anira_budget_kind kind() const noexcept { return m_kind; }
+    /// The explicit figure; 0 for a measured budget.
+    std::chrono::nanoseconds value() const noexcept { return m_value; }
+    bool operator==(const Budget& other) const noexcept = default;
+
+private:
+    Budget(anira_budget_kind kind_value, std::chrono::nanoseconds value) noexcept
+        : m_kind(kind_value), m_value(value) {}
+
+    anira_budget_kind m_kind;
+    std::chrono::nanoseconds m_value;
+};
+
 /// The real-time stream: host geometry, budget, warmup, miss policy, wait ratio.
 struct Hard {
     /// The block range in elements of the anchor tensor: both 0 (unset) or both finite and
@@ -890,8 +934,8 @@ struct Hard {
     double block_min = 0;
     double block_max = 0;
     double rate = 0;
-    anira_budget_kind budget = ANIRA_BUDGET_MEASURED;
-    std::chrono::nanoseconds budget_value{};  ///< Explicit only
+    /// Required: the per-inference budget (no default; a duration is an explicit budget).
+    Budget budget;
     anira_warmup_mode warmup = ANIRA_WARMUP_UNTIL_STABLE;
     uint32_t warmup_iterations = 0;  ///< Fixed only
     anira_miss_policy on_miss = ANIRA_MISS_BYPASS;
@@ -949,8 +993,8 @@ inline anira_contract* mint(const Hard& hard) {
           err);
     try {
         check(anira_contract_hard_set_budget(contract,
-                                             hard.budget,
-                                             milliseconds_of(hard.budget_value)),
+                                             hard.budget.kind(),
+                                             milliseconds_of(hard.budget.value())),
               "anira_contract_hard_set_budget");
         check(anira_contract_hard_set_warmup(contract, hard.warmup, hard.warmup_iterations),
               "anira_contract_hard_set_warmup");
@@ -1196,7 +1240,7 @@ public:
 
     /// The Hard aggregate this handle holds, a loaded or legacy one alike: every field the
     /// read-back of anira/abi/config.h answers, ring_dtypes and latencies from their
-    /// enumerations, and budget_value rounded to the nanosecond (the handle stores double
+    /// enumerations, and the budget's figure rounded to the nanosecond (the handle stores double
     /// milliseconds; std::chrono::round, so 42.66 ms reads 42660000 ns). Minting the result
     /// gives an equal contract. @throws Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle,
     /// Error{ANIRA_ERROR_INVALID_ARGUMENT} on an empty one.
@@ -1204,15 +1248,17 @@ public:
         if (m_contract == nullptr) {
             throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_contract_hard_geometry");
         }
-        Hard out;
+        anira_budget_kind budget_kind = ANIRA_BUDGET_MEASURED;
+        double budget_ms = 0.0;
+        detail::check(anira_contract_hard_budget(m_contract, &budget_kind, &budget_ms),
+                      "anira_contract_hard_budget");
+        Hard out{.budget = budget_kind == ANIRA_BUDGET_EXPLICIT
+                               ? Budget(std::chrono::round<std::chrono::nanoseconds>(
+                                     std::chrono::duration<double, std::milli>(budget_ms)))
+                               : Budget::measured()};
         detail::check(
             anira_contract_hard_geometry(m_contract, &out.block_min, &out.block_max, &out.rate),
             "anira_contract_hard_geometry");
-        double budget_ms = 0.0;
-        detail::check(anira_contract_hard_budget(m_contract, &out.budget, &budget_ms),
-                      "anira_contract_hard_budget");
-        out.budget_value = std::chrono::round<std::chrono::nanoseconds>(
-            std::chrono::duration<double, std::milli>(budget_ms));
         detail::check(anira_contract_hard_warmup(m_contract, &out.warmup, &out.warmup_iterations),
                       "anira_contract_hard_warmup");
         detail::check(anira_contract_hard_on_miss(m_contract, &out.on_miss),
@@ -3653,6 +3699,276 @@ private:
 
     anira_pipeline* m_pipeline = nullptr;
 };
+
+// ---- the handler (section 6) ---------------------------------------------------------------
+
+/**
+ * @brief An anira_handler with its lifetime: the runtime of one pipeline on a context. Move-only;
+ * the destructor is anira_handler_destroy, which drains the handler's in-flight work.
+ *
+ * Created from a Pipeline, whose stages and engines the handler copies (anira_handler_create):
+ * the Pipeline may die afterwards, and so may the Engine and Stage objects the program holds
+ * (the handler keeps what it runs alive). prepare takes the contract and returns the PlanReport,
+ * a view of the handler's report, valid until the next prepare or the handler's end.
+ *
+ * The Hard entries are one-line forwarders onto the tensor entries of anira/abi/handler.h:
+ * noexcept, ANIRA_NONBLOCKING, a status returned and never thrown (the reason of a failure is
+ * rt_error()), nothing copied but the samples. They take anira::Tensor descriptors only, as the
+ * C surface does; a float host builds its planar tensors once per geometry with
+ * Tensor::from_host_planar and sets the block length (shape[1]) per call. The forms over one
+ * slot take the slot's tensor; the forms over every slot (the _multi entries) take one tensor
+ * per slot of the model's list: a Streamed slot's block, a Static slot's whole tensor, or an
+ * empty element (a rank of 1 or more with an extent of 0; a value-initialised Tensor{} has
+ * rank 0 and is not empty) that leaves its slot out. `delivered` receives the samples written
+ * per output (one count for the single forms, one per output slot for the multi forms), or is
+ * NULL. The _wait twins wait for the inference the call needs, up to timeout_ms or with
+ * ANIRA_WAIT_CONTRACT / ANIRA_WAIT_FOREVER; they are not nonblocking.
+ *
+ * Every member is [main-thread] except: the Hard entries, the Static pair, reset and
+ * get_available_samples, which are the driver thread's ([driver-thread], nonblocking); rt_error,
+ * set_plan, get_plan, get_latency and get_latencies, which are [thread-safe] (set_plan and
+ * get_plan nonblocking); the _wait twins ([any-thread, blocking]).
+ */
+class InferenceHandler {
+public:
+    /// @throws Error with the status of anira_handler_create (an engine the pipeline does not
+    /// carry, a structural rule of the model config).
+    InferenceHandler(Context& context, const Pipeline& pipeline) {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_handler_create(context.native(), pipeline.native(), &m_handler, &err),
+                      err);
+    }
+    ~InferenceHandler() { anira_handler_destroy(m_handler); }
+    InferenceHandler(const InferenceHandler&) = delete;
+    InferenceHandler& operator=(const InferenceHandler&) = delete;
+    InferenceHandler(InferenceHandler&& other) noexcept
+        : m_handler(std::exchange(other.m_handler, nullptr)) {}
+    InferenceHandler& operator=(InferenceHandler&& other) noexcept {
+        if (this != &other) {
+            anira_handler_destroy(m_handler);
+            m_handler = std::exchange(other.m_handler, nullptr);
+        }
+        return *this;
+    }
+
+    /// anira_handler_prepare: the blocking quiescence point, never from the driver thread. An
+    /// Async contract is ANIRA_ERROR_NOT_SUPPORTED until the Async pump lands.
+    /// @throws Error with the status and the reason; the handler is unprepared after a refusal.
+    PlanReport prepare(const ContractHandle& contract) {
+        anira_error err{};
+        detail::check(anira_handler_prepare(m_handler, contract.native(), &err), err);
+        return plan_report();
+    }
+    PlanReport prepare(const Hard& hard) { return prepare(ContractHandle(hard)); }
+    PlanReport prepare(const Async& async) { return prepare(ContractHandle(async)); }
+    PlanReport prepare(const Contract& contract) { return prepare(ContractHandle(contract)); }
+    /// The report of the last successful prepare (a report without plans before it).
+    PlanReport plan_report() const noexcept {
+        return PlanReport(anira_handler_plan_report(m_handler));
+    }
+    /// anira_handler_num_entries: the chunks that can be in flight at once.
+    uint32_t num_entries() const noexcept { return anira_handler_num_entries(m_handler); }
+
+    // Hard entries: never wait.
+    anira_status process(const Tensor& in,
+                         uint32_t in_slot,
+                         const Tensor& out,
+                         uint32_t out_slot,
+                         size_t* delivered = nullptr) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_process(m_handler, &in, in_slot, &out, out_slot, delivered);
+    }
+    anira_status process(std::span<const Tensor> inputs,
+                         std::span<const Tensor> outputs,
+                         size_t* delivered = nullptr) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_process_multi(m_handler,
+                                           inputs.data(),
+                                           static_cast<uint32_t>(inputs.size()),
+                                           outputs.data(),
+                                           static_cast<uint32_t>(outputs.size()),
+                                           delivered);
+    }
+    anira_status push_data(const Tensor& in, uint32_t slot) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_push_data(m_handler, &in, slot);
+    }
+    anira_status push_data(std::span<const Tensor> inputs) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_push_data_multi(m_handler,
+                                             inputs.data(),
+                                             static_cast<uint32_t>(inputs.size()));
+    }
+    anira_status pop_data(const Tensor& out,
+                          uint32_t slot,
+                          size_t* delivered = nullptr) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_pop_data(m_handler, &out, slot, delivered);
+    }
+    anira_status pop_data(std::span<const Tensor> outputs,
+                          size_t* delivered = nullptr) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_pop_data_multi(m_handler,
+                                            outputs.data(),
+                                            static_cast<uint32_t>(outputs.size()),
+                                            delivered);
+    }
+
+    // The _wait twins: blocking.
+    anira_status process_wait(const Tensor& in,
+                              uint32_t in_slot,
+                              const Tensor& out,
+                              uint32_t out_slot,
+                              double timeout_ms,
+                              size_t* delivered = nullptr) noexcept {
+        return anira_handler_process_wait(m_handler,
+                                          &in,
+                                          in_slot,
+                                          &out,
+                                          out_slot,
+                                          delivered,
+                                          timeout_ms);
+    }
+    anira_status process_wait(std::span<const Tensor> inputs,
+                              std::span<const Tensor> outputs,
+                              double timeout_ms,
+                              size_t* delivered = nullptr) noexcept {
+        return anira_handler_process_multi_wait(m_handler,
+                                                inputs.data(),
+                                                static_cast<uint32_t>(inputs.size()),
+                                                outputs.data(),
+                                                static_cast<uint32_t>(outputs.size()),
+                                                delivered,
+                                                timeout_ms);
+    }
+    anira_status pop_data_wait(const Tensor& out,
+                               uint32_t slot,
+                               double timeout_ms,
+                               size_t* delivered = nullptr) noexcept {
+        return anira_handler_pop_data_wait(m_handler, &out, slot, delivered, timeout_ms);
+    }
+    anira_status pop_data_wait(std::span<const Tensor> outputs,
+                               double timeout_ms,
+                               size_t* delivered = nullptr) noexcept {
+        return anira_handler_pop_data_multi_wait(m_handler,
+                                                 outputs.data(),
+                                                 static_cast<uint32_t>(outputs.size()),
+                                                 delivered,
+                                                 timeout_ms);
+    }
+
+    /// anira_handler_set_static_input: a whole Static tensor in the spec's dtype and shape.
+    anira_status set_static_input(uint32_t slot, const Tensor& value) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_set_static_input(m_handler, slot, &value);
+    }
+    /// anira_handler_get_static_output: the latest collected value of a Static output.
+    anira_status get_static_output(uint32_t slot, const Tensor& out) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_get_static_output(m_handler, slot, &out);
+    }
+
+    /// anira_handler_get_latency: one output's latency in samples of that output.
+    uint32_t get_latency(uint32_t slot = 0) const noexcept ANIRA_NONBLOCKING {
+        return anira_handler_get_latency(m_handler, slot);
+    }
+    /// anira_handler_get_latencies: one per output slot, 0 for a slot that is not Streamed;
+    /// empty before a successful prepare.
+    std::vector<uint32_t> get_latencies() const {
+        uint32_t count = 0;
+        if (ANIRA_FAILED(anira_handler_get_latencies(m_handler, &count, nullptr))) { return {}; }
+        std::vector<uint32_t> latencies(count);
+        if (count > 0 &&
+            ANIRA_FAILED(anira_handler_get_latencies(m_handler, &count, latencies.data()))) {
+            return {};
+        }
+        return latencies;
+    }
+    /// anira_handler_get_available_samples: the samples waiting in one channel of an output
+    /// ring (it collects finished inferences, hence non-const).
+    anira_status get_available_samples(uint32_t slot,
+                                       uint32_t channel,
+                                       size_t* out) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_get_available_samples(m_handler, slot, channel, out);
+    }
+
+    /// anira_handler_reset: restarts the stream (the rings, the declared state, rt_error()).
+    void reset() noexcept ANIRA_NONBLOCKING { anira_handler_reset(m_handler); }
+    /// anira_handler_rt_error: the last real-time failure, ANIRA_OK when there was none.
+    anira_status rt_error() const noexcept ANIRA_NONBLOCKING {
+        return anira_handler_rt_error(m_handler);
+    }
+    /// anira_handler_set_plan: the dense plan index of the report; effective at the next chunk.
+    anira_status set_plan(uint32_t plan) noexcept ANIRA_NONBLOCKING {
+        return anira_handler_set_plan(m_handler, plan);
+    }
+    uint32_t get_plan() const noexcept ANIRA_NONBLOCKING {
+        return anira_handler_get_plan(m_handler);
+    }
+
+    const anira_handler* native() const noexcept { return m_handler; }
+    anira_handler* native() noexcept { return m_handler; }
+
+private:
+    anira_handler* m_handler = nullptr;
+};
+
+/**
+ * @brief An inference thread the host drives (anira_inference_thread of anira/abi/thread.h),
+ * for a context configured with no pool threads (ContextConfig::threads(0)): start() runs the
+ * loop on a thread of anira's, or the host calls run_loop() or execute() on a thread of its own.
+ * Move-only; the destructor is anira_inference_thread_destroy, which natively stops and joins a
+ * started thread first (on WebAssembly the thread must have left its loop: stop(), then wait for
+ * has_exited()).
+ */
+class InferenceThread {
+public:
+    /// @throws Error with the status of anira_inference_thread_create.
+    explicit InferenceThread(Context& context) {
+        detail::abi_check_once();
+        anira_error err{};
+        detail::check(anira_inference_thread_create(context.native(), &m_thread, &err), err);
+    }
+    ~InferenceThread() { anira_inference_thread_destroy(m_thread); }
+    InferenceThread(const InferenceThread&) = delete;
+    InferenceThread& operator=(const InferenceThread&) = delete;
+    InferenceThread(InferenceThread&& other) noexcept
+        : m_thread(std::exchange(other.m_thread, nullptr)) {}
+    InferenceThread& operator=(InferenceThread&& other) noexcept {
+        if (this != &other) {
+            anira_inference_thread_destroy(m_thread);
+            m_thread = std::exchange(other.m_thread, nullptr);
+        }
+        return *this;
+    }
+
+    /// anira_inference_thread_start: the loop on a real-time thread of anira's.
+    /// @throws Error when the thread cannot be started.
+    void start() {
+        anira_error err{};
+        detail::check(anira_inference_thread_start(m_thread, &err), err);
+    }
+    /// anira_inference_thread_stop: asks the loop to return and joins the thread start() started
+    /// (WebAssembly: waits for its Worker to leave the loop); a run_loop() on a thread of the
+    /// host's is asked to return only (poll has_exited()).
+    void stop() noexcept { anira_inference_thread_stop(m_thread); }
+    /// anira_inference_thread_execute: one dequeue on the caller's thread; whether it ran one.
+    bool execute() noexcept { return anira_inference_thread_execute(m_thread) != 0U; }
+    /// anira_inference_thread_run_loop: the loop on the caller's thread, until stop().
+    void run_loop() noexcept { anira_inference_thread_run_loop(m_thread); }
+    bool should_exit() const noexcept { return anira_inference_thread_should_exit(m_thread) != 0U; }
+    bool is_running() const noexcept { return anira_inference_thread_is_running(m_thread) != 0U; }
+    bool has_exited() const noexcept { return anira_inference_thread_has_exited(m_thread) != 0U; }
+
+    const anira_inference_thread* native() const noexcept { return m_thread; }
+    anira_inference_thread* native() noexcept { return m_thread; }
+
+private:
+    anira_inference_thread* m_thread = nullptr;
+};
+
+/// anira_log_rt: one record from a real-time thread into the core's queue (a static message
+/// and up to two integers; nothing is formatted or allocated on the caller's thread).
+inline void log_rt(anira_log_level level,
+                   const char* group,
+                   const char* static_message,
+                   int32_t a = 0,
+                   int32_t b = 0) noexcept ANIRA_NONBLOCKING {
+    anira_log_rt(level, group, static_message, a, b);
+}
 
 // ---- job options (section 6) ---------------------------------------------------------------
 

@@ -12,12 +12,12 @@
 //
 //     anira::ModelConfig model = anira::ModelConfig::from_file(k_cnn_model_json);
 //     anira::ContractHandle contract = anira::ContractHandle::from_file(k_cnn_contract_json);
-//     anira::InferenceConfig config = anira::v3compat::to_inference_config(
-//         model, contract, anira::v3compat::enabled_engines());
+//     anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(model)});
+//     handler.prepare(contract.hard_geometry(block, block, rate));
 //
 // (or anira_model_config_from_json_file / anira_contract_from_json from C). The files set no
-// instance ceiling, so one processor per engine runs; a config that wants parallel instances
-// says so with max_instances.
+// instance ceiling, so the count is the inference pool's (ANIRA_INSTANCES_AUTO); a config that
+// wants fewer parallel instances says so with max_instances.
 
 #define ANIRA_EXTRAS_MODEL_FILE(relative) ANIRA_EXTRAS_MODELS_DIR "/" relative
 

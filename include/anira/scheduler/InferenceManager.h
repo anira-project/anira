@@ -49,10 +49,9 @@ struct RtLatch;
  *
  * Host blocks reach the rings through one copy path, written over anira_tensor (see "The
  * tensor stems" below): one tensor per slot, of any ring element type, planar, contiguous or
- * interleaved. The manager takes host tensors and nothing else. The float face of the library,
- * anira::InferenceHandler, presents its channel pointers as planar float32 tensors before it
- * calls it; a direct caller that holds channel pointers, a host of the C ABI included, does
- * the same with anira_tensor_init_host_planar().
+ * interleaved. The manager takes host tensors and nothing else; a caller that holds channel
+ * pointers, a host of the C ABI included, presents them as planar float32 tensors with
+ * anira_tensor_init_host_planar().
  *
  * @note This class coordinates between multiple components and should be used
  *       as the primary interface for inference operations rather than directly
@@ -171,8 +170,7 @@ public:
      * @name The tensor stems
      *
      * The host<->ring copy path, and the only way into it: what an entry that takes host
-     * tensors calls, and what the float face (anira::InferenceHandler) calls with the planar
-     * float32 tensors it presents. A call hands over one anira_tensor per slot, in slot order and
+     * tensors calls. A call hands over one anira_tensor per slot, in slot order and
      * covering every slot of that side: `inputs` has one tensor per input tensor of the
      * InferenceConfig, `outputs` one per output tensor.
      *
@@ -180,9 +178,7 @@ public:
      * InferenceConfig: a Static tensor of a 3.x model) has no ring and is not the copy path's:
      * its tensor is never read, whatever it holds, its delivered count is always 0, and a miss
      * leaves its memory alone. Its values travel beside the stems: through the static ports of a
-     * 3.x handler (whole tensors in the spec's shape, src/capi/port.h), and for the 2.x
-     * face through anira::NonStreamableRouter (src/scheduler/NonStreamableRouter.h), which keeps
-     * the value count, the clamp and the miss rules of the 2.x `float***` blocks.
+     * 3.x handler (whole tensors in the spec's shape, src/capi/port.h).
      *
      * The tensor of a streamed slot is a host block of the logical shape `[channels, samples]`,
      * over memory in one of three descriptions, for any channel count:
@@ -331,8 +327,8 @@ public:
      *
      * With a blocking ratio above 0 this is process_wait() with the budget of
      * contract_wait_budget() (the block's own duration times the ratio, waited for on the
-     * semaphore) and the outcome dropped; without one it is process_nowait(). What
-     * anira::InferenceHandler::process() calls; the tensors pass through as they are.
+     * semaphore) and the outcome dropped; without one it is process_nowait(). The tensors
+     * pass through as they are.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
@@ -349,9 +345,9 @@ public:
      * `wait_until` for the next result on the session's semaphore and pops. A session without
      * a blocking ratio has no semaphore to wait on: nothing is waited for and nothing is
      * collected, the call pops what the receive rings hold, and the site
-     * RtSite::WaitWithoutSemaphore records it once. What
-     * anira::InferenceHandler::pop_data() with a time point calls; pop_data_wait() is the 3.x
-     * form, which waits on either completion primitive and reports how the wait ended.
+     * RtSite::WaitWithoutSemaphore records it once. The 2.x
+     * face's deadline pop; pop_data_wait() is the 3.x form, which waits on either completion
+     * primitive and reports how the wait ended.
      *
      * @param outputs One tensor per output slot (see "The tensor stems")
      * @param wait_until Time point until which the call waits for the result

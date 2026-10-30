@@ -1095,8 +1095,7 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
         .block_min = 64,
         .block_max = 2048,
         .rate = 44100.0,
-        .budget = ANIRA_BUDGET_EXPLICIT,
-        .budget_value = std::chrono::microseconds{2500},
+        .budget = std::chrono::microseconds{2500},
         .warmup = ANIRA_WARMUP_FIXED,
         .warmup_iterations = 7,
         .on_miss = ANIRA_MISS_CALLBACK,
@@ -1112,7 +1111,6 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
     EXPECT_EQ(back.block_max, hard.block_max);
     EXPECT_EQ(back.rate, hard.rate);
     EXPECT_EQ(back.budget, hard.budget);
-    EXPECT_EQ(back.budget_value, hard.budget_value);
     EXPECT_EQ(back.warmup, hard.warmup);
     EXPECT_EQ(back.warmup_iterations, hard.warmup_iterations);
     EXPECT_EQ(back.on_miss, hard.on_miss);
@@ -1129,7 +1127,7 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
     const anira::Hard patched = loaded.hard();
     EXPECT_EQ(patched.block_min, 512u);
     EXPECT_EQ(patched.rate, 48000.0);
-    EXPECT_EQ(patched.budget, ANIRA_BUDGET_MEASURED);
+    EXPECT_EQ(patched.budget.kind(), ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(patched.ring_dtypes,
               (std::map<std::string, anira::DType>{{"audio_in", ANIRA_DTYPE_I16}}));
     EXPECT_EQ(patched.latencies, (std::map<std::string, uint32_t>{{"mask_out", 1024}}));
@@ -1151,10 +1149,9 @@ TEST(AbiReadBackCxx, TheBudgetRoundTripsToTheNanosecond) {
                                             nanoseconds{1000001}};
     int truncated = 0;
     for (const nanoseconds value : values) {
-        const anira::ContractHandle handle(anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT,
-                                                       .budget_value = value,
-                                                       .warmup = ANIRA_WARMUP_NONE});
-        EXPECT_EQ(handle.hard().budget_value, value) << value.count() << " ns";
+        const anira::ContractHandle handle(
+            anira::Hard{.budget = value, .warmup = ANIRA_WARMUP_NONE});
+        EXPECT_EQ(handle.hard().budget.value(), value) << value.count() << " ns";
         anira_budget_kind kind = ANIRA_BUDGET_MEASURED;
         double ms = 0.0;
         ASSERT_EQ(anira_contract_hard_budget(handle.native(), &kind, &ms), ANIRA_OK);
@@ -1174,20 +1171,20 @@ TEST(AbiReadBackCxx, HardOfAFileAsyncAndEmptyHandle) {
     const anira::Hard typed = anira::ContractHandle::from_json(k_typed).hard();
     EXPECT_EQ(typed.block_min, 256u);
     EXPECT_EQ(typed.block_max, 1024u);
-    EXPECT_EQ(typed.budget_value, std::chrono::microseconds{42660}) << "42.66 ms, rounded";
+    EXPECT_EQ(typed.budget.value(), std::chrono::microseconds{42660}) << "42.66 ms, rounded";
     EXPECT_EQ(typed.warmup_iterations, 3u);
     EXPECT_EQ(typed.on_miss, ANIRA_MISS_ZEROS);
     EXPECT_EQ(typed.ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
     EXPECT_EQ(typed.latencies.at("audio_out"), 2048u);
     // Re-minted, the aggregate is the same contract.
     const anira::Hard again = anira::ContractHandle(typed).hard();
-    EXPECT_EQ(again.budget_value, typed.budget_value);
+    EXPECT_EQ(again.budget, typed.budget);
     EXPECT_EQ(again.ring_dtypes, typed.ring_dtypes);
     EXPECT_EQ(again.latencies, typed.latencies);
 
     const anira::ContractHandle async_contract(anira::Async{});
     EXPECT_EQ(status_of([&] { (void)async_contract.hard(); }), ANIRA_ERROR_WRONG_CONTRACT);
-    anira::ContractHandle moved(anira::Hard{});
+    anira::ContractHandle moved(anira::Hard{.budget = anira::Budget::measured()});
     const anira::ContractHandle taker(std::move(moved));
     // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move): the empty handle
     EXPECT_EQ(status_of([&] { (void)moved.hard(); }), ANIRA_ERROR_INVALID_ARGUMENT);

@@ -206,13 +206,10 @@ inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
                                                double wait_ratio = 0.0,
                                                double budget_ms = 5.0,
                                                uint32_t warmup_iterations = 0) {
-    anira::Hard hard;
-    hard.block_min = block;
-    hard.block_max = block;
-    hard.rate = rate;
-    hard.budget = ANIRA_BUDGET_EXPLICIT;
-    hard.budget_value = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double, std::milli>(budget_ms));
+    anira::Hard hard{.block_min = static_cast<double>(block),
+                     .block_max = static_cast<double>(block),
+                     .rate = rate,
+                     .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = warmup_iterations;
     hard.on_miss = on_miss;

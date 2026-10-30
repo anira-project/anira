@@ -1,16 +1,21 @@
-#include <anira/anira.h>
-#include <anira/benchmark.h>
-#include <anira/compat/v3_to_v2.h>
+#include <ProcessBlockFixture.h>
 #include <benchmark/benchmark.h>
 #include <gtest/gtest.h>
 
+#include <anira/anira.hpp>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
+#include <thread>
+#include <vector>
+
 #include "../../../extras/models/cnn/CNNConfig.h"
-#include "../../../extras/models/cnn/CNNPrePostProcessor.h"
 #include "../../../extras/models/hybrid-nn/HybridNNConfig.h"
-#include "../../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../../extras/models/hybrid-nn/HybridNNStage.h"
 #include "../../../extras/models/model_files.h"
 #include "../../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "ClearCustomProcessor.h"
+#include "ClearEngine.h"
 
 /* ============================================================ *
  * ========================= Configs ========================== *
@@ -22,54 +27,51 @@
 #define SAMPLE_RATE 44100
 
 std::vector<int> buffer_sizes = {64, 128, 256, 512, 1024, 2048, 4096, 8192};
-std::vector<anira::InferenceBackend> inference_backends = {
-#ifdef USE_LIBTORCH
-    anira::InferenceBackend::LIBTORCH,
-#endif
-#ifdef USE_ONNXRUNTIME
-    anira::InferenceBackend::ONNX,
-#endif
-#ifdef USE_TFLITE
-    anira::InferenceBackend::TFLITE,
-#endif
-#ifdef USE_LITERT
-    anira::InferenceBackend::LITERT,
-#endif
-#ifdef USE_EXECUTORCH
-    anira::InferenceBackend::EXECUTORCH,
-#endif
-    anira::InferenceBackend::CUSTOM};
 // The three models: the steerable-nafx CNN, GuitarLSTM and the stateful LSTM. Their shapes
 // follow the host buffer (the CNN's hop, GuitarLSTM's batch count, the LSTM's chunk), which the
 // fixed windows of the configuration files cannot, so the benchmark builds each model config
-// in code with the builders of extras/models and bridges it per buffer size; the contract
-// comes from the model's contract file. inference_config outlives the handler of one run.
+// in code with the builders of extras/models per buffer size; the contract comes from the
+// model's contract file.
 constexpr int k_num_models = 3;
-anira::InferenceConfig inference_config;
 
-/// Builds the model config of `model` at `buffer_size` into inference_config and returns the
-/// host geometry (the buffer at SAMPLE_RATE) through the model's contract.
-anira::HostConfig configure(int model, int buffer_size);
+/// The engines a run benchmarks: every engine of this build, and the clear engine
+/// (ClearEngine.h, zeros without a model) as the baseline of anira's own path.
+const std::vector<anira::EngineRef>& benchmark_engines() {
+    static const std::vector<anira::EngineRef> engines = [] {
+        std::vector<anira::EngineRef> list;
+        for (const anira::BackendId& row : anira::enabled_engines()) {
+            list.push_back({.kind = static_cast<anira::EngineKind>(row.engine)});
+        }
+        list.push_back({.kind = ANIRA_ENGINE_CUSTOM, .id = k_clear_engine_id});
+        return list;
+    }();
+    return engines;
+}
 
-// define the buffer sizes, backends and model configs to be used in the benchmark and the backends
-// to be used
+/// The model config of `model` at `buffer_size`, with the clear engine's entry, and its
+/// contract file.
+anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json);
+
+/// The one candidate of a run: the engine benchmarked, on the CPU path, so the handler loads
+/// that engine's model alone.
+anira::BackendId candidate_of(const anira::EngineRef& engine) {
+    return {.struct_size = sizeof(anira::BackendId),
+            .engine = static_cast<uint32_t>(engine.kind),
+            .provider = ANIRA_PROVIDER_CPU,
+            .engine_id = engine.id.empty() ? nullptr : engine.id.data()};
+}
+
+// define the buffer sizes, models and engines to be used in the benchmark
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i) {
         for (int j = 0; j < k_num_models; ++j) {
-            for (int k = 0; k < inference_backends.size(); ++k) {
+            for (int k = 0; k < benchmark_engines().size(); ++k) {
                 const bool is_stateful_rnn = (j == 2);
-                bool skip = false;
-#ifdef USE_ONNXRUNTIME
-                // ONNX backend does not support the stateful RNN
-                skip = skip ||
-                       (is_stateful_rnn && inference_backends[k] == anira::InferenceBackend::ONNX);
-#endif
-#ifdef USE_EXECUTORCH
-                // The stateful RNN .pte is exported at a fixed 2048-sample chunk and
-                // cannot follow the varying buffer size
-                skip = skip || (is_stateful_rnn &&
-                                inference_backends[k] == anira::InferenceBackend::EXECUTORCH);
-#endif
+                const anira::EngineKind engine = benchmark_engines()[k].kind;
+                // ONNX Runtime does not support the stateful RNN; its ExecuTorch export is fixed
+                // at a 2048-sample chunk and cannot follow the varying buffer size.
+                const bool skip = is_stateful_rnn && (engine == ANIRA_ENGINE_ONNXRUNTIME ||
+                                                      engine == ANIRA_ENGINE_EXECUTORCH);
                 if (!skip) { b->Args({buffer_sizes[i], j, k}); }
             }
         }
@@ -83,48 +85,42 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
 typedef anira::benchmark::ProcessBlockFixture ProcessBlockFixture;
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) {
-    // The buffer size (state.range(0) of the google benchmark, read through get_buffer_size())
-    // and the model (state.range(1)) of this run.
-    anira::HostConfig host_config = configure(static_cast<int>(state.range(1)), get_buffer_size());
+    // The buffer size (state.range(0) of the google benchmark, read through get_buffer_size()),
+    // the model (state.range(1)) and the engine (state.range(2)) of this run.
+    const int model = static_cast<int>(state.range(1));
+    const anira::EngineRef engine = benchmark_engines()[static_cast<size_t>(state.range(2))];
+    const char* contract_json = nullptr;
+    const anira::ModelConfig model_config =
+        model_config_of(model, get_buffer_size(), contract_json);
+    anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+    const auto block = static_cast<double>(get_buffer_size());
+    contract.hard_geometry(block, block, SAMPLE_RATE);
 
-    anira::PrePostProcessor* my_pp_processor;
-
-    if (state.range(1) == 0) {
-        my_pp_processor = new CNNPrePostProcessor(inference_config);
-    } else if (state.range(1) == 1) {
-        my_pp_processor = new HybridNNPrePostProcessor(inference_config);
-    } else if (state.range(1) == 2) {
-        my_pp_processor = new anira::PrePostProcessor(inference_config);
+    // Only report errors, so the log output of the engines does not pollute the benchmark
+    // results.
+    m_context = std::make_unique<anira::Context>(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
+    anira::Pipeline pipeline;
+    pipeline.add(anira::stage::Inference(model_config, {candidate_of(engine)})
+                     .engine(std::make_shared<ClearEngine>()));
+    if (model == 1) {
+        // GuitarLSTM's windows; the CNN and the LSTM take anira's default fill.
+        pipeline.add(anira::stage::Custom(std::make_shared<HybridNNStage>()));
     }
+    m_inference_handler = std::make_unique<anira::InferenceHandler>(*m_context, pipeline);
+    const anira::PlanReport report = m_inference_handler->prepare(contract);
+    const uint32_t plan = ProcessBlockFixture::plan_of(report, engine.kind, engine.id);
+    m_inference_handler->set_plan(plan);
 
-    ClearCustomProcessor clear_custom_processor(inference_config);
-
-    // Only report errors, so the log output of the backends does not pollute the
-    // benchmark results.
-    const anira::CoreConfig core_config =
-        anira::v3compat::to_core_config(anira::ContextConfig{}.log_level(ANIRA_LOG_ERROR));
-
-    m_inference_handler = std::make_unique<anira::InferenceHandler>(*my_pp_processor,
-                                                                    inference_config,
-                                                                    clear_custom_processor,
-                                                                    core_config);
-    m_inference_handler->prepare(host_config);
-    m_inference_handler->set_inference_backend(inference_backends[state.range(2)]);
-
-    m_buffer =
-        std::make_unique<anira::Buffer<float>>(inference_config.get_preprocess_input_channels()[0],
-                                               host_config.m_buffer_size);
-
-    initialize_repetition(inference_config, host_config, inference_backends[state.range(2)]);
+    initialize_repetition(model_config, contract.hard(), plan);
 
     for (auto _ : state) {
-        push_random_samples_in_buffer(host_config);
+        push_random_samples_in_buffer();
 
         initialize_iteration();
 
         std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
 
-        m_inference_handler->process(m_buffer->get_array_of_write_pointers(), get_buffer_size());
+        process_buffer();
 
         while (!buffer_processed()) { std::this_thread::sleep_for(std::chrono::nanoseconds(10)); }
 
@@ -133,8 +129,6 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
         interation_step(start, end, state);
     }
     repetition_step(NUM_REPETITIONS);
-
-    delete my_pp_processor;
 }
 
 // /* ============================================================ *
@@ -146,22 +140,17 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
     ->Iterations(NUM_ITERATIONS)
     ->Repetitions(NUM_REPETITIONS)
     ->Apply(Arguments)
-    ->ComputeStatistics("min", anira::calculate_min)
-    ->ComputeStatistics("max", anira::calculate_max)
+    ->ComputeStatistics("min", anira::benchmark::calculate_min)
+    ->ComputeStatistics("max", anira::benchmark::calculate_max)
     ->ComputeStatistics("percentile",
                         [](const std::vector<double>& v) -> double {
-                            return anira::calculate_percentile(v, PERCENTILE);
+                            return anira::benchmark::calculate_percentile(v, PERCENTILE);
                         })
     ->DisplayAggregatesOnly(false)
     ->UseManualTime();
 
-anira::HostConfig configure(int model, int buffer_size) {
-    // Every engine of this build, plus ANIRA_ENGINE_CUSTOM so the custom placeholder entry below
-    // survives the candidate filter.
-    std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
-    candidates.push_back(ANIRA_ENGINE_CUSTOM);
+anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json) {
     anira::ModelConfig model_config;
-    const char* contract_json = nullptr;
     if (model == 0) {
         // The CNN: the hop follows the buffer size, the receptive field stays.
         model_config = cnn_model_config(buffer_size);
@@ -171,20 +160,11 @@ anira::HostConfig configure(int model, int buffer_size) {
         model_config = hybridnn_model_config(buffer_size);
         contract_json = k_hybridnn_contract_json;
     } else {
-        // The stateful LSTM: one chunk per buffer. ONNX Runtime does not support it and the
-        // ExecuTorch export runs only at its exported 2048-sample chunk, so neither is a
-        // candidate (Arguments() skips those rows as well).
+        // The stateful LSTM: one chunk per buffer (Arguments() skips ONNX Runtime and
+        // ExecuTorch, which cannot run it at every size).
         model_config = rnn_model_config(buffer_size);
         contract_json = k_rnn_contract_json;
-        std::erase(candidates, ANIRA_ENGINE_ONNXRUNTIME);
-        std::erase(candidates, ANIRA_ENGINE_EXECUTORCH);
     }
-    // The custom backend needs no model file, but the benchmark fixture resolves a model name
-    // via get_model_path(CUSTOM): a placeholder entry for the 2.x custom engine.
-    model_config.add_model_path("anira.v2.custom", "custom-placeholder");
-    anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    inference_config = anira::v3compat::to_inference_config(model_config, contract, candidates);
-    const auto block = static_cast<uint32_t>(buffer_size);
-    contract.hard_geometry(block, block, SAMPLE_RATE);
-    return anira::v3compat::to_host_config(contract, model_config);
+    model_config.add_model(k_clear_engine_id);  // the baseline needs no model file
+    return model_config;
 }

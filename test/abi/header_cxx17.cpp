@@ -1,18 +1,10 @@
-// Gate 4 (docs/anira-v3-architecture.md, section 6a): the M1 headers as C++17 under the
-// strict flags with no anira define at all; the C headers never need C++20 (anira.hpp may).
-// Every header is included on purpose, so the include-cleaner check is off for the file.
+// Gate 4 (docs/anira-v3-architecture.md, section 6a): the C headers as C++17 under the strict
+// flags with no anira define at all, through the C umbrella (<anira/anira.h>) plus the draft
+// header and the platform companion; the C headers never need C++20 (anira.hpp may). Every
+// header is included on purpose, so the include-cleaner check is off for the file.
 // NOLINTBEGIN(misc-include-cleaner)
-#include <anira/abi/config.h>
 #include <anira/abi/draft/tensor_platform.h>
-#include <anira/abi/engine.h>
-#include <anira/abi/enums.h>
-#include <anira/abi/export.h>
-#include <anira/abi/handler.h>
-#include <anira/abi/log.h>
-#include <anira/abi/stage.h>
-#include <anira/abi/status.h>
-#include <anira/abi/tensor.h>
-#include <anira/abi/version.h>
+#include <anira/anira.h>
 #include <anira/anira_em.h>
 
 #include <cstddef>

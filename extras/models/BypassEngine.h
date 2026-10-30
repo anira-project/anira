@@ -6,7 +6,8 @@
 // CNN's [1, 1, 15380], 256 for the HybridNN's [256, 1, 150]), the last samples of the row go to
 // the output, as many as the output holds per row (2048 for the CNN, 1 for the HybridNN). That is
 // the window's newest audio, so the model's output is its input, delayed by the handler's
-// latency: what the examples' "bypass" setting runs, for any model shaped this way.
+// latency: what the examples' "bypass" setting runs, for any model shaped this way. The first
+// input goes to the first output; every other output (a Static output) is zeros.
 //
 // A model config serves it with an entry without a source, which the engine's
 // ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL allows (anira::ModelConfig::add_model(k_bypass_engine_id), or a
@@ -59,6 +60,15 @@ private:
                 std::memcpy(out + (r * per_row),
                             in + (r * row) + (row - per_row),
                             per_row * sizeof(float));
+            }
+            // Every other output (a Static output of the model, the gain models' peak) is zeros.
+            for (std::size_t i = 1; i < outputs.size(); ++i) {
+                void* data = outputs[i].data(outputs[i].dtype);
+                if (data == nullptr) { continue; }
+                std::memset(data,
+                            0,
+                            outputs[i].num_elements() * ANIRA_DTYPE_BITS(outputs[i].dtype) *
+                                ANIRA_DTYPE_LANES(outputs[i].dtype) / 8);
             }
             return ANIRA_OK;
         }

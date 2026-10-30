@@ -9,7 +9,7 @@
 //
 // The model takes `batches` windows of 150 samples per inference, each window one sample
 // further than the last, and returns one sample per window: a hop of `batches` samples with
-// 149 samples of context ahead of it, which HybridNNPrePostProcessor builds the windows from.
+// 149 samples of context ahead of it, which HybridNNStage builds the windows from.
 // The PyTorch exports hold the input as [batch, channel, time]; the TensorFlow exports hold it
 // as [batch, time, channel]. The Time axis of the spec is the 150-sample window of one batch,
 // not the 405 ring elements one inference consumes: the ring extent and the axis are reconciled

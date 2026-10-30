@@ -5,26 +5,44 @@
 #include <clap/helpers/plugin.hh>
 #include <clap/helpers/plugin.hxx>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <span>
+#include <string_view>
+#include <vector>
 
 namespace clap_plugin_example {
+
+namespace {
+
+/// GuitarLSTM's model config with the entry of the bypass engine, which needs no model file.
+anira::ModelConfig hybridnn_with_bypass() {
+    anira::ModelConfig config = anira::ModelConfig::from_file(k_hybridnn_model_json);
+    config.add_model(k_bypass_engine_id);
+    return config;
+}
+
+/// The inference stage (the model's engines and the bypass engine) and the model's windows.
+anira::Pipeline make_pipeline(const anira::ModelConfig& model) {
+    return anira::Pipeline{anira::stage::Inference(model).engine(std::make_shared<BypassEngine>()),
+                           anira::stage::Custom(std::make_shared<HybridNNStage>())};
+}
+
+}  // namespace
 
 AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host)
     , m_plugin_latency(0)
-    , m_model_config(anira::ModelConfig::from_file(k_hybridnn_model_json))
+    // The context takes the library default (half the hardware threads for inference), which
+    // is what this plugin wants; section 3.1 of the usage guide shows how to change it.
+    , m_model_config(hybridnn_with_bypass())
     , m_contract(anira::ContractHandle::from_file(k_hybridnn_contract_json))
-    , m_inference_config(anira::v3compat::to_inference_config(m_model_config,
-                                                              m_contract,
-                                                              anira::v3compat::enabled_engines()))
-    , m_pp_processor(m_inference_config)
-    , m_bypass_processor(m_inference_config)
-    // No CoreConfig is passed: the library default (half the hardware threads for
-    // inference) is what this plugin wants; section 3.1 of the usage guide shows how to change it.
-    , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor) {
+    , m_inference_handler(m_context, make_pipeline(m_model_config)) {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
 }
@@ -183,11 +201,37 @@ bool AniraClapPluginExample::activate(double sampleRate,
     // of more latency.
     try {
         m_contract.hard_geometry(maxFrameCount, maxFrameCount, sampleRate);
-        m_inference_handler.prepare(anira::v3compat::to_host_config(m_contract, m_model_config));
+        const anira::PlanReport report = m_inference_handler.prepare(m_contract);
+        // The plan behind each Backend choice: the first plan of its engine, else the bypass.
+        const std::vector<anira_plan_info> plans = report.plans();
+        const auto first_plan_of = [&plans](uint32_t engine, std::string_view id) {
+            for (uint32_t i = 0; i < plans.size(); ++i) {
+                if (plans[i].engine != engine) { continue; }
+                if (!id.empty() && (plans[i].engine_id == nullptr || id != plans[i].engine_id)) {
+                    continue;
+                }
+                return std::optional<uint32_t>(i);
+            }
+            return std::optional<uint32_t>();
+        };
+        const uint32_t bypass = first_plan_of(ANIRA_ENGINE_CUSTOM, k_bypass_engine_id).value_or(0);
+        const std::array<uint32_t, 6> engines{ANIRA_ENGINE_ONNXRUNTIME,
+                                              ANIRA_ENGINE_LIBTORCH,
+                                              ANIRA_ENGINE_TFLITE,
+                                              ANIRA_ENGINE_CUSTOM,
+                                              ANIRA_ENGINE_LITERT,
+                                              ANIRA_ENGINE_EXECUTORCH};
+        for (size_t choice = 0; choice < engines.size(); ++choice) {
+            m_backend_plans[choice].store(
+                choice == Bypassed ? bypass : first_plan_of(engines[choice], {}).value_or(bypass));
+        }
     } catch (const anira::Error& error) {
         std::cerr << "anira: " << error.what() << std::endl;
         return false;
     }
+
+    const std::array<int64_t, 2> extents{1, static_cast<int64_t>(maxFrameCount)};
+    m_audio = anira::Tensor::from_host_planar<float>(std::span<float* const>(m_channels), extents);
 
     m_plugin_latency = (uint32_t)m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t)m_plugin_latency);
@@ -207,7 +251,10 @@ clap_process_status AniraClapPluginExample::process(const clap_process* process)
         }
     }
 
-    m_inference_handler.process(in, (size_t)process->frames_count);
+    // In place on the input block, as one planar tensor over its channel pointer.
+    m_channels[0] = in[0];
+    m_audio.shape[1] = static_cast<int64_t>(process->frames_count);
+    m_inference_handler.process(m_audio, 0, m_audio, 0);
 
     for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
@@ -247,45 +294,11 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) 
         *m_param_to_value[v->param_id] = v->value;
 
         if (m_param_to_value[v->param_id] == &m_param_backend) {
-            switch ((Backend)m_param_backend) {
-                case OnnxRuntime:
-#if USE_ONNXRUNTIME
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case LibTorch:
-#if USE_LIBTORCH
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case TensorFlowLite:
-#if USE_TENSORFLOW
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case LiteRt:
-#if USE_LITERT
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case ExecuTorch:
-#if USE_EXECUTORCH
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                default:
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-                    break;
+            // The plan behind the choice (activate filled the table: the bypass plan for an
+            // engine this build or the model lacks).
+            const auto choice = static_cast<size_t>(m_param_backend);
+            if (choice < m_backend_plans.size()) {
+                m_inference_handler.set_plan(m_backend_plans[choice].load());
             }
         } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {
             auto new_mix = static_cast<float>(m_param_dry_wet / 100.0);

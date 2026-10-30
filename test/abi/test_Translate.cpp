@@ -84,9 +84,7 @@ ModelConfig minimal() {
 
 /// The contract the 2.x runtime accepts: an explicit budget and a fixed warmup.
 Hard explicit_hard() {
-    Hard hard;
-    hard.budget = ANIRA_BUDGET_EXPLICIT;
-    hard.budget_value = std::chrono::milliseconds(5);
+    Hard hard{.budget = std::chrono::milliseconds(5)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = 0;
     return hard;
@@ -236,7 +234,7 @@ TEST(AbiTranslate, ContractScalarsAndModelScalarsLandInTheConfig) {
     ModelConfig model = minimal();
     model.state(ANIRA_MODEL_STATEFUL).max_instances(3);
     Hard hard = explicit_hard();
-    hard.budget_value = std::chrono::microseconds(42660);
+    hard.budget = std::chrono::microseconds(42660);
     hard.warmup_iterations = 2;
     hard.wait_ratio = 0.5;
     const Outcome outcome = bridge(model, hard);
@@ -1148,7 +1146,7 @@ TEST(AbiTranslate, AnUnknownExtensionFailsByName) {
 
 TEST(AbiTranslate, ContractRules) {
     const ModelConfig model = minimal();
-    Outcome outcome = bridge(model, Hard{});
+    Outcome outcome = bridge(model, Hard{.budget = anira::Budget::measured()});
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: a MEASURED budget");
 

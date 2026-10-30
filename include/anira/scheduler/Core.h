@@ -70,7 +70,7 @@ struct RtLatch;
  * pool (from the configuration in effect) when it registers the first session, and
  * release_session() stops and joins every pool thread — before it returns, inside the same
  * critical section — when it unregisters the last one. A plugin host may therefore unload
- * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
+ * the plugin's shared library as soon as the last handler has been destroyed: no
  * thread of anira's is alive at that point.
  *
  * A plugin destroys its handlers before its host unloads it, from its instance teardown or

@@ -13,13 +13,19 @@
 #   anira_header_cxx17    gate 4: the same as C++17
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
-#   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
+#   anira_header_coexist  the 2.x C++ headers and the C headers in one TU, both orders
 #   anira_header_cxx20_with_v2
-#                         the v2 C++ umbrella and anira.hpp in one TU, both orders
+#                         the 2.x C++ headers and anira.hpp in one TU, both orders (no class
+#                         of namespace anira defined both in libanira and in anira.hpp)
 #   anira_header_compat   anira/compat/v2.hpp alone as C++20 under the strict flags, the
 #                         shim's API exercised at compile time (nothing runs)
 #   anira_header_compat_with_v2
-#                         the v2 C++ umbrella, anira.hpp and the shim in one TU, both orders
+#                         the 2.x C++ headers, the C umbrella, anira.hpp and the shim in one
+#                         TU, both orders
+#   anira_header_scheduler_coexist
+#                         the library's scheduler classes (scheduler/Core.h,
+#                         scheduler/InferenceThread.h) beside anira.hpp: no class of namespace
+#                         anira in both
 #   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
 #                         calling every [callback-safe] tensor entry and the nonblocking Hard
 #                         entries over host tensors, under -Werror=function-effects on clang
@@ -56,7 +62,7 @@ set(_abi_headers export status version enums log tensor config context core thre
 # other target, so the per-file wrappers include them everywhere.
 set(_abi_platform_headers anira_em)
 # The umbrellas the registry generates (`umbrellas:`), beside the platform headers.
-set(_abi_umbrella_headers anira_all)
+set(_abi_umbrella_headers anira anira_all)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -115,9 +121,9 @@ function(anira_abi_consumer_target target lang)
     endif()
 endfunction()
 
-# A target holding the v2 C++ umbrella: the include and define set anira_header_isolation
-# (test/CMakeLists.txt) uses for it, C++20 (the umbrella's floor), and only the default
-# warnings, as errors, since the v2 headers are not held to -Wall -Wextra.
+# A target holding the 2.x C++ headers (v2_headers.inc): the include and define set
+# anira_header_isolation (test/CMakeLists.txt) uses for them, C++20 (their floor), and only the
+# default warnings, as errors, since the 2.x headers are not held to -Wall -Wextra.
 function(anira_abi_umbrella_target target)
     set_target_properties(${target} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
     target_include_directories(${target} PRIVATE
@@ -449,9 +455,9 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
 endif()
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
-# header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
-# drivers select; header_cxx20_with_v2.inc does the same for <anira/anira.h> and
-# <anira/anira.hpp>, header_compat_with_v2.inc for <anira/anira.h> and the compat shim. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
+# header_coexist.inc includes the 2.x headers (v2_headers.inc) and the C headers in the order
+# its two drivers select; header_cxx20_with_v2.inc does the same for the 2.x headers and
+# <anira/anira.hpp>, header_compat_with_v2.inc for the 2.x headers and the compat shim. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
 # GCC's "redefined") or a name both declare in namespace anira is what these gates are for.
 if(NOT _abi_on_device)
     add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
@@ -466,6 +472,10 @@ if(NOT _abi_on_device)
         header_compat_with_v2.cpp header_compat_with_v2_reverse.cpp)
     anira_abi_umbrella_target(anira_header_compat_with_v2)
     anira_abi_build_test(anira_header_compat_with_v2)
+    add_library(anira_header_scheduler_coexist OBJECT EXCLUDE_FROM_ALL
+        header_scheduler_coexist.cpp)
+    anira_abi_umbrella_target(anira_header_scheduler_coexist)
+    anira_abi_build_test(anira_header_scheduler_coexist)
 endif()
 
 # ---- gate 3: the Tier-1 layout table -----------------------------------------------------

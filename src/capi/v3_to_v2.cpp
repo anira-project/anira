@@ -1,8 +1,6 @@
-// The bridge from the 3.x configuration to the 2.x runtime (v3_to_v2.h): the translators
-// into the 2.x configuration objects, made from what the validator derived (validate.h), for
-// the C handler's sessions until the runtime cut-over, and the exported face over them
-// (anira/compat/v3_to_v2.h), whose every entry is the boundary where a failure is said once
-// (capi_internal.h), like the C entries of config.cpp.
+// The translators from the 3.x configuration into the 2.x configuration objects the scheduler
+// still takes (v3_to_v2.h), made from what the validator derived (validate.h), for the C
+// handler's sessions until the core takes the 3.x types (PR 10b).
 #include "v3_to_v2.h"
 
 #include <anira/CoreConfig.h>
@@ -10,7 +8,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -26,7 +23,6 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "validate.h"
-#include "words.h"
 
 // ---- the translators ------------------------------------------------------------------------
 
@@ -50,16 +46,6 @@ anira::InferenceBackend validated_backend(const ModelEntry& row) {
         refuse(ANIRA_ERROR_INTERNAL, "a validated row has no 2.x backend");
     }
     return *backend;
-}
-
-anira::LogLevel log_level_of(anira_log_level level) {
-    switch (level) {
-        case ANIRA_LOG_DEBUG: return anira::LogLevel::Debug;
-        case ANIRA_LOG_INFO: return anira::LogLevel::Info;
-        case ANIRA_LOG_WARNING: return anira::LogLevel::Warning;
-        case ANIRA_LOG_ERROR:
-        default: return anira::LogLevel::Error;
-    }
 }
 
 }  // namespace
@@ -185,22 +171,6 @@ anira::InferenceConfig make_inference_config(const anira_model_config& model,
             model.m_max_instances};
 }
 
-anira::CoreConfig make_core_config(const anira_context_config& config) {
-    check_context_extensions(config);
-    const unsigned int threads = config.m_num_threads == ANIRA_THREADS_AUTO
-                                     ? anira::default_num_threads()
-                                     : config.m_num_threads;
-    const anira::WaitStrategy wait = config.m_wait == ANIRA_WAIT_BLOCKING
-                                         ? anira::WaitStrategy::Blocking
-                                         : anira::WaitStrategy::SpinBackoff;
-    anira::CoreConfig core(threads, wait, log_level_of(config.m_log_level));
-    core.m_log.m_drain = config.m_log_drain == ANIRA_LOG_DRAIN_MANUAL ? anira::LogDrain::Manual
-                                                                      : anira::LogDrain::Thread;
-    core.m_log.m_drain_interval_ms = config.m_drain_interval_ms;
-    core.m_log.m_queue_capacity = config.m_queue_capacity;
-    return core;
-}
-
 anira_context_config make_context_config(const anira::CoreConfig& core_config) {
     anira_context_config config;
     // 0 stays "bring your own threads"; a CoreConfig never says AUTO (its default is
@@ -269,111 +239,3 @@ anira::HostConfig make_host_config(const anira_model_config& model,
 }
 
 }  // namespace anira::capi
-
-// ---- the exported face ----------------------------------------------------------------------
-
-namespace anira::v3compat {
-
-using anira::capi::translate_exception;
-
-namespace {
-
-// The first State spec of a model, inputs first, or NULL.
-const anira_tensor_spec* first_state_spec(const anira_model_config& model) noexcept {
-    for (const anira_tensor_spec& spec : model.m_inputs) {
-        if (spec.m_role == ANIRA_ROLE_STATE) { return &spec; }
-    }
-    for (const anira_tensor_spec& spec : model.m_outputs) {
-        if (spec.m_role == ANIRA_ROLE_STATE) { return &spec; }
-    }
-    return nullptr;
-}
-
-}  // namespace
-
-anira_status to_inference_config(const anira_model_config* model,
-                                 const anira_contract* contract,
-                                 const anira_engine* candidates,
-                                 uint32_t num_candidates,
-                                 anira::InferenceConfig& out,
-                                 anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(model != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "model is NULL");
-    ANIRA_CAPI_REQUIRE(contract != nullptr,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "contract is NULL: the 2.x InferenceConfig carries the Hard contract's "
-                       "budget, warmup and wait ratio");
-    ANIRA_CAPI_REQUIRE(candidates != nullptr || num_candidates == 0,
-                       err,
-                       ANIRA_ERROR_INVALID_ARGUMENT,
-                       "candidates is NULL with num_candidates %u",
-                       static_cast<unsigned>(num_candidates));
-    // Declared state is fed and captured by a 3.x handler's session. A bare 2.x
-    // InferenceConfig reaches a 2.x InferenceHandler, which runs no feedback: the model would
-    // run on a zero state without a word. The shared translator maps the role (the handler
-    // needs it); this entry refuses it.
-    const anira_tensor_spec* state = first_state_spec(*model);
-    ANIRA_CAPI_REQUIRE(state == nullptr,
-                       err,
-                       ANIRA_ERROR_NOT_SUPPORTED,
-                       "tensor '%s': a State tensor (declared state passing) has no 2.x "
-                       "counterpart: a 2.x InferenceHandler feeds no state back; run the model "
-                       "through a 3.x handler (anira_handler_create)",
-                       state->m_name.c_str());
-    // The bridge keeps its engine list: every engine maps to the CPU path, and
-    // ANIRA_ENGINE_CUSTOM keeps the custom rows, the 2.x CUSTOM backend's
-    // (ANIRA_ENGINE_CUSTOM with k_v2_custom_engine, the one id the bridge serves); NULL stays
-    // NULL.
-    std::vector<anira_backend_id> ids;
-    if (candidates != nullptr) {
-        ids.reserve(num_candidates);
-        for (uint32_t i = 0; i < num_candidates; ++i) {
-            const bool custom = candidates[i] == ANIRA_ENGINE_CUSTOM;
-            ids.push_back(
-                anira_backend_id{.struct_size = sizeof(anira_backend_id),
-                                 .engine = static_cast<uint32_t>(candidates[i]),
-                                 .provider = ANIRA_PROVIDER_CPU,
-                                 .engine_id = custom ? anira::capi::k_v2_custom_engine : nullptr});
-        }
-    }
-    out = anira::capi::make_inference_config(*model,
-                                             *contract,
-                                             candidates != nullptr ? ids.data() : nullptr,
-                                             num_candidates);
-    return ANIRA_OK;
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status to_core_config(const anira_context_config* config,
-                            anira::CoreConfig& out,
-                            anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(config != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "config is NULL");
-    out = anira::capi::make_core_config(*config);
-    return ANIRA_OK;
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status to_host_config(const anira_contract* contract,
-                            const anira_model_config* model,
-                            anira::HostConfig& out,
-                            anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(contract != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "contract is NULL");
-    ANIRA_CAPI_REQUIRE(model != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "model is NULL");
-    out = anira::capi::make_host_config(*contract, *model);
-    return ANIRA_OK;
-} catch (...) { return translate_exception(err, __func__); }
-
-anira_status to_host_config(const anira_model_config* model,
-                            float buffer_size,
-                            float sample_rate,
-                            bool allow_smaller_buffers,
-                            anira::HostConfig& out,
-                            anira_error* err) noexcept try {
-    ANIRA_CAPI_REQUIRE(model != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "model is NULL");
-    out = anira::capi::make_host_config(*model, buffer_size, sample_rate, allow_smaller_buffers);
-    return ANIRA_OK;
-} catch (...) { return translate_exception(err, __func__); }
-
-std::vector<anira_engine> enabled_engines() {
-    return anira::capi::enabled_engines();
-}
-
-}  // namespace anira::v3compat

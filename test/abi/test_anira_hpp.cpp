@@ -153,7 +153,8 @@ TEST(AbiCxx, HandlesAreMoveOnlyAndMoveTheNativePointer) {
                           TensorSpec("b", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC));
     expect_move_semantics(ModelConfig(), ModelConfig());
     expect_move_semantics(ContextConfig(), ContextConfig());
-    expect_move_semantics(ContractHandle(anira::Hard{}), ContractHandle(anira::Async{}));
+    expect_move_semantics(ContractHandle(anira::Hard{.budget = anira::Budget::measured()}),
+                          ContractHandle(anira::Async{}));
     expect_move_semantics(JobOptionsHandle(), JobOptionsHandle());
 }
 
@@ -175,7 +176,10 @@ TEST(AbiCxx, MoveCarriesTheUpgradedFlagAndTheHandleContents) {
 }
 
 TEST(AbiCxx, ReleaseHandsTheContractOutAndEmptiesTheHandle) {
-    ContractHandle handle(anira::Hard{.block_min = 64, .block_max = 64, .rate = 48000.0});
+    ContractHandle handle(anira::Hard{.block_min = 64,
+                                      .block_max = 64,
+                                      .rate = 48000.0,
+                                      .budget = anira::Budget::measured()});
     anira_contract* raw = handle.release();
     ASSERT_NE(raw, nullptr);
     EXPECT_EQ(handle.native(), nullptr);
@@ -373,8 +377,7 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
         .block_min = 256,
         .block_max = 512,
         .rate = 44100.0,
-        .budget = ANIRA_BUDGET_EXPLICIT,
-        .budget_value = std::chrono::milliseconds{42} + std::chrono::microseconds{660},
+        .budget = std::chrono::milliseconds{42} + std::chrono::microseconds{660},
         .warmup = ANIRA_WARMUP_FIXED,
         .warmup_iterations = 3,
         .on_miss = ANIRA_MISS_ZEROS,
@@ -390,8 +393,8 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_EQ(minted.block_min, 256u);
     EXPECT_EQ(minted.block_max, 512u);
     EXPECT_DOUBLE_EQ(minted.rate, 44100.0);
-    EXPECT_EQ(minted.budget, ANIRA_BUDGET_EXPLICIT);
-    EXPECT_EQ(minted.budget_value, std::chrono::microseconds{42660}) << "42 ms 660 us";
+    EXPECT_EQ(minted.budget.kind(), ANIRA_BUDGET_EXPLICIT);
+    EXPECT_EQ(minted.budget.value(), std::chrono::microseconds{42660}) << "42 ms 660 us";
     EXPECT_EQ(minted.warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(minted.warmup_iterations, 3u);
     EXPECT_EQ(minted.on_miss, ANIRA_MISS_ZEROS);
@@ -405,13 +408,13 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_EQ(patched.block_min, 1u);
     EXPECT_EQ(patched.block_max, 512u);
     EXPECT_DOUBLE_EQ(patched.rate, 48000.0);
-    EXPECT_EQ(patched.budget_value, std::chrono::microseconds{42660})
+    EXPECT_EQ(patched.budget.value(), std::chrono::microseconds{42660})
         << "the geometry patch leaves the rest";
     EXPECT_EQ(patched.ring_dtypes, hard.ring_dtypes);
 
-    const ContractHandle defaults{anira::Hard{}};
+    const ContractHandle defaults{anira::Hard{.budget = anira::Budget::measured()}};
     const anira::Hard zero = defaults.hard();
-    EXPECT_EQ(zero.budget, ANIRA_BUDGET_MEASURED);
+    EXPECT_EQ(zero.budget.kind(), ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(zero.warmup, ANIRA_WARMUP_UNTIL_STABLE);
     EXPECT_EQ(zero.on_miss, ANIRA_MISS_BYPASS);
     EXPECT_DOUBLE_EQ(zero.wait_ratio, 0.0);
@@ -691,7 +694,7 @@ TEST(AbiCxx, JobOptionsExtensionKeepsTheValueItPointsInto) {
 }
 
 TEST(AbiCxx, EmptyContractHandleThrowsOnKind) {
-    ContractHandle source(anira::Hard{});
+    ContractHandle source(anira::Hard{.budget = anira::Budget::measured()});
     const ContractHandle destination(std::move(source));
     EXPECT_FALSE(destination.empty());
     // NOLINTNEXTLINE(bugprone-use-after-move,clang-analyzer-cplusplus.Move) the point of the test
@@ -731,6 +734,7 @@ TEST(AbiCxx, TheMissFunctionTravelsThroughTheAggregateAndTheSetter) {
         .block_min = 64,
         .block_max = 64,
         .rate = 48000.0,
+        .budget = anira::Budget::measured(),
         .on_miss = ANIRA_MISS_CALLBACK,
         .miss_fn = &cxx_decline_miss,
         .miss_user_data = &user,
@@ -742,7 +746,7 @@ TEST(AbiCxx, TheMissFunctionTravelsThroughTheAggregateAndTheSetter) {
     EXPECT_EQ(fields->m_miss_fn, &cxx_decline_miss);
     EXPECT_EQ(fields->m_miss_user_data, &user);
 
-    const ContractHandle plain{anira::Hard{}};
+    const ContractHandle plain{anira::Hard{.budget = anira::Budget::measured()}};
     EXPECT_EQ(plain.native()->hard()->m_miss_fn, nullptr);
 
     ContractHandle loaded = ContractHandle::from_json(anira_test::k_contract_hard_v3);
@@ -794,7 +798,7 @@ TEST(AbiCxx, ContractSettersPatchALoadedContract) {
 }
 
 TEST(AbiCxx, HardRingDtypeLandsInTheHandle) {
-    ContractHandle contract{anira::Hard{}};
+    ContractHandle contract{anira::Hard{.budget = anira::Budget::measured()}};
     contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16);
     EXPECT_EQ(contract.native()->hard()->m_ring_dtypes.at("audio_in"), ANIRA_DTYPE_I16);
     const Thrown empty = thrown_by([&] { contract.hard_ring_dtype("", ANIRA_DTYPE_F32); });
@@ -810,7 +814,7 @@ TEST(AbiCxx, HardRingDtypeLandsInTheHandle) {
 // The host-end domain is common to both kinds: it lands in the handle of either, by name; an
 // empty name and a domain that is no anira_domain value are refused.
 TEST(AbiCxx, HostDomainLandsInTheHandleOfEitherKind) {
-    ContractHandle hard{anira::Hard{}};
+    ContractHandle hard{anira::Hard{.budget = anira::Budget::measured()}};
     hard.host_domain("audio_in", ANIRA_DOMAIN_HOST).host_domain("state_in", ANIRA_DOMAIN_CUDA);
     EXPECT_EQ(hard.native()->m_host_domains.at("audio_in"), ANIRA_DOMAIN_HOST);
     EXPECT_EQ(hard.native()->m_host_domains.at("state_in"), ANIRA_DOMAIN_CUDA);
@@ -2964,4 +2968,323 @@ TEST(AbiCxx, SyncTokenResetsAndDups) {
     EXPECT_TRUE(refused.m_thrown);
     EXPECT_EQ(refused.m_status, ANIRA_ERROR_INVALID_ARGUMENT) << "not an open descriptor";
     EXPECT_NE(refused.m_what.find("anira_sync_token_dup"), std::string::npos) << refused.m_what;
+}
+
+// ---- the handler half (section 6) ---------------------------------------------------------
+//
+// anira::InferenceHandler, anira::InferenceThread and anira::log_rt over the C entries of
+// anira/abi/handler.h and anira/abi/thread.h, on the bundled stereo gain model run by the
+// pass-through engine of the custom row: output 0 is the stereo input behind the latency,
+// output 1 (Static) the latest gain the host set.
+
+namespace {
+
+/// An anira.hpp context: MANUAL drain, as anira_test::Context, and `threads` pool threads.
+anira::ContextConfig hpp_context_config(uint32_t threads = 2) {
+    anira::ContextConfig config;
+    config.threads(threads, ANIRA_WAIT_SPIN_BACKOFF)
+        .log_level(ANIRA_LOG_ERROR)
+        .log_drain(ANIRA_LOG_DRAIN_MANUAL);
+    return config;
+}
+
+/// The stereo gain model on the custom row, with the pass-through engine object added.
+anira::Pipeline stereo_pipeline() {
+    anira::Pipeline pipe{
+        anira::stage::Inference(anira_test::stereo_gain_with_custom(), {custom_row()})};
+    anira_test::add_passthrough(pipe.native());
+    return pipe;
+}
+
+/// One stereo block per side, as planar tensors built once over the two planes of each side,
+/// and the whole streams of both sides, per channel.
+struct StereoStream {
+    StereoStream() {
+        for (size_t c = 0; c < 2; ++c) {
+            m_in[c].assign(k_hop, 0.0F);
+            m_out[c].assign(k_hop, -1.0F);
+            m_in_planes[c] = m_in[c].data();
+            m_out_planes[c] = m_out[c].data();
+        }
+        const std::array<int64_t, 2> extents{2, static_cast<int64_t>(k_hop)};
+        m_source = Tensor::from_host_planar<float>(std::span<float* const>(m_in_planes), extents);
+        m_sink = Tensor::from_host_planar<float>(std::span<float* const>(m_out_planes), extents);
+    }
+
+    /// Fills block k of the ramp (channel 1 at twice channel 0) into the source.
+    void fill(size_t k) {
+        const std::vector<float> ramp = anira_test::ramp(k + 1, k_hop);
+        for (size_t c = 0; c < 2; ++c) {
+            for (size_t n = 0; n < k_hop; ++n) { m_in[c][n] = ramp[n] * static_cast<float>(c + 1); }
+            m_out[c].assign(k_hop, -1.0F);
+        }
+    }
+    /// Appends the source and the sink to the streams.
+    void record() {
+        for (size_t c = 0; c < 2; ++c) {
+            m_in_stream[c].insert(m_in_stream[c].end(), m_in[c].begin(), m_in[c].end());
+            m_out_stream[c].insert(m_out_stream[c].end(), m_out[c].begin(), m_out[c].end());
+        }
+    }
+    /// Both output channels are their input channel behind the latency; clears the streams.
+    void expect_delayed(size_t latency, const char* what) {
+        for (size_t c = 0; c < 2; ++c) {
+            ASSERT_EQ(m_in_stream[c].size(), m_out_stream[c].size()) << what;
+            for (size_t n = 0; n < m_out_stream[c].size(); ++n) {
+                const float wanted = n < latency ? 0.0F : m_in_stream[c][n - latency];
+                ASSERT_EQ(m_out_stream[c][n], wanted)
+                    << what << ": channel " << c << ", sample " << n;
+            }
+            m_in_stream[c].clear();
+            m_out_stream[c].clear();
+        }
+    }
+
+    std::array<std::vector<float>, 2> m_in;
+    std::array<std::vector<float>, 2> m_out;
+    std::array<float*, 2> m_in_planes{};
+    std::array<float*, 2> m_out_planes{};
+    Tensor m_source{};
+    Tensor m_sink{};
+    std::array<std::vector<float>, 2> m_in_stream;
+    std::array<std::vector<float>, 2> m_out_stream;
+};
+
+constexpr size_t k_stream_blocks = 4;
+constexpr double k_wait_ms = 20000.0;
+
+}  // namespace
+
+// The handler is a move-only RAII handle; it prepares from every contract form and reports
+// the plans of its report, its entry count and its latencies; an Async contract and a
+// pipeline whose engine is missing throw anira::Error with the C entry's status.
+TEST(AbiCxx, TheHandlerIsMoveOnlyAndPreparesFromEveryContractForm) {
+    anira::Context context(hpp_context_config());
+    const anira::Pipeline pipe = stereo_pipeline();
+    expect_move_semantics(anira::InferenceHandler(context, pipe),
+                          anira::InferenceHandler(context, pipe));
+
+    anira::InferenceHandler handler(context, pipe);
+    EXPECT_EQ(handler.plan_report().num_plans(), 0U) << "no report before the first prepare";
+    EXPECT_TRUE(handler.get_latencies().empty());
+
+    const anira::Hard hard{.block_min = static_cast<double>(k_hop),
+                           .block_max = static_cast<double>(k_hop),
+                           .rate = anira_test::k_rate,
+                           .budget = std::chrono::milliseconds(5),
+                           .warmup = ANIRA_WARMUP_NONE};
+    EXPECT_EQ(handler.prepare(hard).num_plans(), 1U) << "the Hard aggregate";
+    EXPECT_EQ(handler.prepare(anira::Contract{hard}).num_plans(), 1U) << "the variant";
+    EXPECT_EQ(handler.prepare(anira_test::explicit_contract()).num_plans(), 1U) << "a handle";
+    EXPECT_EQ(handler.plan_report().num_plans(), 1U);
+    EXPECT_EQ(handler.plan_report().native(), anira_handler_plan_report(handler.native()));
+    EXPECT_EQ(handler.num_entries(), anira_handler_num_entries(handler.native()));
+    EXPECT_GT(handler.num_entries(), 0U);
+    const std::vector<uint32_t> latencies = handler.get_latencies();
+    ASSERT_EQ(latencies.size(), 2U) << "one per output slot";
+    EXPECT_EQ(latencies[0], handler.get_latency(0));
+    EXPECT_EQ(latencies[0], handler.get_latency()) << "slot 0 is the default";
+    EXPECT_EQ(latencies[1], 0U) << "the Static output has no latency";
+    EXPECT_EQ(handler.get_plan(), 0U);
+
+    const Thrown async = thrown_by([&] { static_cast<void>(handler.prepare(anira::Async{})); });
+    EXPECT_TRUE(async.m_thrown);
+    EXPECT_EQ(async.m_status, ANIRA_ERROR_NOT_SUPPORTED) << async.m_what;
+
+    const anira::Pipeline no_engine{
+        anira::stage::Inference(anira_test::stereo_gain_with_custom(), {custom_row()})};
+    const Thrown missing =
+        thrown_by([&] { const anira::InferenceHandler refused(context, no_engine); });
+    EXPECT_TRUE(missing.m_thrown) << "the custom row's engine is not in the pipeline";
+    EXPECT_NE(missing.m_status, ANIRA_OK);
+}
+
+// The Hard entries over one slot and over every slot, the push/pop pair and the _wait twins
+// carry the stereo stream behind the latency, each form after a reset; the Static pair sets
+// the gain input and reads the output the engine copied it to.
+TEST(AbiCxx, TheHardFormsAndTheirTwinsCarryTheStereoStream) {
+    anira::Context context(hpp_context_config());
+    anira::InferenceHandler handler(context, stereo_pipeline());
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()).num_plans(), 1U);
+    const size_t latency = handler.get_latency(0);
+    StereoStream stream;
+
+    float gain = 0.25F;
+    float gain_out = -1.0F;
+    const std::array<int64_t, 1> scalar{1};
+    const Tensor gain_source = Tensor::from_host(&gain, ANIRA_DTYPE_F32, scalar);
+    const Tensor gain_sink = Tensor::from_host(&gain_out, ANIRA_DTYPE_F32, scalar);
+    EXPECT_EQ(handler.set_static_input(1, gain_source), ANIRA_OK);
+
+    // process over one slot of each side, then the wait for the block's inference.
+    for (size_t k = 0; k < k_stream_blocks; ++k) {
+        stream.fill(k);
+        const size_t prev = anira_test::available(handler.native());
+        size_t delivered = 0;
+        ASSERT_EQ(handler.process(stream.m_source, 0, stream.m_sink, 0, &delivered), ANIRA_OK);
+        EXPECT_EQ(delivered, k_hop);
+        anira_test::wait_for_block(handler.native(), prev);
+        ASSERT_FALSE(HasFatalFailure());
+        stream.record();
+    }
+    stream.expect_delayed(latency, "process");
+    EXPECT_EQ(handler.get_static_output(1, gain_sink), ANIRA_OK);
+    EXPECT_EQ(gain_out, 0.25F) << "the engine copied the Static input to the Static output";
+
+    // process over every slot: the Static elements travel whole, the gain set and read
+    // with the block.
+    handler.reset();
+    for (size_t k = 0; k < k_stream_blocks; ++k) {
+        stream.fill(k);
+        const size_t prev = anira_test::available(handler.native());
+        const std::array<Tensor, 2> inputs{stream.m_source, gain_source};
+        const std::array<Tensor, 2> outputs{stream.m_sink, gain_sink};
+        std::array<size_t, 2> delivered{};
+        ASSERT_EQ(handler.process(inputs, outputs, delivered.data()), ANIRA_OK);
+        EXPECT_EQ(delivered[0], k_hop);
+        anira_test::wait_for_block(handler.native(), prev);
+        ASSERT_FALSE(HasFatalFailure());
+        stream.record();
+    }
+    stream.expect_delayed(latency, "process over every slot");
+    gain = 0.5F;
+    gain_out = -1.0F;
+    stream.fill(0);
+    {
+        const size_t prev = anira_test::available(handler.native());
+        const std::array<Tensor, 2> inputs{stream.m_source, gain_source};
+        const std::array<Tensor, 2> outputs{stream.m_sink, gain_sink};
+        ASSERT_EQ(handler.process(inputs, outputs), ANIRA_OK);
+        anira_test::wait_for_block(handler.native(), prev);
+        ASSERT_FALSE(HasFatalFailure());
+    }
+    EXPECT_EQ(handler.get_static_output(1, gain_sink), ANIRA_OK);
+    EXPECT_EQ(gain_out, 0.5F) << "the multi form's Static element is the gain of its block";
+
+    // process_wait waits for the inference the call needs, in both forms.
+    handler.reset();
+    for (size_t k = 0; k < k_stream_blocks; ++k) {
+        stream.fill(k);
+        size_t delivered = 0;
+        if (k % 2 == 0) {
+            ASSERT_EQ(handler.process_wait(stream.m_source,
+                                           0,
+                                           stream.m_sink,
+                                           0,
+                                           ANIRA_WAIT_FOREVER,
+                                           &delivered),
+                      ANIRA_OK);
+        } else {
+            const std::array<Tensor, 2> inputs{stream.m_source, gain_source};
+            const std::array<Tensor, 2> outputs{stream.m_sink, gain_sink};
+            std::array<size_t, 2> multi{};
+            ASSERT_EQ(handler.process_wait(inputs, outputs, k_wait_ms, multi.data()), ANIRA_OK);
+            delivered = multi[0];
+        }
+        EXPECT_EQ(delivered, k_hop);
+        stream.record();
+    }
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+    stream.expect_delayed(latency, "process_wait");
+
+    // push_data, then the pop that waits for the pushed block's inference, both forms.
+    handler.reset();
+    for (size_t k = 0; k < k_stream_blocks; ++k) {
+        stream.fill(k);
+        size_t delivered = 0;
+        if (k % 2 == 0) {
+            ASSERT_EQ(handler.push_data(stream.m_source, 0), ANIRA_OK);
+            ASSERT_EQ(handler.pop_data_wait(stream.m_sink, 0, k_wait_ms, &delivered), ANIRA_OK);
+        } else {
+            const std::array<Tensor, 2> inputs{stream.m_source, gain_source};
+            const std::array<Tensor, 2> outputs{stream.m_sink, gain_sink};
+            std::array<size_t, 2> multi{};
+            ASSERT_EQ(handler.push_data(inputs), ANIRA_OK);
+            ASSERT_EQ(handler.pop_data_wait(outputs, k_wait_ms, multi.data()), ANIRA_OK);
+            delivered = multi[0];
+        }
+        EXPECT_EQ(delivered, k_hop);
+        stream.record();
+    }
+    stream.expect_delayed(latency, "push_data + pop_data_wait");
+
+    // The plain pop delivers what the ring holds and never waits.
+    size_t waiting = 0;
+    ASSERT_EQ(handler.get_available_samples(0, 0, &waiting), ANIRA_OK);
+    size_t delivered = 0;
+    ASSERT_EQ(handler.pop_data(stream.m_sink, 0, &delivered), ANIRA_OK);
+    EXPECT_LE(delivered, k_hop);
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+}
+
+// set_plan takes a dense index of the report: out of range it is a no-op recorded as
+// ANIRA_ERROR_CONFIG in rt_error, which reset clears.
+TEST(AbiCxx, TheHandlersSetPlanRefusesAnIndexOutOfRange) {
+    anira::Context context(hpp_context_config());
+    anira::InferenceHandler handler(context, stereo_pipeline());
+    EXPECT_EQ(handler.set_plan(0), ANIRA_ERROR_NOT_PREPARED);
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()).num_plans(), 1U);
+    EXPECT_EQ(handler.set_plan(0), ANIRA_OK);
+    EXPECT_EQ(handler.set_plan(1), ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(handler.get_plan(), 0U) << "a no-op";
+    EXPECT_EQ(handler.rt_error(), ANIRA_ERROR_CONFIG);
+    handler.reset();
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK) << "reset clears rt_error";
+}
+
+// An InferenceThread of the host's on a context without pool threads: execute() runs the
+// block's inference on the test's thread, start() runs the loop on a thread of anira's, stop()
+// joins it; anira::shutdown is refused while the context and the handler live.
+TEST(AbiCxx, AnInferenceThreadRunsTheHandlersInferences) {
+    anira::Context context(hpp_context_config(0));
+    anira::InferenceHandler handler(context, stereo_pipeline());
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()).num_plans(), 1U);
+    const size_t latency = handler.get_latency(0);
+    StereoStream stream;
+    expect_move_semantics(anira::InferenceThread(context), anira::InferenceThread(context));
+    anira::InferenceThread thread(context);
+    EXPECT_FALSE(thread.is_running());
+    EXPECT_FALSE(thread.has_exited());
+    EXPECT_FALSE(thread.should_exit());
+
+    // execute() on this thread until the block came back (when the process already has a
+    // pool, from a test that ran before in this process, a pool thread may run it instead).
+    for (size_t k = 0; k < 2; ++k) {
+        stream.fill(k);
+        const size_t prev = anira_test::available(handler.native());
+        ASSERT_EQ(handler.process(stream.m_source, 0, stream.m_sink, 0), ANIRA_OK);
+        const auto start = std::chrono::steady_clock::now();
+        while (anira_test::available(handler.native()) != prev) {
+            static_cast<void>(thread.execute());
+            ASSERT_LT(std::chrono::steady_clock::now() - start,
+                      std::chrono::seconds(anira_test::k_wait_s));
+        }
+        stream.record();
+    }
+
+    thread.start();
+    EXPECT_TRUE(thread.is_running());
+    for (size_t k = 2; k < k_stream_blocks; ++k) {
+        stream.fill(k);
+        const size_t prev = anira_test::available(handler.native());
+        ASSERT_EQ(handler.process(stream.m_source, 0, stream.m_sink, 0), ANIRA_OK);
+        anira_test::wait_for_block(handler.native(), prev);
+        ASSERT_FALSE(HasFatalFailure());
+        stream.record();
+    }
+    stream.expect_delayed(latency, "the host's inference thread");
+    EXPECT_EQ(anira::shutdown(), ANIRA_ERROR_INVALID_STATE) << "a context and a handler live";
+
+    thread.stop();
+    EXPECT_FALSE(thread.is_running());
+    EXPECT_TRUE(thread.has_exited()) << "stop joined the loop";
+}
+
+// log_rt queues one record from a real-time thread; the drain delivers it with source "rt".
+TEST(AbiCxx, LogRtQueuesARecordTheDrainDelivers) {
+    const anira::Context context(hpp_context_config());
+    anira_test::RecordCollector collector;
+    anira::log_rt(ANIRA_LOG_ERROR, "anira.test", "anira.hpp log_rt record", 7, 9);
+    static_cast<void>(anira::drain_log());
+    EXPECT_EQ(anira_test::count_records(collector, "anira.hpp log_rt record", "rt"), 1U);
 }

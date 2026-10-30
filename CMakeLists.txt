@@ -14,7 +14,7 @@ cmake_policy(SET CMP0099 NEW)
 option(BUILD_SHARED_LIBS "Build anira as a shared library" ON)
 
 # --- Components ----------------------------------------------------------------
-option(ANIRA_WITH_BENCHMARK "Build the library with benchmarking capabilities" OFF)
+option(ANIRA_WITH_BENCHMARK "Build the benchmark examples (examples/benchmark) and their fixture" OFF)
 option(ANIRA_WITH_EXAMPLES  "Add example targets (juce plugin, benchmarks, minimal inference and model examples)" OFF)
 option(ANIRA_WITH_INSTALL   "Add install targets" OFF)
 option(ANIRA_WITH_TESTS     "Add build tests" OFF)
@@ -315,7 +315,6 @@ target_sources(${PROJECT_NAME}
         src/utils/RtLatch.cpp
 
         # Interface
-        src/InferenceHandler.cpp
         src/PrePostProcessor.cpp
         src/InferenceConfig.cpp
 
@@ -440,10 +439,6 @@ if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)
 endif()
 
-if(ANIRA_WITH_BENCHMARK)
-    include(cmake/benchmark-src.cmake)
-endif()
-
 # ==============================================================================
 # Add install targets for the library
 # ==============================================================================
@@ -466,11 +461,13 @@ endif()
 # ==============================================================================
 
 # First we import the extras folder since we need the compile definitions (model paths) for the examples
-if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_TESTS)
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
     add_subdirectory(extras)
 endif()
 
-if(ANIRA_WITH_EXAMPLES)    
+# The examples, and the benchmarks with their fixture (examples/benchmark), which
+# ANIRA_WITH_BENCHMARK builds on its own as well.
+if(ANIRA_WITH_EXAMPLES OR ANIRA_WITH_BENCHMARK)
     add_subdirectory(examples)
 endif()
 

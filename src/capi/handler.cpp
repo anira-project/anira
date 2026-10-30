@@ -771,9 +771,9 @@ void check_miss_policy(const anira::capi::HardContract& hard,
 // blocks and has no job to attach it to, so the handler refuses the model here, where the
 // contract is first known. The spec itself stays valid (create and the model files take it),
 // and the rule lives here and not in capi::validate, like the miss policy's: validate also
-// serves the 2.x bridge (anira::v3compat::to_inference_config), which carries a Buffer tensor
-// as a 2.x non-streamable tensor and keeps doing so. A persistent side input under a Hard
-// contract is the Static role.
+// serves the 2.x translator of the white-box tests (v3_to_v2.h), which carries a Buffer tensor
+// as a 2.x non-streamable tensor. A persistent side input under a Hard contract is the Static
+// role.
 void check_buffer_specs(const anira_model_config& model) {
     const auto first_buffer =
         [](const std::vector<anira_tensor_spec>& specs) -> const anira_tensor_spec* {

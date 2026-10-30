@@ -1,5 +1,5 @@
 // The tensor stems of InferenceManager, driven directly with what the float face
-// (anira::PlanarFloatAdapter, src/scheduler/PlanarFloatAdapter.h) cannot express: one block read
+// (anira::PlanarFloatAdapter, test/support/PlanarFloatAdapter.h) cannot express: one block read
 // by strides (interleaved for 1, 2, 3 and 6 channels, contiguous,
 // packed), planar memory with a byte offset and with a stride inside each plane, the two
 // descriptions crossed between input and output, the same tensor on both sides, empty and
@@ -45,11 +45,11 @@
 #include <vector>
 
 #include "../abi/handler_support.h"
+#include "../support/NonStreamableRouter.h"
+#include "../support/PlanarFloatAdapter.h"
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
-#include "scheduler/NonStreamableRouter.h"
-#include "scheduler/PlanarFloatAdapter.h"
 #include "scheduler/TensorRun.h"
 
 using namespace anira;
@@ -326,7 +326,7 @@ enum class Model { PassThrough, FanOut, ParamRamp };
 /// How a rig hands its blocks to the tensor stems.
 enum class Face {
     FloatAdapter,  ///< separate channel pointers, presented by a PlanarFloatAdapter the way
-                   ///< anira::InferenceHandler presents its own
+                   ///< anira_test::V2Handler presents its own
     Tensor         ///< hand-built tensors over blocks of the rig's two layouts
 };
 
@@ -649,7 +649,7 @@ private:
 
     /// The tensor stem of each name, over the arrays of either face, through the 2.x face's
     /// router: the stems move the streamed slots, the router the Static ones around them
-    /// (src/scheduler/NonStreamableRouter.h), which is where the recorded clamp, the clamped
+    /// (test/support/NonStreamableRouter.h), which is where the recorded clamp, the clamped
     /// count and the miss rules of a Static slot live.
     const size_t* call_stem(Stem stem,
                             const anira_tensor* inputs,
