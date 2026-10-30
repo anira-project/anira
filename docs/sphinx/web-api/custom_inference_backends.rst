@@ -94,3 +94,18 @@ The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entr
 the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
 module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.
+
+``onnxRuntimeWeb({ numThreads: 2 })`` runs each inference on two threads: the inference Worker's
+own and one Worker that onnxruntime-web's module starts in the engine's ``init``, before the
+inference Worker's loop (its glue loads itself into it). anira's own ONNX Runtime engine cannot do
+this: the module starts no pthread. It pays off where anira's inference threads cannot run
+inferences side by side: a stateful model (a declared state pair), whose inferences run one
+after another, or one large model on one handler. Every inference Worker's runtime starts its own
+threads, so a pool of ``n`` Workers uses up to ``n × numThreads`` threads; size the pool and the
+count together. The engines one worker module defines share its runtime, so they share one count:
+an engine asking for another fails its ``init``. The default is 1.
+
+.. code-block:: ts
+
+   // the worker module: two threads per inference
+   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb({ numThreads: 2 }))

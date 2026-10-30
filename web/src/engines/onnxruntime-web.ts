@@ -9,7 +9,8 @@
 // one float32 ORT tensor per model tensor of the call, shaped by the session's metadata (a single
 // dynamic dimension resolved from the element count), the outputs copied into the call's tensors.
 // The module's own ONNX Runtime ("engine": "onnxruntime") needs none of this; this engine is for a
-// page that wants onnxruntime-web's build.
+// page that wants onnxruntime-web's build, or more than one thread per inference (`numThreads`),
+// which the module's own engine cannot have: the module starts no pthread.
 import { anira_status } from '../abi/enums'
 import {
   engineTensors,
@@ -34,6 +35,19 @@ export type OnnxRuntimeWebOptions = {
    * relative to the module's glue).
    */
   model?: string | URL | Uint8Array
+  /**
+   * The intra-op threads one inference runs on: the inference Worker's own thread and
+   * `numThreads - 1` threads of onnxruntime-web's, Workers that its module starts in the
+   * engine's init, before the inference Worker's loop, and that every session of the Worker
+   * shares (the environment's global pool). Default 1: no Worker of onnxruntime-web's. More
+   * than 1 shortens one inference where anira's inference threads cannot run several at once:
+   * a stateful model (a declared state pair), whose inferences run one after another, or one
+   * large model on one handler. Each inference Worker's runtime starts its own threads, so the
+   * cores used are the pool's size times this count. One count per worker module: the engines a
+   * Worker defines share its runtime, and an engine whose count differs from the one the runtime
+   * started with fails its init.
+   */
+  numThreads?: number
 }
 
 /** The ONNX Runtime Web wasm module's C API, as far as the engine calls it. */
@@ -82,8 +96,18 @@ interface OrtWasmModule {
 
 type TensorMeta = { namePtr: number; dims: number[] }
 
-// One ORT module per scope, shared by the scope's engines.
-let ortModule: Promise<OrtWasmModule> | null = null
+// One ORT runtime per scope, shared by the scope's engines, with the thread count it started with.
+let ortRuntime: { module: Promise<OrtWasmModule>; numThreads: number } | null = null
+
+// onnxruntime-web's module with `numThreads - 1` Workers of its own, started before the factory
+// resolves (its glue loads itself into each, by its import.meta.url), and its environment, whose
+// global intra-op pool of `numThreads` threads every session of the runtime runs on.
+const startRuntime = async (numThreads: number): Promise<OrtWasmModule> => {
+  const ort = (await ortWasmFactory({ numThreads })) as OrtWasmModule
+  if (ort._OrtInit(numThreads, 3) !== 0)
+    throw new Error('onnxruntime-web: _OrtInit failed')
+  return ort
+}
 
 // A model file read on an inference Worker whose event loop does not run (its C loop blocks):
 // a synchronous request, which a Worker may make. Absolute, or relative to the module's glue.
@@ -132,10 +156,21 @@ class OnnxRuntimeWebEngine implements Engine {
   }
 
   async init(): Promise<void> {
+    const numThreads = this.options.numThreads ?? 1
+    if (!Number.isInteger(numThreads) || numThreads < 1) {
+      throw new Error(
+        `onnxruntime-web: numThreads must be a whole number of at least 1, not ${numThreads}`
+      )
+    }
+    if (ortRuntime !== null && ortRuntime.numThreads !== numThreads) {
+      throw new Error(
+        `onnxruntime-web: this Worker's runtime runs ${ortRuntime.numThreads} thread(s); an ` +
+          `engine of the same worker module asked for ${numThreads}`
+      )
+    }
     const bytes = this.options.model ? await readModel(this.options.model) : null
-    ortModule ??= ortWasmFactory({ numThreads: 1 }) as Promise<OrtWasmModule>
-    const ort = (this.ort = await ortModule)
-    if (ort._OrtInit(1, 3) !== 0) throw new Error('onnxruntime-web: _OrtInit failed')
+    ortRuntime ??= { module: startRuntime(numThreads), numThreads }
+    this.ort = await ortRuntime.module
     if (bytes) this.createSession(bytes)
   }
 
