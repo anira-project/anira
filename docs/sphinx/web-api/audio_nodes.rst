@@ -70,6 +70,12 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    quantum, rounded up (481 / 480: 2 quanta, 960 frames), with half a frame taken off first so an
    exact fit stays one quantum (a ``"hardware"`` quantum of the callback's size). A quantum at
    least the callback's size is rendered one call per callback or fewer: a burst of one quantum.
+   A context whose sample rate differs from the device's is resampled: each callback renders the
+   device's frames times the context's rate over the device's, in context frames (2048 device
+   frames at 48 kHz for a context of 44.1 kHz: 1881.6 frames, runs of 14 and 15 quanta of 128, a
+   burst of 1920). The probe times the callbacks and counts in the context's rate, so it measures
+   that; Chromium's ``baseLatency`` times the context's ``sampleRate`` (2048) does not, one more
+   reason no attribute gives the burst.
    An ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum, nothing to
    measure.
 
