@@ -469,7 +469,8 @@ rest of this page is the way forward, and the header lets that happen one class 
      - Present with an ``anira::Engine&`` constructed with ``k_custom_engine_id``
        (``"anira.v2.custom"``), which the caller keeps alive past the handler.
    * - ``set_inference_backend`` / ``get_inference_backend``
-     - Present, wait-free, before ``prepare`` too.
+     - Present, wait-free, before ``prepare`` too; from any thread while audio runs, but not
+       while ``prepare`` or the destructor runs on another thread.
    * - ``prepare(HostConfig)``
      - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
        reference tensor that is not streamable is refused.
@@ -708,7 +709,12 @@ What differs from 2.x:
   returns what the nonblocking stem delivered and leaves ``ANIRA_ERROR_INVALID_STATE`` in
   ``rt_error()``.
 - **set_inference_backend** of a backend without a plan keeps the selection and logs one record
-  of the group ``anira.compat``; before ``prepare`` the request is kept and applied then.
+  of the group ``anira.compat``; before ``prepare`` the request is kept and applied then. It
+  and ``get_inference_backend`` may be called from any thread while audio runs, but **not while
+  ``prepare`` runs** (or the destructor): ``prepare`` rebuilds the plan table and may replace the
+  C handler they read, the rule ``anira_handler_set_plan`` states. 2.x promised the switch while
+  audio runs, never alongside ``prepare``; a host that switches from a UI thread and re-prepares
+  from another serialises the two itself.
 - **get_num_inference_threads()** is the pool size, 0 until the first ``prepare`` in the
   process; ``drain_log()`` drains the process's queue.
 - **The real-time attribute:** ``reset``, ``get_latency``, ``get_available_samples``,

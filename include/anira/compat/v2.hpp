@@ -1994,7 +1994,9 @@ struct Context {
  * pop forms are noexcept but carry no attribute, since a blocking ratio or set_non_realtime makes
  * them wait for the inference (the 2.x declarations claimed the attribute and waited anyway).
  * Without either, on the thread that drives the handler, they allocate nothing and wait for
- * nothing.
+ * nothing. No member runs concurrently with prepare() or the destructor: set_inference_backend
+ * and get_inference_backend may be called from any other thread while audio runs, but not while
+ * prepare runs (the C ABI's rule for anira_handler_set_plan).
  */
 class InferenceHandler {
 public:
@@ -2031,13 +2033,19 @@ public:
 
     /// The backend the next block runs on; before prepare the request is kept and applied at
     /// prepare. A backend without a plan keeps the selection and logs once through the real-time
-    /// queue (group anira.compat); rt_error() is untouched. Any thread.
+    /// queue (group anira.compat); rt_error() is untouched. Any thread, but not while prepare()
+    /// or the destructor runs on another thread: prepare rebuilds the plan table and may replace
+    /// the C handler this reads, the rule anira_handler_set_plan states ("not while
+    /// anira_handler_prepare runs"). 2.x promised this member while audio runs, never alongside
+    /// prepare; a host that switches from a UI thread and re-prepares from another serialises
+    /// the two itself.
     void set_inference_backend(InferenceBackend inference_backend) noexcept ANIRA_NONBLOCKING {
         m_requested.store(static_cast<uint32_t>(inference_backend), std::memory_order_relaxed);
         if (m_prepared.load(std::memory_order_acquire)) { select(inference_backend); }
     }
     /// The backend of the selected plan; before prepare the request, else the 2.x initial rule
-    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM).
+    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM). The
+    /// same thread rule as set_inference_backend: not while prepare() or the destructor runs.
     InferenceBackend get_inference_backend() const noexcept ANIRA_NONBLOCKING {
         if (m_prepared.load(std::memory_order_acquire)) {
             const uint32_t plan = anira_handler_get_plan(m_handler);
