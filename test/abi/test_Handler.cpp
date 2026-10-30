@@ -377,7 +377,7 @@ struct GainOracle : Oracle {
         : Oracle(context,
                  gain_with_custom(default_custom),
                  custom_candidates(),
-                 anira_test::bridged_2x(k_gain_model_json, k_gain_contract_json, true)) {}
+                 anira_test::config_2x_of(k_gain_model_json, k_gain_contract_json, true)) {}
 };
 
 }  // namespace
@@ -679,7 +679,7 @@ TEST(AbiHandler, CnnMatchesTheTwoPointXHandler) {
     Oracle oracle(context,
                   anira_test::cnn_model(),
                   candidates,
-                  anira_test::bridged_2x(k_cnn_model_json, k_cnn_contract_json, false));
+                  anira_test::config_2x_of(k_cnn_model_json, k_cnn_contract_json, false));
     ASSERT_NO_FATAL_FAILURE(
         oracle.prepare(file_contract(k_cnn_contract_json, k_cnn_block), k_cnn_block));
     EXPECT_EQ(anira_handler_get_latency(oracle.h(), 0), oracle.m_v2.get_latency(0));

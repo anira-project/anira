@@ -20,7 +20,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
@@ -44,6 +43,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_handler.h"
+#include "../support/v2_objects.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -149,9 +149,9 @@ inline std::vector<anira_backend_id> engine_candidates() {
 /// The 2.x InferenceConfig of a bundled model over the same engines the C side runs
 /// (oracle_engines(), plus the custom row when with_custom): what the oracle's 2.x handler
 /// takes, so both sides' configs compare equal and the core pools one processor per engine.
-inline anira::InferenceConfig bridged_2x(const char* model_json,
-                                         const char* contract_json,
-                                         bool with_custom) {
+inline anira::InferenceConfig config_2x_of(const char* model_json,
+                                           const char* contract_json,
+                                           bool with_custom) {
     anira::ModelConfig cfg = anira::ModelConfig::from_file(model_json);
     std::vector<anira_engine> candidates = oracle_engines();
     if (with_custom) {
@@ -159,7 +159,7 @@ inline anira::InferenceConfig bridged_2x(const char* model_json,
         candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
     }
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    return anira::v3compat::to_inference_config(cfg, contract, candidates);
+    return anira_test::inference_config_of(cfg, contract, candidates);
 }
 
 /// The bundled CNN without a custom row (the pass-through would zero its 15380 -> 2048 output).

@@ -1,12 +1,11 @@
 // The bundled configuration files, extras/models/**/*.model.json and *.contract.json: each one
-// loads as a 3.x document and bridges to the 2.x InferenceConfig the 2.x fixture header used
+// loads as a 3.x document and translates to the 2.x InferenceConfig the 2.x fixture header used
 // to spell out by hand (the literals below are those headers), and the three builders the
 // benchmarks sweep with equal their file at the default size.
 
 #include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
@@ -19,7 +18,6 @@
 #include <optional>
 #include <span>
 #include <string>
-#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,9 +25,10 @@
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/model_files.h"
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../support/extras_fixtures.h"
 #include "../support/inference_config_eq.h"
+#include "../support/v2_objects.h"
 #include "capi/handles.h"
+#include "capi/validate.h"
 
 namespace {
 
@@ -62,7 +61,7 @@ struct Oracle {
 /// The engines of this build the file names; empty means the bridge refuses the file here.
 std::vector<anira_engine> usable(std::span<const anira_engine> named) {
     std::vector<anira_engine> out;
-    for (const anira_engine engine : anira::v3compat::enabled_engines()) {
+    for (const anira_engine engine : anira::capi::enabled_engines()) {
         if (std::ranges::find(named, engine) != named.end()) { out.push_back(engine); }
     }
     return out;
@@ -116,7 +115,7 @@ void check_files(const char* model_json, const char* contract_json, const Oracle
     }
     const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
     EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
-    const anira::InferenceConfig cfg = anira_test::bridged(model_json, contract_json);
+    const anira::InferenceConfig cfg = anira_test::inference_config_of(model_json, contract_json);
     expect_matches(cfg, oracle);
 }
 
@@ -130,9 +129,10 @@ void check_builder(const char* model_json,
     }
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
     const anira::InferenceConfig from_builder =
-        anira::v3compat::to_inference_config(built, contract, anira::v3compat::enabled_engines());
-    anira_test::expect_inference_config_eq(anira_test::bridged(model_json, contract_json),
-                                           from_builder);
+        anira_test::inference_config_of(built, contract, anira::capi::enabled_engines());
+    anira_test::expect_inference_config_eq(
+        anira_test::inference_config_of(model_json, contract_json),
+        from_builder);
 }
 
 Oracle cnn_oracle(int64_t window, unsigned warm_up) {
@@ -295,19 +295,6 @@ TEST(ExtrasFixtures, StatefulAccumulator) {
     EXPECT_EQ(hard->m_budget_ms, 5.0);
     EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(hard->m_warmup_iterations, 1U);
-
-    // The bridge refuses the file by the State tensor's name, ahead of any engine question, so
-    // this holds on a build without an engine too.
-    try {
-        [[maybe_unused]] const anira::InferenceConfig refused =
-            anira_test::bridged(k_stateful_accumulator_model_json,
-                                k_stateful_accumulator_contract_json);
-        FAIL() << "the bridge accepted a State spec";
-    } catch (const anira::Error& error) {
-        EXPECT_EQ(error.status, ANIRA_ERROR_NOT_SUPPORTED);
-        EXPECT_NE(std::string_view(error.what()).find("tensor 'state_in'"), std::string_view::npos)
-            << error.what();
-    }
 }
 
 TEST(ExtrasFixtures, RaveFunkDrum) {
@@ -393,7 +380,7 @@ TEST(ExtrasFixtures, SweptBuildersFollowTheHop) {
         anira::ContractHandle::from_file(k_cnn_contract_json);
     const anira::ModelConfig cnn = cnn_model_config(512);
     const anira::InferenceConfig cnn_cfg =
-        anira::v3compat::to_inference_config(cnn, cnn_contract, anira::v3compat::enabled_engines());
+        anira_test::inference_config_of(cnn, cnn_contract, anira::capi::enabled_engines());
     EXPECT_EQ(cnn_cfg.get_tensor_input_shape(), (TensorShapeList{{1, 1, 512 + 13332}}));
     EXPECT_EQ(cnn_cfg.get_preprocess_input_size(), (std::vector<size_t>{512}));
     EXPECT_EQ(cnn_cfg.get_postprocess_output_size(), (std::vector<size_t>{512}));
@@ -402,9 +389,7 @@ TEST(ExtrasFixtures, SweptBuildersFollowTheHop) {
         anira::ContractHandle::from_file(k_hybridnn_contract_json);
     const anira::ModelConfig hybrid = hybridnn_model_config(1024);
     const anira::InferenceConfig hybrid_cfg =
-        anira::v3compat::to_inference_config(hybrid,
-                                             hybrid_contract,
-                                             anira::v3compat::enabled_engines());
+        anira_test::inference_config_of(hybrid, hybrid_contract, anira::capi::enabled_engines());
     EXPECT_EQ(hybrid_cfg.get_tensor_input_shape(), (TensorShapeList{{1024, 1, 150}}));
     EXPECT_EQ(hybrid_cfg.get_preprocess_input_size(), (std::vector<size_t>{1024}));
 
@@ -412,7 +397,7 @@ TEST(ExtrasFixtures, SweptBuildersFollowTheHop) {
         anira::ContractHandle::from_file(k_rnn_contract_json);
     const anira::ModelConfig rnn = rnn_model_config(256);
     const anira::InferenceConfig rnn_cfg =
-        anira::v3compat::to_inference_config(rnn, rnn_contract, anira::v3compat::enabled_engines());
+        anira_test::inference_config_of(rnn, rnn_contract, anira::capi::enabled_engines());
     EXPECT_EQ(rnn_cfg.get_tensor_input_shape(), (TensorShapeList{{256, 1, 1}}));
     EXPECT_EQ(rnn_cfg.get_preprocess_input_size(), (std::vector<size_t>{256}));
 }

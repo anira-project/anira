@@ -1,6 +1,7 @@
 // The bundled model configurations (extras/models/**/*.model.json and *.contract.json) as the
 // 2.x runtime of this pre-release takes them: loaded with the 3.x loaders and bridged with
-// anira::v3compat. Shared by the runtime tests and the fixture tests.
+// anira::v3compat. Its last user is test_InferenceHandler.cpp; the runtime cut-over rewrites it
+// on anira.hpp and deletes this file with the bridge.
 #ifndef ANIRA_TEST_SUPPORT_EXTRAS_FIXTURES_H
 #define ANIRA_TEST_SUPPORT_EXTRAS_FIXTURES_H
 

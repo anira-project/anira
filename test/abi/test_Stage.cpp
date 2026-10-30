@@ -24,7 +24,6 @@
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
@@ -51,6 +50,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_handler.h"
+#include "../support/v2_objects.h"
 #include "capi/port.h"
 #include "capi/stage.h"
 #include "capi/words.h"
@@ -2569,7 +2569,7 @@ TEST(AbiStage, PerChunkScratchByEntry) {
 
 // Differential, on a window longer than its hop (the receptive-field fill) and a backend whose
 // every output sample needs the history: the C handler, whose session sees the processor, against
-// a 2.x handler over the bridged configuration, whose session sees the default processor.
+// a 2.x handler over the translated configuration, whose session sees the default processor.
 TEST(AbiStage, NoStageEqualsTheV2Default) {
     const Context context;
     const auto window = static_cast<int64_t>(2 * k_hop);
@@ -2581,7 +2581,7 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
     const anira_test::DestroyFirst c_guard(c, &c_engine);
     ASSERT_EQ(c.prepare(contract), ANIRA_OK) << c.m_err.message;
 
-    anira::InferenceConfig config_2x = anira::v3compat::to_inference_config(model, contract);
+    anira::InferenceConfig config_2x = anira_test::inference_config_of(model, contract);
     anira::PrePostProcessor pp(config_2x);
     WindowSumBackend v_backend(config_2x);
     {

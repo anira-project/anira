@@ -14,8 +14,8 @@
 #ifdef USE_ONNXRUNTIME
 
 #include "../../extras/models/model_files.h"
-#include "../support/extras_fixtures.h"
 #include "../support/v2_documents.h"
+#include "../support/v2_objects.h"
 
 using namespace anira;
 
@@ -26,31 +26,34 @@ TEST(JsonConfigLoader, EqualInferenceConfig) {
     std::vector<std::array<InferenceConfig, 2>> test_configs;
 
     // The 2.x loader on the 2.x document (test/support/v2_documents.h) against the 3.x loader
-    // on the 3.x files, bridged to the 2.x runtime: the same InferenceConfig either way.
+    // on the 3.x files, translated to the 2.x runtime's objects: the same InferenceConfig either
+    // way.
     std::istringstream funk_drum_json(anira_test::rave_funk_drum_v2_document());
     JsonConfigLoader funk_drum_json_loader(funk_drum_json);
-    test_configs.push_back(
-        {*funk_drum_json_loader.get_inference_config(),
-         anira_test::bridged(k_rave_funk_drum_model_json, k_rave_funk_drum_contract_json)});
+    test_configs.push_back({*funk_drum_json_loader.get_inference_config(),
+                            anira_test::inference_config_of(k_rave_funk_drum_model_json,
+                                                            k_rave_funk_drum_contract_json)});
 
     std::istringstream funk_drum_encode_json(anira_test::rave_funk_drum_encoder_v2_document());
     JsonConfigLoader funk_drum_encode_json_loader(funk_drum_encode_json);
-    test_configs.push_back({*funk_drum_encode_json_loader.get_inference_config(),
-                            anira_test::bridged(k_rave_funk_drum_encoder_model_json,
-                                                k_rave_funk_drum_encoder_contract_json)});
+    test_configs.push_back(
+        {*funk_drum_encode_json_loader.get_inference_config(),
+         anira_test::inference_config_of(k_rave_funk_drum_encoder_model_json,
+                                         k_rave_funk_drum_encoder_contract_json)});
 
     std::istringstream funk_drum_decode_json(anira_test::rave_funk_drum_decoder_v2_document());
     JsonConfigLoader funk_drum_decode_json_loader(funk_drum_decode_json);
-    test_configs.push_back({*funk_drum_decode_json_loader.get_inference_config(),
-                            anira_test::bridged(k_rave_funk_drum_decoder_model_json,
-                                                k_rave_funk_drum_decoder_contract_json)});
+    test_configs.push_back(
+        {*funk_drum_decode_json_loader.get_inference_config(),
+         anira_test::inference_config_of(k_rave_funk_drum_decoder_model_json,
+                                         k_rave_funk_drum_decoder_contract_json)});
 
     // A 2.x document without num_parallel_processors means the 2.x default (half the hardware
     // threads); a 3.x file without max_instances means one instance. State the 2.x default on
     // the 3.x side, so the comparison is about everything else.
     std::istringstream gain_json(anira_test::gain_v2_document());
     JsonConfigLoader gain_json_loader(gain_json);
-    InferenceConfig gain = anira_test::bridged(k_gain_model_json, k_gain_contract_json);
+    InferenceConfig gain = anira_test::inference_config_of(k_gain_model_json, k_gain_contract_json);
     gain.m_num_parallel_processors = InferenceConfig::Defaults::m_num_parallel_processors;
     test_configs.push_back({*gain_json_loader.get_inference_config(), gain});
 

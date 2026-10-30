@@ -1750,7 +1750,7 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
         SCOPED_TRACE("plan " + std::to_string(plan));
         anira_test::Handler c(context, anira_test::stereo_gain_with_custom(), candidates);
         anira::InferenceConfig config_2x =
-            anira_test::bridged_2x(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
+            anira_test::config_2x_of(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
         anira::PrePostProcessor pp(config_2x);
         anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
         core_config.m_log.m_drain = anira::LogDrain::Manual;
