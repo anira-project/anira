@@ -12,40 +12,38 @@ what the loaders do with a 2.x JSON file, and how long the 2.x classes stay.
 Where the 2.x API stands in this pre-release
 --------------------------------------------
 
+- **``<anira/anira.h>``** is the C11 umbrella of the C ABI (every promised header of
+  ``anira/abi/``), no longer the umbrella of the 2.x classes. A 2.x program replaces
+  ``#include <anira/anira.h>`` with ``#include <anira/compat/v2.hpp>`` and adds
+  ``using namespace anira::v2;`` (:ref:`migration-compat`); C++ against the 3.x API includes
+  ``<anira/anira.hpp>``.
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
   JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
   :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
   :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape`,
   :cpp:struct:`anira::ProcessingSpec` and :cpp:class:`anira::JsonConfigLoader` remain public and
   exported through the alpha releases of the 3.x line.
-- **The runtime** (:cpp:class:`anira::InferenceHandler`, :cpp:class:`anira::PrePostProcessor`,
-  ``prepare`` and ``process``) is unchanged in this pre-release and still takes the 2.x
-  configuration classes, which the transitional bridge ``<anira/compat/v3_to_v2.h>`` builds
-  from the 3.x handles (:ref:`migration-bridge`); sections 3 to 5 of the :doc:`usage` guide
-  describe it. The 3.x handler over the C ABI is in this pre-release (``anira/abi/handler.h``,
-  :doc:`usage` section 3.2); the ``anira::InferenceHandler`` class of ``anira/anira.hpp`` and
-  the removal of the 2.x runtime follow with the cut-over. The class behind both handlers,
-  :cpp:class:`anira::InferenceManager`, is not part of that surface and did change: it takes
-  host tensors only, and its 2.x ``float***`` functions (``process``, ``push_data``,
-  ``pop_data`` and their variants) are gone. Code that drove a manager directly presents one
-  ``anira_tensor`` per slot to the function of the same name, for channel pointers with
-  ``anira_tensor_init_host_planar`` (:doc:`usage` section 3.3); ``anira::InferenceHandler``
-  does exactly that for its callers, and a host of the C ABI does it itself (:doc:`usage`
-  section 3.2). A custom :cpp:class:`anira::PrePostProcessor` stays with the 2.x handler; its
-  3.x form is the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`),
-  which runs on the C handler. A custom :cpp:class:`anira::BackendBase` stays with the 2.x
-  handler likewise; its 3.x form is a *registered engine* (``anira_engine_desc``,
-  :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs on the C handler like a
-  built-in one. :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps
-  its code compiles against ``anira/compat/v2.hpp``, which runs it on the C handler
+- **The runtime** is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``, the C++
+  face of the C handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5): created on a
+  context from a pipeline, prepared with the contract, the Hard entries over host tensors. The
+  2.x class of that name, its ``float***`` forms and the transitional bridge
+  ``<anira/compat/v3_to_v2.h>`` that fed it the 2.x configuration classes are removed
+  (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
+  :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
+  and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
+  becomes the *stage* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
+  custom :cpp:class:`anira::BackendBase` a *registered engine* (``anira_engine_desc``,
+  :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
+  :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps its code
+  compiles against ``anira/compat/v2.hpp``, which runs it on the same C handler
   (:ref:`migration-compat`).
 - **The bundled models.** The 2.x fixture headers with their ``anira::InferenceConfig`` statics
   (``cnn_config``, ``hybridnn_config``, ``rnn_config``, ``gain_config``, ``stereo_gain_config``,
   ``rave_funk_drum_config`` and the encoder and decoder) are gone. Every bundled model ships a
   model file and a contract file next to its model directory (``extras/models/**/*.model.json``,
   ``*.contract.json``; ``extras/models/model_files.h`` names them), which the examples load with
-  ``anira::ModelConfig::from_file`` and ``anira::ContractHandle::from_file`` and bridge to the
-  runtime (:ref:`migration-bridge`). ``CNNConfig.h``, ``HybridNNConfig.h`` and
+  ``anira::ModelConfig::from_file`` and ``anira::ContractHandle::from_file`` and run on
+  :cpp:class:`anira::InferenceHandler`. ``CNNConfig.h``, ``HybridNNConfig.h`` and
   ``StatefulRNNConfig.h`` keep builders (``cnn_model_config(hop, size)``,
   ``hybridnn_model_config(batches)``, ``rnn_model_config(chunk)``) for the benchmark sweeps
   alone, which vary the shapes with the host buffer. A project that included the old headers
@@ -60,7 +58,7 @@ Where the 2.x API stands in this pre-release
 - **Schedule.** The 2.x configuration classes have deprecated twins over the 3.x handles in
   ``anira/compat/v2.hpp`` (``namespace anira::v2``; :ref:`migration-compat`), with the
   2.x processor, its views and the 2.x ``InferenceHandler`` over the C handler beside them; the
-  header is removed one minor release after 3.0.0; the 2.x ``ContextConfig`` is there as
+  header is removed one minor release after 3.0.0 (:ref:`migration-compat-schedule`); the 2.x ``ContextConfig`` is there as
   ``anira::v2::ContextConfig`` (``anira::CoreConfig`` is this pre-release's spelling). The 2.x
   JSON document is read by the 3.x loaders for as long as the 3.x line lives
   (:ref:`migration-json`).
@@ -134,15 +132,14 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_model_config_tensor_layout``): the 2.x per-backend shape is the spec's
        extents permuted by that entry's layout.
    * - ``anira::InferenceConfig::max_inference_time``
-     - ``anira::Hard{.budget = ANIRA_BUDGET_EXPLICIT, .budget_value =
-       std::chrono::microseconds(...)}`` (``anira_contract_hard_set_budget(contract,
-       ANIRA_BUDGET_EXPLICIT, ms)``).
+     - ``anira::Hard{..., .budget = std::chrono::microseconds(...)}``, a required member
+       (``anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, ms)``).
    * - ``anira::InferenceConfig::warm_up``
-     - ``anira::Hard{.warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = n}``
+     - ``hard.warmup = ANIRA_WARMUP_FIXED``, ``hard.warmup_iterations = n``
        (``anira_contract_hard_set_warmup``); ``0`` is ``ANIRA_WARMUP_NONE``.
    * - ``anira::InferenceConfig::blocking_ratio``
-     - ``anira::Hard{.wait_ratio = ...}`` (``anira_contract_hard_set_wait_ratio``); consumed by
-       the ``_wait`` twins with ``ANIRA_WAIT_CONTRACT``.
+     - ``hard.wait_ratio`` (``anira_contract_hard_set_wait_ratio``); consumed by the ``_wait``
+       twins with ``ANIRA_WAIT_CONTRACT``.
    * - ``anira::InferenceConfig::session_exclusive_processor``
      - ``cfg.state(ANIRA_MODEL_STATEFUL)`` (``anira_model_config_set_state``).
    * - ``anira::InferenceConfig::num_parallel_processors``
@@ -156,7 +153,7 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        ``set_log_queue_capacity``), or all at once with ``context.log(desc)``
        (``anira_context_config_set_log``).
    * - ``anira::HostConfig{buffer_size, sample_rate}``
-     - ``anira::Hard{.block_min, .block_max, .rate}`` (``anira_contract_create_hard``) or
+     - ``hard.block_min``, ``block_max``, ``rate`` (``anira_contract_create_hard``) or
        ``contract.hard_geometry(block_min, block_max, rate)``
        (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
        against ``block_min == block_max``. The blocks are doubles, so a fractional
@@ -183,11 +180,14 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
 The handler entries and the stage
 ---------------------------------
 
-The 3.x runtime of this pre-release is the C handler of ``anira/abi/handler.h`` (:doc:`usage`
-section 3.2) with the stage of ``anira/abi/stage.h`` (:doc:`usage` section 2); the 2.x
-:cpp:class:`anira::InferenceHandler` and :cpp:class:`anira::PrePostProcessor` stay as they are
-until the cut-over. What each 2.x call becomes on the C handler (``h`` is the ``anira_handler``,
-a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
+The 3.x runtime is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp`` over the C
+handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5) with the stage of
+``anira/abi/stage.h`` (:doc:`usage` section 2). It is created on an :cpp:class:`anira::Context`
+from an :cpp:class:`anira::Pipeline` (``anira::InferenceHandler handler(context,
+anira::Pipeline{anira::stage::Inference(cfg)})``), where the 2.x handler took a processor, the
+configuration and a ``CoreConfig``. What each 2.x call becomes (``handler`` is the
+:cpp:class:`anira::InferenceHandler`, ``h`` the ``anira_handler`` of the C entry in brackets; a
+block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` section 3.3):
 
 .. list-table::
    :header-rows: 1
@@ -196,13 +196,15 @@ a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
    * - anira 2.x
      - anira 3.x
    * - ``process(data, n)`` / ``process(data, n, tensor_index)`` (in place)
-     - ``anira_handler_process(h, &block, slot, &block, slot, &delivered)``: one
-       ``anira_tensor`` over the channel pointers (``anira_tensor_init_host_planar``, built
-       once, ``shape[1]`` stored before each call), the same tensor on both sides, one slot per
-       side.
+     - ``handler.process(block, slot, block, slot, &delivered)``
+       (``anira_handler_process``): one tensor over the channel pointers
+       (``anira::Tensor::from_host_planar``, ``anira_tensor_init_host_planar``, built once,
+       ``shape[1]`` stored before each call), the same tensor on both sides, one slot per side.
+       There is no ``float**`` form.
    * - ``process(in, n_in, out, n_out)`` and the multi-tensor ``float***`` forms
-     - Two tensors, or ``anira_handler_process_multi(h, inputs, num_inputs, outputs,
-       num_outputs, delivered)`` with one tensor per tensor of the model config's lists: an
+     - Two tensors, or ``handler.process(inputs, outputs, delivered)`` over spans
+       (``anira_handler_process_multi(h, inputs, num_inputs, outputs, num_outputs,
+       delivered)``) with one tensor per tensor of the model config's lists: an
        empty one (an extent of ``0``) for a slot the call leaves out, the whole Static tensor
        for a Static slot, the empty tensor at a State position. The request is ``shape[1]`` of
        each output tensor.
@@ -213,43 +215,60 @@ a block is an ``anira_tensor`` of :doc:`usage` section 3.3):
        same list. A model whose stream sits at another position on each side names both:
        ``in_slot`` and ``out_slot``.
    * - ``push_data(...)`` / ``pop_data(...)``
-     - ``anira_handler_push_data(h, &in, slot)`` / ``anira_handler_pop_data(h, &out, slot,
-       &delivered)`` and their ``_multi`` forms.
+     - ``handler.push_data(in, slot)`` / ``handler.pop_data(out, slot, &delivered)``
+       (``anira_handler_push_data`` / ``anira_handler_pop_data``) and their forms over every
+       slot (the ``_multi`` entries).
    * - ``pop_data(out, n, wait_until)``, ``set_non_realtime(true)``, the wait inside ``process``
        under ``blocking_ratio``
-     - The ``_wait`` twins, each its bare form with ``double timeout_ms`` appended as the last
-       parameter: ``anira_handler_pop_data_wait(h, &out, slot, &delivered, timeout_ms)`` with
-       an explicit timeout or ``ANIRA_WAIT_FOREVER``, ``anira_handler_process_wait(h, &in,
-       in_slot, &out, out_slot, &delivered, ANIRA_WAIT_CONTRACT)`` for the contract's
-       ``wait_ratio`` times the block duration, and the two ``_multi_wait`` forms.
+     - The ``_wait`` twins: ``handler.pop_data_wait(out, slot, timeout_ms, &delivered)``
+       with an explicit timeout or ``ANIRA_WAIT_FOREVER``, ``handler.process_wait(in,
+       in_slot, out, out_slot, ANIRA_WAIT_CONTRACT, &delivered)`` for the contract's
+       ``wait_ratio`` times the block duration, and their forms over every slot
+       (``anira_handler_pop_data_wait`` and the other C twins, each its bare form with
+       ``double timeout_ms`` appended as the last parameter).
    * - the returned sample count
-     - ``delivered``, a nullable pure out parameter written on every return; the status says
-       what happened: ``ANIRA_OK``, ``ANIRA_MISSED`` for a block the miss policy filled, or a
-       failure recorded in ``anira_handler_rt_error``.
+     - ``delivered``, a nullable pure out parameter written on every return; the returned
+       ``anira_status`` says what happened: ``ANIRA_OK``, ``ANIRA_MISSED`` for a block the miss
+       policy filled, or a failure recorded in ``handler.rt_error()``
+       (``anira_handler_rt_error``).
    * - ``pp_processor.set_input(value, tensor_index, sample)``
-     - ``anira_handler_set_static_input(h, slot, &tensor)``: the whole tensor in the spec's
-       shape and dtype, no per-element write and no clamp; or the element of that slot in a
-       ``_multi`` form. ``[driver-thread]``, not any-thread.
+     - ``handler.set_static_input(slot, tensor)`` (``anira_handler_set_static_input``): the
+       whole tensor in the spec's shape and dtype, no per-element write and no clamp; or the
+       element of that slot in a form over every slot. ``[driver-thread]``, not any-thread.
    * - ``pp_processor.get_output(tensor_index, sample)``
-     - ``anira_handler_get_static_output(h, slot, &out)``: the whole tensor of the latest
-       collected inference.
+     - ``handler.get_static_output(slot, out)`` (``anira_handler_get_static_output``): the
+       whole tensor of the latest collected inference.
    * - ``get_latency()`` / ``get_latency_vector()``
-     - ``anira_handler_get_latency(h, slot)`` / ``anira_handler_get_latencies(h, &count,
-       out)``: one entry per output tensor of the list, ``0`` for a Static or a State output;
-       a figure the Hard contract declared for the slot (below) where it did.
+     - ``handler.get_latency(slot)`` / ``handler.get_latencies()``
+       (``anira_handler_get_latency`` / ``anira_handler_get_latencies``): one entry per output
+       tensor of the list, ``0`` for a Static or a State output; a figure the Hard contract
+       declared for the slot (below) where it did.
    * - ``prepare(host_config, custom_latency, tensor_index)`` and ``prepare(host_config,
        std::vector<unsigned int> custom_latency)``
      - The declared stream latency of an output on the Hard contract,
-       ``anira_contract_hard_set_latency(contract, "audio_out", samples)`` per named output
-       (``"latencies"`` in the contract file), then ``anira_handler_prepare``: the figure
+       ``contract.hard_latency("audio_out", samples)`` per named output
+       (``anira_contract_hard_set_latency``, ``"latencies"`` in the contract file), then
+       ``handler.prepare(contract)``: the figure
        replaces the computed one and primes the receive ring, as the 2.x custom latency did.
        Where 2.x clamped a figure below the model's internal latency up to it with a warning,
        prepare refuses it with ``ANIRA_ERROR_CONFIG``, as it refuses a name that is no
        Streamed output; an output never named keeps the computed figure.
+   * - ``prepare(host_config)``
+     - ``handler.prepare(contract)`` with the host geometry on the Hard contract
+       (``contract.hard_geometry(block_min, block_max, rate)``); it returns the
+       :cpp:class:`anira::PlanReport`.
    * - ``reset()``
-     - ``anira_handler_reset(h)``; it also re-initialises declared state.
-   * - ``set_inference_backend(backend)``
-     - ``anira_handler_set_plan(h, plan)`` over the plan report (``anira_handler_get_plan``).
+     - ``handler.reset()`` (``anira_handler_reset``); it also re-initialises declared state.
+   * - ``set_inference_backend(backend)`` / ``get_inference_backend()``
+     - ``handler.set_plan(plan)`` / ``handler.get_plan()`` over the plan report
+       (``anira_handler_set_plan`` / ``anira_handler_get_plan``): pick the index of a plan on
+       that engine from ``report.plans()``.
+   * - ``drain_log()``, ``get_num_inference_threads()``
+     - ``anira::drain_log()``, ``anira::num_inference_threads()`` (``anira_drain_log``,
+       ``anira_num_inference_threads``): process-wide, no handler member.
+   * - ``anira::Core::make_inference_thread()`` on a ``CoreConfig`` without threads
+     - ``anira::InferenceThread thread(context)`` on a ``context.threads(0)`` context
+       (``anira_inference_thread_create``).
 
 What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
 stage (the C descriptor ``anira_stage_desc``, or :cpp:class:`anira::Stage` in C++):
@@ -421,8 +440,7 @@ descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`cu
        a stage reads the pair with ``anira_stage_engine``); ``anira.v2.custom`` is the id of the 2.x ``CUSTOM`` backend. The
        C handler runs it like every added id, on the engine added under it (the one id with
        the prefix ``anira.`` ``anira_custom_engine_create`` admits; ``anira/compat/v2.hpp``
-       adds it for a 2.x custom backend); the bridge keeps serving it without an engine until
-       the cut-over.
+       adds it for a 2.x custom backend).
 
 .. _migration-compat:
 
@@ -729,140 +747,67 @@ What differs from 2.x:
 When the 2.x classes go
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-The 2.x handler of ``<anira/anira.h>`` (:cpp:class:`anira::InferenceHandler` and what it takes)
-stays public through the alpha releases and goes with the runtime cut-over, the transitional
-bridge below with it; the remaining 2.x headers become private in the release after that. From
-then on ``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor
-release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+The 2.x handler is removed in this pre-release, the transitional bridge with it
+(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
+(the configuration classes, :cpp:class:`anira::PrePostProcessor`,
+:cpp:class:`anira::BackendBase`, :cpp:class:`anira::JsonConfigLoader`) stay installed, each
+included by its own path, until a later pre-release makes them private. From then on
+``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
+after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.
 
 .. _migration-bridge:
 
-The bridge to the 2.x runtime, until the cut-over
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+The removed bridge
+~~~~~~~~~~~~~~~~~~
 
-``<anira/compat/v3_to_v2.h>`` (``namespace anira::v3compat``) is the other direction: it turns a
-3.x configuration into the 2.x classes of ``<anira/anira.h>``, so a host that wrote its
-configuration in 3.x drives the 2.x handler with it (the bundled examples and the benchmark do,
-until the cut-over). It is transitional: the runtime cut-over that removes the 2.x classes
-removes it. A host that moves off 2.x takes the 3.x handler (:doc:`usage` section 3.2); one
-that keeps its 2.x code takes ``anira/compat/v2.hpp`` above.
-
-.. code-block:: cpp
-
-    #include <anira/anira.hpp>
-    #include <anira/compat/v3_to_v2.h>
-
-    anira::ModelConfig cfg = ...;                 // section 1.2 of the usage guide
-    anira::Hard hard{.budget = ANIRA_BUDGET_EXPLICIT,
-                     .budget_value = std::chrono::microseconds(42660),
-                     .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2};
-    anira::ContextConfig context;                 // section 1.4
-
-    anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(cfg, hard);
-    anira::CoreConfig core_config = anira::v3compat::to_core_config(context);
-    anira::InferenceHandler handler(pp_processor, inference_config, core_config);
-
-    // prepare, once the host geometry is known
-    hard.block_min = hard.block_max = samples_per_block;
-    hard.rate = sample_rate;
-    handler.prepare(anira::v3compat::to_host_config(hard, cfg));
-
-The overloads over the ``anira.hpp`` handles (``ModelConfig``, ``ContractHandle`` or a
-``Hard`` aggregate, ``ContextConfig``) return the 2.x object and throw ``anira::Error`` with
-the reason; the same four functions exist over the C handles with a status and an
-``anira_error`` (``to_inference_config(const anira_model_config*, const anira_contract*,
-const anira_engine* candidates, uint32_t num_candidates, anira::InferenceConfig&,
-anira_error*)`` and so on). ``to_host_config(cfg, buffer_size, sample_rate, allow_smaller)``
-takes the host's own geometry, which may be fractional (a plugin that prepares a 2048-sample
-decoder with ``samplesPerBlock / 2048.f``); the contract forms carry a fractional geometry
-the same way, as the nearest float of the double (the latency calculation recovers the
-rational the host meant from it, 1/3 and 1/4 exactly).
-
-**What becomes what.**
+The alpha releases before this one carried ``<anira/compat/v3_to_v2.h>``
+(``namespace anira::v3compat``), which turned a 3.x configuration into the 2.x classes the 2.x
+handler took. It is removed with that handler. A host that wrote its configuration in 3.x and
+drove the 2.x handler through the bridge hands the same objects to
+:cpp:class:`anira::InferenceHandler`:
 
 .. list-table::
    :header-rows: 1
    :widths: 45 55
 
-   * - anira 3.x
-     - anira 2.x
-   * - A model entry (``models[]``)
-     - One ``anira::ModelData`` per entry: a path is copied, bytes are borrowed, the ``entry``
-       extension is the model function. ``anira.v2.custom`` is the 2.x ``CUSTOM`` backend.
-   * - The tensor specs
-     - One universal ``anira::TensorShape`` from the specs' extents (a dynamic Time extent
-       resolved to the window), plus one backend-qualified ``TensorShape`` per entry whose
-       ``tensors`` record holds a layout (``engine_dims`` of the spec). A name in the record
-       does not reach the 2.x ``InferenceConfig``, which has no tensor names: the 2.x path binds
-       by position; the C handler binds by name where the engine's side has names, and refuses a
-       name on a side its engine binds by position (``ANIRA_ERROR_NOT_SUPPORTED``).
-   * - ``ANIRA_AXIS_CHANNEL`` extent; window minus overlap; output ``latency``
-     - ``preprocess_input_channels`` / ``postprocess_output_channels``;
-       ``preprocess_input_size`` / ``postprocess_output_size`` (``0`` for a Static or Buffer
-       tensor); ``internal_model_latency``.
-   * - ``Hard.budget_value`` (explicit); ``warmup`` ``FIXED n`` / ``NONE``; ``wait_ratio``
-     - ``max_inference_time``; ``warm_up = n`` / ``0``; ``blocking_ratio``.
-   * - ``state(ANIRA_MODEL_STATEFUL)``; ``max_instances``
-     - ``session_exclusive_processor``; ``num_parallel_processors`` (a config that sets no
-       ``max_instances`` carries ``ANIRA_INSTANCES_AUTO``, which the core resolves to the
-       inference pool's thread count; the 2.x constructor default was half the hardware
-       threads, the size of the default pool).
-   * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
-     - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
-       ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
-   * - ``Hard.ring_dtypes``
-     - No 2.x counterpart: every 2.x stream was float32, so the bridge takes a ring dtype equal
-       to the spec's (float32) and nothing else.
-   * - ``Hard.latencies`` (the declared stream latency)
-     - No ``InferenceConfig`` counterpart: the 2.x handler takes the figure as the
-       ``custom_latency`` argument of its ``prepare`` overloads, which the bridge does not
-       call; pass it there.
-   * - ``ContextConfig`` threads (``ANIRA_THREADS_AUTO`` = the 2.x default), wait strategy,
-       log level, drain, interval and queue capacity
-     - ``CoreConfig`` and its ``LogConfig``. The log sink, the log flags and the device
-       descriptors have no 2.x counterpart and are not carried.
+   * - The bridge
+     - anira 3.x
+   * - ``to_inference_config(cfg, hard, candidates)``
+     - ``anira::stage::Inference(cfg, candidates)`` in an :cpp:class:`anira::Pipeline`; the
+       candidates are ``anira::BackendId`` rows (an engine on a provider), none for the
+       default set.
+   * - ``to_core_config(context_config)``
+     - ``anira::Context context(context_config)``, which the handler is created on.
+   * - ``to_host_config(hard, cfg)``, ``to_host_config(cfg, buffer_size, sample_rate)``
+     - The Hard contract's geometry (``contract.hard_geometry(block_min, block_max, rate)``,
+       fractional where the host's numbers are) and ``handler.prepare(contract)``.
+   * - ``enabled_engines()``
+     - ``anira::enabled_engines()``.
+   * - ``anira::InferenceHandler handler(pp, inference_config, core_config)``
+     - ``anira::InferenceHandler handler(context, pipeline)``, with a custom processor's 3.x
+       form as the pipeline's stage (``anira::stage::Custom``, :ref:`migration-runtime`).
 
-**What the 2.x runtime cannot do** is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` and a message
-saying what to change: an Async contract; a ``MEASURED`` budget or ``UNTIL_STABLE`` warmup
-(the defaults of ``anira::Hard{}``: set an explicit budget and a fixed warmup, as every bundled
-fixture does); a spec dtype other than float32; a layout that moves an axis of extent above 1
-(a transpose; a view over unit axes is fine); a dynamic Time extent on a Buffer tensor; an
-engine this build does not carry (see the candidates below); a custom engine other than
-``anira.v2.custom``, which the bridge serves with the 2.x pass-through (the C handler runs a
-custom engine added to its pipeline, ``anira.v2.custom`` included, and refuses an id without
-one at ``anira_handler_create``, :doc:`custom_engines`). Every other
+.. code-block:: cpp
 
-rule of section 1.1 that a configuration breaks is
-``ANIRA_ERROR_CONFIG`` with the tensor's or the entry's name in the message. A ring dtype that
-differs from its spec's dtype, or that names no Streamed tensor, is ``ANIRA_ERROR_CONFIG``.
+    #include <anira/anira.hpp>
 
-**Candidates.** The candidate list narrows which entries reach the ``InferenceConfig``. With
-none (the default), every entry is one, and an entry naming an engine this build does not
-carry is refused; ``anira::v3compat::enabled_engines()`` is the list that lets one model
-config serve every build, and ``ANIRA_ENGINE_CUSTOM`` in the list keeps the custom-engine
-entries (the 2.x ``CUSTOM`` backend's, ``anira.v2.custom``). The consumed-or-fail walk over the extensions runs over the entries that survive, so
-an ``entry`` extension on a LibTorch entry does not fail a build without LibTorch when LibTorch
-is not a candidate. The bridge's candidates name engines on the CPU path: a model
-entry pinned to a provider (``"provider": "xnnpack"`` beside its ``"engine"``, :doc:`usage`
-section 1.2) is
-no candidate under an explicit engine list, and under none its pin is not applied, since the
-2.x runtime runs every model on the CPU path; providers, pins and provider options
-are the C handler's (:doc:`usage` sections 3.1 and 3.2).
+    anira::ModelConfig cfg = ...;            // section 1.2 of the usage guide
+    anira::ContractHandle contract = ...;    // section 1.3
+    anira::Context context{anira::ContextConfig{}};
 
-**Lifetime.** A path entry is copied into the ``InferenceConfig``; a bytes entry is borrowed
-(a 2.x binary ``ModelData`` never copies), so the ``ModelConfig`` must outlive the
-``InferenceConfig`` and every handler built on it. Destroy in this order: the handler, the
-``InferenceConfig``, the ``ModelConfig``. The C++ overloads take the model config by lvalue
-reference only; passing a temporary does not compile.
+    anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(cfg)});
 
-**Windows.** A flexible window (``window_min < window_max``) is pinned when
-``to_inference_config`` runs, by the rule of the usage guide (section 1.3, *Flexible
-windows*): one anchor hop for the whole model, the largest every window and time ratio allow
-at or below ``block_max``, else the smallest above it; without a geometry on the contract, the
-smallest. When a spec's window is flexible, set the geometry before the call, or build the
-``InferenceConfig`` at prepare. With fixed windows, which every bundled
-fixture uses, the order does not matter.
+    // prepare, once the host geometry is known
+    contract.hard_geometry(samples_per_block, samples_per_block, sample_rate);
+    const anira::PlanReport report = handler.prepare(contract);
+
+What the bridge refused because the 2.x runtime could not run it runs on the 3.x handler: a
+spec dtype other than float32, a ring dtype of the host's (``Hard::ring_dtypes``), a declared
+stream latency (``Hard::latencies``), a State pair, a transposed layout, a provider pin and the
+provider options, a custom engine under any id. An Async contract and a ``MEASURED`` budget are
+refused at prepare with ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release, as they were by the
+bridge.
 
 .. _migration-json:
 
@@ -950,7 +895,7 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
        that ``anira_model_config_take_legacy_contract`` hands out once;
        ``anira_contract_from_json`` on the same document yields it directly. A ``warm_up``
        the file leaves out is ``warmup {"fixed": 0}``, the 2.x default, so the contract
-       bridges as the file ran. The contract carries ``on_miss`` ``zeros``, what the 2.x
+       runs as the file ran. The contract carries ``on_miss`` ``zeros``, what the 2.x
        runtime delivered on a miss.
    * - any other key
      - Stored as an extension of its host and refused by name at prepare.
@@ -971,7 +916,7 @@ its default (the first streamed tensor), which is what the 2.x ``anira::HostConf
 
 In C++ the same document goes through the ``anira.hpp`` loaders: the model config from its
 ``inference_config`` block, the Hard contract that block held back, and the context config
-from its ``context_config`` block. Bridged, they are the 2.x objects the file described:
+from its ``context_config`` block, the three objects a handler runs the file with:
 
 .. code-block:: cpp
 
@@ -979,9 +924,8 @@ from its ``context_config`` block. Bridged, they are the 2.x objects the file de
     anira::ContractHandle contract = model_config.take_legacy_contract().value();  // upgraded()
     anira::ContextConfig context_config = anira::ContextConfig::from_file("Config.json");
 
-    anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
-        model_config, contract, anira::v3compat::enabled_engines());
-    anira::CoreConfig core_config = anira::v3compat::to_core_config(context_config);
+    anira::Context context(context_config);
+    anira::InferenceHandler handler(context, anira::Pipeline{anira::stage::Inference(model_config)});
 
 **Converting a file.** Reading a 2.x file and writing the handle back is the migration tool:
 ``anira_model_config_to_json`` and ``anira_context_config_to_json`` write the 3.x spelling with a

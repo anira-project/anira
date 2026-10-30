@@ -95,11 +95,11 @@ Audio Glitches or Dropouts
 **Issue**: Audio processing experiences dropouts or glitches during inference.
 
 **Solutions**:
-    1. Increase the maximum inference time in your :cpp:struct:`anira::InferenceConfig` to allow more time for model processing.
+    1. Increase the inference budget of your Hard contract (``anira::Hard::budget``, ``"budget"`` in the contract file) to allow more time for model processing.
     2. Reduce the complexity of your neural network model
     3. Increase audio buffer size (though this increases latency)
     4. Check if other processes are consuming CPU resources
-    5. Use `anira::benchmark` tools to identify performance bottlenecks
+    5. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
 
 Model Loading Failures
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -117,9 +117,9 @@ Wait Strategy Mismatch
 
 **Issue**: The log shows ``[WARNING] wait strategy mismatch``.
 
-All anira instances in a process share one inference thread pool, and the pool's threads wait for work according to the :cpp:enum:`anira::WaitStrategy` of the *first* :cpp:struct:`anira::CoreConfig` the core was created with. A later instance that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
+All anira handlers in a process share one inference thread pool, and the pool's threads wait for work according to the wait strategy of the *first* context configuration the core was created with (``context.threads(n, wait)``). A later context that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
 
-**Solution**: Use the same ``wait_strategy`` in every :cpp:struct:`anira::CoreConfig` (and the ``wait_strategy`` key of every context file) that the process loads.
+**Solution**: Use the same wait strategy in every :cpp:class:`anira::ContextConfig` (and the ``wait_strategy`` key of every context file) that the process loads.
 
 Thread Priority Issues
 ^^^^^^^^^^^^^^^^^^^^^^
@@ -140,7 +140,7 @@ Unexpected Results or Crashes
 **Issue**: Inference produces incorrect outputs or crashes.
 
 **Solutions**:
-    1. Validate tensor shapes in your :cpp:struct:`anira::InferenceConfig` match your model's expectations
+    1. Validate that the tensor specs of your model configuration match your model's expectations
     2. Ensure your pre/post-processing logic correctly handles the data format
     3. Try using a different backend to rule out engine-specific issues
     4. Check that your model works correctly outside of anira use the minimal inference example provided in the :doc:`examples` section.
@@ -156,8 +156,7 @@ in ``destroy`` entries, in sinks) and the real-time refusals. :doc:`logging` exp
 Where the records are on each platform:
 
 - **Linux, Windows**: ``stderr`` for Error and Warning, ``stdout`` for Info and Debug, flushed
-  per record. Set the runtime level with the context config or, for the 2.x runtime,
-  ``CoreConfig::m_log.m_level``.
+  per record. Set the runtime level with the context config (``context.log_level``).
 - **Android**: ``adb logcat -s anira:V``; anira's component is inside the message as
   ``[native][anira.engine.onnxruntime] ...``. The engines keep their own tags:
   ``adb logcat -s anira:V onnxruntime:V tflite:V ExecuTorch:V``.
@@ -244,9 +243,9 @@ even from late-running static destructors) and is reclaimed at unload.
        idempotent and cheap when there is nothing to do, and it refuses
        (``ANIRA_ERROR_INVALID_STATE``, nothing happens) while a context or a handler of
        this copy of anira still exists.
-    2. **You manage inference threads yourself** (``CoreConfig(0)`` +
-       :cpp:func:`anira::Core::make_inference_thread`): stop them before your library
-       can be unloaded; the hook only joins anira's own pool.
+    2. **You manage inference threads yourself** (``context.threads(0)`` +
+       :cpp:class:`anira::InferenceThread`): stop them before your library can be
+       unloaded; the hook only joins anira's own pool.
     3. **The library silently never unloads (GCC/Linux)**: glibc never unloads an object
        that defines an ``STB_GNU_UNIQUE`` symbol, which GCC emits for exported inline
        statics and template statics. anira compiles with ``-fno-gnu-unique``; add the

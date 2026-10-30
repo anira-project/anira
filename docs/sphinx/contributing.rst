@@ -139,7 +139,7 @@ Fix only what the branch changes. ``<base>`` here and below is the branch your p
 
 Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
 
-**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
+**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark examples (the fixture of ``examples/benchmark/fixture/``) and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
 
 .. code-block:: bash
 
@@ -157,8 +157,8 @@ The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep
 
 .. code-block:: bash
 
-    find src/engines/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
-         src/InferenceHandler.cpp src/PrePostProcessor.cpp test/engines/ test/scheduler/ test/utils/ \
+    find src/engines/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
+         src/PrePostProcessor.cpp examples/benchmark/fixture/ test/engines/ test/scheduler/ test/utils/ \
          test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
          test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
         | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
@@ -192,11 +192,12 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
   ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
   covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
   only ``BackendBase.h``.
-- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
-  ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
-  cross-unit integration suites (``test_OneSidedStreaming``). For the 3.x cut-over a test
+- Root-level units (``InferenceConfig``, ``CoreConfig``, ``PrePostProcessor``) and the
+  ``anira.hpp`` handler (``test_InferenceHandler``) are covered by root-level ``test_*.cpp``
+  files, alongside the cross-unit integration suites (``test_OneSidedStreaming``). A test
   file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
+  ``test/CMakeLists.txt`` partitions (the white-box suites that still drive the 2.x handler run
+  it as ``anira_test::V2Handler`` of ``test/support/v2_handler.h``): ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
   compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
   ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather

@@ -9,15 +9,13 @@ promise. In C a stage is an ``anira_stage_desc`` of ``anira/abi/stage.h`` handed
 ``anira_pipeline_add_stage``; in C++ it is a subclass of :cpp:class:`anira::Stage`, the
 registration, whose ``prepare`` returns the :cpp:class:`anira::Stage::Prepared` that runs the
 phases for one handler, handed to an :cpp:class:`anira::Pipeline` as
-:cpp:class:`anira::stage::Custom`. Both run on the 3.x
-handler of ``anira/abi/handler.h`` (:doc:`usage` section 3.2). This page walks through the
+:cpp:class:`anira::stage::Custom`. Both run on :cpp:class:`anira::InferenceHandler`, the
+handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5). This page walks through the
 cases a stage is for, in the order they come up.
 
 .. note::
-    Coming from anira 2.x? The 2.x :cpp:class:`anira::PrePostProcessor` stays with the 2.x
-    :cpp:class:`anira::InferenceHandler` in this pre-release, unchanged, and its API reference
-    still describes it; :ref:`migration-runtime` maps each of its virtuals and helpers onto the
-    stage. A 2.x processor also runs as the stage of a 3.x pipeline as it is: written against
+    Coming from anira 2.x? :ref:`migration-runtime` maps each virtual and helper of the 2.x
+    :cpp:class:`anira::PrePostProcessor` onto the stage. A 2.x processor also runs as the stage of a 3.x pipeline as it is: written against
     ``anira::v2::PrePostProcessor`` of ``anira/compat/v2.hpp``, it is added with
     ``pipeline.add(anira::stage::Custom(std::make_shared<anira::v2::LegacyProcessorStage>(pp)))``
     (:ref:`migration-compat-config`).
@@ -490,6 +488,5 @@ only where the stage fills the phase that moves that ring, and the stage runs la
 an exception a C++ ``init`` throws, fails the prepare with ``the stage refused init``, and the
 next prepare calls init again), then its own ``prepare``, with the record; a status a C
 ``prepare`` returns, an exception a C++ ``prepare`` throws or a null ``Prepared`` it returns,
-fails the prepare (``the stage refused prepare``), and no unprepare follows. The
-:cpp:class:`anira::InferenceHandler` class of ``anira/anira.hpp`` arrives with the runtime
-cut-over; until then a stage is driven through the C entries of the handler.
+fails the prepare (``the stage refused prepare``), and no unprepare follows. In C++ the
+refusal is the ``anira::Error`` that :cpp:func:`anira::InferenceHandler::prepare` throws.

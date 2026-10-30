@@ -9,12 +9,10 @@ write, what a message contains, where the records go on each platform, and what 
 promises about exceptions.
 
 .. note::
-    The runtime half of this page is the C handler of ``anira/abi/handler.h`` (:doc:`usage`,
-    section 3.2): ``anira_handler_rt_error``, the per-handler latch and the drain summary
-    are in effect there. The 2.x :cpp:class:`anira::InferenceHandler` of :doc:`usage`,
-    sections 3 to 5, runs on the same scheduler: its operational real-time conditions are
-    latched per site the same way and a failed inference delivers zeros, but it has no
-    ``rt_error`` word to read.
+    The runtime half of this page is the handler of ``anira/abi/handler.h`` and its C++
+    face :cpp:class:`anira::InferenceHandler` (:doc:`usage`, sections 3 to 5):
+    ``anira_handler_rt_error`` (:cpp:func:`anira::InferenceHandler::rt_error`), the
+    per-handler latch and the drain summary are in effect there.
 
 The rule
 --------
@@ -252,11 +250,11 @@ the real-time records that preceded the failure are in front of you before you a
 (Not for ``[callback-safe]`` entries, and not when the entry runs inside a sink.) The drain is
 lock-free and the queue is multi-consumer, so this is safe beside the running drain thread; it
 means a real-time record may arrive on the failing caller's thread as well as on the drain
-thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` /
-:cpp:func:`anira::Core::shutdown` drain the queue as well.
+thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` (``anira::shutdown()``)
+drain the queue as well.
 
 **Manual mode and WebAssembly.** With ``ANIRA_LOG_DRAIN_MANUAL`` there is no thread; the host
-pumps ``anira_drain_log`` (:cpp:func:`anira::InferenceHandler::drain_log` on the 2.x runtime,
+pumps ``anira_drain_log`` (``anira::drain_log()`` in C++,
 ``anira.drainLog()`` or ``anira.startLogPump()`` on the web) from a timer, and once more after any failed call.
 The queue is shared by every handler in the process, so pumping any one of them drains
 everything. WebAssembly has no drain thread at all: ``ANIRA_LOG_DRAIN_THREAD`` is coerced to
