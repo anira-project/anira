@@ -108,12 +108,13 @@ size_t round_up(size_t bytes, size_t align) {
 }  // namespace
 
 // The worker's first JavaScript: give the scope's Module its memory (the package's heap views are
-// rebuilt from it after a growth, heap() of web/src/abi/bindings.ts; the glue keeps it to itself
-// in a Worker), import the module (the engines and stages it defines on the scope's registry,
-// globalThis[Symbol.for('anira.registry')]), await the registry's boot over this instance (its
-// JavaScript engines' init), then call the entry through the table, and
-// once it returned store 1 to `left` from JavaScript, after the last C frame of the worker. The
-// import and the boot are asynchronous: the entry runs from a later task of the worker.
+// rebuilt from it after a growth, heap() of web/src/abi/bindings.ts; a Worker's Module starts
+// without it, and it is a runtime export so that a Debug build's ASSERTIONS put no getter-only
+// trap there, cmake/build-wasm.cmake), import the module (the engines and stages it defines on the
+// scope's registry, globalThis[Symbol.for('anira.registry')]), await the registry's boot over this
+// instance (its JavaScript engines' init), then call the entry through the table, and once it
+// returned store 1 to `left` from JavaScript, after the last C frame of the worker. The import and
+// the boot are asynchronous: the entry runs from a later task of the worker.
 EM_JS_DEPS(anira_em_worker, "$getWasmTableEntry,$UTF8ToString");
 
 EM_JS(void,
@@ -123,9 +124,11 @@ EM_JS(void,
           Module['wasmMemory'] = wasmMemory;
           var url = module_url ? UTF8ToString(module_url) : "";
           // A template literal: Vite's dev server rewrites a dynamic import of a bare variable
-          // into one through its client, which a worklet scope cannot load
-          // (cmake/wasm-glue-rewrite.cmake). clang-format would split `${url}` into `$ { url }`,
-          // which is no longer an interpolation.
+          // into one through its client, which a worklet scope cannot load. Vite cannot analyse
+          // either form and warns of it unless the call carries a @vite-ignore comment, which
+          // cannot be written here (the preprocessor strips the comments of an EM_JS body):
+          // cmake/wasm-glue-rewrite.cmake inserts it into the linked glue. clang-format would
+          // split `${url}` into `$ { url }`, which is no longer an interpolation.
           // clang-format off
           var loaded = url ? import(`${url}`) : Promise.resolve();
           // clang-format on

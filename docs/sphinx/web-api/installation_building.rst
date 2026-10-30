@@ -68,9 +68,10 @@ What the Page Needs
   before).
 * **The package left as it is by the dev server.** ``optimizeDeps: { exclude:
   ['@anira-project/anira'] }``: the glue loads itself into the Workers and the worklet. Vite's
-  dev server works (the module's build rewrites the one construct of the glue it would turn into
-  a client import, ``cmake/wasm-glue-rewrite.cmake``); it warns once that the Workers' dynamic
-  import cannot be analysed, which is intended.
+  dev server works: the module's build (``cmake/wasm-glue-rewrite.cmake``) rewrites the one
+  construct of the glue the dev server would turn into a client import, and marks
+  ``/* @vite-ignore */`` the Workers' dynamic import of the worker module, which the dev server
+  cannot analyse and would otherwise warn of.
 * **onnxruntime-web excluded from the dev server's optimisation too**, when a page uses the ONNX
   Runtime Web engine: ``optimizeDeps: { exclude: ['@anira-project/anira', 'onnxruntime-web'] }``.
   Otherwise Vite re-optimises its dependencies at the first import of onnxruntime-web and reloads

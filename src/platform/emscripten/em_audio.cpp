@@ -263,7 +263,9 @@ bool render(int num_inputs,
 // The JavaScript stages of the worklet scope are built over its instance before the first
 // quantum reaches them: the registry's boot, posted to the audio thread at every create. The
 // scope's Module gets its memory first, which the package's heap views are rebuilt from after a
-// growth (heap() of web/src/abi/bindings.ts; the glue keeps the memory to itself here).
+// growth (heap() of web/src/abi/bindings.ts; the worklet's Module starts without it, and it is a
+// runtime export so that a Debug build's ASSERTIONS put no getter-only trap there,
+// cmake/build-wasm.cmake).
 EM_JS(void, anira_em_js_boot_worklet_registry, (), {
     Module['wasmMemory'] = wasmMemory;
     var registry = globalThis[Symbol.for ('anira.registry')];

@@ -46,6 +46,12 @@ endif()
 # address below 2^31, where the package's `>>> 2` indexing and the glue need no unsigned pointers.
 # With -pthread the glue reads the heap through a check per access (growMemViews; Emscripten
 # warns pthreads-mem-growth); the package's own code goes through heap() of web/src/abi/bindings.ts.
+# heap() reads the realm's Module.wasmMemory, which anira's boot of an inference Worker and of the
+# worklet assigns (src/platform/emscripten/em_worker.cpp, em_audio.cpp), so wasmMemory is a
+# runtime export: an unexported runtime symbol is a getter-only property of Module under
+# ASSERTIONS (a Debug build), and the glue is an ES module, whose strict mode makes that
+# assignment throw (no Worker entered its loop). The ABI gates' glue is a script, where it
+# fails silently, so only a Debug build of this module shows it.
 # A library's runtime never exits: EXIT_RUNTIME=0 here, and the noExitRuntime symbol that makes
 # keepRuntimeAlive() honour it comes with the library itself (src/platform/emscripten/
 # em_runtime.cpp), for this module and every other that links anira.
@@ -70,7 +76,7 @@ set(ANIRA_WASM_LINK_FLAGS "\
   -s NO_DISABLE_EXCEPTION_CATCHING \
   -s STACK_SIZE=33554432 \
   -s EXPORTED_FUNCTIONS=@${CMAKE_CURRENT_SOURCE_DIR}/web/src/abi/exports_wasm.txt \
-  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"stringToUTF8OnStack\",\"lengthBytesUTF8\",\"HEAPU8\",\"HEAP32\",\"HEAPU32\",\"HEAPF32\",\"HEAPF64\",\"HEAP64\",\"HEAPU64\",\"stackSave\",\"stackRestore\",\"stackAlloc\",\"emscriptenRegisterAudioObject\",\"emscriptenGetAudioObject\"]' \
+  -s EXPORTED_RUNTIME_METHODS='[\"UTF8ToString\",\"stringToUTF8OnStack\",\"lengthBytesUTF8\",\"HEAPU8\",\"HEAP32\",\"HEAPU32\",\"HEAPF32\",\"HEAPF64\",\"HEAP64\",\"HEAPU64\",\"stackSave\",\"stackRestore\",\"stackAlloc\",\"emscriptenRegisterAudioObject\",\"emscriptenGetAudioObject\",\"wasmMemory\"]' \
   ")
 
 # CMake requires at least one source file for add_executable.
@@ -89,14 +95,15 @@ set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   JOB_POOL_LINK anira_wasm_link
 )
 
-# The glue's one construct that has Vite's dev server inject its client (the pthread pool's
-# literal worker URL), rewritten to go through locateFile: cmake/wasm-glue-rewrite.cmake.
+# The glue for Vite's dev server: its one construct that has the dev server inject its client
+# (the pthread pool's literal worker URL) rewritten to go through locateFile, and the Wasm
+# Workers' import of the worker module marked /* @vite-ignore */: cmake/wasm-glue-rewrite.cmake.
 add_custom_command(TARGET ${ANIRA_WASM_TARGET_NAME} POST_BUILD
     COMMAND ${CMAKE_COMMAND}
         "-DGLUE=${ANIRA_WASM_OUTPUT_FOLDER}/${ANIRA_WASM_TARGET_NAME}.js"
         -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/wasm-glue-rewrite.cmake"
     VERBATIM
-    COMMENT "Rewriting the pthread worker URL of ${ANIRA_WASM_TARGET_NAME}.js for Vite's dev server")
+    COMMENT "Rewriting ${ANIRA_WASM_TARGET_NAME}.js for Vite's dev server")
 
 # ==============================================================================
 # Bundle license files from native deps that get statically linked into the
