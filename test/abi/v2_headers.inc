@@ -15,6 +15,5 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
-#include <anira/utils/JsonConfigLoader.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/Semaphore.h>

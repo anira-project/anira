@@ -309,7 +309,6 @@ target_sources(${PROJECT_NAME}
         src/scheduler/LatencyCalculator.cpp
 
         # Utils
-        src/utils/JsonConfigLoader.cpp
         src/utils/Logger.cpp
         src/utils/LogSinks.cpp
         src/utils/RtLatch.cpp

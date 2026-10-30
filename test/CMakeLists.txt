@@ -123,8 +123,6 @@ anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
-	utils/test_JsonConfigLoader.cpp
-	utils/test_JsonConfigLoaderErrors.cpp
 	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
 	system/test_HighPriorityThread.cpp

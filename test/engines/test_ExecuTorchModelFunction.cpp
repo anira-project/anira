@@ -6,13 +6,11 @@
 
 #ifdef USE_EXECUTORCH
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/JsonConfigLoader.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -20,7 +18,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <sstream>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -119,8 +117,9 @@ TEST(ExecuTorchModelFunction, NamedMethodSelectsItsGraph) {
     EXPECT_FLOAT_EQ(steady_state_output("gain4"), 4.0F);
 }
 
+// A version-2 document's model_function becomes the entry's entry extension in the upgrade.
 TEST(ExecuTorchModelFunction, JsonConfigCarriesModelFunction) {
-    std::istringstream json{
+    const std::string json{
         R"({
         "inference_config": {
             "model_data": [
@@ -136,11 +135,12 @@ TEST(ExecuTorchModelFunction, JsonConfigCarriesModelFunction) {
             "max_inference_time": 5.0
         }
     })"};
-    anira::JsonConfigLoader loader(json);
-    auto config = loader.get_inference_config();
-    ASSERT_NE(config, nullptr);
-    ASSERT_EQ(config->m_model_data.size(), 1U);
-    EXPECT_EQ(config->m_model_data.front().m_model_function, "gain2");
+    const anira::ModelConfig model = anira::ModelConfig::from_json(json);
+    EXPECT_TRUE(model.upgraded());
+    ASSERT_EQ(model.model_count(), 1U);
+    const std::optional<anira::ext::Entry> entry = model.model_ext<anira::ext::Entry>(0);
+    ASSERT_TRUE(entry.has_value());
+    if (entry.has_value()) { EXPECT_EQ(entry->name, "gain2"); }
 }
 
 #endif  // USE_EXECUTORCH

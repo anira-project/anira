@@ -20,9 +20,12 @@ Where the 2.x API stands in this pre-release
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
   JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
   :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
-  :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape`,
-  :cpp:struct:`anira::ProcessingSpec` and :cpp:class:`anira::JsonConfigLoader` remain public and
-  exported through the alpha releases of the 3.x line.
+  :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape` and
+  :cpp:struct:`anira::ProcessingSpec` remain public and exported through the alpha releases of
+  the 3.x line. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
+  document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
+  (:ref:`migration-compat-config`).
 - **The runtime** is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``, the C++
   face of the C handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5): created on a
   context from a pipeline, prepared with the contract, the Hard entries over host tensors. The
@@ -748,8 +751,8 @@ When the 2.x classes go
 The 2.x handler is removed in this pre-release, the transitional bridge with it
 (:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
 (the configuration classes, :cpp:class:`anira::PrePostProcessor`,
-:cpp:class:`anira::BackendBase`, :cpp:class:`anira::JsonConfigLoader`) stay installed, each
-included by its own path, until a later pre-release makes them private. From then on
+:cpp:class:`anira::BackendBase`) stay installed, each included by its own path, until a later
+pre-release makes them private; the 2.x ``JsonConfigLoader`` is removed already. From then on
 ``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
 after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.
@@ -946,24 +949,24 @@ format).
     anira_model_config_to_json(cfg, text, len + 1, &len);
     /* write text to model.json */
 
-**The 2.x C++ loader.** :cpp:class:`anira::JsonConfigLoader` still reads the 2.x document into
-the 2.x structs in this pre-release:
+**The 2.x C++ loader** is removed with ``<anira/utils/JsonConfigLoader.h>``. The 2.x document
+loads through ``anira::ModelConfig::from_file`` (with ``take_legacy_contract()`` for the Hard
+contract) and ``anira::ContextConfig::from_file``, or, in the 2.x spelling, through
+``anira::v2::JsonConfigLoader`` of ``<anira/compat/v2.hpp>`` (:ref:`migration-compat-config`):
 
 .. code-block:: cpp
 
-    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
-    anira::CoreConfig core_config = std::move(*json_config_loader.get_core_config());
-    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
+    #include <anira/compat/v2.hpp>
 
-Its getters return a ``std::unique_ptr`` each; move the value out before using it. The loader
-also accepts a ``std::istream``. It is lenient where the 3.x loaders are strict: a malformed
-value is reported through the log and skipped, an unparseable ``model_data`` or
-``tensor_shape`` entry is dropped, an out-of-range scalar falls back to its default, and only a
-configuration that still has model data, a tensor shape and ``max_inference_time`` yields an
-:cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must
-check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"`` and ``drain`` to
-``"manual"``, each with a warning; ``num_threads`` sizes the pool as natively, its threads being
-Wasm Workers.
+    anira::v2::JsonConfigLoader json_config_loader("path/to/Config.json");
+    anira::v2::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::v2::InferenceConfig inference_config =
+        std::move(*json_config_loader.get_inference_config());
+
+The 2.x loader was lenient where the 3.x loaders are strict: it logged a malformed value and
+skipped it, dropped an unparseable ``model_data`` or ``tensor_shape`` entry, and answered
+``nullptr`` for a configuration without model data, a tensor shape or ``max_inference_time``.
+Each of these is an ``anira::Error`` from the constructor now.
 
 .. _migration-web:
 

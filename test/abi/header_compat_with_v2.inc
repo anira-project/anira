@@ -40,7 +40,7 @@ static_assert(!std::is_same_v<anira::InferenceHandler, anira::v2::InferenceHandl
 
 [[maybe_unused]] std::size_t ANIRA_COMPAT_WITH_V2_PROBE() {
     return sizeof(anira::InferenceConfig) + sizeof(anira::v2::InferenceConfig) +
-           sizeof(anira::JsonConfigLoader) + sizeof(anira::v2::JsonConfigLoader);
+           sizeof(anira::v2::JsonConfigLoader);
 }
 
 }  // namespace

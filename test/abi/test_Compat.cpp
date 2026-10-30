@@ -23,7 +23,6 @@
 #include <anira/utils/Buffer.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
-#include <anira/utils/JsonConfigLoader.h>
 #include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
@@ -981,68 +980,24 @@ std::vector<Document> v2_documents() {
 
 }  // namespace
 
-// The four version-2 documents through the istream constructor, against the live loader: the
-// context's thread count where the document sets it, and every getter of the configuration.
-TEST(AbiCompatConfig, TheLoaderMatchesTheLiveLoader) {
+// The four version-2 documents through the istream constructor: the context's thread count where
+// the document sets it, and every getter of the configuration against what the document spells.
+TEST(AbiCompatConfig, TheLoaderReadsTheDocuments) {
     for (const Document& document : v2_documents()) {
         const std::string& text = document.m_text;
         SCOPED_TRACE(document.m_name);
-        std::istringstream old_stream(text);
-        anira::JsonConfigLoader old_loader(old_stream);
-        std::istringstream shim_stream(text);
-        v2::JsonConfigLoader shim_loader(shim_stream);
-
-        const std::unique_ptr<anira::CoreConfig> old_context = old_loader.get_core_config();
-        const std::unique_ptr<v2::ContextConfig> shim_context = shim_loader.get_context_config();
-        ASSERT_NE(old_context, nullptr);
-        ASSERT_NE(shim_context, nullptr);
-        if (text.find("\"context_config\"") != std::string::npos) {
-            EXPECT_EQ(shim_context->m_num_threads, old_context->m_num_threads);
-            EXPECT_EQ(shim_context->m_num_threads, document.m_threads.value_or(0U));
-        } else {
-            EXPECT_FALSE(document.m_threads.has_value());
-            EXPECT_EQ(shim_context->m_num_threads, v2::ContextConfig::k_threads_auto);
-        }
-        EXPECT_EQ(shim_loader.get_context_config(), nullptr) << "once, as in 2.x";
-
-        const std::unique_ptr<anira::InferenceConfig> old = old_loader.get_inference_config();
-        const std::unique_ptr<v2::InferenceConfig> shim = shim_loader.get_inference_config();
-        if (old == nullptr) {
-            // The document's only engine is not in this build: 2.x dropped the row and gave up.
-            ASSERT_NE(shim, nullptr);
-            EXPECT_TRUE(std::ranges::none_of(document.m_args.m_rows, [](const Row& row) {
-                return v2::is_available(row.m_backend);
-            }));
-            continue;
-        }
-        ASSERT_NE(shim, nullptr);
-        EXPECT_EQ(shim_loader.get_inference_config(), nullptr) << "once, as in 2.x";
-        expect_getters_of(document.m_args, *shim);
-        // Only the rows of this build: 2.x dropped the others, the shim keeps them as entries.
-        for (const v2::InferenceBackend backend : k_backends) {
-            const std::optional<anira::InferenceBackend> mapped = old_backend(backend);
-            if (!mapped.has_value()) { continue; }
-            EXPECT_EQ(old->get_model_function(*mapped), shim->get_model_function(backend));
-            EXPECT_EQ(old->get_tensor_input_shape(*mapped), shim->get_tensor_input_shape(backend));
-            EXPECT_EQ(old->get_tensor_output_shape(*mapped),
-                      shim->get_tensor_output_shape(backend));
-            if (old->get_model_data(*mapped) != nullptr) {
-                EXPECT_EQ(old->get_model_path(*mapped), shim->get_model_path(backend));
-            }
-        }
-        EXPECT_EQ(old->get_tensor_input_shape(), shim->get_tensor_input_shape());
-        EXPECT_EQ(old->get_tensor_input_size(), shim->get_tensor_input_size());
-        EXPECT_EQ(old->get_tensor_output_size(), shim->get_tensor_output_size());
-        EXPECT_EQ(old->get_preprocess_input_channels(), shim->get_preprocess_input_channels());
-        EXPECT_EQ(old->get_postprocess_output_channels(), shim->get_postprocess_output_channels());
-        EXPECT_EQ(old->get_preprocess_input_size(), shim->get_preprocess_input_size());
-        EXPECT_EQ(old->get_postprocess_output_size(), shim->get_postprocess_output_size());
-        EXPECT_EQ(old->get_internal_model_latency(), shim->get_internal_model_latency());
-        EXPECT_FLOAT_EQ(old->m_max_inference_time, shim->m_max_inference_time);
-        EXPECT_EQ(old->m_warm_up, shim->m_warm_up);
-        EXPECT_EQ(old->m_session_exclusive_processor, shim->m_session_exclusive_processor);
-        EXPECT_FLOAT_EQ(old->m_blocking_ratio, shim->m_blocking_ratio);
-        EXPECT_EQ(old->m_num_parallel_processors, shim->m_num_parallel_processors);
+        std::istringstream stream(text);
+        v2::JsonConfigLoader loader(stream);
+        const std::unique_ptr<v2::ContextConfig> context = loader.get_context_config();
+        ASSERT_NE(context, nullptr);
+        EXPECT_EQ(context->m_num_threads,
+                  document.m_threads.value_or(v2::ContextConfig::k_threads_auto));
+        EXPECT_EQ(loader.get_context_config(), nullptr) << "once, as in 2.x";
+        // Every entry, in this build or not: 2.x dropped the others, the shim keeps them.
+        const std::unique_ptr<v2::InferenceConfig> config = loader.get_inference_config();
+        ASSERT_NE(config, nullptr);
+        EXPECT_EQ(loader.get_inference_config(), nullptr) << "once, as in 2.x";
+        expect_getters_of(document.m_args, *config);
     }
 }
 
