@@ -1282,7 +1282,7 @@ int64_t found(const anira_plan_report* report, const anira_plan_query& query) {
     const anira_status status = anira_plan_report_find(report, &query, &plan);
     if (status != ANIRA_OK) {
         EXPECT_EQ(plan, 99U) << "a miss leaves plan untouched";
-        return status == ANIRA_ERROR_NOT_SUPPORTED ? -1 : -2;
+        return status == ANIRA_ERROR_NOT_FOUND ? -1 : -2;
     }
     return plan;
 }
@@ -1292,7 +1292,7 @@ int64_t found(const anira_plan_report* report, const anira_plan_query& query) {
 // anira_plan_report_find over two custom engines on one pipeline, one of them on a custom
 // provider too: the first plan in table order with every property the query names; an engine by
 // ANIRA_ENGINE_CUSTOM and its id, a provider by its enum value or ANIRA_PROVIDER_CUSTOM and its
-// name, NONE and ANIRA_VARIANT_ANY matching everything; a miss is ANIRA_ERROR_NOT_SUPPORTED with
+// name, NONE and ANIRA_VARIANT_ANY matching everything; a miss is ANIRA_ERROR_NOT_FOUND with
 // plan untouched; a short record reads its missing tail as the INIT does; NULL arguments and a
 // query that breaks the pair rule are ANIRA_ERROR_INVALID_ARGUMENT.
 TEST(AbiEngine, FindLooksAPlanUpByEngineProviderAndVariant) {
@@ -1337,6 +1337,7 @@ TEST(AbiEngine, FindLooksAPlanUpByEngineProviderAndVariant) {
     EXPECT_EQ(
         found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE, "org.example.none")),
         -1);
+    EXPECT_STREQ(anira_status_string(ANIRA_ERROR_NOT_FOUND), "not found");
     // A built-in engine this pipeline does not run: nothing.
     EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_NONE)), -1);
     // A provider alone, whatever the engine: the CPU path first, the custom provider by name.

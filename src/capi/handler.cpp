@@ -2600,7 +2600,7 @@ anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
             return ANIRA_OK;
         }
     }
-    return ANIRA_ERROR_NOT_SUPPORTED;
+    return ANIRA_ERROR_NOT_FOUND;
 }
 
 // ==== the plan selection ======================================================================

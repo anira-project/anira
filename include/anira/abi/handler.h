@@ -790,13 +790,12 @@ ANIRA_API anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report
  * @param report The report.
  * @param query What the plan must have; ANIRA_PLAN_QUERY_INIT matches every plan.
  * @param plan Receives the dense index of the first matching plan; untouched when none matches.
- * @return ANIRA_OK with the index in plan; ANIRA_ERROR_NOT_SUPPORTED when no plan of the report
- *         matches (none of this handler's plans runs what the query names here);
- *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL report, query or plan, a query whose
- *         struct_size is below its head (struct_size and variant), or a backend that breaks the
- *         pair rule (ANIRA_ENGINE_CUSTOM without an engine_id or an engine_id beside another
- *         engine; ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another
- *         provider).
+ * @return ANIRA_OK with the index in plan; ANIRA_ERROR_NOT_FOUND when no plan of the report
+ *         matches (plan untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL report, query or
+ *         plan, a query whose struct_size is below its head (struct_size and variant), or a
+ *         backend that breaks the pair rule (ANIRA_ENGINE_CUSTOM without an engine_id or an
+ *         engine_id beside another engine; ANIRA_PROVIDER_CUSTOM without a provider_id or a
+ *         provider_id beside another provider).
  * @par Thread contract
  * [thread-safe] ANIRA_NONBLOCKING
  * @since ABI 0.2

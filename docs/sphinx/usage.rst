@@ -1420,7 +1420,7 @@ the names and bound itself) and the
 order, with every property an ``anira_plan_query`` names (``ANIRA_PLAN_QUERY_INIT`` matches every
 plan; ``variant`` a variant or ``ANIRA_VARIANT_ANY``; ``backend.engine`` an engine or
 ``ANIRA_ENGINE_NONE``, a custom one with its ``engine_id``; ``backend.provider`` a provider or
-``ANIRA_PROVIDER_NONE``, a custom one with its ``provider_id``), ``ANIRA_ERROR_NOT_SUPPORTED``
+``ANIRA_PROVIDER_NONE``, a custom one with its ``provider_id``), ``ANIRA_ERROR_NOT_FOUND``
 when none has them. It allocates nothing and is ``[thread-safe]`` and ``ANIRA_NONBLOCKING``
 while the report is valid, so a host resolves a backend choice where it applies it. Every
 successful prepare also logs the

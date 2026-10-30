@@ -217,6 +217,12 @@
               "doc": "The extension kind is known but not at that version."
             },
             {
+              "name": "ANIRA_ERROR_NOT_FOUND",
+              "value": -23,
+              "text": "not found",
+              "doc": "The lookup found nothing that matches (anira_plan_report_find: no plan has every property the query names)."
+            },
+            {
               "name": "ANIRA_ERROR_INTERNAL",
               "value": -100,
               "text": "internal error",
@@ -9655,7 +9661,7 @@
           "status": "promised",
           "since": "0.2",
           "doc": "The first plan, in dense-index order, that has every property the query names: the variant unless ANIRA_VARIANT_ANY, the engine unless ANIRA_ENGINE_NONE (a custom engine by ANIRA_ENGINE_CUSTOM and its engine_id, compared as a string), the provider unless ANIRA_PROVIDER_NONE (a custom provider by ANIRA_PROVIDER_CUSTOM and its provider_id, compared as a string). What a host looks the plan of a backend choice up with, from the thread that picks it: the index goes to anira_handler_set_plan. Reads the report's rows and nothing else: no allocation, no lock. Callable from any thread while the report is valid (until the handler's next prepare or its destroy).",
-          "return_doc": "ANIRA_OK with the index in plan; ANIRA_ERROR_NOT_SUPPORTED when no plan of the report matches (none of this handler's plans runs what the query names here); ANIRA_ERROR_INVALID_ARGUMENT for a NULL report, query or plan, a query whose struct_size is below its head (struct_size and variant), or a backend that breaks the pair rule (ANIRA_ENGINE_CUSTOM without an engine_id or an engine_id beside another engine; ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another provider)."
+          "return_doc": "ANIRA_OK with the index in plan; ANIRA_ERROR_NOT_FOUND when no plan of the report matches (plan untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL report, query or plan, a query whose struct_size is below its head (struct_size and variant), or a backend that breaks the pair rule (ANIRA_ENGINE_CUSTOM without an engine_id or an engine_id beside another engine; ANIRA_PROVIDER_CUSTOM without a provider_id or a provider_id beside another provider)."
         },
         {
           "kind": "function",

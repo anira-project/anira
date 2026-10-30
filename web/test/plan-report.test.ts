@@ -1,6 +1,6 @@
 // PlanReport.find (src/PlanReport.ts): the anira_plan_query it writes on the stack (the wasm32
 // layout of the C record), the defaults of the fields left out, and the answers: an index, null
-// for a miss (ANIRA_ERROR_NOT_SUPPORTED), a refused query thrown. A stand-in module and binding.
+// for a miss (ANIRA_ERROR_NOT_FOUND), a refused query thrown. A stand-in module and binding.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AniraBindings } from '../src/abi/bindings'
@@ -114,7 +114,7 @@ test('find writes the query the C entry reads, every field left out matching eve
 test('a miss is null; a refused query throws; an unprepared report is refused', () => {
   const miss = fakes(() => {
     throw new AniraError(
-      anira_status.ANIRA_ERROR_NOT_SUPPORTED,
+      anira_status.ANIRA_ERROR_NOT_FOUND,
       'anira_plan_report_find: no plan'
     )
   })

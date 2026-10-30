@@ -2184,9 +2184,9 @@ public:
     }
 
     /// anira_plan_report_find: the dense index of the first plan with every property the
-    /// query names, std::nullopt when none has them (or for a query that breaks the pair
-    /// rule). Allocation-free; callable from any thread while the report is valid, so a host
-    /// looks the plan of a backend choice up where it applies it (set_plan).
+    /// query names, std::nullopt when none has them (ANIRA_ERROR_NOT_FOUND) or for a query that
+    /// breaks the pair rule. Allocation-free; callable from any thread while the report is valid,
+    /// so a host looks the plan of a backend choice up where it applies it (set_plan).
     std::optional<uint32_t> find(const PlanQuery& query) const noexcept ANIRA_NONBLOCKING {
         const anira_plan_query native_query{
             .struct_size = sizeof(anira_plan_query),

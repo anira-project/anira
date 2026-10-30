@@ -226,7 +226,7 @@ export class PlanReport {
       } catch (error) {
         if (
           error instanceof AniraError &&
-          error.status === anira_status.ANIRA_ERROR_NOT_SUPPORTED
+          error.status === anira_status.ANIRA_ERROR_NOT_FOUND
         ) {
           return null
         }
