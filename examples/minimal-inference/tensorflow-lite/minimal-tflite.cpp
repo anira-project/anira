@@ -5,17 +5,17 @@ Licence: Apache 2.0
 
 ========================================================================== */
 
-#include <anira/compat/v3_to_v2.h>
 #include <tensorflow/lite/c_api.h>
 
 #include <array>
 #include <cstdio>
 #include <iostream>
+#include <optional>
 #include <utility>
+#include <vector>
 
 #include "../../../extras/models/model_files.h"
-#include "../../../include/anira/utils/Buffer.h"
-#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../minimal_model.h"
 
 #define TFLITE_MINIMAL_CHECK(x)                                  \
     if (!(x)) {                                                  \
@@ -23,16 +23,14 @@ Licence: Apache 2.0
         exit(1);                                                 \
     }
 
-void minimal_inference(anira::InferenceConfig m_inference_config) {
+void minimal_inference(const MinimalModel& info) {
     std::cout << "Minimal TensorFlow-Lite example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: "
-              << m_inference_config.get_model_path(anira::InferenceBackend::TFLITE) << std::endl;
+    std::cout << "Using model: " << info.m_path << std::endl;
 
     // Load model
     TfLiteModel* m_model;
-    m_model = TfLiteModelCreateFromFile(
-        m_inference_config.get_model_path(anira::InferenceBackend::TFLITE).c_str());
+    m_model = TfLiteModelCreateFromFile(info.m_path.c_str());
 
     // Create the interpreter
     TfLiteInterpreterOptions* m_options;
@@ -43,10 +41,9 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // This is necessary when we have dynamic input shapes, it should be done before allocating
     // tensors obviously
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
+    for (size_t i = 0; i < info.m_input_shapes.size(); i++) {
         std::vector<int> input_shape;
-        std::vector<int64_t> input_shape64 =
-            m_inference_config.get_tensor_input_shape(anira::InferenceBackend::TFLITE)[i];
+        std::vector<int64_t> input_shape64 = info.m_input_shapes[i];
         for (size_t j = 0; j < input_shape64.size(); j++) {
             input_shape.push_back((int)input_shape64[j]);
         }
@@ -60,29 +57,22 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     TfLiteInterpreterAllocateTensors(m_interpreter);
 
     // Fill an Buffer with some data
-    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
-    for (int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
-        input.set_sample(0, i, i * 0.000001f);
-    }
+    std::vector<float> input(info.m_input_sizes[0]);
+    for (int i = 0; i < info.m_input_sizes[0]; ++i) { input[i] = i * 0.000001f; }
 
     // Get input tensors and prepare input data
     std::vector<TfLiteTensor*> m_inputs;
-    std::vector<anira::MemoryBlock<float>> m_input_data;
+    std::vector<std::vector<float>> m_input_data;
 
-    m_inputs.resize(m_inference_config.get_tensor_input_shape().size());
-    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
-        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
+    m_inputs.resize(info.m_input_shapes.size());
+    m_input_data.resize(info.m_input_shapes.size());
+    for (size_t i = 0; i < info.m_input_shapes.size(); i++) {
+        m_input_data[i].resize(info.m_input_sizes[i]);
         m_inputs[i] = TfLiteInterpreterGetInputTensor(m_interpreter, i);
-        if (i != 0) {
-            m_input_data[i].clear();
-        } else {
-            m_input_data[i].swap_data(input.get_memory_block());
-            input.reset_channel_ptr();
-        }
+        if (i == 0) { m_input_data[i].swap(input); }
         TfLiteTensorCopyFromBuffer(m_inputs[i],
                                    m_input_data[i].data(),
-                                   m_inference_config.get_tensor_input_size()[i] * sizeof(float));
+                                   info.m_input_sizes[i] * sizeof(float));
     }
 
     for (int i = 0; i < m_inputs.size(); ++i) {
@@ -100,8 +90,8 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     // Get output tensors
     std::vector<const TfLiteTensor*> m_outputs;
 
-    m_outputs.resize(m_inference_config.get_tensor_output_shape().size());
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
+    m_outputs.resize(info.m_output_shapes.size());
+    for (size_t i = 0; i < info.m_output_shapes.size(); i++) {
         m_outputs[i] = TfLiteInterpreterGetOutputTensor(m_interpreter, i);
     }
 
@@ -115,14 +105,14 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
     }
 
     // Extract the output tensor data
-    std::vector<anira::MemoryBlock<float>> m_output_data;
-    m_output_data.resize(m_inference_config.get_tensor_output_shape().size());
+    std::vector<std::vector<float>> m_output_data;
+    m_output_data.resize(info.m_output_shapes.size());
 
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); i++) {
+    for (size_t i = 0; i < info.m_output_shapes.size(); i++) {
         float* output_data = (float*)TfLiteTensorData(m_outputs[i]);
-        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
-            m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
-            for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+        for (size_t j = 0; j < info.m_output_sizes[i]; j++) {
+            m_output_data[i].resize(info.m_output_sizes[i]);
+            for (size_t j = 0; j < info.m_output_sizes[i]; j++) {
                 m_output_data[i][j] = output_data[j];
             }
         }
@@ -143,24 +133,24 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 }
 
 int main(int argc, const char* argv[]) {
-    // The bundled models: a model file and a contract file each (extras/models/model_files.h),
-    // loaded with the 3.x API and bridged to the 2.x InferenceConfig this example reads its
-    // model path and tensor shapes from. The candidate list keeps the entries of this build's
-    // engines only.
-    const std::array<std::pair<const char*, const char*>, 5> models_to_inference = {{
-        {k_hybridnn_model_json, k_hybridnn_contract_json},
-        {k_cnn_model_json, k_cnn_contract_json},
-        {k_rnn_model_json, k_rnn_contract_json},
-        {k_gain_model_json, k_gain_contract_json},
-        {k_stereo_gain_model_json, k_stereo_gain_contract_json},
-    }};
+    // The bundled model files (extras/models/model_files.h), read back with the 3.x API
+    // (minimal_model.h): the path of the entry for this example's engine and the shapes the
+    // engine is fed. A file without an entry for the engine is skipped.
+    const std::array<const char*, 5> models_to_inference = {
+        k_hybridnn_model_json,
+        k_cnn_model_json,
+        k_rnn_model_json,
+        k_gain_model_json,
+        k_stereo_gain_model_json,
+    };
 
-    for (const auto& [model_json, contract_json] : models_to_inference) {
-        const anira::ModelConfig model_config = anira::ModelConfig::from_file(model_json);
-        const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-        minimal_inference(anira::v3compat::to_inference_config(model_config,
-                                                               contract,
-                                                               anira::v3compat::enabled_engines()));
+    for (const char* model_json : models_to_inference) {
+        const std::optional<MinimalModel> model = minimal_model(model_json, ANIRA_ENGINE_TFLITE);
+        if (!model.has_value()) {
+            std::cout << model_json << ": no entry for this engine" << std::endl;
+            continue;
+        }
+        minimal_inference(*model);
     }
 
     return 0;

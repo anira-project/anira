@@ -2567,6 +2567,13 @@ TEST(AbiStage, PerChunkScratchByEntry) {
 // A pipeline without a stage is the 2.x default processor
 // ============================================================================================
 
+// The extras' two 2.x processors (test/support/extras_v2_processors.inc) against the live 2.x
+// classes.
+namespace v2x_copy {
+namespace anira = ::anira;
+#include "../support/extras_v2_processors.inc"
+}  // namespace v2x_copy
+
 // Differential, on a window longer than its hop (the receptive-field fill) and a backend whose
 // every output sample needs the history: the C handler, whose session sees the processor, against
 // a 2.x handler over the translated configuration, whose session sees the default processor.
@@ -2583,6 +2590,53 @@ TEST(AbiStage, NoStageEqualsTheV2Default) {
 
     anira::InferenceConfig config_2x = anira_test::inference_config_of(model, contract);
     anira::PrePostProcessor pp(config_2x);
+    WindowSumBackend v_backend(config_2x);
+    {
+        anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
+        core_config.m_log.m_drain = anira::LogDrain::Manual;
+        anira_test::V2Handler v2(pp, config_2x, v_backend, core_config);
+        v2.prepare(
+            anira::HostConfig(static_cast<float>(k_hop), static_cast<float>(anira_test::k_rate)));
+        v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
+        ASSERT_EQ(anira_handler_get_latency(c.m_handler, 0), v2.get_latency(0));
+
+        anira_test::FloatFace face(c.m_handler);
+        for (size_t k = 1; k <= 12; ++k) {
+            std::vector<float> c_block = anira_test::ramp(k, k_hop);
+            std::vector<float> v_block = c_block;
+            const size_t prev_c = anira_test::available(c.m_handler);
+            const size_t prev_v = v2.get_available_samples(0);
+            const std::array<float*, 1> c_channels{c_block.data()};
+            const std::array<float*, 1> v_channels{v_block.data()};
+            size_t delivered = 0;
+            ASSERT_EQ(face.process_inplace(c_channels.data(), k_hop, 0, &delivered), ANIRA_OK);
+            anira_test::wait_for_block(c.m_handler, prev_c);
+            EXPECT_EQ(v2.process(v_channels.data(), k_hop), delivered);
+            anira_test::wait_for_block(v2, prev_v);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            anira_test::expect_same_block(c_block, v_block, k);
+        }
+    }
+    EXPECT_EQ(anira_handler_rt_error(c.m_handler), ANIRA_OK);
+}
+
+// The extras' 2.x CNN processor is anira's default fill: the same differential with the 2.x side
+// running CNNPrePostProcessor (the text of extras/models/cnn/CNNPrePostProcessor.h as it was,
+// test/support/extras_v2_processors.inc) in place of the default processor. So the CNN model needs
+// no stage on the C handler (extras/models/cnn has none).
+TEST(AbiStage, TheCnnProcessorIsTheDefault) {
+    const Context context;
+    const auto window = static_cast<int64_t>(2 * k_hop);
+    const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
+    const anira::ContractHandle contract = zeros_contract();
+
+    WindowSumEngine c_engine;
+    Handler c(context, model, {}, {}, c_engine.engine());
+    const anira_test::DestroyFirst c_guard(c, &c_engine);
+    ASSERT_EQ(c.prepare(contract), ANIRA_OK) << c.m_err.message;
+
+    anira::InferenceConfig config_2x = anira_test::inference_config_of(model, contract);
+    v2x_copy::CNNPrePostProcessor pp(config_2x);
     WindowSumBackend v_backend(config_2x);
     {
         anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);

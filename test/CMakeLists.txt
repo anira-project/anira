@@ -151,6 +151,7 @@ anira_add_test_binary(test_abi
 	abi/test_anira_hpp.cpp
 	abi/test_Translate.cpp
 	abi/test_ExtrasFixtures.cpp
+	abi/test_Extras.cpp
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
