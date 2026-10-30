@@ -196,8 +196,7 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
   ``anira.hpp`` handler (``test_InferenceHandler``) are covered by root-level ``test_*.cpp``
   files, alongside the cross-unit integration suites (``test_OneSidedStreaming``). A test
   file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions (the white-box suites that still drive the 2.x handler run
-  it as ``anira_test::V2Handler`` of ``test/support/v2_handler.h``): ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
+  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
   compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
   ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather

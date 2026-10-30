@@ -3,10 +3,9 @@
 
 /*
  * The float face of the host<->ring copy path. InferenceManager takes host blocks as one
- * anira_tensor per slot and nothing else; the 2.x handler, which holds float channel
- * pointers, presents them through this adapter, which it owns (anira_test::V2Handler,
- * test/support/v2_handler.h, since the library's 2.x class left it). The C ABI has no float
- * face: its Hard entries take host tensors, and a C host builds its own planar tensor with
+ * anira_tensor per slot and nothing else; a host that holds float channel pointers, as the
+ * 2.x handler did, presents them through this adapter. The C ABI has no float face: its Hard
+ * entries take host tensors, and a C host builds its own planar tensor with
  * anira_tensor_init_host_planar. A test helper: the copy-oracle rigs and test_abi's float face
  * drive the C entries through it as a float host would; header-inline, in no library.
  *
@@ -24,7 +23,6 @@
  * the pointers of an earlier call in a slot this call left out.
  */
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/tensor.h>
@@ -50,28 +48,10 @@ public:
     PlanarFloatAdapter& operator=(PlanarFloatAdapter&&) = delete;
 
     /**
-     * @brief Sizes the adapter for a configuration: one tensor per input and per output tensor
-     * of the InferenceConfig, with the slot's channel count (1 for a non-streamable slot, which
-     * is one run of values). Allocates: with the session's prepare, never on the driver thread.
-     * Before the first prepare() the adapter has no slots.
-     */
-    void prepare(const InferenceConfig& inference_config) {
-        make_side(m_inputs,
-                  m_input_planes,
-                  channels_of(inference_config.get_preprocess_input_size(),
-                              inference_config.get_preprocess_input_channels()),
-                  static_cast<uint32_t>(ANIRA_TENSOR_READ_ONLY));
-        make_side(m_outputs,
-                  m_output_planes,
-                  channels_of(inference_config.get_postprocess_output_size(),
-                              inference_config.get_postprocess_output_channels()),
-                  0U);
-    }
-
-    /**
      * @brief Sizes the adapter for a prepared C handler: one tensor per port of either side,
      * with the channel count of a Streamed slot's stream port (1 for every other slot, which is
      * one run of values). Allocates: after the handler's prepare, never on the driver thread.
+     * Before the first prepare() the adapter has no slots.
      */
     void prepare(const std::vector<capi::Port>& input_ports,
                  const std::vector<capi::Port>& output_ports) {
@@ -182,17 +162,6 @@ private:
             // and an output's channels came in without the const.
             planes[channel] = const_cast<float*>(channels[channel]);
         }
-    }
-
-    /// The channels per slot of a 2.x side: a non-streamable slot (no stream size) has no ring
-    /// and is one run of values.
-    static std::vector<size_t> channels_of(const std::vector<size_t>& stream_sizes,
-                                           const std::vector<size_t>& stream_channels) {
-        std::vector<size_t> channels(stream_sizes.size(), 1);
-        for (size_t slot = 0; slot < stream_sizes.size(); ++slot) {
-            if (stream_sizes[slot] > 0) { channels[slot] = stream_channels[slot]; }
-        }
-        return channels;
     }
 
     /// The channels per slot of a C handler's side: a stream port's channel count, 1 for every

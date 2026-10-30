@@ -9,12 +9,8 @@
 // and writes only into the state its test owns. Every EXPECT runs after the calls. The streams
 // are driven in lockstep (one block, then the wait for its inference), so every case is
 // deterministic whatever the pool does.
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/build_info.h>
 #include <anira/abi/context.h>
-#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -24,11 +20,8 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
@@ -50,8 +43,6 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
-#include "../support/v2_objects.h"
 #include "capi/port.h"
 #include "capi/processor.h"
 #include "capi/words.h"
@@ -409,37 +400,6 @@ anira_status ANIRA_CALL on_prepare(const anira_prepare_info* info,
 void ANIRA_CALL on_release(void* user_data) {
     ++static_cast<Lifetime*>(user_data)->m_released;
 }
-
-// ---- a model whose output needs the window's history -------------------------------------------
-
-/// out[n] = in[n] + in[n + overlap] over a [1, 1, 2 * hop] window: wrong in every sample when
-/// the head of the window is not the ring's history. The 2.x backend, for the 2.x handler.
-class WindowSumBackend : public anira::BackendBase {
-public:
-    explicit WindowSumBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<anira::SessionElement> session) override {
-        const size_t hop = output[0].get_num_samples();
-        const float* in = input[0].get_read_pointer(0);
-        float* out = output[0].get_write_pointer(0);
-        for (size_t n = 0; n < hop; ++n) { out[n] = in[n] + in[n + hop]; }
-    }
-};
-
-/// WindowSumBackend's model as the custom row's engine, for the C handler.
-class WindowSumEngine : public anira_test::GateEngine {
-public:
-    anira_status run(const anira_engine_ctx& ctx) noexcept override {
-        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
-        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
-        if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        const size_t hop = anira_test::elements_of(ctx.outputs[0]);
-        for (size_t n = 0; n < hop; ++n) { out[n] = in[n] + in[n + hop]; }
-        return ANIRA_OK;
-    }
-};
 
 // ---- a converting processor
 // ------------------------------------------------------------------------
@@ -1551,50 +1511,6 @@ TEST(AbiProcessor, RingAccessorsF32AndI16) {
 #endif
 }
 
-// anira_ring_pop_windows is the 2.x batched pop (PrePostProcessor::pop_samples_from_buffer with
-// num_batches), element for element.
-TEST(AbiProcessor, PopWindowsEqualsTheBatchedPop) {
-    constexpr size_t k_new = 3;
-    constexpr size_t k_old = 2;
-    constexpr size_t k_offset = 1;
-    constexpr size_t k_batches = 4;
-    constexpr size_t k_total = k_offset + (k_batches * (k_new + k_old));
-    std::array<anira::RingBuffer, 2> rings;
-    for (anira::RingBuffer& ring : rings) {
-        ring.initialize_with_positions(1, 64);
-        // Two elements of history, then the unread run.
-        for (int n = 0; n < 2 + static_cast<int>(k_batches * k_new); ++n) {
-            ring.push_sample(0, static_cast<float>(n + 1));
-        }
-        (void)ring.pop_sample(0);
-        (void)ring.pop_sample(0);
-    }
-    const std::vector<anira::ModelData> model_data = {
-        {"unused-by-this-test", anira::InferenceBackend::CUSTOM}};
-    const std::vector<anira::TensorShape> shapes = {{{{1, 1, 8}}, {{1, 1, 8}}}};
-    anira::InferenceConfig config{model_data, shapes, anira::ProcessingSpec(), 5.0F};
-    anira::PrePostProcessor v2(config);
-    anira::BufferF expected(1, k_total);
-    expected.clear();
-    v2.pop_samples_from_buffer(rings[0], expected, k_new, k_old, k_offset, k_batches);
-
-    std::array<float, k_total> windows{};
-    EXPECT_EQ(anira_ring_pop_windows(&rings[1],
-                                     0,
-                                     windows.data(),
-                                     ANIRA_DTYPE_F32,
-                                     k_new,
-                                     k_old,
-                                     k_offset,
-                                     static_cast<uint32_t>(k_batches)),
-              k_batches * (k_new + k_old));
-    for (size_t n = 0; n < k_total; ++n) {
-        EXPECT_EQ(windows.at(n), expected.get_sample(0, n)) << "element " << n;
-    }
-    EXPECT_EQ(anira_ring_available(&rings[1], 0), rings[0].available(0));
-    EXPECT_EQ(windows.at(k_offset), 1.0F) << "a window starts with its history";
-}
-
 // ============================================================================================
 // The context accessors over a hand-built context
 // ============================================================================================
@@ -2585,110 +2501,6 @@ TEST(AbiProcessor, PerChunkScratchByEntry) {
     expect_same_stream(stream.m_out, wanted);
     EXPECT_EQ(scratch.m_broken.load(), 0);
     EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
-}
-
-// ============================================================================================
-// A pipeline without a processor is the 2.x default processor
-// ============================================================================================
-
-// The extras' two 2.x processors (test/support/extras_v2_processors.inc) against the live 2.x
-// classes.
-namespace v2x_copy {
-namespace anira = ::anira;
-#include "../support/extras_v2_processors.inc"
-}  // namespace v2x_copy
-
-// Differential, on a window longer than its hop (the receptive-field fill) and a backend whose
-// every output sample needs the history: the C handler, whose session sees the processor, against
-// a 2.x handler over the translated configuration, whose session sees the default processor.
-TEST(AbiProcessor, NoProcessorEqualsTheV2Default) {
-    const Context context;
-    const auto window = static_cast<int64_t>(2 * k_hop);
-    const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
-    const anira::ContractHandle contract = zeros_contract();
-
-    WindowSumEngine c_engine;
-    Handler c(context, model, {}, {}, c_engine.engine());
-    const anira_test::DestroyFirst c_guard(c, &c_engine);
-    ASSERT_EQ(c.prepare(contract), ANIRA_OK) << c.m_err.message;
-
-    anira::InferenceConfig config_2x = anira_test::inference_config_of(model, contract);
-    anira::PrePostProcessor pp(config_2x);
-    WindowSumBackend v_backend(config_2x);
-    {
-        anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
-        core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira_test::V2Handler v2(pp, config_2x, v_backend, core_config);
-        v2.prepare(
-            anira::HostConfig(static_cast<float>(k_hop), static_cast<float>(anira_test::k_rate)));
-        v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
-        ASSERT_EQ(anira_handler_get_latency(c.m_handler, 0), v2.get_latency(0));
-
-        anira_test::FloatFace face(c.m_handler);
-        for (size_t k = 1; k <= 12; ++k) {
-            std::vector<float> c_block = anira_test::ramp(k, k_hop);
-            std::vector<float> v_block = c_block;
-            const size_t prev_c = anira_test::available(c.m_handler);
-            const size_t prev_v = v2.get_available_samples(0);
-            const std::array<float*, 1> c_channels{c_block.data()};
-            const std::array<float*, 1> v_channels{v_block.data()};
-            size_t delivered = 0;
-            ASSERT_EQ(face.process_inplace(c_channels.data(), k_hop, 0, &delivered), ANIRA_OK);
-            anira_test::wait_for_block(c.m_handler, prev_c);
-            EXPECT_EQ(v2.process(v_channels.data(), k_hop), delivered);
-            anira_test::wait_for_block(v2, prev_v);
-            ASSERT_FALSE(::testing::Test::HasFatalFailure());
-            anira_test::expect_same_block(c_block, v_block, k);
-        }
-    }
-    EXPECT_EQ(anira_handler_rt_error(c.m_handler), ANIRA_OK);
-}
-
-// The extras' 2.x CNN processor is anira's default fill: the same differential with the 2.x side
-// running CNNPrePostProcessor (the text of extras/models/cnn/CNNPrePostProcessor.h as it was,
-// test/support/extras_v2_processors.inc) in place of the default processor. So the CNN model needs
-// no processor on the C handler (extras/models/cnn has none).
-TEST(AbiProcessor, TheCnnProcessorIsTheDefault) {
-    const Context context;
-    const auto window = static_cast<int64_t>(2 * k_hop);
-    const ModelConfig model = stream_model(window, static_cast<int64_t>(k_hop));
-    const anira::ContractHandle contract = zeros_contract();
-
-    WindowSumEngine c_engine;
-    Handler c(context, model, {}, {}, c_engine.engine());
-    const anira_test::DestroyFirst c_guard(c, &c_engine);
-    ASSERT_EQ(c.prepare(contract), ANIRA_OK) << c.m_err.message;
-
-    anira::InferenceConfig config_2x = anira_test::inference_config_of(model, contract);
-    v2x_copy::CNNPrePostProcessor pp(config_2x);
-    WindowSumBackend v_backend(config_2x);
-    {
-        anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
-        core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira_test::V2Handler v2(pp, config_2x, v_backend, core_config);
-        v2.prepare(
-            anira::HostConfig(static_cast<float>(k_hop), static_cast<float>(anira_test::k_rate)));
-        v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
-        ASSERT_EQ(anira_handler_get_latency(c.m_handler, 0), v2.get_latency(0));
-
-        anira_test::FloatFace face(c.m_handler);
-        for (size_t k = 1; k <= 12; ++k) {
-            std::vector<float> c_block = anira_test::ramp(k, k_hop);
-            std::vector<float> v_block = c_block;
-            const size_t prev_c = anira_test::available(c.m_handler);
-            const size_t prev_v = v2.get_available_samples(0);
-            const std::array<float*, 1> c_channels{c_block.data()};
-            const std::array<float*, 1> v_channels{v_block.data()};
-            size_t delivered = 0;
-            ASSERT_EQ(face.process_inplace(c_channels.data(), k_hop, 0, &delivered), ANIRA_OK);
-            anira_test::wait_for_block(c.m_handler, prev_c);
-            EXPECT_EQ(v2.process(v_channels.data(), k_hop), delivered);
-            anira_test::wait_for_block(v2, prev_v);
-            ASSERT_FALSE(::testing::Test::HasFatalFailure());
-            anira_test::expect_same_block(c_block, v_block, k);
-        }
-    }
-    EXPECT_EQ(anira_handler_rt_error(c.m_handler), ANIRA_OK);
 }
 
 // ============================================================================================

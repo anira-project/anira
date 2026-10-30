@@ -7,7 +7,6 @@
 #ifndef ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -44,8 +43,6 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
-#include "../support/v2_objects.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -110,11 +107,11 @@ inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
     return model;
 }
 
-/// The engines of this build the bundled gain and CNN files run on, on both sides of the
-/// oracle. LiteRT is left out: its signature lists the gain export's outputs as [peak,
-/// processed], so the file's litert row names them (a tensors record), and the 2.x side of the
-/// oracle, whose InferenceConfig has no tensor names, binds them by position and fails the
-/// shape check at prepare; the oracle compares the plans that load on both sides.
+/// The engines of this build the bundled gain and CNN files run on in the suites that also
+/// drive the shim's 2.x configurations. LiteRT is left out: its signature lists the gain
+/// export's outputs as [peak, processed], which the file's litert row names (a tensors record),
+/// and a 2.x configuration, which has no tensor names, binds them by position and fails the
+/// shape check at prepare.
 inline std::vector<anira_engine> oracle_engines() {
     std::vector<anira_engine> out;
     for (const anira::BackendId& id : anira::enabled_engines()) {
@@ -152,22 +149,6 @@ inline std::vector<anira_backend_id> engine_candidates() {
                        .engine_id = nullptr});
     }
     return out;
-}
-
-/// The 2.x InferenceConfig of a bundled model over the same engines the C side runs
-/// (oracle_engines(), plus the custom row when with_custom): what the oracle's 2.x handler
-/// takes, so both sides' configs compare equal and the core pools one processor per engine.
-inline anira::InferenceConfig config_2x_of(const char* model_json,
-                                           const char* contract_json,
-                                           bool with_custom) {
-    anira::ModelConfig cfg = anira::ModelConfig::from_file(model_json);
-    std::vector<anira_engine> candidates = oracle_engines();
-    if (with_custom) {
-        cfg.add_model_path(k_custom, "custom-processor");
-        candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
-    }
-    const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    return anira_test::inference_config_of(cfg, contract, candidates);
 }
 
 /// The bundled CNN without a custom row (the pass-through would zero its 15380 -> 2048 output).
@@ -264,8 +245,7 @@ inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t m
     return model;
 }
 
-/// A bundled contract file with the host geometry patched in: what the 2.x side bridges,
-/// so both handlers' InferenceConfigs compare equal and the core pools one processor.
+/// A bundled contract file with the host geometry patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
                                            double rate = k_rate) {
@@ -582,25 +562,9 @@ inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t slot = 
     wait_for_available(handler, prev, slot);
 }
 
-/// The 2.x twin of wait_for_block.
-inline void wait_for_block(anira_test::V2Handler& handler, size_t prev) {
-    const auto start = std::chrono::steady_clock::now();
-    while (handler.get_available_samples(0) != prev) {
-        if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
-            FAIL() << "timeout while waiting for the 2.x block (" << prev << " expected, have "
-                   << handler.get_available_samples(0) << ")";
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-}
-
 /// After a push: the inference of the pushed block adds one hop to the ring.
 inline void wait_for_push(anira_handler* handler, size_t prev, size_t block) {
     wait_for_available(handler, prev + block);
-}
-
-inline void wait_for_push(anira_test::V2Handler& handler, size_t prev, size_t block) {
-    wait_for_block(handler, prev + block);
 }
 
 /// The closed form of a stream through a model that maps every sample on its own (the gain

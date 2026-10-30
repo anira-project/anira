@@ -115,9 +115,10 @@ endfunction()
 #       test_PrePostProcessor, and every use of the two support headers below.
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
-# test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
-# test/support/v2_handler.h is the 2.x handler those suites and the 2.x arms of test_abi
-# (test_Handler, test_HandlerTensor, test_Processor, test_Compat) drive; both go in PR 10b.
+# No suite drives a 2.x session any more (PR 10b): the 2.x handler and the 2.x objects of the
+# white-box suites left the tests, and the arms of test_abi check the 3.x side against closed
+# forms. test/support/inference_config_eq.h stays with test_Translate, the translator's own
+# suite, until the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
@@ -129,8 +130,8 @@ anira_add_test_binary(test_utils
 	test_CoreConfig.cpp
 	test_InferenceConfig.cpp
 )
-# test_Logger drives a 2.x session through test/support/v2_handler.h, which includes the
-# scheduler's private helpers.
+# test_Logger reads its C handlers white-box through test/abi/handler_support.h, which includes
+# the private headers.
 target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_scheduler

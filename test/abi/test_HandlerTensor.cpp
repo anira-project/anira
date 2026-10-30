@@ -3,7 +3,7 @@
 // host block is one anira_tensor per slot, of the logical shape [channels, samples], over
 // planar memory, one block read by strides (contiguous, interleaved) or one packed block.
 //
-// The tensor entries and the 2.x handler share one copy path, so a
+// The tensor entries of every layout share one copy path, so a
 // pass-through model cancels a symmetric stride bug and no single oracle would see it. The
 // cases are therefore named comparisons: absolute expectations per description (every channel
 // its own ramp, late by the reported latency), crossed descriptions on the two sides, in
@@ -16,9 +16,6 @@
 // inference is collected. A starved block is a call without the settle. No sleeps, no wall
 // clock.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
@@ -28,7 +25,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -46,9 +42,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/copy_oracle.h"
-#include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -1510,8 +1504,8 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
 }
 
 // A float host: channel pointers presented as planar float32 tensors through an
-// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the 2.x handler
-// (anira_test::V2Handler) presents its own. The miss function is handed the caller's arrays as they
+// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the shim's 2.x handler presents
+// its own. The miss function is handed the caller's arrays as they
 // are, and a slot the missed call did not carry names no memory: the adapter nulls the planes of a
 // slot it leaves out, so the pointers of an earlier call never reach the function.
 TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyAre) {
@@ -1735,100 +1729,83 @@ TEST(AbiHandlerTensor, APlanarAndAnInterleavedBlockAgreeBitForBitAcrossMisses) {
     }
 }
 
-// The tensor entries against the 2.x handler (anira_test::V2Handler) in one binary
-// (test_Handler's oracle), on the bundled stereo gain model: every plan this build has an
-// engine for, and the engine-free custom row. The C side takes one interleaved block and the
-// Static gain as [1, 1] through anira_handler_process_multi; the 2.x side takes channel
-// pointers. Bit-equal per channel after de-interleaving. Through a real engine this covers two
-// channels only; 3 and 6 channels run through the engine-free pass-through above.
-TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) {
+// The tensor entries' layouts against each other on the bundled stereo gain model, on every plan
+// this build has an engine for and on the engine-free custom row: one C handler takes an
+// interleaved block, a second handler of the same model planar channels, both with the Static
+// gain as [1] through anira_handler_process_multi. Bit-equal per channel after de-interleaving.
+// Through a real engine this covers two channels only; 3 and 6 channels run through the
+// engine-free pass-through above.
+TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
     using anira_test::k_block;
     const anira_test::Context context;
     const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
     uint32_t num_plans = 1;
     for (uint32_t plan = 0; plan < num_plans; ++plan) {
         SCOPED_TRACE("plan " + std::to_string(plan));
-        anira_test::Handler c(context, anira_test::stereo_gain_with_custom(), candidates);
-        anira::InferenceConfig config_2x =
-            anira_test::config_2x_of(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
-        anira::PrePostProcessor pp(config_2x);
-        anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
-        core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira_test::V2Handler v2(pp, config_2x, core_config);
-        ASSERT_EQ(c.prepare(anira_test::file_contract(k_stereo_gain_contract_json, k_block)),
-                  ANIRA_OK)
-            << c.m_err.message;
-        anira_handler* h = c.m_handler;
-        v2.prepare(
-            anira::HostConfig(static_cast<float>(k_block), static_cast<float>(anira_test::k_rate)));
-        anira_test::expect_inference_config_eq(h->m_inference_config, config_2x);
+        anira_test::Handler interleaved(context, anira_test::stereo_gain_with_custom(), candidates);
+        anira_test::Handler planar(context, anira_test::stereo_gain_with_custom(), candidates);
+        const anira::ContractHandle contract =
+            anira_test::file_contract(k_stereo_gain_contract_json, k_block);
+        ASSERT_EQ(interleaved.prepare(contract), ANIRA_OK) << interleaved.m_err.message;
+        ASSERT_EQ(planar.prepare(contract), ANIRA_OK) << planar.m_err.message;
+        anira_handler* h = interleaved.m_handler;
+        anira_handler* p = planar.m_handler;
         num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
         ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
-        v2.set_inference_backend(h->m_plans.at(plan).m_backend);
-        ASSERT_EQ(anira_handler_get_latency(h, 0), v2.get_latency(0));
+        ASSERT_EQ(anira_handler_set_plan(p, plan), ANIRA_OK);
+        ASSERT_EQ(anira_handler_get_latency(h, 0), anira_handler_get_latency(p, 0));
 
         for (size_t k = 1; k <= 8; ++k) {
             const std::vector<float> left = anira_test::ramp(k);
             std::vector<float> right = anira_test::ramp(k);
             for (float& sample : right) { sample = -sample; }  // L != R
-            Block c_in(Layout::Interleaved, 2, k_block);
+            const auto run = [k, &left, &right](anira_handler* handler,
+                                                Layout layout,
+                                                const Block& out,
+                                                float& gain_out) {
+                Block in(layout, 2, k_block);
+                for (size_t i = 0; i < k_block; ++i) {
+                    in.at(0, i) = left.at(i);
+                    in.at(1, i) = right.at(i);
+                }
+                // The Static gain travels whole, in the spec's shape: [1].
+                const float gain_in = 1.0F;
+                const std::array<anira_tensor, 2> inputs{in.tensor(),
+                                                         anira_test::whole_f32(&gain_in, {1})};
+                const std::array<anira_tensor, 2> outputs{out.tensor(),
+                                                          anira_test::whole_f32(&gain_out, {1})};
+                std::array<size_t, 2> delivered{k_unset, k_unset};
+                const size_t prev = anira_test::available(handler);
+                ASSERT_EQ(anira_handler_process_multi(handler,
+                                                      inputs.data(),
+                                                      2,
+                                                      outputs.data(),
+                                                      2,
+                                                      delivered.data()),
+                          ANIRA_OK)
+                    << "block " << k;
+                EXPECT_EQ(delivered[0], k_block);
+                EXPECT_EQ(delivered[1], 1U);
+                anira_test::wait_for_block(handler, prev);
+            };
             const Block c_out(Layout::Interleaved, 2, k_block);
-            for (size_t i = 0; i < k_block; ++i) {
-                c_in.at(0, i) = left.at(i);
-                c_in.at(1, i) = right.at(i);
-            }
-            // The Static gain travels whole, in the spec's shape: [1].
-            const float gain_in = 1.0F;
-            float gain_out = k_untouched;
-            const std::array<anira_tensor, 2> inputs{c_in.tensor(),
-                                                     anira_test::whole_f32(&gain_in, {1})};
-            const std::array<anira_tensor, 2> outputs{c_out.tensor(),
-                                                      anira_test::whole_f32(&gain_out, {1})};
-            std::array<size_t, 2> delivered{k_unset, k_unset};
-            const size_t prev_c = anira_test::available(h);
-            ASSERT_EQ(anira_handler_process_multi(h,
-                                                  inputs.data(),
-                                                  2,
-                                                  outputs.data(),
-                                                  2,
-                                                  delivered.data()),
-                      ANIRA_OK)
-                << "block " << k;
-            EXPECT_EQ(delivered[0], k_block);
-            EXPECT_EQ(delivered[1], 1U);
-            anira_test::wait_for_block(h, prev_c);
-
-            std::vector<float> v_left(k_block, k_untouched);
-            std::vector<float> v_right(k_block, k_untouched);
-            const float v_gain_in = 1.0F;
-            float v_gain_out = k_untouched;
-            const std::array<const float*, 2> v_in_ch{left.data(), right.data()};
-            const std::array<const float*, 1> v_gain_ch{&v_gain_in};
-            const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
-            std::array<size_t, 2> v_num_in{k_block, 1};
-            const std::array<float*, 2> v_out_ch{v_left.data(), v_right.data()};
-            const std::array<float*, 1> v_gout_ch{&v_gain_out};
-            const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
-            std::array<size_t, 2> v_num_out{k_block, 1};
-            const size_t prev_v = v2.get_available_samples(0);
-            const size_t n_v =
-                v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
-            anira_test::wait_for_block(v2, prev_v);
-            ASSERT_EQ(n_v, k_block) << "block " << k;
+            const Block p_out(Layout::Planar, 2, k_block);
+            float c_gain_out = k_untouched;
+            float p_gain_out = k_untouched;
+            run(h, Layout::Interleaved, c_out, c_gain_out);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            run(p, Layout::Planar, p_out, p_gain_out);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
             // The Static output is written on every delivered block, and that is all this case
-            // says about it. It is the latest completed value (PrePostProcessor stores it after
-            // the ring push of its inference), so whether a call already sees the result of the
-            // block it pushed is a race that each side runs on its own: compared with each other
-            // the two sides differed once in about 200 local runs, the C side holding the
-            // result of block 4 and the 2.x side that of block 3, with every sample of the
-            // stream bit-equal. What the value is differs per engine, too. The values of a
-            // Static output are compared exactly where the gate makes the order certain:
-            // ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
-            EXPECT_NE(gain_out, k_untouched) << "block " << k;
-            EXPECT_NE(v_gain_out, k_untouched) << "block " << k;
+            // says about it: it is the latest completed value, so whether a call already sees
+            // the result of the block it pushed is a race each handler runs on its own. The
+            // values of a Static output are compared exactly where the gate makes the order
+            // certain: ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
+            EXPECT_NE(c_gain_out, k_untouched) << "block " << k;
+            EXPECT_NE(p_gain_out, k_untouched) << "block " << k;
             for (size_t i = 0; i < k_block; ++i) {
-                ASSERT_EQ(c_out.at(0, i), v_left.at(i)) << "block " << k << ", left " << i;
-                ASSERT_EQ(c_out.at(1, i), v_right.at(i)) << "block " << k << ", right " << i;
+                ASSERT_EQ(c_out.at(0, i), p_out.at(0, i)) << "block " << k << ", left " << i;
+                ASSERT_EQ(c_out.at(1, i), p_out.at(1, i)) << "block " << k << ", right " << i;
             }
         }
     }
