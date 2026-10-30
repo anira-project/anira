@@ -14,9 +14,9 @@
 // misses where the burst exceeds its latency) is re-prepared mid-stream through audioNode.prepare
 // to a block_max past that latency: a plain handler.prepare is refused meanwhile, the output goes
 // on, the latency read back changes, and no quantum misses after the re-prepare. Last, contexts
-// created with renderSizeHint 256, 480 and "hardware" where the browser takes it: the quantum is
-// the size, the burst the device's, and a node at that geometry misses no quantum. The verdict is
-// window.anira_test_result.
+// created with renderSizeHint 256, 480, 2047 and "hardware" where the browser takes it: the quantum
+// is the size, the burst the device's, and a node at that geometry misses no quantum. The verdict
+// is window.anira_test_result.
 import {
   ANIRA_EM_HOOK_PRE,
   Anira,
@@ -302,9 +302,13 @@ const run = async () => {
   small.stop()
 
   // Contexts of another render size, where the browser takes renderSizeHint: 256 and 480 frames
-  // (480 is no power of two: a callback of 2048 renders 4 or 5 of them), and "hardware", the
-  // size the browser deems best (Chromium: 128; renderQuantumSize is 0 until the context runs).
-  for (const hint of [256, 480, 'hardware']) {
+  // (480 is no power of two: a callback of 2048 renders 4 or 5 of them; on CI's callback of 481
+  // frames one, and two back to back once every 480 callbacks: a burst of 960 no window of the
+  // probe shows, which it takes from the frames per callback), 2047 (one frame short of
+  // headless Chromium's 2048: the same case here, one quantum per callback and a double once
+  // every 2047, a burst of 4094), and "hardware", the size the browser deems best (Chromium:
+  // 128; renderQuantumSize is 0 until the context runs).
+  for (const hint of [256, 480, 2047, 'hardware']) {
     const sizedContext = new AudioContext({ sampleRate: 48000, renderSizeHint: hint })
     if (sizedContext.renderQuantumSize === undefined) {
       check(true, `renderSizeHint ${hint}: not supported by this browser, skipped`)

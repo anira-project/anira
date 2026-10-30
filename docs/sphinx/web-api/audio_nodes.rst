@@ -52,23 +52,34 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    varying number of sample-frames" (`Rendering an Audio Graph
    <https://webaudio.github.io/web-audio-api/#rendering-loop>`_), and no attribute gives it across
    browsers (Chromium's ``baseLatency`` is its callback buffer and keeps the first device's after
-   ``setSinkId``, Safari's is one quantum, Firefox's is 0). So the burst is always measured: a
-   probe ``AudioWorklet`` watches ``process()`` calls and takes the longest run of back-to-back
-   calls: "A running AudioContext can be used to infer the user's audio hardware buffer size via
-   AudioWorklet timing" (`Privacy Considerations
+   ``setSinkId``, Safari's is one quantum, Firefox's is 0). So the burst is always measured, from
+   the timing of ``process()`` calls: "A running AudioContext can be used to infer the user's
+   audio hardware buffer size via AudioWorklet timing" (`Privacy Considerations
    <https://webaudio.github.io/web-audio-api/#privacy-considerations>`_, on the ``"hardware"``
-   render size). A run ends where a gap reaches halfway from one quantum's duration to the longest gap
-   between callbacks, so a call late by a few milliseconds inside a run does not split it. The
-   burst is a whole number of quanta: a callback whose size is no multiple of the quantum renders
-   a varying number of them, and the largest counts (441 frames, 9.1875 ms at 48 kHz on a CI
-   runner: 3 or 4 quanta of 128, a burst of 512), and a quantum at least the callback's size is
-   rendered one call per callback or fewer, a burst of one quantum. An ``OfflineAudioContext``
-   renders quantum by quantum: its burst is one quantum, nothing to measure.
+   render size). The burst is the worst case, a whole number of quanta: a callback whose size is
+   no multiple of the quantum renders a varying number of them, and the largest counts (441
+   frames, 9.1875 ms at 48 kHz on a CI runner: 3 or 4 quanta of 128, a burst of 512). The worst
+   case can be rarer than any window: a callback of 481 frames at a quantum of 480 renders one
+   quantum per callback and two back to back once every 480 callbacks (about 5 s), when the frame
+   left over each time adds up to a quantum. So a probe ``AudioWorklet`` measures two things: the
+   longest run of back-to-back calls it sees (a run ends where a gap reaches halfway from one
+   quantum's duration to the longest gap between callbacks, so a call late by a few milliseconds
+   does not split it), and the frames per device callback, the period at which the runs begin
+   timed with a Worker's microsecond clock (the worklet scope has only ``Date.now``) times the
+   rate. The burst is the more of the two in whole quanta: the frames per callback over the
+   quantum, rounded up (481 / 480: 2 quanta, 960 frames), with half a frame taken off first so an
+   exact fit stays one quantum (a ``"hardware"`` quantum of the callback's size). A quantum at
+   least the callback's size is rendered one call per callback or fewer: a burst of one quantum.
+   An ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum, nothing to
+   measure.
 
 The probe needs a running context, so ``await context.resume()`` first. It costs time once,
-after the page's start (its Play click): about 50 ms where the calls are evenly paced (one
-quantum per callback, which it then reports), else 400 ms (a 100 ms lead-in, then a 300 ms
-window). The geometry is explicit: the page measures it and declares it.
+after the page's start (its Play click): a 100 ms lead-in, then at least 300 ms, and on until the
+frames per callback are known well enough to tell which whole number of quanta covers a
+callback (16 run starts or more, within three standard errors and a tenth of a frame), at most
+2 s: about 1 s in headless Chromium, whose callbacks of 2048 frames come every 42.7 ms. Its
+worklet notifies the clock Worker at every call (a futex wake on the audio thread while it
+measures). The geometry is explicit: the page measures it and declares it.
 
 .. literalinclude:: ../../../web/examples/model-file/main.ts
    :language: ts
@@ -93,7 +104,7 @@ too small for the context: measure first.
    the browser deems best for the device instead of a fixed 128 (Chromium chooses 128; Firefox's
    patches for it, bug 2034508, the audio system's smallest callback). A quantum of the
    callback's size is one ``process()`` call per callback, a burst of one quantum
-   (``block_min == block_max``), and the probe reports it within about 50 ms.
+   (``block_min == block_max``).
 
    .. literalinclude:: ../../../web/examples/model-file/main.ts
       :language: ts

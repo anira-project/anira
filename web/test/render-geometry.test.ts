@@ -1,9 +1,15 @@
-// The render geometry (src/renderGeometry.ts): the probe's run detector and its early stop on
-// synthetic timestamps, and what measureRenderGeometry decides without measuring.
+// The render geometry (src/renderGeometry.ts): the probe's run detector and its frames per
+// callback on synthetic timestamps, and what measureRenderGeometry decides without measuring.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AniraAudioNode } from '../src/AudioNode'
-import { evenlyPaced, longestRun, measureRenderGeometry } from '../src/renderGeometry'
+import {
+  burstQuanta,
+  framesPerCallback,
+  longestRun,
+  measureRenderGeometry,
+  runStarts,
+} from '../src/renderGeometry'
 
 const RATE = 48000
 
@@ -129,34 +135,95 @@ test('callbacks of a size that is no multiple of the quantum: the largest run', 
   assert.equal(longestRun(loaded([1], large, 0.05, 12), large), 1)
 })
 
-test('the early stop: evenly paced calls, one quantum per callback, within about 50 ms', () => {
-  const quantumMs = (128 / RATE) * 1000
-  const paced = loaded([1], quantumMs, 0.05, 200)
-  // The first call at which the probe stops: after 50 ms of evenly paced calls.
-  const stop = Array.from(paced, (_, i) => i).find((i) =>
-    evenlyPaced(paced, quantumMs, i + 1)
-  )
+// The clock Worker's times (ms, a microsecond clock) of a context whose device calls back every
+// `frames` frames and renders `counts[k % counts.length]` quanta in callback k, back to back
+// 0.02 ms apart, each callback's start off by up to `jitterMs` (a fixed pseudo-random sequence).
+const clocked = (
+  counts: number[],
+  frames: number,
+  callbacks: number,
+  jitterMs = 0.15
+) => {
+  const periodMs = (frames / RATE) * 1000
+  const times: number[] = []
+  let seed = 11
+  const jitter = () =>
+    ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 2 * jitterMs
+  for (let k = 0; k < callbacks; k++) {
+    const start = 1000 + k * periodMs + jitter()
+    for (let c = 0; c < counts[k % counts.length]; c++) times.push(start + c * 0.02)
+  }
+  return times
+}
+
+// The burst in frames the probe reports from a window of `times`: the longest run, or the quanta
+// a callback needs, whichever is more.
+const burstOf = (times: number[], quantum: number) => {
+  const quantumMs = (quantum / RATE) * 1000
+  const callback = framesPerCallback(runStarts(times, quantumMs), RATE)
+  const result = burstQuanta(longestRun(times, quantumMs), callback, quantum)
+  return {
+    burst: result.quanta * quantum,
+    settled: result.settled,
+    frames: callback?.frames,
+  }
+}
+
+test('the frames per callback: the worst case a window may never show', () => {
+  // 481 frames at a quantum of 480 (CI's device): one quantum per callback, two back to back
+  // once every 480 callbacks, never in a second of them here: the burst is 960.
+  const ci = burstOf(clocked([1], 481, 100), 480)
+  assert.ok(Math.abs((ci.frames ?? 0) - 481) < 0.2, `${ci.frames} frames per callback`)
+  assert.deepEqual([ci.burst, ci.settled], [960, true])
+  // An exact fit stays one quantum: 480 at 480, a "hardware" quantum of the callback's size.
+  assert.deepEqual(Object.values(burstOf(clocked([1], 480, 100), 480)).slice(0, 2), [
+    480,
+    true,
+  ])
+  assert.deepEqual(Object.values(burstOf(clocked([1], 2048, 48), 2048)).slice(0, 2), [
+    2048,
+    true,
+  ])
+  // Whole runs: 441 frames at 128 (3 or 4 quanta), 192 at 128 (2 or 1), 2048 at 128 (16).
+  assert.equal(burstOf(clocked([4, 3, 4, 3, 3], 441, 100), 128).burst, 512)
+  assert.equal(burstOf(clocked([2, 1], 192, 200), 128).burst, 256)
+  assert.equal(burstOf(clocked([16], 2048, 48), 128).burst, 2048)
+  // A quantum of 2048 over a callback of 1024: a call every second callback, one quantum.
+  assert.equal(burstOf(clocked([1, 0], 1024, 96), 2048).burst, 2048)
+})
+
+test('a callback the runs merged over leaves a hole on the grid, not a longer period', () => {
+  const times = clocked([1], 481, 100)
+  times.splice(40, 1) // the run of callback 40 went missing
+  const callback = framesPerCallback(runStarts(times, 10), RATE)
   assert.ok(
-    stop !== undefined && paced[stop] - paced[0] >= 50 && paced[stop] - paced[0] < 60
+    callback !== null && Math.abs(callback.frames - 481) < 0.2,
+    `${callback?.frames}`
   )
-  // A quantum larger than the callback: 4 gaps of 42.7 ms.
-  const large = (2048 / RATE) * 1000
-  assert.ok(evenlyPaced(loaded([1], large, 0.05, 5), large))
-  assert.ok(!evenlyPaced(loaded([1], large, 0.05, 4), large), 'three gaps are too few')
-  // Runs never stop it, loaded or not, nor callbacks of a size that is no multiple of the
-  // quantum; nor do evenly paced calls just after a run.
-  const prefixes = (times: number[]) =>
-    times.some((_, i) => evenlyPaced(times, quantumMs, i + 1))
-  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 0.05, 20)))
-  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 2.0, 20)))
-  assert.ok(!prefixes(loaded([16], 16 * quantumMs, 0.5, 20, 16, 8)))
-  assert.ok(!prefixes(loaded([4, 3, 4, 3, 3], 9.1875, 0.3, 60)))
-  assert.ok(!prefixes(loaded([2, 1], 4, 0.05, 80)))
-  const after = [
-    ...loaded([16], 16 * quantumMs, 0.05, 1),
-    ...loaded([1], quantumMs, 0.05, 30),
-  ]
-  assert.ok(!evenlyPaced(after, quantumMs, 20))
+})
+
+test('a start a stall delayed, and a first start inside a run, do not move the estimate', () => {
+  const times = clocked([1], 481, 100)
+  times[50] += 5 // the run of callback 50 began 5 ms late
+  const starts = runStarts(times, 10)
+  // The window began inside a run: its first start is off the grid.
+  const callback = framesPerCallback([starts[0] - 3, ...starts], RATE)
+  assert.ok(
+    callback !== null && Math.abs(callback.frames - 481) < 0.2,
+    `${callback?.frames}`
+  )
+  assert.equal(burstQuanta(1, callback, 480).quanta, 2)
+})
+
+test('a short window does not settle what it cannot tell apart', () => {
+  // Six callbacks, jittered by 0.5 ms: 480 or 481 frames is not yet known; the probe watches on.
+  const short = burstOf(clocked([1], 480, 6, 0.5), 480)
+  assert.equal(short.settled, false)
+  // Too few runs for an estimate: the runs alone, unsettled.
+  assert.deepEqual(burstQuanta(3, framesPerCallback([0, 10, 20], RATE), 128), {
+    quanta: 3,
+    settled: false,
+  })
 })
 
 test('an evenly paced context late once: one quantum, or the quanta it caught up', () => {
