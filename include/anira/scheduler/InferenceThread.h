@@ -13,7 +13,6 @@
 #include <tanh/core/threading/Thread.h>
 #endif
 
-#include "../utils/Buffer.h"
 #include "SessionElement.h"
 #ifdef __x86_64__
 #include <immintrin.h>

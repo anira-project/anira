@@ -18,13 +18,16 @@ Where the 2.x API stands in this pre-release
   ``using namespace anira::v2;`` (:ref:`migration-compat`); C++ against the 3.x API includes
   ``<anira/anira.hpp>``.
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
-  JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
-  :cpp:struct:`anira::HostConfig`, :cpp:struct:`anira::ModelData`,
-  :cpp:struct:`anira::TensorShape` and :cpp:struct:`anira::ProcessingSpec` remain public and
-  exported through the alpha releases of the 3.x line. ``anira::CoreConfig`` with its
+  JSON files of its section 1.5. The library's own 2.x classes are removed:
+  ``anira::InferenceConfig`` with ``ModelData``, ``TensorShape`` and ``ProcessingSpec``
+  (``<anira/InferenceConfig.h>``), ``anira::HostConfig`` (``<anira/utils/HostConfig.h>``),
+  ``anira::InferenceBackend``, ``anira::PrePostProcessor``, ``anira::Buffer`` / ``BufferF`` /
+  ``MemoryBlock`` and ``<anira/utils/helperFunctions.h>``, and ``anira::CoreConfig`` with its
   ``LogConfig`` and the ``LogLevel`` / ``LogDrain`` / ``WaitStrategy`` enums
-  (``<anira/CoreConfig.h>``) is removed: ``anira::ContextConfig`` of ``anira/anira.hpp`` is
-  the 3.x configuration, ``anira::v2::ContextConfig`` the 2.x spelling. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  (``<anira/CoreConfig.h>``). Nothing in anira used them once the core ran on the 3.x types:
+  ``anira/compat/v2.hpp`` declares every one in ``namespace anira::v2``
+  (:ref:`migration-compat-config`), and ``anira::ContextConfig`` of ``anira/anira.hpp`` is the
+  3.x context configuration. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
   removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
   document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
   (:ref:`migration-compat-config`).
@@ -35,7 +38,7 @@ Where the 2.x API stands in this pre-release
   ``<anira/compat/v3_to_v2.h>`` that fed it the 2.x configuration classes are removed
   (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
   :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
-  and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
+  and its 2.x ``float***`` functions are gone. A custom 2.x ``PrePostProcessor``
   becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
   custom ``anira::BackendBase`` a *registered engine* (``anira_engine_desc``,
   :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
@@ -274,7 +277,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
      - ``anira::InferenceThread thread(context)`` on a ``context.threads(0)`` context
        (``anira_inference_thread_create``).
 
-What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
+What each virtual and helper of a custom 2.x ``PrePostProcessor`` becomes on the
 processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Processor` in C++):
 
 .. list-table::
@@ -751,12 +754,10 @@ When the 2.x classes go
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The 2.x handler is removed in this pre-release, the transitional bridge with it
-(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
-(the configuration classes, :cpp:class:`anira::PrePostProcessor`) stay installed, each
-included by its own path, until a later pre-release makes them private; the 2.x
-``JsonConfigLoader`` and ``BackendBase`` are removed already. From then on
-``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
-after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The library's own 2.x
+classes are removed too: the configuration classes, ``PrePostProcessor``, ``CoreConfig``,
+``JsonConfigLoader`` and ``BackendBase``, with their headers. ``anira/compat/v2.hpp`` is what
+2.x code compiles against, and it is removed one minor release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.
 
 .. _migration-bridge:

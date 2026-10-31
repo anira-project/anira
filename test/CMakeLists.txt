@@ -104,16 +104,15 @@ endfunction()
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
 #   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Processors).
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
-#       test_engines, test_utils, plus test_InferenceConfig (moved into test_utils in PR 8),
-#       test_OneSidedStreamingInternals (the struct-pool cases of
-#       test_OneSidedStreaming on the 2.x session, PR 8), test_PrePostProcessor (the 2.x
-#       default processor's window fill, in test_scheduler since PR 10), and test_capi_internal
+#       test_engines, test_utils, plus test_OneSidedStreamingInternals (the struct-pool cases of
+#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal
 #       (test_abi's internal probes and the 2.x arms, PR 12).
 #   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
 #       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
 #       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_CoreConfig,
-#       test_PrePostProcessor, and the 2.x configuration comparison of test_Translate, which is
-#       test_Validate now (what the validator derives, which the session reads).
+#       test_InferenceConfig, test_PrePostProcessor, test_Buffer, test_HelperFunctions, and the
+#       2.x configuration comparison of test_Translate, which is test_Validate now (what the
+#       validator derives, which the session reads).
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
 # No suite drives a 2.x session any more (PR 10b): the 2.x handler and the 2.x objects of the
@@ -121,13 +120,10 @@ endfunction()
 # forms, and the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils
-	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
-	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
 	system/test_HighPriorityThread.cpp
-	test_InferenceConfig.cpp
 )
 # test_Logger reads its C handlers white-box through test/abi/handler_support.h, which includes
 # the private headers.
@@ -149,7 +145,6 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
-	test_PrePostProcessor.cpp
 )
 # The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
 # engine room (src/engines/Adapter.h) the suites read white-box.

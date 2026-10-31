@@ -4,7 +4,6 @@
  * of it over nlohmann::json, which never reaches a header. Loaders are dumb: strings to
  * enums, numbers, construct; semantic validation is prepare's.
  */
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -1288,14 +1287,14 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     }
     static_cast<void>(sizes_given);
     static_cast<void>(has_contract_key);
-    // The keys a 2.x file may leave out took the InferenceConfig constructor's defaults: a
-    // fixed warm-up count (0), which the upgrade writes, so the bridge to the 2.x runtime
-    // yields the same configuration, and half the hardware threads as parallel processors,
-    // which was 2.x's way of saying as many as the default pool has threads: a count left out
-    // stays ANIRA_INSTANCES_AUTO, the pool's thread count once the handler is prepared.
+    // The keys a 2.x file may leave out took the 2.x InferenceConfig constructor's defaults: a
+    // fixed warm-up count of none, which the upgrade writes (the contract's own default
+    // count), and half the hardware threads as parallel processors, which was 2.x's way of
+    // saying as many as the default pool has threads: a count left out stays
+    // ANIRA_INSTANCES_AUTO, the pool's thread count once the handler is prepared.
     if (!warm_up_given) {
         hard.m_warmup = ANIRA_WARMUP_FIXED;
-        hard.m_warmup_iterations = anira::InferenceConfig::Defaults::k_warm_up;
+        hard.m_warmup_iterations = anira::capi::HardContract{}.m_warmup_iterations;
     }
     hard.m_on_miss = ANIRA_MISS_ZEROS;  // the 2.x runtime delivered zeros on a miss
     legacy->m_kind = hard;

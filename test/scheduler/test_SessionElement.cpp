@@ -1,12 +1,9 @@
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
 #include <sanitizer/lsan_interface.h>
@@ -627,57 +624,4 @@ TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceIsRefused) {
                                                      {{.m_elements = 1, .m_hop = 0}},
                                                      2)),
               ANIRA_ERROR_CONFIG);
-}
-
-// =============================================================================
-// HostConfig::resolve_reference() unit tests, independent of prepare().
-// =============================================================================
-
-namespace {
-// The 2.x configurations the reference rule reads.
-InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::move(shapes),
-        std::move(spec),
-        10.f,   // max_inference_time
-        0,      // warm_up
-        false,  // session_exclusive_processor
-        0.f,    // blocking_ratio
-        2);     // num_parallel_processors
-}
-
-// Generator: 4 control parameters in, a 2048-sample audio stream out.
-InferenceConfig generator_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                       ProcessingSpec({1}, {1}, {0}, {2048}));
-}
-}  // namespace
-
-TEST(HostConfigReference, AutoPicksFirstStreamableInput) {
-    InferenceConfig const config =
-        make_config(std::vector<TensorShape>{TensorShape({{1, 1}, {2, 256}}, {{1, 1, 2048}})},
-                    ProcessingSpec({1, 2}, {1}, {0, 256}, {2048}));
-    ReferenceStream const ref = HostConfig(256, 48000).resolve_reference(config);
-    EXPECT_TRUE(ref.m_is_input);
-    EXPECT_EQ(ref.m_index, 1u) << "input 0 is non-streamable, input 1 is the first streamable one.";
-}
-
-TEST(HostConfigReference, AutoFallsBackToFirstStreamableOutput) {
-    InferenceConfig const config = generator_config();
-    ReferenceStream const ref = HostConfig(512, 48000).resolve_reference(config);
-    EXPECT_FALSE(ref.m_is_input) << "no streamable input, so the reference is an output.";
-    EXPECT_EQ(ref.m_index, 0u);
-}
-
-TEST(HostConfigReference, EqualityDependsOnDirection) {
-    EXPECT_NE(HostConfig(512, 48000, true, 0, true), HostConfig(512, 48000, true, 0, false));
-    EXPECT_EQ(HostConfig(512, 48000, true, 0, false), HostConfig(512, 48000, true, 0, false));
-}
-
-TEST(HostConfigReference, RelativeBufferSizeIsFiniteForGenerator) {
-    InferenceConfig const config = generator_config();
-    float const size = HostConfig(512, 48000).get_relative_buffer_size(config, 0, false);
-    EXPECT_TRUE(std::isfinite(size));
-    EXPECT_GT(size, 0.f);
 }

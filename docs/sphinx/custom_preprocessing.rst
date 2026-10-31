@@ -15,7 +15,8 @@ cases a processor is for, in the order they come up.
 
 .. note::
     Coming from anira 2.x? :ref:`migration-runtime` maps each virtual and helper of the 2.x
-    :cpp:class:`anira::PrePostProcessor` onto the processor. A 2.x processor also runs as the processor of a 3.x pipeline as it is: written against
+    ``PrePostProcessor`` (:cpp:class:`anira::v2::PrePostProcessor` in the shim) onto the
+    processor. A 2.x processor also runs as the processor of a 3.x pipeline as it is: written against
     ``anira::v2::PrePostProcessor`` of ``anira/compat/v2.hpp``, it is added with
     ``pipeline.add_processor(std::make_shared<anira::v2::LegacyProcessor>(pp))``
     (:ref:`migration-compat-config`).

@@ -312,8 +312,6 @@ target_sources(${PROJECT_NAME}
         src/utils/RtLatch.cpp
 
         # Interface
-        src/PrePostProcessor.cpp
-        src/InferenceConfig.cpp
 
         # System
 )

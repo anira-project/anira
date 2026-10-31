@@ -3,11 +3,9 @@
 // engine include directory. It fails to compile as soon as a public header includes
 // an engine header again — the engine state belongs in each engine adapter's own
 // translation unit under src/engines (src/engines/Adapter.h). Every public
-// header is covered: the C umbrella, the C++ face, the 2.x compat shim and the 2.x headers
-// still installed (the umbrella of 2.x is the C umbrella now, so they are listed one by one).
+// header is covered: the C umbrella, the C++ face, the 2.x compat shim and the core's C++
+// headers still installed, listed one by one.
 // NOLINTBEGIN(misc-include-cleaner)
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/anira.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
@@ -15,9 +13,6 @@
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/system/HighPriorityThread.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/Semaphore.h>
 
@@ -25,7 +20,7 @@
 #include <anira/compat/v2.hpp>
 #include <type_traits>
 
-static_assert(std::is_class_v<anira::InferenceConfig>);
+static_assert(std::is_class_v<anira::RingBuffer>);
 static_assert(std::is_class_v<anira::InferenceHandler>);
 static_assert(std::is_class_v<anira::v2::InferenceHandler>);
 // NOLINTEND(misc-include-cleaner)

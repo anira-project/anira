@@ -21,7 +21,6 @@
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
@@ -460,8 +459,7 @@ struct HandBuiltCtx {
         size_t elements = 1;
         for (const int64_t extent : shape) { elements *= static_cast<size_t>(extent); }
         for (size_t slot = 0; slot < m_ports.size(); ++slot) {
-            m_buffers.emplace_back(1, elements);
-            m_buffers[slot].clear();
+            m_buffers.emplace_back(elements, 0.0F);
         }
         // The chunk's descriptors as the session builds them: the spec's shape, float32, over
         // the buffer.
@@ -498,11 +496,11 @@ struct HandBuiltCtx {
         m_frame.m_output_tensors = inputs ? nullptr : &m_tensors;
     }
 
-    float* data() { return m_buffers[0].get_write_pointer(0); }
+    float* data() { return m_buffers[0].data(); }
     anira::RingBuffer& ring() { return std::get<anira::capi::StreamPort>(m_ports[0]).m_ring; }
 
     std::vector<anira::capi::Port> m_ports;
-    std::vector<anira::BufferF> m_buffers;
+    std::vector<std::vector<float>> m_buffers;
     std::vector<anira_tensor> m_tensors;
     anira::capi::ProcessorFrame m_frame;
     anira_processor_ctx m_ctx{};

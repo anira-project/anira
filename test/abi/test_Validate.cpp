@@ -1203,6 +1203,17 @@ TEST(AbiValidate, TheAnchorIsTheFirstStreamedTensorUnlessNamed) {
     EXPECT_TRUE(first.m_derived.m_anchor_is_input);
     EXPECT_EQ(first.m_derived.m_anchor_index, 0U);
 
+    // A Static input ahead of the first Streamed one is no anchor.
+    ModelConfig behind;
+    behind.add_model_path(k_custom, "model.custom");
+    behind.input(scalar("gain"));
+    behind.input(streamed("in"));
+    behind.output(streamed("out"));
+    const Outcome second = derive(behind);
+    ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_message;
+    EXPECT_TRUE(second.m_derived.m_anchor_is_input);
+    EXPECT_EQ(second.m_derived.m_anchor_index, 1U);
+
     ModelConfig generator;
     generator.add_model_path(k_custom, "model.custom");
     generator.input(scalar("gain"));
