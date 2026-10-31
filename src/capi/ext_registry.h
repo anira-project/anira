@@ -11,7 +11,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/system/Exports.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -63,15 +62,15 @@ struct ExtConsumer {
 };
 
 /// The rows of this build, in registration order (function-local static).
-ANIRA_API const std::vector<ExtRow>& ext_rows();
+const std::vector<ExtRow>& ext_rows();
 /// The consumers of this build.
-ANIRA_API const std::vector<ExtConsumer>& ext_consumers();
+const std::vector<ExtConsumer>& ext_consumers();
 /// The distinct registered kinds, in first-registration order.
-ANIRA_API const std::vector<const char*>& ext_kinds();
+const std::vector<const char*>& ext_kinds();
 
 /// One slot of a bag: a known kind holds a payload owned through its row; an unknown kind
 /// holds what was handed in (the header bytes, or the JSON text) and fails prepare by name.
-class ANIRA_API ExtSlot {
+class ExtSlot {
 public:
     ExtSlot() = default;
     ExtSlot(const ExtSlot& other);
@@ -107,7 +106,7 @@ private:
 };
 
 /// The extension slots of one host: one per kind, a second set of a kind replaces the first.
-class ANIRA_API ExtBag {
+class ExtBag {
 public:
     /// NULL or short header -> INVALID_ARGUMENT; known kind at an unregistered version ->
     /// EXTENSION_VERSION; unknown kind -> stored (the header bytes) for the walk to name.
@@ -156,7 +155,7 @@ struct ProviderOptionSet {
 /// The payload of the "provider_options" kind (version 1): the header's sets point into
 /// m_records, whose strings and arrays point into m_sets, m_keys and m_values (rebuilt by
 /// fix_header after every change of m_sets).
-struct ANIRA_API ProviderOptionsPayload {
+struct ProviderOptionsPayload {
     anira_ext_provider_options m_hdr;
     std::vector<ProviderOptionSet> m_sets;
     std::vector<anira_provider_option_set> m_records;
@@ -183,13 +182,13 @@ struct ANIRA_API ProviderOptionsPayload {
 /// (anira_engine_desc::consumed_kinds, one consumer per engine keyed by its id), each of which
 /// reads its "model:" kinds from its own entries alone and its other kinds from any host, while it
 /// is a candidate. On failure err carries the offending name.
-ANIRA_API anira_status ext_check_consumed(const anira_model_config& model,
-                                          const anira_context_config* config,
-                                          const anira_contract* contract,
-                                          const anira_backend_id* candidates,
-                                          uint32_t num_candidates,
-                                          anira_error* err,
-                                          const std::vector<ExtConsumer>* pipeline = nullptr);
+anira_status ext_check_consumed(const anira_model_config& model,
+                                const anira_context_config* config,
+                                const anira_contract* contract,
+                                const anira_backend_id* candidates,
+                                uint32_t num_candidates,
+                                anira_error* err,
+                                const std::vector<ExtConsumer>* pipeline = nullptr);
 
 /// One row of anira_plan_ext: a consumed slot and its consumer.
 struct ExtPlanRow {
@@ -203,12 +202,11 @@ struct ExtPlanRow {
 /// consumer of `pipeline` that reads the slot's kind (the processor; a registered engine among the
 /// candidates, on its own entries for a "model:" kind), in the vector's order. Never fails:
 /// ext_check_consumed ran first.
-ANIRA_API std::vector<ExtPlanRow> ext_consumed_rows(
-    const anira_model_config& model,
-    const anira_contract* contract,
-    const anira_backend_id* candidates,
-    uint32_t num_candidates,
-    const std::vector<ExtConsumer>* pipeline = nullptr);
+std::vector<ExtPlanRow> ext_consumed_rows(const anira_model_config& model,
+                                          const anira_contract* contract,
+                                          const anira_backend_id* candidates,
+                                          uint32_t num_candidates,
+                                          const std::vector<ExtConsumer>* pipeline = nullptr);
 
 }  // namespace anira::capi
 

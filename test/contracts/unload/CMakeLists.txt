@@ -103,9 +103,10 @@ gtest_discover_tests(anira_unload_test
     PROPERTIES TIMEOUT 120)
 
 # Export-table check (cmake/tanh/check-exports.cmake): the shared libanira exports
-# exactly the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
-# STB_GNU_UNIQUE symbol), and the plugin-shaped module exports no backend-runtime
-# symbol and, with a static anira, nothing of namespace anira either. See the
+# nothing but the C entry points (no std::, backend, third-party or STB_GNU_UNIQUE symbol;
+# the C++ classes of namespace anira are not exported at all, which anira_symbol_baseline
+# proves name by name), and the plugin-shaped module exports no backend-runtime symbol and,
+# with a static anira, nothing of namespace anira either. See the
 # symbol-policy notes in the top-level CMakeLists.txt. On PE, which cannot interpose,
 # the dllexports LibTorch's headers and the LiteRT/TFLite archives force are tolerated.
 # ALLOW_REGEX admits the C entry points of the 3.x line (anira_*, extern "C") on the
@@ -115,7 +116,7 @@ tanh_add_export_check(NAME anira_exports
     LIBRARY anira MODULE anira_unload_module
     NAMESPACES anira
     ALLOW_REGEX "^_?anira_[a-z0-9_]+$"
-    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl
+    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl moodycamel nlohmann
     FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
     TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
 

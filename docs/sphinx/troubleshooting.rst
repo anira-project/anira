@@ -183,11 +183,9 @@ Where the records are on each platform:
 
 **Solution**: Two switches, neither on by default. ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the
 context config makes every failed status also an Error record with the entry name, the status
-and the message (the 3.x runtime applies it; in this pre-release
-``anira::capi::set_trace_failures(true)`` is the process-wide switch). Or install your own
-sink (``anira_log_fn`` on the context config, ``thl::Logger::set_callback`` for the 2.x
-runtime), which receives every record, and keep the last N in a ring you write out from your
-crash handler.
+and the message. Or install your own sink (``anira_log_fn`` on the context config, or
+``anira::ContextConfig::log_sink`` in C++), which receives every record, and keep the last N in
+a ring you write out from your crash handler.
 
 **Issue**: A real-time record is missing from the log after a crash.
 

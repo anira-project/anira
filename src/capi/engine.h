@@ -14,7 +14,6 @@
 #include <anira/abi/engine.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
-#include <anira/system/Exports.h>
 
 #include <cstdint>
 #include <memory>
@@ -33,7 +32,7 @@ namespace anira::capi {
 /// to, every handler copy of those pipelines and every loaded model that ran on it share the
 /// carrier; release fires once, when the last of them dies, after every unload of those
 /// models.
-class ANIRA_API EngineCarrier {
+class EngineCarrier {
 public:
     /// `id` is the engine's checked reverse-URI id, `desc` already the library's own record
     /// (copied within the caller's struct_size over ANIRA_ENGINE_DESC_INIT and checked).
@@ -105,8 +104,7 @@ struct QueryAnswers {
 /// named and keyed by its id (the name points into the carrier, which `engines` keeps alive
 /// and which outlives the facts: the pipeline's or its handler copy's own list). The twin of
 /// processor_facts (processor.h).
-ANIRA_API EngineFacts
-    engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines);
+EngineFacts engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines);
 
 }  // namespace anira::capi
 

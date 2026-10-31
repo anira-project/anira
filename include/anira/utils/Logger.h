@@ -2,13 +2,13 @@
 #define ANIRA_LOGGER_H
 
 #include <anira/abi/enums.h>
+#include <anira/abi/export.h>
 #include <anira/abi/log.h>
 #include <tanh/core/Logger.h>
 
 #include <atomic>
 #include <cstdint>
 
-#include "anira/system/Exports.h"
 #include "anira/utils/RtLatch.h"
 
 /**
@@ -134,7 +134,7 @@ namespace anira::detail {
  * cleared before the core is freed. Real-time log sites read it with one relaxed
  * load; no session — and hence no real-time path — exists while it is null.
  */
-ANIRA_API std::atomic<thl::Logger::rt::Queue*>& rt_log_queue_slot() noexcept;
+std::atomic<thl::Logger::rt::Queue*>& rt_log_queue_slot() noexcept;
 
 /**
  * @brief The log sinks of this copy of anira: one anira_log_fn per registered entry.
@@ -155,7 +155,7 @@ using LogSinkId = uint32_t;
  * reach `callback` from the return of this call on.
  * @return The entry's id, or 0 for a NULL callback (nothing registered).
  */
-ANIRA_API LogSinkId add_log_sink(anira_log_fn callback, void* user_data, anira_log_level level);
+LogSinkId add_log_sink(anira_log_fn callback, void* user_data, anira_log_level level);
 
 /**
  * @brief Unregisters a sink and waits until no call into it is in flight on another thread.
@@ -163,10 +163,10 @@ ANIRA_API LogSinkId add_log_sink(anira_log_fn callback, void* user_data, anira_l
  * Refused (nothing happens, false) when the calling thread is inside that very sink: the
  * caller would wait for itself. Unknown ids and 0 are ignored (true).
  */
-ANIRA_API bool remove_log_sink(LogSinkId id) noexcept;
+bool remove_log_sink(LogSinkId id) noexcept;
 
 /// Whether the calling thread is inside the callback of the sink `id` right now.
-ANIRA_API bool inside_log_sink(LogSinkId id) noexcept;
+bool inside_log_sink(LogSinkId id) noexcept;
 
 /**
  * @brief Switches thl::Logger's platform sink (stderr, logcat, os_log) on or off without
@@ -175,7 +175,7 @@ ANIRA_API bool inside_log_sink(LogSinkId id) noexcept;
  * there: its stderr reaches the console as console.error for every level).
  * ANIRA_LOG_FLAG_DISABLE_PLATFORM_SINK of a context is applied through this.
  */
-ANIRA_API void set_platform_sink_enabled(bool enabled);
+void set_platform_sink_enabled(bool enabled);
 
 }  // namespace anira::detail
 

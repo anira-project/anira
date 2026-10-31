@@ -3,7 +3,6 @@
 
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/system/Exports.h>
 
 #include <array>
 #include <atomic>
@@ -190,16 +189,16 @@ namespace anira::detail {
  * @brief The process-wide latch of one operational site: a constant-initialized array, no
  * registration, no guard. Re-armed by every prepare of every session.
  */
-ANIRA_API RtLatch& rt_site(RtSite site) noexcept;
+RtLatch& rt_site(RtSite site) noexcept;
 
 /**
  * @brief The interval at which the drain's summary reports a persisting real-time condition,
  * in milliseconds; 10000 by default. Exported so the tests can lower it.
  */
-ANIRA_API void set_rt_summary_interval_ms(uint32_t ms) noexcept;
+void set_rt_summary_interval_ms(uint32_t ms) noexcept;
 
 /// The summary interval in effect (set_rt_summary_interval_ms).
-ANIRA_API uint32_t rt_summary_interval_ms() noexcept;
+uint32_t rt_summary_interval_ms() noexcept;
 
 }  // namespace anira::detail
 

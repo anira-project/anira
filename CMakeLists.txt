@@ -248,9 +248,9 @@ FetchContent_MakeAvailable(nlohmann_json)
 # Symbol policy (cmake/tanh/symbol-policy.cmake; the rules are written up in
 # docs/sphinx/troubleshooting.rst, "Host application ships its own engine runtime"):
 #
-#  * Hidden symbol visibility on every platform; the public API is re-exported through
-#    ANIRA_API (include/anira/system/Exports.h) — the same allowlist model Windows
-#    enforces via dllexport. This keeps the engine runtimes private: without it, weak
+#  * Hidden symbol visibility on every platform; the C entry points are re-exported through
+#    ANIRA_API (include/anira/abi/export.h) — the same allowlist model Windows enforces via
+#    dllexport. No C++ class or function carries it. This keeps the engine runtimes private: without it, weak
 #    C++ symbols from the engine headers (e.g. ONNX Runtime's Ort::Global<void>::api_)
 #    are exported from any plugin that embeds anira and get weak-coalesced by the
 #    dynamic linker against a host that ships its own copy of the runtime (Ableton
@@ -261,7 +261,7 @@ FetchContent_MakeAvailable(nlohmann_json)
 #    part of the consumer and must neither be exported from it nor be dllimport'ed.
 #  * -fno-gnu-unique under GCC (glibc never unloads an object defining a unique symbol),
 #    one section per function/variable and link-time GC of the shared library.
-#  * The shared libanira pins its export table to namespace anira at link time with a
+#  * The shared libanira pins its export table to the anira_* entry points at link time with a
 #    generated version script / -exported_symbols_list: -fvisibility=hidden cannot hide
 #    what a header stamps default-visibility itself (libstdc++ wraps namespace std in
 #    visibility("default"), LibTorch's C10_API classes emit default-visibility
@@ -286,9 +286,10 @@ tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects>)
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
-# The exported surface: the C++ namespace and, from the 3.x line on, the C entry
-# points anira_* (extern "C", so the namespace pattern cannot cover them).
-tanh_set_export_allowlist(${PROJECT_NAME} NAMESPACE anira SYMBOL "anira_*")
+# The exported surface is the C ABI alone: the entry points anira_* (extern "C"). No C++ symbol
+# of anira crosses the library boundary; anira.hpp and compat/v2.hpp are header-only over the C
+# entries, and the white-box tests link the objects (anira_objects) instead.
+tanh_set_export_allowlist(${PROJECT_NAME} SYMBOL "anira_*")
 # tanh-lib's components are compiled hidden with an empty TANH_API when static, so the
 # objects of libtanh_core.a are already hidden inside a plugin that embeds a static
 # anira. Localizing the archive on the consumer's link on top of that is

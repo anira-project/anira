@@ -41,8 +41,8 @@
  * control-path record of the firewall itself is ANIRA_ERROR_INTERNAL, the non-fatal CHECK.
  */
 
+#include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/system/Exports.h>
 
 #include <cstdarg>
 #include <cstddef>
@@ -115,22 +115,22 @@ void hold_platform_sink_off(bool acquire);
 /// status of every entry emits one Error record whose message bytes are the anira_error
 /// message prefixed by the entry and the status text. Process-global; the context config
 /// stores the flag and the context (M2) applies it. Exported for the tests.
-ANIRA_API void set_trace_failures(bool enabled) noexcept;
-ANIRA_API bool trace_failures() noexcept;
+void set_trace_failures(bool enabled) noexcept;
+bool trace_failures() noexcept;
 
 /// The firewall tests' probe: throws the exception class `kind` selects (0 none, 1
 /// std::bad_alloc, 2 StatusError{status, message}, 3 std::invalid_argument{message},
 /// 4 std::runtime_error{message}, 5 an int) and returns through the firewall; on
 /// success writes 42 to out_value. Exported so the shared legs can test the firewall.
-ANIRA_API anira_status firewall_probe(int kind,
-                                      anira_status status,
-                                      const char* message,
-                                      anira_error* err,
-                                      int* out_value) noexcept;
+anira_status firewall_probe(int kind,
+                            anira_status status,
+                            const char* message,
+                            anira_error* err,
+                            int* out_value) noexcept;
 
 /// The void-path twin of firewall_probe: the same kinds, through the handler of a
 /// destroy entry (report_void_failure), or through the quiet handler when `quiet` is set.
-ANIRA_API void firewall_probe_void(int kind, const char* message, bool quiet) noexcept;
+void firewall_probe_void(int kind, const char* message, bool quiet) noexcept;
 
 }  // namespace anira::capi
 
