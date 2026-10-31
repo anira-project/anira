@@ -101,6 +101,15 @@ Audio Glitches or Dropouts
     4. Check if other processes are consuming CPU resources
     5. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
 
+Missed blocks right after a JUCE standalone starts
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: A JUCE plugin's standalone build logs a few ``Missing samples`` warnings right after it starts (two or three blocks with the examples' RAVE models), then runs clean.
+
+**Cause**: JUCE's standalone wrapper starts the audio device before it hands the processor to its ``AudioProcessorPlayer``, whose ``setProcessor`` calls ``prepareToPlay`` while holding the lock the player's audio callback takes. The audio thread waits out the whole prepare (the model loads and their warm-up), the device's capture buffer fills meanwhile, and the first ``processBlock`` calls arrive back to back. A Hard contract's latency is sized for blocks at the host's real-time pace, so such a burst outruns the first inferences. A plugin host resumes processing at its real-time pace after a prepare, so the plugin builds do not see this.
+
+**Solution**: None needed: the stream stays time-aligned and recovers by itself. If you chain handlers by hand (one handler's ``pop_data`` feeding another's ``push_data``, as the JUCE example's RAVE encoder and decoder do), treat a pop that returns ``ANIRA_MISSED`` like a delivered block (the miss policy filled it): the missed position is consumed, and waiting for it instead puts the chain out of step for good.
+
 Model Loading Failures
 ^^^^^^^^^^^^^^^^^^^^^^
 
