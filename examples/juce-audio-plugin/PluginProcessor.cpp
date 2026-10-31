@@ -213,9 +213,13 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     m_count_input_samples += buffer.getNumSamples();
     encoder.handler.push_data(audio, 0);
     while (m_count_input_samples >= 2048) {
-        size_t received_samples = 0;
-        encoder.handler.pop_data(latent, 0, &received_samples);
-        if (received_samples == 0) { break; }
+        // A missed frame still takes its place in the stream: anira keeps the stream
+        // time-aligned (the miss policy filled the frame, with zeros here, and the late frame
+        // is dropped when it arrives), so it is counted and passed on like any other. Waiting
+        // for it instead would leave the count ahead of the encoder's stream from then on:
+        // every later pop too early, the decoder fed out of step, misses on every block.
+        const anira_status popped = encoder.handler.pop_data(latent, 0);
+        if (popped != ANIRA_OK && popped != ANIRA_MISSED) { break; }
         m_count_input_samples -= 2048;
         // Make some latent space modulation :) The offsets are the parameter listener's atomics:
         // reading the parameters' ValueTree here (getParameterAsValue) would allocate and
