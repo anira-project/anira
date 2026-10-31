@@ -37,6 +37,11 @@ class Loaded;
 class Prepared;
 }  // namespace engine
 
+/// The jobs that wait for a free shared instance of one loaded model (src/scheduler/
+/// InstanceWaitList.h, private to the scheduler): held through a smart pointer like the two
+/// engine-room types above.
+class InstanceWaitList;
+
 /**
  * @brief Session management class for individual inference instances
  *
@@ -288,6 +293,13 @@ public:
         // the inference thread; synced by the queue handoffs like the fields above.
         std::vector<anira_tensor> m_input_tensors;
         std::vector<anira_tensor> m_output_tensors;
+        // The chunk's links while its job waits for a free instance of its plan's loaded model
+        // (an inference thread dequeued it while every instance was busy and put it on the
+        // model's InstanceWaitList, PlanSlot::m_waiting): the session the job belongs to, kept
+        // alive while it waits, and the next waiting struct. Written and read by the list alone,
+        // under its lock; empty and null otherwise.
+        std::shared_ptr<SessionElement> m_waiting_session;
+        ThreadSafeStruct* m_waiting_next = nullptr;
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
@@ -313,6 +325,12 @@ public:
         /// back by Core::release_session after the session's in-flight inferences drained,
         /// before the loaded model is released. Declared after m_loaded, so it dies first.
         std::unique_ptr<engine::Prepared> m_prepared;
+        /// The jobs that wait for a free shared instance of m_loaded: the pool entry's list,
+        /// shared like the loaded model with every session on it (Core::acquire_loaded_locked);
+        /// null for a plan whose loaded model is this session's own (a 2.x custom backend, the
+        /// roundtrip), which claims no instance. An inference thread that dequeues a job of the
+        /// plan while every instance is busy puts it here instead of waiting with it.
+        std::shared_ptr<InstanceWaitList> m_waiting;
         /// A registered engine's plan: its Prepared is the C handler's to make, with the
         /// record of its prepare; null until then.
         bool m_registered = false;
@@ -605,10 +623,10 @@ struct InferenceData {
  * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *
- * On WebAssembly builds the plain ConcurrentQueue is used: inference loops
- * are driven cooperatively by JS Workers across WASM instances that share
- * memory via postMessage, so there is no pthreads runtime to block on, and a
- * blocked worker could not service its JS event loop anyway.
+ * On WebAssembly builds the plain ConcurrentQueue is used: the pool's threads
+ * are Wasm Workers on the module's shared memory, and an idle Worker parks on
+ * the core's wake word (memory.atomic.wait32, notified by every enqueue)
+ * instead of a semaphore, under either wait strategy.
  */
 #ifdef __EMSCRIPTEN__
 using InferenceQueue = moodycamel::ConcurrentQueue<InferenceData>;

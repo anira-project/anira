@@ -535,6 +535,14 @@ typedef enum anira_probe_rung {
 #define ANIRA_THREADS_AUTO 0xffffffffu
 
 /**
+ * @brief max_instances sentinel and default: as many shared instances of a stateless model as
+ * the context's inference pool has threads (at least 1; 1 when the host brings its own
+ * threads), resolved when a handler is prepared. Every instance is a full copy of the
+ * model in memory.
+ */
+#define ANIRA_INSTANCES_AUTO 0xffffffffu
+
+/**
  * @brief Log flag: switch the platform sink (stderr, logcat, os_log) off while this context
  * lives.
  */
@@ -781,8 +789,9 @@ typedef enum anira_phase {
 
 /**
  * @brief anira_engine_desc.flags bit: a model entry of this engine may have no source, neither
- * a path nor bytes. Declared and reported (anira_plan_info.engine_flags) in this
- * pre-release; consumed when a source-less entry can be built, in a later one.
+ * a path nor bytes (anira_model_config_add_model_path with a NULL path; a JSON entry
+ * without "path"). anira_handler_create refuses a source-less entry of any other engine
+ * with ANIRA_ERROR_CONFIG. Reported in anira_plan_info.engine_flags.
  */
 #define ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL 1u
 

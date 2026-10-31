@@ -1,171 +1,120 @@
-Custom Inference Backends
-=========================
+Custom Inference Engines
+========================
 
-``Anira Web`` covers most use cases with the two engines it ships:
-the WASM-side ONNX Runtime (the default path in :doc:`basic_usage`)
-and ``onnxruntime-web`` on the JS side (see
-:ref:`run-inference-in-javascript`). Reach for a custom backend when
-neither fits — for example, when you want to run the model through a
-different JS runtime, drive a GPU directly, or wire up a stub for
-testing.
+An inference engine in TypeScript runs on the context's inference Workers, called synchronously
+from each Worker's loop; it is the counterpart of a C ``anira_engine_desc``
+(:doc:`../custom_engines`). The module's built-in ONNX Runtime engine needs none of this: a model
+entry ``"engine": "onnxruntime"`` runs on it as natively.
 
-A custom backend is a JS class that anira's inference worker invokes
-in place of the bundled engine. Writing one takes three steps:
+The Worker Module
+-----------------
 
-1. Subclass :js:class:`JSBackendBase` and override ``process``.
-2. Bundle that subclass into a custom inference worker so the worker
-   knows how to construct it.
-3. Spin up that custom worker and wire the backend into
-   :js:class:`InferenceHandler` via ``InferenceBackend.CUSTOM``.
+Every inference Worker imports the context's worker module before it enters its loop, and
+awaits the boot of its scope's registry: the ``init`` of every engine the module defined. Define
+the engine there:
 
-The `js-copying demo <https://anira-project.github.io/anira-web-example>`_ walks through all three
-with a passthrough ``JSCopyBackend``; we'll use it as the running
-example below.
+.. literalinclude:: ../../../web/examples/stage-and-engine/double-engine.ts
+   :language: ts
 
-Step 1: Implement the Backend
------------------------------
+and name the module in the context, bundled into one file (with Vite,
+``import workerModule from './double-engine.ts?worker&url'``):
 
-Subclass :js:class:`JSBackendBase` and override
-``process(inputVecPtr, outputVecPtr)``. Anira hands you two pointers
-into WASM memory — one to a ``VectorBufferF`` of input tensors, one to
-outputs — and expects you to populate the outputs in place. Use
-``wrapPointer`` to view the WASM structures as TypeScript objects.
+.. code-block:: ts
 
-.. code-block:: typescript
+   const context = Context.create(anira, { threads: 2, workerModule })
 
-   // misc/JSCopyBackend.ts
-   import { JSBackendBase, BufferF, VectorBufferF } from '@anira-project/anira'
+``init`` (optional, may be async) loads what the engine needs before the Worker's loop: a runtime
+instantiated. ``load(model)`` (optional, synchronous) receives the model entry the calls run, what
+a C engine's load reads of its row: ``model.bytes`` (a ``Uint8Array`` view of the shared memory,
+no copy; valid while the loaded model lives), else ``model.path``, or neither for an engine that
+declares ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``. It runs on each Worker before the first call on a
+loaded model; ``ModelConfig.fromUrl`` attaches the bytes of a JavaScript engine's entry, so the
+model file is fetched once, on the main thread, and every Worker reads the same memory.
+``process(ctx, prepared)`` runs once per inference (``prepared`` the loaded model's record, which
+:js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
+gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
+tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
+``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``registerEngine``) runs at a new stream of an exclusive
+handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
+can run here and runs on the main thread, so a page whose engine has one imports the module there
+as well. Each Worker builds its own instance, so an engine object is never shared between
+threads.
 
-   export class JSCopyBackend extends JSBackendBase {
-     override process(inputVecPtr: number, outputVecPtr: number): void {
-       const heapF32 = this.wasmInstance.HEAPF32
-       const inputVec  = this.wrapPointer(VectorBufferF, inputVecPtr)
-       const outputVec = this.wrapPointer(VectorBufferF, outputVecPtr)
+``process`` must be synchronous: the Worker's event loop does not run while it is in its loop, so
+an engine whose inference is a promise (onnxruntime-web's ``session.run()``, a WebGPU readback)
+cannot run there yet. :ref:`web-realms` says what an engine can reach once the Worker runs.
 
-       const tensors = Math.min(inputVec.size(), outputVec.size())
-       for (let t = 0; t < tensors; t++) {
-         const inputBuffer  = this.wrapPointer(BufferF, inputVec.get(t))
-         const outputBuffer = this.wrapPointer(BufferF, outputVec.get(t))
+Registering It
+--------------
 
-         const channels      = inputBuffer.getNumChannels()
-         const inputSamples  = inputBuffer.getNumSamples()
-         const outputSamples = outputBuffer.getNumSamples()
-         const sampleDiff    = inputSamples - outputSamples
+The model entry names the engine by its reverse-URI id, and the pipeline registers it under that
+id:
 
-         for (let ch = 0; ch < channels; ch++) {
-           const readOffset  = inputBuffer.getReadPointer(ch) >> 2
-           const writeOffset = outputBuffer.getWritePointer(ch) >> 2
-           for (let i = 0; i < outputSamples; i++) {
-             heapF32[writeOffset + i] = heapF32[readOffset + i + sampleDiff]
-           }
-         }
-       }
-     }
-   }
+.. code-block:: ts
 
-Step 2: Bundle Into a Custom Inference Worker
----------------------------------------------
+   const model = await ModelConfig.fromJson(anira, JSON.stringify({
+     models: [{ engine: 'org.example.double' }], // no path: the engine needs no model
+     // ...
+   }))
+   const pipeline = Pipeline.create(anira)
+     .addInference(model)
+     .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 
-The default inference worker that ``spinUpInferenceWorker()`` spawns
-doesn't know about your backend class — it only knows the built-ins.
-You ship a custom worker file that hands your subclass to anira's
-worker runtime:
+``flags`` states the engine's promises (``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: it reads no model
+file, so its model entry needs no ``path``). Register before ``Handler.create``: a handler copies the pipeline.
 
-.. code-block:: typescript
+ONNX Runtime Web
+----------------
 
-   // customInferenceWorker.ts
-   import { setupInferenceWorker } from '@anira-project/anira'
-   import { JSCopyBackend } from '../misc/JSCopyBackend'
+``@anira-project/anira/engines/onnxruntime-web`` wraps onnxruntime-web's own WebAssembly build
+as such an engine: its ``init`` loads onnxruntime-web's binary (``dist/wasm/
+ort-wasm-simd-threaded.wasm``), its ``load`` creates a session from the model entry's bytes
+(copied into onnxruntime-web's own heap, a separate module) or, for an entry with a path and no
+bytes, from a synchronous fetch of the path, and its ``process`` runs one float32 ORT tensor per
+model tensor of the call:
 
-   setupInferenceWorker({ JSCopyBackend })
+.. code-block:: ts
 
-This is a one-line file: ``setupInferenceWorker`` runs anira's worker
-loop and registers the constructors you pass it, so the worker can
-instantiate the right class when ``registerProcessor`` is called from
-the main thread.
+   // the worker module
+   import { defineEngine } from '@anira-project/anira/scope'
+   import { ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb } from '@anira-project/anira/engines/onnxruntime-web'
 
-Step 3: Wire It Up
-------------------
+   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())
 
-On the main thread, point ``spinUpInferenceWorker`` at the custom
-worker file, then follow the usual setup with three additions: the
-model is declared as ``InferenceBackend.CUSTOM``, the backend is
-instantiated and registered with ``aniraWeb``, and the same instance
-is handed to :js:class:`InferenceHandler` as a third argument.
+The model is the config's, stated once:
 
-.. code-block:: typescript
+.. code-block:: json
 
-   const customInferenceWorkerUrl = new URL('./customInferenceWorker.ts', import.meta.url)
+   { "models": [{ "engine": "org.anira.onnxruntime-web", "path": "model.onnx" }], "inputs": [], "outputs": [] }
 
-   const aniraWeb = await AniraWeb.create()
-   await aniraWeb.spinUpInferenceWorker(customInferenceWorkerUrl)
+``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
+each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
+(a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
+the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
+module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+that.
 
-   const vectorModelData = aniraWeb.VectorModelData([
-     aniraWeb.ModelData(modelBuffer, aniraWeb.InferenceBackend.CUSTOM),
-   ])
+``onnxRuntimeWeb({ numThreads: 2 })`` runs each inference on two threads: the inference Worker's
+own and one Worker that onnxruntime-web's module starts in the engine's ``init``, before the
+inference Worker's loop (its glue loads itself into it). anira's own ONNX Runtime engine cannot do
+this: the module starts no pthread. It pays off where anira's inference threads cannot run
+inferences side by side: a stateful model (a declared state pair), whose inferences run one
+after another, or one large model on one handler. Every inference Worker's runtime starts its own
+threads, so a pool of ``n`` Workers uses up to ``n × numThreads`` threads; size the pool and the
+count together. The engines one worker module defines share its runtime, so they share one count:
+an engine asking for another fails its ``init``. The default is 1.
 
-   // Build inferenceConfig, processingSpec, ppProcessor as in basic_usage...
+.. code-block:: ts
 
-   const jsCopyBackend = new JSCopyBackend(aniraWeb.getWasmInstance(), inferenceConfig)
-   await aniraWeb.registerProcessor(jsCopyBackend, 'JSCopyBackend')
+   // the worker module: two threads per inference
+   defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb({ numThreads: 2 }))
 
-   const inferenceHandler = aniraWeb.InferenceHandler(
-     ppProcessor, inferenceConfig, jsCopyBackend
-   )
-   inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.CUSTOM)
-
-``registerProcessor`` ships the backend reference over to the
-inference worker so the WASM-side dispatch can call back into it.
-
-.. note::
-   ``ModelData`` accepts either an ``ArrayBuffer`` (the binary form,
-   shown above) or a URL string. If you pass a URL, anira hands the
-   string to your backend as-is — your backend decides how to load
-   it. The built-in :js:class:`ONNXRuntimeWebBackend` uses this to
-   fetch the model itself; ``modelData.isBinary()`` tells you which
-   form is in play:
-
-   .. code-block:: typescript
-
-      if (modelData.isBinary()) {
-        const ptr = modelData.getDataPtr()
-        const size = modelData.getSize()
-        modelBytes = new Uint8Array(wasm.HEAPU32.buffer, ptr, size).slice()
-      } else {
-        const pathBytes = new Uint8Array(
-          wasm.HEAPU32.buffer,
-          modelData.getDataPtr(),
-          modelData.getSize()
-        ).slice()
-        const modelUrl = new TextDecoder().decode(pathBytes)
-        modelBytes = new Uint8Array(await (await fetch(modelUrl)).arrayBuffer())
-      }
-
-.. warning::
-   The custom backend runs on the inference worker thread, not on the
-   audio worklet thread, so it doesn't block the real-time callback
-   directly. It still has to finish under the
-   ``max_inference_time_ms`` set in :js:class:`InferenceConfig`,
-   otherwise anira will fall back to the previous block's output and
-   you will hear dropouts.
-
-Sanity Check: JSBackendBase as a Passthrough
---------------------------------------------
-
-If you want to verify the JS-bridge plumbing before committing to a
-real backend, instantiate :js:class:`JSBackendBase` directly. It
-ships with a trivial WASM-side passthrough ``process`` and a JS hook
-that fires for every block — and because it's a built-in, it doesn't
-need a custom inference worker:
-
-.. code-block:: typescript
-
-   const jsBackendBase = aniraWeb.JSBackendBase(inferenceConfig)
-   await aniraWeb.registerProcessor(jsBackendBase, 'JSBackendBase')
-
-   const inferenceHandler = aniraWeb.InferenceHandler(
-     ppProcessor, inferenceConfig, jsBackendBase
-   )
-   inferenceHandler.setInferenceBackend(aniraWeb.InferenceBackend.CUSTOM)
-
-The `js-callback demo <https://anira-project.github.io/anira-web-example>`_ does exactly this.
+``onnxRuntimeWeb({ warmup: 3 })`` runs three inferences over zeros of the model's input shapes
+right after the engine creates its session, so the stream's first inferences do not pay
+onnxruntime-web's first-run setup. A contract's ``"warmup": { "fixed": n }`` warms anira's
+built-in engines only; a JavaScript engine warms itself. Over the model entry the session, and so
+the warm-up, comes with the entry at the first call, inside the stream. Given its own ``model``,
+the engine creates the session in its ``init``, before the inference Worker's loop, and the
+stream starts warm; ``ModelConfig.fromUrl(anira, url, { fetchModel: () => false })`` then keeps
+the page from fetching the file a second time.

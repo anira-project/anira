@@ -15,11 +15,14 @@
 #include <tanh/core/Logger.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -29,11 +32,16 @@
 #include <utility>
 #include <vector>
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+#include <unistd.h>
+#endif
+
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../engines/LegacyAdapter.h"
 #include "../utils/StatusError.h"
+#include "InstanceWaitList.h"
 #include "LogDrainLoop.h"
 
 namespace anira {
@@ -145,6 +153,9 @@ struct Core::State {
         engine::Model m_model;
         const void* m_carrier = nullptr;
         std::shared_ptr<engine::Loaded> m_loaded;
+        /// The jobs that wait for a free shared instance of m_loaded, handed to every plan slot
+        /// on the entry with the loaded model (SessionElement::PlanSlot::m_waiting).
+        std::shared_ptr<InstanceWaitList> m_waiting;
     };
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
 };
@@ -156,20 +167,134 @@ namespace {
 std::atomic<void*> s_state{nullptr};
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+// Whether the process is exiting: set by an exit handler, registered once when the core is
+// first put to work (the pool starts, a user-managed thread is made). A handler registered
+// after main started runs before the loader's own exit pass (_dl_fini on glibc), which runs
+// the unload hook, so the hook tells an exit from a dlclose by it. At a dlclose the handler
+// runs after the hook (the image's __cxa_finalize comes last in its fini pass), too late to
+// matter. A core first put to work before main (a static constructor) registers the handler
+// before the loader's and is not told: its hook takes every exit for an unload.
+std::atomic<bool> s_process_exiting{false};
+std::atomic<bool> s_exit_watched{false};
+
+void mark_process_exiting() {
+    s_process_exiting.store(true, std::memory_order_release);
+}
+
+void watch_process_exit() {
+    if (s_exit_watched.exchange(true, std::memory_order_acq_rel)) { return; }
+    // A failed registration leaves exits unrecognised: they are treated as unloads.
+    static_cast<void>(std::atexit(mark_process_exiting));
+}
+
+// How long the unload hook waits for the inferences in flight before it gives up on them.
+constexpr std::chrono::milliseconds k_unload_wait_for_inferences{2000};
+
+// The unload hook's wait: until every thread of the pool has left its loop and no inference is
+// in flight (InferenceThread::get_num_in_flight(), an atomic the inference threads keep),
+// polling every millisecond, which touches nothing the loader lock guards. The loop exit is
+// what makes the join below safe: a pool thread checks its stop flag and then dequeues, two
+// steps, so a thread that passed the check just before the hook told it to stop still takes one
+// more job, which counts as in flight only from its dequeue, possibly after the hook first
+// looked; it leaves its loop only once that job is done. When a thread or an inference is still
+// running at the bound it never will be while the hook holds the unload: a thread waiting for
+// the loader lock that the dlclose holds, or an engine that does not return. Joining it would
+// hang the host for good, returning would unmap the code under it, so the hook writes the rule
+// to stderr (not through anira's log queue or sinks, which may be gone or be what is stuck) and
+// aborts.
+void wait_for_inferences_or_abort(const std::vector<const InferenceThread*>& pool) {
+    const auto deadline = std::chrono::steady_clock::now() + k_unload_wait_for_inferences;
+    const auto threads_in_loop = [&pool]() {
+        return static_cast<unsigned int>(std::ranges::count_if(
+            pool,
+            [](const InferenceThread* thread) { return thread->is_in_loop(); }));
+    };
+    unsigned int in_flight = InferenceThread::get_num_in_flight();
+    unsigned int running = threads_in_loop();
+    while (in_flight > 0 || running > 0) {
+        if (std::chrono::steady_clock::now() >= deadline) {
+            std::array<char, 384> message{};
+            const int length = std::snprintf(
+                message.data(),
+                message.size(),
+                "anira: the library is being unloaded while an inference is still running "
+                "(%u in flight, %u inference threads not stopped); destroy every anira handler, "
+                "or call anira_shutdown(), before unloading. Aborting instead of hanging.\n",
+                in_flight,
+                running);
+            if (length > 0) {
+                const auto size = std::min(static_cast<size_t>(length), message.size() - 1);
+                static_cast<void>(::write(STDERR_FILENO, message.data(), size));
+            }
+            std::abort();
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        in_flight = InferenceThread::get_num_in_flight();
+        running = threads_in_loop();
+    }
+}
+#endif
+
+}  // namespace
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+namespace detail {
+
+/// The body of the library-unload hook below; Core's friend, since it tells the pool's
+/// threads to stop without joining them.
+struct UnloadHook {
+    static void run();
+};
+
+void UnloadHook::run() {
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing != nullptr && !s_process_exiting.load(std::memory_order_acquire)) {
+        // An unload: every pool thread is told to stop first, so no new inference starts and a
+        // thread that holds an instance gives the jobs waiting for it up (they count as in
+        // flight until then); then the threads and the inferences in flight get the bounded wait.
+        // At exit no loader lock is held, so the join below waits for them whatever they take,
+        // as it always did. The threads are kept by the pool, which only shutdown() below
+        // empties, so their pointers outlive the wait.
+        Core::State& state = *static_cast<Core::State*>(existing);
+        std::vector<const InferenceThread*> pool;
+        {
+            const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+            pool.reserve(state.m_thread_pool.size());
+            for (const std::unique_ptr<InferenceThread>& thread : state.m_thread_pool) {
+                thread->request_stop();
+                pool.push_back(thread.get());
+            }
+        }
+        wait_for_inferences_or_abort(pool);
+    }
+    Core::shutdown();
+    Core::release_core_if_idle();
+}
+
+}  // namespace detail
+#endif
+
+namespace {
+
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 // Library-unload hook (ELF and Mach-O). Runs from the DSO's fini pass on dlclose (and at
 // process exit), before the C++ static destructors of this DSO — for a shared libanira as
 // well as for a plugin embedding a static anira. It lives in this translation unit so a
 // static library always links it in (Core.cpp is referenced by every user).
 //
-// shutdown() is a backstop: with the default lifecycle no pool thread exists once the
-// last session was released, so it only ever joins something when a host unloads the
-// library with a live instance. Joining here is safe because the pool threads never take
-// the loader lock: they block in nanosleep/futex or run anira code that was bound at load
-// time (RTLD_NOW, no lazy binding, no global-dynamic TLS). release_core_if_idle() then
-// returns the core's memory unless something is left.
+// shutdown() is a backstop: with the default lifecycle no pool thread exists once the last
+// session was released, so it only ever joins something when a host unloads the library with
+// a live handler (or the process exits with one). At a dlclose the unloading thread holds the
+// loader lock (glibc's dl_load_lock) for the whole close, and the pool threads are not free of
+// it: anira's own code was bound at load time, but a runtime may take it mid-inference
+// (LibTorch's first inference on a thread registers its thread_local destructors through
+// __cxa_thread_atexit, which takes dl_load_lock; a lazy dlopen does too), and so may a custom
+// engine. Such a thread cannot finish while the hook runs, so the hook waits a bounded time for
+// the inferences in flight and aborts with a message when one is still running
+// (UnloadHook::run). An idle pool is joined as before. release_core_if_idle() then returns the
+// core's memory unless something is left.
 __attribute__((destructor)) void anira_library_unload_hook() {
-    anira::Core::shutdown();
-    anira::Core::release_core_if_idle();
+    detail::UnloadHook::run();
 }
 #elif defined(_WIN32)
 // Windows has no equivalent that may join threads: the CRT runs this destructor from
@@ -178,6 +303,10 @@ __attribute__((destructor)) void anira_library_unload_hook() {
 // So this only frees an idle core — it never blocks (try_lock) and never joins. Plugins
 // that want the shutdown() backstop call it from their module-exit entry point (CLAP
 // deinit, VST3 ExitDll), which the host invokes before FreeLibrary and outside the lock.
+// The POSIX hook's check for inferences in flight is not done here either: the destructor
+// also runs at process exit after ExitProcess has ended every other thread, mid-inference
+// or not, so the in-flight count would be stale there, and a static destructor cannot tell
+// the two (DllMain's lpReserved is not visible to it).
 struct UnloadGuard {
     ~UnloadGuard() { anira::Core::release_core_if_idle(); }
 };
@@ -212,6 +341,16 @@ bool any_plan_holds(const std::vector<std::shared_ptr<SessionElement>>& sessions
             return slot.m_loaded == loaded;
         });
     });
+}
+
+// Stops the threads of `pool` from index `first` on and joins them. Every one is told first,
+// then joined (the destructors join): no thread waits for a free instance of a loaded model
+// (a job whose model is busy waits on the model's InstanceWaitList, not on a thread), and a
+// thread that holds an instance takes no more waiting jobs once told (it gives each up), so a
+// join waits for the inferences inside an engine and nothing else.
+void stop_and_join(std::vector<std::unique_ptr<InferenceThread>>& pool, size_t first = 0) {
+    for (size_t i = first; i < pool.size(); ++i) { pool[i]->request_stop(); }
+    pool.erase(pool.begin() + static_cast<ptrdiff_t>(first), pool.end());
 }
 
 }  // namespace
@@ -335,42 +474,27 @@ size_t Core::prospective_thread_pool_size(const anira_context_config& context_co
 
 anira_context_config Core::sanitize_config(anira_context_config context_config) {
 #ifdef __EMSCRIPTEN__
-    // Blocking waits are impossible on WebAssembly: inference loops are driven
-    // cooperatively by JS Workers, and there is no pthreads runtime to block on.
-    // Coerce before the config is stored or compared, so the strategy that takes
-    // effect and the mismatch check stay meaningful.
+    // The inference queue of WebAssembly has no semaphore to block on (InferenceQueue): an idle
+    // Wasm Worker parks on the wake word instead, which is what ANIRA_WAIT_BLOCKING buys
+    // natively. Coerce before the config is stored or compared, so the strategy that takes
+    // effect and the mismatch check stay meaningful. The pool's threads are Wasm Workers
+    // (InferenceThread::start), so num_threads and AUTO mean what they mean natively.
     if (context_config.m_wait == ANIRA_WAIT_BLOCKING) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "ANIRA_WAIT_BLOCKING is not supported on WebAssembly builds. Using "
-                          "ANIRA_WAIT_SPIN_BACKOFF.");
+                          "ANIRA_WAIT_SPIN_BACKOFF (an idle Wasm Worker parks all the same).");
         context_config.m_wait = ANIRA_WAIT_SPIN_BACKOFF;
     }
-    // The auto-managed thread pool cannot exist on WebAssembly either: an
-    // InferenceThread owns no OS thread here, so pool entries would be inert
-    // objects that never run, and the parallel-processor clamp in
-    // create_session() would measure phantom capacity. Threads are always
-    // supplied externally (JS Workers via AniraWeb.spinUpInferenceWorker(),
-    // backed by Core::make_inference_thread()). AUTO is 0 here as well
-    // (default_num_threads()), silently: it is the platform default.
-    if (context_config.m_num_threads != 0 && context_config.m_num_threads != ANIRA_THREADS_AUTO) {
-        ANIRA_LOG_WARNING(log_group::k_core,
-                          "num_threads = %u is not supported on WebAssembly builds: the core "
-                          "cannot run inference threads; they must be supplied externally "
-                          "(e.g. AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.",
-                          context_config.m_num_threads);
-    }
-    context_config.m_num_threads = 0;
     if (context_config.m_log_drain != ANIRA_LOG_DRAIN_MANUAL) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: no "
-                          "thread can drain the log queue there. Using ANIRA_LOG_DRAIN_MANUAL - "
-                          "pump anira_drain_log() from the host.");
+                          "ANIRA_LOG_DRAIN_THREAD is not supported on WebAssembly builds: the "
+                          "JavaScript log sink runs on the main thread. Using "
+                          "ANIRA_LOG_DRAIN_MANUAL - pump anira_drain_log() from the host.");
         context_config.m_log_drain = ANIRA_LOG_DRAIN_MANUAL;
     }
 #endif
-    // ANIRA_THREADS_AUTO is the library default: half the cores, at least one (0 on
-    // WebAssembly, resolved above). Resolved here, once, so that the stored config and
-    // every comparison against it hold a real count.
+    // ANIRA_THREADS_AUTO is the library default: half the cores, at least one. Resolved here,
+    // once, so that the stored config and every comparison against it hold a real count.
     if (context_config.m_num_threads == ANIRA_THREADS_AUTO) {
         context_config.m_num_threads = default_num_threads();
     }
@@ -506,6 +630,17 @@ void Core::apply_or_compare_config_locked(State& state,
                               context_config.m_queue_capacity,
                               context_config.m_drain_interval_ms);
         }
+#ifdef __EMSCRIPTEN__
+        if (state.m_core_config.m_em_worker_module != context_config.m_em_worker_module) {
+            ANIRA_LOG_WARNING(log_group::k_core,
+                              "worker module mismatch: the core's inference Workers import '%s' "
+                              "but a new context or session asked for '%s'. All sessions in "
+                              "this process share one pool, so the first module stays in "
+                              "effect.",
+                              state.m_core_config.m_em_worker_module.c_str(),
+                              context_config.m_em_worker_module.c_str());
+        }
+#endif
         if (state.m_core_config.m_wait != context_config.m_wait) {
             ANIRA_LOG_WARNING(log_group::k_core,
                               "wait strategy mismatch: the core was created with wait strategy "
@@ -564,16 +699,12 @@ void Core::resize_pool_locked(State& state, unsigned int new_num_threads) {
             state.m_thread_pool.emplace_back(
                 std::make_unique<InferenceThread>(state.m_next_inference,
                                                   state.m_core_config.m_wait));
+#ifdef __EMSCRIPTEN__
+            state.m_thread_pool.back()->set_worker_module(state.m_core_config.m_em_worker_module);
+#endif
         }
     } else if (new_num_threads < current_num_threads) {
-        for (unsigned int i = current_num_threads - 1; i >= new_num_threads; --i) {
-            state.m_thread_pool[i]->stop();
-            while (state.m_thread_pool[i]->is_running()) {
-                std::this_thread::sleep_for(std::chrono::microseconds(50));
-            }
-            state.m_thread_pool.pop_back();
-            if (i == 0) { break; }
-        }
+        stop_and_join(state.m_thread_pool, new_num_threads);
     }
 }
 
@@ -597,7 +728,7 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     // and joining them here, inside the critical section that emptied the registry,
     // is what lets a plugin host unload the library right after the last handler is
     // destroyed. (Each InferenceThread's destructor stops and joins its OS thread.)
-    if (state.m_sessions.empty()) { state.m_thread_pool.clear(); }
+    if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
 }
 
 std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
@@ -622,8 +753,21 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // The pool is built at registration (the last step), so clamp against the size it
     // will have. An empty pool means the caller brings its own threads: no clamp. The
     // instance count of every requested model takes the same clamp: no loaded model
-    // runs more calls at once than the pool has threads.
+    // runs more calls at once than the pool has threads. ANIRA_INSTANCES_AUTO (a model
+    // config that names no count, the default) is resolved first, silently, to the pool's
+    // size, at least 1 (1 without a pool): before the session is built (its pending queue is
+    // sized from the count) and before the requests meet the pool's keys, so two handlers
+    // that leave the count to the pool share one loaded model.
     const size_t pool_size = prospective_pool_size_locked(state, config);
+    const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
+    if (inference_config.m_num_parallel_processors == ANIRA_INSTANCES_AUTO) {
+        inference_config.m_num_parallel_processors = resolved_auto;
+    }
+    for (engine::PlanRequest& request : requests) {
+        if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
+            request.m_model.m_instances = resolved_auto;
+        }
+    }
     if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
                           "Session %d requested more parallel processors than threads are "
@@ -663,7 +807,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
-            slot.m_loaded = acquire_loaded_locked(state, request, inference_config, pool_size);
+            acquire_loaded_locked(state, request, inference_config, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
@@ -744,10 +888,11 @@ std::shared_ptr<engine::BuiltinEngine> Core::find_or_make_builtin_engine(State& 
     return object;
 }
 
-std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
-                                                            const engine::PlanRequest& request,
-                                                            InferenceConfig& inference_config,
-                                                            size_t pool_size) {
+void Core::acquire_loaded_locked(State& state,
+                                 const engine::PlanRequest& request,
+                                 InferenceConfig& inference_config,
+                                 size_t pool_size,
+                                 SessionElement::PlanSlot& slot) {
     switch (request.m_source) {
         case engine::Source::Legacy: {
             // A caller's 2.x backend: this session's alone, loaded through the adapter.
@@ -758,13 +903,15 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
             }
             auto loaded = std::make_shared<engine::LegacyLoaded>(*request.m_backend);
             loaded->load(request.m_model);
-            return loaded;
+            slot.m_loaded = std::move(loaded);
+            return;
         }
         case engine::Source::Roundtrip: {
             // The 2.x default processor over this session's configuration: its own.
             auto loaded = std::make_shared<engine::LegacyLoaded>(inference_config);
             loaded->load(request.m_model);
-            return loaded;
+            slot.m_loaded = std::move(loaded);
+            return;
         }
         case engine::Source::BuiltIn:
         case engine::Source::Registered: break;
@@ -774,7 +921,9 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
     const void* const carrier = request.m_carrier.get();
     for (const State::PoolEntry& entry : state.m_loaded_models) {
         if (entry.m_carrier == carrier && entry.m_model == request.m_model) {
-            return entry.m_loaded;
+            slot.m_loaded = entry.m_loaded;
+            slot.m_waiting = entry.m_waiting;
+            return;
         }
     }
     std::shared_ptr<engine::Loaded> loaded;
@@ -809,9 +958,13 @@ std::shared_ptr<engine::Loaded> Core::acquire_loaded_locked(State& state,
     init.context = request.m_context;
     loaded->init(init);
     loaded->load(request.m_model);
-    state.m_loaded_models.push_back(
-        State::PoolEntry{.m_model = request.m_model, .m_carrier = carrier, .m_loaded = loaded});
-    return loaded;
+    auto waiting = std::make_shared<InstanceWaitList>();
+    state.m_loaded_models.push_back(State::PoolEntry{.m_model = request.m_model,
+                                                     .m_carrier = carrier,
+                                                     .m_loaded = loaded,
+                                                     .m_waiting = waiting});
+    slot.m_loaded = std::move(loaded);
+    slot.m_waiting = std::move(waiting);
 }
 
 void Core::release_loaded_locked(State& state, const std::shared_ptr<SessionElement>& session) {
@@ -882,7 +1035,7 @@ void Core::shutdown() {
                             "The inference threads are stopped; the sessions' memory is leaked.",
                             state.m_sessions.size());
         }
-        state.m_thread_pool.clear();
+        stop_and_join(state.m_thread_pool);
         log_drain_to_stop = take_log_drain_locked(state);
     }
     // Outside the lifecycle lock, for the reasons given in release_session().
@@ -1369,6 +1522,8 @@ bool Core::enqueue_inference_or_drop(
                                 "Could not enqueue next inference to global core job queue! "
                                 "Dropping the inference and zero-filling its output.");
         session->complete_with_zeros(thread_safe_struct);
+    } else {
+        InferenceThread::notify_work();
     }
     return enqueued;
 }
@@ -1385,11 +1540,17 @@ void Core::post_process(
 }
 
 void Core::start_thread_pool_locked(State& state) {
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    // Before a thread can run an inference, so the unload hook can tell an exit (see there).
+    if (!state.m_thread_pool.empty()) { watch_process_exit(); }
+#endif
     for (const auto& i : state.m_thread_pool) {
+        // A start without the memory for its thread throws (WebAssembly: the Worker's region,
+        // ANIRA_ERROR_OUT_OF_MEMORY).
         if (!i->is_running() && !i->start()) {
             // Waiting for is_running() below would never return: say it instead.
             throw std::runtime_error(
-                "anira: the operating system refused to create an "
+                "anira: the operating system (or the browser) refused to create an "
                 "inference thread of the pool");
         }
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
@@ -1453,6 +1614,8 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             }
         }
+        // The other sessions' jobs are back in the queue: a parked thread takes them now.
+        if (!inference_stack.empty()) { InferenceThread::notify_work(); }
 
         // seq_cst: pairs with the worker's seq_cst read of m_initialized, which the caller
         // stored false before this drain: a worker that read it true is counted until it
@@ -1535,12 +1698,25 @@ InferenceQueue& Core::get_static_inference_queue() {
 
 std::unique_ptr<InferenceThread> Core::make_inference_thread() {
     State& state = get_state();
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+    watch_process_exit();  // as for the pool (start_thread_pool_locked)
+#endif
     anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF;
+#ifdef __EMSCRIPTEN__
+    std::string worker_module;
+#endif
     {
         const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
         wait = state.m_core_config.m_wait;
+#ifdef __EMSCRIPTEN__
+        worker_module = state.m_core_config.m_em_worker_module;
+#endif
     }
-    return std::make_unique<InferenceThread>(state.m_next_inference, wait);
+    auto thread = std::make_unique<InferenceThread>(state.m_next_inference, wait);
+#ifdef __EMSCRIPTEN__
+    thread->set_worker_module(std::move(worker_module));
+#endif
+    return thread;
 }
 
 unsigned int Core::get_num_inference_threads() {

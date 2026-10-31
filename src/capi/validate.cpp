@@ -3,6 +3,7 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/InferenceBackend.h>
 
@@ -10,6 +11,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
+#include <numeric>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -123,10 +126,7 @@ const anira_tensor_spec* find_spec(const anira_model_config& model,
 
 // ---- the rules, one tensor at a time ------------------------------------------------------
 
-void check_spec(const anira_tensor_spec& spec,
-                bool is_input,
-                const HardContract* hard,
-                DerivedSpec& out) {
+void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) {
     const std::string where = at(spec);
     if (spec.m_ndim == 0) { config_error(where + "no axis was set"); }
     const bool streamed = spec.m_role == ANIRA_ROLE_STREAMED;
@@ -175,7 +175,7 @@ void check_spec(const anira_tensor_spec& spec,
         const int64_t extent = out.m_dims[i];
         if (extent == ANIRA_DYNAMIC) {
             if (time_axis.has_value() && i == *time_axis) {
-                if (streamed) { continue; }  // resolved from the pinned window below
+                if (streamed) { continue; }  // resolved from the window (pin_anchor_hop)
                 not_supported(where +
                               "a dynamic Time extent on a Buffer tensor: the 2.x runtime "
                               "binds a fixed shape (give the extent)");
@@ -201,6 +201,10 @@ void check_spec(const anira_tensor_spec& spec,
         if (spec.m_overlap >= spec.m_window_min) {
             config_error(where + "overlap " + std::to_string(spec.m_overlap) +
                          " must be below window_min " + std::to_string(spec.m_window_min));
+        }
+        if (spec.m_ratio_den != 0 && spec.m_ratio_num == 0) {
+            config_error(where + "time ratio 0/" + std::to_string(spec.m_ratio_den) +
+                         ": a Streamed tensor advances with the anchor");
         }
     } else {
         if (spec.m_window_min != 0 || spec.m_window_max != 0 || spec.m_overlap != 0) {
@@ -236,27 +240,12 @@ void check_spec(const anira_tensor_spec& spec,
     }
     out.m_time_axis = time_axis;
 
-    // Window pinning: a fixed window is used as is; a flexible one covers one host block per
-    // inference (block_max scaled by the tensor's time ratio, plus the context), clamped to
-    // [window_min, window_max]; without a geometry the smallest window.
-    if (streamed) {
-        int64_t used = spec.m_window_min;
-        if (spec.m_window_max != spec.m_window_min && hard != nullptr && hard->m_block_max > 0) {
-            const int64_t num = spec.m_ratio_den == 0 ? 1 : spec.m_ratio_num;
-            const int64_t den = spec.m_ratio_den == 0 ? 1 : spec.m_ratio_den;
-            const auto block = static_cast<int64_t>(hard->m_block_max);
-            if ((block * num) % den != 0) {
-                config_error(where + "time ratio " + std::to_string(num) + "/" +
-                             std::to_string(den) + " gives a fractional hop for block_max " +
-                             std::to_string(block));
-            }
-            used = block * num / den + spec.m_overlap;
-            used = std::max(used, spec.m_window_min);
-            if (spec.m_window_max != ANIRA_UNBOUNDED) { used = std::min(used, spec.m_window_max); }
-        }
-        out.m_window_used = used;
-        out.m_hop = used - spec.m_overlap;
-        if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = used; }
+    // A fixed window is used as it is; a flexible one is pinned with the anchor hop of the whole
+    // model (pin_anchor_hop), which resolves its dynamic Time extent there.
+    if (streamed && spec.m_window_min == spec.m_window_max) {
+        out.m_window_used = spec.m_window_min;
+        out.m_hop = spec.m_window_min - spec.m_overlap;
+        if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = out.m_window_used; }
     }
 }
 
@@ -269,10 +258,9 @@ void check_contract(const anira_contract& contract,
             "contract: an Async contract has no 2.x counterpart; it arrives with "
             "the 3.x runtime");
     }
-    if (hard->m_block_min > hard->m_block_max) {
-        config_error("contract: block_min " + std::to_string(hard->m_block_min) +
-                     " exceeds block_max " + std::to_string(hard->m_block_max));
-    }
+    const std::string refusal =
+        geometry_refusal(hard->m_block_min, hard->m_block_max, hard->m_rate);
+    if (!refusal.empty()) { config_error("contract: " + refusal); }
     if (hard->m_budget == ANIRA_BUDGET_EXPLICIT && !(hard->m_budget_ms > 0.0)) {
         config_error("contract: an explicit budget must be positive (got " +
                      std::to_string(hard->m_budget_ms) + " ms)");
@@ -489,26 +477,167 @@ void resolve_anchor(const anira_model_config& model, Derived& out) {
     out.m_anchor_index = index;
 }
 
-// A declared time ratio must agree with the hops the windows fix: hop * den == anchor hop * num.
-void check_ratios(const anira_model_config& model, const Derived& derived) {
-    const DerivedSpec& anchor = derived.m_anchor_is_input
-                                    ? derived.m_inputs[derived.m_anchor_index]
-                                    : derived.m_outputs[derived.m_anchor_index];
-    const auto check = [&](const std::vector<anira_tensor_spec>& specs,
-                           const std::vector<DerivedSpec>& rows) {
+// ---- the anchor hop -----------------------------------------------------------------------
+
+constexpr int64_t k_open = std::numeric_limits<int64_t>::max();  // a range without an upper bound
+
+// a * b and a + b of non-negative operands; a result past int64_t is a window no host runs.
+int64_t product(int64_t a, int64_t b, const anira_tensor_spec& spec) {
+    if (a != 0 && b > k_open / a) { config_error(at(spec) + "the window and time ratio overflow"); }
+    return a * b;
+}
+int64_t sum(int64_t a, int64_t b, const anira_tensor_spec& spec) {
+    if (b > k_open - a) { config_error(at(spec) + "the window and time ratio overflow"); }
+    return a + b;
+}
+int64_t ceil_div(int64_t a, int64_t b) {
+    return a / b + (a % b != 0 ? 1 : 0);
+}
+
+// The anchor hops a set of tensors allows: the multiples of m_step in [m_low, m_high].
+struct HopRange {
+    int64_t m_step = 1;
+    int64_t m_low = 1;
+    int64_t m_high = k_open;
+};
+
+// The smallest anchor hop of a range; 0, never a hop, when the range holds no multiple of its
+// step.
+int64_t first_hop(const HopRange& range) {
+    const int64_t first = ceil_div(range.m_low, range.m_step);
+    if (range.m_low > range.m_high || first > range.m_high / range.m_step) { return 0; }
+    return first * range.m_step;
+}
+
+std::string hops_text(const HopRange& range) {
+    if (range.m_low == range.m_high) { return "of " + std::to_string(range.m_low); }
+    return (range.m_step == 1 ? std::string()
+                              : "that is a multiple of " + std::to_string(range.m_step) + " ") +
+           "in [" + std::to_string(range.m_low) + ", " +
+           (range.m_high == k_open ? std::string("unbounded") : std::to_string(range.m_high)) + "]";
+}
+
+// One tensor whose hop follows the anchor hop h: it advances h * num / den elements per
+// inference (its time ratio, reduced), so h is a multiple of den and keeps the window, that
+// advance plus the overlap, within [window_min, window_max].
+struct HopNeed {
+    bool m_is_input = true;
+    size_t m_index = 0;
+    int64_t m_num = 1;
+    int64_t m_den = 1;
+    HopRange m_range;
+};
+
+// One inference consumes the same span of the stream on every tensor, so the hops are chosen
+// together: the anchor's hop, which the anchor, every tensor with a declared time ratio and every
+// flexible window (time ratio 1/1 without one) follow. A fixed window with no declared ratio
+// keeps its own hop, its ratio derived from it. Of the hops every such tensor allows, the largest
+// at or below the host block (one inference per block when the block is one, several per block
+// when it is above the hop) or else the smallest (one inference every few blocks: a block below
+// the step, a fractional block); without a geometry the smallest. A fractional block_max counts
+// as the rational the latency calculation recovers from it.
+void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, Derived& out) {
+    const auto spec_of = [&](bool is_input, size_t index) -> const anira_tensor_spec& {
+        return is_input ? model.m_inputs[index] : model.m_outputs[index];
+    };
+    const auto derived_of = [&](bool is_input, size_t index) -> DerivedSpec& {
+        return is_input ? out.m_inputs[index] : out.m_outputs[index];
+    };
+
+    std::vector<HopNeed> needs;
+    std::vector<std::string> folded;  // the tensors the range stands for, for the refusal
+    HopRange range;
+    const auto fold = [&](bool is_input, size_t index) {
+        const anira_tensor_spec& spec = spec_of(is_input, index);
+        const bool anchor = is_input == out.m_anchor_is_input && index == out.m_anchor_index;
+        HopNeed need{.m_is_input = is_input, .m_index = index};
+        if (!anchor && spec.m_ratio_den != 0) {
+            const int64_t common = std::gcd(spec.m_ratio_num, spec.m_ratio_den);
+            need.m_num = spec.m_ratio_num / common;
+            need.m_den = spec.m_ratio_den / common;
+        }
+        need.m_range.m_step = need.m_den;
+        need.m_range.m_low =
+            ceil_div(product(spec.m_window_min - spec.m_overlap, need.m_den, spec), need.m_num);
+        if (spec.m_window_max != ANIRA_UNBOUNDED) {
+            need.m_range.m_high =
+                product(spec.m_window_max - spec.m_overlap, need.m_den, spec) / need.m_num;
+        }
+
+        const std::string window =
+            spec.m_window_min == spec.m_window_max
+                ? "window " + std::to_string(spec.m_window_min)
+                : "window [" + std::to_string(spec.m_window_min) + ", " +
+                      (spec.m_window_max == ANIRA_UNBOUNDED ? std::string("unbounded")
+                                                            : std::to_string(spec.m_window_max)) +
+                      "]";
+        const std::string ratio =
+            spec.m_ratio_den == 0
+                ? std::string("1/1 (a flexible window's default)")
+                : std::to_string(spec.m_ratio_num) + "/" + std::to_string(spec.m_ratio_den);
+        const std::string subject = anchor ? window : "time ratio " + ratio + " and " + window;
+        if (first_hop(need.m_range) == 0) {
+            config_error(at(spec) + subject + (anchor ? " admits" : " admit") +
+                         " no whole anchor hop");
+        }
+
+        const HopRange merged{
+            .m_step = product(range.m_step / std::gcd(range.m_step, need.m_den), need.m_den, spec),
+            .m_low = std::max(range.m_low, need.m_range.m_low),
+            .m_high = std::min(range.m_high, need.m_range.m_high)};
+        if (first_hop(merged) == 0) {
+            std::string names;
+            for (const std::string& name : folded) {
+                names += (names.empty() ? "'" : ", '") + name + "'";
+            }
+            const bool one = folded.size() == 1;
+            config_error(at(spec) + subject + (anchor ? " needs" : " need") + " an anchor hop " +
+                         hops_text(need.m_range) + ", but " + (one ? "tensor " : "tensors ") +
+                         names +
+                         (range.m_low == range.m_high
+                              ? std::string(one ? " fixes" : " fix") + " the anchor hop at " +
+                                    std::to_string(range.m_low)
+                              : std::string(one ? " allows" : " allow") + " an anchor hop " +
+                                    hops_text(range)));
+        }
+        range = merged;
+        folded.push_back(spec.m_name);
+        needs.push_back(need);
+    };
+
+    fold(out.m_anchor_is_input, out.m_anchor_index);
+    const auto fold_side = [&](bool is_input) {
+        const std::vector<anira_tensor_spec>& specs = is_input ? model.m_inputs : model.m_outputs;
         for (size_t i = 0; i < specs.size(); ++i) {
             const anira_tensor_spec& spec = specs[i];
-            if (spec.m_role != ANIRA_ROLE_STREAMED || spec.m_ratio_den == 0) { continue; }
-            if (rows[i].m_hop * spec.m_ratio_den != anchor.m_hop * spec.m_ratio_num) {
-                config_error(at(spec) + "time ratio " + std::to_string(spec.m_ratio_num) + "/" +
-                             std::to_string(spec.m_ratio_den) + " does not match its hop " +
-                             std::to_string(rows[i].m_hop) + " against the anchor's " +
-                             std::to_string(anchor.m_hop));
-            }
+            const bool anchor = is_input == out.m_anchor_is_input && i == out.m_anchor_index;
+            const bool follows = spec.m_ratio_den != 0 || spec.m_window_min != spec.m_window_max;
+            if (spec.m_role == ANIRA_ROLE_STREAMED && !anchor && follows) { fold(is_input, i); }
         }
     };
-    check(model.m_inputs, derived.m_inputs);
-    check(model.m_outputs, derived.m_outputs);
+    fold_side(true);
+    fold_side(false);
+
+    int64_t block = 0;
+    if (hard != nullptr && hard->m_block_max > 0.0) {
+        const anira::LatencyCalculator::Rational rational =
+            anira::LatencyCalculator::rationalize(hard->m_block_max);
+        block = rational.m_numerator / rational.m_denominator;
+    }
+    const int64_t below = std::min(block, range.m_high) / range.m_step * range.m_step;
+    const int64_t hop = below >= range.m_low ? below : first_hop(range);  // the fold kept one
+
+    for (const HopNeed& need : needs) {
+        const anira_tensor_spec& spec = spec_of(need.m_is_input, need.m_index);
+        if (spec.m_window_min == spec.m_window_max) { continue; }  // check_spec's, kept by range
+        DerivedSpec& derived = derived_of(need.m_is_input, need.m_index);
+        derived.m_hop = product(hop / need.m_den, need.m_num, spec);
+        derived.m_window_used = sum(derived.m_hop, spec.m_overlap, spec);
+        const std::optional<size_t> time_axis = derived.m_time_axis;  // a Streamed tensor's
+        if (time_axis.has_value() && derived.m_dims[*time_axis] == ANIRA_DYNAMIC) {
+            derived.m_dims[*time_axis] = derived.m_window_used;
+        }
+    }
 }
 
 // Whether a custom row's id is served: on the C path by an engine registered on the pipeline
@@ -517,6 +646,17 @@ void check_ratios(const anira_model_config& model, const Derived& derived) {
 bool serves_custom_id(const std::string& id, const EngineFacts* engines) {
     if (engines == nullptr) { return id == k_v2_custom_engine; }
     return std::ranges::find(engines->m_ids, id) != engines->m_ids.end();
+}
+
+// Whether the registered engine of a custom row declares ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, which
+// admits an entry without a source (neither a path nor bytes).
+bool needs_no_model(const std::string& id, const EngineFacts* engines) {
+    if (engines == nullptr) { return false; }
+    const auto found = std::ranges::find(engines->m_ids, id);
+    if (found == engines->m_ids.end()) { return false; }
+    const auto at = static_cast<size_t>(found - engines->m_ids.begin());
+    return at < engines->m_flags.size() &&
+           (engines->m_flags[at] & ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL) != 0;
 }
 
 void check_rows(const anira_model_config& model,
@@ -558,8 +698,11 @@ void check_rows(const anira_model_config& model,
                 "' is not in this build (its engines: " + engines_list(enabled_engines()) +
                 "); name the candidates to skip the entries this build cannot load");
         }
-        if (row.m_path.empty() && !row.has_bytes()) {
-            config_error(at_row(i) + "neither a path nor bytes");
+        if (row.m_path.empty() && !row.has_bytes() &&
+            !(row.is_custom() && needs_no_model(row.m_engine_id, engines))) {
+            config_error(at_row(i) + "neither a path nor bytes (an entry without a source is " +
+                         "legal for a custom engine that declares " +
+                         "ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone)");
         }
         for (const Taken& other : taken) {
             if (other.m_engine == row.m_engine && other.m_engine_id == row.m_engine_id &&
@@ -865,13 +1008,13 @@ void validate(const anira_model_config& model,
     out.m_inputs.resize(model.m_inputs.size());
     out.m_outputs.resize(model.m_outputs.size());
     for (size_t i = 0; i < model.m_inputs.size(); ++i) {
-        check_spec(model.m_inputs[i], true, hard, out.m_inputs[i]);
+        check_spec(model.m_inputs[i], true, out.m_inputs[i]);
     }
     for (size_t i = 0; i < model.m_outputs.size(); ++i) {
-        check_spec(model.m_outputs[i], false, hard, out.m_outputs[i]);
+        check_spec(model.m_outputs[i], false, out.m_outputs[i]);
     }
     resolve_anchor(model, out);
-    check_ratios(model, out);
+    pin_anchor_hop(model, hard, out);
     check_rows(model, candidates, num_candidates, engines, out, default_set);
     check_layouts(model, out);
     const std::vector<ExtConsumer> consumers = pipeline_consumers(stages, engines);
@@ -963,10 +1106,10 @@ Anchor anchor_of(const anira_model_config& model) {
     derived.m_inputs.resize(model.m_inputs.size());
     derived.m_outputs.resize(model.m_outputs.size());
     for (size_t i = 0; i < model.m_inputs.size(); ++i) {
-        check_spec(model.m_inputs[i], true, nullptr, derived.m_inputs[i]);
+        check_spec(model.m_inputs[i], true, derived.m_inputs[i]);
     }
     for (size_t i = 0; i < model.m_outputs.size(); ++i) {
-        check_spec(model.m_outputs[i], false, nullptr, derived.m_outputs[i]);
+        check_spec(model.m_outputs[i], false, derived.m_outputs[i]);
     }
     resolve_anchor(model, derived);
     return {.m_named = derived.m_anchor_named,

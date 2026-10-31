@@ -22,6 +22,20 @@ ANIRA_TEST_EXPORT void* unloadtest_create(void);
 /// its code is libanira's and its runtime's, never this module's. nullptr, with nothing left
 /// behind, if a step failed: on a build without a built-in engine that runs the model.
 ANIRA_TEST_EXPORT void* unloadtest_create_builtin(void);
+/// The engines of unloadtest_create_engine, all of this module on the custom row: an inference
+/// that never ends on its own (it sleeps until the process dies); one that needs the loader
+/// lock again and again until the process dies (dlopen on glibc, which a dlclose in progress
+/// holds; elsewhere it stalls); one that sleeps slow_ms, then passes the block through.
+enum {
+    UNLOADTEST_ENGINE_STALLING = 1,
+    UNLOADTEST_ENGINE_LOADER_LOCK = 2,
+    UNLOADTEST_ENGINE_SLOW = 3,
+};
+/// Creates and prepares an instance over the module engine of `behaviour` (above; slow_ms
+/// for UNLOADTEST_ENGINE_SLOW); nullptr, with nothing left behind, if a step failed.
+ANIRA_TEST_EXPORT void* unloadtest_create_engine(int behaviour, int slow_ms);
+/// The inferences of the engines of unloadtest_create_engine that reached their process.
+ANIRA_TEST_EXPORT int unloadtest_engine_entered(void);
 /// anira_handler_prepare with a 512-sample / 48 kHz Hard contract — starts the pool threads.
 ANIRA_TEST_EXPORT void unloadtest_prepare(void* instance);
 /// Runs num_blocks blocks through anira_handler_process(), in place over one planar tensor.

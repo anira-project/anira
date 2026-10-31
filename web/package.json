@@ -1,6 +1,6 @@
 {
   "name": "@anira-project/anira",
-  "version": "2.2.1",
+  "version": "3.0.0-alpha.2",
   "license": "Apache-2.0",
   "homepage": "https://github.com/anira-project/anira",
   "repository": {
@@ -20,17 +20,13 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
-    "./workers/inference-worker": {
-      "types": "./dist/workers/inference-worker.d.ts",
-      "import": "./dist/workers/inference-worker.js"
+    "./scope": {
+      "types": "./dist/scope.d.ts",
+      "import": "./dist/scope.js"
     },
-    "./workers/audio-worklet": {
-      "types": "./dist/workers/audio-worklet.d.ts",
-      "import": "./dist/workers/audio-worklet.js"
-    },
-    "./workers/worklet-base": {
-      "types": "./dist/workers/worklet-base.d.ts",
-      "import": "./dist/workers/worklet-base.js"
+    "./engines/onnxruntime-web": {
+      "types": "./dist/engines/onnxruntime-web.d.ts",
+      "import": "./dist/engines/onnxruntime-web.js"
     },
     "./wasm/*": "./dist/wasm/*"
   },
@@ -39,6 +35,9 @@
   ],
   "scripts": {
     "build": "tsc && vite build",
+    "test": "node --experimental-strip-types --no-warnings --import ./test/resolve-ts.mjs --test test/*.test.ts",
+    "check:bundle": "node test/bundle-check.mjs",
+    "examples": "tsc -p examples/stage-and-engine && vite build --config examples/stage-and-engine/vite.config.ts && tsc -p examples/model-file && vite build --config examples/model-file/vite.config.ts",
     "dev": "vite build --watch",
     "format": "prettier . --write"
   },

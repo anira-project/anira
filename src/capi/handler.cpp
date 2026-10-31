@@ -11,9 +11,11 @@
 //
 // One face over the copy path (InferenceManager's tensor stems): the Hard entries take host
 // tensors, one per slot. They validate every descriptor (anira::tensor_run::check_host_tensor,
-// src/scheduler/TensorRun.h), hand the arrays to the stems as they are and report the counts
-// the stems return. A host that holds float channel pointers presents them itself, as one
-// planar tensor over its pointer array (anira_tensor_init_host_planar).
+// src/scheduler/TensorRun.h) and its count against the declared block (one host block of
+// block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
+// cut to its tail), hand the arrays to the stems as they are and report the counts the stems
+// return. A host that holds float channel pointers presents them itself, as one planar tensor
+// over its pointer array (anira_tensor_init_host_planar).
 //
 // The stems move Streamed slots. A Static slot has no ring: its value lives in the
 // handler's static port (port.h), a whole tensor in the spec's shape and dtype, written
@@ -47,6 +49,7 @@
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -195,12 +198,38 @@ bool both_slots(const anira_handler& handler,
 
 // ==== the host tensors ========================================================================
 
+// The count of a well-formed host block against its slot's stream port: one host block of the
+// geometry's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
+// rings were sized for. A larger block is refused before anything moves, never cut to its
+// tail. A compare against prepare's figure: no allocation, no lock. Recorded and logged like
+// every other refusal, naming the slot and the bound.
+anira_status block_count_status(anira_handler& handler,
+                                const anira::capi::StreamPort& port,
+                                const anira_tensor& tensor,
+                                bool input,
+                                [[maybe_unused]] uint32_t slot,
+                                [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
+    if (std::cmp_less_equal(tensor.shape[1], port.m_max_samples)) { return ANIRA_OK; }
+    if (!handler.m_rt.record(ANIRA_ERROR_INVALID_ARGUMENT)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
+                           "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
+                           "host block of the geometry's block_max (%zu on this stream); nothing "
+                           "moved. Declare the largest block the host passes as block_max",
+                           entry,
+                           input ? "input" : "output",
+                           slot,
+                           slot_name(handler, input, slot),
+                           static_cast<long long>(tensor.shape[1]),
+                           port.m_max_samples);
+    return ANIRA_ERROR_INVALID_ARGUMENT;
+}
+
 // One host tensor of a tensor form against its slot's stream port: the check the manager's
 // stems leave to their caller (anira::tensor_run::check_host_tensor: a status only, no
-// allocation, no log, the order rank, domain, flags, shape, dtype, memory and strides). A
-// refusal is recorded last-wins like every other and logged on the kind's first occurrence,
-// naming the slot. Every caller asked the port first (input_slot, output_slot,
-// side_tensors_status): `slot` has a stream port.
+// allocation, no log, the order rank, domain, flags, shape, dtype, memory and strides), then
+// its count against the block (block_count_status). A refusal is recorded last-wins like every
+// other and logged on the kind's first occurrence, naming the slot. Every caller asked the port
+// first (input_slot, output_slot, side_tensors_status): `slot` has a stream port.
 anira_status slot_tensor_status(anira_handler& handler,
                                 const anira_tensor& tensor,
                                 bool input,
@@ -213,7 +242,10 @@ anira_status slot_tensor_status(anira_handler& handler,
     const uint32_t channels = port->m_channels;
     const anira_status status =
         anira::tensor_run::check_host_tensor(tensor, dtype, channels, /*output=*/!input);
-    if (status == ANIRA_OK || !handler.m_rt.record(status)) { return status; }
+    if (status == ANIRA_OK) {
+        return block_count_status(handler, *port, tensor, input, slot, entry);
+    }
+    if (!handler.m_rt.record(status)) { return status; }
     [[maybe_unused]] const char* side = input ? "input" : "output";
     switch (status) {
         case ANIRA_ERROR_CONFIG:
@@ -596,6 +628,25 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
 
 // ==== prepare's pieces ========================================================================
 
+// The host block in hops, rho = B / R, as the latency calculation takes it
+// (LatencyCalculator's constructor): the geometry's block_max over the reference stream's
+// samples per hop, the reduced fraction rationalize() recovers from the float.
+anira::LatencyCalculator::Rational block_in_hops(const anira::HostConfig& host,
+                                                 const anira::InferenceConfig& config) {
+    const auto reference_size = static_cast<double>(host.get_reference_size(config));
+    return anira::LatencyCalculator::rationalize(static_cast<double>(host.m_buffer_size) /
+                                                 reference_size);
+}
+
+// One host block in samples of a stream with `hop` samples per hop: ceil(rho * hop), the
+// block the send ring holds besides the adaptation leftover (LatencyCalculator), so floor(b)
+// and ceil(b) of a fractional block b both fit. 0 for a slot without a stream.
+size_t host_block_samples(const anira::LatencyCalculator::Rational& block_hops, size_t hop) {
+    const int64_t numerator = block_hops.m_numerator * static_cast<int64_t>(hop);
+    return static_cast<size_t>((numerator + block_hops.m_denominator - 1) /
+                               block_hops.m_denominator);
+}
+
 // What the manager calls once per missed block under ANIRA_MISS_CALLBACK, on the thread that
 // drives the call: it forwards the arrays the copy path was handed, as they are, to the host's
 // function: the caller's own arrays of a multi form, one tensor per slot of the side (a State
@@ -904,8 +955,11 @@ bool consumes_provider_options(const anira_pipeline& pipeline, const anira::capi
 // the kind and serve the provider by its declared list and its query; a set for a custom
 // engine this pipeline does not add is another pipeline's and passes. So a misspelled provider
 // word, which reads as a custom provider's name, is refused here and never silently ignored,
-// and a set no plan of the handler runs on is still no error.
-void check_option_sets(const anira_context& context, const anira_pipeline& pipeline) {
+// and a set no plan of the handler runs on is still no error. A custom engine's query answer is
+// asked through `answers` (QueryUse::Ask), which the handler keeps.
+void check_option_sets(const anira_context& context,
+                       const anira_pipeline& pipeline,
+                       anira::capi::QueryAnswers& answers) {
     const auto* options =
         context.m_config.m_ext.payload<anira::capi::ProviderOptionsPayload>("provider_options");
     if (options == nullptr) { return; }
@@ -929,7 +983,9 @@ void check_option_sets(const anira_context& context, const anira_pipeline& pipel
                     "consumed_kinds lacks \"context:provider_options\")";
                 throw StatusError(ANIRA_ERROR_EXTENSION_UNCONSUMED, message);
             }
-            served = anira::capi::served_by_custom(context, *engine);
+            served =
+                anira::capi::served_by_custom(*engine,
+                                              anira::capi::ask_query(context, *engine, answers));
         } else {
             served = anira::capi::served_by_builtin(context, set.m_engine);
         }
@@ -950,16 +1006,20 @@ bool listless_engine(const anira_pipeline& pipeline, const anira::capi::ModelEnt
 // Whether every plan of the table runs on a provider its engine serves here, through the one
 // path of providers.h: a built-in engine's provider must be in the context's capabilities
 // (what its runtime reported at the last probe), a registered engine's in its descriptor's
-// list and reported usable by its query (run now, before its init); an engine without a list
-// serves ANIRA_PROVIDER_CPU alone. ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine,
-// the provider and what is served (a declared provider the query cleared says so); a query
-// that fails fails the create with its status; the engine's load may still refuse a provider
-// at run time (a device lost between create and prepare). Under the default set a plan on a
-// provider its engine declares but cannot use here is dropped from the table instead (with
-// its row when no plan of the row is left), and a table left empty is ANIRA_ERROR_CONFIG.
+// list and reported usable by its query (before its init; asked at create under
+// QueryUse::Ask and kept in `answers`, reused at prepare under QueryUse::Reuse, so the query
+// runs on the main thread only); an engine without a list serves ANIRA_PROVIDER_CPU alone.
+// ANIRA_ERROR_NOT_SUPPORTED naming the entry, the engine, the provider and what is served (a
+// declared provider the query cleared says so); a query that fails fails the create with its
+// status; the engine's load may still refuse a provider at run time (a device lost between create
+// and prepare). Under the default set a plan on a provider its engine declares but cannot use here
+// is dropped from the table instead (with its row when no plan of the row is left), and a table
+// left empty is ANIRA_ERROR_CONFIG.
 void check_providers(const anira_context& context,
                      const anira_pipeline& pipeline,
-                     anira::capi::Derived& derived) {
+                     anira::capi::Derived& derived,
+                     anira::capi::QueryAnswers& answers,
+                     anira::capi::QueryUse use) {
     const anira_model_config& model = pipeline.m_variants[0];
     std::vector<anira::capi::PlanKey> kept;
     kept.reserve(derived.m_plans.size());
@@ -974,7 +1034,7 @@ void check_providers(const anira_context& context,
             continue;
         }
         const anira::capi::ServedProviders served =
-            anira::capi::served_providers(context, pipeline, row);
+            anira::capi::served_providers(context, pipeline, row, answers, use);
         if (served.serves(key.m_provider, key.m_provider_id)) {
             kept.push_back(std::move(key));
             continue;
@@ -1512,9 +1572,15 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     check_stage_flags(stage);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
     check_miss_policy(hard, model, derived, ring_dtypes);
-    // The plans' providers against what their engines serve now (a built-in engine's runtime,
-    // a custom engine's query), as at create: a context probed again since is seen here.
-    check_providers(*handler.m_context, handler.m_pipeline, derived);
+    // The plans' providers against what their engines serve, as at create: a built-in
+    // engine's runtime as the context reports it now (a context probed again since is seen
+    // here), a custom engine's query as it answered at create (the query runs on the main
+    // thread only; a prepare may run on any control thread).
+    check_providers(*handler.m_context,
+                    handler.m_pipeline,
+                    derived,
+                    handler.m_query_answers,
+                    anira::capi::QueryUse::Reuse);
     // The stage's init, once per registration, at the first prepare of a handler of the
     // pipeline that survives validation, before any model loads (a refused init throws none of
     // that work away and is tried again by the next prepare), with the facts of the core in
@@ -1589,36 +1655,38 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_num_entries = stage_processor->num_entries();
 
     // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
-    // block must carry (the resolved ring dtype) and the channel count of a host block; then
-    // the empty tensors of the single-tensor forms. A Static slot has no ring and no host
-    // block: its entry of either array stays the empty tensor, and its tensors are checked
-    // against the static port's value. A State slot has neither a ring nor a value: its entry
-    // is an empty tensor nothing ever replaces.
+    // block must carry (the resolved ring dtype), the channel count of a host block and the
+    // most samples it may carry (one host block of block_max on the slot's stream); then the
+    // empty tensors of the single-tensor forms. A Static slot has no ring and no host block:
+    // its entry of either array stays the empty tensor, and its tensors are checked against the
+    // static port's value. A State slot has neither a ring nor a value: its entry is an empty
+    // tensor nothing ever replaces.
     const anira::InferenceConfig& prepared = handler.m_inference_config;
+    const anira::LatencyCalculator::Rational block_hops = block_in_hops(host, prepared);
     for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
         if (stream == nullptr) { continue; }
+        const size_t hop = prepared.get_preprocess_input_size()[slot];
         stream->m_ring_dtype = ring_dtypes.m_inputs[slot];
         stream->m_channels =
-            prepared.get_preprocess_input_size()[slot] > 0
-                ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot])
-                : 1U;
+            hop > 0 ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot]) : 1U;
+        stream->m_max_samples = host_block_samples(block_hops, hop);
     }
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
         if (stream == nullptr) { continue; }
+        const size_t hop = prepared.get_postprocess_output_size()[slot];
         stream->m_ring_dtype = ring_dtypes.m_outputs[slot];
         stream->m_channels =
-            prepared.get_postprocess_output_size()[slot] > 0
-                ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot])
-                : 1U;
+            hop > 0 ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot]) : 1U;
+        stream->m_max_samples = host_block_samples(block_hops, hop);
     }
     handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
     handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
     // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
     // has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
-        static_cast<double>(hard.m_block_max) / hard.m_rate * 1e6 * hard.m_wait_ratio));
+        hard.m_block_max / hard.m_rate * 1e6 * hard.m_wait_ratio));
 
     // The declared host-end domain per slot (validate refused a name that is no tensor's and,
     // in this pre-release, any domain but host memory): what the slot rows report, and the
@@ -1752,6 +1820,17 @@ anira_status enumerate_rows(const std::vector<T>& rows,
 }  // namespace
 
 namespace anira::capi {
+
+void prepare_or_unprepare(anira_handler& handler, const anira_contract& contract) {
+    try {
+        prepare_handler(handler, contract);
+    } catch (...) {
+        // A failed prepare leaves the handler unprepared whatever step failed: a refused
+        // contract on a prepared handler releases the previous session too.
+        unprepare(handler);
+        throw;
+    }
+}
 
 anira_model_config clone_model_config(const anira_model_config& model) {
     anira_model_config copy;
@@ -2287,11 +2366,15 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                           &stages,
                           &engines,
                           pipeline->m_default_set);
-    check_providers(*context, *pipeline, derived);
-    check_option_sets(*context, *pipeline);
+    // The custom engines' queries run here, on the main thread, and the handler keeps their
+    // answers for its prepares.
+    anira::capi::QueryAnswers answers;
+    check_providers(*context, *pipeline, derived, answers, anira::capi::QueryUse::Ask);
+    check_option_sets(*context, *pipeline, answers);
 
     auto handler = std::make_unique<anira_handler>();
     handler->m_pipeline = anira_pipeline(*pipeline);
+    handler->m_query_answers = std::move(answers);
     // The ports: one per tensor of either list, the arm by the spec's role (the copy fixes the
     // specs, so the vectors are never resized and no arm ever changes). A static port holds
     // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
@@ -2373,14 +2456,14 @@ anira_status ANIRA_CALL anira_handler_prepare(anira_handler* handler,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "handler: NULL contract");
-    try {
-        prepare_handler(*handler, *contract);
-    } catch (...) {
-        // A failed prepare leaves the handler unprepared whatever step failed: a refused
-        // contract on a prepared handler releases the previous session too.
-        unprepare(*handler);
-        throw;
-    }
+    ANIRA_CAPI_REQUIRE(handler->m_audio_nodes.load(std::memory_order_acquire) == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_STATE,
+                       "handler: %u audio node(s) stream through it, whose render callback may "
+                       "be inside a process call; re-prepare through the node "
+                       "(anira_em_audio_node_prepare), which holds the callback off",
+                       handler->m_audio_nodes.load(std::memory_order_relaxed));
+    anira::capi::prepare_or_unprepare(*handler, *contract);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 

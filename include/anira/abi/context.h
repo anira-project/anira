@@ -131,8 +131,10 @@ typedef struct anira_edge_info {
  * file comment), registers the config's log sink so that it receives every record from
  * here on, applies the config's ANIRA_LOG_FLAG_* switches while the context lives, and
  * probes the capabilities. A device block on the config is refused in this pre-release.
- * On WebAssembly a nonzero num_threads, ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD
- * are coerced with a warning, as the context file section says.
+ * On WebAssembly the pool's threads are Wasm Workers
+ * (anira_em_context_config_set_worker_module names the module they import);
+ * ANIRA_WAIT_BLOCKING and ANIRA_LOG_DRAIN_THREAD are coerced to SPIN_BACKOFF and MANUAL
+ * with a warning.
  * @param config The context config; copied, destroyable right after.
  * @param out Receives the handle on success.
  * @param err Nullable.
@@ -153,7 +155,10 @@ ANIRA_API anira_status ANIRA_CALL anira_context_create(const anira_context_confi
  * calls, withdraws its ANIRA_LOG_FLAG_* switches, and invalidates the handle for the
  * caller whatever the internal count (a handler that added a reference keeps the memory
  * alive). Joins nothing. A destroy issued from inside the context's own sink is refused
- * with one Error record and nothing happens.
+ * with one Error record and nothing happens. A plugin must destroy its handlers, then
+ * its contexts, before its host unloads it (its instance teardown or module-exit entry
+ * point), and never from its own static destructors or DllMain, which run inside the
+ * unload under the loader lock.
  * @param context The handle; NULL is a no-op.
  * @par Thread contract
  * [main-thread & !loader-lock]

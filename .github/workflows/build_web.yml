@@ -1,7 +1,8 @@
 name: build_web
 
 # The wasm build runs through the shared cmake-build-wasm action — the emsdk
-# pin lives there, shared across tanh-lab repos. The JS/TS npm package build
+# pin lives there, shared across tanh-lab repos (4.0.23: the prebuilt ONNX Runtime
+# archive the module links is built with it). The JS/TS npm package build
 # that follows is anira product code and stays here, in the same job, because
 # it consumes the wasm build outputs.
 
@@ -9,6 +10,8 @@ on:
   workflow_dispatch:
   merge_group:
   pull_request:
+  # on_tag.yml gates publish_npm on this workflow.
+  workflow_call:
 
 concurrency:
   group: build-web-${{ github.ref }}
@@ -16,7 +19,7 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GITHUB_TOKEN: ${{ github.token }} # authenticated backend integrity check
     steps:
@@ -41,10 +44,58 @@ jobs:
           which tsc
           tsc --version
 
+      # wasm-abi is wasm-release (the module the package ships) plus ANIRA_WITH_ABI_TESTS:
+      # the ABI gates that run under node, in the same build.
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.15
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
-          PRESET: wasm-release
+          PRESET: wasm-abi
+
+      # The node gate anira_em_oom, config.html and the model-file example load a bundled model
+      # config (extras/models/model-pool/gain.model.json) and its model file: the fixture trees,
+      # restored from the cache warm_caches.yml keeps, else fetched at their pins.
+      - name: restore the model fixtures
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            extras/models/hybrid-nn/GuitarLSTM
+            extras/models/cnn/steerable-nafx
+            extras/models/stateful-rnn/stateful-lstm
+            extras/models/model-pool/example-models
+            extras/models/third-party/ircam-acids/RAVE
+          key: anira-models-v1-${{ hashFiles('extras/fetch-models.cmake') }}
+          enableCrossOsArchive: true
+      - name: fetch the model fixtures
+        run: cmake -P extras/fetch-models.cmake
+
+      # Gate 3's layout table on wasm32, diffed against abi/layout-0.txt, and the node smoke
+      # of anira/anira_em.h's trampolines (test/abi/CMakeLists.txt, its Wasm arm). node is
+      # emsdk's, the CMAKE_CROSSCOMPILING_EMULATOR of the configure.
+      - name: run the WebAssembly ABI gates under node
+        run: cmake --build --preset wasm-abi --target anira_abi_wasm_gates
+
+      # The module exports exactly the promised, draft and Emscripten entry points (and
+      # _malloc, _free), read from the typing emcc emitted: a name of the lists missing from
+      # the link, or an export no list has, fails the job.
+      - name: check the exports of AniraWeb against the symbol lists
+        run: |
+          set -euo pipefail
+          dts=web/wasm/AniraWeb.d.ts
+          grep -oE '^  _[A-Za-z0-9_]+\(' "$dts" | sed -E 's/^  _//; s/\($//' | sort -u > "$RUNNER_TEMP/exported.txt"
+          { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
+            | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          extra=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
+            echo "$missing"
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::AniraWeb.d.ts exports names no symbol list has:"
+            echo "$extra"
+          fi
+          [ -z "$missing" ] && [ -z "$extra" ]
+          echo "the module exports exactly the $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists"
 
       - name: setup node
         uses: actions/setup-node@v5
@@ -67,12 +118,49 @@ jobs:
         working-directory: web
         run: npm run build
 
+      # The package's unit tests under node's type stripping (web/test/*.test.ts).
+      - name: test js package
+        working-directory: web
+        run: npm test
+
+      # The two examples (web/examples/stage-and-engine, web/examples/model-file) against the built
+      # package: tsc with strict over their files and the package's types, then their Vite builds
+      # (stage-and-engine's worker and worklet modules bundled into one script each), which the
+      # browser test runs.
+      - name: build the examples
+        working-directory: web
+        run: npm run examples
+
+      # A page that only names the ONNX Runtime Web engine (ONNXRUNTIME_WEB_ENGINE_ID from the root
+      # entry) must not bundle onnxruntime-web: no module the root or scope entry imports, and no
+      # chunk of the examples, carries its code.
+      - name: check the bundles carry no onnxruntime-web
+        working-directory: web
+        run: npm run check:bundle
+
+      # The built package in headless Chromium and Firefox (served with COOP/COEP).
+      # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm
+      # Workers importing a worker module with a JavaScript engine, a JavaScript stage in the
+      # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
+      # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
+      # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX
+      # entry on the module's built-in ONNX Runtime engine. ort.html: the ONNX Runtime Web
+      # engine on a Worker. The example's check page, built and under Vite's dev server. A load
+      # the browser refuses (Firefox's file:/// security error) fails the step too.
+      - name: browser test (headless Chromium and Firefox)
+        working-directory: web
+        run: |
+          npm install --no-save playwright@1.64.1
+          npx playwright install --with-deps chromium firefox
+          node test/browser/run.mjs chromium
+          node test/browser/run.mjs firefox
+
   # The queue's required status for this workflow.
   result:
     name: web result
     needs: [build]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - name: aggregate
         run: |

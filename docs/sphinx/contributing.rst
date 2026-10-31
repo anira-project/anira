@@ -98,7 +98,7 @@ The ``ci-install-*`` presets build ONNX Runtime only. For an install tree with t
 Code Style
 ~~~~~~~~~~
 
-Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
+Formatting and linting are enforced by ``.clang-format``, ``.clang-tidy`` and ``.clangd`` in the repository root; the CMake modules under ``cmake/tanh/`` (platform detection, the symbol-export policy and its CTest check, git versioning, sanitizers, googletest/benchmark, Apple defaults, CPack, install RPATHs, the compile-database link) are the build-side counterpart. None of these files are **maintained in anira**: they are shared across the tanh-lab projects and installed verbatim from a pinned release of `tanh-tooling <https://github.com/tanh-lab/tanh-tooling>`_ (the canonical copies live in its ``clang/`` and ``cmake/`` directories). Do not edit them by hand and do not add files to ``cmake/tanh/`` — the ``tooling-config`` job in ``lint.yml`` (a merge-queue job) re-downloads the pinned release and fails if the committed files differ. The tanh-lib anira fetches carries its own copy of the modules, so anira and the pinned tanh-lib must move to the same tanh-tooling tag together.
 
 To update to a newer tanh-tooling release, run its installer with the new tag, commit the rewritten files, and bump the ``ref`` (and the workflow version) in ``.github/workflows/lint.yml`` to the same tag in the same commit:
 
@@ -107,6 +107,65 @@ To update to a newer tanh-tooling release, run its installer with the new tag, c
     curl -fsSL https://raw.githubusercontent.com/tanh-lab/tanh-tooling/vX.Y.Z/install.sh | sh -s -- clang cmake
 
 Style changes themselves belong in tanh-tooling, not here.
+
+Running the format and tidy checks locally
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+CI runs both tools at LLVM 20 (``lint.yml``'s ``clang-format`` job, ``clang_tidy.yml``), and another major formats and flags differently. Where the system ships another LLVM, the PyPI wheels give the same major beside it:
+
+.. code-block:: bash
+
+    python3 -m venv ~/.local/llvm20
+    ~/.local/llvm20/bin/pip install "clang-tidy==20.*" "clang-format==20.*"
+    export PATH="$HOME/.local/llvm20/bin:$PATH"
+
+The wheels match the major, not the patch release: PyPI's only LLVM 20 clang-tidy is 20.1.0,
+while CI installs Ubuntu's ``clang-tidy-20`` (20.1.8 at the time of writing). The static
+analyzer checks can differ between the two (20.1.0 reports a NULL dereference path that 20.1.8
+does not), so a finding the wheel alone reports is worth a look but is not a CI failure; CI's
+run is the one that gates.
+
+**clang-format.** Check mode over the tracked sources (a superset of the queue job's ``src/ include/ test/ examples/``):
+
+.. code-block:: bash
+
+    git ls-files '*.h' '*.hpp' '*.c' '*.cpp' | xargs -P "$(nproc)" -n 20 clang-format --dry-run --Werror
+
+Fix only what the branch changes. ``<base>`` here and below is the branch your pull request targets: ``main``, or ``v3`` while 3.x is developed there.
+
+.. code-block:: bash
+
+    git diff --name-only --diff-filter=d origin/<base>... -- '*.h' '*.hpp' '*.c' '*.cpp' | xargs -r clang-format -i
+
+Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
+
+**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
+
+.. code-block:: bash
+
+    cmake --preset clang-tidy
+    cmake --build build/clang-tidy
+
+A pull request checks the ``.cpp`` files it changes:
+
+.. code-block:: bash
+
+    git diff --name-only --diff-filter=d origin/<base>... -- '*.cpp' \
+        | xargs -r -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
+
+The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep the list below in step with it):
+
+.. code-block:: bash
+
+    find src/engines/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
+         src/InferenceHandler.cpp src/PrePostProcessor.cpp test/engines/ test/scheduler/ test/utils/ \
+         test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
+         test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
+        | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
+
+The sweep is about an hour of CPU time for some 115 files: 3 minutes on 32 cores, and no core count brings it much below 2, since single files take that long. The time goes to the test files: one of ``test/abi/`` includes googletest and the whole C++ face and runs the static analyzer over dozens of test bodies, 80 to 125 s per file, where a library file takes 5 to 55 s. A pull request that changes a test file therefore spends minutes on it, not seconds.
+
+Every configure preset exports ``compile_commands.json`` into its tree, and ``.clangd`` reads ``build/compile_commands.json``. The development presets (every ``desktop-*`` one and ``wasm-debug`` / ``wasm-release``) set ``ANIRA_LINK_COMPILE_COMMANDS=ON``, so each configure of one of them links its tree's database there (``tanh_link_compile_commands`` in ``cmake/tanh/compile-commands.cmake``) and clangd follows the tree configured last: configure ``desktop-tests-debug`` to work on the tests, ``wasm-debug`` to see the Emscripten branches, ``desktop-debug`` for the library alone. The ``clang-tidy``, ``docs``, ``ci-*``, sanitizer and mobile presets leave the link alone, so a tidy sweep or a sanitizer run does not move it. The wasm trees compile with ``em++``, which adds the wasm target and the emsdk sysroot itself; start clangd with ``--query-driver=**/em++`` so it asks ``em++`` for them. That is a command-line flag (it lets clangd run the compiler), never a ``.clangd`` key.
 
 Documentation
 ~~~~~~~~~~~~~
@@ -191,7 +250,8 @@ The C headers under ``include/anira/abi/`` are generated, never edited by hand. 
 single source of truth is ``abi/anira.yml``; ``python3 tools/abi/gen.py --repo . --write``
 (or the ``anira_abi_regen`` build target; needs ``pip install pyyaml``) validates the
 registry against the header conventions of ``docs/anira-v3-architecture.md`` and
-rewrites the headers, ``web/src/abi/enums.ts`` and ``web/src/abi/layout.ts``, the symbol and
+rewrites the headers, ``web/src/abi/enums.ts``, ``web/src/abi/layout.ts`` and
+``web/src/abi/bindings.ts`` (one typed method per entry point, see below), the symbol and
 wasm export lists, the tables under ``src/capi/generated/`` (the status texts, and
 ``struct_sizes.inc`` behind ``anira_sizeof``) and ``test/abi/generated/``,
 ``abi/layout-<major>.txt`` and the enum pages under ``docs/sphinx/api/enum/``. Commit the
@@ -202,8 +262,22 @@ pre-release) or breaking (a major). The generated files carry a ``.clang-format`
 ``DisableFormat`` (``include/anira/abi/``'s covers the ``draft/`` folder below it) and a
 ``NOLINTBEGIN(readability-identifier-naming)`` block, so the pinned root configs stay
 untouched; ``layout.ts`` is emitted the way prettier prints it under ``web/.prettierrc``
-(check it with ``npx prettier --check src/abi/layout.ts``, and never run ``npm run format``:
-it rewrites the generated ``enums.ts``, which then fails ``--check``).
+(check it with ``npx prettier --check src/abi/layout.ts``), and ``web/.prettierignore`` lists
+the generated ``enums.ts`` and ``bindings.ts``, so ``npm run format`` leaves them as written.
+
+``bindings.ts`` is the TypeScript face of the C ABI: the class ``AniraBindings`` over one
+module instance, one method per entry point under its C name, derived from the registry's
+types alone. The ``anira_error*`` parameter is made by the binding on the instance's stack and
+a failed ``anira_status`` throws an ``AniraError`` with the entry's message (an entry without
+one throws with the status text); a ``const char*`` argument is a JS string copied to the
+stack (with its ``size_t len`` computed when one follows); what an entry writes through a
+non-const pointer to a scalar, an enum, a handle pointer or a ``const char*`` is returned (one
+value, or an object of them by parameter name); a ``_to_json`` returns its text; an
+``anira_bool`` is a ``boolean``, a 64-bit integer a ``bigint``, a pointer or a size a
+``number``. An enumeration entry (a ``uint32_t* count`` the caller sets to its capacity) keeps
+its pointers as arguments, and a record the caller passes in (a tensor, a descriptor, a
+capability row) is a pointer. A new entry needs no TypeScript: regenerating gives it its
+method.
 
 Entity kinds are ``verbatim``, ``typedef``, ``define``, ``enum``, ``handles``, ``struct``,
 ``union``, ``callback`` and ``function``. A struct field or a union arm has exactly one shape:
@@ -232,7 +306,16 @@ followed by an explicit ``reserved``. A header with ``draft: true`` lives under
 symbol lists and its declaration into a promised header without renaming it; a draft function
 is outside the promise, so ``--diff-against`` lists a changed, removed or promoted one as an
 addition, while a changed arm of a frozen union (an appended one included), a changed
-signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. The
+signature, thread tag or ``nonblocking`` and a removed ``callback_safe`` are breaks. A header
+with ``platform: emscripten`` is a companion of the ABI for one target (``file:
+anira_<name>.h`` with its own ``guard:``): it lands in ``include/anira/`` beside the umbrellas,
+its body sits inside ``#if defined(__EMSCRIPTEN__) || defined(DOXYGEN)`` (elsewhere it is an
+empty header, so a native consumer may include it, and the reference documents it from any
+host), it declares functions, callbacks, typedefs and defines only, and no
+header may include it. Its names go to ``abi/symbols-emscripten.txt`` and the WebAssembly
+export list, never to ``abi/symbols-<major>.txt``, ``abi/symbols-draft.txt``, the link probe
+or the layout test's include list; its defines reach ``web/src/abi/enums.ts`` like any
+other, and ``abi/anira.json`` records the key. The
 generator refuses a member name repeated within one C scope (the fields of a struct, the arms
 of a union, the fields of one arm; an ``ANIRA_PTR`` slot takes both ``name`` and
 ``name_bits``), so ``--check`` exits 1 with ``duplicate field <name> in <scope>``; arms may
@@ -307,6 +390,31 @@ like a consumer, on static and shared legs alike), ``anira_symbol_baseline``
 table, read with ``nm`` or ``dumpbin``) and the WebAssembly link, whose
 ``-sEXPORTED_FUNCTIONS`` is the generated ``web/src/abi/exports_wasm.txt``. So a registry
 entry, a draft one included, needs its body in the same pull request, on Emscripten too.
+``build_web`` builds the ``wasm-abi`` preset (``wasm-release`` plus ``ANIRA_WITH_ABI_TESTS``,
+the one test option WebAssembly allows), whose gates run under node:
+``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
+as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
+the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
+``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine through
+the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
+a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
+(the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
+a second thread of the ``-pthread`` link build, prepare and tear down handlers at the same time,
+so the core's mutexes must exclude across them, and ``anira_em_pool`` (``test/abi/em_pool.c``),
+a context of two inference threads that anira starts as Wasm Workers, each importing
+``test/abi/em_pool_module.mjs`` (a JavaScript engine on the scope's registry) before its loop,
+``anira_em_console`` (``test/abi/em_console.c``), a consumer of the archive with no export
+list that logs one warning and must see it once, through ``console.warn``, and
+``anira_em_runtime`` (``test/abi/em_runtime.c``), a library module that links the archive with
+none of AniraWeb's flags and must still run a timer callback after a first one, and
+``anira_em_oom`` (``test/abi/em_oom.c``), which fills its heap (a fixed 512 MiB of its own
+link; AniraWeb's grows) and must see a
+handler on the bundled gain config refused with ``ANIRA_ERROR_OUT_OF_MEMORY``, then prepare once
+the memory is back (it reads the model fixtures: ``cmake -P extras/fetch-models.cmake``);
+the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the names of
+``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
+``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
+target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~

@@ -18,6 +18,7 @@
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
 #include <anira/abi/version.h>
+#include <anira/anira_em.h>
 #include <stddef.h>
 #include <string.h>
 

@@ -311,7 +311,7 @@ struct LogConfig {
  * @brief The 2.x ContextConfig (v2.3.0's name; the pre-release that preceded anira 3 called it
  * CoreConfig): a plain value with the 2.x fields, minted into an anira::ContextConfig when a
  * handler is built (to_context_config). The default thread count is k_threads_auto, the
- * sentinel anira resolves (half the hardware threads, at least 1; 0 on WebAssembly) where 2.x
+ * sentinel anira resolves (half the hardware threads, at least 1, on WebAssembly too) where 2.x
  * stored the resolved count: a host that read m_num_threads back to learn the count reads the
  * sentinel.
  */
@@ -383,11 +383,12 @@ struct ContextConfig {
 /**
  * @brief The 2.x HostConfig: the host's block size and sample rate in samples of the reference
  * stream, whether smaller blocks come, and which tensor is the reference stream
- * (k_first_streamable: the first Streamed input, else the first Streamed output). The handler's
- * prepare refuses a fractional m_buffer_size (ANIRA_ERROR_CONFIG): a host that scaled its block
- * to another stream anchors on that stream instead (m_tensor_index, m_tensor_is_input) and
- * passes its own block. The session's arithmetic of 2.x (resolve_reference,
- * get_reference_size, get_relative_buffer_size, get_relative_sample_rate) is not declared.
+ * (k_first_streamable: the first Streamed input, else the first Streamed output). The
+ * m_buffer_size may be fractional, as in 2.x (a control-rate model prepared with
+ * samplesPerBlock / 2048.f): it becomes the Hard geometry as it is, and the host moves a
+ * sample of a stream only once a whole one has accumulated (anira_contract_create_hard). The
+ * session's arithmetic of 2.x (resolve_reference, get_reference_size,
+ * get_relative_buffer_size, get_relative_sample_rate) is not declared.
  */
 struct HostConfig {
     static constexpr size_t k_first_streamable = static_cast<size_t>(-1);
@@ -404,7 +405,7 @@ struct HostConfig {
         , m_tensor_index(tensor_index)
         , m_tensor_is_input(tensor_is_input) {}
 
-    float m_buffer_size = 0;                     ///< the host's largest block, a whole number
+    float m_buffer_size = 0;                     ///< the host's largest block: no call carries more
     float m_sample_rate = 0;                     ///< Hz
     bool m_allow_smaller_buffers = false;        ///< blocks below m_buffer_size may come
     size_t m_tensor_index = k_first_streamable;  ///< the reference tensor's index
@@ -668,9 +669,11 @@ public:
         static constexpr unsigned k_warm_up = 0;
         static constexpr bool k_session_exclusive_processor = false;
         static constexpr float k_blocking_ratio = 0.F;
-        /// Half the hardware threads, at least 1. A function where 2.x had a static member: a
-        /// header has no out-of-line definition, and an inline variable would be bound
-        /// STB_GNU_UNIQUE by GCC, which pins a plugin in memory.
+        /// Half the hardware threads, at least 1: the count 2.x wrote, and what the shim reads
+        /// back for a model that leaves the count to the pool (the constructors' default,
+        /// ANIRA_INSTANCES_AUTO; the library's default pool has as many threads). A function
+        /// where 2.x had a static member: a header has no out-of-line definition, and an
+        /// inline variable would be bound STB_GNU_UNIQUE by GCC, which pins a plugin in memory.
         static unsigned num_parallel_processors() noexcept {
             const unsigned hardware = std::thread::hardware_concurrency();
             return hardware / 2 > 0 ? hardware / 2 : 1;
@@ -688,7 +691,7 @@ public:
                     unsigned warm_up = Defaults::k_warm_up,
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,
-                    unsigned num_parallel_processors = Defaults::num_parallel_processors()) {
+                    unsigned num_parallel_processors = ANIRA_INSTANCES_AUTO) {
         m_document = document_of(std::move(model_data),
                                  std::move(tensor_shape),
                                  std::move(processing_spec),
@@ -706,7 +709,7 @@ public:
                     unsigned warm_up = Defaults::k_warm_up,
                     bool session_exclusive_processor = Defaults::k_session_exclusive_processor,
                     float blocking_ratio = Defaults::k_blocking_ratio,
-                    unsigned num_parallel_processors = Defaults::num_parallel_processors())
+                    unsigned num_parallel_processors = ANIRA_INSTANCES_AUTO)
         : InferenceConfig(std::move(model_data),
                           std::move(tensor_shape),
                           ProcessingSpec(),
@@ -808,7 +811,8 @@ public:
     unsigned m_warm_up = 0;                      ///< the legacy contract's fixed warm-up count
     bool m_session_exclusive_processor = false;  ///< the model's state is STATEFUL
     float m_blocking_ratio = 0;                  ///< the legacy contract's wait ratio
-    unsigned m_num_parallel_processors = 0;      ///< the model's max_instances; 1 when exclusive
+    unsigned m_num_parallel_processors = 0;      ///< the model's max_instances (2.x's default for
+                                                 ///< ANIRA_INSTANCES_AUTO); 1 when exclusive
 
     /// The configurations anira 3 holds: the model files (ModelConfig::to_json), the three
     /// legacy scalars, the borrowed bytes by pointer and size.
@@ -1076,8 +1080,11 @@ private:
         doc += detail::json_number(blocking_ratio);
         doc += R"(,"session_exclusive_processor":)";
         doc += session_exclusive_processor ? "true" : "false";
-        doc += R"(,"num_parallel_processors":)";
-        doc += std::to_string(num_parallel_processors);
+        // A count left to the pool is the key left out: the upgrade keeps ANIRA_INSTANCES_AUTO.
+        if (num_parallel_processors != ANIRA_INSTANCES_AUTO) {
+            doc += R"(,"num_parallel_processors":)";
+            doc += std::to_string(num_parallel_processors);
+        }
         doc += "}}";
         return doc;
     }
@@ -1262,8 +1269,14 @@ private:
         m_blocking_ratio = static_cast<float>(legacy.wait_ratio);
         m_session_exclusive_processor = model.state() == ANIRA_MODEL_STATEFUL;
         // 2.x ran a session-exclusive configuration on one processor whatever the count said;
-        // a document may leave the count out, which the upgrade fills with the default.
-        m_num_parallel_processors = m_session_exclusive_processor ? 1 : model.max_instances();
+        // a count left to the pool (ANIRA_INSTANCES_AUTO, what a document without the key
+        // upgrades to) reads back as 2.x's default count.
+        const uint32_t instances = model.max_instances();
+        m_num_parallel_processors =
+            m_session_exclusive_processor
+                ? 1
+                : (instances == ANIRA_INSTANCES_AUTO ? Defaults::num_parallel_processors()
+                                                     : instances);
     }
 
     std::optional<anira::ModelConfig> m_model;
@@ -1968,7 +1981,9 @@ struct Context {
  * prepare); a prepare with the settings of the last one only resets the stream, one with another
  * geometry loads the models again, one with another reference tensor rebuilds the C handler; the
  * single forms carry their one slot per side and nothing else (2.x resent what the last call
- * left in the other slots); push_data never waits, pop_data with a deadline polls on a handler
+ * left in the other slots); a block above the HostConfig buffer size (ceil of it, scaled to each
+ * stream) is refused, nothing moves and rt_error() reports ANIRA_ERROR_INVALID_ARGUMENT (2.x kept
+ * its tail); push_data never waits, pop_data with a deadline polls on a handler
  * without a blocking ratio, and set_non_realtime is never refused (a wait without an inference
  * loop fails the call instead, which rt_error() reports); set_inference_backend of a backend
  * without a plan keeps the selection and logs; get_num_inference_threads is the pool size, 0 until
@@ -2010,6 +2025,8 @@ public:
                      const ContextConfig& context_config = ContextConfig())
         : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
     /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
+    /// A plugin destroys its handlers before its host unloads it, never from its own static
+    /// destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
     /// Requests the backend for the next block. Any thread may call this while prepare runs;
@@ -2057,12 +2074,13 @@ public:
     }
 
     /// Prepares for the host's stream: the configuration's legacy contract with the host
-    /// geometry (m_buffer_size whole, block_min 1 when smaller blocks come), the reference
-    /// tensor as the model's anchor. The settings of the last successful prepare only reset the
+    /// geometry (block_max m_buffer_size, a fractional one included; block_min 1 when smaller
+    /// blocks come, half the block when it is one sample or less), the reference tensor as the
+    /// model's anchor. The settings of the last successful prepare only reset the
     /// stream (the models stay loaded); another geometry prepares again and loads the models
     /// again; another reference tensor rebuilds the C handler. The selected backend is applied
-    /// again. @throws Error: ANIRA_ERROR_CONFIG for a fractional or non-positive block size or
-    /// rate, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
+    /// again. @throws Error: ANIRA_ERROR_CONFIG for a block size or rate that is not finite and
+    /// above 0, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
     /// else the status of anira_handler_prepare (a model that does not load, a rule of the
     /// configuration); the handler is then unprepared.
     void prepare(HostConfig new_audio_config) { prepare_with(new_audio_config, {}); }
@@ -2481,12 +2499,10 @@ private:
 
     void prepare_with(const HostConfig& host, const std::map<std::string, uint32_t>& latencies) {
         const float block = host.m_buffer_size;
-        if (!(block > 0.F) || std::floor(block) != block || !std::isfinite(block)) {
+        if (!(block > 0.F) || !std::isfinite(block)) {
             detail::fail(ANIRA_ERROR_CONFIG,
                          "HostConfig: m_buffer_size " + detail::json_number(block) +
-                             " is not a whole number of samples above 0; a host whose block is "
-                             "measured on another stream anchors on that stream instead "
-                             "(m_tensor_index, m_tensor_is_input) and passes its own block");
+                             " is not a number of samples above 0");
         }
         if (!(host.m_sample_rate > 0.F) || !std::isfinite(host.m_sample_rate)) {
             detail::fail(ANIRA_ERROR_CONFIG,
@@ -2519,8 +2535,16 @@ private:
             m_anchor = wanted;
         }
         anira::Hard hard = m_config.hard();
-        const auto frames = static_cast<uint32_t>(block);
-        hard.block_min = host.m_allow_smaller_buffers ? 1 : frames;
+        // The float as it is: the geometry is a double, and the latency calculation recovers
+        // the rational the host meant from either. The translation reads only whether
+        // block_min is below block_max, so a block of one sample or less says that smaller
+        // blocks come with half of itself.
+        const auto frames = static_cast<double>(block);
+        if (host.m_allow_smaller_buffers) {
+            hard.block_min = frames > 1.0 ? 1.0 : frames / 2.0;
+        } else {
+            hard.block_min = frames;
+        }
         hard.block_max = frames;
         hard.rate = host.m_sample_rate;
         hard.latencies = latencies;

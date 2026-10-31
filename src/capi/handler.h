@@ -104,7 +104,11 @@ struct anira_plan_report {
 struct anira_handler {
     anira_context* m_context = nullptr;  ///< add-ref'd at create, released at destroy
     anira_pipeline m_pipeline;           ///< the copy
-    anira_contract m_contract;           ///< the snapshot of the last successful prepare (Hard)
+    /// What the queries of the pipeline's custom engines answered at create (the main
+    /// thread); every prepare checks the plans' providers against these answers and calls no
+    /// query. Never changed after create.
+    anira::capi::QueryAnswers m_query_answers;
+    anira_contract m_contract;  ///< the snapshot of the last successful prepare (Hard)
     anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
                                                 ///< and m_pp
     /// The ports: per side one entry per tensor of the model config's list, indexed by slot
@@ -147,6 +151,11 @@ struct anira_handler {
                                           ///< entries and reset run; cleared first by
                                           ///< unprepare; acquire in those entries
     anira::RtLatch m_rt;                  ///< rt_error, the kind bits, the suppressed count
+    /// The audio nodes that stream through this handler (WebAssembly, anira_em_audio_node_create
+    /// counts up, anira_em_audio_node_destroy down). While any exists its render callback may be
+    /// inside a process call, so anira_handler_prepare refuses; the node re-prepares the handler
+    /// under its own hold (anira_em_audio_node_prepare). Always 0 on other targets.
+    std::atomic<uint32_t> m_audio_nodes{0};
     // One array of empty tensors per side, built at prepare from the ports (rank 2, shape
     // {channels, 0}, the slot's dtype, host memory, no pointer; the channel count and the dtype
     // are the stream port's, 1 and the spec's dtype for a Static slot, which has no host

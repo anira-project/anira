@@ -58,20 +58,7 @@ void anira::JsonConfigLoader::parse_core_config(const nlohmann::json& config) {
 
     if (context_json.contains("num_threads")) {
         if (context_json.at("num_threads").is_number_unsigned()) {
-#ifdef __EMSCRIPTEN__
-            // The core cannot run inference threads on WebAssembly — they are
-            // always supplied externally (e.g. AniraWeb.spinUpInferenceWorker()).
-            // Accept the (valid) value so shared config files keep working, but
-            // coerce it.
-            if (context_json.at("num_threads").get<unsigned int>() > 0) {
-                ANIRA_LOG_WARNING(anira::log_group::k_config,
-                                  "'num_threads' > 0 is not supported on WebAssembly builds: "
-                                  "inference threads must be supplied externally (e.g. "
-                                  "AniraWeb.spinUpInferenceWorker()). Using num_threads = 0.");
-            }
-#else
             m_core_config->m_num_threads = context_json.at("num_threads").get<unsigned int>();
-#endif
         } else {
             ANIRA_LOG_ERROR(anira::log_group::k_config,
                             "Invalid 'num_threads' value: expected an unsigned integer.");
@@ -86,10 +73,9 @@ void anira::JsonConfigLoader::parse_core_config(const nlohmann::json& config) {
             m_core_config->m_wait_strategy = anira::WaitStrategy::SpinBackoff;
         } else if (strategy == "blocking") {
 #ifdef __EMSCRIPTEN__
-            // Blocking waits are impossible on WebAssembly: inference loops are
-            // driven cooperatively by JS Workers, and there is no pthreads
-            // runtime to block on. Accept the (valid) value so shared config
-            // files keep working, but coerce it.
+            // The core does not block on WebAssembly: an inference Worker parks on
+            // its wake word with a bounded wait instead. Accept the (valid) value so
+            // shared config files keep working, but coerce it.
             ANIRA_LOG_WARNING(anira::log_group::k_config,
                               "wait_strategy 'blocking' is not supported on WebAssembly builds. "
                               "Using 'spin_backoff'.");
@@ -142,9 +128,10 @@ void anira::JsonConfigLoader::parse_core_config(const nlohmann::json& config) {
                 drain_json.is_string() ? drain_json.get<std::string>() : std::string();
             if (drain == "thread") {
 #ifdef __EMSCRIPTEN__
-                ANIRA_LOG_WARNING(anira::log_group::k_config,
-                                  "log.drain 'thread' is not supported on WebAssembly builds: "
-                                  "no thread can drain the log queue there. Using 'manual'.");
+                ANIRA_LOG_WARNING(
+                    anira::log_group::k_config,
+                    "log.drain 'thread' is not supported on WebAssembly builds: "
+                    "the JavaScript log sink runs on the main thread. Using 'manual'.");
                 m_core_config->m_log.m_drain = anira::LogDrain::Manual;
 #else
                 m_core_config->m_log.m_drain = anira::LogDrain::Thread;

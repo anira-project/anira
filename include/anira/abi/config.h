@@ -332,10 +332,15 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_window(anira_tensor_spec
                                                                int64_t overlap) ANIRA_NOEXCEPT;
 
 /**
- * @brief The tensor's Time advance relative to the anchor tensor.
+ * @brief The tensor's Time advance relative to the anchor tensor. A flexible window is pinned
+ * at prepare from the anchor hop, the anchor elements one inference consumes, chosen
+ * once for the whole model: the tensor's hop is the anchor hop times this ratio, so the
+ * anchor hop is a multiple of den (the ratio reduced); a ratio of 0 is
+ * ANIRA_ERROR_CONFIG at prepare.
  * @param spec The spec.
  * @param num This tensor advances num elements ...
- * @param den ... per den anchor elements; (0, 0) = derive (default).
+ * @param den ... per den anchor elements; (0, 0) = derive (default): a fixed window's ratio
+ *        from its hop, a flexible window's 1/1.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value or den == 0 with num
  *         != 0.
  * @par Thread contract
@@ -442,22 +447,32 @@ ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANI
 /**
  * @brief Creates a Hard (real-time) contract with the stream geometry; the fixed-block host
  * earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on
- * miss, wait_ratio 0, PERMISSIVE edge cost. A geometry of 0, 0, 0 is legal here and
- * completed by hard_set_geometry or refused at prepare.
+ * miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left
+ * unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here) or
+ * both finite and > 0 with block_min <= block_max; block_min < block_max allows every
+ * smaller block. A block need not be whole: a fractional block (for a model with no
+ * stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0) is
+ * taken as the rational the latency calculation recovers from it (1e-6 relative,
+ * denominator at most 2^20), and the host moves an element of a stream only once a whole
+ * one has accumulated: after its k-th call it has pushed and popped floor(k * b)
+ * elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of them
+ * (0 or 1 for 0.25, the 1 on every fourth call).
  * @param block_min Smallest block the host callback delivers, in Time-axis elements of the
- *        anchor tensor.
- * @param block_max Largest; block_min == block_max is the fixed-block host.
+ *        anchor tensor; may be fractional (0.25: one element every fourth callback).
+ * @param block_max Largest; block_min == block_max is the fixed-block host. May be fractional
+ *        like block_min.
  * @param rate Anchor elements per second (48000 for audio).
  * @param out Receives the handle on success.
  * @param err Nullable.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max, a negative rate,
- *         or a NULL out.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a block that is NaN, infinite or
+ *         negative, one block 0 and the other not, block_min > block_max, a negative rate, or a
+ *         NULL out; the message names the value.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(uint32_t block_min,
-                                                             uint32_t block_max,
+ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double block_min,
+                                                             double block_max,
                                                              double rate,
                                                              anira_contract** out,
                                                              anira_error* err) ANIRA_NOEXCEPT;
@@ -476,20 +491,22 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_async(anira_contract** o
                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8).
+ * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under
+ * the rules of anira_contract_create_hard; a refusal leaves the geometry as it was.
  * @param contract A Hard contract.
- * @param block_min See anira_contract_create_hard.
- * @param block_max See anira_contract_create_hard.
+ * @param block_min See anira_contract_create_hard; may be fractional.
+ * @param block_max See anira_contract_create_hard; may be fractional.
  * @param rate See anira_contract_create_hard.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
- *         ANIRA_ERROR_INVALID_ARGUMENT for block_min > block_max or a negative rate.
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or
+ *         negative, one block 0 and the other not, block_min > block_max, or a negative rate.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
-                                                                   uint32_t block_min,
-                                                                   uint32_t block_max,
+                                                                   double block_min,
+                                                                   double block_max,
                                                                    double rate) ANIRA_NOEXCEPT;
 
 /**
@@ -884,7 +901,9 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_set_log_flags(anira_conte
                                                                      uint32_t flags) ANIRA_NOEXCEPT;
 
 /**
- * @brief The context's log sink; ignored on Wasm, where anira_em_set_log_hook is the sink.
+ * @brief The context's log sink, on every target: on WebAssembly a C sink compiled into the
+ * module receives the records like any other, and anira_em_set_log_hook
+ * (anira/anira_em.h) adds the JavaScript hook beside it.
  * @param config The config.
  * @param callback The sink, or NULL for none.
  * @param user_data Passed to callback.
@@ -1038,8 +1057,8 @@ typedef void (ANIRA_CALL* anira_bytes_release_fn)(const void* bytes, void* ctx);
 
 /**
  * @brief Creates an empty model config: no models, no tensors, default engine NONE (= plan 0,
- * the first plan of the table), STATELESS, max_instances 1, anchor = the first Streamed
- * input.
+ * the first plan of the table), STATELESS, max_instances ANIRA_INSTANCES_AUTO, anchor =
+ * the first Streamed input.
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL out.
@@ -1063,12 +1082,15 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_create(anira_model_config**
  * @param engine A built-in engine, or ANIRA_ENGINE_CUSTOM for a custom engine (not NONE).
  * @param engine_id The custom engine's reverse-URI id (must contain a '.'), copied, beside
  *        ANIRA_ENGINE_CUSTOM; NULL beside a built-in engine.
- * @param utf8_path Model file path, UTF-8, copied.
+ * @param utf8_path Model file path, UTF-8, copied; NULL for an entry without a source, which
+ *        anira_handler_create admits for a custom engine that declares
+ *        ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL alone (the JSON form: an entry without
+ *        "path").
  * @param out_index Receives the model index, or NULL.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for ANIRA_ENGINE_NONE, an unknown engine, a
  *         pair against the pair rule (an id beside a built-in engine, ANIRA_ENGINE_CUSTOM
- *         without an id or with an id without a '.'), or a NULL or empty path.
+ *         without an id or with an id without a '.'), or an empty path.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1456,9 +1478,12 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_state(anira_model_confi
 
 /**
  * @brief The ceiling within which the planner allocates lanes and pool instances (v2's
- * num_parallel_processors).
+ * num_parallel_processors). Each instance is a full copy of the model in memory; set 1
+ * to keep one. A stateful model (or one with a declared State pair) has no shared
+ * instance whatever it says: each of its handlers runs on its own.
  * @param config The config.
- * @param max_instances Memory ceiling of loaded model instances; >= 1; default 1.
+ * @param max_instances Memory ceiling of loaded model instances; >= 1, or ANIRA_INSTANCES_AUTO
+ *        (the default): the inference pool's thread count.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for 0.
  * @par Thread contract
  * [main-thread]
@@ -1977,9 +2002,12 @@ ANIRA_API anira_model_state ANIRA_CALL anira_model_config_state(const anira_mode
                                                                 ANIRA_NOEXCEPT;
 
 /**
- * @brief The instance limit anira_model_config_set_max_instances stored.
+ * @brief The instance limit anira_model_config_set_max_instances stored, unresolved:
+ * ANIRA_INSTANCES_AUTO when never set (the handler resolves it to the pool's thread
+ * count when it is prepared; anira_engine_load_info.instances reports the resolved
+ * count).
  * @param config The config.
- * @return The limit, at least 1; 0 for NULL.
+ * @return The limit, at least 1, or ANIRA_INSTANCES_AUTO; 0 for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2064,8 +2092,8 @@ ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const 
  * @brief The geometry as anira_contract_create_hard or anira_contract_hard_set_geometry stored
  * it; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
  * @param contract A Hard contract.
- * @param block_min Receives the smallest block.
- * @param block_max Receives the largest block.
+ * @param block_min Receives the smallest block as stored, a fractional one included.
+ * @param block_max Receives the largest block as stored.
  * @param rate Receives the rate.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a NULL out-parameter.
@@ -2074,8 +2102,8 @@ ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const 
  * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
-                                                               uint32_t* block_min,
-                                                               uint32_t* block_max,
+                                                               double* block_min,
+                                                               double* block_max,
                                                                double* rate) ANIRA_NOEXCEPT;
 
 /**

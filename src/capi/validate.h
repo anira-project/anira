@@ -45,7 +45,8 @@ struct DerivedSpec {
     std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
     int64_t m_channels = 1;             ///< Streamed: the Channel axis extent, 1 without one;
                                         ///< Static and Buffer: 1 (the tag names an axis there)
-    int64_t m_window_used = 0;          ///< Streamed only: the window pinned for this contract
+    int64_t m_window_used = 0;          ///< Streamed only: the window, a flexible one pinned
+                                        ///< from the anchor hop (pin_anchor_hop)
     int64_t m_hop = 0;                  ///< Streamed: window_used - context; Static and Buffer: 0
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
 };
@@ -111,6 +112,9 @@ struct EngineFacts {
     /// engine without a list): where a neutral entry of the engine runs under the default set
     /// (home_provider).
     std::vector<std::vector<std::string>> m_providers;
+    /// The flags of each engine's descriptor, beside m_ids: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL
+    /// admits a model entry of the engine without a source.
+    std::vector<uint32_t> m_flags;
 };
 
 /// The consumers a pipeline declares, in one vector: the stage's, then one per registered
@@ -180,7 +184,8 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
-/// pin to window_min). The candidates narrow the model entries and make the plan table
+/// take the smallest anchor hop the windows and time ratios allow). The candidates narrow
+/// the model entries and make the plan table
 /// (Derived::m_plans): NULL keeps every row as one plan (the bridge's rule; the handler always
 /// names its set), a built-in engine keeps its rows, ANIRA_ENGINE_CUSTOM with an engine_id
 /// keeps the custom rows of that name, and a row is a
@@ -262,7 +267,7 @@ struct Anchor {
 };
 
 /// The anchor of a model without a contract: the tensor spec rules that need none (the
-/// extents, the roles, the windows pinned to window_min), then the anchor rule. Throws
+/// extents, the roles, the windows; no window is pinned), then the anchor rule. Throws
 /// StatusError with ANIRA_ERROR_CONFIG for a model without an input or an output, a spec that
 /// breaks a rule, no Streamed tensor, or an anchor that names no Streamed tensor. What the
 /// bridge's HostConfig of the host's own geometry reads (v3_to_v2.h make_host_config).

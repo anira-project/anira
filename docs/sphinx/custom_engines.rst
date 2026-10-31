@@ -153,7 +153,8 @@ the stage's descriptor does, the slots from the innermost level of the lifecycle
   without a list serves the CPU path without a bit). It runs before ``init`` and any number of times, on the main thread, at
   ``anira_handler_create`` and at the pipeline's capabilities entries (below), with an
   ``anira_init_info``; it may log and must not call an entry that takes the core's lifecycle
-  lock. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
+  lock. ``anira_handler_prepare`` never calls it: the handler keeps the answer its create got
+  and checks the plans against that again, so a prepare on another thread does not run it. A status other than ``ANIRA_OK`` fails the calling entry with it, naming the engine.
   ``NULL``: every listed provider is usable.
 
 Three levels, three pointers, three lifetimes: ``user_data`` lives with the engine object,
@@ -248,7 +249,8 @@ what it keeps and never keeps the pointers):
   load twice.
 - ``instances``: the **shared call slots** of this loaded model, the ``process`` calls that
   may run at once on them, each on its own instance below this count (``ctx->instance``): the
-  model's ``max_instances`` for a stateless model, clamped to the size of the inference-thread
+  model's ``max_instances`` for a stateless model (``ANIRA_INSTANCES_AUTO``, the default,
+  resolved to the size of the inference-thread pool, at least 1), clamped to the size of the
   pool when anira runs one; ``0`` for a model declared ``ANIRA_MODEL_STATEFUL`` or with a
   declared State pair, whose handlers are **exclusive** (``ANIRA_PREPARE_EXCLUSIVE`` at their
   ``prepare``, below) and run on what their ``prepare`` builds, never on a shared slot. Which
@@ -427,9 +429,11 @@ Statuses and flags
 The flags are the engine's promises, declared once and reported in
 ``anira_plan_info.engine_flags`` of every plan of the engine (``0`` for a built-in engine):
 
-- ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: a model entry of this engine may have no source.
-  Declared and reported now; consumed when a source-less entry can be built, in a later
-  pre-release (today every entry carries a path or bytes, which the engine is free to ignore).
+- ``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: a model entry of this engine may have no source,
+  neither a path nor bytes: ``anira_model_config_add_model_path`` with a NULL path
+  (:cpp:func:`anira::ModelConfig::add_model`), or a JSON entry without ``"path"``. The load
+  then reads no path and no bytes; ``anira_handler_create`` refuses a source-less entry of any
+  other engine (``ANIRA_ERROR_CONFIG``).
 - ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``: ``process`` allocates nothing, takes no lock and makes
   no syscall after prepare. Reported; consumed by a later contract option. No built-in engine
   sets it.

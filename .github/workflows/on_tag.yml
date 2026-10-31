@@ -21,6 +21,9 @@ jobs:
     uses: ./.github/workflows/build_test.yml
   build_test_mobile:
     uses: ./.github/workflows/build_test_mobile.yml
+  # The wasm build, the node ABI gates, the export check and the npm build of the PR leg.
+  build_web:
+    uses: ./.github/workflows/build_web.yml
   build_release:
     needs: [build_test, build_test_mobile]
     name: ${{ matrix.name }}
@@ -35,8 +38,8 @@ jobs:
         # auto-disables LibTorch (shared-only upstream), so a *-static zip ships
         # ONNX Runtime + LiteRT only.
         include:
-          - { name: Linux-x86_64-shared,      os: ubuntu-latest,    preset: ci-tests-shared}
-          - { name: Linux-x86_64-static,      os: ubuntu-latest,    preset: ci-tests-static}
+          - { name: Linux-x86_64-shared,      os: ubuntu-24.04,    preset: ci-tests-shared}
+          - { name: Linux-x86_64-static,      os: ubuntu-24.04,    preset: ci-tests-static}
           - { name: Linux-aarch64-shared,     os: ubuntu-24.04-arm, preset: ci-tests-shared}
           - { name: Linux-aarch64-static,     os: ubuntu-24.04-arm, preset: ci-tests-static}
           - { name: Windows-x86_64-shared,    os: windows-latest,   preset: windows-msvc-tests-shared, vcvars: x64 }
@@ -59,7 +62,7 @@ jobs:
           submodules: true
           fetch-depth: 0
       - name: setup build tools
-        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.15
+        uses: tanh-lab/ci-actions/setup-cpp-build-tools@v0.3.16
       # Ninja needs cl.exe and its headers/libs from a vcvars environment.
       - name: MSVC environment
         if: matrix.vcvars
@@ -67,13 +70,13 @@ jobs:
         with:
           arch: ${{ matrix.vcvars }}
       - name: build
-        uses: tanh-lab/ci-actions/cmake-build@v0.3.15
+        uses: tanh-lab/ci-actions/cmake-build@v0.3.16
         with:
           PRESET: ${{ matrix.preset }}
           CMAKE_BUILD_ARGS: "-DANIRA_WITH_TESTS=OFF -DANIRA_WITH_INSTALL=ON ${{ matrix.arch && format('-DCMAKE_OSX_ARCHITECTURES={0}', matrix.arch) || '' }}"
       - name: resolve the build directory
         id: bdir
-        uses: tanh-lab/ci-actions/preset-binary-dir@v0.3.15
+        uses: tanh-lab/ci-actions/preset-binary-dir@v0.3.16
         with:
           PRESET: ${{ matrix.preset }}
       - name: install
@@ -148,7 +151,7 @@ jobs:
   build_release_android:
     needs: [build_test, build_test_mobile]
     name: Android
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     env:
       GITHUB_TOKEN: ${{ github.token }} # lets anira's backend integrity check avoid API rate limits
       ANDROID_PLATFORM: android-24
@@ -190,7 +193,7 @@ jobs:
 
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write # creates the GitHub release
     needs:
@@ -214,8 +217,8 @@ jobs:
   publish_npm:
     name: npm publish
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build_test, build_test_mobile]
-    runs-on: ubuntu-latest
+    needs: [build_test, build_test_mobile, build_web]
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write # the npm OIDC trusted-publishing handshake
@@ -225,6 +228,12 @@ jobs:
         with:
           submodules: true
           fetch-depth: 0
+      # What is published is what the registry says: the committed C ABI files must match
+      # abi/anira.yml before the module is built from them.
+      - name: check the generated C ABI files against abi/anira.yml
+        run: |
+          python3 -m pip install --user pyyaml
+          python3 tools/abi/gen.py --repo . --check
       # emcc emits the .d.ts during the build (--emit-tsd), so the pin must
       # precede it.
       - name: pin global typescript for emscripten --emit-tsd
@@ -232,9 +241,30 @@ jobs:
           sudo npm i -g typescript@5.9
           tsc --version
       - name: build wasm
-        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.15
+        uses: tanh-lab/ci-actions/cmake-build-wasm@v0.3.16
         with:
           PRESET: wasm-release
+      # The module that ships exports exactly the promised, draft and Emscripten entry
+      # points (and _malloc, _free): the same check as build_web, on this build.
+      - name: check the exports of AniraWeb against the symbol lists
+        run: |
+          set -euo pipefail
+          dts=web/wasm/AniraWeb.d.ts
+          grep -oE '^  _[A-Za-z0-9_]+\(' "$dts" | sed -E 's/^  _//; s/\($//' | sort -u > "$RUNNER_TEMP/exported.txt"
+          { cat abi/symbols-0.txt abi/symbols-draft.txt abi/symbols-emscripten.txt; printf 'malloc\nfree\n'; } \
+            | sort -u > "$RUNNER_TEMP/expected.txt"
+          missing=$(comm -13 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          extra=$(comm -23 "$RUNNER_TEMP/exported.txt" "$RUNNER_TEMP/expected.txt")
+          if [ -n "$missing" ]; then
+            echo "::error::AniraWeb.d.ts lacks entry points of the symbol lists:"
+            echo "$missing"
+          fi
+          if [ -n "$extra" ]; then
+            echo "::error::AniraWeb.d.ts exports names no symbol list has:"
+            echo "$extra"
+          fi
+          [ -z "$missing" ] && [ -z "$extra" ]
+          echo "the module exports exactly the $(wc -l < "$RUNNER_TEMP/expected.txt") names of the symbol lists"
       - name: setup node
         uses: actions/setup-node@v5
         with:

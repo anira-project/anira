@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "../engines/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
+#include "InstanceWaitList.h"    // IWYU pragma: keep (the complete wait list of PlanSlot)
 
 namespace anira {
 

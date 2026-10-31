@@ -12,7 +12,9 @@
             "generator": "Ninja",
             "cacheVariables": {
                 "CMAKE_C_COMPILER": "clang",
-                "CMAKE_CXX_COMPILER": "clang++"
+                "CMAKE_CXX_COMPILER": "clang++",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -155,14 +157,14 @@
             "binaryDir": "${sourceDir}/build/clang-tidy",
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Debug",
-                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
                 "ANIRA_WITH_TESTS": "ON",
                 "ANIRA_WITH_BENCHMARK": "ON",
                 "ANIRA_WITH_LIBTORCH": "ON",
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
                 "ANIRA_WITH_TFLITE": "OFF",
                 "ANIRA_WITH_LITERT": "ON",
-                "ANIRA_WITH_EXECUTORCH": "ON"
+                "ANIRA_WITH_EXECUTORCH": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "OFF"
             }
         },
         {
@@ -180,7 +182,9 @@
                 "ANIRA_WITH_LITERT": "OFF",
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
-                "CMAKE_BUILD_TYPE": "Debug"
+                "CMAKE_BUILD_TYPE": "Debug",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -198,7 +202,19 @@
                 "ANIRA_WITH_LITERT": "OFF",
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "ON",
-                "CMAKE_BUILD_TYPE": "Release"
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+                "ANIRA_LINK_COMPILE_COMMANDS": "ON"
+            }
+        },
+        {
+            "name": "wasm-abi",
+            "displayName": "Wasm ABI gates",
+            "description": "wasm-release plus the ABI gates that run under node (layout, header gates, the anira_em.h smoke)",
+            "inherits": "wasm-release",
+            "binaryDir": "${sourceDir}/build/wasm/Abi",
+            "cacheVariables": {
+                "ANIRA_WITH_ABI_TESTS": "ON"
             }
         },
         {
@@ -215,7 +231,8 @@
                 "ANIRA_WITH_EXECUTORCH": "OFF",
                 "ANIRA_WITH_ONNXRUNTIME": "OFF",
                 "CMAKE_BUILD_TYPE": "Release",
-                "Python3_EXECUTABLE": "/usr/bin/python3"
+                "Python3_EXECUTABLE": "/usr/bin/python3",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -226,7 +243,8 @@
             "cacheVariables": {
                 "CMAKE_BUILD_TYPE": "Release",
                 "ANIRA_WITH_TESTS": "ON",
-                "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded"
+                "CMAKE_MSVC_DEBUG_INFORMATION_FORMAT": "Embedded",
+                "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
             }
         },
         {
@@ -555,6 +573,12 @@
             "configurePreset": "wasm-release",
             "configuration": "Release",
             "description": "Build AniraWeb WASM module (release)"
+        },
+        {
+            "name": "wasm-abi",
+            "configurePreset": "wasm-abi",
+            "configuration": "Release",
+            "description": "Build AniraWeb and the ABI gates that run under node"
         },
         {
             "name": "docs",

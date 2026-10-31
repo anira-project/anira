@@ -33,18 +33,37 @@
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
 # are members of ALL, since the device cannot drive the build tree.
-
-if(TANH_OPERATING_SYSTEM STREQUAL "Emscripten")
-    # Gates 3 and 4 run under node from M2 (the umbrella); nothing here builds on Wasm yet.
-    return()
-endif()
+#
+# On WebAssembly (ANIRA_WITH_ABI_TESTS, the wasm-abi preset; no CTest there) the gates are
+# members of ALL and run under node (CMAKE_CROSSCOMPILING_EMULATOR, which Emscripten's
+# toolchain file sets), through the target anira_abi_wasm_gates that build_web runs:
+#   anira_header_c11 / anira_header_cxx17
+#                         gate 4 as above, anira/anira_em.h with its declarations compiled
+#   anira_abi_layout      gate 3: the printer as a node executable, its table diffed against
+#                         abi/layout-<major>.txt (the wasm32 column of the layout identity)
+#   anira_em_smoke        the trampolines of anira/anira_em.h against a hook object installed
+#                         by em_smoke.pre.js, one instance, the queue driven by
+#                         anira_inference_thread_execute; it also holds the link's
+#                         thread-local block to its 1024-byte budget
+#   anira_em_smoke_thread a user-driven inference thread for real: em_smoke_thread.mjs runs
+#                         a second instance in a worker_threads Worker, with its own stack
+#                         and thread-local block, inside anira_inference_thread_run_loop
+#                         (the park on the wake word, the notify, the has_exited stop)
 
 set(_abi_headers export status version enums log tensor config context core thread lifecycle stage engine handler draft/tensor_platform)
+# The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
+# other target, so the per-file wrappers include them everywhere.
+set(_abi_platform_headers anira_em)
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
 else()
     set(_abi_on_device FALSE)
+endif()
+if(TANH_BINARY_FORMAT STREQUAL "Wasm")
+    set(_abi_on_wasm TRUE)
+else()
+    set(_abi_on_wasm FALSE)
 endif()
 if(CMAKE_C_COMPILER_ID STREQUAL "MSVC" OR CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
     # C4201 (nameless struct/union): the ANIRA_PTR slots are anonymous unions, standard C11.
@@ -133,7 +152,15 @@ foreach(_h IN LISTS _abi_headers)
     list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
     list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
-if(_abi_on_device)
+foreach(_h IN LISTS _abi_platform_headers)
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
+        "#include <anira/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
+    anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"
+        "#include <anira/${_h}.h>\nint anira_gate4_${_h}_cxx();\nint anira_gate4_${_h}_cxx() { return 0; }\n")
+    list(APPEND _gate4_c "${_gate4_dir}/only_${_h}.c")
+    list(APPEND _gate4_cxx "${_gate4_dir}/only_${_h}.cpp")
+endforeach()
+if(_abi_on_device OR _abi_on_wasm)
     add_library(anira_header_c11 OBJECT header_c.c ${_gate4_c})
     add_library(anira_header_cxx17 OBJECT header_cxx17.cpp ${_gate4_cxx})
 else()
@@ -144,6 +171,198 @@ else()
 endif()
 anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
+
+# ---- the WebAssembly arm: gate 3 and the anira_em.h smoke under node -------------------------
+if(_abi_on_wasm)
+    if(NOT CMAKE_CROSSCOMPILING_EMULATOR)
+        message(FATAL_ERROR "ANIRA_WITH_ABI_TESTS on WebAssembly runs its gates under node: "
+                            "CMAKE_CROSSCOMPILING_EMULATOR (Emscripten's toolchain file sets it) "
+                            "names no node executable")
+    endif()
+    # Gate 3: the printer alone, no library; the same table every native leg prints.
+    add_executable(anira_abi_layout generated/test_layout.c)
+    anira_abi_consumer_target(anira_abi_layout C)
+    target_link_options(anira_abi_layout PRIVATE -sENVIRONMENT=node)
+    # The smoke: C over the hook object em_smoke.pre.js installs, linked against the library
+    # the way AniraWeb is (shared memory, the C ABI's export list, the runtime methods the hook
+    # object reads the heap with).
+    set(_smoke_exports "${CMAKE_CURRENT_BINARY_DIR}/em_smoke_exports.txt")
+    file(READ "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt" _wasm_exports)
+    anira_abi_write_if_changed("${_smoke_exports}" "${_wasm_exports}_main\n")
+    add_executable(anira_em_smoke em_smoke.c)
+    anira_abi_consumer_target(anira_em_smoke C)
+    target_link_libraries(anira_em_smoke PRIVATE anira::anira)
+    # The link is AniraWeb's: -pthread, whose objects carry the atomics and bulk-memory
+    # features (anira's through CMAKE_C_FLAGS / CMAKE_CXX_FLAGS), Wasm Workers, which
+    # InferenceThread::start creates, and the Wasm Audio Worklet of anira_em_audio_node_create.
+    set_target_properties(anira_em_smoke PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_smoke PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sSHARED_MEMORY=1
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "-sEXPORTED_FUNCTIONS=@${_smoke_exports}"
+        "-sEXPORTED_RUNTIME_METHODS=[\"UTF8ToString\",\"HEAPU32\",\"HEAPF32\"]"
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js")
+    set_property(TARGET anira_em_smoke APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_smoke.pre.js" "${_smoke_exports}")
+    # A loop the host drives on a thread of its own: a Wasm Worker the test creates runs
+    # anira_inference_thread_run_loop (the park on the wake word, the notify, the has_exited
+    # stop), with a C engine.
+    add_executable(anira_em_smoke_thread em_smoke_thread.c)
+    anira_abi_consumer_target(anira_em_smoke_thread C)
+    target_link_libraries(anira_em_smoke_thread PRIVATE anira::anira)
+    set_target_properties(anira_em_smoke_thread PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_smoke_thread PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
+    # Issue #212: the core's mutexes exclude across two threads of one module (a pthread
+    # beside the main thread, on the threaded libc AniraWeb's Wasm Workers run on).
+    add_executable(anira_em_mutex em_mutex.c)
+    anira_abi_consumer_target(anira_em_mutex C)
+    target_link_libraries(anira_em_mutex PRIVATE anira::anira)
+    set_target_properties(anira_em_mutex PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_mutex PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sPTHREAD_POOL_SIZE=1
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
+    # The context's pool on WebAssembly: two inference threads anira starts as Wasm Workers,
+    # each importing em_pool_module.mjs (a JavaScript engine on the scope's registry) before its
+    # loop; the handler's blocks are waited for on the main thread, then the pool is stopped.
+    add_executable(anira_em_pool em_pool.c)
+    anira_abi_consumer_target(anira_em_pool C)
+    target_link_libraries(anira_em_pool PRIVATE anira::anira)
+    set_target_properties(anira_em_pool PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_pool PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "-sEXPORTED_FUNCTIONS=@${_smoke_exports}"
+        "-sEXPORTED_RUNTIME_METHODS=[\"HEAPU32\",\"HEAPF32\",\"UTF8ToString\"]")
+    set_property(TARGET anira_em_pool APPEND PROPERTY LINK_DEPENDS "${_smoke_exports}")
+    # The console sink of WebAssembly: a consumer of the archive with no export list that
+    # calls anira_log alone sees its warning once, through console.warn (em_console.c).
+    add_executable(anira_em_console em_console.c)
+    anira_abi_consumer_target(anira_em_console C)
+    target_link_libraries(anira_em_console PRIVATE anira::anira)
+    set_target_properties(anira_em_console PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_console PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
+    set_property(TARGET anira_em_console APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_console.pre.js")
+    # The runtime that never exits on its own: a -pthread library module (--no-entry) that links
+    # the archive with none of AniraWeb's flags (EXIT_RUNTIME at its default) still runs C after
+    # a timer callback. Its incoming Module API is narrowed as AniraWeb's is: the default one
+    # names noExitRuntime, which includes the symbol and hides the failure.
+    add_executable(anira_em_runtime em_runtime.c)
+    anira_abi_consumer_target(anira_em_runtime C)
+    target_link_libraries(anira_em_runtime PRIVATE anira::anira)
+    set_target_properties(anira_em_runtime PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_runtime PRIVATE
+        --no-entry
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sINITIAL_MEMORY=268435456
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sASSERTIONS=0
+        -sINCOMING_MODULE_JS_API=onRuntimeInitialized,print,printErr
+        -sNO_DISABLE_EXCEPTION_CATCHING
+        "--pre-js=${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
+    set_property(TARGET anira_em_runtime APPEND PROPERTY LINK_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/em_runtime.pre.js")
+    # Out of memory as a status: a consumer with a fixed 512 MiB (AniraWeb's grows to 2 GiB; a
+    # fixed size fills fast) and nothing of its own about malloc (the library's INTERFACE options
+    # make malloc return NULL) fills the heap and must see a handler on the bundled gain config
+    # refused, then prepare once freed.
+    add_executable(anira_em_oom em_oom.c)
+    anira_abi_consumer_target(anira_em_oom C)
+    target_link_libraries(anira_em_oom PRIVATE anira::anira)
+    set_target_properties(anira_em_oom PROPERTIES LINKER_LANGUAGE CXX JOB_POOL_LINK anira_wasm_link)
+    target_link_options(anira_em_oom PRIVATE
+        -pthread
+        -sWASM_WORKERS
+        -sAUDIO_WORKLET
+        -sENVIRONMENT=node
+        -sNODERAWFS=1
+        -sINITIAL_MEMORY=536870912
+        -sALLOW_MEMORY_GROWTH=0
+        -sMALLOC=emmalloc
+        -sSTACK_SIZE=8388608
+        -sEXIT_RUNTIME=1
+        -sASSERTIONS=1
+        -sNO_DISABLE_EXCEPTION_CATCHING)
+    # Both gates under node, in one target build_web runs after the build.
+    add_custom_target(anira_abi_wasm_gates
+        COMMAND ${CMAKE_COMMAND}
+            "-DLAYOUT_RUNNER=${CMAKE_CROSSCOMPILING_EMULATOR}"
+            -DLAYOUT_EXE=$<TARGET_FILE:anira_abi_layout>
+            -DEXPECTED=${anira_SOURCE_DIR}/abi/layout-${ANIRA_ABI_MAJOR}.txt
+            -DACTUAL=${CMAKE_CURRENT_BINARY_DIR}/layout-${ANIRA_ABI_MAJOR}.actual.txt
+            -P ${anira_SOURCE_DIR}/cmake/abi-layout-check.cmake
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_smoke_thread>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_mutex>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_pool>
+            "${CMAKE_CURRENT_SOURCE_DIR}/em_pool_module.mjs"
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_console>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_runtime>
+        COMMAND "${CMAKE_CROSSCOMPILING_EMULATOR}" $<TARGET_FILE:anira_em_oom>
+            "${anira_SOURCE_DIR}/extras/models/model-pool/gain.model.json"
+        DEPENDS anira_abi_layout anira_em_smoke anira_em_smoke_thread anira_em_mutex anira_em_pool
+            anira_em_console anira_em_runtime anira_em_oom
+        COMMENT "Running the WebAssembly ABI gates under node: the layout table and the anira_em.h smoke"
+        VERBATIM)
+    return()
+endif()
 
 # ---- gate 4: anira.hpp alone as C++20 ------------------------------------------------------
 # The header-only wrapper the way a consumer compiles it: anira's include directories, no

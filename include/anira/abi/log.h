@@ -93,11 +93,12 @@ typedef struct anira_log_desc {
 
 /**
  * @brief Delivers the queued real-time records of this copy's core to the sinks; the host's
- * pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists). Returns
- * 0 while no core exists. Real-time records are also delivered on the thread of a
- * failing main-thread entry: before a negative status is returned the firewall drains
- * the queue there, so the records that preceded the failure are in front of the host
- * before it acts.
+ * pump under ANIRA_LOG_DRAIN_MANUAL (and on Wasm, where no drain thread exists; there
+ * the records reach the C sinks and the JavaScript hook of anira_em_set_log_hook alike,
+ * on the instance that drains). Returns 0 while no core exists. Real-time records are
+ * also delivered on the thread of a failing main-thread entry: before a negative status
+ * is returned the firewall drains the queue there, so the records that preceded the
+ * failure are in front of the host before it acts.
  * @return The number of records delivered.
  * @par Thread contract
  * [thread-safe, !audio-thread]

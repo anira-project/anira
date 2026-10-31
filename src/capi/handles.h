@@ -102,8 +102,10 @@ struct ModelEntry {
 /// member initializers only once the enclosing class is complete, which would leave
 /// std::variant without a default constructor.
 struct HardContract {
-    uint32_t m_block_min = 0;
-    uint32_t m_block_max = 0;
+    /// The geometry, in elements of the anchor tensor: both 0 (unset) or both finite and > 0,
+    /// fractional ones included (geometry_refusal).
+    double m_block_min = 0.0;
+    double m_block_max = 0.0;
     double m_rate = 0.0;
     anira_budget_kind m_budget = ANIRA_BUDGET_MEASURED;
     double m_budget_ms = 0.0;
@@ -129,6 +131,12 @@ struct HardContract {
     /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
     std::map<std::string, uint32_t> m_latencies;
 };
+
+/// The geometry rules of anira_contract_create_hard, shared by the two C setters, the JSON
+/// loader and the validator: the blocks both 0 (the unset geometry) or both finite and > 0,
+/// block_min <= block_max, a rate of 0 or more. The first broken rule as a message naming the
+/// value (without a "contract: " prefix), or the empty string when the geometry is legal.
+std::string geometry_refusal(double block_min, double block_max, double rate);
 
 /// The Async half of a contract.
 struct AsyncContract {
@@ -206,7 +214,10 @@ struct anira_model_config {
     anira_provider m_default_provider = ANIRA_PROVIDER_NONE;
     std::string m_default_provider_id;
     anira_model_state m_state = ANIRA_MODEL_STATELESS;
-    uint32_t m_max_instances = 1;
+    /// The shared instances of a stateless model: a count of at least 1, or
+    /// ANIRA_INSTANCES_AUTO (the default), which Core::create_session resolves to the inference
+    /// pool's thread count when the handler is prepared.
+    uint32_t m_max_instances = ANIRA_INSTANCES_AUTO;
     std::string m_anchor;  ///< canonical name of the clock tensor; empty = the first streamed
     anira::capi::ExtBag m_ext;
     std::unique_ptr<anira_contract> m_legacy_contract;  ///< after a version 2 JSON upgrade
@@ -231,6 +242,10 @@ struct anira_context_config {
     std::optional<anira_webgpu_desc> m_webgpu;
     anira::capi::ExtBag m_ext;
     bool m_upgraded = false;
+#ifdef __EMSCRIPTEN__
+    /// The ES module the inference Workers import (anira_em_context_config_set_worker_module).
+    std::string m_em_worker_module;
+#endif
 };
 
 struct anira_job_options {

@@ -13,16 +13,19 @@
  *             the core by the record of the model and the carrier of a registered engine and
  *             shared by every session whose plan describes that model, a session-exclusive
  *             session's included (exclusivity is no part of the pool's key any more). It holds
- *             the shared call slots (instances) and the spin-and-claim loop the five 2.x
- *             processors each carried, here once: a shared call claims the first slot whose
- *             busy flag was clear, and the claimed slot's index travels in the context.
+ *             the shared call slots (instances) and their busy flags: a shared call runs on
+ *             a slot claimed for it (the first whose busy flag was clear), and the claimed
+ *             slot's index travels in the context. The inference thread claims before it
+ *             takes a job and never waits for a slot (try_claim, release, run_claimed); the
+ *             claim loop the five 2.x processors each carried (claim_and_run, under run) is
+ *             here once more for a caller that runs a shared call directly.
  *   Prepared  one session's handle over a loaded model (the C prepared pointer): what
  *             Loaded::prepare hands back per session, held in the session's plan table beside
  *             the loaded model, and what the inference thread runs (run). For an exclusive
  *             session (a model declared stateful or with a declared State pair: its inferences
  *             run one at a time under the dispatch gate) it owns what the session keeps per
  *             stream, its own executor included, and its calls claim no shared slot; for a
- *             shared session it routes every call through the loaded model's claim loop.
+ *             shared session it runs every call on a claimed slot of the loaded model.
  *   Executor  one call slot of a loaded model: the engine's executor (a session, an
  *             interpreter, a method), what one process call runs on, never two at once. The
  *             built-in engines make them (ExecutorLoaded); a registered engine and a 2.x backend
@@ -145,6 +148,20 @@ struct Bindings {
 struct PrepareRequest {
     bool m_exclusive = false;
     const anira_prepare_info* m_info = nullptr;
+};
+
+/// Whether the thread that runs a call is being stopped, asked by the claim loop of a shared
+/// call (Loaded::claim_and_run) whenever no instance was free. The inference thread passes
+/// its own stop flag (InferenceThread::should_exit), though it claims before it runs and never
+/// reaches the loop for a pooled model; the default never stops.
+struct StopSignal {
+    bool (*m_stopping)(const void* context) noexcept = nullptr;
+    const void* m_context = nullptr;
+
+    /// True once the thread was told to stop; false without a query.
+    [[nodiscard]] bool stopping() const noexcept {
+        return m_stopping != nullptr && m_stopping(m_context);
+    }
 };
 
 /// One call slot of a loaded model: the engine's executor, what one process call runs on, never
@@ -341,6 +358,18 @@ public:
     /// by exclusive sessions alone.
     uint32_t num_instances() const noexcept { return m_num_instances; }
 
+    /// Inference thread: claims the first shared slot whose busy flag is clear and writes its
+    /// index into `instance`; false, and nothing claimed, when every slot is busy or the model
+    /// has none. Never waits. A slot whose flag reads set is skipped without a write; every
+    /// read and write is sequentially consistent, so a claim that failed and a release() that
+    /// follows it are ordered for the dispatch of InferenceThread (a job that waits for a slot
+    /// is seen by the thread that releases one). The caller runs the call on the slot
+    /// (Prepared::run_claimed) and gives it back with release().
+    bool try_claim(uint32_t& instance) noexcept;
+
+    /// Gives back a slot try_claim() claimed (sequentially consistent, after the call on it).
+    void release(uint32_t instance) noexcept;
+
     /// How load bound every slot: ANIRA_BINDING_POSITION for every slot of the record unless
     /// do_load said otherwise (set_bindings); the legacy adapter's 2.x backend binds by
     /// position. Sized to the record after load, empty before.
@@ -372,14 +401,22 @@ protected:
 
 private:
     friend class Prepared;
-    /// Inference thread, a shared session's call: claims a free slot of the model (the first
-    /// whose busy flag was clear, spinning until one is; the flag is released on every path
-    /// out), writes its index into the call and runs the prepared's process on it. Without a
-    /// claim (claims_instances() false) the call runs at once with instance 0.
-    /// ANIRA_ERROR_INVALID_STATE, and no engine call, on a model without a shared slot.
+    /// A shared session's call run directly (Prepared::run): claims a free slot of the model
+    /// (try_claim; the flag is released on every path out), writes its index into the call and
+    /// runs the prepared's process on it. The inference thread never gets here for a pooled
+    /// model: it claims before it takes a job (InferenceThread) and runs the call with
+    /// Prepared::run_claimed; this loop serves the callers that run a shared call themselves
+    /// (the engine room's tests drive it from several threads). While every slot is busy it waits
+    /// with the backoff of the inference thread's loop (src/utils/Backoff.h: spins, pause
+    /// hints, then a yield and a 100 us sleep per pass), and gives up once `stop` says the
+    /// thread is being stopped, so a pool's join never waits on a thread that waits for a
+    /// slot another thread holds. Without a claim (claims_instances() false) the call runs at
+    /// once with instance 0. ANIRA_ERROR_INVALID_STATE, and no engine call, on a model without
+    /// a shared slot and when it gave up.
     anira_status claim_and_run(Prepared& prepared,
                                anira_engine_ctx& call,
-                               ChunkBuffers* chunk) noexcept;
+                               ChunkBuffers* chunk,
+                               StopSignal stop) noexcept;
 
     Model m_model;
     Bindings m_bindings;
@@ -406,9 +443,30 @@ public:
     /// exclusive session's call carries ANIRA_ENGINE_CALL_EXCLUSIVE with instance 0, claims no
     /// slot, is reset first when `reset_first` and runs on what this session keeps; a shared
     /// session's call goes through the loaded model's claim loop, which writes the claimed
-    /// slot's index into the call. Returns process's status; ANIRA_ERROR_INVALID_STATE, and no
-    /// engine call, over a model that was never loaded.
-    anira_status run(const anira_engine_ctx& ctx, ChunkBuffers* chunk, bool reset_first) noexcept;
+    /// slot's index into the call, and gives up waiting for one once `stop` says the thread is
+    /// being stopped. Returns process's status; ANIRA_ERROR_INVALID_STATE, and no engine call,
+    /// over a model that was never loaded and for a shared call that gave up.
+    anira_status run(const anira_engine_ctx& ctx,
+                     ChunkBuffers* chunk,
+                     bool reset_first,
+                     StopSignal stop = {}) noexcept;
+
+    /// Inference thread: one shared call of this session on a slot the caller claimed
+    /// (Loaded::try_claim) and gives back (Loaded::release) itself: copies the context, writes
+    /// the loaded pointer and `instance` into it and runs process on it, without the claim
+    /// loop. For a session whose calls claim a slot (claims_instance()). Returns process's
+    /// status; ANIRA_ERROR_INVALID_STATE, and no engine call, over a model that was never
+    /// loaded.
+    anira_status run_claimed(const anira_engine_ctx& ctx,
+                             ChunkBuffers* chunk,
+                             uint32_t instance) noexcept;
+
+    /// Whether this session's calls run on a claimed shared slot of the loaded model: a shared
+    /// session over a model that claims slots (not a 2.x backend, which takes no index) and has
+    /// at least one. False for an exclusive session, whose calls run on what it keeps.
+    bool claims_instance() const noexcept {
+        return !m_exclusive && m_loaded->claims_instances() && m_loaded->num_instances() > 0;
+    }
 
     /// Whether this session's calls run exclusively (ANIRA_PREPARE_EXCLUSIVE at its prepare).
     bool exclusive() const noexcept { return m_exclusive; }

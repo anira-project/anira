@@ -50,8 +50,9 @@ Where the 2.x API stands in this pre-release
   ``hybridnn_model_config(batches)``, ``rnn_model_config(chunk)``) for the benchmark sweeps
   alone, which vary the shapes with the host buffer. A project that included the old headers
   (the nn-inference-template, for one) loads the files instead. The files set no instance
-  ceiling, so one processor per engine runs (the 2.x statics ran half the hardware threads);
-  a configuration that wants parallel instances says so with ``max_instances``. The
+  ceiling, so the count is the pool's (``ANIRA_INSTANCES_AUTO``: as many instances as the
+  inference pool has threads; the 2.x statics ran half the hardware threads, the default
+  pool's size); a configuration that wants fewer says so with ``max_instances``. The
   per-model CMake variables the old headers were compiled with (``GUITARLSTM_MODELS_PATH_*``,
   ``STEERABLENAFX_MODELS_PATH_*``, ``STATEFULLSTM_MODELS_PATH_*``, ``SIMPLEGAIN_MODEL_PATH``,
   ``RAVE_MODEL_DIR``, ``*_JSON_CONFIG_PATH``) are gone with them; ``ANIRA_EXTRAS_MODELS_DIR``,
@@ -158,7 +159,9 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
      - ``anira::Hard{.block_min, .block_max, .rate}`` (``anira_contract_create_hard``) or
        ``contract.hard_geometry(block_min, block_max, rate)``
        (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
-       against ``block_min == block_max``.
+       against ``block_min == block_max``. The blocks are doubles, so a fractional
+       ``buffer_size`` (the ``samplesPerBlock / 2048.f`` idiom of a control-rate model) is a
+       fractional geometry: ``contract.hard_geometry(samples_per_block / 2048.0, ...)``.
    * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
      - ``cfg.anchor(canonical)`` with the tensor's canonical name
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
@@ -470,8 +473,8 @@ rest of this page is the way forward, and the header lets that happen one class 
        ``prepare``. A request is applied when preparation finishes if a handler is still prepared,
        or at the next successful preparation otherwise.
    * - ``prepare(HostConfig)``
-     - Present; a fractional block size and a reference tensor that is not streamable are
-       refused.
+     - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
+       reference tensor that is not streamable is refused.
    * - ``prepare(HostConfig, custom_latency, tensor_index)``, ``prepare(HostConfig, vector)``
      - Present: the declared stream latency of the Hard contract
        (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
@@ -518,10 +521,9 @@ rest of this page is the way forward, and the header lets that happen one class 
   file loads through ``anira::ModelConfig::from_file``).
 
 **Behaviour that differs** is listed per class in :ref:`migration-compat-config`; in short:
-nothing loads before ``prepare``, and a ``prepare`` with other settings loads again; a
-fractional block size is refused (anchor on the stream the block is measured on, e.g. the audio
-output, and pass that stream's block: the ``samplesPerBlock / 2048.f`` idiom of the bridge
-below does not carry over); the single forms carry one slot per side; ``push_data`` never waits;
+nothing loads before ``prepare``, and a ``prepare`` with other settings loads again; the
+single forms carry one slot per side; a block above the ``HostConfig`` buffer size is refused;
+``push_data`` never waits;
 ``pop_data`` with a deadline polls on a handler without a blocking ratio;
 ``set_non_realtime`` is never refused (a waiting call without an inference loop fails instead);
 ``set_inference_backend`` of a backend without a plan logs and keeps the selection;
@@ -535,7 +537,8 @@ leniency, resolves relative paths against the document's directory and keeps row
 this build lacks; the ``ContextConfig`` thread count defaults to ``k_threads_auto``, and a
 document without a log level reads Warning; the engine code of ``PassthroughEngine`` and every
 2.x custom engine is the host's, so a handler must be destroyed before the module that holds it
-unloads.
+unloads, and never from that module's static destructors (:ref:`usage-teardown`: a library
+unloaded with an inference still running aborts with a message on Linux and macOS).
 
 .. _migration-compat-config:
 
@@ -651,7 +654,7 @@ What differs from 2.x:
 - **The engine code is the host's.** The header is compiled into the host, so the
   ``PassthroughEngine`` and every 2.x custom engine run code of the module that includes it,
   where 2.x ran its pass-through inside libanira: destroy the handler before that module
-  unloads.
+  unloads, never from its static destructors (:ref:`usage-teardown`).
 
 ``anira::v2::InferenceHandler`` is the 2.x handler over the C handler of
 ``anira/abi/handler.h``: its constructors take the processor, the configuration and a
@@ -687,14 +690,23 @@ What differs from 2.x:
   ``prepare`` (``ANIRA_ERROR_NO_SUCH_FILE``, ``ANIRA_ERROR_MODEL_LOAD``). A ``prepare`` with the
   settings of the last one only resets the stream; another geometry prepares again and loads the
   models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
-  the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size`` is
-  ``ANIRA_ERROR_CONFIG``: anchor on the stream the block is measured on instead.
+  the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size``
+  works as in 2.x (``samplesPerBlock / 2048.f`` for a control-rate reference): it becomes the
+  Hard geometry as it is (``block_min`` is half of it when smaller blocks come and it is one
+  sample or less); a block that is not finite and above 0 is ``ANIRA_ERROR_CONFIG``.
 - **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
   contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
   Warning as in 2.x; an index out of range, or a figure on a non-streamable output, is
   ``ANIRA_ERROR_INVALID_ARGUMENT`` (2.x threw ``std::invalid_argument`` or asserted).
 - **The single forms** carry their one slot per side and nothing else; 2.x resent what the last
   call had left in the other slots.
+- **A block above the buffer size** is refused: a ``process``, ``push_data`` or ``pop_data`` call
+  that carries more than ``m_buffer_size`` samples of the reference stream (``ceil`` of it, scaled
+  to every other stream by its hop) moves nothing, delivers 0 and leaves
+  ``ANIRA_ERROR_INVALID_ARGUMENT`` in ``rt_error()``, as every Hard entry of the C handler does
+  (section 1.3 of the usage guide, *Fractional blocks*). 2.x took any count and kept the tail of a
+  push larger than its ring. Prepare with the largest block the host passes, with
+  ``m_allow_smaller_buffers`` for the smaller ones.
 - **Waits:** ``push_data`` never waits (2.x waited under ``set_non_realtime``); ``pop_data`` with
   a deadline polls on a handler without a blocking ratio (2.x neither waited nor collected);
   ``set_non_realtime(true)`` is never refused, and without an inference loop each waiting call
@@ -720,7 +732,8 @@ The 2.x handler of ``<anira/anira.h>`` (:cpp:class:`anira::InferenceHandler` and
 stays public through the alpha releases and goes with the runtime cut-over, the transitional
 bridge below with it; the remaining 2.x headers become private in the release after that. From
 then on ``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor
-release after 3.0.0; no ``[[deprecated]]`` attribute marks it until then.
+release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+entity gains one before 3.0.0.
 
 .. _migration-bridge:
 
@@ -761,7 +774,9 @@ the reason; the same four functions exist over the C handles with a status and a
 const anira_engine* candidates, uint32_t num_candidates, anira::InferenceConfig&,
 anira_error*)`` and so on). ``to_host_config(cfg, buffer_size, sample_rate, allow_smaller)``
 takes the host's own geometry, which may be fractional (a plugin that prepares a 2048-sample
-decoder with ``samplesPerBlock / 2048.f``).
+decoder with ``samplesPerBlock / 2048.f``); the contract forms carry a fractional geometry
+the same way, as the nearest float of the double (the latency calculation recovers the
+rational the host meant from it, 1/3 and 1/4 exactly).
 
 **What becomes what.**
 
@@ -789,8 +804,9 @@ decoder with ``samplesPerBlock / 2048.f``).
      - ``max_inference_time``; ``warm_up = n`` / ``0``; ``blocking_ratio``.
    * - ``state(ANIRA_MODEL_STATEFUL)``; ``max_instances``
      - ``session_exclusive_processor``; ``num_parallel_processors`` (a config that sets no
-       ``max_instances`` runs one processor per engine; the 2.x constructor default was half
-       the hardware threads, which the upgrade of a 2.x document keeps).
+       ``max_instances`` carries ``ANIRA_INSTANCES_AUTO``, which the core resolves to the
+       inference pool's thread count; the 2.x constructor default was half the hardware
+       threads, the size of the default pool).
    * - ``Hard.block_max`` / ``rate``; ``block_min < block_max``; ``anchor``
      - ``HostConfig{buffer_size, sample_rate}``; ``allow_smaller_buffers``;
        ``tensor_index`` / ``tensor_is_input`` (the 2.x default when no anchor is set).
@@ -840,10 +856,11 @@ are the C handler's (:doc:`usage` sections 3.1 and 3.2).
 reference only; passing a temporary does not compile.
 
 **Windows.** A flexible window (``window_min < window_max``) is pinned when
-``to_inference_config`` runs: one host block per inference (``block_max`` scaled by the
-tensor's time ratio, plus the overlap), clamped to the window range; without a geometry on the
-contract, the smallest window. When a spec's window is flexible, set the geometry before the
-call, or build the ``InferenceConfig`` at prepare. With fixed windows, which every bundled
+``to_inference_config`` runs, by the rule of the usage guide (section 1.3, *Flexible
+windows*): one anchor hop for the whole model, the largest every window and time ratio allow
+at or below ``block_max``, else the smallest above it; without a geometry on the contract, the
+smallest. When a spec's window is flexible, set the geometry before the call, or build the
+``InferenceConfig`` at prepare. With fixed windows, which every bundled
 fixture uses, the order does not matter.
 
 .. _migration-json:
@@ -923,8 +940,8 @@ entry is ``ANIRA_ERROR_JSON`` with the key path in ``anira_error::message``.
    * - ``processing_spec.internal_model_latency``
      - ``outputs[].latency``.
    * - ``num_parallel_processors``
-     - ``max_instances``; absent, the 2.x default (half the hardware threads, at least 1),
-       which is what the 2.x constructor used.
+     - ``max_instances``; absent, ``ANIRA_INSTANCES_AUTO`` (as many as the inference pool has
+       threads), what the 2.x default of half the hardware threads meant for the default pool.
    * - ``session_exclusive_processor``
      - ``"state": "stateful"``.
    * - ``max_inference_time``, ``warm_up``, ``blocking_ratio``
@@ -997,7 +1014,65 @@ value is reported through the log and skipped, an unparseable ``model_data`` or
 ``tensor_shape`` entry is dropped, an out-of-range scalar falls back to its default, and only a
 configuration that still has model data, a tensor shape and ``max_inference_time`` yields an
 :cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must
-check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"``, a ``num_threads``
-other than ``0`` to ``0`` and ``drain`` to ``"manual"``, each with a warning: the core
-cannot run threads on the web, they are created from JavaScript via
-``AniraWeb.spinUpInferenceWorker()``.
+check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"`` and ``drain`` to
+``"manual"``, each with a warning; ``num_threads`` sizes the pool as natively, its threads being
+Wasm Workers.
+
+.. _migration-web:
+
+Anira Web: from the 2.x TypeScript classes
+------------------------------------------
+
+The 3.x package (``@anira-project/anira``) no longer wraps the 2.x C++ classes: the module
+exports the C ABI (``_anira_*``) and ``anira/anira_em.h`` (``_anira_em_*``), the package is a
+thin typed layer over them (:doc:`web-api/basic_usage` has the whole setup), and anira starts the
+page's other threads itself, from C: the context's inference threads are Wasm Workers, the audio
+path is a Wasm Audio Worklet node whose render callback is C.
+
+- ``new AniraWeb()`` / ``AniraWeb.create()`` becomes ``await Anira.create()``; its ``abi`` is the
+  C ABI, one typed method per entry (``anira.abi.anira_context_create(config)``), which throws an
+  ``AniraError`` on a failed status. ``malloc``, ``free``, ``getHeapF32`` and the other heap
+  helpers become ``anira.module`` (``_malloc``, ``HEAPF32``, ...); ``getAniraVersion`` is
+  ``anira.version``, ``drainAniraLog`` ``anira.drainLog()``.
+- ``ModelData``, ``TensorShape``, ``ProcessingSpec`` and ``InferenceConfig`` become one model
+  config: ``await ModelConfig.fromUrl(anira, url)`` reads the 3.x model file a native host reads
+  (a 2.x JSON document is read too, :ref:`migration-json`) and fetches its model files.
+- ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
+  ``Contract.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate: sampleRate, budgetMs })``
+  with ``g = await measureRenderGeometry(context)``, or a contract file (``Contract.fromUrl``,
+  then ``setGeometry``): the render quantum is the smallest block, the context's burst of quanta
+  the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
+- ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
+  ``Pipeline.create(anira).addInference(model)``, ``Handler.create(context, pipeline)`` and
+  ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core
+  and its pool.
+- ``inferenceHandler.process(...)`` in a worklet becomes the handler's audio node,
+  ``await handler.createAudioNode(audioContext, { params, staticInputs, waitMs })``: the render
+  callback is C; ``setInput`` on a Static tensor becomes the node's AudioParam (scalars) or
+  ``audioNode.setStaticInput`` (tensors). ``BufferF``, ``RingBuffer`` and the ``Vector*``
+  classes have no successor: tensors are heap memory described by ``anira_tensor`` records.
+- ``JSPrePostProcessor`` and ``registerPrePostProcessor`` become ``defineStage(name, factory)``
+  in every scope that runs one of the stage's phases (the page, the worklet's module) and
+  ``pipeline.addStage(name, { hooks, flags })``: the method names stay (``preProcess``,
+  ``postProcess``, ``beforeInference``, ``afterInference``), they receive the
+  ``anira_stage_ctx`` pointer instead of buffer vectors.
+- ``JSBackendBase`` and ``registerProcessor(backend, className)`` become
+  ``defineEngine(id, factory)`` in the context's worker module and
+  ``pipeline.registerEngine(id, { flags })``; ``process(ctx, prepared)`` reads the
+  ``anira_engine_ctx`` (``engineTensors``), ``InferenceBackend.CUSTOM`` becomes the engine id in
+  the model entry. The ONNX Runtime Web backend is
+  ``onnxRuntimeWeb({ model })`` from ``@anira-project/anira/engines/onnxruntime-web``; the built-in
+  ONNX Runtime engine of the module needs no JavaScript.
+- ``spinUpInferenceWorker()`` goes: the context's ``threads`` (and ``workerModule``) start the
+  Workers, and ``await context.ready()`` waits until they run.
+
+3.0.0-alpha.2 pages (``AniraWeb``, ``spinUpInferenceWorker(context, url)``, ``registerJSEngine``,
+``addJSStage``, ``configureAudioWorklet``, ``AniraAudioWorkletBase``, ``setupInferenceWorker``)
+move the same way: the worker file's ``setupInferenceWorker({ MyEngine })`` becomes
+``defineEngine`` calls in the context's worker module, the worklet subclass with its
+``stageClasses`` becomes ``defineStage`` in a ``workletModules`` module, and
+``configureAudioWorklet`` becomes ``handler.createAudioNode``. Its single-slot options
+``inputChannels``, ``outputChannels``, ``inputSlot`` and ``outputSlot`` become ``inputSlots`` and
+``outputSlots``, lists of Streamed slots whose channel counts come from the model (the default
+is every Streamed slot of the side, so a single-stream model needs neither), with
+``partialStreams`` to leave a Streamed slot unserved (:doc:`web-api/audio_nodes`).

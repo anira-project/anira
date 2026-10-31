@@ -55,7 +55,9 @@ namespace anira::v3compat {
  * Static or Buffer tensor) and the output latencies become the ProcessingSpec; the contract's
  * explicit budget, FIXED warmup count and wait ratio become max_inference_time, warm_up and
  * blocking_ratio; a STATEFUL model config becomes session_exclusive_processor;
- * max_instances becomes num_parallel_processors.
+ * max_instances becomes num_parallel_processors (ANIRA_INSTANCES_AUTO stays the sentinel,
+ * which the core resolves to the inference pool's thread count when the session is
+ * created; a 2.x caller that reads the count before reads 0xffffffff).
  *
  * @param model The model config.
  * @param contract A Hard contract with an explicit budget and a FIXED or NONE warmup.
@@ -93,9 +95,10 @@ ANIRA_API anira_status to_core_config(const anira_context_config* config,
 /**
  * @brief The 2.x HostConfig of a Hard contract's geometry and a model config's anchor.
  *
- * block_max and rate become the host buffer size and sample rate, block_min < block_max
- * allows smaller buffers, and the anchor names the reference tensor (the first Streamed input,
- * else output, when none is set).
+ * block_max and rate become the host buffer size and sample rate (a fractional block_max as
+ * the nearest float, from which the latency calculation recovers the rational the host meant),
+ * block_min < block_max allows smaller buffers, and the anchor names the reference tensor (the
+ * first Streamed input, else output, when none is set).
  *
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument; ANIRA_ERROR_CONFIG
  * when the geometry is missing (block_max 0 or rate 0) or a spec breaks a rule;

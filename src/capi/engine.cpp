@@ -95,6 +95,7 @@ EngineFacts engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>
     for (const std::shared_ptr<const EngineCarrier>& engine : engines) {
         facts.m_ids.push_back(engine->id());
         facts.m_providers.push_back(engine->providers());
+        facts.m_flags.push_back(engine->desc().flags);
         if (engine->consumed_kinds().empty()) { continue; }
         facts.m_consumers.push_back(ExtConsumer{.m_name = engine->id().c_str(),
                                                 .m_engine = ANIRA_ENGINE_CUSTOM,

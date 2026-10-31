@@ -85,8 +85,8 @@ private:
     thl::core::Thread m_thread;  ///< Last: started by the constructor once the rest exists
 };
 #else
-// No thread can drain the queue on WebAssembly (ANIRA_LOG_DRAIN_MANUAL is coerced); never
-// built.
+// No drain thread on WebAssembly (ANIRA_LOG_DRAIN_MANUAL is coerced: the JavaScript log sink
+// runs on the main thread, which a Wasm Worker cannot call); never built.
 class LogDrainLoop {};
 #endif
 
