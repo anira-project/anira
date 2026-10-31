@@ -49,38 +49,38 @@ anira takes its configuration from two JSON files that travel with the model: th
 The basic usage of anira is as follows:
 
 ```cpp
-#include <anira/anira.h>
 #include <anira/anira.hpp>
-#include <anira/compat/v3_to_v2.h>
 
 // The configuration: the model file next to your model, and the contract file
 anira::ModelConfig model_config = anira::ModelConfig::from_file("path/to/model.json");
 anira::ContractHandle contract = anira::ContractHandle::from_file("path/to/contract.json");
 
-// The runtime of this pre-release still takes the 2.x classes; the bridge builds them
-// from the files, over the engines of this build
-anira::InferenceConfig inference_config = anira::v3compat::to_inference_config(
-    model_config, contract, anira::v3compat::enabled_engines());
+// The context (the inference thread pool) and the handler over the model's inference stage,
+// on every engine of this build the model file names
+anira::Context context{anira::ContextConfig{}};
+anira::Pipeline pipeline;
+pipeline.add_inference(model_config);
+anira::InferenceHandler inference_handler(context, pipeline);
 
-// Create a pre- and post-processor instance
-anira::PrePostProcessor pp_processor(inference_config);
-
-// Create an InferenceHandler instance
-anira::InferenceHandler inference_handler(pp_processor, inference_config);
-
-// Complete the contract with the host geometry and allocate memory for audio processing
+// Complete the contract with the host geometry and allocate memory for audio processing;
+// prepare returns the plans, one per engine the model runs on here
 contract.hard_geometry(buffer_size, buffer_size, sample_rate);
-inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
+const anira::PlanReport report = inference_handler.prepare(contract);
 
-// Select the inference backend
-inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+// Optionally select another plan (the first one runs by default) and get the latency
+inference_handler.set_plan(0);
+uint32_t latency_in_samples = inference_handler.get_latency();
 
-// Optionally get the latency of the inference process in samples
-unsigned int latency_in_samples = inference_handler.get_latency();
+// The audio block as a tensor over the host's channel pointers, built once at prepare
+std::array<float*, 2> channels{};
+anira::Tensor audio = anira::Tensor::from_host_planar<float>(
+    std::span<float* const>(channels), std::array<int64_t, 2>{2, buffer_size});
 
 // Real-time safe audio processing in process callback of your application
-process(float** audio_data, int num_samples) {
-    inference_handler.process(audio_data, num_samples);
+void process(float* const* audio_data, size_t num_samples) noexcept {
+    channels = {audio_data[0], audio_data[1]};
+    audio.shape[1] = static_cast<int64_t>(num_samples);
+    inference_handler.process(audio, 0, audio, 0);
 }
 // audio_data now contains the processed audio samples
 ```
@@ -218,7 +218,7 @@ configurable (the linkage is not: it follows ``BUILD_SHARED_LIBS``, see above):
 
 Moreover, the following options are available:
 
-- Build anira with benchmark capabilities: ``-DANIRA_WITH_BENCHMARK=ON``
+- Build the benchmark examples and their fixture (`examples/benchmark/`, not part of the library): ``-DANIRA_WITH_BENCHMARK=ON``
 - Build example applications, plugins and populate example neural models: ``-DANIRA_WITH_EXAMPLES=ON``
 - Build anira with tests: ``-DANIRA_WITH_TESTS=ON``
 - Build anira with documentation: ``-DANIRA_WITH_DOCS=ON``
@@ -229,7 +229,7 @@ Moreover, the following options are available:
 Anira is available as the `@anira-project/anira` package for web applications: anira compiled
 to WebAssembly with a thin typed layer over its C ABI. anira starts the page's threads from C on
 one shared memory (the context's inference threads are Wasm Workers, the audio path a Wasm Audio
-Worklet node whose render callback is C), stages and inference engines are written in
+Worklet node whose render callback is C), processors and inference engines are written in
 TypeScript without rebuilding the module, and the model and contract files of a native host load
 unchanged. The 3.x pre-release is on the `next` dist-tag:
 
@@ -279,7 +279,7 @@ A debug preset is also available via `cmake --preset wasm-debug` / `cmake --buil
 
 - [Simple JUCE Audio Plugin](https://github.com/anira-project/anira/tree/main/examples/juce-audio-plugin/): Demonstrates how to use anira in a real-time audio JUCE / VST3-Plugin.
 - [CLAP Plugin Example](https://github.com/anira-project/anira/tree/main/examples/clap-audio-plugin/): Demonstrates how to use anira in a real-time clap plugin.
-- [Benchmark](https://github.com/anira-project/anira/tree/main/examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations.
+- [Benchmark](https://github.com/anira-project/anira/tree/main/examples/benchmark/): Demonstrates how to use anira for benchmarking of different neural network models, backends and audio configurations, with the Google Benchmark fixture of `examples/benchmark/fixture/` to copy into a project of your own.
 - [Minimal Inference](https://github.com/anira-project/anira/tree/main/examples/minimal-inference/): Demonstrates how minimal inference applications can be implemented in every engine.
 
 ### Other examples

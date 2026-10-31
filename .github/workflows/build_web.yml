@@ -51,9 +51,9 @@ jobs:
         with:
           PRESET: wasm-abi
 
-      # The node gate anira_em_oom, config.html and the model-file example load a bundled model
-      # config (extras/models/model-pool/gain.model.json) and its model file: the fixture trees,
-      # restored from the cache warm_caches.yml keeps, else fetched at their pins.
+      # The node gate anira_em_oom, config.html, plan-find.html and the model-file example load a
+      # bundled model config (extras/models/model-pool/gain.model.json) and its model file: the
+      # fixture trees, restored from the cache warm_caches.yml keeps, else fetched at their pins.
       - name: restore the model fixtures
         uses: actions/cache/restore@v4
         with:
@@ -123,9 +123,9 @@ jobs:
         working-directory: web
         run: npm test
 
-      # The two examples (web/examples/stage-and-engine, web/examples/model-file) against the built
+      # The two examples (web/examples/processor-and-engine, web/examples/model-file) against the built
       # package: tsc with strict over their files and the package's types, then their Vite builds
-      # (stage-and-engine's worker and worklet modules bundled into one script each), which the
+      # (processor-and-engine's worker and worklet modules bundled into one script each), which the
       # browser test runs.
       - name: build the examples
         working-directory: web
@@ -140,13 +140,14 @@ jobs:
 
       # The built package in headless Chromium and Firefox (served with COOP/COEP).
       # web/test/browser/index.html: the typed layer end to end, a context whose pool is two Wasm
-      # Workers importing a worker module with a JavaScript engine, a JavaScript stage in the
+      # Workers importing a worker module with a JavaScript engine, a JavaScript processor in the
       # worklet, an OfflineAudioContext rendered through the handler's audio node (the C render
       # callback), the Static gain an automated AudioParam, then a tensor slot. config.html: the
       # bundled gain.model.json and gain.contract.json as they are in the repository, the ONNX
-      # entry on the module's built-in ONNX Runtime engine. ort.html: the ONNX Runtime Web
-      # engine on a Worker. The example's check page, built and under Vite's dev server. A load
-      # the browser refuses (Firefox's file:/// security error) fails the step too.
+      # entry on the module's built-in ONNX Runtime engine. plan-find.html: PlanReport.find over
+      # that config and a JavaScript engine's entry, setPlan on its answer. ort.html: the ONNX
+      # Runtime Web engine on a Worker. The example's check page, built and under Vite's dev
+      # server. A load the browser refuses (Firefox's file:/// security error) fails the step too.
       - name: browser test (headless Chromium and Firefox)
         working-directory: web
         run: |

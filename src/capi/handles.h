@@ -176,7 +176,7 @@ struct anira_contract {
     anira_edge_cost m_edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
     /// The declared host-end domain per tensor, by canonical name, common to both kinds
     /// (anira_contract_set_host_domain, the JSON key "host_domains"): the domain the ring, the
-    /// model tensor, the Static store and the state buffers of the slot live in and every stage
+    /// model tensor, the Static store and the state buffers of the slot live in and every processor
     /// phase works in. Absent = ANIRA_DOMAIN_HOST. Resolved at prepare, where a name that is no
     /// tensor is ANIRA_ERROR_CONFIG and, in this pre-release, any domain but host memory is
     /// ANIRA_ERROR_NOT_SUPPORTED.

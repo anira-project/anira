@@ -1,11 +1,12 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
-// isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a
-// headless browser (Playwright) and prints its checks: test/browser/index.html, ort.html,
-// config.html, streams.html, boot-stop.html, concurrent.html, quanta.html, growth.html and oom.html (the package as built) and the check pages of the two examples, stage-and-engine
-// and model-file (as their own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a page
-// fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
-// fetches those) the way a site serves its own. Then the stage-and-engine check page once more under
-// Vite's dev server (vite's createServer over the example's config), whose transform of the
+// isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a headless
+// browser (Playwright) and prints its checks: test/browser/index.html, ort.html, config.html,
+// streams.html, boot-stop.html, concurrent.html, quanta.html, growth.html and oom.html (the package
+// as built) and the check pages of the two examples, processor-and-engine and model-file (as their
+// own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a
+// page fetches the bundled model configs and their model files (cmake -P extras/fetch-models.cmake
+// fetches those) the way a site serves its own. Then the processor-and-engine check page once more
+// under Vite's dev server (vite's createServer over the example's config), whose transform of the
 // module's glue the worklet scope must survive (decision D2; cmake/wasm-glue-rewrite.cmake). Exit
 // code 0 when every check passed and the browser refused no load.
 // usage: node test/browser/run.mjs [chromium|firefox] [page...]
@@ -76,13 +77,14 @@ const allPages = [
   'test/browser/index.html',
   'test/browser/ort.html',
   'test/browser/config.html',
+  'test/browser/plan-find.html',
   'test/browser/streams.html',
   'test/browser/boot-stop.html',
   'test/browser/concurrent.html',
   'test/browser/quanta.html',
   'test/browser/growth.html',
   'test/browser/oom.html',
-  'examples/stage-and-engine/dist/check.html',
+  'examples/processor-and-engine/dist/check.html',
   'examples/model-file/dist/check.html',
 ]
 const browserName = process.argv[2] ?? 'chromium'
@@ -100,7 +102,7 @@ const DEV_PAGE = 'check.html'
 const devServer = async () => {
   const { createServer } = await import('vite')
   const dev = await createServer({
-    configFile: path.join(root, 'examples/stage-and-engine/vite.config.ts'),
+    configFile: path.join(root, 'examples/processor-and-engine/vite.config.ts'),
     server: { port: 0, host: '127.0.0.1' },
     logLevel: 'error',
   })
@@ -118,7 +120,7 @@ let failed = 0
 try {
   for (const pathname of pages) {
     console.log(
-      `-- ${pathname === 'dev' ? `examples/stage-and-engine/${DEV_PAGE} (vite dev)` : pathname}`
+      `-- ${pathname === 'dev' ? `examples/processor-and-engine/${DEV_PAGE} (vite dev)` : pathname}`
     )
     const dev = pathname === 'dev' ? await devServer() : null
     const page = await browser.newPage()

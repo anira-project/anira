@@ -190,19 +190,19 @@ export interface AbiModule {
   _anira_ring_push_fill(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_ring_discard(_0: number, _1: number, _2: number): number
   _anira_ring_pop_windows(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number, _7: number): number
-  _anira_stage_input_role(_0: number, _1: number, _2: number): number
-  _anira_stage_output_role(_0: number, _1: number, _2: number): number
-  _anira_stage_input_ring(_0: number, _1: number, _2: number): number
-  _anira_stage_output_ring(_0: number, _1: number, _2: number): number
-  _anira_stage_input_tensor(_0: number, _1: number, _2: number): number
-  _anira_stage_output_tensor(_0: number, _1: number, _2: number): number
-  _anira_stage_engine(_0: number, _1: number, _2: number): number
-  _anira_stage_provider(_0: number, _1: number, _2: number): number
-  _anira_stage_default_pre_process(_0: number): number
-  _anira_stage_default_post_process(_0: number): number
+  _anira_processor_input_role(_0: number, _1: number, _2: number): number
+  _anira_processor_output_role(_0: number, _1: number, _2: number): number
+  _anira_processor_input_ring(_0: number, _1: number, _2: number): number
+  _anira_processor_output_ring(_0: number, _1: number, _2: number): number
+  _anira_processor_input_tensor(_0: number, _1: number, _2: number): number
+  _anira_processor_output_tensor(_0: number, _1: number, _2: number): number
+  _anira_processor_engine(_0: number, _1: number, _2: number): number
+  _anira_processor_provider(_0: number, _1: number, _2: number): number
+  _anira_processor_default_pre_process(_0: number): number
+  _anira_processor_default_post_process(_0: number): number
   _anira_pipeline_create(_0: number, _1: number): number
   _anira_pipeline_add_inference(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
-  _anira_pipeline_add_stage(_0: number, _1: number, _2: number): number
+  _anira_pipeline_add_processor(_0: number, _1: number, _2: number): number
   _anira_custom_engine_create(_0: number, _1: number, _2: number, _3: number): number
   _anira_custom_engine_destroy(_0: number): void
   _anira_custom_engine_detach(_0: number): void
@@ -219,6 +219,7 @@ export interface AbiModule {
   _anira_plan_report_plans(_0: number, _1: number, _2: number, _3: number): number
   _anira_plan_report_slots(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
   _anira_plan_report_exts(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_plan_report_find(_0: number, _1: number, _2: number): number
   _anira_handler_set_plan(_0: number, _1: number): number
   _anira_handler_get_plan(_0: number): number
   _anira_handler_process(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
@@ -242,10 +243,10 @@ export interface AbiModule {
   _anira_tensor_init_iosurface(_0: number, _1: number, _2: bigint, _3: number, _4: number, _5: number, _6: number): void
   _anira_tensor_init_ahardwarebuffer(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): void
   _anira_tensor_init_d3d12(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number): void
-  _anira_em_stage_desc_init(_0: number, _1: number, _2: number, _3: number): number
-  _anira_em_pipeline_add_js_stage(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_em_processor_desc_init(_0: number, _1: number, _2: number, _3: number): number
+  _anira_em_pipeline_add_js_processor(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number): number
-  _anira_em_pipeline_register_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
+  _anira_em_pipeline_add_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
   _anira_em_set_log_hook(_0: number): void
   _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
   _anira_em_inference_threads_in_loop(): number
@@ -478,7 +479,7 @@ export class AniraBindings {
    * filled: anira_tensor_init_host(&t, p, t.dtype, t.ndim, t.shape) re-points a tensor.
    * The previous content is overwritten, never released: end an owning acquire token with
    * anira_sync_token_reset and call a non-NULL release before re-initialising a record. A
-   * field fill: legal from a render thread and from inside a stage callback.
+   * field fill: legal from a render thread and from inside a processor callback.
    *
    * @param tensor The caller's record; NULL is a no-op.
    * @param data The first byte of pageable host memory; borrowed.
@@ -811,7 +812,7 @@ export class AniraBindings {
    * The first element of a host float tensor: handle.host.ptr plus byte_offset. NULL for
    * every domain but ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, for every dtype but
    * ANIRA_DTYPE_F32, for a planar tensor (ANIRA_TENSOR_PLANAR: anira_tensor_plane reads
-   * it) and for a NULL base pointer: a stage that receives a device tensor or a uint8
+   * it) and for a NULL base pointer: a processor that receives a device tensor or a uint8
    * tensor learns so from the NULL, not from a crash. It never converts and never looks
    * at strides: they are returned as declared, the caller reads by them (all-zero =
    * packed row-major).
@@ -1106,19 +1107,19 @@ export class AniraBindings {
    * on the input (JSON: "state_source" on the input spec). anira keeps one value per pair
    * in the handler, on the port of the state input, in the spec's shape and dtype (zeroed
    * at create and at prepare), copies it into the input tensor as the first step before
-   * the engine call, ahead of the stage's before_inference, and copies the output tensor
-   * into it as the last step after the engine call, behind the stage's after_inference; a
-   * failed inference (an engine failure, a non-OK stage) skips the capture, so the state
-   * keeps its last good value. anira_handler_reset re-initialises the state at the first
-   * inference of the new stream; the state survives anira_handler_set_plan. A model with
-   * a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation
-   * (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input
-   * names exactly one state output and every state output is named by exactly one state
-   * input; the two halves have equal dtype and shape; a state spec has no Time axis,
-   * window, time ratio or latency, and neither a ring dtype nor the anchor may name it.
-   * ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32 (as every
-   * model tensor of this pre-release; the value takes the spec's dtype), or with a
-   * transposed layout. A second call replaces the name.
+   * the engine call, ahead of the processor's before_inference, and copies the output
+   * tensor into it as the last step after the engine call, behind the processor's
+   * after_inference; a failed inference (an engine failure, a non-OK processor) skips the
+   * capture, so the state keeps its last good value. anira_handler_reset re-initialises
+   * the state at the first inference of the new stream; the state survives
+   * anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its
+   * state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at
+   * prepare): every state input names exactly one state output and every state output is
+   * named by exactly one state input; the two halves have equal dtype and shape; a state
+   * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor
+   * the anchor may name it. ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype
+   * than float32 (as every model tensor of this pre-release; the value takes the spec's
+   * dtype), or with a transposed layout. A second call replaces the name.
    *
    * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
    * @param output_canonical The canonical name of the state output this input is fed
@@ -1440,12 +1441,12 @@ export class AniraBindings {
    * of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the
    * ring as is. Nothing in anira converts: the Hard entries copy between the host and the
    * ring, a ring dtype that differs from the spec's dtype (the model's) is
-   * ANIRA_ERROR_CONFIG at prepare, unless a stage of the pipeline fills the phase that
-   * moves that ring (pre_process for an input, post_process for an output) and so takes
-   * the difference on itself; the default bodies of anira/abi/stage.h still refuse such a
-   * slot at run time. Set per tensor by canonical name, so an input and an output may
-   * differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed
-   * tensor is checked at prepare, not here.
+   * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase
+   * that moves that ring (pre_process for an input, post_process for an output) and so
+   * takes the difference on itself; the default bodies of anira/abi/processor.h still
+   * refuse such a slot at run time. Set per tensor by canonical name, so an input and an
+   * output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
+   * Streamed tensor is checked at prepare, not here.
    *
    * @param contract A Hard contract.
    * @param canonical The tensor's canonical name (the one its spec was created with).
@@ -1599,13 +1600,13 @@ export class AniraBindings {
   /**
    * The host-end domain of one tensor, common to both contract kinds like
    * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor
-   * and the Static store of the slot in, and the domain all four phases of a stage, the
-   * feed and the capture work in; for a State input it overrides the domain of the pair's
-   * two buffers, which is the backend's domain of the plans that run the pair otherwise
-   * (host memory for every backend of this pre-release), the domain the bound State
-   * descriptors report; the planner joins it to the backend's domain per slot with the
-   * edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
-   * recipe). A tensor declared in the backend's own domain has no edge to cross. The
+   * and the Static store of the slot in, and the domain all four phases of a processor,
+   * the feed and the capture work in; for a State input it overrides the domain of the
+   * pair's two buffers, which is the backend's domain of the plans that run the pair
+   * otherwise (host memory for every backend of this pre-release), the domain the bound
+   * State descriptors report; the planner joins it to the backend's domain per slot with
+   * the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class
+   * / recipe). A tensor declared in the backend's own domain has no edge to cross. The
    * ring, the model tensor and the tensors the context accessors fill share the declared
    * domain, readable from the domain field of any tensor an accessor fills or from the
    * plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name
@@ -4559,10 +4560,10 @@ export class AniraBindings {
    * The element type the ring stores: the ring dtype the host declared for the slot on
    * the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing
    * was declared. It is never inferred from the tensor spec's dtype, which may differ
-   * when the stage converts; every data accessor states the dtype it believes it is
+   * when the processor converts; every data accessor states the dtype it believes it is
    * reading or writing.
    *
-   * @param ring A ring of the stage context, or NULL.
+   * @param ring A ring of the processor context, or NULL.
    * @returns The ring's dtype; 0, which is no dtype, for a NULL ring.
    * Thread: [driver-thread] [callback-safe] ANIRA_NONBLOCKING
    */
@@ -4575,7 +4576,7 @@ export class AniraBindings {
    * The channel count of the ring: the extent of the Channel axis of its Streamed tensor
    * spec, 1 without one.
    *
-   * @param ring A ring of the stage context, or NULL.
+   * @param ring A ring of the processor context, or NULL.
    * @returns The number of channels; 0 for a NULL ring.
    * Thread: [driver-thread] [callback-safe] ANIRA_NONBLOCKING
    */
@@ -4587,7 +4588,7 @@ export class AniraBindings {
   /**
    * The unread elements of one channel.
    *
-   * @param ring A ring of the stage context, or NULL.
+   * @param ring A ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @returns The count; 0 for a NULL ring, and 0 with ANIRA_ERROR_INVALID_ARGUMENT
    *   recorded in anira_handler_rt_error for a channel out of range.
@@ -4603,7 +4604,7 @@ export class AniraBindings {
    * anira_ring_peek_past_block can address. 0 right after prepare or reset, growing as
    * elements are popped, bounded by the ring's capacity.
    *
-   * @param ring A ring of the stage context, or NULL.
+   * @param ring A ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @returns The count; 0 for a NULL ring, and 0 with ANIRA_ERROR_INVALID_ARGUMENT
    *   recorded in anira_handler_rt_error for a channel out of range.
@@ -4618,7 +4619,7 @@ export class AniraBindings {
    * Pops count elements of one channel into out, oldest first. Exactly count elements are
    * written: those beyond the available ones are value-initialised (zero).
    *
-   * @param ring An input ring of the stage context, or NULL.
+   * @param ring An input ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param out Room for count elements of dtype, packed.
    * @param dtype The dtype of the memory at out; it must be anira_ring_dtype(ring).
@@ -4648,7 +4649,7 @@ export class AniraBindings {
    * checked against anira_ring_available_past: history the ring never held reads as zero
    * after prepare or reset.
    *
-   * @param ring An input ring of the stage context, or NULL.
+   * @param ring An input ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param out Room for count elements of dtype, packed.
    * @param dtype The dtype of the memory at out; it must be anira_ring_dtype(ring).
@@ -4671,7 +4672,7 @@ export class AniraBindings {
    * Pushes count elements into one channel. A full ring overwrites its oldest elements;
    * anira sizes an output ring so that one hop per submitted chunk always fits.
    *
-   * @param ring An output ring of the stage context, or NULL.
+   * @param ring An output ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param in_ count elements of dtype, packed.
    * @param dtype The dtype of the memory at in; it must be anira_ring_dtype(ring).
@@ -4697,7 +4698,7 @@ export class AniraBindings {
   /**
    * Pushes count copies of one element into one channel.
    *
-   * @param ring An output ring of the stage context, or NULL.
+   * @param ring An output ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param value One element of dtype.
    * @param dtype The dtype of the element at value; it must be anira_ring_dtype(ring).
@@ -4721,7 +4722,7 @@ export class AniraBindings {
    * Drops up to count unread elements of one channel; they become history like popped
    * ones. No element crosses the call, so it takes no dtype and has no dtype refusal.
    *
-   * @param ring An input ring of the stage context, or NULL.
+   * @param ring An input ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param count Unread elements to drop.
    * @returns The elements dropped, at most the available ones; 0 for a NULL ring, and 0
@@ -4742,7 +4743,7 @@ export class AniraBindings {
    * num_batches * num_new elements in all; with num_batches 1 and offset 0 it is
    * anira_ring_peek_past_block followed by anira_ring_pop_block.
    *
-   * @param ring An input ring of the stage context, or NULL.
+   * @param ring An input ring of the processor context, or NULL.
    * @param channel The channel, below anira_ring_num_channels.
    * @param out The base of the destination, in elements of dtype: room for offset +
    *   num_batches * (num_new + num_old) elements.
@@ -4782,27 +4783,31 @@ export class AniraBindings {
 
   /**
    * Fills out with what the tensor of an input slot is: the anira_role of its spec, the
-   * same answer in all four phases. It is the first question of a stage about a slot it
-   * does not know from its model config: a Streamed tensor has a ring in pre_process
-   * (anira_stage_input_ring) and a model end, a Static and a State tensor have their
-   * model end only (anira_stage_input_tensor). Every context accessor answers the same
-   * way: a status, an out-parameter filled on ANIRA_OK and reset on anything else, and
-   * every status but ANIRA_OK recorded in anira_handler_rt_error with one latched record
-   * per kind naming the entry, the slot and the phase, since asking for what a slot does
-   * not have is the stage's bug and not an answer. A NULL ctx and a ctx without a frame
-   * name no handler to record into.
+   * same answer in all four phases. It is the first question of a processor about a slot
+   * it does not know from its model config: a Streamed tensor has a ring in pre_process
+   * (anira_processor_input_ring) and a model end, a Static and a State tensor have their
+   * model end only (anira_processor_input_tensor). Every context accessor answers the
+   * same way: a status, an out-parameter filled on ANIRA_OK and reset on anything else,
+   * and every status but ANIRA_OK recorded in anira_handler_rt_error with one latched
+   * record per kind naming the entry, the slot and the phase, since asking for what a
+   * slot does not have is the processor's bug and not an answer. A NULL ctx and a ctx
+   * without a frame name no handler to record into.
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's input list, below num_inputs.
    * @returns What the entry writes to out. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_input_role(ctx: number, slot: number): number {
+  anira_processor_input_role(ctx: number, slot: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const out_ = stackSlot(m)
-      checkStatus(m, m._anira_stage_input_role(ctx, slot, out_), 'anira_stage_input_role')
+      checkStatus(
+        m,
+        m._anira_processor_input_role(ctx, slot, out_),
+        'anira_processor_input_role'
+      )
       return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
@@ -4812,8 +4817,8 @@ export class AniraBindings {
   /**
    * Fills out with what the tensor of an output slot is: the anira_role of its spec, the
    * same answer in all four phases. A Streamed tensor has a ring in post_process
-   * (anira_stage_output_ring) and a model end, a Static and a State tensor have their
-   * model end only (anira_stage_output_tensor).
+   * (anira_processor_output_ring) and a model end, a Static and a State tensor have their
+   * model end only (anira_processor_output_tensor).
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's output list, below
@@ -4821,15 +4826,15 @@ export class AniraBindings {
    * @returns What the entry writes to out. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_output_role(ctx: number, slot: number): number {
+  anira_processor_output_role(ctx: number, slot: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const out_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_stage_output_role(ctx, slot, out_),
-        'anira_stage_output_role'
+        m._anira_processor_output_role(ctx, slot, out_),
+        'anira_processor_output_role'
       )
       return heap(m).HEAPU32[out_ >>> 2]
     } finally {
@@ -4840,23 +4845,27 @@ export class AniraBindings {
   /**
    * Fills out with the ring of an input slot: the ring of a Streamed tensor in
    * ANIRA_PHASE_PRE_PROCESS, the one phase that moves the input rings. The pointer is
-   * valid until the callback returns, and the stage advances the ring through the
+   * valid until the callback returns, and the processor advances the ring through the
    * anira_ring accessors. In every other case the slot has no ring here, and asking for
-   * one is the stage's bug: a tensor of another role has none (ask anira_stage_input_role
-   * first, or know the slot from the model config), and no input ring is handed out in
-   * another phase than pre_process.
+   * one is the processor's bug: a tensor of another role has none (ask
+   * anira_processor_input_role first, or know the slot from the model config), and no
+   * input ring is handed out in another phase than pre_process.
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's input list, below num_inputs.
    * @returns What the entry writes to out. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_input_ring(ctx: number, slot: number): number {
+  anira_processor_input_ring(ctx: number, slot: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const out_ = stackSlot(m)
-      checkStatus(m, m._anira_stage_input_ring(ctx, slot, out_), 'anira_stage_input_ring')
+      checkStatus(
+        m,
+        m._anira_processor_input_ring(ctx, slot, out_),
+        'anira_processor_input_ring'
+      )
       return heap(m).HEAPU32[out_ >>> 2]
     } finally {
       m.stackRestore(sp)
@@ -4867,7 +4876,8 @@ export class AniraBindings {
    * Fills out with the ring of an output slot: the ring of a Streamed tensor in
    * ANIRA_PHASE_POST_PROCESS, the one phase that moves the output rings; valid until the
    * callback returns. A tensor of another role has no ring, and no output ring is handed
-   * out in another phase: asking is the stage's bug, as for anira_stage_input_ring.
+   * out in another phase: asking is the processor's bug, as for
+   * anira_processor_input_ring.
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's output list, below
@@ -4875,15 +4885,15 @@ export class AniraBindings {
    * @returns What the entry writes to out. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_output_ring(ctx: number, slot: number): number {
+  anira_processor_output_ring(ctx: number, slot: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const out_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_stage_output_ring(ctx, slot, out_),
-        'anira_stage_output_ring'
+        m._anira_processor_output_ring(ctx, slot, out_),
+        'anira_processor_output_ring'
       )
       return heap(m).HEAPU32[out_ >>> 2]
     } finally {
@@ -4894,18 +4904,18 @@ export class AniraBindings {
   /**
    * Fills out with the model end of an input slot: the tensor the engine binds, in the
    * spec's shape, memory owned by anira in the slot's host domain (readable from the
-   * descriptor's domain field), for the stage to write. Available in
+   * descriptor's domain field), for the processor to write. Available in
    * ANIRA_PHASE_PRE_PROCESS for a Streamed and a Static input (every Static input is
    * already materialised there; a State input has no host end and is fed after
    * pre_process, so there is no model end to hand out), and in
    * ANIRA_PHASE_BEFORE_INFERENCE for a tensor of every role, State included: there every
-   * State input is already fed from the handler's state value, a stage may read or alter
-   * it, and what it leaves is what the engine gets. Asking in after_inference or
+   * State input is already fed from the handler's state value, a processor may read or
+   * alter it, and what it leaves is what the engine gets. Asking in after_inference or
    * post_process, which expose the model's outputs, or for a State input in pre_process,
-   * is the stage's bug. The descriptor is built by this call over the memory the tensor
-   * has right now; an engine may swap that memory between two inferences, so a stage asks
-   * again in every callback and keeps neither the descriptor nor its data pointer across
-   * calls.
+   * is the processor's bug. The descriptor is built by this call over the memory the
+   * tensor has right now; an engine may swap that memory between two inferences, so a
+   * processor asks again in every callback and keeps neither the descriptor nor its data
+   * pointer across calls.
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's input list, below num_inputs.
@@ -4919,12 +4929,12 @@ export class AniraBindings {
    *   of range are recorded too. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_input_tensor(ctx: number, slot: number, out: number): number {
+  anira_processor_input_tensor(ctx: number, slot: number, out: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_stage_input_tensor(ctx, slot, out),
-      'anira_stage_input_tensor'
+      m._anira_processor_input_tensor(ctx, slot, out),
+      'anira_processor_input_tensor'
     )
   }
 
@@ -4932,13 +4942,13 @@ export class AniraBindings {
    * Fills out with the model end of an output slot: the tensor the engine wrote, in the
    * spec's shape, memory owned by anira in the slot's host domain. Available in
    * ANIRA_PHASE_AFTER_INFERENCE for a tensor of every role, State included (there a State
-   * output is not yet captured: what the stage leaves in it is what the next inference is
-   * fed), and in ANIRA_PHASE_POST_PROCESS for a Streamed and a Static output (a State
-   * output was captured ahead of post_process and has no host end). Asking in pre_process
-   * or before_inference, or for a State output in post_process, is the stage's bug. A
-   * chunk that completed without an inference (dropped, failed) reads as zeros. The
-   * descriptor is built by this call and is not kept across calls, as for
-   * anira_stage_input_tensor.
+   * output is not yet captured: what the processor leaves in it is what the next
+   * inference is fed), and in ANIRA_PHASE_POST_PROCESS for a Streamed and a Static output
+   * (a State output was captured ahead of post_process and has no host end). Asking in
+   * pre_process or before_inference, or for a State output in post_process, is the
+   * processor's bug. A chunk that completed without an inference (dropped, failed) reads
+   * as zeros. The descriptor is built by this call and is not kept across calls, as for
+   * anira_processor_input_tensor.
    *
    * @param ctx The context the phase callback received.
    * @param slot The tensor's position in the model config's output list, below
@@ -4948,21 +4958,22 @@ export class AniraBindings {
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_STATE, recorded, in a phase that does not
    *   expose the model's outputs (pre_process, before_inference, reset) and for a State
    *   output in post_process; ANIRA_ERROR_INVALID_ARGUMENT under the refusals of
-   *   anira_stage_input_tensor, against num_outputs. A failed status throws an AniraError.
+   *   anira_processor_input_tensor, against num_outputs. A failed status throws an
+   *   AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_output_tensor(ctx: number, slot: number, out: number): number {
+  anira_processor_output_tensor(ctx: number, slot: number, out: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_stage_output_tensor(ctx, slot, out),
-      'anira_stage_output_tensor'
+      m._anira_processor_output_tensor(ctx, slot, out),
+      'anira_processor_output_tensor'
     )
   }
 
   /**
    * Fills the pair of the engine of the plan the chunk was submitted under
-   * (anira_engine's pair rule): the value anira_stage_ctx.engine carries, and the id
+   * (anira_engine's pair rule): the value anira_processor_ctx.engine carries, and the id
    * anira_plan_info.engine_id carries for that plan, the reverse-URI id of a custom
    * engine beside ANIRA_ENGINE_CUSTOM, NULL for a built-in engine. The id out-parameter
    * may be NULL when the caller wants the value alone. The same answer in every phase of
@@ -4973,7 +4984,7 @@ export class AniraBindings {
    *   AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_engine(ctx: number): { engine: number; engine_id: string | null } {
+  anira_processor_engine(ctx: number): { engine: number; engine_id: string | null } {
     const m = this.module
     const sp = m.stackSave()
     try {
@@ -4981,8 +4992,8 @@ export class AniraBindings {
       const engine_id_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_stage_engine(ctx, engine_, engine_id_),
-        'anira_stage_engine'
+        m._anira_processor_engine(ctx, engine_, engine_id_),
+        'anira_processor_engine'
       )
       return {
         engine: heap(m).HEAPU32[engine_ >>> 2],
@@ -4994,7 +5005,7 @@ export class AniraBindings {
   }
 
   /**
-   * The provider twin of anira_stage_engine: the pair of the provider of the plan the
+   * The provider twin of anira_processor_engine: the pair of the provider of the plan the
    * chunk was submitted under (anira_plan_info.provider and provider_id), the name of a
    * custom provider beside ANIRA_PROVIDER_CUSTOM, NULL for a provider of the enum.
    *
@@ -5003,7 +5014,9 @@ export class AniraBindings {
    *   AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_provider(ctx: number): { provider: number; provider_id: string | null } {
+  anira_processor_provider(
+    ctx: number
+  ): { provider: number; provider_id: string | null } {
     const m = this.module
     const sp = m.stackSave()
     try {
@@ -5011,8 +5024,8 @@ export class AniraBindings {
       const provider_id_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_stage_provider(ctx, provider_, provider_id_),
-        'anira_stage_provider'
+        m._anira_processor_provider(ctx, provider_, provider_id_),
+        'anira_processor_provider'
       )
       return {
         provider: heap(m).HEAPU32[provider_ >>> 2],
@@ -5024,64 +5037,66 @@ export class AniraBindings {
   }
 
   /**
-   * The default pre_process, for a stage that wants it ("call super"): for every Streamed
-   * input it pops one hop per channel from the ring into the model tensor, which it reads
-   * as packed row-major memory: channel c of a tensor of n elements per channel starts at
-   * element c * n. Where n is the hop, that is the plain pop. Where n is above the hop,
-   * the receptive field of a sliding-window model, the n minus hop elements at the head
-   * of the channel are the ring's history (anira_ring_peek_past_block) and the hop is
-   * popped behind them. It never touches a tensor of another role. Real-time by
+   * The default pre_process, for a processor that wants it ("call super"): for every
+   * Streamed input it pops one hop per channel from the ring into the model tensor, which
+   * it reads as packed row-major memory: channel c of a tensor of n elements per channel
+   * starts at element c * n. Where n is the hop, that is the plain pop. Where n is above
+   * the hop, the receptive field of a sliding-window model, the n minus hop elements at
+   * the head of the channel are the ring's history (anira_ring_peek_past_block) and the
+   * hop is popped behind them. It never touches a tensor of another role. Real-time by
    * construction: no allocation, no lock, no system call. anira runs it itself, once per
-   * chunk, when the stage's pre_process slot is NULL (or the pipeline has no stage).
+   * chunk, when the processor's pre_process slot is NULL (or the pipeline has no
+   * processor).
    *
-   * @param ctx The context the stage's pre_process received.
+   * @param ctx The context the processor's pre_process received.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another
    *   phase than ANIRA_PHASE_PRE_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a
    *   Streamed input is not its tensor's dtype, with that tensor untouched and the others
-   *   filled (nothing converts: a stage that declared another ring dtype pops that ring
-   *   itself). The status is returned, never recorded by the default itself: a stage that
-   *   returns it fails the chunk with it. A failed status throws an AniraError.
+   *   filled (nothing converts: a processor that declared another ring dtype pops that ring
+   *   itself). The status is returned, never recorded by the default itself: a processor
+   *   that returns it fails the chunk with it. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_default_pre_process(ctx: number): number {
+  anira_processor_default_pre_process(ctx: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_stage_default_pre_process(ctx),
-      'anira_stage_default_pre_process'
+      m._anira_processor_default_pre_process(ctx),
+      'anira_processor_default_pre_process'
     )
   }
 
   /**
-   * The default post_process, for a stage that wants it ("call super"): for every
+   * The default post_process, for a processor that wants it ("call super"): for every
    * Streamed output it pushes one hop per channel from the model tensor, read as packed
    * row-major memory, into the ring: channel c from element c * hop. It never touches a
    * tensor of another role. Real-time by construction. anira runs it itself, once per
-   * chunk, when the stage's post_process slot is NULL (or the pipeline has no stage).
+   * chunk, when the processor's post_process slot is NULL (or the pipeline has no
+   * processor).
    *
-   * @param ctx The context the stage's post_process received.
+   * @param ctx The context the processor's post_process received.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another
    *   phase than ANIRA_PHASE_POST_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a
    *   Streamed output is not its tensor's dtype, with that ring untouched and the others
-   *   pushed. The status is returned, never recorded by the default itself: a stage that
-   *   returns it fails the chunk with it. A failed status throws an AniraError.
+   *   pushed. The status is returned, never recorded by the default itself: a processor
+   *   that returns it fails the chunk with it. A failed status throws an AniraError.
    * Thread: [driver-thread | inference-thread] [callback-safe] ANIRA_NONBLOCKING
    */
-  anira_stage_default_post_process(ctx: number): number {
+  anira_processor_default_post_process(ctx: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_stage_default_post_process(ctx),
-      'anira_stage_default_post_process'
+      m._anira_processor_default_post_process(ctx),
+      'anira_processor_default_post_process'
     )
   }
 
   /**
    * Creates an empty pipeline. A pipeline holds exactly one inference stage
-   * (anira_pipeline_add_inference) and at most one pre- and post-processing stage
-   * (anira_pipeline_add_stage). Value-like: copied by anira_handler_create, destroyable
-   * right after; the copy shares the carrier of the stage and the custom engines added to
-   * it.
+   * (anira_pipeline_add_inference) and at most one processor, the custom pre- and
+   * post-processing (anira_pipeline_add_processor). Value-like: copied by
+   * anira_handler_create, destroyable right after; the copy shares the carrier of the
+   * processor and the custom engines added to it.
    *
    * @returns What the entry writes to out. A failed status throws an AniraError with the
    *   entry's message.
@@ -5110,16 +5125,17 @@ export class AniraBindings {
    * entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure of the variant
    * (axes, roles, windows, layouts, the engines of the named candidates against this
    * build, the extensions on the model and its specs) is checked at anira_handler_create;
-   * the contract rules at prepare. A custom engine is part of this stage and never a
-   * stage of its own: it is one more implementation a candidate's engine_id resolves to,
-   * added to the pipeline with anira_pipeline_add_engine (before or after this call), and
-   * its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose id no
-   * engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create:
-   * every custom id, anira.v2.custom included, needs an engine on the pipeline.
+   * the contract rules at prepare. A custom engine is part of this processor and never a
+   * processor of its own: it is one more implementation a candidate's engine_id resolves
+   * to, added to the pipeline with anira_pipeline_add_engine (before or after this call),
+   * and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose
+   * id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
+   * anira_handler_create: every custom id, anira.v2.custom included, needs an engine on
+   * the pipeline.
    *
    * @param pipeline The pipeline.
-   * @param variants The model configurations the stage may run, copied; exactly one in
-   *   this pre-release.
+   * @param variants The model configurations the processor may run, copied; exactly one
+   *   in this pre-release.
    * @param num_variants The number of variants; 1 in this pre-release.
    * @param candidates The candidate backends, copied, or NULL (with num_candidates 0) for
    *   the default set: every engine this build carries on ANIRA_PROVIDER_CPU, every custom
@@ -5185,43 +5201,44 @@ export class AniraBindings {
   }
 
   /**
-   * Sets the pipeline's one stage: the descriptor is copied into a refcounted carrier,
-   * which the pipeline and every handler created from it share, and release fires exactly
-   * once, when the last of them is destroyed, after every unprepare. One registration,
-   * prepared per handler: every anira_handler_prepare calls the stage's prepare with an
-   * anira_prepare_info and keeps the prepared pointer it hands back for that handler,
-   * which its phase calls, its reset and its unprepare receive beside user_data (two
-   * handlers of one pipeline never share a prepared pointer; user_data they do). A
-   * pipeline holds at most one stage, and the stage owns every phase it fills for every
-   * slot (it composes what it does not handle itself by calling the default bodies); a
-   * second call is refused. The order relative to anira_pipeline_add_inference means
-   * nothing. A refused call creates no carrier and never calls release. The descriptor is
-   * 104 bytes on LP64 and 60 on ILP32 without implicit padding; its slots, from the
-   * innermost level out: the four phases, reset, prepare, unprepare, init, release; init
-   * runs once per registration, at the first anira_handler_prepare of a handler of the
-   * pipeline, with an anira_init_info.
+   * Sets the pipeline's one processor: the descriptor is copied into a refcounted
+   * carrier, which the pipeline and every handler created from it share, and release
+   * fires exactly once, when the last of them is destroyed, after every unprepare. One
+   * registration, prepared per handler: every anira_handler_prepare calls the processor's
+   * prepare with an anira_prepare_info and keeps the prepared pointer it hands back for
+   * that handler, which its phase calls, its reset and its unprepare receive beside
+   * user_data (two handlers of one pipeline never share a prepared pointer; user_data
+   * they do). A pipeline holds at most one processor, and the processor owns every phase
+   * it fills for every slot (it composes what it does not handle itself by calling the
+   * default bodies); a second call is refused. The order relative to
+   * anira_pipeline_add_inference means nothing. A refused call creates no carrier and
+   * never calls release. The descriptor is 104 bytes on LP64 and 60 on ILP32 without
+   * implicit padding; its slots, from the innermost level out: the four phases, reset,
+   * prepare, unprepare, init, release; init runs once per registration, at the first
+   * anira_handler_prepare of a handler of the pipeline, with an anira_init_info.
    *
    * @param pipeline The pipeline.
-   * @param desc The stage; min(struct_size, sizeof(anira_stage_desc)) bytes are copied,
-   *   with the consumed kinds, so the record and its strings may die when the call returns.
-   *   The slots a shorter struct_size does not cover read as in ANIRA_STAGE_DESC_INIT.
-   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_STATE when the pipeline already has a stage;
-   *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or desc, a struct_size below the
-   *   three leading slots {struct_size, abi_version, user_data}, a flags bit this header
-   *   does not define, or a NULL consumed_kinds (or a NULL entry in it) with a count above
-   *   0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
+   * @param desc The processor; min(struct_size, sizeof(anira_processor_desc)) bytes are
+   *   copied, with the consumed kinds, so the record and its strings may die when the call
+   *   returns. The slots a shorter struct_size does not cover read as in
+   *   ANIRA_PROCESSOR_DESC_INIT.
+   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_STATE when the pipeline already has a
+   *   processor; ANIRA_ERROR_INVALID_ARGUMENT for a NULL pipeline or desc, a struct_size
+   *   below the three leading slots {struct_size, abi_version, user_data}, a flags bit this
+   *   header does not define, or a NULL consumed_kinds (or a NULL entry in it) with a count
+   *   above 0; ANIRA_ERROR_ABI_VERSION for an abi_version this library does not serve
    *   (anira_check_abi). A failed status throws an AniraError with the entry's message.
    * Thread: [main-thread]
    */
-  anira_pipeline_add_stage(pipeline: number, desc: number): number {
+  anira_pipeline_add_processor(pipeline: number, desc: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const err = stackError(m)
       return checkStatus(
         m,
-        m._anira_pipeline_add_stage(pipeline, desc, err),
-        'anira_pipeline_add_stage',
+        m._anira_pipeline_add_processor(pipeline, desc, err),
+        'anira_pipeline_add_processor',
         err
       )
     } finally {
@@ -5435,7 +5452,7 @@ export class AniraBindings {
 
   /**
    * Destroys a pipeline; handlers created from it keep their copy. The release function
-   * of a stage fires here when no handler shares its carrier any more, and a custom
+   * of a processor fires here when no handler shares its carrier any more, and a custom
    * engine's when neither its handle, another pipeline, a handler nor a loaded model
    * holds it any more.
    *
@@ -5494,15 +5511,15 @@ export class AniraBindings {
   /**
    * Destroys a handler: releases its session (in-flight inferences are drained, the
    * thread pool joins with the last session of this copy, which is why the call must not
-   * run under a loader lock), then calls the stage's unprepare for this handler when its
-   * prepare succeeded (no phase call runs afterwards), frees the plan report, stops
+   * run under a loader lock), then calls the processor's unprepare for this handler when
+   * its prepare succeeded (no phase call runs afterwards), frees the plan report, stops
    * counting as a user of the core, drops the handler's reference on its context and its
-   * share of the stage and engine carriers (the release function of a stage or an engine
-   * fires here when this handler held the last one). The driver thread must have stopped
-   * calling the Hard entries. A plugin must destroy its handlers, then its contexts,
-   * before its host unloads it (its instance teardown or module-exit entry point), and
-   * never from its own static destructors or DllMain, which run inside the unload under
-   * the loader lock.
+   * share of the processor and engine carriers (the release function of a processor or an
+   * engine fires here when this handler held the last one). The driver thread must have
+   * stopped calling the Hard entries. A plugin must destroy its handlers, then its
+   * contexts, before its host unloads it (its instance teardown or module-exit entry
+   * point), and never from its own static destructors or DllMain, which run inside the
+   * unload under the loader lock.
    *
    * @param handler The handle; NULL is a no-op.
    * Thread: [main-thread & !loader-lock]
@@ -5520,32 +5537,32 @@ export class AniraBindings {
    * serves (a built-in engine's runtime as the context reports it now, so a context
    * probed again since the create is seen; a custom engine's query as it answered at
    * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as
-   * at anira_handler_create), runs the stage's init when it has not run yet (once per
+   * at anira_handler_create), runs the processor's init when it has not run yet (once per
    * registration, before any model loads), loads the model of every candidate with an
    * entry, warms up as the contract says, sizes the rings for the contract's block range
    * and the latency, builds the plan report, selects the plan of the variant's default
    * engine when that engine has a plan (else plan 0), logs the report (Info records of
    * the group anira.capi: the counts and the selected plan, then one record per plan, per
    * slot and per consumed extension) re-arms the real-time latches, logging the count of
-   * failures suppressed since the last prepare or reset, and last calls the stage's
-   * prepare function, when the pipeline has a stage with one, with an anira_prepare_info
-   * (the handler, the report, the entry count, a template of the model end of every slot
-   * and the canonical names) and keeps the prepared pointer it hands back for this
-   * handler (a status other than ANIRA_OK fails this call with it, and unprepare is not
-   * called for a refused prepare). A second prepare replaces the previous session whole:
-   * the stage's unprepare of the previous prepare runs once the old session is released,
-   * before the new prepare. A failed prepare leaves the handler unprepared, the previous
-   * prepare's unprepare called all the same. Refused in this pre-release: an Async
-   * contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE
-   * (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up),
-   * ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel
-   * count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a
-   * function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed
-   * tensor, or one that differs from its spec's dtype while the stage does not fill the
-   * phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a stage whose
-   * filled pre_process, post_process or reset carries no
-   * ANIRA_STAGE_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
-   * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
+   * failures suppressed since the last prepare or reset, and last calls the processor's
+   * prepare function, when the pipeline has a processor with one, with an
+   * anira_prepare_info (the handler, the report, the entry count, a template of the model
+   * end of every slot and the canonical names) and keeps the prepared pointer it hands
+   * back for this handler (a status other than ANIRA_OK fails this call with it, and
+   * unprepare is not called for a refused prepare). A second prepare replaces the
+   * previous session whole: the processor's unprepare of the previous prepare runs once
+   * the old session is released, before the new prepare. A failed prepare leaves the
+   * handler unprepared, the previous prepare's unprepare called all the same. Refused in
+   * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+   * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and
+   * FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a
+   * streamed output's channel count or ring dtype differs from the anchored input's,
+   * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring
+   * dtype that names no Streamed tensor, or one that differs from its spec's dtype while
+   * the processor does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming
+   * the field), and a processor whose filled pre_process, post_process or reset carries
+   * no ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract
+   * those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
    *
    * @param handler The handler.
    * @param contract A Hard contract, copied; the handle may be destroyed when the call
@@ -5558,7 +5575,7 @@ export class AniraBindings {
    *   ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
    *   spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
    *   ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
-   *   stage's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
+   *   processor's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
    *   streams through the handler (WebAssembly: its render callback may be inside a process
    *   call; re-prepare through anira_em_audio_node_prepare). A failed status throws an
    *   AniraError with the entry's message.
@@ -5596,10 +5613,10 @@ export class AniraBindings {
 
   /**
    * The entries of the prepared handler: the chunks that can be in flight at once, each
-   * holding one chunk from its pre_process to its post_process. anira_stage_ctx.entry
+   * holding one chunk from its pre_process to its post_process. anira_processor_ctx.entry
    * names one of them, 0 .. num_entries - 1, in every phase callback: the size of a
-   * stage's per-chunk scratch, allocated in its prepare function (the handler counts as
-   * prepared there, and anira_prepare_info.num_entries carries the same count) and
+   * processor's per-chunk scratch, allocated in its prepare function (the handler counts
+   * as prepared there, and anira_prepare_info.num_entries carries the same count) and
    * indexed by the entry at run time. Fixed by anira_handler_prepare for the life of the
    * session; the next prepare may change it.
    *
@@ -5716,6 +5733,37 @@ export class AniraBindings {
   }
 
   /**
+   * The first plan, in dense-index order, that has every property the query names: the
+   * variant unless ANIRA_VARIANT_ANY, the engine unless ANIRA_ENGINE_NONE (a custom
+   * engine by ANIRA_ENGINE_CUSTOM and its engine_id, compared as a string), the provider
+   * unless ANIRA_PROVIDER_NONE (a custom provider by ANIRA_PROVIDER_CUSTOM and its
+   * provider_id, compared as a string). What a host looks the plan of a backend choice up
+   * with, from the thread that picks it: the index goes to anira_handler_set_plan. Reads
+   * the report's rows and nothing else: no allocation, no lock. Callable from any thread
+   * while the report is valid (until the handler's next prepare or its destroy).
+   *
+   * @param report The report.
+   * @param query What the plan must have; ANIRA_PLAN_QUERY_INIT matches every plan.
+   * @returns What the entry writes to plan. A failed status throws an AniraError.
+   * Thread: [thread-safe] ANIRA_NONBLOCKING
+   */
+  anira_plan_report_find(report: number, query: number): number {
+    const m = this.module
+    const sp = m.stackSave()
+    try {
+      const plan_ = stackSlot(m)
+      checkStatus(
+        m,
+        m._anira_plan_report_find(report, query, plan_),
+        'anira_plan_report_find'
+      )
+      return heap(m).HEAPU32[plan_ >>> 2]
+    } finally {
+      m.stackRestore(sp)
+    }
+  }
+
+  /**
    * Selects the plan the next submitted chunk runs on: one relaxed store, never planning.
    * The selection is a single atomic value, the dense index itself, so callers on several
    * threads cannot leave anira_handler_get_plan and the running engine in disagreement,
@@ -5802,9 +5850,9 @@ export class AniraBindings {
    *   list; a Streamed tensor. A slot is that one number everywhere: every slot, in_slot
    *   and out_slot of this header, the positions of the arrays and delivered counts of the
    *   _multi forms and of anira_miss_fn, the latency vector, the plan report's slot rows
-   *   and the slot of a stage's context accessors (anira_stage_input_role and its siblings)
-   *   use it, each against the list of its side. The role of the tensor decides which
-   *   entries take its slot: a Streamed one the block calls, a Static one
+   *   and the slot of a processor's context accessors (anira_processor_input_role and its
+   *   siblings) use it, each against the list of its side. The role of the tensor decides
+   *   which entries take its slot: a Streamed one the block calls, a Static one
    *   anira_handler_set_static_input / anira_handler_get_static_output or an element of a
    *   _multi form, a State one no Hard entry. A host that does not want to hard-code the
    *   number resolves it by the tensor's canonical name at setup.
@@ -6028,15 +6076,16 @@ export class AniraBindings {
    * Stores the value of a Static input in the handler: the whole tensor, copied under the
    * slot's latch, so an inference never sees a torn tensor. Every inference submitted
    * after the call sees the new value, materialised into the model's input tensor ahead
-   * of the stage's pre_process; a value set between two Hard calls applies from the next
-   * submitted inference on. The store is the handler's, zeroed at anira_handler_create,
-   * never resized, untouched by anira_handler_prepare and anira_handler_reset: the entry
-   * is legal from create on, a value set before prepare survives it, and a stage's
-   * prepare may call it. 'Fits' is a check, never a clamp: there is no partial Static
-   * tensor and no count. One writer at a time; the driver thread is the writer (and the
-   * reader, under a Hard contract, so the latch is never contended). A host that writes
-   * from another thread breaks the tag: the tensor still never tears, but a writer
-   * preempted inside the call can make the driver thread wait for it.
+   * of the processor's pre_process; a value set between two Hard calls applies from the
+   * next submitted inference on. The store is the handler's, zeroed at
+   * anira_handler_create, never resized, untouched by anira_handler_prepare and
+   * anira_handler_reset: the entry is legal from create on, a value set before prepare
+   * survives it, and a processor's prepare may call it. 'Fits' is a check, never a clamp:
+   * there is no partial Static tensor and no count. One writer at a time; the driver
+   * thread is the writer (and the reader, under a Hard contract, so the latch is never
+   * contended). A host that writes from another thread breaks the tag: the tensor still
+   * never tears, but a writer preempted inside the call can make the driver thread wait
+   * for it.
    *
    * @param handler The handler; prepared or not.
    * @param slot The slot: the tensor's position in the model config's input list; a
@@ -6072,10 +6121,10 @@ export class AniraBindings {
   /**
    * Reads the value of a Static output: the whole tensor the latest collected inference
    * produced, copied under the slot's latch, never torn. The handler captures it from the
-   * model's output tensor behind the last stage's post_process, when a Hard entry
+   * model's output tensor behind the last processor's post_process, when a Hard entry
    * collects the inference; after a Hard call it is the value of the latest inference
    * that call or an earlier one collected. All zeros before the first capture. A chunk
-   * that completed as zeros (dropped, or failed in a stage or in the engine) captures
+   * that completed as zeros (dropped, or failed in a processor or in the engine) captures
    * nothing, and anira_handler_reset and anira_handler_prepare leave the store alone: it
    * holds what the model produced last. The miss policies define nothing for a Static
    * output, and what an anira_miss_fn writes into a caller's tensor never enters the
@@ -6184,10 +6233,10 @@ export class AniraBindings {
    * re-initialised to zeros: not by this call, which stays one generation bump, but on
    * the inference thread at the first inference of the new stream, so an inference still
    * in flight across the reset can never seed the new stream with its state. The state a
-   * session-exclusive engine keeps inside itself and the state a stage keeps between
+   * session-exclusive engine keeps inside itself and the state a processor keeps between
    * chunks are re-initialised through their reset slots (anira_engine_desc.reset on the
-   * inference thread, anira_stage_desc.reset on the thread that runs pre_process) at the
-   * first chunk of the new stream; without a reset slot they stay untouched. Clears
+   * inference thread, anira_processor_desc.reset on the thread that runs pre_process) at
+   * the first chunk of the new stream; without a reset slot they stay untouched. Clears
    * anira_handler_rt_error and re-arms the real-time latches, logging the count of
    * failures suppressed since the last prepare or reset through the real-time queue.
    *
@@ -6524,68 +6573,70 @@ export class AniraBindings {
   }
 
   /**
-   * Fills a stage descriptor whose slots are the trampolines into the scope registry's
-   * stage: one per bit of hook_mask, every other slot NULL, the release slot always (it
-   * frees the record behind user_data, after the hook's release when
-   * ANIRA_EM_HOOK_RELEASE is set), and flags stage_flags. The promise is stated, never
-   * derived from the hook bits: under a Hard contract a stage with a pre_process,
-   * post_process or reset hook runs it on the driving thread (the audio worklet), and
-   * anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless stage_flags carries
-   * ANIRA_STAGE_FLAG_REALTIME_PRE_POST. The descriptor is for anira_pipeline_add_stage;
-   * one that is never added keeps its record, so anira_em_pipeline_add_js_stage is the
-   * call JavaScript makes.
+   * Fills a processor descriptor whose slots are the trampolines into the scope
+   * registry's processor: one per bit of hook_mask, every other slot NULL, the release
+   * slot always (it frees the record behind user_data, after the hook's release when
+   * ANIRA_EM_PROCESSOR_HOOK_RELEASE is set), and flags processor_flags. The promise is
+   * stated, never derived from the hook bits: under a Hard contract a processor with a
+   * pre_process, post_process or reset hook runs it on the driving thread (the audio
+   * worklet), and anira_handler_prepare refuses it with ANIRA_ERROR_CONFIG unless
+   * processor_flags carries ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST. The descriptor is for
+   * anira_pipeline_add_processor; one that is never added keeps its record, so
+   * anira_em_pipeline_add_js_processor is the call JavaScript makes.
    *
-   * @param desc The caller's descriptor, overwritten from ANIRA_STAGE_DESC_INIT.
-   * @param js_key The key the hook receives, the stage's entry in the instance's
+   * @param desc The caller's descriptor, overwritten from ANIRA_PROCESSOR_DESC_INIT.
+   * @param js_key The key the hook receives, the processor's entry in the instance's
    *   registry.
-   * @param hook_mask An OR of the ANIRA_EM_HOOK_* bits: the slots that cross into the
-   *   scope registry's stage.
-   * @param stage_flags The descriptor's flags, the stage's real-time promise, which
-   *   JavaScript cannot write into the descriptor itself: an OR of
-   *   ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the pre_process, post_process and reset hooks
+   * @param hook_mask An OR of the ANIRA_EM_PROCESSOR_HOOK_* bits: the slots that cross
+   *   into the scope registry's processor.
+   * @param processor_flags The descriptor's flags, the processor's real-time promise,
+   *   which JavaScript cannot write into the descriptor itself: an OR of
+   *   ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the pre_process, post_process and reset hooks
    *   allocate nothing, lock nothing and block on nothing) and
-   *   ANIRA_STAGE_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise), or 0
-   *   for no promise. Stored as given: a bit the header does not define is refused by
-   *   anira_pipeline_add_stage.
+   *   ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS (before_inference and after_inference likewise),
+   *   or 0 for no promise. Stored as given: a bit the header does not define is refused by
+   *   anira_pipeline_add_processor.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask
    *   does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated. A
    *   failed status throws an AniraError.
    * Thread: [main-thread]
    */
-  anira_em_stage_desc_init(
+  anira_em_processor_desc_init(
     desc: number,
     js_key: number,
     hook_mask: number,
-    stage_flags: number
+    processor_flags: number
   ): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_em_stage_desc_init(desc, js_key, hook_mask, stage_flags),
-      'anira_em_stage_desc_init'
+      m._anira_em_processor_desc_init(desc, js_key, hook_mask, processor_flags),
+      'anira_em_processor_desc_init'
     )
   }
 
   /**
-   * anira_em_stage_desc_init followed by anira_pipeline_add_stage: the pipeline's one
-   * stage is a JavaScript stage. A refused addition frees the record; the hook's release
-   * is not called then, as anira_pipeline_add_stage never calls release on a refusal.
+   * anira_em_processor_desc_init followed by anira_pipeline_add_processor: the pipeline's
+   * one processor is a JavaScript processor. A refused addition frees the record; the
+   * hook's release is not called then, as anira_pipeline_add_processor never calls
+   * release on a refusal.
    *
    * @param pipeline The pipeline.
-   * @param js_key As in anira_em_stage_desc_init.
-   * @param hook_mask As in anira_em_stage_desc_init.
-   * @param stage_flags As in anira_em_stage_desc_init: the stage's real-time promise.
-   * @returns As anira_em_stage_desc_init, then as anira_pipeline_add_stage
+   * @param js_key As in anira_em_processor_desc_init.
+   * @param hook_mask As in anira_em_processor_desc_init.
+   * @param processor_flags As in anira_em_processor_desc_init: the processor's real-time
+   *   promise.
+   * @returns As anira_em_processor_desc_init, then as anira_pipeline_add_processor
    *   (ANIRA_ERROR_INVALID_ARGUMENT for a flags bit the header does not define,
-   *   ANIRA_ERROR_INVALID_STATE when the pipeline already has a stage). A failed status
+   *   ANIRA_ERROR_INVALID_STATE when the pipeline already has a processor). A failed status
    *   throws an AniraError with the entry's message.
    * Thread: [main-thread]
    */
-  anira_em_pipeline_add_js_stage(
+  anira_em_pipeline_add_js_processor(
     pipeline: number,
     js_key: number,
     hook_mask: number,
-    stage_flags: number
+    processor_flags: number
   ): number {
     const m = this.module
     const sp = m.stackSave()
@@ -6593,8 +6644,14 @@ export class AniraBindings {
       const err = stackError(m)
       return checkStatus(
         m,
-        m._anira_em_pipeline_add_js_stage(pipeline, js_key, hook_mask, stage_flags, err),
-        'anira_em_pipeline_add_js_stage',
+        m._anira_em_pipeline_add_js_processor(
+          pipeline,
+          js_key,
+          hook_mask,
+          processor_flags,
+          err
+        ),
+        'anira_em_pipeline_add_js_processor',
         err
       )
     } finally {
@@ -6667,7 +6724,7 @@ export class AniraBindings {
    *   failed status throws an AniraError with the entry's message.
    * Thread: [main-thread]
    */
-  anira_em_pipeline_register_js_engine(
+  anira_em_pipeline_add_js_engine(
     pipeline: number,
     engine_id: string,
     js_key: number,
@@ -6681,7 +6738,7 @@ export class AniraBindings {
       const err = stackError(m)
       return checkStatus(
         m,
-        m._anira_em_pipeline_register_js_engine(
+        m._anira_em_pipeline_add_js_engine(
           pipeline,
           engine_id_,
           js_key,
@@ -6689,7 +6746,7 @@ export class AniraBindings {
           engine_flags,
           err
         ),
-        'anira_em_pipeline_register_js_engine',
+        'anira_em_pipeline_add_js_engine',
         err
       )
     } finally {
@@ -6723,9 +6780,9 @@ export class AniraBindings {
    * imports before it enters its loop. The context's pool threads are Wasm Workers (as
    * natively they are OS threads), and anira_inference_thread_start starts one for a
    * user-driven thread; each imports this module first, which defines the JavaScript
-   * engines and stages of its scope on the registry
+   * engines and processors of its scope on the registry
    * globalThis[Symbol.for('anira.registry')] (the package's defineEngine and
-   * defineStage), and awaits the registry's boot (the engines' async init) before the
+   * defineProcessor), and awaits the registry's boot (the engines' async init) before the
    * loop. A module that fails to load is reported on the console and the Worker runs
    * without it. Like the wait strategy, the first context's module is the one in effect
    * for the process's pool; a later context naming another is warned about. Not part of
@@ -6792,11 +6849,11 @@ export class AniraBindings {
    * empty). Driving one handler from several nodes, one slot each, is not the supported
    * form: the streams stay aligned, but a non-anchored call loses BYPASS (zeros on a
    * miss), the wait credit and the miss callback's view of the block. A quantum other
-   * than the declared one is silence. A JavaScript stage of the handler runs its worklet
-   * phases on the worklet scope's registry, which the caller fills before
-   * (audioWorklet.addModule of a module that calls defineStage) and anira boots over the
-   * worklet's instance at every create. The render callback allocates nothing and locks
-   * nothing; nodes are at most 256 at once.
+   * than the declared one is silence. A JavaScript processor of the handler runs its
+   * worklet phases on the worklet scope's registry, which the caller fills before
+   * (audioWorklet.addModule of a module that calls defineProcessor) and anira boots over
+   * the worklet's instance at every create. The render callback allocates nothing and
+   * locks nothing; nodes are at most 256 at once.
    *
    * @param handler A handler prepared under a Hard contract whose block range holds the
    *   context's render quantum; it must outlive the node (anira_em_audio_node_destroy

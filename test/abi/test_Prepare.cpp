@@ -173,16 +173,16 @@ TEST(AbiPrepare, MeasuredBudgetAndUntilStableWarmupAreNotSupportedUntilTheEstima
     Handler handler(context, model, candidates);
     anira_error err = ANIRA_ERROR_INIT;
 
-    Hard defaults;  // the create-time defaults: MEASURED, UNTIL_STABLE
-    defaults.block_min = 512;
-    defaults.block_max = 512;
-    defaults.rate = 48000.0;
+    // The create-time defaults: MEASURED, UNTIL_STABLE.
+    const Hard defaults{.block_min = 512,
+                        .block_max = 512,
+                        .rate = 48000.0,
+                        .budget = anira::Budget::measured()};
     EXPECT_EQ(handler.prepare(ContractHandle(defaults), &err), ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "contract: a MEASURED budget");
 
     Hard until_stable = defaults;
-    until_stable.budget = ANIRA_BUDGET_EXPLICIT;
-    until_stable.budget_value = std::chrono::milliseconds(5);
+    until_stable.budget = std::chrono::milliseconds(5);
     until_stable.warmup = ANIRA_WARMUP_UNTIL_STABLE;
     EXPECT_EQ(handler.prepare(ContractHandle(until_stable), &err), ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "contract: UNTIL_STABLE warmup");
@@ -199,9 +199,7 @@ TEST(AbiPrepare, MissingGeometryIsConfig) {
     Handler handler(context, model, candidates);
     anira_error err = ANIRA_ERROR_INIT;
 
-    Hard hard;  // geometry 0/0/0: legal at create
-    hard.budget = ANIRA_BUDGET_EXPLICIT;
-    hard.budget_value = std::chrono::milliseconds(5);
+    Hard hard{.budget = std::chrono::milliseconds(5)};  // geometry 0/0/0: legal at create
     hard.warmup = ANIRA_WARMUP_FIXED;
     ContractHandle contract(hard);
     EXPECT_EQ(handler.prepare(contract, &err), ANIRA_ERROR_CONFIG);

@@ -1,10 +1,10 @@
 // anira/abi/engine.h: the custom engine as an object (anira_custom_engine_create) added to
-// pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the stage's
+// pipelines under ids (anira_pipeline_add_engine), the lifetime of its carrier, the processor's
 // twin, sharing across pipelines, and the engine at run time through the three levels of its
 // lifecycle (anira/abi/lifecycle.h): a model entry naming an added id is a plan the C handler
 // runs through the engine's init (once per object, at the first prepare that reaches it), its
 // load (once per pooled model, a stateful one too), its prepare (once per handler, with the
-// stage's record), its process on every inference (an exclusive handler's calls flagged, on
+// processor's record), its process on every inference (an exclusive handler's calls flagged, on
 // what its prepare built) and its reset at a stream boundary, on every leg of the build (a
 // registered engine needs no built-in one).
 #include <anira/abi/build_info.h>
@@ -452,7 +452,7 @@ anira_status ANIRA_CALL gain_prepare(const anira_prepare_info* info,
     const PrepareWatch watch(*engine);
     ++engine->m_prepared;
     if (engine->m_refuse_prepare != ANIRA_OK) { return engine->m_refuse_prepare; }
-    // The record is the stage's (the handler, its report), the loaded pointer one load handed
+    // The record is the processor's (the handler, its report), the loaded pointer one load handed
     // back and unload has not received, and the record's lists are the load record's.
     auto* kept = static_cast<GainLoaded*>(loaded);
     if (info == nullptr || info->struct_size != sizeof(anira_prepare_info) ||
@@ -1101,7 +1101,7 @@ TEST(AbiEngine, PassthroughOnEveryLeg) {
 
     // The three levels, once each: init with the facts of the core (the level, the pool of
     // this context, the handler's context), load with the row's record, prepare with the
-    // stage's record and the loaded pointer.
+    // processor's record and the loaded pointer.
     ASSERT_EQ(gain.m_inited, 1);
     ASSERT_EQ(gain.m_loaded, 1);
     ASSERT_EQ(gain.m_prepared, 1);
@@ -1255,6 +1255,164 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     pipe.destroy();
     EXPECT_EQ(gain.m_released, 1);
+}
+
+// ==== finding a plan ==========================================================================
+
+namespace {
+
+constexpr const char* k_other_id = "org.example.other";
+
+/// A query of the backend axes alone, every variant.
+anira_plan_query backend_query(anira_engine engine,
+                               anira_provider provider,
+                               const char* engine_id = nullptr,
+                               const char* provider_id = nullptr) {
+    anira_plan_query query = ANIRA_PLAN_QUERY_INIT;
+    query.backend.engine = static_cast<uint32_t>(engine);
+    query.backend.provider = static_cast<uint32_t>(provider);
+    query.backend.engine_id = engine_id;
+    query.backend.provider_id = provider_id;
+    return query;
+}
+
+/// The plan anira_plan_report_find answers, or -1 with the status for a refusal.
+int64_t found(const anira_plan_report* report, const anira_plan_query& query) {
+    uint32_t plan = 99;
+    const anira_status status = anira_plan_report_find(report, &query, &plan);
+    if (status != ANIRA_OK) {
+        EXPECT_EQ(plan, 99U) << "a miss leaves plan untouched";
+        return status == ANIRA_ERROR_NOT_FOUND ? -1 : -2;
+    }
+    return plan;
+}
+
+}  // namespace
+
+// anira_plan_report_find over two custom engines on one pipeline, one of them on a custom
+// provider too: the first plan in table order with every property the query names; an engine by
+// ANIRA_ENGINE_CUSTOM and its id, a provider by its enum value or ANIRA_PROVIDER_CUSTOM and its
+// name, NONE and ANIRA_VARIANT_ANY matching everything; a miss is ANIRA_ERROR_NOT_FOUND with
+// plan untouched; a short record reads its missing tail as the INIT does; NULL arguments and a
+// query that breaks the pair rule are ANIRA_ERROR_INVALID_ARGUMENT.
+TEST(AbiEngine, FindLooksAPlanUpByEngineProviderAndVariant) {
+    const Context context;
+    GainEngine gain;
+    GainEngine other;
+    Pipe pipe;
+    const std::array<const char*, 2> served{"cpu", "com.example.npu"};
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+        << pipe.m_err.message;
+    ASSERT_EQ(pipe.add_new_engine(k_other_id, gain_desc(other)), ANIRA_OK) << pipe.m_err.message;
+    ModelConfig model = gain_model();
+    model.add_model_path(k_other_id, k_never_opened);
+    std::vector<anira_backend_id> candidates = gain_candidates(
+        {{ANIRA_PROVIDER_CPU, nullptr}, {ANIRA_PROVIDER_CUSTOM, "com.example.npu"}});
+    candidates.push_back({.struct_size = sizeof(anira_backend_id),
+                          .engine = ANIRA_ENGINE_CUSTOM,
+                          .provider = ANIRA_PROVIDER_CPU,
+                          .engine_id = k_other_id,
+                          .provider_id = nullptr});
+    pipe.add_inference(model, candidates);
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    const anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    const std::vector<anira_plan_info> plans = plan_rows(handler);
+    ASSERT_EQ(plans.size(), 3U);
+    ASSERT_STREQ(plans[0].engine_id, k_gain_id);
+    EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+    ASSERT_STREQ(plans[1].engine_id, k_gain_id);
+    ASSERT_STREQ(plans[1].provider_id, "com.example.npu");
+    ASSERT_STREQ(plans[2].engine_id, k_other_id);
+    const anira_plan_report* report = anira_handler_plan_report(handler);
+
+    // Everything matches the INIT query: the first plan.
+    EXPECT_EQ(found(report, ANIRA_PLAN_QUERY_INIT), 0);
+    // A custom engine by its id; the other id is the other engine's; an unknown id nothing.
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE, k_gain_id)), 0);
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE, k_other_id)),
+              2);
+    EXPECT_EQ(
+        found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE, "org.example.none")),
+        -1);
+    EXPECT_STREQ(anira_status_string(ANIRA_ERROR_NOT_FOUND), "not found");
+    // A built-in engine this pipeline does not run: nothing.
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_NONE)), -1);
+    // A provider alone, whatever the engine: the CPU path first, the custom provider by name.
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CPU)), 0);
+    EXPECT_EQ(
+        found(report,
+              backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CUSTOM, nullptr, "com.example.npu")),
+        1);
+    EXPECT_EQ(
+        found(report,
+              backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CUSTOM, nullptr, "com.example.gpu")),
+        -1)
+        << "another custom provider";
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_COREML)), -1);
+    // Engine and provider together: the custom engine with and without its custom provider,
+    // and the other engine, which does not serve it.
+    EXPECT_EQ(found(report,
+                    backend_query(ANIRA_ENGINE_CUSTOM,
+                                  ANIRA_PROVIDER_CUSTOM,
+                                  k_gain_id,
+                                  "com.example.npu")),
+              1);
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_CPU, k_other_id)), 2);
+    EXPECT_EQ(found(report,
+                    backend_query(ANIRA_ENGINE_CUSTOM,
+                                  ANIRA_PROVIDER_CUSTOM,
+                                  k_other_id,
+                                  "com.example.npu")),
+              -1);
+    // The variant: ANY and 0 match (one variant in this pre-release), 1 nothing.
+    anira_plan_query variant = ANIRA_PLAN_QUERY_INIT;
+    variant.variant = 0;
+    EXPECT_EQ(found(report, variant), 0);
+    variant.variant = 1;
+    EXPECT_EQ(found(report, variant), -1);
+    variant.variant = ANIRA_VARIANT_ANY;
+    variant.backend.engine = ANIRA_ENGINE_CUSTOM;
+    variant.backend.engine_id = k_other_id;
+    EXPECT_EQ(found(report, variant), 2);
+
+    // A shorter record: a query that ends after its variant matches every backend; a backend
+    // record that ends before its ids reads them as NULL (here: a provider of the enum).
+    anira_plan_query head_only =
+        backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE, k_other_id);
+    head_only.struct_size = offsetof(anira_plan_query, backend);
+    EXPECT_EQ(found(report, head_only), 0) << "the backend is beyond the caller's header";
+    anira_plan_query short_backend = backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CPU);
+    short_backend.backend.struct_size = 3 * sizeof(uint32_t);
+    short_backend.backend.engine_id = "ignored";
+    EXPECT_EQ(found(report, short_backend), 0) << "the ids are beyond the backend's header";
+
+    // The refusals: NULL arguments, a query below its head, the pair rule on either axis.
+    uint32_t plan = 99;
+    const anira_plan_query all = ANIRA_PLAN_QUERY_INIT;
+    EXPECT_EQ(anira_plan_report_find(nullptr, &all, &plan), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_plan_report_find(report, nullptr, &plan), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_plan_report_find(report, &all, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    anira_plan_query tiny = ANIRA_PLAN_QUERY_INIT;
+    tiny.struct_size = sizeof(uint32_t);
+    EXPECT_EQ(found(report, tiny), -2);
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_CUSTOM, ANIRA_PROVIDER_NONE)), -2)
+        << "a custom engine without its id";
+    EXPECT_EQ(
+        found(report, backend_query(ANIRA_ENGINE_ONNXRUNTIME, ANIRA_PROVIDER_NONE, k_gain_id)),
+        -2)
+        << "an id beside a built-in engine";
+    EXPECT_EQ(found(report, backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CUSTOM)), -2)
+        << "a custom provider without its name";
+    EXPECT_EQ(
+        found(report,
+              backend_query(ANIRA_ENGINE_NONE, ANIRA_PROVIDER_CPU, nullptr, "com.example.npu")),
+        -2)
+        << "a name beside a provider of the enum";
+    EXPECT_EQ(plan, 99U);
+    anira_handler_destroy(handler);
 }
 
 // The default provider picks the initial plan beside the default engine: under three
@@ -2405,7 +2563,7 @@ TEST(AbiEngine, AMissingFileOnARealEngineIsModelLoadOrNoSuchFile) {
 
 // Two handlers of one pipeline over one model share one loaded model: the engine's load runs
 // once, with `instances` = the model's max_instances, its prepare once per handler with the
-// stage's record and that loaded pointer, and both handlers run on it (shared calls, a slot
+// processor's record and that loaded pointer, and both handlers run on it (shared calls, a slot
 // each). A stateful model is loaded once too: exclusivity is the handler's, not the model's,
 // so the load says 0 shared slots, each handler's prepare carries ANIRA_PREPARE_EXCLUSIVE and
 // builds what it runs on, and every call of theirs carries ANIRA_ENGINE_CALL_EXCLUSIVE with

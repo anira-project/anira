@@ -9,7 +9,6 @@
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -17,11 +16,10 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/backends/BackendBase.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
@@ -44,6 +42,8 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
+#include "../support/v2_objects.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -149,9 +149,9 @@ inline std::vector<anira_backend_id> engine_candidates() {
 /// The 2.x InferenceConfig of a bundled model over the same engines the C side runs
 /// (oracle_engines(), plus the custom row when with_custom): what the oracle's 2.x handler
 /// takes, so both sides' configs compare equal and the core pools one processor per engine.
-inline anira::InferenceConfig bridged_2x(const char* model_json,
-                                         const char* contract_json,
-                                         bool with_custom) {
+inline anira::InferenceConfig config_2x_of(const char* model_json,
+                                           const char* contract_json,
+                                           bool with_custom) {
     anira::ModelConfig cfg = anira::ModelConfig::from_file(model_json);
     std::vector<anira_engine> candidates = oracle_engines();
     if (with_custom) {
@@ -159,7 +159,7 @@ inline anira::InferenceConfig bridged_2x(const char* model_json,
         candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
     }
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    return anira::v3compat::to_inference_config(cfg, contract, candidates);
+    return anira_test::inference_config_of(cfg, contract, candidates);
 }
 
 /// The bundled CNN without a custom row (the pass-through would zero its 15380 -> 2048 output).
@@ -206,13 +206,10 @@ inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
                                                double wait_ratio = 0.0,
                                                double budget_ms = 5.0,
                                                uint32_t warmup_iterations = 0) {
-    anira::Hard hard;
-    hard.block_min = block;
-    hard.block_max = block;
-    hard.rate = rate;
-    hard.budget = ANIRA_BUDGET_EXPLICIT;
-    hard.budget_value = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::duration<double, std::milli>(budget_ms));
+    anira::Hard hard{.block_min = static_cast<double>(block),
+                     .block_max = static_cast<double>(block),
+                     .rate = rate,
+                     .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = warmup_iterations;
     hard.on_miss = on_miss;
@@ -422,7 +419,7 @@ public:
     int m_first_sleep_us = 0;
 };
 
-/// A pipeline with one inference stage, the stages of `stages` (at most one in this
+/// A pipeline with one inference stage, the processors of `processors` (at most one in this
 /// pre-release) and the handler over it. An empty span means NULL candidates: the default set
 /// (every engine of this build plus the custom entries). Before the inference stage the
 /// pipeline gets the engine a custom row runs on: `custom` (a GateEngine's engine(), declared
@@ -431,7 +428,7 @@ struct Handler {
     Handler(const Context& context,
             const anira::ModelConfig& model,
             std::span<const anira_backend_id> candidates = {},
-            std::span<const anira_stage_desc> stages = {},
+            std::span<const anira_processor_desc> processors = {},
             const anira_custom_engine* custom = nullptr) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         if (custom != nullptr) {
@@ -448,8 +445,8 @@ struct Handler {
                                                &m_err),
                   ANIRA_OK)
             << m_err.message;
-        for (const anira_stage_desc& stage : stages) {
-            EXPECT_EQ(anira_pipeline_add_stage(m_pipeline, &stage, &m_err), ANIRA_OK)
+        for (const anira_processor_desc& processor : processors) {
+            EXPECT_EQ(anira_pipeline_add_processor(m_pipeline, &processor, &m_err), ANIRA_OK)
                 << m_err.message;
         }
         EXPECT_EQ(anira_handler_create(context.m_context, m_pipeline, &m_handler, &m_err), ANIRA_OK)
@@ -516,7 +513,7 @@ inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t slot = 
 }
 
 /// The 2.x twin of wait_for_block.
-inline void wait_for_block(anira::InferenceHandler& handler, size_t prev) {
+inline void wait_for_block(anira_test::V2Handler& handler, size_t prev) {
     const auto start = std::chrono::steady_clock::now();
     while (handler.get_available_samples(0) != prev) {
         if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
@@ -532,7 +529,7 @@ inline void wait_for_push(anira_handler* handler, size_t prev, size_t block) {
     wait_for_available(handler, prev + block);
 }
 
-inline void wait_for_push(anira::InferenceHandler& handler, size_t prev, size_t block) {
+inline void wait_for_push(anira_test::V2Handler& handler, size_t prev, size_t block) {
     wait_for_block(handler, prev + block);
 }
 

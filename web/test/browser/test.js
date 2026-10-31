@@ -1,24 +1,24 @@
 // The browser test of the built package (web/dist), run by run.mjs in headless Chromium and
 // Firefox: the typed layer end to end. The module on the page (Anira), a context whose pool is two
 // Wasm Workers importing pool-worker.js (a JavaScript engine that writes its input times 2 * the
-// Static gain), a pipeline with that engine and a JavaScript stage (worklet-stage.js: halves the
-// input in pre_process, on the worklet scope's registry), a Hard handler of block 128, and an
-// OfflineAudioContext rendered through the handler's Wasm Audio Worklet node (C render callback),
-// the gain being the node's AudioParam, automated mid-render. The output must be the input times
-// the gain of its quantum after the handler's latency (the stage's 0.5 and the engine's 2 cancel).
-// Then the gain as a tensor slot written with setStaticInput on a second handler, and the teardown:
-// the nodes, the handlers and the context, which stops the pool. The verdict is
-// window.anira_test_result. First, before any of it: a warning reaches the console exactly once,
-// through the log hook while one is set (it replaces the platform sink), through the platform
-// sink once the hook is removed, there as console.warn (the console by level).
+// Static gain), a pipeline with that engine and a JavaScript processor (worklet-processor.js:
+// halves the input in pre_process, on the worklet scope's registry), a Hard handler of block 128,
+// and an OfflineAudioContext rendered through the handler's Wasm Audio Worklet node (C render
+// callback), the gain being the node's AudioParam, automated mid-render. The output must be the
+// input times the gain of its quantum after the handler's latency (the processor's 0.5 and the
+// engine's 2 cancel). Then the gain as a tensor slot written with setStaticInput on a second
+// handler, and the teardown: the nodes, the handlers and the context, which stops the pool. The
+// verdict is window.anira_test_result. First, before any of it: a warning reaches the console
+// exactly once, through the log hook while one is set (it replaces the platform sink), through the
+// platform sink once the hook is removed, there as console.warn (the console by level).
 import {
-  ANIRA_EM_HOOK_PRE,
+  ANIRA_EM_PROCESSOR_HOOK_PRE,
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   AniraError,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_status,
@@ -34,7 +34,7 @@ const GAIN_BEFORE = 1
 const GAIN_AFTER = 0.25
 const CHANGE_QUANTUM = 32
 const ENGINE_ID = 'org.anira-test.pool-double'
-const STAGE = 'org.anira-test.half'
+const PROCESSOR = 'org.anira-test.half'
 
 // Counts the console lines that carry `marker`, whichever method printed them; installed before
 // the module, whose glue binds console.error for its stderr when it is instantiated.
@@ -81,7 +81,7 @@ const run = async () => {
   const counter = consoleCounter(BLOCKING_WARNING)
   const anira = await Anira.create()
   const hook = (record) => console.log(`[anira ${record.group}] ${record.message}`)
-  anira.setLogHook(hook)
+  anira.setLogSink(hook)
   check(anira.version.length > 0, `the module is anira ${anira.version}`)
 
   warnOnce(anira.abi)
@@ -90,14 +90,14 @@ const run = async () => {
     `with the log hook set a warning reaches the console once, through the hook ` +
       `(${JSON.stringify(counter.counts)})`
   )
-  anira.setLogHook(null)
+  anira.setLogSink(null)
   warnOnce(anira.abi)
   check(
     counter.total() === 2 && counter.counts.log === 1 && counter.counts.warn === 1,
     `without the hook it reaches the console once, through the platform sink as console.warn ` +
       `(${JSON.stringify(counter.counts)})`
   )
-  anira.setLogHook(hook)
+  anira.setLogSink(hook)
 
   // The bindings throw a refused call as an AniraError with the entry's message.
   let thrown = null
@@ -108,7 +108,7 @@ const run = async () => {
   }
   check(
     thrown instanceof AniraError &&
-      thrown.code === anira_status.ANIRA_ERROR_JSON &&
+      thrown.status === anira_status.ANIRA_ERROR_JSON &&
       thrown.message.startsWith('anira_model_config_from_json: '),
     `a refused call throws an AniraError (${thrown?.message})`
   )
@@ -142,15 +142,20 @@ const run = async () => {
   )
   const pipeline = Pipeline.create(anira)
     .addInference(model)
-    .registerEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-    .addStage(STAGE, { hooks: ANIRA_EM_HOOK_PRE })
-  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
-  const handler = Handler.create(context, pipeline).prepare(contract)
-  const latency = handler.latency()
+    .addEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+    .addProcessor(PROCESSOR, { phases: ANIRA_EM_PROCESSOR_HOOK_PRE })
+  const contract = ContractHandle.hard(anira, {
+    blockMin: QUANTUM,
+    rate: RATE,
+    budgetMs: 2,
+  })
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
+  const latency = handler.getLatency()
   // The first session built the pool.
   check(
-    context.threads === THREADS,
-    `the context's pool has ${context.threads} Wasm Workers`
+    context.numInferenceThreads() === THREADS,
+    `the context's pool has ${context.numInferenceThreads()} Wasm Workers`
   )
   // An offline render waits for every inference: the Workers must be in their loops first.
   await context.ready()
@@ -159,13 +164,13 @@ const run = async () => {
   const samples = new Float32Array(QUANTUM * QUANTA)
   for (let i = 0; i < samples.length; i++)
     samples[i] = 0.25 * Math.sin((2 * Math.PI * 440 * i) / RATE)
-  const stageModule = new URL('./worklet-stage.js', import.meta.url)
+  const processorModule = new URL('./worklet-processor.js', import.meta.url)
 
   const audio = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const audioNode = await handler.createAudioNode(audio, {
     params: [1],
     waitMs: 500,
-    workletModules: [stageModule],
+    workletModules: [processorModule],
   })
   check(
     audioNode.node instanceof AudioWorkletNode && audioNode.params.has(1),
@@ -186,18 +191,19 @@ const run = async () => {
   check(
     worst < 1e-6,
     `the output is the input times the AudioParam's gain after ${latency} samples, through ` +
-      `the worklet's JavaScript stage and the pool's engine (worst error ${worst})`
+      `the worklet's JavaScript processor and the pool's engine (worst error ${worst})`
   )
   audioNode.destroy()
   handler.destroy()
 
   // The same gain as a tensor slot the main thread writes whole: a constant 0.5.
-  const second = Handler.create(context, pipeline).prepare(contract)
+  const second = InferenceHandler.create(context, pipeline)
+  second.prepare(contract)
   const audio2 = new OfflineAudioContext(1, QUANTUM * QUANTA, RATE)
   const tensorNode = await second.createAudioNode(audio2, {
     staticInputs: [1],
     waitMs: 500,
-    workletModules: [stageModule],
+    workletModules: [processorModule],
   })
   let refused = ''
   try {
@@ -223,7 +229,7 @@ const run = async () => {
   contract.destroy()
   model.destroy()
   context.destroy()
-  check(context.threads === 0, 'the last context stopped the pool')
+  check(context.numInferenceThreads() === 0, 'the last context stopped the pool')
   return { checks }
 }
 

@@ -70,7 +70,7 @@ struct RtLatch;
  * pool (from the configuration in effect) when it registers the first session, and
  * release_session() stops and joins every pool thread — before it returns, inside the same
  * critical section — when it unregisters the last one. A plugin host may therefore unload
- * the plugin's shared library as soon as the last InferenceHandler has been destroyed: no
+ * the plugin's shared library as soon as the last handler has been destroyed: no
  * thread of anira's is alive at that point.
  *
  * A plugin destroys its handlers before its host unloads it, from its instance teardown or
@@ -354,7 +354,7 @@ public:
      * context configuration is registered
      *
      * What the init record of a registration names for a session that does not exist yet
-     * (the stage's init runs before the session's models load): the pool in effect, clamped
+     * (the processor's init runs before the session's models load): the pool in effect, clamped
      * by the configuration's thread count, or the configuration's count when no user has a
      * pool yet; 0 for a configuration that brings its own threads. Takes the lifecycle lock.
      *
@@ -558,7 +558,7 @@ public:
      *
      * @return Unique pointer to a new user-owned InferenceThread.
      */
-    static std::unique_ptr<InferenceThread> make_inference_thread();
+    static std::unique_ptr<scheduler::InferenceThread> make_inference_thread();
 
     /**
      * @brief Number of inference threads currently active in the process.
@@ -982,10 +982,10 @@ private:
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
-    SessionElement* __doxygen_force_0;   ///< Placeholder for Doxygen to find SessionElement class
-                                         ///< documentation
-    InferenceThread* __doxygen_force_1;  ///< Placeholder for Doxygen to find InferenceThread class
-                                         ///< documentation
+    SessionElement* __doxygen_force_0;  ///< Placeholder for Doxygen to find SessionElement class
+                                        ///< documentation
+    scheduler::InferenceThread* __doxygen_force_1;  ///< Placeholder for Doxygen to find
+                                                    ///< InferenceThread class documentation
     InferenceData* __doxygen_force_2;  ///< Placeholder for Doxygen to find InferenceData structure
                                        ///< documentation
 #endif

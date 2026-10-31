@@ -10,7 +10,7 @@ Three Kinds of Threads
 The main thread
    :js:meth:`Anira.create` instantiates the module here. The configuration happens here (the
    context, the configs, the pipeline, the handler, its prepare), and so do the main-thread
-   phases of a JavaScript stage (``init``, ``prepare``, ``unprepare``, ``release``) and an
+   phases of a JavaScript processor (``init``, ``prepare``, ``unprepare``, ``release``) and an
    engine's ``query``. There is no log drain thread on the web: :js:meth:`Anira.startLogPump`
    drains the real-time records on an interval.
 
@@ -33,7 +33,7 @@ The context's inference Workers
    done (one that never finishes is terminated after 10 s, its 4 MiB region left allocated).
 
 The audio thread
-   :js:meth:`Handler.createAudioNode` creates a Wasm Audio Worklet node
+   :js:meth:`InferenceHandler.createAudioNode` creates a Wasm Audio Worklet node
    (``anira_em_audio_node_create``, ``src/platform/emscripten/em_audio.cpp``). The first node of
    an audio context starts the context's worklet thread (Emscripten loads the glue into its
    AudioWorkletGlobalScope), a node of *n* AudioParams registers the processor
@@ -47,15 +47,16 @@ threads (the module links ``-pthread``); the audio thread never waits on one.
 The Scope Registry
 ------------------
 
-What runs in JavaScript (a stage, an engine, the log) is reached through the trampolines of
-``anira/anira_em.h``: a JavaScript stage or engine is a C descriptor whose slots are trampolines
+What runs in JavaScript (a processor, an engine, the log) is reached through the trampolines of
+``anira/anira_em.h``: a JavaScript processor or engine is a C descriptor whose slots are trampolines
 compiled into anira. Each calls the registry of the scope that runs the C call,
-``globalThis[Symbol.for('anira.registry')]``, with the instance's ``Module``, the stage's or
-engine's key, the ``anira_phase`` and two pointers. The key is :js:func:`~registry.keyOf` of the name (the
-32-bit FNV-1a hash of its UTF-16 code units), the same in every scope; a registry refuses to
-define a second name whose key is taken, with an error naming both: a stage defined under one name on the main thread and in the worklet is one
-stage with one instance per scope, built over the scope's ``env`` (its bindings and its
-``Module``). :js:func:`~registry.defineStage` and :js:func:`~registry.defineEngine` install the registry.
+``globalThis[Symbol.for('anira.registry')]``, with the instance's ``Module``, the processor's or
+engine's key, the ``anira_phase`` and two pointers. The key is :js:func:`~registry.keyOf` of the
+name (the 32-bit FNV-1a hash of its UTF-16 code units), the same in every scope; a registry refuses
+to define a second name whose key is taken, with an error naming both: a processor defined under one
+name on the main thread and in the worklet is one processor with one instance per scope, built over
+the scope's ``env`` (its bindings and its ``Module``). :js:func:`~registry.defineProcessor` and
+:js:func:`~registry.defineEngine` install the registry.
 
 A hook that throws is caught in the trampoline and reported on the console (rate-limited); the
 call fails the usual way (zeros, the real-time error latched). No JavaScript exception unwinds
@@ -69,15 +70,16 @@ Where Each Phase Runs
 
    * - Phase
      - Scope
-   * - stage ``preProcess``, ``postProcess``, ``reset`` (Hard contract)
-     - the audio worklet (a ``workletModules`` module of :js:meth:`Handler.createAudioNode`)
-   * - stage ``beforeInference``, ``afterInference``; engine ``process``, ``reset``
+   * - processor ``preProcess``, ``postProcess``, ``reset`` (Hard contract)
+     - the audio worklet (a ``workletModules`` module of
+       :js:meth:`InferenceHandler.createAudioNode`)
+   * - processor ``beforeInference``, ``afterInference``; engine ``process``, ``reset``
      - the inference Workers (the context's ``workerModule``)
-   * - stage ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``
+   * - processor ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``
      - the main thread
 
-A stage whose phases span scopes is one module imported in each: ``web/examples/
-stage-and-engine/gain-stage.ts`` allocates its per-handler memory in ``prepare`` on the main
+A processor whose phases span scopes is one module imported in each: ``web/examples/
+processor-and-engine/gain-processor.ts`` allocates its per-handler memory in ``prepare`` on the main
 thread and reads it in ``preProcess`` in the worklet, through the ``prepared`` pointer.
 
 .. _web-realms:
@@ -88,7 +90,7 @@ What an Inference Worker and the Worklet Can See
 Every inference Worker and the AudioWorkletGlobalScope is a JavaScript realm of its own: its own
 globals, its own module graph, its own instance of the module's glue. Only the WebAssembly memory
 is shared. No closure, object or class of the main thread reaches a Worker or the worklet, so a
-stage or an engine is defined in the realm that runs it, by the module that realm imports (the
+processor or an engine is defined in the realm that runs it, by the module that realm imports (the
 context's worker module, a ``workletModules`` module), and a pool of *N* threads builds *N*
 instances of each engine: *N* model loads.
 
@@ -99,12 +101,12 @@ the Worker's event loop never runs again: no promise continuation, no ``onmessag
 ``setTimeout`` and no ``fetch`` completion. ``process`` is therefore synchronous; ``init`` may be
 ``async``.
 
-Once the Workers run, what reaches a stage or an engine is what the shared memory carries:
+Once the Workers run, what reaches a processor or an engine is what the shared memory carries:
 
 * the model's Static inputs (``setStaticInput``, an AudioParam of the node, a seqlock block per
   tensor);
-* a stage's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by every
-  phase in every realm;
+* a processor's ``prepared`` pointer, written by its ``prepare`` on the main thread and read by
+  every phase in every realm;
 * an engine's model entry, read by anira's load on the main thread and handed to every call as
   ``prepared`` (``load(model)``, :js:func:`~registry.engineModel`: the bytes the config's
   loader attached, a view of the shared memory);
@@ -142,19 +144,19 @@ rebuilds its own:
   the buffer changed) and with them the instance's ``Module.HEAP*``;
 * the package's code reads the heap through ``heap(module)`` of the bindings, which compares the
   views' buffer with ``memory.buffer`` and rebuilds the seven views once after a growth. The
-  generated bindings call it at every access, the typed layer's classes too, and the stage and
-  engine trampolines before every call into a JavaScript stage or engine, so a stage's or an
+  generated bindings call it at every access, the typed layer's classes too, and the processor and
+  engine trampolines before every call into a JavaScript processor or engine, so a processor's or an
   engine's ``module.HEAPF32`` is current for the memory that existed when its call began. The
   rebuild is a small JavaScript allocation, at most once per realm and growth: on the audio
-  thread, in a JavaScript stage's realm, the first call after a growth makes it.
+  thread, in a JavaScript processor's realm, the first call after a growth makes it.
 
 ``heap`` needs the realm's memory: the main thread's ``Module.wasmMemory`` is the memory
-:js:meth:`Anira.create` passed, and anira's boot of an inference Worker and of the worklet sets
-the realm's (their ``Module`` starts without it; ``wasmMemory`` is a runtime export of the
-module, so a Debug build's assertions leave the property writable there). Pointers handed across realms are offsets, valid
-in every realm; a view kept across calls (an engine's ``model.bytes``, a ``Float32Array`` a stage
-built in its ``prepare``) stays valid for the memory it covers, and one made over memory that
-existed then needs no rebuild.
+:js:meth:`Anira.create` passed, and anira's boot of an inference Worker and of the worklet sets the
+realm's (their ``Module`` starts without it; ``wasmMemory`` is a runtime export of the module, so a
+Debug build's assertions leave the property writable there). Pointers handed across realms are
+offsets, valid in every realm; a view kept across calls (an engine's ``model.bytes``, a
+``Float32Array`` a processor built in its ``prepare``) stays valid for the memory it covers, and one
+made over memory that existed then needs no rebuild.
 
 The Bindings
 ------------

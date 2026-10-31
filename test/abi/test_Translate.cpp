@@ -1,16 +1,16 @@
-// The bridge behind anira/compat/v3_to_v2.h (the validator of src/capi/validate.h and the 2.x
-// translators of src/capi/v3_to_v2.h), exercised through its status-returning face: every
-// section-2 rule the 2.x runtime can honour returns ANIRA_ERROR_CONFIG with a
-// message naming the tensor or the entry, everything the 2.x runtime cannot do returns
-// ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x InferenceConfig,
-// CoreConfig and HostConfig the same way the 2.x constructors would build them.
+// The translator the C handler prepares its sessions with (the validator of src/capi/validate.h
+// and the 2.x translators of src/capi/v3_to_v2.h), white-box, under the classification of the C
+// firewall (see translated() below): every section-2 rule the 2.x runtime can honour is
+// ANIRA_ERROR_CONFIG with a message naming the tensor or the entry, everything the 2.x runtime
+// cannot do is ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x
+// InferenceConfig and HostConfig the same way the 2.x constructors would build them. Retired
+// with the translator when the core takes the 3.x types (PR 10b).
 
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/compat/v3_to_v2.h>
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
@@ -22,8 +22,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -33,10 +35,10 @@
 #include "capi/v3_to_v2.h"
 #include "capi/validate.h"
 #include "fixtures.h"
+#include "utils/StatusError.h"
 
 namespace {
 
-using anira::ContextConfig;
 using anira::ContractHandle;
 using anira::Hard;
 using anira::ModelConfig;
@@ -82,9 +84,7 @@ ModelConfig minimal() {
 
 /// The contract the 2.x runtime accepts: an explicit budget and a fixed warmup.
 Hard explicit_hard() {
-    Hard hard;
-    hard.budget = ANIRA_BUDGET_EXPLICIT;
-    hard.budget_value = std::chrono::milliseconds(5);
+    Hard hard{.budget = std::chrono::milliseconds(5)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = 0;
     return hard;
@@ -99,6 +99,71 @@ Hard geometry(double block) {
     return hard;
 }
 
+/// The translator's throw as the status the C entries return, the classification of the C
+/// firewall (src/capi/error.cpp): an anira::StatusError is its status, a std::invalid_argument
+/// (the 2.x constructors' cross-checks) ANIRA_ERROR_CONFIG; the message lands in err.
+template <class Body>
+anira_status translated(anira_error* err, Body&& body) {
+    const auto fail = [err](anira_status status, const char* what) {
+        if (err != nullptr) {
+            err->status = status;
+            std::snprintf(err->message, sizeof(err->message), "%s", what);
+        }
+        return status;
+    };
+    try {
+        body();
+        return ANIRA_OK;
+    } catch (const anira::StatusError& e) {
+        return fail(e.status(), e.what());
+    } catch (const std::invalid_argument& e) { return fail(ANIRA_ERROR_CONFIG, e.what()); }
+}
+
+/// The 2.x InferenceConfig of a model under a Hard contract; the candidates name engines on the
+/// CPU path, ANIRA_ENGINE_CUSTOM the 2.x custom rows (the custom engine anira.v2.custom).
+anira_status to_inference_config(const anira_model_config* model,
+                                 const anira_contract* contract,
+                                 const anira_engine* candidates,
+                                 uint32_t num_candidates,
+                                 anira::InferenceConfig& out,
+                                 anira_error* err) {
+    std::vector<anira_backend_id> ids;
+    for (uint32_t i = 0; candidates != nullptr && i < num_candidates; ++i) {
+        const bool custom = candidates[i] == ANIRA_ENGINE_CUSTOM;
+        ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                       .engine = static_cast<uint32_t>(candidates[i]),
+                                       .provider = ANIRA_PROVIDER_CPU,
+                                       .engine_id = custom ? k_custom : nullptr});
+    }
+    return translated(err, [&] {
+        out = anira::capi::make_inference_config(*model,
+                                                 *contract,
+                                                 candidates != nullptr ? ids.data() : nullptr,
+                                                 num_candidates);
+    });
+}
+
+/// The 2.x HostConfig of a Hard contract's geometry and the model's anchor.
+anira_status to_host_config(const anira_contract* contract,
+                            const anira_model_config* model,
+                            anira::HostConfig& out,
+                            anira_error* err) {
+    return translated(err, [&] { out = anira::capi::make_host_config(*contract, *model); });
+}
+
+/// The 2.x HostConfig with the host's own (possibly fractional) geometry.
+anira_status to_host_config(const anira_model_config* model,
+                            float buffer_size,
+                            float sample_rate,
+                            bool allow_smaller_buffers,
+                            anira::HostConfig& out,
+                            anira_error* err) {
+    return translated(err, [&] {
+        out =
+            anira::capi::make_host_config(*model, buffer_size, sample_rate, allow_smaller_buffers);
+    });
+}
+
 struct Outcome {
     anira_status m_status = ANIRA_OK;
     std::string m_message;
@@ -110,13 +175,13 @@ Outcome bridge(const ModelConfig& model,
                const std::vector<anira_engine>* candidates = nullptr) {
     Outcome outcome;
     anira_error err = ANIRA_ERROR_INIT;
-    outcome.m_status = anira::v3compat::to_inference_config(
-        model.native(),
-        contract.native(),
-        candidates != nullptr ? candidates->data() : nullptr,
-        candidates != nullptr ? static_cast<uint32_t>(candidates->size()) : 0U,
-        outcome.m_config,
-        &err);
+    outcome.m_status =
+        to_inference_config(model.native(),
+                            contract.native(),
+                            candidates != nullptr ? candidates->data() : nullptr,
+                            candidates != nullptr ? static_cast<uint32_t>(candidates->size()) : 0U,
+                            outcome.m_config,
+                            &err);
     outcome.m_message = err.message;
     return outcome;
 }
@@ -133,7 +198,7 @@ void expect_contains(const std::string& message, std::string_view needle) {
 
 /// An engine this build does not carry, if there is one.
 std::optional<anira_engine> missing_engine() {
-    const std::vector<anira_engine> enabled = anira::v3compat::enabled_engines();
+    const std::vector<anira_engine> enabled = anira::capi::enabled_engines();
     for (anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
                                 ANIRA_ENGINE_LIBTORCH,
                                 ANIRA_ENGINE_TFLITE,
@@ -169,7 +234,7 @@ TEST(AbiTranslate, ContractScalarsAndModelScalarsLandInTheConfig) {
     ModelConfig model = minimal();
     model.state(ANIRA_MODEL_STATEFUL).max_instances(3);
     Hard hard = explicit_hard();
-    hard.budget_value = std::chrono::microseconds(42660);
+    hard.budget = std::chrono::microseconds(42660);
     hard.warmup_iterations = 2;
     hard.wait_ratio = 0.5;
     const Outcome outcome = bridge(model, hard);
@@ -219,7 +284,7 @@ TEST(AbiTranslate, UpgradedHybridNnLiteralKeepsTheV2ProcessingSize) {
     ASSERT_TRUE(model.upgraded());
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
-    const std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
+    const std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     const Outcome outcome = bridge(model, *legacy, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
     EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{256}));
@@ -283,10 +348,10 @@ TEST(AbiTranslate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
     EXPECT_EQ(cfg.get_tensor_output_size(), (std::vector<size_t>{1024, 10, 12}));
 }
 
-// Declared state in the shared translator, which the handler pairs its ports by (the bridge
-// entry refuses the role: test_Bridge): a State spec rides the 2.x configuration like a
-// Static one, at its own position of the list (size 0, one channel, its dims in the tensor
-// shape, a Channel axis of any extent), and a pair forces the session-exclusive processor.
+// Declared state in the shared translator, which the handler pairs its ports by: a State spec
+// rides the 2.x configuration like a Static one, at its own position of the list (size 0, one
+// channel, its dims in the tensor shape, a Channel axis of any extent), and a pair forces the
+// session-exclusive processor.
 TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
@@ -324,10 +389,6 @@ TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
                                            0);
     EXPECT_FALSE(plain.m_session_exclusive_processor);
     EXPECT_TRUE(anira::capi::state_links(*minimal().native()).empty());
-
-    const Outcome outcome = bridge(model);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "tensor 'h_in'");
 }
 
 TEST(AbiTranslate, ADynamicTimeExtentResolvesToTheWindow) {
@@ -563,7 +624,7 @@ TEST(AbiTranslate, AnEntryRowOutsideTheCandidatesIsSkippedNotRefused) {
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
     model.output(streamed("out"));
-    std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
+    std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom row
     const ContractHandle contract(explicit_hard());
     const Outcome outcome = bridge(model, contract, &candidates);
@@ -622,7 +683,7 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
     ASSERT_TRUE(model.upgraded());
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
-    const std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
+    const std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     if (candidates.empty()) { GTEST_SKIP() << "no engine in this build"; }
     const Outcome outcome = bridge(model, *legacy, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
@@ -678,39 +739,6 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
 // ============================================================================
 // The rules: each returns its status and names the tensor or the entry
 // ============================================================================
-
-TEST(AbiTranslate, NullArgumentsAreInvalidArgument) {
-    ModelConfig model = minimal();
-    const ContractHandle contract(explicit_hard());
-    anira::InferenceConfig out;
-    anira_error err = ANIRA_ERROR_INIT;
-    EXPECT_EQ(
-        anira::v3compat::to_inference_config(nullptr, contract.native(), nullptr, 0, out, &err),
-        ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira::v3compat::to_inference_config(model.native(), nullptr, nullptr, 0, out, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "contract is NULL");
-    EXPECT_EQ(anira::v3compat::to_inference_config(model.native(),
-                                                   contract.native(),
-                                                   nullptr,
-                                                   2,
-                                                   out,
-                                                   &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    anira::CoreConfig context;
-    EXPECT_EQ(anira::v3compat::to_core_config(nullptr, context, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    anira::HostConfig host;
-    EXPECT_EQ(anira::v3compat::to_host_config(nullptr, model.native(), host, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira::v3compat::to_host_config(contract.native(), nullptr, host, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira::v3compat::to_host_config(nullptr, 512.F, 48000.F, false, host, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira::v3compat::to_host_config(model.native(), 512.F, 48000.F, false, host, nullptr),
-              ANIRA_OK)
-        << "err is nullable";
-}
 
 TEST(AbiTranslate, NoInputOrNoOutputIsConfig) {
     ModelConfig no_input;
@@ -1019,7 +1047,7 @@ TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
     expect_contains(outcome.m_message, "models[0]: engine '");
     expect_contains(outcome.m_message, "' is not in this build");
 
-    std::vector<anira_engine> candidates = anira::v3compat::enabled_engines();
+    std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     candidates.push_back(ANIRA_ENGINE_CUSTOM);
     const ContractHandle contract(explicit_hard());
     outcome = bridge(model, contract, &candidates);
@@ -1118,7 +1146,7 @@ TEST(AbiTranslate, AnUnknownExtensionFailsByName) {
 
 TEST(AbiTranslate, ContractRules) {
     const ModelConfig model = minimal();
-    Outcome outcome = bridge(model, Hard{});
+    Outcome outcome = bridge(model, Hard{.budget = anira::Budget::measured()});
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: a MEASURED budget");
 
@@ -1163,39 +1191,8 @@ TEST(AbiTranslate, ContractRules) {
 }
 
 // ============================================================================
-// CoreConfig and HostConfig
+// HostConfig
 // ============================================================================
-
-TEST(AbiTranslate, ContextScalarsLandInTheCoreConfig) {
-    ContextConfig context;
-    context.threads(2, ANIRA_WAIT_BLOCKING)
-        .log_level(ANIRA_LOG_ERROR)
-        .log_drain(ANIRA_LOG_DRAIN_MANUAL, 25)
-        .log_queue_capacity(1024);
-    anira::CoreConfig core;
-    anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira::v3compat::to_core_config(context.native(), core, &err), ANIRA_OK)
-        << err.message;
-    EXPECT_EQ(core.m_num_threads, 2U);
-    EXPECT_EQ(core.m_wait_strategy, anira::WaitStrategy::Blocking);
-    EXPECT_EQ(core.m_log.m_level, anira::LogLevel::Error);
-    EXPECT_EQ(core.m_log.m_drain, anira::LogDrain::Manual);
-    EXPECT_EQ(core.m_log.m_drain_interval_ms, 25U);
-    EXPECT_EQ(core.m_log.m_queue_capacity, 1024U);
-
-    const ContextConfig automatic;
-    ASSERT_EQ(anira::v3compat::to_core_config(automatic.native(), core, &err), ANIRA_OK);
-    EXPECT_EQ(core.m_num_threads, anira::default_num_threads());
-    EXPECT_EQ(core.m_wait_strategy, anira::WaitStrategy::SpinBackoff);
-    EXPECT_EQ(core.m_log.m_level, anira::LogLevel::Warning);
-    EXPECT_EQ(core.m_log.m_drain, anira::LogDrain::Thread);
-
-    ContextConfig unknown;
-    unknown.ext_json("de.example.unknown", R"({"version": 1})");
-    EXPECT_EQ(anira::v3compat::to_core_config(unknown.native(), core, &err),
-              ANIRA_ERROR_EXTENSION_UNKNOWN);
-    expect_contains(err.message, "de.example.unknown");
-}
 
 TEST(AbiTranslate, HardGeometryAndAnchorLandInTheHostConfig) {
     const ModelConfig model = minimal();
@@ -1206,8 +1203,7 @@ TEST(AbiTranslate, HardGeometryAndAnchorLandInTheHostConfig) {
     const ContractHandle contract(hard);
     anira::HostConfig host;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
-              ANIRA_OK)
+    ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
         << err.message;
     EXPECT_EQ(host,
               anira::HostConfig(512.F, 48000.F, true, anira::HostConfig::k_first_streamable, true));
@@ -1221,19 +1217,17 @@ TEST(AbiTranslate, HardGeometryAndAnchorLandInTheHostConfig) {
     anchored.anchor("clock");
     hard.block_min = 512;
     const ContractHandle fixed(hard);
-    ASSERT_EQ(anira::v3compat::to_host_config(fixed.native(), anchored.native(), host, &err),
-              ANIRA_OK)
+    ASSERT_EQ(to_host_config(fixed.native(), anchored.native(), host, &err), ANIRA_OK)
         << err.message;
     EXPECT_EQ(host, anira::HostConfig(512.F, 48000.F, false, 1, false));
 
     // The geometry is required here (to_inference_config does without it).
     const ContractHandle bare(explicit_hard());
-    EXPECT_EQ(anira::v3compat::to_host_config(bare.native(), model.native(), host, &err),
-              ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(to_host_config(bare.native(), model.native(), host, &err), ANIRA_ERROR_CONFIG);
     expect_contains(err.message, "contract: Hard geometry missing");
 
     const ContractHandle async_contract{anira::Async{}};
-    EXPECT_EQ(anira::v3compat::to_host_config(async_contract.native(), model.native(), host, &err),
+    EXPECT_EQ(to_host_config(async_contract.native(), model.native(), host, &err),
               ANIRA_ERROR_NOT_SUPPORTED);
 
     // A spec rule applies here too.
@@ -1241,8 +1235,7 @@ TEST(AbiTranslate, HardGeometryAndAnchorLandInTheHostConfig) {
     broken.add_model_path(k_custom, "model.custom");
     broken.input(streamed("in").latency(1));
     broken.output(streamed("out"));
-    EXPECT_EQ(anira::v3compat::to_host_config(fixed.native(), broken.native(), host, &err),
-              ANIRA_ERROR_CONFIG);
+    EXPECT_EQ(to_host_config(fixed.native(), broken.native(), host, &err), ANIRA_ERROR_CONFIG);
     expect_contains(err.message, "tensor 'in': latency");
 }
 
@@ -1250,16 +1243,11 @@ TEST(AbiTranslate, TheHostsOwnGeometryMayBeFractional) {
     const ModelConfig model = minimal();
     anira::HostConfig host;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira::v3compat::to_host_config(model.native(),
-                                              1024.F / 2048.F,
-                                              48000.F / 2048.F,
-                                              true,
-                                              host,
-                                              &err),
+    ASSERT_EQ(to_host_config(model.native(), 1024.F / 2048.F, 48000.F / 2048.F, true, host, &err),
               ANIRA_OK)
         << err.message;
     EXPECT_EQ(host, anira::HostConfig(0.5F, 48000.F / 2048.F, true));
-    EXPECT_EQ(anira::v3compat::to_host_config(model.native(), 0.F, 48000.F, false, host, &err),
+    EXPECT_EQ(to_host_config(model.native(), 0.F, 48000.F, false, host, &err),
               ANIRA_ERROR_INVALID_ARGUMENT);
     expect_contains(err.message, "buffer_size and sample_rate must be positive");
 }
@@ -1297,8 +1285,7 @@ TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
         EXPECT_EQ(contract.hard().block_max, c.m_block) << "the double is stored as it is";
         anira::HostConfig host;
         anira_error err = ANIRA_ERROR_INIT;
-        ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
-                  ANIRA_OK)
+        ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
             << err.message;
         EXPECT_EQ(host.m_buffer_size, static_cast<float>(c.m_block));
         EXPECT_FALSE(host.m_allow_smaller_buffers);
@@ -1332,8 +1319,7 @@ TEST(AbiTranslate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
 
     anira::HostConfig host;
     anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(anira::v3compat::to_host_config(contract.native(), model.native(), host, &err),
-              ANIRA_OK)
+    ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
         << err.message;
     const anira::LatencyCalculator::Rational hops =
         anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
@@ -1342,7 +1328,7 @@ TEST(AbiTranslate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
 }
 
 TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
-    const std::vector<anira_engine> engines = anira::v3compat::enabled_engines();
+    const std::vector<anira_engine> engines = anira::capi::enabled_engines();
     const std::vector<anira_engine> expected = [] {
         std::vector<anira_engine> list;
 #ifdef USE_ONNXRUNTIME

@@ -6,7 +6,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
@@ -18,9 +17,11 @@
 #include <cstddef>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -72,7 +73,7 @@ TEST(FallbackPaths, SelectingABackendWithoutAProcessorFallsBackToTheDefault) {
     for (const InferenceBackend backend : compiled_in_backends()) {
         InferenceConfig config = make_config();
         PrePostProcessor pp_processor(config);
-        InferenceHandler handler(pp_processor, config, CoreConfig(2));
+        V2Handler handler(pp_processor, config, CoreConfig(2));
         handler.prepare(HostConfig(k_block, k_sample_rate));
 
         handler.set_inference_backend(backend);
@@ -102,7 +103,7 @@ TEST(FallbackPaths, NonRealtimeIsRefusedWhenNoInferenceThreadCouldSatisfyIt) {
     InferenceConfig config = make_config();
     PrePostProcessor pp_processor(config);
     // num_threads == 0: no auto-managed pool, and this test starts none itself.
-    InferenceHandler handler(pp_processor, config, CoreConfig(0));
+    V2Handler handler(pp_processor, config, CoreConfig(0));
     handler.prepare(HostConfig(k_block, k_sample_rate));
     ASSERT_FALSE(Core::has_inference_threads());
 
@@ -123,7 +124,7 @@ TEST(FallbackPaths, NonRealtimeIsRefusedWhenNoInferenceThreadCouldSatisfyIt) {
 TEST(FallbackPaths, DeadlinePopUsesTheBlockingPathWhenABlockingRatioIsSet) {
     InferenceConfig config = make_config(/*blocking_ratio=*/0.5F);
     PrePostProcessor pp_processor(config);
-    InferenceHandler handler(pp_processor, config, CoreConfig(2));
+    V2Handler handler(pp_processor, config, CoreConfig(2));
     handler.prepare(HostConfig(k_block, k_sample_rate));
 
     std::vector<float> input(k_block, 0.75F);

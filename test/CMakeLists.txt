@@ -11,6 +11,50 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_definitions(ANIRA_EXTRAS_MODELS_DIR="${ANIRA_EXTRAS_MODELS_DIR}")
 
 
+# Windows: anira.dll and the runtime DLLs are searched next to the executable. Every test
+# binary of this directory is built into the same directory, so one target copies them there
+# once and each binary depends on it; a PRE_BUILD copy per binary had parallel links race on
+# the same file ("Permission denied"). Only when there are DLLs (a fully static build has none).
+if (MSVC AND ANIRA_SHARED_LIBS_WIN)
+    get_property(_anira_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
+    if (_anira_multi_config)
+        set(_anira_test_bin_dir "${CMAKE_CURRENT_BINARY_DIR}/$<CONFIG>")
+    else ()
+        set(_anira_test_bin_dir "${CMAKE_CURRENT_BINARY_DIR}")
+    endif ()
+    add_custom_target(anira_test_runtime_dlls
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${_anira_test_bin_dir}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ANIRA_SHARED_LIBS_WIN}
+                "${_anira_test_bin_dir}"
+        COMMENT "Copying the runtime DLLs next to the test binaries"
+        VERBATIM)
+    # The list names files the build makes, not only prebuilt ones: anira.dll by its path and
+    # tanh-lib's and gtest's DLLs as $<TARGET_FILE:...>. The copy waits for every target that
+    # builds one (the per-binary copy ran after its binary's own link dependencies).
+    if (BUILD_SHARED_LIBS)
+        add_dependencies(anira_test_runtime_dlls anira)
+    endif ()
+    foreach (_anira_dll IN LISTS ANIRA_SHARED_LIBS_WIN)
+        if (_anira_dll MATCHES "^\\$<TARGET_FILE:(.+)>$")
+            set(_anira_dll_target "${CMAKE_MATCH_1}")
+            get_target_property(_anira_aliased "${_anira_dll_target}" ALIASED_TARGET)
+            if (_anira_aliased)
+                set(_anira_dll_target "${_anira_aliased}")
+            endif ()
+            get_target_property(_anira_imported "${_anira_dll_target}" IMPORTED)
+            if (NOT _anira_imported)
+                add_dependencies(anira_test_runtime_dlls "${_anira_dll_target}")
+            endif ()
+        endif ()
+    endforeach ()
+    unset(_anira_dll)
+    unset(_anira_dll_target)
+    unset(_anira_aliased)
+    unset(_anira_imported)
+    unset(_anira_multi_config)
+    unset(_anira_test_bin_dir)
+endif ()
+
 # One test binary per component, mirroring the source tree: test/<dir> covers
 # src/<dir> and include/anira/<dir>, and the root files cover the root units. The
 # test_* naming is load-bearing: it is what the shared ci-actions mobile runners
@@ -49,14 +93,8 @@ function(anira_add_test_binary TARGET)
             PROPERTIES LABELS ${TARGET})
     endif()
 
-    # Only copy runtime DLLs when there are any (a fully static build has none).
-    if (MSVC AND ANIRA_SHARED_LIBS_WIN)
-        add_custom_command(TARGET ${TARGET}
-                PRE_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${ANIRA_SHARED_LIBS_WIN}
-                $<TARGET_FILE_DIR:${TARGET}>
-        )
+    if (TARGET anira_test_runtime_dlls)
+        add_dependencies(${TARGET} anira_test_runtime_dlls)
     endif ()
 endfunction()
 
@@ -64,19 +102,22 @@ endfunction()
 # targets one API and moves once.
 #   (a) through anira/compat/v2.hpp, the 2.x source-compatible face over the C ABI:
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
-#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Stages).
+#   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Processors).
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
 #       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
 #       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
-#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal (test_abi's
-#       internal probes and the v2_objects.h oracle arms, PR 12).
-#   (d) retired with their subject: test_PrePostProcessor (folded into test_Stage),
-#       test_JsonConfigLoader and its Errors suite (PR 10, with the 2.x loader class),
-#       test_Bridge / test_Translate (PR 10, into test_Prepare), test_HighPriorityThread (PR 12).
+#       test_OneSidedStreaming on the 2.x session, PR 8), test_PrePostProcessor (the 2.x
+#       default processor's window fill, in test_scheduler since PR 10), and test_capi_internal
+#       (test_abi's internal probes and the 2.x arms, PR 12).
+#   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
+#       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
+#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_Translate,
+#       test_PrePostProcessor, and every use of the two support headers below.
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
 # test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
-# test/support/extras_fixtures.h serves the TUs of (b) and (d) until they go.
+# test/support/v2_handler.h is the 2.x handler those suites and the 2.x arms of test_abi
+# (test_Handler, test_HandlerTensor, test_Processor, test_Compat) drive; both go in PR 10b.
 
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
@@ -90,6 +131,9 @@ anira_add_test_binary(test_utils
 	test_CoreConfig.cpp
 	test_InferenceConfig.cpp
 )
+# test_Logger drives a 2.x session through test/support/v2_handler.h, which includes the
+# scheduler's private helpers.
+target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_scheduler
 	scheduler/test_PlanSwitch.cpp
@@ -107,6 +151,7 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
+	test_PrePostProcessor.cpp
 )
 # handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
 # and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
@@ -127,7 +172,6 @@ anira_add_test_binary(test_handler
 	test_InferenceHandler.cpp
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
-	test_PrePostProcessor.cpp
 )
 
 # The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the
@@ -144,8 +188,8 @@ anira_add_test_binary(test_abi
 	abi/test_JsonUpgrade.cpp
 	abi/test_anira_hpp.cpp
 	abi/test_Translate.cpp
-	abi/test_Bridge.cpp
 	abi/test_ExtrasFixtures.cpp
+	abi/test_Extras.cpp
 	abi/test_Context.cpp
 	abi/test_Thread.cpp
 	abi/test_Handler.cpp
@@ -156,7 +200,7 @@ anira_add_test_binary(test_abi
 	abi/test_InstanceDispatch.cpp
 	abi/test_Prepare.cpp
 	abi/test_RtError.cpp
-	abi/test_Stage.cpp
+	abi/test_Processor.cpp
 	abi/test_Engine.cpp
 	abi/test_State.cpp
 	abi/test_Tensor.cpp

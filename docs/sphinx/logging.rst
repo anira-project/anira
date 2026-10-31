@@ -9,12 +9,10 @@ write, what a message contains, where the records go on each platform, and what 
 promises about exceptions.
 
 .. note::
-    The runtime half of this page is the C handler of ``anira/abi/handler.h`` (:doc:`usage`,
-    section 3.2): ``anira_handler_rt_error``, the per-handler latch and the drain summary
-    are in effect there. The 2.x :cpp:class:`anira::InferenceHandler` of :doc:`usage`,
-    sections 3 to 5, runs on the same scheduler: its operational real-time conditions are
-    latched per site the same way and a failed inference delivers zeros, but it has no
-    ``rt_error`` word to read.
+    The runtime half of this page is the handler of ``anira/abi/handler.h`` and its C++
+    face :cpp:class:`anira::InferenceHandler` (:doc:`usage`, sections 3 to 5):
+    ``anira_handler_rt_error`` (:cpp:func:`anira::InferenceHandler::rt_error`), the
+    per-handler latch and the drain summary are in effect there.
 
 The rule
 --------
@@ -167,7 +165,7 @@ not its slot's (nothing converts: the input is not pushed, the output is zero-fi
 reports 0 samples), a failed inference. A failed
 inference — an engine exception, a throwing custom processor or hook — zero-fills its output
 (never the previous job's data), sets ``rt_error`` to ``ANIRA_ERROR_ENGINE`` and is one
-latched record; the inference thread survives it. A stage of the C handler fails differently:
+latched record; the inference thread survives it. A processor of the C handler fails differently:
 a phase callback that returns a status other than ``ANIRA_OK`` latches *that* status and its
 chunk delivers zeros, the hop-count guard after ``pre_process`` and
 ``post_process`` latches ``ANIRA_ERROR_CONFIG``, and a ring or context accessor refused inside
@@ -252,11 +250,11 @@ the real-time records that preceded the failure are in front of you before you a
 (Not for ``[callback-safe]`` entries, and not when the entry runs inside a sink.) The drain is
 lock-free and the queue is multi-consumer, so this is safe beside the running drain thread; it
 means a real-time record may arrive on the failing caller's thread as well as on the drain
-thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` /
-:cpp:func:`anira::Core::shutdown` drain the queue as well.
+thread, which the sink contract states. Releasing the last handler and ``anira_shutdown`` (``anira::shutdown()``)
+drain the queue as well.
 
 **Manual mode and WebAssembly.** With ``ANIRA_LOG_DRAIN_MANUAL`` there is no thread; the host
-pumps ``anira_drain_log`` (:cpp:func:`anira::InferenceHandler::drain_log` on the 2.x runtime,
+pumps ``anira_drain_log`` (``anira::drain_log()`` in C++,
 ``anira.drainLog()`` or ``anira.startLogPump()`` on the web) from a timer, and once more after any failed call.
 The queue is shared by every handler in the process, so pumping any one of them drains
 everything. WebAssembly has no drain thread at all: ``ANIRA_LOG_DRAIN_THREAD`` is coerced to
@@ -287,7 +285,7 @@ lives (counted across contexts), for a host that shows its own log or a DAW that
 stderr. On WebAssembly the platform sink is the browser console by level (``console.debug``,
 ``console.info``, ``console.warn``, ``console.error``; tanh-lib's own platform sink, stderr, which
 the module's glue would print as ``console.error`` for every level, stays off there), and the
-JavaScript log hook (``anira.setLogHook()``, ``anira_em_set_log_hook``) takes the same hold on it
+JavaScript log hook (``anira.setLogSink()``, ``anira_em_set_log_hook``) takes the same hold on it
 while it is set: a record reaches the console once, at its level.
 
 **The host sink.** ``log_sink(callback, user_data)`` (``anira_context_config_set_log_sink``, or
@@ -357,7 +355,7 @@ uses tanh-lib has a second logger under ``thl``, which anira never touches.
   lines are on stdout/stderr (the Xcode console) instead, not in ``log``.
 - Linux and Windows: stderr for Error and Warning, stdout for Info and Debug; a plugin host
   shows them where it shows its own stderr, or not at all, which is what the host sink is for.
-- WebAssembly: the browser console by level, through the log hook (``anira.setLogHook()``) or,
+- WebAssembly: the browser console by level, through the log hook (``anira.setLogSink()``) or,
   without one, the platform sink; the page must pump ``anira.drainLog()`` (``startLogPump``) for real-time
   records.
 - The engines keep their own tags and channels: ONNX Runtime's ``onnxruntime`` logger, LiteRT's

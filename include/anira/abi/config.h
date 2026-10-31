@@ -370,19 +370,19 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * the input (JSON: "state_source" on the input spec). anira keeps one value per pair in
  * the handler, on the port of the state input, in the spec's shape and dtype (zeroed at
  * create and at prepare), copies it into the input tensor as the first step before the
- * engine call, ahead of the stage's before_inference, and copies the output tensor into
- * it as the last step after the engine call, behind the stage's after_inference; a
- * failed inference (an engine failure, a non-OK stage) skips the capture, so the state
- * keeps its last good value. anira_handler_reset re-initialises the state at the first
- * inference of the new stream; the state survives anira_handler_set_plan. A model with a
- * pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation
- * (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input
- * names exactly one state output and every state output is named by exactly one state
- * input; the two halves have equal dtype and shape; a state spec has no Time axis,
- * window, time ratio or latency, and neither a ring dtype nor the anchor may name it.
- * ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than float32 (as every
- * model tensor of this pre-release; the value takes the spec's dtype), or with a
- * transposed layout. A second call replaces the name.
+ * engine call, ahead of the processor's before_inference, and copies the output tensor
+ * into it as the last step after the engine call, behind the processor's
+ * after_inference; a failed inference (an engine failure, a non-OK processor) skips the
+ * capture, so the state keeps its last good value. anira_handler_reset re-initialises
+ * the state at the first inference of the new stream; the state survives
+ * anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its
+ * state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at
+ * prepare): every state input names exactly one state output and every state output is
+ * named by exactly one state input; the two halves have equal dtype and shape; a state
+ * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
+ * anchor may name it. ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than
+ * float32 (as every model tensor of this pre-release; the value takes the spec's dtype),
+ * or with a transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
@@ -638,12 +638,12 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the
  * ring as is. Nothing in anira converts: the Hard entries copy between the host and the
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
- * ANIRA_ERROR_CONFIG at prepare, unless a stage of the pipeline fills the phase that
+ * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that
  * moves that ring (pre_process for an input, post_process for an output) and so takes
- * the difference on itself; the default bodies of anira/abi/stage.h still refuse such a
- * slot at run time. Set per tensor by canonical name, so an input and an output may
- * differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed
- * tensor is checked at prepare, not here.
+ * the difference on itself; the default bodies of anira/abi/processor.h still refuse
+ * such a slot at run time. Set per tensor by canonical name, so an input and an output
+ * may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
+ * Streamed tensor is checked at prepare, not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
  * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for
@@ -738,12 +738,12 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
 /**
  * @brief The host-end domain of one tensor, common to both contract kinds like
  * anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor
- * and the Static store of the slot in, and the domain all four phases of a stage, the
- * feed and the capture work in; for a State input it overrides the domain of the pair's
- * two buffers, which is the backend's domain of the plans that run the pair otherwise
- * (host memory for every backend of this pre-release), the domain the bound State
- * descriptors report; the planner joins it to the backend's domain per slot with the
- * edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
+ * and the Static store of the slot in, and the domain all four phases of a processor,
+ * the feed and the capture work in; for a State input it overrides the domain of the
+ * pair's two buffers, which is the backend's domain of the plans that run the pair
+ * otherwise (host memory for every backend of this pre-release), the domain the bound
+ * State descriptors report; the planner joins it to the backend's domain per slot with
+ * the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
  * recipe). A tensor declared in the backend's own domain has no edge to cross. The ring,
  * the model tensor and the tensors the context accessors fill share the declared domain,
  * readable from the domain field of any tensor an accessor fills or from the plan row.

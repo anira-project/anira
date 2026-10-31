@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/scheduler/Core.h>
@@ -17,9 +16,11 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 // anira logs through thl::Logger. CoreConfig::m_log.m_level becomes the logger's
 // runtime level; the real-time paths log into a queue the core owns, drained by a
@@ -56,7 +57,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler;
+    V2Handler m_handler;
 };
 
 using anira_test::RecordCollector;

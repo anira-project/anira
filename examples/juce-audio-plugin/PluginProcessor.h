@@ -1,143 +1,142 @@
 #pragma once
 
-// Include anira (and its LibTorch headers) before JuceHeader.h. JuceHeader.h
-// does `using namespace juce;`, which leaks the type `juce::var` into the
-// global namespace. LibTorch's custom_function.h uses an unqualified loop
-// variable named `var`, and MSVC's two-phase template lookup then reports it as
-// an ambiguous symbol (error C2872). Parsing LibTorch first avoids the clash.
+// Include anira before JuceHeader.h. JuceHeader.h does `using namespace juce;`, which leaks the
+// type `juce::var` into the global namespace; the engine headers a host may include beside
+// anira (LibTorch's custom_function.h uses an unqualified loop variable named `var`) then hit
+// MSVC's two-phase lookup as an ambiguous symbol (error C2872). Parsing anira first avoids it.
 // clang-format off
-#include <anira/anira.h>
 #include <anira/anira.hpp>
-#include <anira/compat/v3_to_v2.h>
 #include <JuceHeader.h>
 // clang-format on
 
+#include <array>
+#include <atomic>
+#include <memory>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "../../extras/models/BypassEngine.h"
 #include "../../extras/models/model_files.h"
 #include "PluginParameters.h"
 
-// The model this plugin runs is picked at configure time (MODEL_TO_USE, see CMakeLists.txt).
-// Every variant is configured the same way: the model file and the contract file of a bundled
-// model (extras/models, loaded with anira/anira.hpp) are bridged to the 2.x runtime classes
-// this pre-release's InferenceHandler still takes (anira/compat/v3_to_v2.h). What differs per
-// variant is the pair of files and, for the two models with their own pre/post processing,
-// the processor types. Variant 1 runs the CNN of variant 0 with every file compiled into the
-// plugin; variant 7 runs RAVE as an encoder and a decoder handler.
-#if MODEL_TO_USE == 0 || MODEL_TO_USE == 1
-#include "../../extras/models/cnn/CNNBypassProcessor.h"
-#include "../../extras/models/cnn/CNNPrePostProcessor.h"
-#elif MODEL_TO_USE == 2
-#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
-#endif
 #if MODEL_TO_USE == 1
 #include <BinaryData.h>
 
 #include <cstddef>
+#include <filesystem>
 #include <span>
 #include <string_view>
 #endif
+#if MODEL_TO_USE == 2
+#include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
+#endif
 
-namespace juce_plugin_example {
-
+// The model this plugin runs is picked at configure time (MODEL_TO_USE, see CMakeLists.txt):
+// the model file and the contract file of a bundled model (extras/models). Variant 1 runs the
+// CNN of variant 0 from files compiled into the plugin; variant 7 runs RAVE as an encoder and a
+// decoder handler.
 #if MODEL_TO_USE == 0 || MODEL_TO_USE == 1
-inline constexpr const char* k_model_json = k_cnn_model_json;
-inline constexpr const char* k_contract_json = k_cnn_contract_json;
-using PrePostProcessor = CNNPrePostProcessor;
-using BypassProcessor = CNNBypassProcessor;
+#define MODEL_FILE k_cnn_model_json
+#define CONTRACT_FILE k_cnn_contract_json
 #elif MODEL_TO_USE == 2
-inline constexpr const char* k_model_json = k_hybridnn_model_json;
-inline constexpr const char* k_contract_json = k_hybridnn_contract_json;
-using PrePostProcessor = HybridNNPrePostProcessor;
-using BypassProcessor = HybridNNBypassProcessor;
+#define MODEL_FILE k_hybridnn_model_json
+#define CONTRACT_FILE k_hybridnn_contract_json
 #elif MODEL_TO_USE == 3
-inline constexpr const char* k_model_json = k_rnn_model_json;
-inline constexpr const char* k_contract_json = k_rnn_contract_json;
-using PrePostProcessor = anira::PrePostProcessor;
+#define MODEL_FILE k_rnn_model_json
+#define CONTRACT_FILE k_rnn_contract_json
 #elif MODEL_TO_USE == 4
-inline constexpr const char* k_model_json = k_gain_model_json;
-inline constexpr const char* k_contract_json = k_gain_contract_json;
-using PrePostProcessor = anira::PrePostProcessor;
+#define MODEL_FILE k_gain_model_json
+#define CONTRACT_FILE k_gain_contract_json
 #elif MODEL_TO_USE == 5
-inline constexpr const char* k_model_json = k_stereo_gain_model_json;
-inline constexpr const char* k_contract_json = k_stereo_gain_contract_json;
-using PrePostProcessor = anira::PrePostProcessor;
+#define MODEL_FILE k_stereo_gain_model_json
+#define CONTRACT_FILE k_stereo_gain_contract_json
 #elif MODEL_TO_USE == 6
-inline constexpr const char* k_model_json = k_rave_funk_drum_model_json;
-inline constexpr const char* k_contract_json = k_rave_funk_drum_contract_json;
-using PrePostProcessor = anira::PrePostProcessor;
-#elif MODEL_TO_USE == 7
-// The encoder and the decoder are two entry points of one TorchScript file, run as two
-// handlers; their files are named in the class below.
-#else
+#define MODEL_FILE k_rave_funk_drum_model_json
+#define CONTRACT_FILE k_rave_funk_drum_contract_json
+#elif MODEL_TO_USE != 7
 #error "MODEL_TO_USE must be 0 to 7; see CMakeLists.txt"
 #endif
 
 #if MODEL_TO_USE == 1
-/// Variant 1 reads nothing from disk: cnn.model.json, cnn.contract.json and the four exports
-/// the model file names are compiled into the plugin (juce_add_binary_data, CMakeLists.txt).
-/// The model config is loaded from the embedded JSON text, then each entry's source is replaced
-/// with the embedded bytes of its engine (borrowed: BinaryData is static and outlives the
-/// plugin). The description of the model stays in the file; only where the bytes come from
-/// changes.
-inline std::span<const std::byte> embedded(const char* data, int size) {
-    return std::as_bytes(std::span{data, static_cast<size_t>(size)});
+/// An embedded file (juce_add_binary_data, CMakeLists.txt) by its original file name.
+inline std::span<const std::byte> embedded(std::string_view file_name) {
+    for (int i = 0; i < BinaryData::namedResourceListSize; ++i) {
+        const char* name = BinaryData::namedResourceList[i];
+        if (file_name == BinaryData::getNamedResourceOriginalFilename(name)) {
+            int size = 0;
+            const char* data = BinaryData::getNamedResource(name, size);
+            return std::as_bytes(std::span{data, static_cast<size_t>(size)});
+        }
+    }
+    return {};
 }
 
-inline anira::ModelConfig embedded_cnn_model_config() {
-    anira::ModelConfig config = anira::ModelConfig::from_json(
-        std::string_view{BinaryData::cnn_model_json,
-                         static_cast<size_t>(BinaryData::cnn_model_jsonSize)});
+/// The model file and every export it names, from the plugin binary: each entry's source is
+/// the embedded file of the same name, borrowed (BinaryData is static).
+inline anira::ModelConfig embedded_model_config() {
+    const std::span<const std::byte> json = embedded("cnn.model.json");
+    anira::ModelConfig config =
+        anira::ModelConfig::from_json({reinterpret_cast<const char*>(json.data()), json.size()});
     for (uint32_t i = 0; i < config.model_count(); ++i) {
-        switch (config.model_engine(i).kind) {
-            case ANIRA_ENGINE_LIBTORCH:
-                config.set_model_bytes(i,
-                                       embedded(BinaryData::steerablenafxdynamic_pt,
-                                                BinaryData::steerablenafxdynamic_ptSize),
-                                       ANIRA_BYTES_BORROW);
-                break;
-            case ANIRA_ENGINE_ONNXRUNTIME:
-                config.set_model_bytes(i,
-                                       embedded(BinaryData::steerablenafxlibtorchdynamic_onnx,
-                                                BinaryData::steerablenafxlibtorchdynamic_onnxSize),
-                                       ANIRA_BYTES_BORROW);
-                break;
-            case ANIRA_ENGINE_TFLITE:
-            case ANIRA_ENGINE_LITERT:
-                config.set_model_bytes(i,
-                                       embedded(BinaryData::steerablenafxdynamic_tflite,
-                                                BinaryData::steerablenafxdynamic_tfliteSize),
-                                       ANIRA_BYTES_BORROW);
-                break;
-            case ANIRA_ENGINE_EXECUTORCH:
-                config.set_model_bytes(i,
-                                       embedded(BinaryData::steerablenafxexecutorch_pte,
-                                                BinaryData::steerablenafxexecutorch_pteSize),
-                                       ANIRA_BYTES_BORROW);
-                break;
-            default: break;
-        }
+        const std::string name = std::filesystem::path(config.model_path(i)).filename().string();
+        config.set_model_bytes(i, embedded(name), ANIRA_BYTES_BORROW);
     }
     return config;
 }
 
-inline anira::ContractHandle embedded_cnn_contract() {
+inline anira::ContractHandle embedded_contract() {
+    const std::span<const std::byte> json = embedded("cnn.contract.json");
     return anira::ContractHandle::from_json(
-        std::string_view{BinaryData::cnn_contract_json,
-                         static_cast<size_t>(BinaryData::cnn_contract_jsonSize)});
+        {reinterpret_cast<const char*>(json.data()), json.size()});
 }
 #endif
 
-}  // namespace juce_plugin_example
+/// A model running on one handler: its model config (with the entry of the bypass engine, the
+/// plan behind the "BYPASS" choice), its contract, the handler, and the plan report of the
+/// last prepare, which processBlock looks the backend choice up in.
+struct AniraModel {
+    AniraModel(anira::Context& context, anira::ModelConfig config, anira::ContractHandle hard)
+        : model_config([&] {
+            config.add_model(k_bypass_engine_id);
+            return std::move(config);
+        }())
+        , contract(std::move(hard))
+        , handler(context,
+                  anira::Pipeline()
+                      .add_engine(std::make_shared<BypassEngine>())
+                      .add_inference(model_config)
+#if MODEL_TO_USE == 2
+                      .add_processor(std::make_shared<HybridNNProcessor>())
+#endif
+          ) {
+    }
 
-//==============================================================================
+    /// The host geometry completes the contract; prepare returns the plan report.
+    void prepare(double block, double sample_rate) {
+        contract.hard_geometry(block, block, sample_rate);
+        plan_report = handler.prepare(contract);
+    }
+    /// The plan of the report that runs the query's backend; none: the selection stays.
+    void select(const anira::PlanQuery& query) noexcept {
+        if (const std::optional<uint32_t> plan = plan_report.find(query)) {
+            handler.set_plan(*plan);
+        }
+    }
+
+    anira::ModelConfig model_config;  // outlives the handler: an embedded entry is borrowed
+    anira::ContractHandle contract;
+    anira::InferenceHandler handler;
+    anira::PlanReport plan_report{nullptr};
+};
+
 class AudioPluginAudioProcessor : public juce::AudioProcessor,
                                   private juce::AudioProcessorValueTreeState::Listener {
 public:
-    //==============================================================================
     AudioPluginAudioProcessor();
     ~AudioPluginAudioProcessor() override;
 
-    //==============================================================================
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
 
@@ -146,7 +145,6 @@ public:
     void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
     using AudioProcessor::processBlock;
 
-    //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override;
 
@@ -179,57 +177,42 @@ private:
 private:
     juce::AudioProcessorValueTreeState parameters;
 
-    // The configuration: the model file and the contract file, bridged to the 2.x
-    // InferenceConfig. The model config outlives the InferenceConfig and the handler (an
-    // embedded-bytes entry is borrowed), so it is declared first; members are destroyed in
-    // reverse order. The processors and the handler are constructed in PluginProcessor.cpp.
-#if MODEL_TO_USE != 7
-#if MODEL_TO_USE == 1
-    anira::ModelConfig model_config = juce_plugin_example::embedded_cnn_model_config();
-    anira::ContractHandle contract = juce_plugin_example::embedded_cnn_contract();
-#else
-    anira::ModelConfig model_config =
-        anira::ModelConfig::from_file(juce_plugin_example::k_model_json);
-    anira::ContractHandle contract =
-        anira::ContractHandle::from_file(juce_plugin_example::k_contract_json);
-#endif
-    anira::InferenceConfig inference_config =
-        anira::v3compat::to_inference_config(model_config,
-                                             contract,
-                                             anira::v3compat::enabled_engines());
-    juce_plugin_example::PrePostProcessor pp_processor;
-#if MODEL_TO_USE <= 2
-    // The round trip that outputs audio when the Custom backend is selected; it must match the
-    // custom pre/post processor.
-    juce_plugin_example::BypassProcessor bypass_processor;
-#endif
-    anira::InferenceHandler inference_handler;
-#else
-    // RAVE as two handlers: the encoder turns audio into latent frames, the decoder (anchored
-    // on its audio output, one latent frame per 2048 samples) turns them back into audio.
-    anira::ModelConfig model_config_encoder =
-        anira::ModelConfig::from_file(k_rave_funk_drum_encoder_model_json);
-    anira::ContractHandle contract_encoder =
-        anira::ContractHandle::from_file(k_rave_funk_drum_encoder_contract_json);
-    anira::InferenceConfig inference_config_encoder =
-        anira::v3compat::to_inference_config(model_config_encoder,
-                                             contract_encoder,
-                                             anira::v3compat::enabled_engines());
-    anira::PrePostProcessor pp_processor_encoder;
-    anira::InferenceHandler inference_handler_encoder;
-
-    anira::ModelConfig model_config_decoder =
-        anira::ModelConfig::from_file(k_rave_funk_drum_decoder_model_json);
-    anira::ContractHandle contract_decoder =
-        anira::ContractHandle::from_file(k_rave_funk_drum_decoder_contract_json);
-    anira::InferenceConfig inference_config_decoder =
-        anira::v3compat::to_inference_config(model_config_decoder,
-                                             contract_decoder,
-                                             anira::v3compat::enabled_engines());
-    anira::PrePostProcessor pp_processor_decoder;
-    anira::InferenceHandler inference_handler_decoder;
+    // The library default (half the hardware threads for inference) is what this plugin
+    // wants; section 3.1 of the usage guide shows how to change it.
+    anira::Context context{anira::ContextConfig{}};
+#if MODEL_TO_USE == 7
+    AniraModel encoder{context,
+                       anira::ModelConfig::from_file(k_rave_funk_drum_encoder_model_json),
+                       anira::ContractHandle::from_file(k_rave_funk_drum_encoder_contract_json)};
+    AniraModel decoder{context,
+                       anira::ModelConfig::from_file(k_rave_funk_drum_decoder_model_json),
+                       anira::ContractHandle::from_file(k_rave_funk_drum_decoder_contract_json)};
+    // One latent frame: four channels of one sample, a planar tensor over them.
+    std::array<float, 4> latent_space{};
+    std::array<float*, 4> latent_space_ptrs{};
+    anira::Tensor latent{};
     int m_count_input_samples = 0;
+#elif MODEL_TO_USE == 1
+    AniraModel model{context, embedded_model_config(), embedded_contract()};
+#else
+    AniraModel model{context,
+                     anira::ModelConfig::from_file(MODEL_FILE),
+                     anira::ContractHandle::from_file(CONTRACT_FILE)};
 #endif
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+    // The gain parameter, written into the model's Static input (slot 1) on the audio thread.
+    std::atomic<float> gain{1.0F};
+    float gain_value = 1.0F;
+    anira::Tensor gain_tensor{};
+#endif
+    // The "Backend Type" choice: stored by the parameter listener, applied by processBlock.
+    std::vector<anira::PlanQuery> backend_queries;
+    std::atomic<int> backend{0};
+
+    // The host's audio as one planar tensor over its channel pointers.
+    std::array<float*, 2> channels{};
+    anira::Tensor audio{};
+
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     std::atomic<bool> non_realtime = false;

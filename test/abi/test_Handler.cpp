@@ -1,12 +1,10 @@
-// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the still-public 2.x
-// anira::InferenceHandler as the in-binary oracle. Both handlers drive the same bundled model
-// (gain on the custom plan's pass-through engine on every leg; the CNN where an engine is
-// present) block
-// by block, each waiting for its own inference, so no block is ever missed and the outputs are
-// compared bit for bit.
+// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the 2.x handler
+// (anira_test::V2Handler, test/support/v2_handler.h) as the in-binary oracle. Both handlers drive
+// the same bundled model (gain on the custom plan's pass-through engine on every leg; the CNN where
+// an engine is present) block by block, each waiting for its own inference, so no block is ever
+// missed and the outputs are compared bit for bit.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -42,6 +40,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "capi/port.h"
 #include "capi/words.h"
 #include "float_face.h"
@@ -364,7 +363,7 @@ struct Oracle {
     Handler m_c;
     anira::InferenceConfig m_config_2x;
     anira::PrePostProcessor m_pp;
-    anira::InferenceHandler m_v2;
+    anira_test::V2Handler m_v2;
     uint32_t m_num_inputs = 0;
     uint32_t m_num_outputs = 0;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
@@ -378,7 +377,7 @@ struct GainOracle : Oracle {
         : Oracle(context,
                  gain_with_custom(default_custom),
                  custom_candidates(),
-                 anira_test::bridged_2x(k_gain_model_json, k_gain_contract_json, true)) {}
+                 anira_test::config_2x_of(k_gain_model_json, k_gain_contract_json, true)) {}
 };
 
 }  // namespace
@@ -680,7 +679,7 @@ TEST(AbiHandler, CnnMatchesTheTwoPointXHandler) {
     Oracle oracle(context,
                   anira_test::cnn_model(),
                   candidates,
-                  anira_test::bridged_2x(k_cnn_model_json, k_cnn_contract_json, false));
+                  anira_test::config_2x_of(k_cnn_model_json, k_cnn_contract_json, false));
     ASSERT_NO_FATAL_FAILURE(
         oracle.prepare(file_contract(k_cnn_contract_json, k_cnn_block), k_cnn_block));
     EXPECT_EQ(anira_handler_get_latency(oracle.h(), 0), oracle.m_v2.get_latency(0));
@@ -1195,8 +1194,9 @@ TEST(AbiHandler, APoolStopDoesNotWaitForAThreadWaitingForABusyInstance) {
     });
     // The loop count, a wait-free read: the pool's size is read under the lifecycle lock,
     // which the stop holds while it joins.
-    EXPECT_TRUE(wait_until([]() { return anira::InferenceThread::get_num_loop_active() == 1U; },
-                           std::chrono::seconds(2)))
+    EXPECT_TRUE(
+        wait_until([]() { return anira::scheduler::InferenceThread::get_num_loop_active() == 1U; },
+                   std::chrono::seconds(2)))
         << "the idle thread did not leave at the stop";
     EXPECT_EQ(gate.m_calls.load(), 0) << "the holder is still inside the engine";
     EXPECT_FALSE(stopped.load()) << "the stop joins the holder, whose inference still runs";

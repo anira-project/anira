@@ -3,7 +3,9 @@
 // offline on the built-in ONNX Runtime engine, with the gain automated mid-render. The model
 // applies the gain of the block it runs on, so each output block is its input block times the
 // gain of that quantum, the handler's latency later (the dry path muted for the exact check), and
-// the dry path's delay is that latency. The verdict is window.anira_test_result.
+// the dry path's delay is that latency; the plan report of the prepare names its one plan. The
+// verdict is window.anira_test_result.
+import { anira_engine } from '@anira-project/anira'
 import { createModelFileExample } from './main'
 
 const RATE = 48000
@@ -42,7 +44,7 @@ const run = async (): Promise<Result> => {
   example.output.connect(audio.destination)
   source.start(0)
   const rendered = (await audio.startRendering()).getChannelData(0)
-  const latency = example.latency()
+  const latency = example.getLatency()
 
   let worst = 0
   for (let j = 0; j + latency < rendered.length; j++) {
@@ -57,6 +59,23 @@ const run = async (): Promise<Result> => {
       `automated mid-render from quantum ${CHANGE_QUANTUM} (worst error ${worst})`
   )
 
+  // The plan report of the prepare: one plan, the gain config's ONNX entry on the built-in
+  // ONNX Runtime engine, under the contract file's 5 ms budget.
+  const report = example.planReport()
+  const plans = report.plans()
+  check(
+    report.numPlans() === 1 &&
+      plans.length === 1 &&
+      plans[0].engine === anira_engine.ANIRA_ENGINE_ONNXRUNTIME &&
+      plans[0].engineId === null &&
+      plans[0].budgetMs === 5 &&
+      report.slots(0, true).length === 2 &&
+      report.slots(0, false).length === 2,
+    `the plan report: ${report.numPlans()} plan, engine ${plans[0]?.engine}, budget ` +
+      `${plans[0]?.budgetMs} ms, ${report.slots(0, true).length} input and ` +
+      `${report.slots(0, false).length} output slots`
+  )
+
   const delay = example.dry.delayTime.value
   check(
     Math.abs(delay - latency / RATE) < 1e-7,
@@ -69,7 +88,7 @@ const run = async (): Promise<Result> => {
   let blockMax = 4 * QUANTUM
   while (blockMax <= latency) blockMax *= 2
   example.applyGeometry({ quantum: QUANTUM, burst: blockMax })
-  const changed = example.latency()
+  const changed = example.getLatency()
   check(
     changed !== latency,
     `the node re-prepared at block_max ${blockMax}: latency ${latency} -> ${changed}`

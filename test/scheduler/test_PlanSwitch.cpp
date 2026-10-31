@@ -13,7 +13,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -39,11 +38,13 @@
 #include <utility>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "capi/handles.h"  // IWYU pragma: keep - defines anira_context_config
 #include "engines/Adapters.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -153,7 +154,7 @@ public:
 
 // Polls get_available_samples (which collects the completed chunk and so runs its
 // post_process on this thread) until `count` chunks have been post-processed.
-bool wait_for_post(InferenceHandler& handler, const RecordingProcessor& pp, size_t count) {
+bool wait_for_post(V2Handler& handler, const RecordingProcessor& pp, size_t count) {
     const auto deadline = std::chrono::steady_clock::now() + k_wait;
     while (std::chrono::steady_clock::now() < deadline) {
         static_cast<void>(handler.get_available_samples(0));
@@ -206,7 +207,7 @@ TEST(PlanSwitch, AChunkInFlightFinishesOnTheBackendItWasSubmittedUnder) {
     RecordingProcessor pp(config);
     CountingBackend custom(config);
     {
-        InferenceHandler handler(pp, config, custom, CoreConfig(2));
+        V2Handler handler(pp, config, custom, CoreConfig(2));
         handler.prepare(HostConfig(k_block, k_sample_rate));
         handler.set_inference_backend(*engine);
 
@@ -256,7 +257,7 @@ TEST(PlanSwitch, EveryStepOfAChunkIsToldTheStampedBackend) {
     RecordingProcessor pp(config);
     CountingBackend custom(config);
     {
-        InferenceHandler handler(pp, config, custom, CoreConfig(2));
+        V2Handler handler(pp, config, custom, CoreConfig(2));
         handler.prepare(HostConfig(k_block, k_sample_rate));
         ASSERT_EQ(handler.get_inference_backend(), InferenceBackend::CUSTOM);
 

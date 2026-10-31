@@ -2,7 +2,6 @@
 // capabilities, the enabled-backends query, the clock and the shutdown family.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -28,12 +27,14 @@
 #include <vector>
 
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "capi/capi_internal.h"
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
 
 using namespace anira;
 using anira_test::RecordCollector;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -116,7 +117,7 @@ struct Instance {
     }
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler;
+    V2Handler m_handler;
 };
 
 /// Starts a test from a core nobody uses (a context's config is anchored only then); skips

@@ -26,6 +26,12 @@ class Loaded;  // src/engines/Adapter.h: the loaded model whose shared instances
 }  // namespace engine
 class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting for an instance
 
+/// The 2.x scheduler's own classes. The public thread class of the 3.x C++ face is
+/// anira::InferenceThread of <anira/anira.hpp>; this one is the library's, in its own
+/// namespace so that no class of namespace anira is defined both in libanira and in the
+/// header-only anira.hpp.
+namespace scheduler {
+
 /**
  * @brief Thread class for executing neural network inference operations.
  *
@@ -38,7 +44,7 @@ class InstanceWaitList;  // src/scheduler/InstanceWaitList.h: the jobs waiting f
  * thl::core::ThreadPriority::RealTime. On WebAssembly start() runs it on a Wasm Worker on the
  * module's shared memory (src/platform/emscripten/em_worker.h), with a stack and thread-local
  * block of its own, which first imports the worker module (set_worker_module(): the
- * JavaScript engines and stages it defines) and then enters run_loop(); stop() waits for the
+ * JavaScript engines and processors it defines) and then enters run_loop(); stop() waits for the
  * worker to leave the loop and terminates it, or cancels the boot of a worker that has not
  * entered it yet (em::cancel_boot: the worker finishes its boot, never enters, and the reaper
  * frees its region). A host may instead drive the loop on a thread of
@@ -253,7 +259,7 @@ private:
     /**
      * @brief Performs inference processing for a specific session
      *
-     * One chunk on the inference thread: before_inference; when the chunk's stage status is
+     * One chunk on the inference thread: before_inference; when the chunk's processor status is
      * still ANIRA_OK, the engine call (inference()); when that returned ANIRA_OK,
      * after_inference. A failed engine call (any other status) zeroes the outputs, marks the
      * chunk as completed as zeros, records ANIRA_ERROR_ENGINE on the session's latch
@@ -455,6 +461,8 @@ private:
     thl::core::Thread m_thread;  ///< The OS thread; its stop flag is should_exit()
 #endif
 };
+
+}  // namespace scheduler
 
 }  // namespace anira
 

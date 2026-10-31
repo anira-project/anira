@@ -5,19 +5,18 @@ Licence: MIT
 
 ========================================================================== */
 
-#include <anira/compat/v3_to_v2.h>
 #include <onnxruntime_cxx_api.h>
 
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "../../../extras/models/model_files.h"
-#include "../../../include/anira/utils/Buffer.h"
-#include "../../../include/anira/utils/MemoryBlock.h"
+#include "../minimal_model.h"
 
 namespace {
 // Render a tensor shape as "d0, d1, ...". std::vector has no operator<< of its own;
@@ -33,11 +32,10 @@ std::string shape_to_string(const std::vector<int64_t>& shape) {
 }
 }  // namespace
 
-void minimal_inference(anira::InferenceConfig m_inference_config) {
+void minimal_inference(const MinimalModel& info) {
     std::cout << "Minimal OnnxRuntime example:" << std::endl;
     std::cout << "-----------------------------------------" << std::endl;
-    std::cout << "Using model: " << m_inference_config.get_model_path(anira::InferenceBackend::ONNX)
-              << std::endl;
+    std::cout << "Using model: " << info.m_path << std::endl;
 
     // Define environment that holds logging state used by all other objects.
     // Note: One Env must be created before using any other OnnxRuntime functionality.
@@ -53,48 +51,37 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 
     // Load the model and create InferenceSession
 #ifdef _WIN32
-    std::wstring modelWideStr =
-        std::wstring(m_inference_config.get_model_path(anira::InferenceBackend::ONNX).begin(),
-                     m_inference_config.get_model_path(anira::InferenceBackend::ONNX).end());
+    std::wstring modelWideStr = std::wstring(info.m_path.begin(), info.m_path.end());
     const wchar_t* modelWideCStr = modelWideStr.c_str();
     Ort::Session m_session(m_env, modelWideCStr, m_session_options);
 #else
-    Ort::Session m_session(m_env,
-                           m_inference_config.get_model_path(anira::InferenceBackend::ONNX).c_str(),
-                           Ort::SessionOptions{nullptr});
+    Ort::Session m_session(m_env, info.m_path.c_str(), Ort::SessionOptions{nullptr});
 #endif
 
     // Fill an Buffer with some data
-    anira::BufferF input(1, m_inference_config.get_tensor_input_size()[0]);
-    for (int i = 0; i < m_inference_config.get_tensor_input_size()[0]; ++i) {
-        input.set_sample(0, i, i * 0.000001f);
-    }
+    std::vector<float> input(info.m_input_sizes[0]);
+    for (int i = 0; i < info.m_input_sizes[0]; ++i) { input[i] = i * 0.000001f; }
 
-    std::vector<anira::MemoryBlock<float>> m_input_data;
+    std::vector<std::vector<float>> m_input_data;
     std::vector<Ort::Value> m_inputs;
     std::vector<Ort::Value> m_outputs;
 
-    m_input_data.resize(m_inference_config.get_tensor_input_shape().size());
+    m_input_data.resize(info.m_input_shapes.size());
     m_inputs.clear();
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); i++) {
-        m_input_data[i].resize(m_inference_config.get_tensor_input_size()[i]);
+    for (size_t i = 0; i < info.m_input_shapes.size(); i++) {
+        m_input_data[i].resize(info.m_input_sizes[i]);
         if (i != 0) {
-            m_input_data[i].clear();
-            m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
-                m_memory_info,
-                m_input_data[i].data(),
-                m_input_data[i].size(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i]
-                    .size()));
+            m_inputs.emplace_back(Ort::Value::CreateTensor<float>(m_memory_info,
+                                                                  m_input_data[i].data(),
+                                                                  m_input_data[i].size(),
+                                                                  info.m_input_shapes[i].data(),
+                                                                  info.m_input_shapes[i].size()));
         } else {
-            m_inputs.emplace_back(Ort::Value::CreateTensor<float>(
-                m_memory_info,
-                input.data(),
-                input.get_num_samples(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i].data(),
-                m_inference_config.get_tensor_input_shape(anira::InferenceBackend::ONNX)[i]
-                    .size()));
+            m_inputs.emplace_back(Ort::Value::CreateTensor<float>(m_memory_info,
+                                                                  input.data(),
+                                                                  input.size(),
+                                                                  info.m_input_shapes[i].data(),
+                                                                  info.m_input_shapes[i].size()));
         }
     }
 
@@ -137,14 +124,14 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
                   << std::endl;
     }
 
-    std::vector<anira::MemoryBlock<float>> m_output_data;
+    std::vector<std::vector<float>> m_output_data;
     m_output_data.resize(m_outputs.size());
 
     for (size_t i = 0; i < m_outputs.size(); i++) {
         const auto output_read_ptr = m_outputs[i].GetTensorMutableData<float>();
-        m_output_data[i].resize(m_inference_config.get_tensor_output_size()[i]);
+        m_output_data[i].resize(info.m_output_sizes[i]);
 
-        for (size_t j = 0; j < m_inference_config.get_tensor_output_size()[i]; j++) {
+        for (size_t j = 0; j < info.m_output_sizes[i]; j++) {
             std::cout << "Output data [" << i << "][" << j << "]: " << output_read_ptr[j]
                       << std::endl;
             m_output_data[i][j] = output_read_ptr[j];
@@ -153,24 +140,25 @@ void minimal_inference(anira::InferenceConfig m_inference_config) {
 }
 
 int main(int argc, const char* argv[]) {
-    // The bundled models: a model file and a contract file each (extras/models/model_files.h),
-    // loaded with the 3.x API and bridged to the 2.x InferenceConfig this example reads its
-    // model path and tensor shapes from. The candidate list keeps the entries of this build's
-    // engines only.
-    const std::array<std::pair<const char*, const char*>, 5> models_to_inference = {{
-        {k_hybridnn_model_json, k_hybridnn_contract_json},
-        {k_cnn_model_json, k_cnn_contract_json},
-        {k_rnn_model_json, k_rnn_contract_json},
-        {k_gain_model_json, k_gain_contract_json},
-        {k_stereo_gain_model_json, k_stereo_gain_contract_json},
-    }};
+    // The bundled model files (extras/models/model_files.h), read back with the 3.x API
+    // (minimal_model.h): the path of the entry for this example's engine and the shapes the
+    // engine is fed. A file without an entry for the engine is skipped.
+    const std::array<const char*, 5> models_to_inference = {
+        k_hybridnn_model_json,
+        k_cnn_model_json,
+        k_rnn_model_json,
+        k_gain_model_json,
+        k_stereo_gain_model_json,
+    };
 
-    for (const auto& [model_json, contract_json] : models_to_inference) {
-        const anira::ModelConfig model_config = anira::ModelConfig::from_file(model_json);
-        const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-        minimal_inference(anira::v3compat::to_inference_config(model_config,
-                                                               contract,
-                                                               anira::v3compat::enabled_engines()));
+    for (const char* model_json : models_to_inference) {
+        const std::optional<MinimalModel> model =
+            minimal_model(model_json, ANIRA_ENGINE_ONNXRUNTIME);
+        if (!model.has_value()) {
+            std::cout << model_json << ": no entry for this engine" << std::endl;
+            continue;
+        }
+        minimal_inference(*model);
     }
 
     return 0;

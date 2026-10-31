@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/scheduler/Core.h>
@@ -13,10 +12,12 @@
 #include <thread>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "engines/Adapter.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 // The pool-lifetime policy the session registry enforces (issue #104): inference
 // threads exist exactly while sessions exist. Building the pool is part of
@@ -48,7 +49,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler;
+    V2Handler m_handler;
 };
 
 // The pool's threads count themselves as active when they enter their loop, i.e.

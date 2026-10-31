@@ -11,8 +11,8 @@
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
@@ -33,12 +33,17 @@ const tone = () => {
 
 const handlers = async (anira, context, model, count, geometry) => {
   const contract = (
-    await Contract.fromUrl(anira, new URL(`${MODELS}gain.contract.json`, import.meta.url))
-  ).setGeometry(geometry.quantum, geometry.burst, RATE)
+    await ContractHandle.fromUrl(
+      anira,
+      new URL(`${MODELS}gain.contract.json`, import.meta.url)
+    )
+  ).hardGeometry(geometry.quantum, geometry.burst, RATE)
   const out = []
   for (let i = 0; i < count; i++) {
     const pipeline = Pipeline.create(anira).addInference(model)
-    out.push(Handler.create(context, pipeline).prepare(contract))
+    const handler = InferenceHandler.create(context, pipeline)
+    handler.prepare(contract)
+    out.push(handler)
     pipeline.destroy()
   }
   contract.destroy()
@@ -80,7 +85,7 @@ const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   const anira = await Anira.create()
-  anira.setLogHook(() => {})
+  anira.setLogSink(() => {})
   const context = Context.create(anira, { threads: 1 })
   const model = await ModelConfig.fromUrl(
     anira,
@@ -94,7 +99,7 @@ const run = async () => {
     const audio = new OfflineAudioContext(4, QUANTUM * QUANTA, RATE)
     const hs = await handlers(anira, context, model, 4, offlineGeometry)
     const nodes = await Promise.all(hs.map((h, i) => node(h, audio, GAINS[i], 500)))
-    const worst = await renderOffline(audio, nodes, GAINS, hs[0].latency())
+    const worst = await renderOffline(audio, nodes, GAINS, hs[0].getLatency())
     check(
       nodes.length === 4 && worst < 1e-6,
       `four nodes created at once on a fresh context render their gains (worst error ${worst})`
@@ -118,7 +123,7 @@ const run = async () => {
       node(hs[3], audio, GAINS[3], 500),
     ])
     const nodes = [...first, more[0], more[2]]
-    const worst = await renderOffline(audio, nodes, GAINS, hs[0].latency())
+    const worst = await renderOffline(audio, nodes, GAINS, hs[0].getLatency())
     check(
       worst < 1e-6,
       `two nodes at once, then two more while a fifth is destroyed, render their gains ` +

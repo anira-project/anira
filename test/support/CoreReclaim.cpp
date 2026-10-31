@@ -6,7 +6,7 @@
 // public reclaim API, which frees the core only when nothing references it. Registered
 // for every test binary by anira_add_test_binary().
 
-#include <anira/scheduler/Core.h>
+#include <anira/abi/core.h>
 #include <gtest/gtest.h>
 
 namespace {
@@ -14,8 +14,8 @@ namespace {
 class CoreReclaimEnvironment : public ::testing::Environment {
 public:
     // Not an assertion: a binary that never created a session has no core to release,
-    // and release_core_if_idle() reports that with the same false.
-    void TearDown() override { anira::Core::release_core_if_idle(); }
+    // and anira_release_core_if_idle() reports that with the same false.
+    void TearDown() override { anira_release_core_if_idle(); }
 };
 
 // gtest owns the pointer; the binaries use gtest_main, so this registers statically.

@@ -11,8 +11,8 @@ import {
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   anira_miss_policy,
@@ -62,13 +62,18 @@ const render = async (
   )
   const pipeline = Pipeline.create(anira)
     .addInference(model)
-    .registerEngine(engine, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: RATE, budgetMs: 2 })
-  anira.abi.anira_contract_hard_set_on_miss(contract.ptr, onMiss)
-  const handler = Handler.create(context, pipeline).prepare(contract)
+    .addEngine(engine, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+  const contract = ContractHandle.hard(anira, {
+    blockMin: QUANTUM,
+    rate: RATE,
+    budgetMs: 2,
+  })
+  anira.abi.anira_contract_hard_set_on_miss(contract.native(), onMiss)
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
   pipeline.destroy()
   contract.destroy()
-  const latencies = [handler.latency(0), handler.latency(1)]
+  const latencies = [handler.getLatency(0), handler.getLatency(1)]
   await context.ready()
 
   const total = aChannels + bChannels
@@ -128,7 +133,7 @@ const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   const anira = await Anira.create()
-  anira.setLogHook(() => {}) // the missed blocks of the second render warn; not shown
+  anira.setLogSink(() => {}) // the missed blocks of the second render warn; not shown
   const context = Context.create(anira, {
     threads: 1,
     workerModule: new URL('./streams-worker.js', import.meta.url),

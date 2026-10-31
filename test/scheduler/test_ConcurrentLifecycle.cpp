@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/utils/HostConfig.h>
@@ -11,9 +10,11 @@
 #include <thread>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 // Reproduces the unsynchronized session-lifecycle defect: the core
 // singleton's static state (m_sessions vector, shared inference thread pool,
@@ -53,7 +54,7 @@ struct Instance {
 
     InferenceConfig m_inference_config = make_inference_config();
     PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler{m_pp_processor, m_inference_config, CoreConfig(2)};
+    V2Handler m_handler{m_pp_processor, m_inference_config, CoreConfig(2)};
 };
 
 // Spin gate so two threads hit their critical action as close to

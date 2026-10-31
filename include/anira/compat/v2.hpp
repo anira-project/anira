@@ -15,7 +15,7 @@
  * Scope at this pre-release: the configuration half (InferenceBackend and its conversions,
  * ModelData, TensorShape, ProcessingSpec, InferenceConfig, JsonConfigLoader, ContextConfig,
  * HostConfig and the log enums) and the processor half of the runtime (RingBuffer and BufferF as
- * views, PrePostProcessor, LegacyProcessorStage, which runs a 2.x processor as the stage of a
+ * views, PrePostProcessor, LegacyProcessor, which runs a 2.x processor as the processor of a
  * 3.x pipeline, PassthroughEngine, the 2.x base backend as an anira::Engine, and the static
  * Context) and the InferenceHandler over the C handler of anira/abi/handler.h.
  *
@@ -26,7 +26,7 @@
  * processor reaches: RingBuffer and BufferF, the processor's atomics (set_input, get_output and
  * their twins, any thread) and its five helpers are noexcept, allocate nothing and carry
  * ANIRA_NONBLOCKING; the processor's virtuals carry no attribute (a host's override decides),
- * and the stage's phases are noexcept and unattributed like every anira.hpp trampoline.
+ * and the processor's phases are noexcept and unattributed like every anira.hpp trampoline.
  */
 #ifndef ANIRA_COMPAT_V2_HPP
 #define ANIRA_COMPAT_V2_HPP
@@ -37,7 +37,7 @@
 #include <anira/abi/export.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
@@ -1380,7 +1380,7 @@ private:
 
 /**
  * @brief The 2.x RingBuffer as a view of the anira_ring of one Streamed slot, the float face over
- * the ring accessors of anira/abi/stage.h (anira_ring_*): what a PrePostProcessor's pre_process
+ * the ring accessors of anira/abi/processor.h (anira_ring_*): what a PrePostProcessor's pre_process
  * pops and its post_process pushes. A view of no ring (the slot of a Static or State tensor)
  * moves nothing and answers 0. Valid for the duration of the phase call that handed it out.
  * Absent from the 2.x class: get_future_sample and get_past_sample (no accessor reads one
@@ -1552,8 +1552,8 @@ private:
  * default bodies, the values of the non-streamable tensors as per-element atomics any thread may
  * set and read, and the five 2.x helpers with their 2.x rules (a plain pop lands ring channel c
  * at [c * n, (c + 1) * n) of the buffer; the window, offset and batched pops write every ring
- * channel to the same position, mono windows). It runs inside a LegacyProcessorStage: the
- * phases of the stage call the virtuals, pre_process and post_process on the thread that drives
+ * channel to the same position, mono windows). It runs inside a LegacyProcessor: the
+ * phases of the processor call the virtuals, pre_process and post_process on the thread that drives
  * the handler, before_inference and after_inference on an inference thread, with the backend of
  * the plan the chunk runs on. A virtual that throws fails its chunk (the chunk delivers zeros and
  * the status lands in anira_handler_rt_error: an anira::Error's status, else
@@ -1713,7 +1713,7 @@ public:
         }
     }
 
-    /// The configuration the processor was built with: the slot roles its stage reads.
+    /// The configuration the processor was built with: the slot roles its processor reads.
     const InferenceConfig& config() const noexcept { return m_inference_config; }
 
 protected:
@@ -1738,24 +1738,24 @@ private:
 };
 
 /**
- * @brief The anira::Stage that runs one 2.x PrePostProcessor: all four phases and
- * ANIRA_STAGE_FLAG_REALTIME_PRE_POST (the 2.x processor ran pre_process and post_process on the
+ * @brief The anira::Processor that runs one 2.x PrePostProcessor: all four phases and
+ * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (the 2.x processor ran pre_process and post_process on the
  * audio thread already). What a 2.x host that moves to a 3.x Pipeline keeps its processor with:
- * `pipeline.add(anira::stage::Custom(std::make_shared<anira::v2::LegacyProcessorStage>(pp)))`.
+ * `pipeline.add_processor(std::make_shared<anira::v2::LegacyProcessor>(pp))`.
  * Per phase call it points the processor's view vectors at the chunk's rings and model tensors
  * (per entry, so concurrent chunks never share them) and calls the virtual with the backend of
- * the chunk's plan (to_backend of StageContext::engine()). The processor and its configuration
- * outlive every handler that runs the stage.
+ * the chunk's plan (to_backend of ProcessorContext::engine()). The processor and its configuration
+ * outlive every handler that runs the processor.
  */
-class LegacyProcessorStage final : public anira::Stage {
+class LegacyProcessor final : public anira::Processor {
 public:
-    explicit LegacyProcessorStage(PrePostProcessor& processor) noexcept : m_processor(processor) {}
+    explicit LegacyProcessor(PrePostProcessor& processor) noexcept : m_processor(processor) {}
 
     uint32_t phases() const noexcept override { return k_all_phases; }
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
     /// The view vectors per entry, sized for the handler. @throws Error{ANIRA_ERROR_CONFIG}
     /// when the processor's configuration has another tensor count than the handler's model.
-    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& info) override;
+    std::unique_ptr<anira::Processor::Prepared> prepare(const anira::PrepareInfo& info) override;
 
     class Prepared;
 
@@ -1763,9 +1763,9 @@ private:
     PrePostProcessor& m_processor;
 };
 
-/// One handler's views of the stage: per entry the four vectors the 2.x virtuals take, one
+/// One handler's views of the processor: per entry the four vectors the 2.x virtuals take, one
 /// element per slot of the side (State and Static positions included), re-pointed per call.
-class LegacyProcessorStage::Prepared final : public anira::Stage::Prepared {
+class LegacyProcessor::Prepared final : public anira::Processor::Prepared {
 public:
     Prepared(PrePostProcessor& processor,
              std::vector<anira_role> input_roles,
@@ -1779,7 +1779,7 @@ public:
         , m_out_buffers(num_entries, std::vector<BufferF>(m_output_roles.size()))
         , m_out_rings(num_entries, std::vector<RingBuffer>(m_output_roles.size())) {}
 
-    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+    anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
         const uint32_t e = ctx.entry();
         if (e >= m_in_rings.size()) { return ANIRA_ERROR_INTERNAL; }
         for (uint32_t slot = 0; slot < m_input_roles.size(); ++slot) {
@@ -1794,7 +1794,7 @@ public:
             m_processor.pre_process(m_in_rings[e], m_in_buffers[e], to_backend(ctx.engine()));
         });
     }
-    anira_status post_process(anira::StageContext& ctx) noexcept override {
+    anira_status post_process(anira::ProcessorContext& ctx) noexcept override {
         const uint32_t e = ctx.entry();
         if (e >= m_out_rings.size()) { return ANIRA_ERROR_INTERNAL; }
         for (uint32_t slot = 0; slot < m_output_roles.size(); ++slot) {
@@ -1809,7 +1809,7 @@ public:
             m_processor.post_process(m_out_buffers[e], m_out_rings[e], to_backend(ctx.engine()));
         });
     }
-    anira_status before_inference(anira::StageContext& ctx) noexcept override {
+    anira_status before_inference(anira::ProcessorContext& ctx) noexcept override {
         const uint32_t e = ctx.entry();
         if (e >= m_in_buffers.size()) { return ANIRA_ERROR_INTERNAL; }
         for (uint32_t slot = 0; slot < m_input_roles.size(); ++slot) {
@@ -1821,7 +1821,7 @@ public:
             m_processor.before_inference(m_in_buffers[e], to_backend(ctx.engine()));
         });
     }
-    anira_status after_inference(anira::StageContext& ctx) noexcept override {
+    anira_status after_inference(anira::ProcessorContext& ctx) noexcept override {
         const uint32_t e = ctx.entry();
         if (e >= m_out_buffers.size()) { return ANIRA_ERROR_INTERNAL; }
         for (uint32_t slot = 0; slot < m_output_roles.size(); ++slot) {
@@ -1864,13 +1864,13 @@ private:
     std::vector<std::vector<RingBuffer>> m_out_rings;
 };
 
-inline std::unique_ptr<anira::Stage::Prepared> LegacyProcessorStage::prepare(
+inline std::unique_ptr<anira::Processor::Prepared> LegacyProcessor::prepare(
     const anira::PrepareInfo& info) {
     const anira::ModelConfig& model = m_processor.config().model_config();
     if (model.input_count() != info.inputs().size() ||
         model.output_count() != info.outputs().size()) {
         detail::fail(ANIRA_ERROR_CONFIG,
-                     "anira::v2::LegacyProcessorStage: the PrePostProcessor's configuration has " +
+                     "anira::v2::LegacyProcessor: the PrePostProcessor's configuration has " +
                          std::to_string(model.input_count()) + " inputs and " +
                          std::to_string(model.output_count()) + " outputs, the handler's model " +
                          std::to_string(info.inputs().size()) + " and " +
@@ -1974,7 +1974,7 @@ struct Context {
 /**
  * @brief The 2.x InferenceHandler over the C handler of anira/abi/handler.h: a context (from the
  * ContextConfig), a pipeline built from a private copy of the configuration's model config, the
- * custom engine and a LegacyProcessorStage over the processor, and one anira_handler created from
+ * custom engine and a LegacyProcessor over the processor, and one anira_handler created from
  * them. The processor and the configuration are the caller's and outlive the handler, as in 2.x.
  *
  * What differs from 2.x: nothing loads at construction (a model that does not load fails
@@ -1994,7 +1994,9 @@ struct Context {
  * pop forms are noexcept but carry no attribute, since a blocking ratio or set_non_realtime makes
  * them wait for the inference (the 2.x declarations claimed the attribute and waited anyway).
  * Without either, on the thread that drives the handler, they allocate nothing and wait for
- * nothing.
+ * nothing. No member runs concurrently with prepare() or the destructor: set_inference_backend
+ * and get_inference_backend may be called from any other thread while audio runs, but not while
+ * prepare runs (the C ABI's rule for anira_handler_set_plan).
  */
 class InferenceHandler {
 public:
@@ -2024,20 +2026,26 @@ public:
                      anira::Engine& custom_engine,
                      const ContextConfig& context_config = ContextConfig())
         : InferenceHandler(pp_processor, inference_config, &custom_engine, context_config) {}
-    /// Destroys the C handler (in-flight inferences drain first), then the stage and the context.
-    /// A plugin destroys its handlers before its host unloads it, never from its own static
-    /// destructors (they run inside the unload, under the loader lock).
+    /// Destroys the C handler (in-flight inferences drain first), then the processor and the
+    /// context. A plugin destroys its handlers before its host unloads it, never from its own
+    /// static destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
     /// The backend the next block runs on; before prepare the request is kept and applied at
     /// prepare. A backend without a plan keeps the selection and logs once through the real-time
-    /// queue (group anira.compat); rt_error() is untouched. Any thread.
+    /// queue (group anira.compat); rt_error() is untouched. Any thread, but not while prepare()
+    /// or the destructor runs on another thread: prepare rebuilds the plan table and may replace
+    /// the C handler this reads, the rule anira_handler_set_plan states ("not while
+    /// anira_handler_prepare runs"). 2.x promised this member while audio runs, never alongside
+    /// prepare; a host that switches from a UI thread and re-prepares from another serialises
+    /// the two itself.
     void set_inference_backend(InferenceBackend inference_backend) noexcept ANIRA_NONBLOCKING {
         m_requested.store(static_cast<uint32_t>(inference_backend), std::memory_order_relaxed);
         if (m_prepared.load(std::memory_order_acquire)) { select(inference_backend); }
     }
     /// The backend of the selected plan; before prepare the request, else the 2.x initial rule
-    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM).
+    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM). The
+    /// same thread rule as set_inference_backend: not while prepare() or the destructor runs.
     InferenceBackend get_inference_backend() const noexcept ANIRA_NONBLOCKING {
         if (m_prepared.load(std::memory_order_acquire)) {
             const uint32_t plan = anira_handler_get_plan(m_handler);
@@ -2291,7 +2299,7 @@ private:
         , m_config(inference_config)
         , m_pp(pp_processor)
         , m_model(inference_config.model_config_copy())
-        , m_stage(std::make_shared<LegacyProcessorStage>(pp_processor))
+        , m_processor(std::make_shared<LegacyProcessor>(pp_processor))
         , m_blocking(inference_config.m_blocking_ratio > 0.F) {
         bool has_custom_row = false;
         for (uint32_t e = 0; e < m_model.model_count(); ++e) {
@@ -2387,12 +2395,12 @@ private:
     }
 
     /// The C handler of the private model config: the pipeline (the engine, the inference stage
-    /// under the default candidate set, the stage) is dropped once the handler holds its copy.
+    /// under the default candidate set, the processor) is dropped once the handler holds its copy.
     anira_handler* build_handler() {
         anira::Pipeline pipeline;
-        if (m_engine != nullptr) { pipeline.register_engine(m_engine); }
-        pipeline.inference(m_model);
-        pipeline.add(anira::stage::Custom(m_stage));
+        if (m_engine != nullptr) { pipeline.add_engine(m_engine); }
+        pipeline.add_inference(m_model);
+        pipeline.add_processor(m_processor);
         anira_error err = ANIRA_ERROR_INIT;
         anira_handler* handler = nullptr;
         anira::detail::check(
@@ -2663,7 +2671,7 @@ private:
     PrePostProcessor& m_pp;
     anira::ModelConfig m_model;  ///< the private copy: the anchor is set here, never on m_config
     std::shared_ptr<anira::Engine> m_engine;
-    std::shared_ptr<LegacyProcessorStage> m_stage;
+    std::shared_ptr<LegacyProcessor> m_processor;
     anira_handler* m_handler = nullptr;
     std::string m_anchor;  ///< the anchor the current C handler was created with; "" = default
     std::optional<HostConfig> m_last_host;

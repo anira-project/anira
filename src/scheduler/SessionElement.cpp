@@ -423,8 +423,9 @@ void SessionElement::prepare(const HostConfig& host_config,
         }
     }
 
-    // What the C ring accessors and the default stage bodies need of a ring: its hop, and the
-    // way back to this session's latch (abi/stage.h). A non-streamable slot has no ring to move.
+    // What the C ring accessors and the default processor bodies need of a ring: its hop, and the
+    // way back to this session's latch (abi/processor.h). A non-streamable slot has no ring to
+    // move.
     m_ring_owner.m_rt = m_rt;
     for (size_t i = 0; i < m_send_buffer.size(); ++i) {
         m_send_buffer[i].set_owner(m_inference_config.get_preprocess_input_size()[i],

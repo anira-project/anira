@@ -18,7 +18,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -49,6 +48,7 @@
 #include "../support/copy_oracle.h"
 #include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
+#include "../support/v2_handler.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -1510,10 +1510,10 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
 }
 
 // A float host: channel pointers presented as planar float32 tensors through an
-// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the 2.x anira::InferenceHandler
-// presents its own. The miss function is handed the caller's arrays as they are, and a slot
-// the missed call did not carry names no memory: the adapter nulls the planes of a slot it
-// leaves out, so the pointers of an earlier call never reach the function.
+// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the 2.x handler
+// (anira_test::V2Handler) presents its own. The miss function is handed the caller's arrays as they
+// are, and a slot the missed call did not carry names no memory: the adapter nulls the planes of a
+// slot it leaves out, so the pointers of an earlier call never reach the function.
 TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyAre) {
     const Rig rig(multi_model(), ANIRA_MISS_CALLBACK, 2, &backup, &m_state);
     ASSERT_TRUE(rig.ready());
@@ -1735,7 +1735,7 @@ TEST(AbiHandlerTensor, APlanarAndAnInterleavedBlockAgreeBitForBitAcrossMisses) {
     }
 }
 
-// The tensor entries against the still-public 2.x anira::InferenceHandler in one binary
+// The tensor entries against the 2.x handler (anira_test::V2Handler) in one binary
 // (test_Handler's oracle), on the bundled stereo gain model: every plan this build has an
 // engine for, and the engine-free custom row. The C side takes one interleaved block and the
 // Static gain as [1, 1] through anira_handler_process_multi; the 2.x side takes channel
@@ -1750,11 +1750,11 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) 
         SCOPED_TRACE("plan " + std::to_string(plan));
         anira_test::Handler c(context, anira_test::stereo_gain_with_custom(), candidates);
         anira::InferenceConfig config_2x =
-            anira_test::bridged_2x(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
+            anira_test::config_2x_of(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
         anira::PrePostProcessor pp(config_2x);
         anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
         core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira::InferenceHandler v2(pp, config_2x, core_config);
+        anira_test::V2Handler v2(pp, config_2x, core_config);
         ASSERT_EQ(c.prepare(anira_test::file_contract(k_stereo_gain_contract_json, k_block)),
                   ANIRA_OK)
             << c.m_err.message;

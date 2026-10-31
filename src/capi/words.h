@@ -199,8 +199,8 @@ inline std::string backend_label(anira_engine engine,
 }
 
 /// The words of anira_phase, the lower-case names of its values: how every message anira writes
-/// about a slot names the phase (a stage phase that fails or that an accessor refuses, a refused
-/// init, load or prepare of a stage or an engine, a failed engine call).
+/// about a slot names the phase (a processor phase that fails or that an accessor refuses, a
+/// refused init, load or prepare of a processor or an engine, a failed engine call).
 inline constexpr std::array<std::pair<const char*, anira_phase>, 13> k_phase_words{{
     {"pre_process", ANIRA_PHASE_PRE_PROCESS},
     {"post_process", ANIRA_PHASE_POST_PROCESS},
@@ -218,7 +218,7 @@ inline constexpr std::array<std::pair<const char*, anira_phase>, 13> k_phase_wor
 }};
 
 /// The word of a phase; "unknown phase" for a value the enum does not name. Real-time safe: the
-/// stage's failure records and the engine call's failure record call it on the driving and the
+/// processor's failure records and the engine call's failure record call it on the driving and the
 /// inference thread.
 inline const char* phase_word(anira_phase phase) noexcept ANIRA_NONBLOCKING {
     for (const auto& [name, value] : k_phase_words) {

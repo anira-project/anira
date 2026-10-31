@@ -12,8 +12,8 @@ import {
   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
 } from '../../dist/index.js'
@@ -42,9 +42,14 @@ const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const prepared = (anira, context, model) => {
   const pipeline = Pipeline.create(anira)
     .addInference(model)
-    .registerEngine(ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
-  const contract = Contract.hard(anira, { blockMin: QUANTUM, rate: 48000, budgetMs: 2 })
-  const handler = Handler.create(context, pipeline).prepare(contract)
+    .addEngine(ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+  const contract = ContractHandle.hard(anira, {
+    blockMin: QUANTUM,
+    rate: 48000,
+    budgetMs: 2,
+  })
+  const handler = InferenceHandler.create(context, pipeline)
+  handler.prepare(contract)
   pipeline.destroy()
   contract.destroy()
   return handler
@@ -54,7 +59,7 @@ const run = async () => {
   const checks = []
   const check = (ok, what) => checks.push({ ok: Boolean(ok), what })
   const anira = await Anira.create()
-  anira.setLogHook(() => {})
+  anira.setLogSink(() => {})
   const model = await ModelConfig.fromJson(
     anira,
     JSON.stringify({
@@ -107,7 +112,7 @@ const run = async () => {
   source.connect(audioNode.node).connect(audio.destination)
   source.start(0)
   const rendered = (await audio.startRendering()).getChannelData(0)
-  const latency = handler.latency()
+  const latency = handler.getLatency()
   check(
     rendered[rendered.length - 1] === 0.25 && rendered[latency] === 0.25,
     `after the timers ${NODES} audio nodes were created and the last one rendered through ` +
@@ -116,7 +121,7 @@ const run = async () => {
   audioNode.destroy()
   handler.destroy()
   context.destroy()
-  check(context.threads === 0, 'and stop with the context')
+  check(context.numInferenceThreads() === 0, 'and stop with the context')
   model.destroy()
   return { checks }
 }

@@ -1,20 +1,15 @@
 #ifndef ANIRA_CLAP_PLUGIN_EXAMPLE_H
 #define ANIRA_CLAP_PLUGIN_EXAMPLE_H
 
-#include <anira/anira.h>
-#include <anira/compat/v3_to_v2.h>
-
 #include <anira/anira.hpp>
 #include <array>
-#include <atomic>
 #include <clap/helpers/plugin-proxy.hh>
 #include <clap/helpers/plugin.hh>
-#include <iostream>
-#include <memory>
+#include <cstdint>
 #include <unordered_map>
 
-#include "../../extras/models/hybrid-nn/HybridNNBypassProcessor.h"
-#include "../../extras/models/hybrid-nn/HybridNNPrePostProcessor.h"
+#include "../../extras/models/BypassEngine.h"
+#include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
 #include "../../extras/models/model_files.h"
 #include "utils/DryWetMixer.h"
 
@@ -70,21 +65,20 @@ private:
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;
 
-    // The configuration: the model file and the contract file of GuitarLSTM (extras/models,
-    // loaded with anira/anira.hpp), bridged to the 2.x runtime classes this pre-release's
-    // InferenceHandler still takes (anira/compat/v3_to_v2.h). The model config outlives the
-    // InferenceConfig and the handler, so it is declared first.
+    // GuitarLSTM (the model file and the contract file of extras/models) with the entry of the
+    // bypass engine, on one handler; the plan report of the last activate, where the Backend
+    // choice is looked up.
+    anira::Context m_context{anira::ContextConfig{}};
     anira::ModelConfig m_model_config;
     anira::ContractHandle m_contract;
-    anira::InferenceConfig m_inference_config;
-    HybridNNPrePostProcessor m_pp_processor;
-    HybridNNBypassProcessor m_bypass_processor;
-
     anira::InferenceHandler m_inference_handler;
+    anira::PlanReport m_plan_report{nullptr};
+
+    // The host's input as one planar tensor over its channel pointer.
+    std::array<float*, 1> m_channels{};
+    anira::Tensor m_audio{};
 
     utils::DryWetMixer m_dry_wet_mixer;
-
-    enum Backend { OnnxRuntime, LibTorch, TensorFlowLite, Bypassed, LiteRt, ExecuTorch };
 };
 
 }  // namespace clap_plugin_example

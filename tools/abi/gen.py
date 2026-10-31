@@ -9,6 +9,8 @@ validates it against the header conventions of docs/anira-v3-architecture.md
                                           `draft: true` is include/anira/abi/draft/<name>.h, a
                                           header with `platform: emscripten` is
                                           include/anira/<file>, its body under __EMSCRIPTEN__
+  include/anira/<umbrella>.h              the umbrella headers of `umbrellas:`, each an include
+                                          list over the headers above in registry order
   web/src/abi/enums.ts                    the TypeScript mirror of enums and defines
   web/src/abi/layout.ts                   size, align and member offsets of the Tier-1 records
   web/src/abi/bindings.ts                 one typed method per entry point over a module instance
@@ -65,12 +67,12 @@ THREAD_TAGS = {
     "main-thread & !loader-lock",
     "driver-thread",
     "inference-thread",
-    # The one dual tag: a stage callback (and the accessors and the two stage defaults it may
+    # The one dual tag: a processor callback (and the accessors and the two processor defaults it may
     # call) runs on the driving thread under Hard and on an inference thread for
     # before/after_inference and under Async. anira's own entries under the tag are real-time
-    # on both, so nonblocking is required of an entry; the callback typedef anira_stage_fn
-    # carries no attribute, since whether a stage body is real-time is the stage's own promise
-    # (anira_stage_desc.flags), which differs per stage and cannot be a property of the shared
+    # on both, so nonblocking is required of an entry; the callback typedef anira_processor_fn
+    # carries no attribute, since whether a processor body is real-time is the processor's own promise
+    # (anira_processor_desc.flags), which differs per processor and cannot be a property of the shared
     # type.
     "driver-thread | inference-thread",
     "thread-safe",
@@ -102,6 +104,11 @@ DRAFT_GUARD_PREFIX = "ANIRA_ABI_DRAFT_"
 # outside symbols-<major>.txt, the link probe and the layout test.
 PLATFORMS = {"emscripten": "__EMSCRIPTEN__"}
 PLATFORM_FILE_RE = re.compile(r"^anira_[a-z0-9_]+\.h$")
+# An umbrella (`umbrellas:`) is an include list beside the platform headers, in include/anira/:
+# `scope: promised` takes every header of the ABI that is neither a draft nor a platform header,
+# `scope: all` every header of the registry, drafts and platform headers included.
+UMBRELLA_FILE_RE = re.compile(r"^anira(_[a-z0-9]+)?\.h$")
+UMBRELLA_SCOPES = {"promised", "all"}
 STRUCT_ID_ENUM = "anira_struct_id"
 TS_WIDTH = 90  # web/.prettierrc printWidth: a longer generated line would be re-wrapped by prettier
 
@@ -388,7 +395,20 @@ def validate(reg: dict) -> None:
     for h in headers:
         for inc in h.get("includes", []):
             if inc in platform_files:
-                err(f"{h['file']}: includes the platform header {inc}; nothing may")
+                err(f"{h['file']}: includes the platform header {inc}; only an umbrella may")
+    umbrella_files: list[str] = []
+    for u in reg.get("umbrellas", []):
+        file = u.get("file", "")
+        if not UMBRELLA_FILE_RE.match(file):
+            err(f"umbrella {file!r}: an umbrella is named anira.h or anira_<name>.h")
+        if file in platform_files or file in umbrella_files:
+            err(f"umbrella {file}: the name is taken")
+        umbrella_files.append(file)
+        if u.get("scope") not in UMBRELLA_SCOPES:
+            err(f"umbrella {file}: scope must be one of {sorted(UMBRELLA_SCOPES)}")
+        for key in ("guard", "brief"):
+            if key not in u:
+                err(f"umbrella {file}: names its {key} ({key}:)")
 
     enum_names: set[str] = set()
     struct_names: set[str] = set()
@@ -971,6 +991,38 @@ def emit_header(reg: dict, header: dict) -> str:
     out.append(f"#endif /* {guard} */")
     if platform_macro:
         out.append("// clang-format on")
+    return "\n".join(out) + "\n"
+
+
+def umbrella_headers(reg: dict, umbrella: dict) -> list[dict]:
+    """The headers an umbrella includes, in registry order."""
+    if umbrella["scope"] == "all":
+        return list(reg["headers"])
+    return [h for h in reg["headers"] if not h.get("draft") and "platform" not in h]
+
+
+def emit_umbrella(reg: dict, umbrella: dict) -> str:
+    file = umbrella["file"]
+    guard = umbrella["guard"]
+    out = [
+        "/*",
+        f" * anira/{file} -- generated from abi/anira.yml by tools/abi/gen.py.",
+        " * Do not edit: change the registry and run `python3 tools/abi/gen.py --repo . --write`.",
+        " */",
+        # Beside hand-written headers in include/anira/, like a platform header: the include
+        # list keeps the registry's order, which clang-format would sort.
+        "// clang-format off",
+        f"#ifndef {guard}",
+        f"#define {guard}",
+        "",
+    ]
+    out.append(doc_block(None, None, [f"@file {file}", f"@brief {umbrella['brief']}"] + ([""] + wrap(umbrella["doc"], DOC_WIDTH - 3) if umbrella.get("doc") else [])))
+    out.append("")
+    for header in umbrella_headers(reg, umbrella):
+        out.append(f"#include <{header_path(header)}>  // IWYU pragma: export")
+    out.append("")
+    out.append(f"#endif /* {guard} */")
+    out.append("// clang-format on")
     return "\n".join(out) + "\n"
 
 
@@ -1702,6 +1754,8 @@ def generate(reg: dict) -> dict[str, str]:
     files: dict[str, str] = {}
     for header in reg["headers"]:
         files[f"include/{header_path(header)}"] = emit_header(reg, header)
+    for umbrella in reg.get("umbrellas", []):
+        files[f"include/anira/{umbrella['file']}"] = emit_umbrella(reg, umbrella)
     files["web/src/abi/enums.ts"] = emit_enums_ts(reg)
     promised, draft = symbol_lists(reg)
     emscripten = platform_symbols(reg, "emscripten")

@@ -987,17 +987,18 @@ TEST(AbiTensor, SizeofAnswersEveryRegisteredRecord) {
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_PLAN_INFO), sizeof(anira_plan_info));
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_BACKEND_ID), sizeof(anira_backend_id));
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_ENGINE_CTX), sizeof(anira_engine_ctx));
+    EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_PLAN_QUERY), sizeof(anira_plan_query));
     // The Tier-1 answers are the same number on every target.
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_TENSOR), 216U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_SYNC_TOKEN), 24U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_MEMORY_HANDLE), 24U);
-    EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_STAGE_CTX), 64U);
+    EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_PROCESSOR_CTX), 64U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_LOG_RECORD), 56U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_ERROR), 520U);
     EXPECT_EQ(anira_sizeof(ANIRA_STRUCT_ENGINE_CTX), 64U);
     // Not registered: every id nobody pinned (0, the first free id, the block reserved for
     // extension payloads).
-    for (const int unknown : {0, 13, 0x00010000}) {
+    for (const int unknown : {0, 14, 0x00010000}) {
         // NOLINTNEXTLINE(clang-analyzer-optin.core.EnumCastOutOfRange) an unknown id on purpose
         EXPECT_EQ(anira_sizeof(static_cast<anira_struct_id>(unknown)), 0U) << unknown;
     }

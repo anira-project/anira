@@ -2,13 +2,13 @@
 #define ANIRA_CAPI_ENGINE_H
 /*
  * The engine behind anira/abi/engine.h: the refcounted carrier of one anira_engine_desc and
- * the engine's id (anira_custom_engine_create), the twin of StageCarrier (src/capi/stage.h),
- * which a pipeline holds for every engine added to it (anira_pipeline_add_engine); and what
- * the pipeline's engines mean to the validator (engine_facts, the twin of stage_facts).
- * Private to src/capi (and the tests through the src/ include directory): nothing here enters
- * the ABI. What runs a custom engine is the engine room's DescriptorLoaded
- * (src/engines/DescriptorAdapter.h) over the carrier, one per loaded model, pooled by the
- * core like a built-in engine's with the carrier in the key: the carrier is the engine's
+ * the engine's id (anira_custom_engine_create), the twin of ProcessorCarrier
+ * (src/capi/processor.h), which a pipeline holds for every engine added to it
+ * (anira_pipeline_add_engine); and what the pipeline's engines mean to the validator (engine_facts,
+ * the twin of processor_facts). Private to src/capi (and the tests through the src/ include
+ * directory): nothing here enters the ABI. What runs a custom engine is the engine room's
+ * DescriptorLoaded (src/engines/DescriptorAdapter.h) over the carrier, one per loaded model, pooled
+ * by the core like a built-in engine's with the carrier in the key: the carrier is the engine's
  * identity, and its id, fixed with it, is how model entries name it.
  */
 #include <anira/abi/engine.h>
@@ -104,7 +104,7 @@ struct QueryAnswers {
 /// to the validator: their ids, and one consumer per engine that declares consumed kinds,
 /// named and keyed by its id (the name points into the carrier, which `engines` keeps alive
 /// and which outlives the facts: the pipeline's or its handler copy's own list). The twin of
-/// stage_facts (stage.h).
+/// processor_facts (processor.h).
 ANIRA_API EngineFacts
     engine_facts(const std::vector<std::shared_ptr<const EngineCarrier>>& engines);
 

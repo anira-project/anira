@@ -3,10 +3,10 @@ import { anira_phase, anira_status } from './abi/enums'
 import { anira_engine_ctx, anira_log_record, anira_tensor } from './abi/layout'
 
 /**
- * What a stage or an engine is constructed with, in the scope that runs it (the main thread, an
+ * What a processor or an engine is constructed with, in the scope that runs it (the main thread, an
  * inference Worker, the audio worklet): the typed C ABI of that scope's module instance and the
  * instance itself (its heap views: `module.HEAPF32`, ...). The memory grows, and the views of
- * a scope are rebuilt by `heap(module)`: the trampolines call it before each call into a stage
+ * a scope are rebuilt by `heap(module)`: the trampolines call it before each call into a processor
  * or an engine (a rebuild at most once after a growth, seven typed arrays: on the audio thread a
  * small JavaScript allocation, never one by the C audio path), so `module.HEAPF32` is current
  * there for memory that existed when the call began.
@@ -17,16 +17,16 @@ export type ScopeEnv = {
 }
 
 /**
- * A JavaScript stage: one method per phase it takes part in. Each runs in the scope that runs
- * that phase of the C call: the audio worklet for `preProcess`, `postProcess` and `reset` under
- * a Hard contract, an inference Worker for `beforeInference` and `afterInference`, the main
- * thread for `init`, `prepare`, `unprepare` and `release`. The pointers are into the shared
- * memory: `ctx` an `anira_stage_ctx` (`layout`), `prepared` what this handler's `prepare` stored
- * in its `outPrepared` slot. A method returns an `anira_status` (nothing is `ANIRA_OK`); one that
- * throws fails its call (the C trampoline catches it and reports it on the console). A stage
- * without `preProcess` / `postProcess` runs anira's default body there.
+ * A JavaScript processor: one method per phase it takes part in. Each runs in the scope that runs
+ * that phase of the C call: the audio worklet for `preProcess`, `postProcess` and `reset` under a
+ * Hard contract, an inference Worker for `beforeInference` and `afterInference`, the main thread
+ * for `init`, `prepare`, `unprepare` and `release`. The pointers are into the shared memory: `ctx`
+ * an `anira_processor_ctx` (`layout`), `prepared` what this handler's `prepare` stored in its
+ * `outPrepared` slot. A method returns an `anira_status` (nothing is `ANIRA_OK`); one that throws
+ * fails its call (the C trampoline catches it and reports it on the console). A processor without
+ * `preProcess` / `postProcess` runs anira's default body there.
  */
-export interface Stage {
+export interface Processor {
   preProcess?(ctx: number, prepared: number): number | void
   postProcess?(ctx: number, prepared: number): number | void
   beforeInference?(ctx: number, prepared: number): number | void
@@ -72,7 +72,7 @@ export interface Engine {
   query?(initInfo: number, outAvailable: number): number | void
 }
 
-export type StageFactory = (env: ScopeEnv) => Stage
+export type ProcessorFactory = (env: ScopeEnv) => Processor
 export type EngineFactory = (env: ScopeEnv) => Engine
 
 /** A log record as the JavaScript log hook delivers it (`anira_log_record`). */
@@ -85,10 +85,10 @@ export type LogRecord = {
 }
 
 /**
- * The key a stage name or an engine id crosses the C ABI as (the `js_key` of
- * `anira_em_pipeline_add_js_stage` and `anira_em_pipeline_register_js_engine`): the 32-bit
- * FNV-1a hash of its UTF-16 code units, the same in every scope, so a stage defined under one
- * name on the main thread, the Workers and the worklet is one stage.
+ * The key a processor name or an engine id crosses the C ABI as (the `js_key` of
+ * `anira_em_pipeline_add_js_processor` and `anira_em_pipeline_add_js_engine`): the 32-bit
+ * FNV-1a hash of its UTF-16 code units, the same in every scope, so a processor defined under one
+ * name on the main thread, the Workers and the worklet is one processor.
  */
 export const keyOf = (name: string): number => {
   let hash = 0x811c9dc5
@@ -104,23 +104,23 @@ type Entry<F, T> = { name: string; factory: F; instance: T | null }
 const status = (result: number | void): number => (result ?? anira_status.ANIRA_OK) | 0
 
 /**
- * The registry of one scope, `globalThis[Symbol.for('anira.registry')]`: the stages and engines
+ * The registry of one scope, `globalThis[Symbol.for('anira.registry')]`: the processors and engines
  * the scope's code defined, keyed by `keyOf(name)`, and the instances built over the scope's
- * module. The C trampolines of `anira/anira_em.h` call `stage`, `engine` and `log` with the
+ * module. The C trampolines of `anira/anira_em.h` call `processor`, `engine` and `log` with the
  * module of the instance that runs the call; an inference Worker awaits `boot` before its loop.
  */
 export class Registry {
-  readonly version = 1
+  readonly version = 2
   /** @hidden */
-  private readonly stages = new Map<number, Entry<StageFactory, Stage>>()
+  private readonly processors = new Map<number, Entry<ProcessorFactory, Processor>>()
   /** @hidden */
   private readonly engines = new Map<number, Entry<EngineFactory, Engine>>()
   private env: ScopeEnv | null = null
   /** The scope's log sink (`anira_em_set_log_hook`); none: the records are not shown here. */
-  logHook: ((record: LogRecord) => void) | null = null
+  logSink: ((record: LogRecord) => void) | null = null
 
-  defineStage(name: string, factory: StageFactory): number {
-    return this.define(this.stages, name, factory)
+  defineProcessor(name: string, factory: ProcessorFactory): number {
+    return this.define(this.processors, name, factory)
   }
 
   defineEngine(id: string, factory: EngineFactory): number {
@@ -162,9 +162,9 @@ export class Registry {
     )
   }
 
-  private stageOf(module: AbiModule, key: number): Stage {
-    const entry = this.stages.get(key)
-    if (!entry) throw new Error(`no JavaScript stage under key ${key} in this scope`)
+  private processorOf(module: AbiModule, key: number): Processor {
+    const entry = this.processors.get(key)
+    if (!entry) throw new Error(`no JavaScript processor under key ${key} in this scope`)
     entry.instance ??= entry.factory(this.envOf(module))
     return entry.instance
   }
@@ -181,11 +181,11 @@ export class Registry {
     return entry.instance
   }
 
-  /** The stage trampoline's target. */
-  stage(module: AbiModule, key: number, phase: number, a: number, b: number): number {
+  /** The processor trampoline's target. */
+  processor(module: AbiModule, key: number, phase: number, a: number, b: number): number {
     const p = anira_phase
     if (phase === p.ANIRA_PHASE_RELEASE) {
-      const entry = this.stages.get(key)
+      const entry = this.processors.get(key)
       try {
         entry?.instance?.release?.()
       } finally {
@@ -193,32 +193,34 @@ export class Registry {
       }
       return anira_status.ANIRA_OK
     }
-    const stage = this.stageOf(heap(module), key)
+    const processor = this.processorOf(heap(module), key)
     switch (phase) {
       case p.ANIRA_PHASE_PRE_PROCESS:
-        return stage.preProcess
-          ? status(stage.preProcess(a, b))
-          : module._anira_stage_default_pre_process(a)
+        return processor.preProcess
+          ? status(processor.preProcess(a, b))
+          : module._anira_processor_default_pre_process(a)
       case p.ANIRA_PHASE_POST_PROCESS:
-        return stage.postProcess
-          ? status(stage.postProcess(a, b))
-          : module._anira_stage_default_post_process(a)
+        return processor.postProcess
+          ? status(processor.postProcess(a, b))
+          : module._anira_processor_default_post_process(a)
       case p.ANIRA_PHASE_BEFORE_INFERENCE:
-        return status(stage.beforeInference?.(a, b))
+        return status(processor.beforeInference?.(a, b))
       case p.ANIRA_PHASE_AFTER_INFERENCE:
-        return status(stage.afterInference?.(a, b))
+        return status(processor.afterInference?.(a, b))
       case p.ANIRA_PHASE_RESET:
-        stage.reset?.(a, b)
+        processor.reset?.(a, b)
         return anira_status.ANIRA_OK
       case p.ANIRA_PHASE_PREPARE:
-        return status(stage.prepare?.(a, b))
+        return status(processor.prepare?.(a, b))
       case p.ANIRA_PHASE_UNPREPARE:
-        stage.unprepare?.(a)
+        processor.unprepare?.(a)
         return anira_status.ANIRA_OK
       case p.ANIRA_PHASE_INIT:
-        return status(stage.init?.(a))
+        return status(processor.init?.(a))
     }
-    throw new Error(`JavaScript stage ${key}: phase ${phase} is not a stage phase`)
+    throw new Error(
+      `JavaScript processor ${key}: phase ${phase} is not a processor phase`
+    )
   }
 
   /** The engine trampoline's target. */
@@ -262,7 +264,7 @@ export class Registry {
 
   /** The log hook's target. */
   log(module: AbiModule, record: number): void {
-    if (this.logHook) this.logHook(logRecordAt(module, record))
+    if (this.logSink) this.logSink(logRecordAt(module, record))
   }
 }
 
@@ -275,12 +277,12 @@ export const scopeRegistry = (): Registry => {
 }
 
 /**
- * Define a JavaScript stage under `name` in this scope: call it in every scope that runs one of
+ * Define a JavaScript processor under `name` in this scope: call it in every scope that runs one of
  * its phases (the main thread's code, the inference Workers' module, the worklet's module), with
- * a factory that builds the scope's instance over its env. Returns the stage's key (`keyOf`).
+ * a factory that builds the scope's instance over its env. Returns the processor's key (`keyOf`).
  */
-export const defineStage = (name: string, factory: StageFactory): number =>
-  scopeRegistry().defineStage(name, factory)
+export const defineProcessor = (name: string, factory: ProcessorFactory): number =>
+  scopeRegistry().defineProcessor(name, factory)
 
 /**
  * Define a JavaScript engine under its reverse-URI `id` in this scope: in the inference Workers'

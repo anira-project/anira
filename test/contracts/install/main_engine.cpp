@@ -5,9 +5,9 @@
 // module with hidden visibility whose export table the install test checks for
 // engine symbols. Without anira::onnxruntime the engine include below must fail —
 // the negative try_compile in CMakeLists.txt asserts that.
-#include <anira/anira.h>  // NOLINT(misc-include-cleaner)
 #include <onnxruntime_cxx_api.h>
 
+#include <anira/anira.hpp>
 #include <cstdio>
 
 namespace {
@@ -16,10 +16,11 @@ int run() {
     // Resolves through the ONNX Runtime anira links (a mismatched copy would make
     // anira's ONNX Runtime adapter throw at prepare).
     const Ort::Env env(ORT_LOGGING_LEVEL_WARNING, "anira-install-consumer");
-    const anira::InferenceConfig config{};  // NOLINT(misc-include-cleaner)
-    std::printf("onnxruntime %s, anira tensors %zu\n",
+    const anira::ModelConfig config;
+    std::printf("onnxruntime %s, anira ABI %u, model inputs %u\n",
                 Ort::GetVersionString().c_str(),
-                config.get_tensor_input_size().size());
+                anira_abi_version(),
+                config.input_count());
     return 0;
 }
 

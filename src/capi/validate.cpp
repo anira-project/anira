@@ -251,7 +251,7 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
 
 void check_contract(const anira_contract& contract,
                     const anira_model_config& model,
-                    const StageFacts* stages) {
+                    const ProcessorFacts* processors) {
     const HardContract* hard = contract.hard();
     if (hard == nullptr) {
         not_supported(
@@ -281,7 +281,7 @@ void check_contract(const anira_contract& contract,
                      std::to_string(hard->m_wait_ratio) + ")");
     }
     // The ring dtype rules: a ring exists on a Streamed tensor only, and it holds the
-    // spec's dtype as is (nothing in anira converts), unless a stage of the pipeline fills the
+    // spec's dtype as is (nothing in anira converts), unless a processor of the pipeline fills the
     // phase that moves that ring (pre_process pops the input rings, post_process pushes the
     // output rings) and so takes the difference on itself. The default bodies still refuse
     // such a slot at run time.
@@ -295,14 +295,15 @@ void check_contract(const anira_contract& contract,
             config_error("contract: the ring dtype of '" + name + "' is set on a " +
                          role_word(spec->m_role) + " tensor; only a Streamed tensor has a ring");
         }
-        const bool stage_moves_ring =
-            stages != nullptr && (is_input ? stages->m_fills_pre : stages->m_fills_post);
-        if (dtype != spec->m_dtype && !stage_moves_ring) {
+        const bool processor_moves_ring =
+            processors != nullptr &&
+            (is_input ? processors->m_fills_pre : processors->m_fills_post);
+        if (dtype != spec->m_dtype && !processor_moves_ring) {
             config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
                          " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (add a stage that fills " +
+                         "; nothing converts (add a processor that fills " +
                          phase_word(is_input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS) +
-                         " and converts, anira_pipeline_add_stage)");
+                         " and converts, anira_pipeline_add_processor)");
         }
     }
     // The declared stream latency rules: the figure replaces the computed one for a stream,
@@ -332,7 +333,7 @@ void check_contract(const anira_contract& contract,
     // The host-end domain rules: every tensor of either side, whatever its role, has one
     // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
     // domain anira allocates the ring, the model tensor, the Static store and the state buffers
-    // of the slot in and every stage phase works in. The name must be a tensor's. The 2.x
+    // of the slot in and every processor phase works in. The name must be a tensor's. The 2.x
     // runtime allocates in host memory only, so in this pre-release any other domain is refused
     // here, where the declaration meets the runtime; the declaration itself is data.
     for (const auto& [name, domain] : contract.m_host_domains) {
@@ -924,10 +925,13 @@ bool row_is_candidate(const ModelEntry& row,
     return !matching_plans(0, row, candidates, num_candidates).empty();
 }
 
-std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const EngineFacts* engines) {
+std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
+                                            const EngineFacts* engines) {
     std::vector<ExtConsumer> consumers;
-    if (stages != nullptr) {
-        consumers.insert(consumers.end(), stages->m_consumers.begin(), stages->m_consumers.end());
+    if (processors != nullptr) {
+        consumers.insert(consumers.end(),
+                         processors->m_consumers.begin(),
+                         processors->m_consumers.end());
     }
     if (engines != nullptr) {
         consumers.insert(consumers.end(), engines->m_consumers.begin(), engines->m_consumers.end());
@@ -996,13 +1000,13 @@ void validate(const anira_model_config& model,
               const anira_backend_id* candidates,
               uint32_t num_candidates,
               Derived& out,
-              const StageFacts* stages,
+              const ProcessorFacts* processors,
               const EngineFacts* engines,
               bool default_set) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    if (contract != nullptr) { check_contract(*contract, model, stages); }
+    if (contract != nullptr) { check_contract(*contract, model, processors); }
     const HardContract* hard = contract != nullptr ? contract->hard() : nullptr;
     check_state(model);
     out.m_inputs.resize(model.m_inputs.size());
@@ -1017,7 +1021,7 @@ void validate(const anira_model_config& model,
     pin_anchor_hop(model, hard, out);
     check_rows(model, candidates, num_candidates, engines, out, default_set);
     check_layouts(model, out);
-    const std::vector<ExtConsumer> consumers = pipeline_consumers(stages, engines);
+    const std::vector<ExtConsumer> consumers = pipeline_consumers(processors, engines);
     check_extensions(model,
                      nullptr,
                      contract,

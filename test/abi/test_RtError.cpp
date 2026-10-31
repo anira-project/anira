@@ -389,7 +389,7 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
 #endif
     // The pool is intact.
     EXPECT_EQ(anira_num_inference_threads(), 2U);
-    EXPECT_EQ(anira::InferenceThread::get_num_loop_active(), 2U);
+    EXPECT_EQ(anira::scheduler::InferenceThread::get_num_loop_active(), 2U);
     EXPECT_TRUE(anira::Core::has_inference_threads());
 
     // The pass-through resumes: block k delivers ramp(k - 1).

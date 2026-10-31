@@ -139,7 +139,7 @@ Fix only what the branch changes. ``<base>`` here and below is the branch your p
 
 Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
 
-**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
+**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark examples (the fixture of ``examples/benchmark/fixture/``) and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
 
 .. code-block:: bash
 
@@ -157,8 +157,8 @@ The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep
 
 .. code-block:: bash
 
-    find src/engines/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
-         src/InferenceHandler.cpp src/PrePostProcessor.cpp test/engines/ test/scheduler/ test/utils/ \
+    find src/engines/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
+         src/PrePostProcessor.cpp examples/benchmark/fixture/ test/engines/ test/scheduler/ test/utils/ \
          test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
          test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
         | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
@@ -192,11 +192,12 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
   ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
   covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
   only ``BackendBase.h``.
-- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
-  ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
-  cross-unit integration suites (``test_OneSidedStreaming``). For the 3.x cut-over a test
+- Root-level units (``InferenceConfig``, ``CoreConfig``, ``PrePostProcessor``) and the
+  ``anira.hpp`` handler (``test_InferenceHandler``) are covered by root-level ``test_*.cpp``
+  files, alongside the cross-unit integration suites (``test_OneSidedStreaming``). A test
   file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
+  ``test/CMakeLists.txt`` partitions (the white-box suites that still drive the 2.x handler run
+  it as ``anira_test::V2Handler`` of ``test/support/v2_handler.h``): ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
   compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
   ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
@@ -329,35 +330,35 @@ architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
 tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as the
 ``@par Thread contract`` line of the generated Doxygen. The vocabulary has one dual tag,
 ``driver-thread | inference-thread``, for a callback that runs on the driving thread in some
-phases or contracts and on an inference thread in others (a stage callback, the six context
+phases or contracts and on an inference thread in others (a processor callback, the six context
 accessors and the two default bodies it may call). For an entry under it the generator
 requires ``nonblocking: true`` exactly as it does for ``driver-thread``, since anira's side is
-real-time on both threads; for a callback typedef under it (``anira_stage_fn``) it requires
-no attribute, since whether a stage body is real-time is the stage's own promise
-(``anira_stage_desc.flags``), stated per stage and checked at prepare. An
+real-time on both threads; for a callback typedef under it (``anira_processor_fn``) it requires
+no attribute, since whether a processor body is real-time is the processor's own promise
+(``anira_processor_desc.flags``), stated per processor and checked at prepare. An
 ``inference-thread`` callback typedef (``anira_engine_process_fn``) carries no
 ``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
 promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
-follow one naming scheme and one shape, which every later descriptor keeps: ``stage`` /
-``engine`` on every level that belongs to one side (``anira_stage_desc`` /
-``anira_engine_desc``, ``anira_stage_ctx`` / ``anira_engine_ctx``, the ``anira_stage_*_fn`` /
-``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine`` with ``StageContext`` /
+follow one naming scheme and one shape, which every later descriptor keeps: ``processor`` /
+``engine`` on every level that belongs to one side (``anira_processor_desc`` /
+``anira_engine_desc``, ``anira_processor_ctx`` / ``anira_engine_ctx``, the ``anira_processor_*_fn`` /
+``anira_engine_*_fn`` typedefs, ``anira::Processor`` / ``anira::Engine`` with ``ProcessorContext`` /
 ``EngineContext``), no side on what the two lifecycles share (the records ``anira_init_info``
 and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
 slot of either descriptor receive, ``anira::InitInfo`` / ``anira::PrepareInfo``, and the enum
 ``anira_phase``, which names the phases of both), the verb on
 the record of a level one side alone has (``anira_engine_load_info``,
-``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``,
+``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_PROCESSOR_FLAG_*``,
 ``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what
 ``prepare`` hands back and ``Loaded`` for what ``load`` hands back (the C ``prepared`` and
-``loaded`` pointers; the nested classes ``Stage::Prepared``, ``Engine::Loaded`` and
+``loaded`` pointers; the nested classes ``Processor::Prepared``, ``Engine::Loaded`` and
 ``Engine::Prepared``), and one callback shape, from the outermost level in:
 ``init(info, user_data)`` and ``release(user_data)`` once per carrier;
 ``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)`` once per loaded model,
-the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
+the engine's level alone; ``prepare(info, user_data, &prepared)`` for the processor,
 ``prepare(info, loaded, user_data, &prepared)`` for the engine and
 ``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
-``(ctx, prepared, user_data)``, the four phases and ``reset`` of the stage, ``process`` and
+``(ctx, prepared, user_data)``, the four phases and ``reset`` of the processor, ``process`` and
 ``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
 travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
 (``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
@@ -395,7 +396,7 @@ the one test option WebAssembly allows), whose gates run under node:
 ``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
 as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
 the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
-``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine through
+``test/abi/em_smoke.pre.js``), which drives a JavaScript processor and a JavaScript engine through
 the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
 a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
 (the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and

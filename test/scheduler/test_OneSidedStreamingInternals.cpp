@@ -8,7 +8,6 @@
 
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
@@ -34,10 +33,12 @@
 #include <utility>
 #include <vector>
 
+#include "../support/v2_handler.h"
 #include "gtest/gtest.h"
 #include "tanh/core/Logger.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -155,7 +156,7 @@ bool wait_for(const std::function<bool()>& condition) {
 // Collects what thl::Logger delivers to its sinks, so a test can assert on records anira
 // logs from the real-time paths. Those go into the core's lock-free queue; under
 // LogDrain::Manual the test delivers them deterministically with
-// InferenceHandler::drain_log() before it looks (instead of a drain thread racing the
+// V2Handler::drain_log() before it looks (instead of a drain thread racing the
 // assertions, or a stderr capture that never sees the sinks).
 struct LogRecordCollector {
     LogRecordCollector() {
@@ -192,7 +193,7 @@ TEST(OneSidedStreamingInternals, GeneratorPushDataNeverSubmits) {
     InferenceConfig config = generator_config();
     PrePostProcessor pp_processor(config);
     ParamFillGeneratorBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    V2Handler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     unsigned int const latency = handler.get_latency(0);
@@ -231,7 +232,7 @@ TEST(OneSidedStreamingInternals, AnalyserPushOnlyNeverStalls) {
     InferenceConfig config = analyser_config();
     PrePostProcessor pp_processor(config);
     MeanPlusParamAnalyserBackend backend(config);
-    InferenceHandler handler(pp_processor, config, backend, CoreConfig(2));
+    V2Handler handler(pp_processor, config, backend, CoreConfig(2));
     handler.prepare(HostConfig(512, 48000, false));
 
     float const param = 10.f;
@@ -274,7 +275,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     // itself, right before each assertion, into the LogRecordCollector below.
     CoreConfig core_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
     core_config.m_log.m_drain = LogDrain::Manual;
-    InferenceHandler handler(pp_processor, config, backend, core_config);
+    V2Handler handler(pp_processor, config, backend, core_config);
     handler.prepare(HostConfig(512, 48000, false));
     LogRecordCollector log_records;
 

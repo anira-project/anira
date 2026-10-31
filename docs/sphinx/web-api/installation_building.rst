@@ -11,8 +11,9 @@ Anira Web is the TypeScript / WebAssembly distribution of Anira. It is made up o
 * a thin TypeScript layer over it: the bindings generated from the ABI registry
   (:js:class:`AniraBindings`), the generated mirrors of the C headers (``abi/enums.ts``,
   ``abi/layout.ts``), a few classes over the handles (:js:class:`Anira`, :js:class:`Context`,
-  :js:class:`ModelConfig`, :js:class:`Contract`, :js:class:`Pipeline`, :js:class:`Handler`) and
-  the registry a scope defines its JavaScript stages and engines on.
+  :js:class:`ModelConfig`, :js:class:`ContractHandle`, :js:class:`Pipeline`,
+  :js:class:`InferenceHandler`, :js:class:`PlanReport`) and the registry a scope defines its
+  JavaScript processors and engines on.
 
 The sections below cover how to consume the published package, what a bundler and a server must
 do for it, and how to build the WASM module and the TypeScript package from source.
@@ -43,7 +44,7 @@ Importing
 The package is published as ESM only, with three entry points:
 
 * ``@anira-project/anira``: everything, for the page's main thread.
-* ``@anira-project/anira/scope``: the registry (:js:func:`~registry.defineStage`, :js:func:`~registry.defineEngine`,
+* ``@anira-project/anira/scope``: the registry (:js:func:`~registry.defineProcessor`, :js:func:`~registry.defineEngine`,
   :js:func:`~registry.engineTensors`), the bindings, the enums and the layouts, and nothing that loads the
   module: what an inference Worker's module and a worklet's module import.
 * ``@anira-project/anira/engines/onnxruntime-web``: the ONNX Runtime Web engine for a worker
@@ -51,7 +52,7 @@ The package is published as ESM only, with three entry points:
 
 .. code-block:: ts
 
-   import { Anira, Context, ModelConfig, Pipeline, Handler, Contract } from '@anira-project/anira'
+   import { Anira, Context, ContractHandle, InferenceHandler, ModelConfig, Pipeline } from '@anira-project/anira'
 
 What the Page Needs
 -------------------
@@ -78,9 +79,9 @@ What the Page Needs
   the page, aborting what it was fetching (Chromium: "wasm streaming compile failed: ...
   Response body loading was aborted" while ``Anira.create`` fetched the module).
 
-``web/examples/stage-and-engine/vite.config.ts`` is a complete configuration:
+``web/examples/processor-and-engine/vite.config.ts`` is a complete configuration:
 
-.. literalinclude:: ../../../web/examples/stage-and-engine/vite.config.ts
+.. literalinclude:: ../../../web/examples/processor-and-engine/vite.config.ts
    :language: ts
 
 .. _web-memory:
@@ -133,8 +134,8 @@ Out of memory
 Each realm reads the heap through views (``Float32Array`` and the like over ``memory.buffer``),
 and a growth gives a shared memory a new, longer buffer: views made before it cover the old
 length only. The package's code reads the heap through one helper, ``heap(module)`` of the
-bindings (exported for stages and engines), which rebuilds a realm's views once after a growth;
-the stage and engine trampolines call it before every call (:doc:`architecture`). With
+bindings (exported for processors and engines), which rebuilds a realm's views once after a growth;
+the processor and engine trampolines call it before every call (:doc:`architecture`). With
 ``-pthread`` and growth Emscripten's glue checks its views at every heap access of its own
 (``growMemViews``; it warns, ``pthreads-mem-growth``, that this makes JavaScript heap access
 slower). Measured in headless Chromium 156 and Firefox 157 (medians of 5), the growing build
@@ -142,7 +143,7 @@ against the fixed 512 MiB build:
 
 * the worklet's work per quantum (an offline render of 60 s that does not wait for its
   inferences: 22500 quanta through the glue's ``process()``, the C callback and a JavaScript
-  stage): Chromium 59.5 against 56.3 ms (+6 %, about 0.14 µs per quantum), Firefox 48.9 against
+  processor): Chromium 59.5 against 56.3 ms (+6 %, about 0.14 µs per quantum), Firefox 48.9 against
   46.7 ms (+5 %);
 * a render that waits for a JavaScript engine on two Workers (a window of 4096 samples, 20 s):
   468 against 469 ms in both, paced by the inferences either way;
@@ -165,7 +166,7 @@ growth.
 Building from Source
 --------------------
 
-Building ``@anira-project/anira`` is a two-stage process:
+Building ``@anira-project/anira`` is a two-processor process:
 
 1. Cross-compile the Anira C++ library to WebAssembly with Emscripten.
    The build outputs ``AniraWeb.wasm``, ``AniraWeb.js`` and
@@ -173,7 +174,7 @@ Building ``@anira-project/anira`` is a two-stage process:
 2. Build the TypeScript package, which bundles those artifacts into
    ``anira/web/dist/``.
 
-Both stages are run from a checkout of the Anira repository, so start
+Both processors are run from a checkout of the Anira repository, so start
 by cloning it:
 
 .. code-block:: bash
@@ -293,19 +294,19 @@ Once ``anira/web/wasm/`` is populated, build the npm package:
    npm run build          # tsc && vite build
    # npm run dev          # rebuild on changes (vite build --watch)
 
-The build runs ``tsc`` for type-checking and then ``vite build`` to
-produce ESM output in ``anira/web/dist/``. ``vite-plugin-static-copy``
-copies the WASM artifacts from ``wasm/`` into ``dist/wasm/`` so they are
-included in the published package. ``npm test`` runs the unit tests (node, no build needed),
-``npm run examples`` type-checks and builds ``web/examples/stage-and-engine`` and
-``web/examples/model-file``, and ``node test/browser/run.mjs chromium`` (or ``firefox``, with
-Playwright installed; CI uses 1.64.1, Chromium 156 and Firefox 157) runs the browser test: the
-package's pages (``quanta.html``: offline contexts of render sizes 256 and 480 where the browser
-takes ``renderSizeHint``), the examples' check pages built, stage-and-engine's under Vite's dev
-server, and in Chromium a live ``AudioContext`` (``live.html``: the burst ``measureRenderGeometry``
-measures against the device's, idle, beside load and with a loaded node held, no quantum missed
-at it, a running node re-prepared to it, and contexts of render sizes 256, 480 and
-``"hardware"``; headless Firefox keeps a live context suspended). The test's ``config.html`` and
-the model-file example load the bundled ``extras/models`` configs and their model files; fetch
-those first with ``cmake -P extras/fetch-models.cmake``.
+The build runs ``tsc`` for type-checking and then ``vite build`` to produce ESM output in
+``anira/web/dist/``. ``vite-plugin-static-copy`` copies the WASM artifacts from ``wasm/`` into
+``dist/wasm/`` so they are included in the published package. ``npm test`` runs the unit tests
+(node, no build needed), ``npm run examples`` type-checks and builds
+``web/examples/processor-and-engine`` and ``web/examples/model-file``, and ``node
+test/browser/run.mjs chromium`` (or ``firefox``, with Playwright installed; CI uses 1.64.1, Chromium
+156 and Firefox 157) runs the browser test: the package's pages (``quanta.html``: offline contexts
+of render sizes 256 and 480 where the browser takes ``renderSizeHint``), the examples' check pages
+built, processor-and-engine's under Vite's dev server, and in Chromium a live ``AudioContext``
+(``live.html``: the burst ``measureRenderGeometry`` measures against the device's, idle, beside load
+and with a loaded node held, no quantum missed at it, a running node re-prepared to it, and contexts
+of render sizes 256, 480 and ``"hardware"``; headless Firefox keeps a live context suspended). The
+test's ``config.html``, ``plan-find.html`` and the model-file example load the bundled
+``extras/models`` configs and their model files; fetch those first with ``cmake -P
+extras/fetch-models.cmake``.
 

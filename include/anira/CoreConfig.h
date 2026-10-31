@@ -189,8 +189,8 @@ inline unsigned int default_num_threads() noexcept {
  * // Specify custom thread count
  * anira::CoreConfig custom_config(4);
  *
- * // Use with InferenceHandler
- * anira::InferenceHandler handler(pp_processor, inference_config, custom_config);
+ * // Use with InferenceManager (the 2.x session)
+ * anira::InferenceManager manager(pp_processor, inference_config, nullptr, custom_config);
  * @endcode
  *
  * @note This configuration affects global behavior. It is applied by the first session

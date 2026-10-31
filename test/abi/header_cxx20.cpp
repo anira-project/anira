@@ -74,31 +74,36 @@ static_assert(k_move_only<anira::JobOptionsHandle>);
 static_assert(k_move_only<anira::Context>);
 static_assert(k_move_only<anira::Pipeline>);
 
-// The plan report is a view, copied freely; the inference stage takes one model config.
+// The plan report is a view, copied freely. The pipeline has one member per C entry of
+// anira_pipeline, named as the entry without its prefix: the inference stage over one model
+// config (or its variants), the processor and the engines by shared_ptr; nothing else fills it.
 static_assert(std::is_copy_constructible_v<anira::PlanReport>);
-static_assert(std::is_constructible_v<anira::stage::Inference, const anira::ModelConfig&>);
-static_assert(std::is_same_v<anira::Pipeline::AnyStage,
-                             std::variant<anira::stage::Inference, anira::stage::Custom>>);
-static_assert(std::is_constructible_v<anira::stage::Custom, std::shared_ptr<anira::Stage>> &&
-              std::is_copy_constructible_v<anira::stage::Custom>);
+static_assert(std::is_same_v<decltype(std::declval<anira::Pipeline&>().add_inference(
+                                 std::declval<const anira::ModelConfig&>())),
+                             anira::Pipeline&>);
+static_assert(std::is_same_v<
+              decltype(&anira::Pipeline::add_processor),
+              anira::Pipeline& (anira::Pipeline::*)(const std::shared_ptr<anira::Processor>&)>);
+static_assert(!std::is_constructible_v<anira::Pipeline, std::initializer_list<int>>);
 
-// A stage is a class a consumer subclasses: abstract (phases() and prepare() are the
+// A processor is a class a consumer subclasses: abstract (phases() and prepare() are the
 // subclass's statements), never copied or moved (the pipeline's carrier shares it), destroyed
 // through the base. Its Prepared, what prepare returns per handler, is concrete (every phase
 // has a base body), never copied or moved (anira owns it), destroyed through the base by anira.
-static_assert(std::is_abstract_v<anira::Stage> && std::has_virtual_destructor_v<anira::Stage> &&
-              !std::is_copy_constructible_v<anira::Stage> &&
-              !std::is_move_constructible_v<anira::Stage>);
-static_assert(!std::is_abstract_v<anira::Stage::Prepared> &&
-              std::has_virtual_destructor_v<anira::Stage::Prepared> &&
-              !std::is_copy_constructible_v<anira::Stage::Prepared> &&
-              !std::is_move_constructible_v<anira::Stage::Prepared>);
-static_assert(std::is_same_v<decltype(std::declval<anira::Stage&>().prepare(
+static_assert(std::is_abstract_v<anira::Processor> &&
+              std::has_virtual_destructor_v<anira::Processor> &&
+              !std::is_copy_constructible_v<anira::Processor> &&
+              !std::is_move_constructible_v<anira::Processor>);
+static_assert(!std::is_abstract_v<anira::Processor::Prepared> &&
+              std::has_virtual_destructor_v<anira::Processor::Prepared> &&
+              !std::is_copy_constructible_v<anira::Processor::Prepared> &&
+              !std::is_move_constructible_v<anira::Processor::Prepared>);
+static_assert(std::is_same_v<decltype(std::declval<anira::Processor&>().prepare(
                                  std::declval<const anira::PrepareInfo&>())),
-                             std::unique_ptr<anira::Stage::Prepared>>);
-static_assert(std::is_same_v<
-              decltype(std::declval<anira::Stage&>().init(std::declval<const anira::InitInfo&>())),
-              void>);
+                             std::unique_ptr<anira::Processor::Prepared>>);
+static_assert(std::is_same_v<decltype(std::declval<anira::Processor&>().init(
+                                 std::declval<const anira::InitInfo&>())),
+                             void>);
 // The two shared records (anira/abi/lifecycle.h) are views over the C records: trivially
 // copyable, no default. The init record: the level, the pool, the context, all noexcept. The
 // prepare record: the templates as a span of Tensor, the report as a PlanReport, the flags and
@@ -125,18 +130,19 @@ static_assert(
     noexcept(std::declval<const anira::PrepareInfo&>().input_names()) &&
     noexcept(std::declval<const anira::PrepareInfo&>().flags()) &&
     noexcept(std::declval<const anira::PrepareInfo&>().exclusive()));
-static_assert(anira::Stage::k_pre_process == 1U && anira::Stage::k_post_process == 2U &&
-              anira::Stage::k_before_inference == 4U && anira::Stage::k_after_inference == 16U &&
-              anira::Stage::phase_bit(ANIRA_PHASE_AFTER_INFERENCE) ==
-                  anira::Stage::k_after_inference);
+static_assert(anira::Processor::k_pre_process == 1U && anira::Processor::k_post_process == 2U &&
+              anira::Processor::k_before_inference == 4U &&
+              anira::Processor::k_after_inference == 16U &&
+              anira::Processor::phase_bit(ANIRA_PHASE_AFTER_INFERENCE) ==
+                  anira::Processor::k_after_inference);
 // What a phase callback reaches is nonblocking: the context and the ring view are trivially
 // copyable views, and every method is noexcept (a status or a count, never a throw).
 static_assert(std::is_trivially_copyable_v<anira::RingView> &&
               std::is_nothrow_default_constructible_v<anira::RingView> &&
               !std::is_convertible_v<anira::RingView, bool> &&
               std::is_constructible_v<bool, anira::RingView>);
-static_assert(std::is_trivially_copyable_v<anira::StageContext> &&
-              !std::is_default_constructible_v<anira::StageContext>);
+static_assert(std::is_trivially_copyable_v<anira::ProcessorContext> &&
+              !std::is_default_constructible_v<anira::ProcessorContext>);
 static_assert(noexcept(std::declval<const anira::RingView&>().dtype()) &&
               noexcept(std::declval<const anira::RingView&>().num_channels()) &&
               noexcept(std::declval<const anira::RingView&>().available(0)) &&
@@ -144,47 +150,49 @@ static_assert(noexcept(std::declval<const anira::RingView&>().dtype()) &&
               noexcept(std::declval<anira::RingView&>().discard(0, 0)) &&
               noexcept(std::declval<anira::RingView&>().pop_block(0, std::span<float>{})) &&
               noexcept(std::declval<anira::RingView&>().push_fill(0, 0.0F, 0)));
-static_assert(noexcept(std::declval<const anira::StageContext&>().phase()) &&
-              noexcept(std::declval<const anira::StageContext&>().engine()) &&
-              noexcept(std::declval<const anira::StageContext&>().provider()) &&
-              noexcept(std::declval<const anira::StageContext&>()
+static_assert(noexcept(std::declval<const anira::ProcessorContext&>().phase()) &&
+              noexcept(std::declval<const anira::ProcessorContext&>().engine()) &&
+              noexcept(std::declval<const anira::ProcessorContext&>().provider()) &&
+              noexcept(std::declval<const anira::ProcessorContext&>()
                            .input_role(0, std::declval<anira::Role&>())) &&
-              noexcept(std::declval<const anira::StageContext&>()
+              noexcept(std::declval<const anira::ProcessorContext&>()
                            .input_ring(0, std::declval<anira::RingView&>())) &&
-              noexcept(std::declval<const anira::StageContext&>()
+              noexcept(std::declval<const anira::ProcessorContext&>()
                            .output_ring(0, std::declval<anira::RingView&>())) &&
-              noexcept(std::declval<const anira::StageContext&>()
+              noexcept(std::declval<const anira::ProcessorContext&>()
                            .input_tensor(0, std::declval<anira::Tensor&>())) &&
-              noexcept(std::declval<const anira::StageContext&>()
+              noexcept(std::declval<const anira::ProcessorContext&>()
                            .output_tensor(0, std::declval<anira::Tensor&>())));
 // Every context accessor returns the C status and fills an out-parameter; the view is
 // copy-assignable, so a refused ring leaves a view of no ring.
-static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>()
+static_assert(std::is_same_v<decltype(std::declval<const anira::ProcessorContext&>()
                                           .input_ring(0, std::declval<anira::RingView&>())),
                              anira_status>);
-static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>()
+static_assert(std::is_same_v<decltype(std::declval<const anira::ProcessorContext&>()
                                           .output_role(0, std::declval<anira::Role&>())),
                              anira_status>);
-static_assert(
-    std::is_nothrow_copy_assignable_v<anira::RingView> &&
-    std::is_same_v<decltype(std::declval<const anira::StageContext&>().ticket()), anira_ticket>);
+static_assert(std::is_nothrow_copy_assignable_v<anira::RingView> &&
+              std::is_same_v<decltype(std::declval<const anira::ProcessorContext&>().ticket()),
+                             anira_ticket>);
 // Every per-chunk virtual of the Prepared is noexcept, prepare of the registration is not.
 static_assert(
-    noexcept(std::declval<anira::Stage::Prepared&>().pre_process(
-        std::declval<anira::StageContext&>())) &&
-    noexcept(std::declval<anira::Stage::Prepared&>().post_process(
-        std::declval<anira::StageContext&>())) &&
-    noexcept(std::declval<anira::Stage::Prepared&>().before_inference(
-        std::declval<anira::StageContext&>())) &&
-    noexcept(std::declval<anira::Stage::Prepared&>().after_inference(
-        std::declval<anira::StageContext&>())) &&
-    noexcept(std::declval<anira::Stage::Prepared&>().reset(std::declval<anira::StageContext&>())) &&
-    noexcept(std::declval<anira::Stage&>().release()) &&
-    noexcept(std::declval<const anira::Stage&>().consumed_kinds()) &&
-    noexcept(std::declval<const anira::Stage&>().flags()) &&
-    noexcept(std::declval<const anira::StageContext&>().entry()) &&
-    !noexcept(std::declval<anira::Stage&>().prepare(std::declval<const anira::PrepareInfo&>())) &&
-    !noexcept(std::declval<anira::Stage&>().init(std::declval<const anira::InitInfo&>())));
+    noexcept(std::declval<anira::Processor::Prepared&>().pre_process(
+        std::declval<anira::ProcessorContext&>())) &&
+    noexcept(std::declval<anira::Processor::Prepared&>().post_process(
+        std::declval<anira::ProcessorContext&>())) &&
+    noexcept(std::declval<anira::Processor::Prepared&>().before_inference(
+        std::declval<anira::ProcessorContext&>())) &&
+    noexcept(std::declval<anira::Processor::Prepared&>().after_inference(
+        std::declval<anira::ProcessorContext&>())) &&
+    noexcept(std::declval<anira::Processor::Prepared&>().reset(
+        std::declval<anira::ProcessorContext&>())) &&
+    noexcept(std::declval<anira::Processor&>().release()) &&
+    noexcept(std::declval<const anira::Processor&>().consumed_kinds()) &&
+    noexcept(std::declval<const anira::Processor&>().flags()) &&
+    noexcept(std::declval<const anira::ProcessorContext&>().entry()) &&
+    !noexcept(
+        std::declval<anira::Processor&>().prepare(std::declval<const anira::PrepareInfo&>())) &&
+    !noexcept(std::declval<anira::Processor&>().init(std::declval<const anira::InitInfo&>())));
 
 // The enum alias of anira_engine is EngineKind; the name Engine is the class of a custom
 // engine: the registration, abstract (load is the subclass's statement), never copied or
@@ -247,7 +255,7 @@ static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>().
                              anira::EngineRef>);
 static_assert(std::is_same_v<decltype(std::declval<const anira::ModelConfig&>().default_provider()),
                              anira::ProviderRef>);
-static_assert(std::is_same_v<decltype(std::declval<const anira::StageContext&>().engine()),
+static_assert(std::is_same_v<decltype(std::declval<const anira::ProcessorContext&>().engine()),
                              anira::EngineRef>);
 static_assert(std::is_trivially_copyable_v<anira::EngineContext> &&
               !std::is_default_constructible_v<anira::EngineContext>);
@@ -281,17 +289,11 @@ static_assert(
     !noexcept(std::declval<anira::Engine&>().load(std::declval<const anira::EngineLoadInfo&>())) &&
     !noexcept(
         std::declval<anira::Engine::Loaded&>().prepare(std::declval<const anira::PrepareInfo&>())));
-// The two registration spellings: on the pipeline and on the inference stage, both taking the
-// shared engine object alone, whose id is its own (the constructor's, read back by id()); the
-// stage lists what it brought.
+// The one way to add an engine: to the pipeline, the shared engine object alone, whose id is
+// its own (the constructor's, read back by id()).
 static_assert(
-    std::is_same_v<decltype(&anira::Pipeline::register_engine),
+    std::is_same_v<decltype(&anira::Pipeline::add_engine),
                    anira::Pipeline& (anira::Pipeline::*)(const std::shared_ptr<anira::Engine>&)>);
-static_assert(std::is_same_v<decltype(&anira::stage::Inference::engine),
-                             anira::stage::Inference& (
-                                 anira::stage::Inference::*)(std::shared_ptr<anira::Engine>)>);
-static_assert(std::is_same_v<decltype(std::declval<const anira::stage::Inference&>().engines()),
-                             std::span<const std::shared_ptr<anira::Engine>>>);
 static_assert(
     std::is_same_v<decltype(std::declval<const anira::Engine&>().id()), const std::string&>);
 static_assert(noexcept(std::declval<const anira::Engine&>().id()));
@@ -393,14 +395,14 @@ static_assert(noexcept(std::declval<anira::SyncToken&>().reset()) &&
 static_assert(std::is_base_of_v<std::runtime_error, anira::Error>);
 static_assert(std::is_same_v<decltype(anira::Error::status), anira_status>);
 
-/// A stage as a consumer writes it: the registration states the phases it fills and its
+/// A processor as a consumer writes it: the registration states the phases it fills and its
 /// promise, and prepare returns the Prepared of one handler, whose overrides are noexcept. It
 /// converts an int16 ring into the float model tensor and leaves the push to anira's default.
-class ProbePrepared final : public anira::Stage::Prepared {
+class ProbePrepared final : public anira::Processor::Prepared {
 public:
     explicit ProbePrepared(uint32_t num_entries) : m_num_entries(num_entries) {}
 
-    anira_status pre_process(anira::StageContext& ctx) noexcept override {
+    anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
         if (ctx.entry() >= m_num_entries) { return ANIRA_ERROR_INTERNAL; }
         anira::Tensor input{};
         const anira_status exposed = ctx.input_tensor(0, input);
@@ -415,7 +417,7 @@ public:
         for (std::size_t n = 0; n < popped; ++n) { samples[n] = static_cast<float>(m_block[n]); }
         return ANIRA_OK;
     }
-    anira_status after_inference(anira::StageContext& ctx) noexcept override {
+    anira_status after_inference(anira::ProcessorContext& ctx) noexcept override {
         anira::Role role = ANIRA_ROLE_FORCE32;
         anira::Tensor output{};
         const anira_status asked = ctx.output_role(0, role);
@@ -423,18 +425,18 @@ public:
         return role == ANIRA_ROLE_STREAMED ? ctx.output_tensor(0, output) : ANIRA_ERROR_CONFIG;
     }
     // The first chunk of a new stream: the block this object keeps starts over.
-    void reset(anira::StageContext& /*ctx*/) noexcept override { m_block.fill(0); }
+    void reset(anira::ProcessorContext& /*ctx*/) noexcept override { m_block.fill(0); }
 
 private:
     std::array<int16_t, 64> m_block{};
     uint32_t m_num_entries;
 };
 
-class ProbeStage final : public anira::Stage {
+class ProbeProcessor final : public anira::Processor {
 public:
     uint32_t phases() const noexcept override { return k_pre_process | k_after_inference; }
     // The real-time promise a Hard contract requires of a filled pre_process.
-    uint32_t flags() const noexcept override { return ANIRA_STAGE_FLAG_REALTIME_PRE_POST; }
+    uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
 
     void init(const anira::InitInfo& info) override {
         if (info.context() == nullptr || info.log_level() > ANIRA_LOG_ERROR) {
@@ -443,7 +445,7 @@ public:
         m_num_threads = info.num_threads();
     }
 
-    std::unique_ptr<anira::Stage::Prepared> prepare(const anira::PrepareInfo& info) override {
+    std::unique_ptr<anira::Processor::Prepared> prepare(const anira::PrepareInfo& info) override {
         if (info.handler() == nullptr || info.report().num_plans() == 0 ||
             info.inputs().size() != info.input_names().size() || info.exclusive() ||
             info.flags() != 0) {
@@ -550,8 +552,8 @@ std::size_t engine_probe(const anira_engine_ctx* record) noexcept ANIRA_NONBLOCK
 /// Every call a phase callback can make on the two views, from a nonblocking function: where
 /// the compiler has the analysis (-Werror=function-effects, see CMakeLists.txt) a method that
 /// allocates, locks or calls a function that is not nonblocking is a compiler error here.
-std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONBLOCKING {
-    const anira::StageContext ctx(record);
+std::size_t nonblocking_probe(const anira_processor_ctx* record) noexcept ANIRA_NONBLOCKING {
+    const anira::ProcessorContext ctx(record);
     anira::Tensor tensor{};
     anira::Role role = ANIRA_ROLE_FORCE32;
     std::array<float, 8> block{};
@@ -576,6 +578,45 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
     return moved;
 }
 
+// The Hard entries of anira.hpp's handler from a nonblocking function: under
+// -Werror=function-effects a forwarder without ANIRA_NONBLOCKING fails here.
+anira_status hard_entries_probe(anira::InferenceHandler& handler) noexcept ANIRA_NONBLOCKING {
+    const anira::Tensor block{};
+    const std::array<anira::Tensor, 1> slots{block};
+    size_t delivered = 0;
+    anira_status status = handler.process(block, 0, block, 0, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.process(slots, slots, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.push_data(block, 0);
+    status = ANIRA_FAILED(status) ? status : handler.push_data(slots);
+    status = ANIRA_FAILED(status) ? status : handler.pop_data(block, 0, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.pop_data(slots, &delivered);
+    status = ANIRA_FAILED(status) ? status : handler.set_static_input(1, block);
+    status = ANIRA_FAILED(status) ? status : handler.get_static_output(1, block);
+    size_t available = 0;
+    status = ANIRA_FAILED(status) ? status : handler.get_available_samples(0, 0, &available);
+    handler.reset();
+    status = ANIRA_FAILED(status) ? status : handler.set_plan(handler.get_plan());
+    anira::log_rt(ANIRA_LOG_INFO, "probe", "the hard entries", 1, 2);
+    return ANIRA_FAILED(status) || handler.get_latency(0) > 0 ? status : handler.rt_error();
+}
+
+// The lookup of a backend choice on the thread that applies it: PlanReport::find is
+// nonblocking, the query an aggregate with designated initializers.
+std::optional<uint32_t> find_probe(const anira::PlanReport& report) noexcept ANIRA_NONBLOCKING {
+    const std::optional<uint32_t> engine =
+        report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}});
+    const std::optional<uint32_t> provider =
+        report.find({.backend = {.provider = ANIRA_PROVIDER_COREML}});
+    return engine.has_value() ? engine : provider;
+}
+
+// The budget of a Hard aggregate is required: no Hard without one, a duration is an explicit
+// budget, Budget::measured() the measured one.
+static_assert(!std::is_default_constructible_v<anira::Hard>);
+static_assert(!std::is_default_constructible_v<anira::Budget>);
+static_assert(std::is_convertible_v<std::chrono::milliseconds, anira::Budget>);
+static_assert(std::is_aggregate_v<anira::Hard>);
+
 }  // namespace
 
 // Exported on purpose, so that the TU holds a symbol a linker would see; the
@@ -583,9 +624,13 @@ std::size_t nonblocking_probe(const anira_stage_ctx* record) noexcept ANIRA_NONB
 int anira_header_cxx20_probe();  // NOLINT(misc-use-internal-linkage)
 int anira_header_cxx20_probe() {
     // The aggregates as a consumer spells them; the defaults stand for what is not named.
-    const anira::Hard hard{.block_min = 64, .block_max = 2048, .rate = 48000.0};
+    const anira::Hard hard{.block_min = 64,
+                           .block_max = 2048,
+                           .rate = 48000.0,
+                           .budget = std::chrono::milliseconds(5)};
     // The two maps in their place between wait_ratio and edge_cost.
-    const anira::Hard typed{.wait_ratio = 0.5,
+    const anira::Hard typed{.budget = anira::Budget::measured(),
+                            .wait_ratio = 0.5,
                             .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
                             .latencies = {{"audio_out", 4096}},
                             .edge_cost = ANIRA_EDGE_COST_STRICT};
@@ -650,30 +695,64 @@ int anira_header_cxx20_probe() {
         const anira::Capabilities capabilities = running.capabilities();
         const std::vector<anira::BackendId> backends = capabilities.backends();
         const anira::BackendId first = backends.empty() ? anira::BackendId{} : backends.front();
-        anira::Pipeline pipe{anira::stage::Inference(model)};
-        pipe.inference(model, {first});
-        const anira::stage::Inference two({std::cref(model), std::cref(model)}, {first});
-        pipe.add(two);
-        // A custom stage beside the inference stage, in the initializer list of one pipeline
-        // and through add on another (a pipeline holds at most one).
-        const anira::stage::Custom custom(std::make_shared<ProbeStage>());
-        const anira::Pipeline staged{anira::stage::Inference(model), custom};
-        anira::Pipeline other{anira::stage::Inference(model)};
-        other.add(custom);
-        checks += custom.stage() != nullptr && custom.stage()->flags() != 0 ? 1 : 0;
+        anira::Pipeline pipe;
+        pipe.add_inference(model);
+        pipe.add_inference(model, {first});
+        pipe.add_inference({std::cref(model), std::cref(model)}, {first});
+        // A custom processor beside the inference stage, chained (a pipeline holds at most one).
+        const std::shared_ptr<anira::Processor> processor = std::make_shared<ProbeProcessor>();
+        anira::Pipeline other;
+        other.add_inference(model).add_processor(processor);
+        checks += processor->flags() != 0 ? 1 : 0;
         checks += nonblocking_probe(nullptr) > 0 ? 1 : 0;
-        // A custom engine registered on the pipeline, and brought along by the inference
-        // stage in an initializer list; the enum alias where the model config takes one.
+        // A custom engine added to the pipeline; the enum alias where the model config takes
+        // one.
         const std::shared_ptr<anira::Engine> probe_engine = std::make_shared<ProbeEngine>();
-        other.register_engine(probe_engine);
+        other.add_engine(probe_engine);
         // The pipeline's capabilities on a context: the rows, an edge.
         const anira::PipelineCapabilities caps =
             other.capabilities(static_cast<const anira_context*>(nullptr));
         checks += caps.backends().empty() ? 0 : 1;
         checks += caps.edge(ANIRA_DOMAIN_HOST, caps.backends().front()).available == 1U ? 1 : 0;
-        const anira::Pipeline with_engine{anira::stage::Inference(model).engine(probe_engine)};
-        const anira::stage::Inference brings(model);
-        checks += brings.engines().empty() ? 1 : 0;
+        anira::Pipeline with_engine;
+        with_engine.add_engine(probe_engine);
+        with_engine.add_inference(model);
+        // The handler half: a handler on the pipeline, prepared with each contract form, its
+        // Hard entries reached from a nonblocking function, the _wait twins, an inference
+        // thread the host drives.
+        anira::InferenceHandler handler(running, with_engine);
+        const anira::PlanReport prepared = handler.prepare(hard);
+        checks += handler.prepare(minted).num_plans() + handler.prepare(contract).num_plans() +
+                              prepared.num_plans() + handler.plan_report().num_plans() +
+                              handler.num_entries() >
+                          0
+                      ? 1
+                      : 0;
+        checks += hard_entries_probe(handler) == ANIRA_OK ? 1 : 0;
+        checks += find_probe(handler.plan_report()).value_or(0U) > 0 ? 1 : 0;
+        checks += handler.get_latencies().size() + handler.get_latency() > 0 ? 1 : 0;
+        const anira::Tensor waited_block{};
+        const std::array<anira::Tensor, 1> waited_slots{waited_block};
+        size_t waited = 0;
+        checks +=
+            handler.process_wait(waited_block, 0, waited_block, 0, ANIRA_WAIT_FOREVER, &waited) ==
+                    ANIRA_OK
+                ? 1
+                : 0;
+        checks += handler.process_wait(waited_slots, waited_slots, ANIRA_WAIT_CONTRACT) == ANIRA_OK
+                      ? 1
+                      : 0;
+        checks += handler.pop_data_wait(waited_block, 0, 10.0) == ANIRA_OK ? 1 : 0;
+        checks += handler.pop_data_wait(waited_slots, 10.0, &waited) == ANIRA_OK ? 1 : 0;
+        checks += handler.native() != nullptr ? 1 : 0;
+        anira::InferenceThread thread(running);
+        thread.start();
+        thread.stop();
+        thread.run_loop();
+        checks += thread.execute() || thread.is_running() || thread.should_exit() ||
+                          thread.has_exited() || thread.native() != nullptr
+                      ? 1
+                      : 0;
         const anira::EngineKind kind = model.model_engine(0).kind;
         model.default_engine(kind)
             .default_provider(ANIRA_PROVIDER_CUDA)

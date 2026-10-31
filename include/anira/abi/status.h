@@ -101,6 +101,11 @@ typedef enum anira_status {
      */
     ANIRA_ERROR_EXTENSION_VERSION = -22,
     /**
+     * The lookup found nothing that matches (anira_plan_report_find: no plan has every property
+     * the query names).
+     */
+    ANIRA_ERROR_NOT_FOUND = -23,
+    /**
      * An exception the firewall could not classify; a bug in anira.
      */
     ANIRA_ERROR_INTERNAL = -100,

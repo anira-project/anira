@@ -2,7 +2,6 @@
 // serving a 2.x session.
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -22,9 +21,11 @@
 #include <thread>
 
 #include "../../extras/models/model_files.h"
+#include "../support/v2_handler.h"
 #include "../support/v2_objects.h"
 
 using namespace anira;
+using anira_test::V2Handler;
 
 namespace {
 
@@ -104,11 +105,11 @@ TEST(AbiInferenceThread, RunLoopOnTheCallersOwnThread) {
         << err.message;
     std::thread worker([thread] { anira_inference_thread_run_loop(thread); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(k_timeout_s);
-    while (InferenceThread::get_num_loop_active() == 0 &&
+    while (scheduler::InferenceThread::get_num_loop_active() == 0 &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
-    EXPECT_GE(InferenceThread::get_num_loop_active(), 1U);
+    EXPECT_GE(scheduler::InferenceThread::get_num_loop_active(), 1U);
     EXPECT_EQ(anira_inference_thread_has_exited(thread), 0U);
     EXPECT_EQ(Core::release_core_if_idle(), false) << "a thread inside its loop uses the core";
     anira_inference_thread_stop(thread);
@@ -129,7 +130,7 @@ TEST(AbiInferenceThread, ServesASessionWithoutAPool) {
     PrePostProcessor pp_processor(inference_config);
     // Zero auto-pool threads, like the context: the user owns the threading.
     const CoreConfig core_config(0, WaitStrategy::SpinBackoff, LogLevel::Error);
-    InferenceHandler inference_handler(pp_processor, inference_config, core_config);
+    V2Handler inference_handler(pp_processor, inference_config, core_config);
 
     anira_inference_thread* thread = nullptr;
     anira_error err = ANIRA_ERROR_INIT;

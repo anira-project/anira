@@ -13,7 +13,7 @@ Every inference Worker imports the context's worker module before it enters its 
 awaits the boot of its scope's registry: the ``init`` of every engine the module defined. Define
 the engine there:
 
-.. literalinclude:: ../../../web/examples/stage-and-engine/double-engine.ts
+.. literalinclude:: ../../../web/examples/processor-and-engine/double-engine.ts
    :language: ts
 
 and name the module in the context, bundled into one file (with Vite,
@@ -34,7 +34,7 @@ model file is fetched once, on the main thread, and every Worker reads the same 
 :js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
 gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
 tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
-``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``registerEngine``) runs at a new stream of an exclusive
+``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``addEngine``) runs at a new stream of an exclusive
 handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
 can run here and runs on the main thread, so a page whose engine has one imports the module there
 as well. Each Worker builds its own instance, so an engine object is never shared between
@@ -58,10 +58,11 @@ id:
    }))
    const pipeline = Pipeline.create(anira)
      .addInference(model)
-     .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+     .addEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 
 ``flags`` states the engine's promises (``ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL``: it reads no model
-file, so its model entry needs no ``path``). Register before ``Handler.create``: a handler copies the pipeline.
+file, so its model entry needs no ``path``). Register before ``InferenceHandler.create``: a
+handler copies the pipeline.
 
 ONNX Runtime Web
 ----------------

@@ -39,7 +39,7 @@ enum class RtKind : uint32_t {
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
     NotSupported = 1U << 6,
-    Other = 1U << 7,  ///< any other status, through record_any only (a stage callback's)
+    Other = 1U << 7,  ///< any other status, through record_any only (a processor callback's)
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -86,7 +86,7 @@ struct RtLatch {
     }
 
     /**
-     * @brief Records a status that is not anira's to choose: what a stage callback returned.
+     * @brief Records a status that is not anira's to choose: what a processor callback returned.
      *
      * A status with a kind bit latches under it, like record(); any other one (the host may
      * return every anira_status) latches under RtKind::Other, so that it still reaches

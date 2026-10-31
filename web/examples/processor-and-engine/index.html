@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>anira processor and engine</title>
+  </head>
+  <body>
+    <h1>A TypeScript processor and engine</h1>
+    <p>A tone, scaled by the processor's gain and doubled by the stand-in model.</p>
+    <button id="start">Start</button>
+    <label for="gain">Gain</label>
+    <input id="gain" type="range" min="0" max="1" step="0.01" value="0.5" />
+    <script type="module">
+      import { mountGainExample } from './main.ts'
+      mountGainExample(document.getElementById('start'), document.getElementById('gain'))
+    </script>
+  </body>
+</html>

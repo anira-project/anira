@@ -7,7 +7,6 @@
 #ifdef USE_EXECUTORCH
 
 #include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/utils/InferenceBackend.h>
 #include <anira/utils/JsonConfigLoader.h>
@@ -21,6 +20,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "../support/v2_handler.h"
 
 namespace {
 
@@ -43,7 +44,7 @@ anira::InferenceConfig make_config(const std::string& model_function) {
 
 // Push one block of ones and wait until its inference result has been consumed
 // back into the ring (available samples return to the pre-push level).
-void process_block(anira::InferenceHandler& handler, std::vector<float>& io) {
+void process_block(anira_test::V2Handler& handler, std::vector<float>& io) {
     std::array<float*, 1> channels = {io.data()};
     const size_t prev = handler.get_available_samples(0);
     handler.process(channels.data(), k_size);
@@ -59,7 +60,7 @@ void process_block(anira::InferenceHandler& handler, std::vector<float>& io) {
 float steady_state_output(const std::string& model_function) {
     anira::InferenceConfig config = make_config(model_function);
     anira::PrePostProcessor pp(config);
-    anira::InferenceHandler handler(pp, config);
+    anira_test::V2Handler handler(pp, config);
     handler.prepare({static_cast<float>(k_size), 48000.0F});
     handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
 

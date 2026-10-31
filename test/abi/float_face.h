@@ -14,7 +14,7 @@
 //                  the Static elements of the _multi forms).
 //
 //   FloatFace      one call per block over a prepared handler. It owns an
-//                  anira::PlanarFloatAdapter (src/scheduler/PlanarFloatAdapter.h, the adapter
+//                  anira::PlanarFloatAdapter (test/support/PlanarFloatAdapter.h, the adapter
 //                  the 2.x anira::InferenceHandler presents its channel pointers through),
 //                  prepared from the handler's own InferenceConfig, and makes every call the
 //                  same way: present the channel pointers, call the tensor entry of the same
@@ -42,8 +42,8 @@
 #include <type_traits>
 #include <vector>
 
+#include "../support/PlanarFloatAdapter.h"
 #include "capi/handler.h"
-#include "scheduler/PlanarFloatAdapter.h"
 
 namespace anira_test {
 

@@ -1,7 +1,7 @@
 # Anira Web
 
 The WebAssembly + TypeScript distribution of [**anira**](https://github.com/anira-project/anira) — a real-time neural-network inference library for low-latency audio applications.
-Anira Web is the same C++ library compiled to WebAssembly with a thin typed layer over its C ABI. The page's main thread instantiates the module; anira starts the other threads from C on the same shared memory: the context's inference threads are Wasm Workers, and a handler streams audio through a Wasm Audio Worklet node whose render callback is C. Stages and inference engines are written in TypeScript against the package, with no rebuild of the module, and the model and contract files of a native host load unchanged.
+Anira Web is the same C++ library compiled to WebAssembly with a thin typed layer over its C ABI. The page's main thread instantiates the module; anira starts the other threads from C on the same shared memory: the context's inference threads are Wasm Workers, and a handler streams audio through a Wasm Audio Worklet node whose render callback is C. Processors and inference engines are written in TypeScript against the package, with no rebuild of the module, and the model and contract files of a native host load unchanged.
 
 📚 **Full documentation:**
 [anira-project.github.io/anira/web-api](https://anira-project.github.io/anira/web-api/index.html)
@@ -27,8 +27,8 @@ streamed through the handler's audio node:
 import {
   Anira,
   Context,
-  Contract,
-  Handler,
+  ContractHandle,
+  InferenceHandler,
   ModelConfig,
   Pipeline,
   measureRenderGeometry,
@@ -36,7 +36,7 @@ import {
 
 const audioContext = new AudioContext({ sampleRate: 48000 })
 const anira = await Anira.create()
-anira.setLogHook()
+anira.setLogSink()
 anira.startLogPump()
 
 const context = Context.create(anira) // a pool of Wasm Workers, half the cores
@@ -45,22 +45,21 @@ const model = await ModelConfig.fromUrl(anira, '/models/gain.model.json')
 await audioContext.resume() // the geometry is measured on a running context
 const geometry = await measureRenderGeometry(audioContext) // the render quantum, the burst
 const contract = (
-  await Contract.fromUrl(anira, '/models/gain.contract.json')
-).setGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
-const handler = Handler.create(
-  context,
-  Pipeline.create(anira).addInference(model)
-).prepare(contract)
+  await ContractHandle.fromUrl(anira, '/models/gain.contract.json')
+).hardGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
+const handler = InferenceHandler.create(context, Pipeline.create(anira).addInference(model))
+const report = handler.prepare(contract) // the plans, as anira::InferenceHandler::prepare
+console.log(`${report.numPlans()} plan(s), latency ${handler.getLatency()} samples`)
 
 const audioNode = await handler.createAudioNode(audioContext, { params: [1] })
 audioNode.params.get(1)!.value = 0.5 // the model's Static gain
 source.connect(audioNode.node).connect(audioContext.destination)
 ```
 
-## Your own stages and engines
+## Your own processors and engines
 
 A JavaScript engine is defined in the context's worker module, which every inference Worker
-imports before its loop; a JavaScript stage in every scope that runs one of its phases (the page,
+imports before its loop; a JavaScript processor in every scope that runs one of its phases (the page,
 the worklet's module):
 
 ```ts
@@ -83,7 +82,7 @@ import workerModule from './double-engine.ts?worker&url'
 const context = Context.create(anira, { threads: 2, workerModule })
 const pipeline = Pipeline.create(anira)
   .addInference(model)
-  .registerEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
+  .addEngine('org.example.double', { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
 ```
 
 A JavaScript engine reads its model entry in each Worker (`load(model)`: the bytes
@@ -91,8 +90,12 @@ A JavaScript engine reads its model entry in each Worker (`load(model)`: the byt
 `defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())` runs the model the config names for
 `org.anira.onnxruntime-web`. With Vite, also exclude `onnxruntime-web` from `optimizeDeps`.
 
+The classes and their members are the ones of `anira.hpp` (`InferenceHandler.getLatency` for
+`get_latency`, `ContractHandle.hardGeometry` for `hard_geometry`); each class's doc comment names
+where the web differs (the audio node, the worker module, `fromUrl`, `destroy()`).
+
 `web/examples/model-file/` in the repository is the quick example as a page, and
-`web/examples/stage-and-engine/` a complete page with a TypeScript stage and engine, both bundled
+`web/examples/processor-and-engine/` a complete page with a TypeScript processor and engine, both bundled
 by Vite.
 
 ## License
