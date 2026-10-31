@@ -196,7 +196,9 @@ environment there, with the level in effect as its
 logger's severity, and every session of every loaded model is created over it; LiteRT its
 environment likewise, with the accelerators its registration finds, which a load's record is
 checked against; ExecuTorch initialises its runtime; LibTorch sets its intra-op thread count
-to one and c10's log level; TensorFlow Lite has nothing per process. What an engine builds at
+to one, OpenBLAS's too where the build carries it (the Linux aarch64 package, whose OpenBLAS
+pool ``torch::set_num_threads`` does not reach), and c10's log level; TensorFlow Lite has
+nothing per process. What an engine builds at
 init outlives every loaded model of the engine that holds the object (a custom engine's for as
 long as its handle, its pipelines or a loaded model holds it; a built-in engine's for as long
 as a loaded model does), and a load before the init is ``ANIRA_ERROR_INVALID_STATE`` on both.

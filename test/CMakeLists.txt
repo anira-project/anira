@@ -158,6 +158,11 @@ anira_add_test_binary(test_engines
 )
 # The engine room (src/engines/Adapter.h and the adapters) for test_Adapter.
 target_include_directories(test_engines PRIVATE "${anira_SOURCE_DIR}/src")
+# test_AdapterLibTorch looks OpenBLAS up with dlsym; glibc before 2.34 keeps it in libdl
+# (the plain signature, as anira_add_test_binary links the target).
+if(TANH_BINARY_FORMAT STREQUAL "ELF")
+	target_link_libraries(test_engines ${CMAKE_DL_LIBS})
+endif()
 
 anira_add_test_binary(test_handler
 	contracts/test_EngineLinkage.cpp

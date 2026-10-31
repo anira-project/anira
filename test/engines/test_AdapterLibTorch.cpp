@@ -3,7 +3,8 @@
 // hand: no Context, no threads), on the paths the end-to-end suites never take: a model handed
 // over as bytes instead of a path, a named entry (warm-up and steady state), a load failure, a
 // module returning a tuple of tensors, the inputs bound to the method's arguments by name, a
-// method with a defaulted argument, and an output of another shape than the record's.
+// method with a defaulted argument, an output of another shape than the record's, and the
+// engine's init pinning OpenBLAS (the Linux aarch64 package's BLAS) to one thread.
 
 #ifdef USE_LIBTORCH
 
@@ -21,6 +22,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 #include "engine_test_support.h"
 #include "engines/Adapter.h"
@@ -296,6 +301,37 @@ TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtLoadWithOrWithoutAWarmUp)
     };
     expect_refused_at_load(warmed);
     expect_refused_at_load(unwarmed);
+}
+
+// The engine's init pins OpenBLAS to one thread where the LibTorch build carries it (the Linux
+// aarch64 package): torch::set_num_threads(1) leaves OpenBLAS's own pool alone, whose workers
+// spin beside anira's inference threads on every core. The pool is widened first, so the test
+// does not pass on an OPENBLAS_NUM_THREADS=1 environment alone; a build without OpenBLAS skips.
+TEST(AdapterLibTorch, InitPinsOpenBlasToOneThread) {
+#if defined(__linux__)
+    using SetNumThreads = void (*)(int);
+    using GetNumThreads = int (*)();
+    void* const set_symbol = dlsym(RTLD_DEFAULT, "openblas_set_num_threads");
+    void* const get_symbol = dlsym(RTLD_DEFAULT, "openblas_get_num_threads");
+    if (set_symbol == nullptr || get_symbol == nullptr) {
+        GTEST_SKIP() << "this LibTorch build carries no OpenBLAS";
+    }
+    const auto set_num_threads = reinterpret_cast<SetNumThreads>(set_symbol);
+    const auto get_num_threads = reinterpret_cast<GetNumThreads>(get_symbol);
+    set_num_threads(2);
+    ASSERT_EQ(get_num_threads(), 2);
+
+    // A fresh engine object, so its init runs (the object remembers a successful one).
+    const std::shared_ptr<anira::engine::BuiltinEngine> engine =
+        anira::engine::make_builtin_engine(ANIRA_ENGINE_LIBTORCH);
+    ASSERT_NE(engine, nullptr);
+    anira_init_info info = ANIRA_INIT_INFO_INIT;
+    info.log_level = static_cast<uint32_t>(anira::get_log_level());
+    engine->ensure_init(info);
+    EXPECT_EQ(get_num_threads(), 1);
+#else
+    GTEST_SKIP() << "OpenBLAS ships with the Linux aarch64 LibTorch package alone";
+#endif
 }
 
 #endif  // USE_LIBTORCH

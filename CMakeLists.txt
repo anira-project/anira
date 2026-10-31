@@ -428,6 +428,11 @@ target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nloh
 # engine in cmake/engines/<engine>.cmake; how each is linked in
 # cmake/aniraEngineHelpers.cmake).
 anira_link_backends(${PROJECT_NAME})
+# The LibTorch engine's init looks OpenBLAS up with dlsym (src/engines/LibTorchAdapter.cpp,
+# pin_openblas_to_one_thread); glibc before 2.34 keeps dlsym in libdl.
+if(ANIRA_WITH_LIBTORCH AND TANH_BINARY_FORMAT STREQUAL "ELF")
+    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)
