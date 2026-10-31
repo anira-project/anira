@@ -136,8 +136,9 @@ endif()
 # Configure the Sphinx configuration file
 configure_file(${SPHINX_SOURCE_DIR}/conf.py.in ${SPHINX_BUILD_DIR}/conf.py @ONLY)
 
-# Collect all files in SPHINX_SOURCE_DIR as dependencies
-file(GLOB_RECURSE SPHINX_SOURCE_FILES "${SPHINX_SOURCE_DIR}/*")
+# Collect all files in SPHINX_SOURCE_DIR as dependencies; an added or deleted file re-runs
+# configure, so the list never names a file that is gone or misses a new one.
+file(GLOB_RECURSE SPHINX_SOURCE_FILES CONFIGURE_DEPENDS "${SPHINX_SOURCE_DIR}/*")
 
 # sphinx-js shells out to `typedoc`, so the locally-installed binary in the
 # docs/typedoc node_modules must be on PATH when sphinx-build runs.

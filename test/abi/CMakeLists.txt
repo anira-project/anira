@@ -195,8 +195,12 @@ if(_abi_on_wasm)
     # The smoke: C over the hook object em_smoke.pre.js installs, linked against the library
     # the way AniraWeb is (shared memory, the C ABI's export list, the runtime methods the hook
     # object reads the heap with).
+    # The list is read here, at configure time: a changed list (gen.py rewrites it from
+    # abi/anira.yml) re-runs configure, so a warm tree never links on a stale copy.
     set(_smoke_exports "${CMAKE_CURRENT_BINARY_DIR}/em_smoke_exports.txt")
-    file(READ "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt" _wasm_exports)
+    set(_wasm_exports_file "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_wasm_exports_file}")
+    file(READ "${_wasm_exports_file}" _wasm_exports)
     anira_abi_write_if_changed("${_smoke_exports}" "${_wasm_exports}_main\n")
     add_executable(anira_em_smoke em_smoke.c)
     anira_abi_consumer_target(anira_em_smoke C)
