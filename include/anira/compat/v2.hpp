@@ -2029,23 +2029,48 @@ public:
     /// destructors (they run inside the unload, under the loader lock).
     ~InferenceHandler() { anira_handler_destroy(m_handler); }
 
-    /// The backend the next block runs on; before prepare the request is kept and applied at
-    /// prepare. A backend without a plan keeps the selection and logs once through the real-time
-    /// queue (group anira.compat); rt_error() is untouched. Any thread.
+    /// Requests the backend for the next block. Any thread may call this while prepare runs;
+    /// the request is applied when preparation finishes if a handler is still prepared, else at
+    /// the next successful prepare.
+    /// A backend without a plan keeps the selection and logs through the real-time queue (group
+    /// anira.compat); rt_error() is untouched. Wait-free.
     void set_inference_backend(InferenceBackend inference_backend) noexcept ANIRA_NONBLOCKING {
         m_requested.store(static_cast<uint32_t>(inference_backend), std::memory_order_relaxed);
-        if (m_prepared.load(std::memory_order_acquire)) { select(inference_backend); }
+        m_pending.store(true);
+        apply_requested();
     }
-    /// The backend of the selected plan; before prepare the request, else the 2.x initial rule
-    /// (CUSTOM with a caller's engine, else the first entry this build runs, else CUSTOM).
+    /// The pending request while preparation runs, or the active plan after prepare. Before
+    /// prepare (or after a failed prepare), returns the request or the 2.x initial backend.
     InferenceBackend get_inference_backend() const noexcept ANIRA_NONBLOCKING {
-        if (m_prepared.load(std::memory_order_acquire)) {
+        if (!enter_plan_access()) {
+            if (m_preparing.load(std::memory_order_acquire)) {
+                if (m_pending.load(std::memory_order_acquire)) {
+                    const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+                    if (requested != k_no_request) {
+                        return static_cast<InferenceBackend>(requested);
+                    }
+                }
+            }
+            if (m_prepared.load(std::memory_order_acquire)) {
+                return static_cast<InferenceBackend>(
+                    m_selected_backend.load(std::memory_order_relaxed));
+            }
+        } else if (m_prepared.load(std::memory_order_acquire)) {
             const uint32_t plan = anira_handler_get_plan(m_handler);
-            if (plan < m_plan_backend.size()) { return m_plan_backend[plan]; }
+            if (plan < m_plan_backend.size()) {
+                const auto backend = m_plan_backend[plan];
+                leave_plan_access();
+                return backend;
+            }
+            leave_plan_access();
+        } else {
+            leave_plan_access();
         }
-        const uint32_t requested = m_requested.load(std::memory_order_relaxed);
-        return requested != k_no_request ? static_cast<InferenceBackend>(requested)
-                                         : m_initial_backend;
+        {
+            const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+            return requested != k_no_request ? static_cast<InferenceBackend>(requested)
+                                             : m_initial_backend;
+        }
     }
 
     /// Prepares for the host's stream: the configuration's legacy contract with the host
@@ -2318,6 +2343,8 @@ private:
         }
         m_caller_engine = custom_engine != nullptr;
         m_initial_backend = initial_backend(m_caller_engine);
+        m_selected_backend.store(static_cast<uint32_t>(m_initial_backend),
+                                 std::memory_order_relaxed);
         build_face(m_config.get_preprocess_input_channels(),
                    m_config.get_tensor_input_size(),
                    true,
@@ -2450,6 +2477,26 @@ private:
         latencies[std::string(spec.name())] = std::max(requested, floor);
     }
 
+    class PrepareGuard {
+    public:
+        explicit PrepareGuard(InferenceHandler& owner) noexcept : m_owner(owner) {
+            // Keep the lock-free getter fallback current while the gate is closed.
+            m_owner.cache_selected_backend();
+            m_owner.m_preparing.store(true);
+            while (m_owner.m_plan_readers.load() != 0) { std::this_thread::yield(); }
+            m_owner.cache_selected_backend();
+        }
+        ~PrepareGuard() {
+            m_owner.m_preparing.store(false);
+            m_owner.apply_requested();
+        }
+        PrepareGuard(const PrepareGuard&) = delete;
+        PrepareGuard& operator=(const PrepareGuard&) = delete;
+
+    private:
+        InferenceHandler& m_owner;
+    };
+
     void prepare_with(const HostConfig& host, const std::map<std::string, uint32_t>& latencies) {
         const float block = host.m_buffer_size;
         if (!(block > 0.F) || !std::isfinite(block)) {
@@ -2463,6 +2510,9 @@ private:
                              " is not above 0");
         }
         const std::string wanted = anchor_of(host);
+        const PrepareGuard guard(*this);
+        const bool had_prepared_handler = m_has_successful_prepare;
+        const uint32_t selected_before_prepare = m_selected_backend.load(std::memory_order_relaxed);
         if (m_prepared.load(std::memory_order_acquire) && wanted == m_anchor &&
             m_last_host.has_value() && *m_last_host == host && latencies == m_last_latencies) {
             anira_handler_reset(m_handler);
@@ -2519,14 +2569,27 @@ private:
                 .id = rows[i].engine_id != nullptr ? std::string_view(rows[i].engine_id)
                                                    : std::string_view()}));
         }
-        const uint32_t requested = m_requested.load(std::memory_order_relaxed);
-        if (requested != k_no_request) {
-            select(static_cast<InferenceBackend>(requested));
-        } else {
-            anira_handler_set_plan(m_handler, initial_plan());
-        }
         m_last_host = host;
         m_last_latencies = latencies;
+        const uint32_t active_plan = anira_handler_get_plan(m_handler);
+        if (active_plan < m_plan_backend.size()) {
+            m_selected_backend.store(static_cast<uint32_t>(m_plan_backend[active_plan]),
+                                     std::memory_order_relaxed);
+        }
+        if (m_pending.exchange(false)) {
+            const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+            if (requested != k_no_request) { select(static_cast<InferenceBackend>(requested)); }
+        } else if (had_prepared_handler) {
+            select(static_cast<InferenceBackend>(selected_before_prepare));
+        } else {
+            const uint32_t plan = initial_plan();
+            anira_handler_set_plan(m_handler, plan);
+            if (plan < m_plan_backend.size()) {
+                m_selected_backend.store(static_cast<uint32_t>(m_plan_backend[plan]),
+                                         std::memory_order_relaxed);
+            }
+        }
+        m_has_successful_prepare = true;
         m_prepared.store(true, std::memory_order_release);
     }
 
@@ -2551,16 +2614,54 @@ private:
     void select(InferenceBackend backend) noexcept ANIRA_NONBLOCKING {
         for (uint32_t i = 0; i < m_plan_backend.size(); ++i) {
             if (m_plan_backend[i] == backend) {
-                anira_handler_set_plan(m_handler, i);
+                if (anira_handler_set_plan(m_handler, i) == ANIRA_OK) {
+                    m_selected_backend.store(static_cast<uint32_t>(backend),
+                                             std::memory_order_relaxed);
+                }
                 return;
             }
         }
+        log_no_plan(backend);
+    }
+
+    void log_no_plan(InferenceBackend backend) const noexcept ANIRA_NONBLOCKING {
         anira_log_rt(ANIRA_LOG_ERROR,
                      "anira.compat",
                      "set_inference_backend: no plan runs on this backend; the selection is "
                      "unchanged",
                      static_cast<int32_t>(to_engine(backend).kind),
                      0);
+    }
+
+    void cache_selected_backend() noexcept {
+        if (!m_prepared.load(std::memory_order_acquire)) { return; }
+        const uint32_t plan = anira_handler_get_plan(m_handler);
+        if (plan < m_plan_backend.size()) {
+            m_selected_backend.store(static_cast<uint32_t>(m_plan_backend[plan]),
+                                     std::memory_order_relaxed);
+        }
+    }
+
+    // The gate and pending flag share a sequentially consistent order: a setter either
+    // enters after prepare opens the gate, or prepare observes its pending request.
+    bool enter_plan_access() const noexcept ANIRA_NONBLOCKING {
+        m_plan_readers.fetch_add(1);
+        if (!m_preparing.load()) { return true; }
+        m_plan_readers.fetch_sub(1);
+        return false;
+    }
+
+    void leave_plan_access() const noexcept ANIRA_NONBLOCKING { m_plan_readers.fetch_sub(1); }
+
+    void apply_requested() noexcept ANIRA_NONBLOCKING {
+        if (!enter_plan_access()) { return; }
+        if (m_prepared.load(std::memory_order_acquire)) {
+            if (m_pending.exchange(false)) {
+                const uint32_t requested = m_requested.load(std::memory_order_relaxed);
+                if (requested != k_no_request) { select(static_cast<InferenceBackend>(requested)); }
+            }
+        }
+        leave_plan_access();
     }
 
     static uint32_t num_slots(const std::vector<anira_tensor>& tensors) noexcept ANIRA_NONBLOCKING {
@@ -2671,6 +2772,11 @@ private:
     std::atomic<bool> m_prepared{false};
     std::atomic<bool> m_non_realtime{false};
     std::atomic<uint32_t> m_requested{k_no_request};
+    std::atomic<bool> m_pending{false};
+    std::atomic<bool> m_preparing{false};
+    mutable std::atomic<uint32_t> m_plan_readers{0};
+    std::atomic<uint32_t> m_selected_backend{static_cast<uint32_t>(CUSTOM)};
+    bool m_has_successful_prepare = false;
     bool m_blocking = false;       ///< the configuration's blocking_ratio is above 0
     bool m_caller_engine = false;  ///< the CUSTOM row runs the caller's engine
     InferenceBackend m_initial_backend = CUSTOM;

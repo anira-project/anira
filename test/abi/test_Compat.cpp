@@ -1694,6 +1694,10 @@ public:
     std::atomic<int> m_prepares{0};
     std::atomic<int> m_releases{0};
     std::atomic<int> m_calls{0};
+    std::atomic<bool> m_block_prepare{false};
+    std::atomic<bool> m_prepare_entered{false};
+    std::atomic<bool> m_continue_prepare{false};
+    std::atomic<bool> m_fail_prepares{false};
 
 private:
     class Prepared : public anira::Engine::Prepared {
@@ -1713,6 +1717,14 @@ private:
         explicit Loaded(KernelEngine& owner) : m_owner(owner) {}
         std::unique_ptr<anira::Engine::Prepared> prepare(
             const anira::PrepareInfo& /*info*/) override {
+            m_owner.m_prepare_entered.store(true, std::memory_order_release);
+            while (m_owner.m_block_prepare.load(std::memory_order_acquire) &&
+                   !m_owner.m_continue_prepare.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            if (m_owner.m_fail_prepares.load(std::memory_order_acquire)) {
+                throw std::runtime_error("injected engine prepare failure");
+            }
             m_owner.m_prepares.fetch_add(1);
             return std::make_unique<Prepared>(m_owner);
         }
@@ -2453,6 +2465,284 @@ TEST(AbiCompat, SetBackendWithoutAPlanKeepsTheSelection) {
 #ifdef ENABLE_LOGGING
     EXPECT_TRUE(collector.has("set_inference_backend: no plan runs on this backend", "rt"));
 #endif
+}
+
+TEST(AbiCompat, BackendRequestBeforePrepareIsAppliedDuringPrepare) {
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.set_inference_backend(v2::CUSTOM);
+    EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+    ASSERT_EQ(status_of([&] {
+                  handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+              }),
+              ANIRA_OK);
+    const auto plans = plans_of(handler.native());
+    const uint32_t active = anira_handler_get_plan(handler.native());
+    ASSERT_LT(active, plans.size());
+    EXPECT_EQ(backend_of(plans[active]), v2::CUSTOM);
+}
+
+TEST(AbiCompat, BackendWithoutAPlanBeforePrepareKeepsTheActivePlan) {
+    const Arguments args = oracle_gain_arguments();
+    std::optional<v2::InferenceBackend> missing;
+    for (const auto backend : k_backends) {
+        if (backend == v2::CUSTOM || std::ranges::any_of(args.m_rows, [backend](const Row& row) {
+                return row.m_backend == backend;
+            })) {
+            continue;
+        }
+        missing = backend;
+        break;
+    }
+    ASSERT_TRUE(missing.has_value());
+
+    v2::InferenceConfig config = make_shim(args);
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.set_inference_backend(*missing);
+    EXPECT_EQ(handler.get_inference_backend(), *missing);
+    ASSERT_EQ(status_of([&] {
+                  handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+              }),
+              ANIRA_OK);
+    const auto plans = plans_of(handler.native());
+    const uint32_t active = anira_handler_get_plan(handler.native());
+    ASSERT_LT(active, plans.size());
+    EXPECT_EQ(handler.get_inference_backend(), backend_of(plans[active]));
+    EXPECT_NE(handler.get_inference_backend(), *missing);
+    EXPECT_EQ(handler.rt_error(), ANIRA_OK);
+}
+
+// Both APIs must observe immediate plan changes made through the other API.
+TEST(AbiCompat, BackendSelectionInteroperatesWithNativeHandler) {
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const auto plans = plans_of(handler.native());
+    for (uint32_t plan = 0; plan < plans.size(); ++plan) {
+        const auto backend = backend_of(plans[plan]);
+        handler.set_inference_backend(backend);
+        EXPECT_EQ(backend_of(plans[anira_handler_get_plan(handler.native())]), backend);
+        const auto other = std::ranges::find_if(plans, [backend](const anira_plan_info& row) {
+            return backend_of(row) != backend;
+        });
+        if (other == plans.end()) { continue; }
+        handler.set_inference_backend(backend_of(*other));
+        ASSERT_EQ(anira_handler_set_plan(handler.native(), plan), ANIRA_OK);
+        EXPECT_EQ(handler.get_inference_backend(), backend);
+    }
+}
+
+TEST(AbiCompat, RepreparePreservesNativeSelectionAfterShimRequest) {
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const auto plans = plans_of(handler.native());
+    if (plans.empty()) { GTEST_SKIP() << "requires two backends"; }
+    const auto other = std::ranges::find_if(plans, [&](const anira_plan_info& row) {
+        return backend_of(row) != backend_of(plans.front());
+    });
+    if (other == plans.end()) { GTEST_SKIP() << "requires two backends"; }
+    handler.set_inference_backend(backend_of(plans.front()));
+    const auto other_index = static_cast<uint32_t>(std::distance(plans.begin(), other));
+    ASSERT_EQ(anira_handler_set_plan(handler.native(), other_index), ANIRA_OK);
+    const auto selected = backend_of(*other);
+    handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
+    EXPECT_EQ(handler.get_inference_backend(), selected);
+}
+
+TEST(AbiCompat, RepreparePreservesSelectionAfterConcurrentSetters) {
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const auto plans = plans_of(handler.native());
+    if (plans.empty()) { GTEST_SKIP() << "requires two backends"; }
+    const auto first = backend_of(plans.front());
+    const auto other = std::ranges::find_if(plans, [first](const anira_plan_info& row) {
+        return backend_of(row) != first;
+    });
+    if (other == plans.end()) { GTEST_SKIP() << "requires two backends"; }
+    const auto second = backend_of(*other);
+    for (int iteration = 0; iteration < 12; ++iteration) {
+        std::thread a([&] {
+            for (int i = 0; i < 1000; ++i) { handler.set_inference_backend(first); }
+        });
+        std::thread b([&] {
+            for (int i = 0; i < 1000; ++i) { handler.set_inference_backend(second); }
+        });
+        a.join();
+        b.join();
+        const auto selected = handler.get_inference_backend();
+        handler.prepare(v2::HostConfig(iteration % 2 == 0 ? 256.F : 512.F,
+                                       static_cast<float>(anira_test::k_rate)));
+        EXPECT_EQ(handler.get_inference_backend(), selected);
+    }
+}
+
+// The input/output anchors force handler reconstruction each pass. CUSTOM-only coverage also
+// applies to builds without an installed inference engine.
+TEST(AbiCompat, BackendAccessorsAreSafeWhilePreparing) {
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    std::atomic<bool> ready{false};
+    std::atomic<bool> done{false};
+    std::atomic<bool> mismatch{false};
+    std::thread accessor([&] {
+        ready.store(true, std::memory_order_release);
+        while (!done.load(std::memory_order_acquire)) {
+            handler.set_inference_backend(v2::CUSTOM);
+            if (handler.get_inference_backend() != v2::CUSTOM) {
+                mismatch.store(true, std::memory_order_relaxed);
+            }
+            std::this_thread::yield();
+        }
+    });
+    while (!ready.load(std::memory_order_acquire)) { std::this_thread::yield(); }
+
+    bool prepared = true;
+    for (size_t i = 0; i < 100; ++i) {
+        const float block = i % 2 == 0 ? 256.F : 512.F;
+        const bool input_anchor = i % 2 == 0;
+        const anira_status status = status_of([&] {
+            handler.prepare(v2::HostConfig(block,
+                                           static_cast<float>(anira_test::k_rate),
+                                           false,
+                                           0,
+                                           input_anchor));
+        });
+        if (status != ANIRA_OK) {
+            prepared = false;
+            break;
+        }
+    }
+    done.store(true, std::memory_order_release);
+    accessor.join();
+
+    EXPECT_TRUE(prepared) << "all geometry and anchor changes prepare successfully";
+    EXPECT_FALSE(mismatch.load(std::memory_order_relaxed));
+    EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+}
+
+TEST(AbiCompat, BackendRequestSurvivesFailedPrepareAndAppliesOnRetry) {
+    auto noop = [](auto) {};
+    KernelEngine<decltype(noop)> engine(noop);
+    v2::InferenceConfig config = make_shim(gain_custom_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+    engine.m_block_prepare.store(true, std::memory_order_relaxed);
+    engine.m_fail_prepares.store(true, std::memory_order_relaxed);
+
+    std::atomic<bool> prepare_done{false};
+    std::atomic<bool> request_observed{false};
+    std::thread accessor([&] {
+        while (!engine.m_prepare_entered.load(std::memory_order_acquire) &&
+               !prepare_done.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
+        }
+        if (engine.m_prepare_entered.load(std::memory_order_acquire)) {
+            handler.set_inference_backend(v2::CUSTOM);
+            request_observed.store(handler.get_inference_backend() == v2::CUSTOM,
+                                   std::memory_order_relaxed);
+        }
+        engine.m_continue_prepare.store(true, std::memory_order_release);
+    });
+
+    const anira_status failed = status_of(
+        [&] { handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate))); });
+    prepare_done.store(true, std::memory_order_release);
+    engine.m_continue_prepare.store(true, std::memory_order_release);
+    accessor.join();
+
+    EXPECT_TRUE(engine.m_prepare_entered.load(std::memory_order_acquire));
+    EXPECT_NE(failed, ANIRA_OK);
+    EXPECT_TRUE(request_observed.load(std::memory_order_relaxed));
+    EXPECT_EQ(handler.get_inference_backend(), v2::CUSTOM);
+
+    engine.m_block_prepare.store(false, std::memory_order_relaxed);
+    engine.m_fail_prepares.store(false, std::memory_order_relaxed);
+    engine.m_prepare_entered.store(false, std::memory_order_relaxed);
+    ASSERT_EQ(status_of([&] {
+                  handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+              }),
+              ANIRA_OK);
+    const auto plans = plans_of(handler.native());
+    const uint32_t active = anira_handler_get_plan(handler.native());
+    ASSERT_LT(active, plans.size());
+    EXPECT_EQ(backend_of(plans[active]), v2::CUSTOM);
+}
+
+TEST(AbiCompat, SelectionSurvivesFailedReprepareAndRetry) {
+    auto noop = [](auto) {};
+    KernelEngine<decltype(noop)> engine(noop);
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, engine, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const auto plans = plans_of(handler.native());
+    const auto other = std::ranges::find_if(plans, [](const anira_plan_info& row) {
+        return backend_of(row) != v2::CUSTOM;
+    });
+    if (other == plans.end()) { GTEST_SKIP() << "requires a non-custom backend"; }
+    const auto selected = backend_of(*other);
+    handler.set_inference_backend(selected);
+    engine.m_fail_prepares.store(true, std::memory_order_relaxed);
+    const auto status = status_of(
+        [&] { handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate))); });
+    EXPECT_NE(status, ANIRA_OK);
+    engine.m_fail_prepares.store(false, std::memory_order_relaxed);
+    ASSERT_EQ(status_of([&] {
+                  handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
+              }),
+              ANIRA_OK);
+    EXPECT_EQ(handler.get_inference_backend(), selected);
+}
+
+TEST(AbiCompat, BackendSwitchesRemainUsableAfterConcurrentPreparation) {
+    v2::InferenceConfig config = make_shim(oracle_gain_arguments());
+    v2::PrePostProcessor pp(config);
+    v2::InferenceHandler handler(pp, config, shim_context_config());
+    handler.prepare(v2::HostConfig(512.F, static_cast<float>(anira_test::k_rate)));
+    const auto plans = plans_of(handler.native());
+    std::vector<v2::InferenceBackend> backends;
+    for (const auto& plan : plans) { backends.push_back(backend_of(plan)); }
+    if (backends.size() < 2) { GTEST_SKIP() << "requires at least two plans"; }
+
+    std::atomic<bool> done{false};
+    std::thread accessor([&] {
+        size_t i = 0;
+        while (!done.load(std::memory_order_acquire)) {
+            handler.set_inference_backend(backends[i++ % backends.size()]);
+            static_cast<void>(handler.get_inference_backend());
+        }
+    });
+    bool prepared = true;
+    for (size_t i = 0; i < 6; ++i) {
+        const auto status = status_of([&] {
+            handler.prepare(v2::HostConfig(i % 2 == 0 ? 256.F : 512.F,
+                                           static_cast<float>(anira_test::k_rate),
+                                           false,
+                                           0,
+                                           i % 2 == 0));
+        });
+        if (status != ANIRA_OK) {
+            prepared = false;
+            break;
+        }
+    }
+    done.store(true, std::memory_order_release);
+    accessor.join();
+    EXPECT_TRUE(prepared);
+    for (const auto backend : backends) {
+        handler.set_inference_backend(backend);
+        EXPECT_EQ(handler.get_inference_backend(), backend);
+        const auto current = plans_of(handler.native());
+        EXPECT_EQ(backend_of(current[anira_handler_get_plan(handler.native())]), backend);
+    }
 }
 
 // Case 21: without an inference loop a waiting form runs the nonblocking stem, returns its

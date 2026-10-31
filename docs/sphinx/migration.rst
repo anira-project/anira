@@ -469,7 +469,9 @@ rest of this page is the way forward, and the header lets that happen one class 
      - Present with an ``anira::Engine&`` constructed with ``k_custom_engine_id``
        (``"anira.v2.custom"``), which the caller keeps alive past the handler.
    * - ``set_inference_backend`` / ``get_inference_backend``
-     - Present, wait-free, before ``prepare`` too.
+     - Present, wait-free, before ``prepare`` too; the accessors may run concurrently with
+       ``prepare``. A request is applied when preparation finishes if a handler is still prepared,
+       or at the next successful preparation otherwise.
    * - ``prepare(HostConfig)``
      - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
        reference tensor that is not streamable is refused.
@@ -525,6 +527,9 @@ single forms carry one slot per side; a block above the ``HostConfig`` buffer si
 ``pop_data`` with a deadline polls on a handler without a blocking ratio;
 ``set_non_realtime`` is never refused (a waiting call without an inference loop fails instead);
 ``set_inference_backend`` of a backend without a plan logs and keeps the selection;
+backend requests are safe to set and read while ``prepare`` rebuilds the handler; a request is
+applied when preparation finishes if a handler is still prepared, or at the next successful
+preparation otherwise, and a prepared handler applies requests immediately outside preparation;
 ``get_num_inference_threads`` is the pool size, 0 until the first ``prepare``;
 ``Context::shutdown()`` is refused while a handler lives; a processor that throws fails its chunk;
 a Static input a custom processor leaves alone reads zeros; the ``JsonConfigLoader`` has no
