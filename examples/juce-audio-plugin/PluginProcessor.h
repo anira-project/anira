@@ -113,9 +113,10 @@ struct AniraModel {
           ) {
     }
 
-    /// The host geometry completes the contract; prepare returns the plan report.
-    void prepare(double block, double sample_rate) {
-        contract.hard_geometry(block, block, sample_rate);
+    /// The host geometry completes the contract, blocks of 1 to block_max samples; prepare
+    /// returns the plan report.
+    void prepare(double block_max, double sample_rate) {
+        contract.hard_geometry(1, block_max, sample_rate);
         plan_report = handler.prepare(contract);
     }
     /// The plan of the report that runs the query's backend; none: the selection stays.

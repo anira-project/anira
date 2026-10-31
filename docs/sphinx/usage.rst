@@ -2056,6 +2056,11 @@ A contract written in code names the geometry on the aggregate, the budget besid
 
     contract.hard_geometry(1, 2048, 44100.0);  // blocks of 1 to 2048 samples
 
+A plugin host promises a largest block, not a fixed one (JUCE's ``prepareToPlay`` names the maximum
+only, CLAP's ``activate`` both ends), so a plugin declares that range: the latency anira reports then
+covers the smallest block as well, and the plugin hands it to the host for compensation. A fixed
+block is for a host that never changes it, at the lower latency.
+
 The anchor is the streamed tensor whose samples are the unit of both values. By default it is resolved automatically: the first streamed input, or, for generator models with no streamed input, the first streamed output. For models with several streamed tensors, name it with ``model_config.anchor("audio_out")`` (section 1.2) or ``"anchor": "audio_out"`` in the model file; a name that is not a streamed tensor is refused at prepare with ``ANIRA_ERROR_CONFIG``.
 
 ..  note::

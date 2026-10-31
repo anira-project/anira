@@ -1,5 +1,6 @@
 #include "anira-clap-demo.h"
 
+#include <algorithm>
 #include <array>
 #include <clap/helpers/host-proxy.hh>
 #include <clap/helpers/host-proxy.hxx>
@@ -155,11 +156,13 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index,
 bool AniraClapPluginExample::activate(double sampleRate,
                                       uint32_t minFrameCount,
                                       uint32_t maxFrameCount) noexcept {
-    // The host geometry completes the contract: a fixed block of maxFrameCount samples at
-    // sampleRate. Passing minFrameCount as block_min would allow smaller blocks, at the price
-    // of more latency.
+    // The host geometry completes the contract: the host's real block range at sampleRate,
+    // which CLAP's activate names on both ends (at least one sample). The latency anira reports
+    // covers every block size of that range, and latencyGet() hands it to the host, which
+    // compensates it. Each process call carries its own block (the tensor's extent is set per
+    // call).
     try {
-        m_contract.hard_geometry(maxFrameCount, maxFrameCount, sampleRate);
+        m_contract.hard_geometry(std::max(1U, minFrameCount), maxFrameCount, sampleRate);
         m_plan_report = m_inference_handler.prepare(m_contract);
     } catch (const anira::Error& error) {
         std::cerr << "anira: " << error.what() << std::endl;
