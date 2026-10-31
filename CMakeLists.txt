@@ -271,7 +271,19 @@ FetchContent_MakeAvailable(nlohmann_json)
 #    the ~400 of the API. test/unload registers the anira_exports CTest that diffs the
 #    real export table on every desktop platform.
 # ------------------------------------------------------------------------------
-add_library(${PROJECT_NAME})
+
+# ------------------------------------------------------------------------------
+# The objects and the library. anira_objects compiles every source of anira once, under the
+# symbol policy and with every build-time requirement (anira's include directories, the
+# engines, the USE_* switches, tanh-lib, the queue and the JSON library). libanira, shared or
+# static, is linked from those objects alone. The white-box test binaries (test/CMakeLists.txt)
+# link the objects themselves and reach the private classes; everything else (the black-box
+# suites, the gates, the install consumers, the examples) links anira::anira as a consumer does.
+# ------------------------------------------------------------------------------
+add_library(anira_objects OBJECT)
+tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
+
+add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects>)
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
 # The exported surface: the C++ namespace and, from the 3.x line on, the C entry
@@ -290,7 +302,7 @@ endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
-target_sources(${PROJECT_NAME}
+target_sources(anira_objects
     PRIVATE
 
         # Backend
@@ -317,19 +329,24 @@ target_sources(${PROJECT_NAME}
 )
 
 # include the public headers of the anira library in the top-level project include directory
-target_include_directories(${PROJECT_NAME}
+target_include_directories(anira_objects
     PUBLIC
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
 )
 # <anira/abi/build_info.h>: the version triple and the ABI pair, generated into the
 # build tree (never under include/, which the install rule copies verbatim).
-anira_generate_build_info(${PROJECT_NAME})
+anira_generate_build_info(anira_objects)
+target_include_directories(${PROJECT_NAME}
+    PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${ANIRA_GENERATED_INCLUDE_DIR}>
+)
 
 # The C ABI (include/anira/abi/, generated from abi/anira.yml by tools/abi/gen.py) and
 # its implementation: every entry body sits behind the exception firewall of
 # src/capi/capi_internal.h; the generated proc table makes a promised name without a
 # definition a link error.
-target_sources(${PROJECT_NAME} PRIVATE
+target_sources(anira_objects PRIVATE
     src/capi/config.cpp
     src/capi/error.cpp
     src/capi/ext_registry.cpp
@@ -351,7 +368,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 # into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
 # empty on every other binary format, so the TU exists on Wasm alone.
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
-    target_sources(${PROJECT_NAME} PRIVATE
+    target_sources(anira_objects PRIVATE
         src/platform/emscripten/em_audio.cpp
         src/platform/emscripten/em_console.cpp
         src/platform/emscripten/em_hooks.cpp
@@ -376,8 +393,8 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     set_property(GLOBAL APPEND PROPERTY JOB_POOLS anira_wasm_link=2)
 endif()
 
-# Shared between the anira target and the isolated ExecuTorch object target below —
-# the two must agree on every USE_* define (they shape the anira class layouts).
+# The objects are compiled with them, and anira passes them on to its consumers; the header
+# gates of test/abi take the same list.
 set(ANIRA_COMPILE_DEFINITIONS
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
@@ -391,48 +408,55 @@ set(ANIRA_COMPILE_DEFINITIONS
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
-target_compile_definitions(${PROJECT_NAME}
-    PUBLIC
-    ${ANIRA_COMPILE_DEFINITIONS}
-)
+foreach(_anira_target anira_objects ${PROJECT_NAME})
+    target_compile_definitions(${_anira_target}
+        PUBLIC
+        ${ANIRA_COMPILE_DEFINITIONS}
+    )
+endforeach()
 
 # The internal chain behind the ANIRA_NONBLOCKING entries is annotated post-3.0; until
 # then clang's function-effects analysis is silenced for the library alone (consumer-shaped
 # targets carry -Werror=function-effects from the tensor PR on).
-target_compile_options(${PROJECT_NAME} PRIVATE
+target_compile_options(anira_objects PRIVATE
     $<$<COMPILE_LANG_AND_ID:CXX,Clang,AppleClang>:-Wno-function-effects>
 )
 
 if(ANIRA_WITH_RTSAN OR ANIRA_WITH_ASAN OR ANIRA_WITH_UBSAN OR ANIRA_WITH_TSAN OR ANIRA_WITH_LSAN)
     include(cmake/tanh/sanitizers.cmake)
 endif()
-if(ANIRA_WITH_RTSAN)
-    tanh_add_sanitizer(${PROJECT_NAME} rtsan DEFINE ANIRA_WITH_RTSAN)
-endif()
-if(ANIRA_WITH_ASAN)
-    tanh_add_sanitizer(${PROJECT_NAME} asan DEFINE ANIRA_WITH_ASAN)
-endif()
-if(ANIRA_WITH_UBSAN)
-    tanh_add_sanitizer(${PROJECT_NAME} ubsan DEFINE ANIRA_WITH_UBSAN)
-endif()
-if(ANIRA_WITH_TSAN)
-    tanh_add_sanitizer(${PROJECT_NAME} tsan DEFINE ANIRA_WITH_TSAN)
-endif()
-if(ANIRA_WITH_LSAN)
-    tanh_add_sanitizer(${PROJECT_NAME} lsan DEFINE ANIRA_WITH_LSAN)
-endif()
+# The objects are instrumented; the library carries the same flags on to its consumers' links.
+foreach(_anira_target anira_objects ${PROJECT_NAME})
+    if(ANIRA_WITH_RTSAN)
+        tanh_add_sanitizer(${_anira_target} rtsan DEFINE ANIRA_WITH_RTSAN)
+    endif()
+    if(ANIRA_WITH_ASAN)
+        tanh_add_sanitizer(${_anira_target} asan DEFINE ANIRA_WITH_ASAN)
+    endif()
+    if(ANIRA_WITH_UBSAN)
+        tanh_add_sanitizer(${_anira_target} ubsan DEFINE ANIRA_WITH_UBSAN)
+    endif()
+    if(ANIRA_WITH_TSAN)
+        tanh_add_sanitizer(${_anira_target} tsan DEFINE ANIRA_WITH_TSAN)
+    endif()
+    if(ANIRA_WITH_LSAN)
+        tanh_add_sanitizer(${_anira_target} lsan DEFINE ANIRA_WITH_LSAN)
+    endif()
 
-target_link_libraries(${PROJECT_NAME} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
+    target_link_libraries(${_anira_target} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
 
-# Backends link PRIVATE through their anira::<engine> targets (details per
-# engine in cmake/engines/<engine>.cmake; how each is linked in
-# cmake/aniraEngineHelpers.cmake).
-anira_link_backends(${PROJECT_NAME})
-# The LibTorch engine's init looks OpenBLAS up with dlsym (src/engines/LibTorchAdapter.cpp,
-# pin_openblas_to_one_thread); glibc before 2.34 keeps dlsym in libdl.
-if(ANIRA_WITH_LIBTORCH AND TANH_BINARY_FORMAT STREQUAL "ELF")
-    target_link_libraries(${PROJECT_NAME} PRIVATE ${CMAKE_DL_LIBS})
-endif()
+    # Backends link PRIVATE through their anira::<engine> targets (details per
+    # engine in cmake/engines/<engine>.cmake; how each is linked in
+    # cmake/aniraEngineHelpers.cmake): the library for its own link and, when static, its
+    # export; the objects so that a white-box binary linking them gets the same closure.
+    anira_link_backends(${_anira_target})
+    # The LibTorch engine's init looks OpenBLAS up with dlsym (src/engines/LibTorchAdapter.cpp,
+    # pin_openblas_to_one_thread); glibc before 2.34 keeps dlsym in libdl.
+    if(ANIRA_WITH_LIBTORCH AND TANH_BINARY_FORMAT STREQUAL "ELF")
+        target_link_libraries(${_anira_target} PRIVATE ${CMAKE_DL_LIBS})
+    endif()
+endforeach()
+unset(_anira_target)
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)

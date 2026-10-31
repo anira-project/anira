@@ -59,11 +59,24 @@ endif ()
 # src/<dir> and include/anira/<dir>, and the root files cover the root units. The
 # test_* naming is load-bearing: it is what the shared ci-actions mobile runners
 # auto-discover.
+#
+# anira_add_test_binary(<target> [WHITE_BOX] <sources>...). A black-box binary links
+# anira::anira and sees what a consumer sees: the public headers and the library's exports. A
+# WHITE_BOX binary reads anira's private classes, so it links the library's objects
+# (anira_objects, CMakeLists.txt) instead, with the private headers under src/ on its include
+# path and ANIRA_STATIC defined (the C entries are linked in, never imported).
 function(anira_add_test_binary TARGET)
+    cmake_parse_arguments(PARSE_ARGV 1 arg "WHITE_BOX" "" "")
     # support/CoreReclaim.cpp releases the context core after the binary's last test,
     # so the immortal-by-design core is not reported as a leak under LeakSanitizer.
-    add_executable(${TARGET} ${ARGN} "${CMAKE_CURRENT_SOURCE_DIR}/support/CoreReclaim.cpp")
-    target_link_libraries(${TARGET} anira::anira gtest_main)
+    add_executable(${TARGET} ${arg_UNPARSED_ARGUMENTS} "${CMAKE_CURRENT_SOURCE_DIR}/support/CoreReclaim.cpp")
+    if(arg_WHITE_BOX)
+        target_link_libraries(${TARGET} anira_objects gtest_main)
+        target_compile_definitions(${TARGET} PRIVATE ANIRA_STATIC)
+        target_include_directories(${TARGET} PRIVATE "${anira_SOURCE_DIR}/src")
+    else()
+        target_link_libraries(${TARGET} anira::anira gtest_main)
+    endif()
 
     if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
         # On mobile the test binary runs on a device/emulator/simulator, reached over a
@@ -103,10 +116,11 @@ endfunction()
 #   (a) through anira/compat/v2.hpp, the 2.x source-compatible face over the C ABI:
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
 #   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Processors).
-#   (c) white-box over the private headers (the src include directory): test_scheduler,
-#       test_engines, test_utils, plus test_OneSidedStreamingInternals (the struct-pool cases of
-#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal
-#       (test_abi's internal probes and the 2.x arms, PR 12).
+#   (c) white-box over the private headers (WHITE_BOX: the library's objects, the src include
+#       directory): test_scheduler, test_engines, test_utils, plus
+#       test_OneSidedStreamingInternals (the struct-pool cases of test_OneSidedStreaming on the
+#       2.x session, PR 8), and test_abi, whose suites read the C handler's internals
+#       (handler_support.h) beside its C entries (PR 12).
 #   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
 #       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
 #       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_CoreConfig,
@@ -119,7 +133,7 @@ endfunction()
 # white-box suites left the tests, the arms of test_abi check the 3.x side against closed
 # forms, and the session runs on the 3.x configuration.
 
-anira_add_test_binary(test_utils
+anira_add_test_binary(test_utils WHITE_BOX
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
 	utils/test_Logger.cpp
@@ -127,9 +141,8 @@ anira_add_test_binary(test_utils
 )
 # test_Logger reads its C handlers white-box through test/abi/handler_support.h, which includes
 # the private headers.
-target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 
-anira_add_test_binary(test_scheduler
+anira_add_test_binary(test_scheduler WHITE_BOX
 	scheduler/test_PlanSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
 	scheduler/test_ContextConfigMismatch.cpp
@@ -149,16 +162,14 @@ anira_add_test_binary(test_scheduler
 )
 # The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
 # engine room (src/engines/Adapter.h) the suites read white-box.
-target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
-anira_add_test_binary(test_engines
+anira_add_test_binary(test_engines WHITE_BOX
 	engines/test_Adapter.cpp
 	engines/test_ExecuTorchModelFunction.cpp
 	engines/test_AdapterExecuTorch.cpp
 	engines/test_AdapterLibTorch.cpp
 )
 # The engine room (src/engines/Adapter.h and the adapters) for test_Adapter.
-target_include_directories(test_engines PRIVATE "${anira_SOURCE_DIR}/src")
 # test_AdapterLibTorch looks OpenBLAS up with dlsym; glibc before 2.34 keeps it in libdl
 # (the plain signature, as anira_add_test_binary links the target).
 if(TANH_BINARY_FORMAT STREQUAL "ELF")
@@ -174,7 +185,7 @@ anira_add_test_binary(test_handler
 
 # The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the
 # exception firewall and the log entries. test/abi/ also holds the ABI gates.
-anira_add_test_binary(test_abi
+anira_add_test_binary(test_abi WHITE_BOX
 	abi/test_Version.cpp
 	abi/test_Error.cpp
 	abi/test_Firewall.cpp
@@ -204,8 +215,8 @@ anira_add_test_binary(test_abi
 	abi/test_Tensor.cpp
 	abi/test_Compat.cpp
 )
-# capi_internal.h (the firewall probe) and the generated tables under src/capi/.
-target_include_directories(test_abi PRIVATE "${anira_SOURCE_DIR}/src")
+# capi_internal.h (the firewall probe), the generated tables under src/capi/ and the C handler's
+# body (handler_support.h).
 add_subdirectory(abi)
 
 # Header-isolation check: anira's public headers must compile with anira's own include
