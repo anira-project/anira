@@ -236,7 +236,10 @@ even from late-running static destructors) and is reclaimed at unload.
        inference on a thread, or an engine that does not return), so the hook writes
        ``anira: the library is being unloaded while an inference is still running ...``
        to stderr and aborts, instead of hanging the host for good. At process exit the
-       hook waits without a bound and the process exits normally. On Windows nothing that
+       pool is stopped earlier, by the core's exit handler, which waits up to two seconds for
+       the inferences in flight before the static state the engines' runtimes built at their
+       first load is torn down (an inference running over it would crash the process); the
+       hook then joins the pool without a bound, and the process exits normally. On Windows nothing that
        runs at ``DLL_PROCESS_DETACH`` may join a thread (loader lock), so call
        ``anira_shutdown()`` from your module-exit entry point, as
        ``examples/clap-audio-plugin`` does, after destroying the handlers. It is

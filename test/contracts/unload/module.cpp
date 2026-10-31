@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -106,12 +107,44 @@ anira_status ANIRA_CALL slow_process(const anira_engine_ctx* ctx, void* prepared
     return passthrough_process(ctx, prepared, user_data);
 }
 
+// The static state of UNLOADTEST_ENGINE_RUNTIME_STATICS's runtime, what ONNX Runtime keeps in
+// static storage (its environment, its type tables): built once, its destructor registered
+// for the process's exit then, and torn down by it. The flag beside it is trivially
+// destructible, so the process reads it after the teardown too.
+std::atomic<bool> s_runtime_statics_alive{false};
+
+struct RuntimeStatics {
+    RuntimeStatics() { s_runtime_statics_alive.store(true); }
+    ~RuntimeStatics() { s_runtime_statics_alive.store(false); }
+    RuntimeStatics(const RuntimeStatics&) = delete;
+    RuntimeStatics& operator=(const RuntimeStatics&) = delete;
+    RuntimeStatics(RuntimeStatics&&) = delete;
+    RuntimeStatics& operator=(RuntimeStatics&&) = delete;
+};
+
+void build_runtime_statics() {
+    static const RuntimeStatics k_statics;
+}
+
+// The pass-through after s_slow_ms of sleep, over the runtime's static state: an inference that
+// finds it torn down exits the process with the code the test looks for (ONNX Runtime fails
+// there with "GetElementType is not implemented" and crashes).
+anira_status ANIRA_CALL runtime_statics_process(const anira_engine_ctx* ctx,
+                                                void* prepared,
+                                                void* user_data) {
+    s_entered.fetch_add(1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(s_slow_ms.load()));
+    if (!s_runtime_statics_alive.load()) { std::_Exit(UNLOADTEST_TORN_DOWN_EXIT_CODE); }
+    return passthrough_process(ctx, prepared, user_data);
+}
+
 // The process of an engine of unloadtest_create_engine; nullptr for an unknown behaviour.
 anira_engine_process_fn engine_process_of(int behaviour) {
     switch (behaviour) {
         case UNLOADTEST_ENGINE_STALLING: return stalling_process;
         case UNLOADTEST_ENGINE_LOADER_LOCK: return loader_lock_process;
         case UNLOADTEST_ENGINE_SLOW: return slow_process;
+        case UNLOADTEST_ENGINE_RUNTIME_STATICS: return runtime_statics_process;
         default: return nullptr;
     }
 }
@@ -332,6 +365,8 @@ void* unloadtest_create_engine(int behaviour, int slow_ms) {
     s_slow_ms.store(slow_ms);
     const anira_engine_process_fn process = engine_process_of(behaviour);
     if (process == nullptr) { return nullptr; }
+    // The runtime builds its static state before the prepare starts the pool.
+    if (behaviour == UNLOADTEST_ENGINE_RUNTIME_STATICS) { build_runtime_statics(); }
     Instance* instance = nullptr;
     try {
         instance = make_instance(Kind::Custom, process);

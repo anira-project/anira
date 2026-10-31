@@ -116,6 +116,8 @@ bool is_mapped(const char* path) {
 constexpr int k_engine_stalling = 1;
 constexpr int k_engine_loader_lock = 2;
 constexpr int k_engine_slow = 3;
+constexpr int k_engine_runtime_statics = 4;
+constexpr int k_torn_down_exit_code = 9;  // UNLOADTEST_TORN_DOWN_EXIT_CODE
 
 using CreateFn = void* (*)();
 using CreateEngineFn = void* (*)(int, int);
@@ -607,6 +609,36 @@ TEST(LibraryUnloadDeathTest, ExitWithASlowInferenceInFlightExitsNormally) {
         },
         ::testing::ExitedWithCode(0),
         "");
+#endif
+}
+
+// A program that exits while an inference of an engine whose runtime keeps static state runs
+// (ONNX Runtime: its environment and type tables, built at its first load): the exit handlers
+// run in the reverse order of their registration, and the core's, registered when the prepare
+// starts the pool, stops the pool and waits for the inference before the handler registered
+// ahead of it tears that state down. Without that wait the inference ran over it (ONNX Runtime:
+// "GetElementType is not implemented", then a SIGSEGV), which the module's engine reports with
+// its own exit status.
+TEST(LibraryUnloadDeathTest, ExitWaitsForTheInferenceBeforeTheRuntimesStaticsGo) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler of the core on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_engine(k_engine_runtime_statics, 300);
+            if (instance == nullptr) { _exit(3); }
+            module.api().m_process(instance, 1);
+            if (!wait_for_entered(module.api(), 1)) { _exit(4); }
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        "");
+    static_cast<void>(k_torn_down_exit_code);
 #endif
 }
 

@@ -25,14 +25,24 @@ ANIRA_TEST_EXPORT void* unloadtest_create_builtin(void);
 /// The engines of unloadtest_create_engine, all of this module on the custom row: an inference
 /// that never ends on its own (it sleeps until the process dies); one that needs the loader
 /// lock again and again until the process dies (dlopen on glibc, which a dlclose in progress
-/// holds; elsewhere it stalls); one that sleeps slow_ms, then passes the block through.
+/// holds; elsewhere it stalls); one that sleeps slow_ms, then passes the block through; one
+/// whose runtime keeps static state, built when the instance is created (before its prepare
+/// starts the pool, as an engine's runtime builds its environment at its first load) and
+/// torn down by the exit handler that construction registered, which sleeps slow_ms and then
+/// exits the process with UNLOADTEST_TORN_DOWN_EXIT_CODE when that state is gone, else passes
+/// the block through.
 enum {
     UNLOADTEST_ENGINE_STALLING = 1,
     UNLOADTEST_ENGINE_LOADER_LOCK = 2,
     UNLOADTEST_ENGINE_SLOW = 3,
+    UNLOADTEST_ENGINE_RUNTIME_STATICS = 4,
 };
+/// The exit status of a process whose UNLOADTEST_ENGINE_RUNTIME_STATICS inference ran over
+/// its torn-down runtime state.
+#define UNLOADTEST_TORN_DOWN_EXIT_CODE 9
 /// Creates and prepares an instance over the module engine of `behaviour` (above; slow_ms
-/// for UNLOADTEST_ENGINE_SLOW); nullptr, with nothing left behind, if a step failed.
+/// for UNLOADTEST_ENGINE_SLOW and UNLOADTEST_ENGINE_RUNTIME_STATICS); nullptr, with nothing
+/// left behind, if a step failed.
 ANIRA_TEST_EXPORT void* unloadtest_create_engine(int behaviour, int slow_ms);
 /// The inferences of the engines of unloadtest_create_engine that reached their process.
 ANIRA_TEST_EXPORT int unloadtest_engine_entered(void);
