@@ -248,7 +248,10 @@ even from late-running static destructors) and is reclaimed at unload.
        pool is stopped earlier, by the core's exit handler, which waits up to two seconds for
        the inferences in flight before the static state the engines' runtimes built at their
        first load is torn down (an inference running over it would crash the process); the
-       hook then joins the pool without a bound, and the process exits normally. On Windows nothing that
+       hook then joins the pool without a bound, and the process exits normally. Both run on the
+       thread that called ``exit``, and neither waits for the core's lifecycle lock when that
+       thread holds it: an engine whose init or load ends the process from inside
+       ``anira_handler_prepare`` exits with its own status. On Windows nothing that
        runs at ``DLL_PROCESS_DETACH`` may join a thread (loader lock), so call
        ``anira_shutdown()`` from your module-exit entry point, as
        ``examples/clap-audio-plugin`` does, after destroying the handlers. It is

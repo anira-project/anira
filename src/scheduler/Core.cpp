@@ -42,19 +42,64 @@
 
 namespace anira {
 
+namespace detail {
+
+/// The core's lifecycle lock: a mutex that knows which thread holds it. The exit paths (the
+/// process-exit handler and the library-unload hook, UnloadHook below) run on the thread that
+/// called exit(), and that thread may be inside a lifecycle call that holds the lock: an
+/// engine's init or load that ends the process from inside anira_handler_prepare. Such a call
+/// never resumes, so the state is that thread's alone, and a wait for the lock would never end;
+/// lock_unless_held() is what the exit paths take instead. try_lock() answers false to the
+/// holder (std::mutex's is undefined there).
+class LifecycleMutex {
+public:
+    void lock() {
+        m_mutex.lock();
+        m_owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    }
+    bool try_lock() {
+        if (held_by_this_thread() || !m_mutex.try_lock()) { return false; }
+        m_owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        return true;
+    }
+    void unlock() {
+        m_owner.store(std::thread::id{}, std::memory_order_relaxed);
+        m_mutex.unlock();
+    }
+
+    /// Whether the calling thread holds the lock: exact for the caller, since only the holder
+    /// writes its own id and clears it before it lets go.
+    bool held_by_this_thread() const noexcept {
+        return m_owner.load(std::memory_order_relaxed) == std::this_thread::get_id();
+    }
+
+    /// The lock of an exit path: taken, or left alone (not owned) when the calling thread holds
+    /// it already.
+    std::unique_lock<LifecycleMutex> lock_unless_held() {
+        std::unique_lock<LifecycleMutex> lock(*this, std::defer_lock);
+        if (!held_by_this_thread()) { lock.lock(); }
+        return lock;
+    }
+
+private:
+    std::mutex m_mutex;
+    std::atomic<std::thread::id> m_owner{};
+};
+
+}  // namespace detail
+
 // The core's entire state. Allocated once by Core::get_state() and never destroyed
 // while the library is loaded: the only static is the trivially destructible pointer
 // below, so no destructor of ours is registered for static teardown and every call
 // into the core stays valid until the library's pages are unmapped. Freed only by
 // Core::release_core_if_idle() (from the unload hook) once nothing uses it.
 struct Core::State {
-    std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle state
-                                   ///< below (registry, thread pool, the pool of prepared
-                                   ///< models, configuration) across create_session /
-                                   ///< release_session / prepare_session / shutdown.
-                                   ///< Hosts may drive several sessions' lifecycles
-                                   ///< from different threads concurrently. Never taken
-                                   ///< on realtime paths; never taken by pool threads.
+    /// Serializes mutation of the shared lifecycle state below (registry, thread pool, the
+    /// pool of prepared models, configuration) across create_session / release_session /
+    /// prepare_session / shutdown. Hosts may drive several sessions' lifecycles from different
+    /// threads concurrently. Never taken on realtime paths; never taken by pool threads; not
+    /// waited for by an exit path on the thread that holds it (detail::LifecycleMutex).
+    detail::LifecycleMutex m_lifecycle_mutex;
 
     std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
 
@@ -168,8 +213,9 @@ struct UnloadHook {
     static void run();
 
 private:
-    /// Tells every thread of the pool to stop (under the lifecycle lock) and returns them; the
-    /// pool keeps the threads, which only shutdown() empties, so the pointers outlive a wait.
+    /// Tells every thread of the pool to stop (under the lifecycle lock, unless the calling
+    /// thread holds it: exit() from inside a lifecycle call) and returns them; the pool keeps
+    /// the threads, which only shutdown() empties, so the pointers outlive a wait.
     static std::vector<const scheduler::InferenceThread*> stop_pool();
 };
 
@@ -190,6 +236,11 @@ std::atomic<void*> s_state{nullptr};
 // runs after the hook (the image's __cxa_finalize comes last in its fini pass), too late to
 // matter. A core first put to work before main (a static constructor) registers the handler
 // before the loader's and is not told: its hook takes every exit for an unload.
+//
+// The exit handler and the unload hook run on the thread that called exit(), which holds the
+// core's lifecycle lock when it called it from inside a lifecycle call (an engine's init or
+// load, under anira_handler_prepare): neither waits for that lock then
+// (detail::LifecycleMutex::lock_unless_held), so such an exit ends with its own status.
 //
 // The exit handlers run in the reverse order of their registration, so this one runs before
 // every one registered ahead of it, the destructors of the static state an engine's runtime
@@ -287,7 +338,9 @@ std::vector<const scheduler::InferenceThread*> UnloadHook::stop_pool() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return pool; }
     Core::State& state = *static_cast<Core::State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    // Not waited for when this thread holds it: exit() from inside a lifecycle call.
+    const std::unique_lock<LifecycleMutex> lifecycle_lock =
+        state.m_lifecycle_mutex.lock_unless_held();
     pool.reserve(state.m_thread_pool.size());
     for (const std::unique_ptr<scheduler::InferenceThread>& thread : state.m_thread_pool) {
         thread->request_stop();
@@ -431,7 +484,7 @@ bool Core::has_core() {
 void Core::register_context(const anira_context_config& context_config) {
     State& state = get_state();
     const anira_context_config config = sanitize_config(context_config);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
     apply_or_compare_config_locked(state, config, /*builds_pool=*/false);
@@ -449,7 +502,7 @@ unsigned int Core::get_num_contexts() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_num_contexts;
 }
 
@@ -458,7 +511,7 @@ void Core::register_handler() {
     // created, so the queue and the drain already exist; the handler's session brings the
     // configuration when it is prepared.
     State& state = get_state();
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     ++state.m_num_handlers;
 }
 
@@ -473,7 +526,7 @@ unsigned int Core::get_num_handlers() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_num_handlers;
 }
 
@@ -481,7 +534,7 @@ void Core::unregister_user(State& state, unsigned int& counter) {
     std::unique_ptr<LogDrainLoop> log_drain_to_stop;
     bool was_last_user = false;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         if (counter == 0) { return; }
         --counter;
         was_last_user = !has_users_locked(state);
@@ -500,7 +553,7 @@ anira_wait_strategy Core::get_wait_strategy() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return ANIRA_WAIT_SPIN_BACKOFF; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return has_users_locked(state) ? state.m_core_config.m_wait : ANIRA_WAIT_SPIN_BACKOFF;
 }
 
@@ -508,13 +561,13 @@ size_t Core::get_thread_pool_size() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_thread_pool.size();
 }
 
 size_t Core::prospective_thread_pool_size(const anira_context_config& context_config) {
     State& state = get_state();
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return prospective_pool_size_locked(state, sanitize_config(context_config));
 }
 
@@ -796,7 +849,7 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     // Whole function locked: applies or reconciles the configuration, hands out shared
     // loaded models from the pool, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     const anira_context_config config = sanitize_config(context_config);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
@@ -1006,7 +1059,7 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
     // context keeps the queue and its drain alive past the last session.
     bool was_last_user = false;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         unregister_session_locked(state, session);
         was_last_user = !has_users_locked(state);
         if (was_last_user) { log_drain_to_stop = take_log_drain_locked(state); }
@@ -1030,7 +1083,11 @@ void Core::shutdown() {
     State& state = *static_cast<State*>(existing);
     std::unique_ptr<LogDrainLoop> log_drain_to_stop;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        // The unload hook runs this at exit, on the thread that called exit(), which holds the
+        // lock when it called it from inside a lifecycle call (an engine's load): not waited
+        // for then, since that call never resumes (detail::LifecycleMutex).
+        const std::unique_lock<detail::LifecycleMutex> lifecycle_lock =
+            state.m_lifecycle_mutex.lock_unless_held();
         if (!state.m_sessions.empty()) {
             ANIRA_LOG_ERROR(log_group::k_core,
                             "Core::shutdown() called with %zu registered session(s): the "
@@ -1109,7 +1166,8 @@ void Core::report_rt_latches() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return; }
     State& state = *static_cast<State*>(existing);
-    const std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
+    const std::unique_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex,
+                                                                  std::try_to_lock);
     if (!lifecycle_lock.owns_lock()) { return; }
     for (const auto& session : state.m_sessions) {
         uint32_t delta = 0;
@@ -1131,7 +1189,8 @@ bool Core::release_core_if_idle() {
     State& state = *static_cast<State*>(existing);
     // Never block: this runs at library unload, possibly under a loader lock. A held
     // lifecycle lock means someone is inside the core — then it is not idle.
-    std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
+    std::unique_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex,
+                                                            std::try_to_lock);
     if (!lifecycle_lock.owns_lock()) { return false; }
     // User-managed threads (make_inference_thread) reference the queue inside the core; a
     // registered context or handler is a user; on WebAssembly a Worker may still be inside
@@ -1192,7 +1251,7 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
         // Only the pool start touches shared state; the drain and the
         // session's own prepare above are session-local and stay unlocked.
         State& state = get_state();
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         start_thread_pool_locked(state);
     }
 
@@ -1415,7 +1474,7 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return {}; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_sessions;
 }
 
@@ -1614,7 +1673,7 @@ int Core::get_num_sessions() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return static_cast<int>(state.m_sessions.size());
 }
 
@@ -1688,7 +1747,7 @@ std::unique_ptr<scheduler::InferenceThread> Core::make_inference_thread() {
     std::string worker_module;
 #endif
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         wait = state.m_core_config.m_wait;
 #ifdef __EMSCRIPTEN__
         worker_module = state.m_core_config.m_em_worker_module;
@@ -1713,7 +1772,7 @@ bool Core::has_inference_threads() {
     bool pool_exists = false;
     if (void* existing = s_state.load(std::memory_order_acquire)) {
         State& state = *static_cast<State*>(existing);
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         pool_exists = !state.m_thread_pool.empty();
     }
     return pool_exists || scheduler::InferenceThread::get_num_active_threads() > 0;

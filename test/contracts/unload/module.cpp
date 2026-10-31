@@ -17,6 +17,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <thread>
@@ -138,6 +139,17 @@ anira_status ANIRA_CALL runtime_statics_process(const anira_engine_ctx* ctx,
     return passthrough_process(ctx, prepared, user_data);
 }
 
+// The load of UNLOADTEST_ENGINE_EXIT_IN_LOAD: a runtime that ends the process from inside its
+// load (a fatal-error handler, a failed licence check) while anira_handler_prepare holds the
+// core's lifecycle lock. The marker says the exit came from here.
+anira_status ANIRA_CALL exit_in_load(const anira_engine_load_info* /*info*/,
+                                     void* /*user_data*/,
+                                     void** /*out_loaded*/) {
+    std::fputs(UNLOADTEST_EXIT_IN_LOAD_MARKER, stderr);
+    std::fflush(stderr);
+    std::exit(0);
+}
+
 // The process of an engine of unloadtest_create_engine; nullptr for an unknown behaviour.
 anira_engine_process_fn engine_process_of(int behaviour) {
     switch (behaviour) {
@@ -145,14 +157,18 @@ anira_engine_process_fn engine_process_of(int behaviour) {
         case UNLOADTEST_ENGINE_LOADER_LOCK: return loader_lock_process;
         case UNLOADTEST_ENGINE_SLOW: return slow_process;
         case UNLOADTEST_ENGINE_RUNTIME_STATICS: return runtime_statics_process;
+        case UNLOADTEST_ENGINE_EXIT_IN_LOAD: return passthrough_process;
         default: return nullptr;
     }
 }
 
-// A new engine object over `process` under k_custom_engine; nullptr when the create fails.
-anira_custom_engine* make_engine(anira_engine_process_fn process) {
+// A new engine object over `process` (and `load`, when set) under k_custom_engine; nullptr when
+// the create fails.
+anira_custom_engine* make_engine(anira_engine_process_fn process,
+                                 anira_engine_load_fn load = nullptr) {
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.process = process;
+    desc.load = load;
     anira_custom_engine* engine = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_custom_engine_create(k_custom_engine, &desc, &engine, &err) != ANIRA_OK) {
@@ -253,9 +269,11 @@ void destroy_instance(Instance* instance) {
 }
 
 // A context (2 pool threads, SpinBackoff, Warning) and a handler over the model of the kind,
-// the custom row on an engine over `process`; nullptr, with nothing left behind, when a step
-// fails.
-Instance* make_instance(Kind kind, anira_engine_process_fn process = passthrough_process) {
+// the custom row on an engine over `process` and `load`; nullptr, with nothing left behind,
+// when a step fails.
+Instance* make_instance(Kind kind,
+                        anira_engine_process_fn process = passthrough_process,
+                        anira_engine_load_fn load = nullptr) {
     const bool custom = kind == Kind::Custom;
     auto* instance = new Instance();
     anira_error err = ANIRA_ERROR_INIT;
@@ -273,7 +291,7 @@ Instance* make_instance(Kind kind, anira_engine_process_fn process = passthrough
         if (ok && custom) {
             // The custom row's engine, added before the handler copies the pipeline; the
             // pipeline holds the object, so the handle goes right away.
-            anira_custom_engine* engine = make_engine(process);
+            anira_custom_engine* engine = make_engine(process, load);
             ok = engine != nullptr && anira_pipeline_add_engine(pipeline, engine, &err) == ANIRA_OK;
             anira_custom_engine_destroy(engine);
         }
@@ -369,7 +387,10 @@ void* unloadtest_create_engine(int behaviour, int slow_ms) {
     if (behaviour == UNLOADTEST_ENGINE_RUNTIME_STATICS) { build_runtime_statics(); }
     Instance* instance = nullptr;
     try {
-        instance = make_instance(Kind::Custom, process);
+        instance =
+            make_instance(Kind::Custom,
+                          process,
+                          behaviour == UNLOADTEST_ENGINE_EXIT_IN_LOAD ? exit_in_load : nullptr);
     } catch (...) { return nullptr; }
     if (instance == nullptr) { return nullptr; }
     if (prepare_instance(*instance) != ANIRA_OK) {

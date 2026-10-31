@@ -117,6 +117,9 @@ constexpr int k_engine_stalling = 1;
 constexpr int k_engine_loader_lock = 2;
 constexpr int k_engine_slow = 3;
 constexpr int k_engine_runtime_statics = 4;
+constexpr int k_engine_exit_in_load = 5;
+// UNLOADTEST_EXIT_IN_LOAD_MARKER, as a death test's stderr pattern.
+constexpr const char* k_exit_in_load_marker = "unloadtest: the engine's load calls exit\\(0\\)";
 constexpr int k_torn_down_exit_code = 9;  // UNLOADTEST_TORN_DOWN_EXIT_CODE
 
 using CreateFn = void* (*)();
@@ -639,6 +642,58 @@ TEST(LibraryUnloadDeathTest, ExitWaitsForTheInferenceBeforeTheRuntimesStaticsGo)
         ::testing::ExitedWithCode(0),
         "");
     static_cast<void>(k_torn_down_exit_code);
+#endif
+}
+
+// A program whose engine ends the process from inside its load (a runtime's fatal-error handler,
+// a failed licence check): the load runs inside anira_handler_prepare under the core's lifecycle
+// lock, and the exit runs anira's exit handler and its unload hook on that same thread, neither
+// of which may wait for the lock the thread holds. The process exits with the status the load
+// asked for, the load's marker on stderr. Here the instance is the first: no pool runs yet, so
+// only the unload hook runs (it takes the exit for an unload: no exit handler was registered).
+TEST(LibraryUnloadDeathTest, ExitInsideAnEnginesLoadExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler or unload hook of the core that locks on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            static_cast<void>(module.api().m_create_engine(k_engine_exit_in_load, 0));
+            _exit(4);  // the load exits: the create never returns
+        },
+        ::testing::ExitedWithCode(0),
+        k_exit_in_load_marker);
+#endif
+}
+
+// The same while another instance's pool runs: its prepare registered the core's exit handler,
+// which stops the pool and waits for it from inside the exit, on the thread that holds the
+// lifecycle lock; then the unload hook joins it.
+TEST(LibraryUnloadDeathTest, ExitInsideAnEnginesLoadWithAPoolRunningExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler or unload hook of the core that locks on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* running = module.api().m_create();
+            if (running == nullptr) { _exit(3); }
+            module.api().m_prepare(running);
+            module.api().m_process_wait(running, 4);
+            if (module.api().m_num_inference_threads() == 0) { _exit(6); }
+            static_cast<void>(module.api().m_create_engine(k_engine_exit_in_load, 0));
+            _exit(4);  // the load exits: the create never returns
+        },
+        ::testing::ExitedWithCode(0),
+        k_exit_in_load_marker);
 #endif
 }
 

@@ -251,11 +251,13 @@ typedef struct anira_engine_ctx {
  * in effect and the handler's context. It may allocate, log and query the context's
  * capabilities; it must not call an entry that takes the lifecycle lock (context create
  * and destroy, handler create, destroy and prepare, anira_inference_thread_create,
- * anira_shutdown, anira_release_core_if_idle). This is where an engine builds what it
- * keeps for its whole life beside user_data: a device context, a thread pool, a weights
- * cache. A status other than ANIRA_OK fails that anira_handler_prepare with it, the
- * message naming the engine, and leaves the object uninitialised: the next prepare calls
- * init again. NULL: nothing to init.
+ * anira_shutdown, anira_release_core_if_idle). It may end the process (exit): anira's
+ * exit handler and library-unload hook then run on this thread and do not wait for the
+ * lock it holds. This is where an engine builds what it keeps for its whole life beside
+ * user_data: a device context, a thread pool, a weights cache. A status other than
+ * ANIRA_OK fails that anira_handler_prepare with it, the message naming the engine, and
+ * leaves the object uninitialised: the next prepare calls init again. NULL: nothing to
+ * init.
  * @param info The record; valid until the callback returns.
  * @param user_data The descriptor's user_data.
  * @par Thread contract
@@ -270,12 +272,13 @@ typedef anira_status (ANIRA_CALL* anira_engine_init_fn)(const anira_init_info* i
  * model: two providers of one model load twice, and the record's provider and
  * provider_id say which one this load is for; a load that cannot serve it returns
  * ANIRA_ERROR_NOT_SUPPORTED). It may allocate, read files, log, call the config getters
- * and the tensor accessors; it must not call an entry that takes the lifecycle lock.
- * This is where the engine loads the row's model, binds the slots by the names of the
- * record and sizes the shared call slots the record counts (instances; 0 for a model
- * whose handlers are exclusive). A status other than ANIRA_OK fails
- * anira_handler_prepare with it, the message naming the engine; unload is not called
- * then.
+ * and the tensor accessors; it must not call an entry that takes the lifecycle lock. It
+ * may end the process (exit): anira's exit handler and library-unload hook then run on
+ * this thread and do not wait for the lock it holds. This is where the engine loads the
+ * row's model, binds the slots by the names of the record and sizes the shared call
+ * slots the record counts (instances; 0 for a model whose handlers are exclusive). A
+ * status other than ANIRA_OK fails anira_handler_prepare with it, the message naming the
+ * engine; unload is not called then.
  * @param info The record; valid until the callback returns.
  * @param user_data The descriptor's user_data.
  * @param out_loaded Starts NULL; what it holds on return is the loaded pointer every prepare of
