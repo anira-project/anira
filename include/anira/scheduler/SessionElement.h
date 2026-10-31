@@ -112,6 +112,29 @@ struct CustomLatencies {
     std::vector<long> m_outputs;  ///< Per output tensor: the latency in samples, or negative
 };
 
+/**
+ * @brief What fills the hops a session's submission drops: the InferenceManager, under the
+ * contract's miss policy
+ *
+ * drop() runs once per dropped hop, at the drop, while every Streamed send ring holds the hop at
+ * its read position: it consumes the hop and keeps its fill. place() runs once per dropped hop at
+ * its ordered placement (SessionElement::place_pending_fills), in the order of the drops: it
+ * pushes the oldest fill not yet placed into every Streamed receive ring, each of which has room
+ * for a hop. Driving thread only; real-time safe.
+ */
+class DroppedHops {
+public:
+    DroppedHops() = default;
+    virtual ~DroppedHops() = default;
+    DroppedHops(const DroppedHops&) = delete;
+    DroppedHops& operator=(const DroppedHops&) = delete;
+    DroppedHops(DroppedHops&&) = delete;
+    DroppedHops& operator=(DroppedHops&&) = delete;
+
+    virtual void drop() ANIRA_NONBLOCKING = 0;
+    virtual void place() ANIRA_NONBLOCKING = 0;
+};
+
 class ANIRA_API SessionElement {
 public:
     /**
@@ -199,6 +222,35 @@ public:
      * @return True if a completed inference can be post-processed without overflowing a ring
      */
     bool receive_rings_have_room();
+
+    /// Drops one hop: consumes it from every Streamed send ring and keeps its fill
+    /// (m_dropped_hops; without one, the fill is silence). Driving thread only.
+    void drop_hop();
+
+    /**
+     * @brief Owes the receive rings one hop of fill per dropped hop, in stream order
+     *
+     * A hop the submission dropped (no slot was free: every slot holds a chunk not yet
+     * collected) produces one hop of fill on every streamable output at its own stream
+     * position, behind every chunk claimed before it: counted on the youngest chunk not yet
+     * collected (ThreadSafeStruct::m_fills_after), which Core::post_process moves to
+     * m_pending_fills behind its own output. With no such chunk (after a wait-free reset the
+     * slots in flight are stale), the fill is due at once. Driving thread only.
+     *
+     * @param hops The hops dropped
+     */
+    void owe_fills(size_t hops);
+
+    /**
+     * @brief Places the fills owed ahead of every chunk not yet collected
+     *
+     * One hop of fill on every streamable output per owed hop (DroppedHops::place, or zeros),
+     * while every receive ring has room for one; the collection calls it before it places the
+     * next chunk. Driving thread only.
+     *
+     * @return True when nothing is owed any more, false when a ring is full
+     */
+    bool place_pending_fills();
 
     /**
      * @brief The ring of a Streamed input or output slot
@@ -342,6 +394,11 @@ public:
         // Plain field, synced by the queue handoffs like the stamps above (written before the
         // done signal, read after it).
         bool m_completed_as_zeros{false};
+        // The hops dropped while this chunk was the youngest one not yet collected: no slot
+        // was free for them (SessionElement::owe_fills). Their fill follows this chunk's
+        // output into the receive rings, ahead of every later chunk. Driving thread only (set
+        // by the submission, moved out by Core::post_process); Core::pre_process resets it.
+        size_t m_fills_after{0};
         // The struct's position in SessionElement::m_inference_queue: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
@@ -468,6 +525,13 @@ public:
                                         ///< that no submitted inference covers yet. Plain field,
                                         ///< written and read only on the session's driving thread
                                         ///< (like m_time_stamps).
+    size_t m_pending_fills = 0;  ///< Hops of fill the receive rings owe behind the last chunk
+                                 ///< collected and ahead of every later one (owe_fills,
+                                 ///< place_pending_fills). Driving thread only; a reset clears
+                                 ///< it.
+    DroppedHops* m_dropped_hops = nullptr;  ///< What fills a dropped hop: the manager of the
+                                            ///< session, set by its prepare and cleared before it
+                                            ///< releases the session; nullptr: silence
 
     const int m_session_id;  ///< Unique identifier for this session (immutable)
 

@@ -101,6 +101,8 @@ Audio Glitches or Dropouts
     4. Check if other processes are consuming CPU resources
     5. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
 
+``ANIRA_MISSED`` from a Hard entry, or ``anira_handler_rt_error`` reporting ``ANIRA_ERROR_CAPACITY``, tells the two kinds apart: a missed block (an inference late for its block) and a dropped hop (every inference slot busy, the hop never inferred). Both are filled by the contract's miss policy at their own stream positions, and the output returns to the reported latency by itself once the inferences keep up again (:doc:`latency`, *When the inference does not keep up*).
+
 Missed blocks right after a JUCE standalone starts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 

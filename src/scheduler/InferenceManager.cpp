@@ -40,6 +40,7 @@ InferenceManager::InferenceManager(capi::ProcessorRunner& processor,
                                      rt_latch)) {}
 
 InferenceManager::~InferenceManager() {
+    m_session->m_dropped_hops = nullptr;
     Core::release_session(m_session);
 }
 
@@ -112,6 +113,201 @@ void InferenceManager::prepare(const CustomLatencies& custom_latencies,
                 m_output_slots[i].m_channels * capacity * m_output_slots[i].m_element_size,
                 0);
         }
+    }
+
+    // The fills of dropped hops (drop(), place()). A dropped hop's fill is placed behind every
+    // chunk claimed before it, so it can wait for as long as those are late. It is on time only
+    // while the host has not popped past it: a hop dropped in the call that pushed input up to
+    // sample E starts at E - hop or earlier, its fill at E - hop + L of the output, and the host
+    // has popped up to E (it pops what it pushes). A fill held for a hop more than
+    // ceil(L / hop) + 1 hops older than the newest dropped one is therefore past the host
+    // already, and under ZEROS, BYPASS, HOLD_LAST and CALLBACK alike a late fill is never
+    // delivered as such (a miss stood in for it). The ring holds ceil(L / hop) + 2 hops of the
+    // largest such count over the outputs, allocated here; when it is full the oldest fill goes
+    // and its hop is placed as zeros.
+    m_drop_capacity = 0;
+    m_drop_head = 0;
+    m_drop_held = 0;
+    m_drop_clipped = 0;
+    m_drop_store.assign(num_outputs, std::vector<unsigned char>{});
+    m_drop_inputs.assign(num_inputs, std::vector<unsigned char>{});
+    if (m_on_miss != ANIRA_MISS_ZEROS) {
+        for (size_t i = 0; i < num_outputs; ++i) {
+            if (!m_output_slots[i].m_streamed) { continue; }
+            const size_t hop = m_session->output_hop(i);
+            const size_t latency = m_session->m_latency[i];
+            m_drop_capacity = std::max(m_drop_capacity, ((latency + hop - 1) / hop) + 2);
+        }
+        for (size_t i = 0; i < num_outputs; ++i) {
+            if (!m_output_slots[i].m_streamed) { continue; }
+            m_drop_store[i].assign(m_drop_capacity * m_output_slots[i].m_channels *
+                                       m_session->output_hop(i) * m_output_slots[i].m_element_size,
+                                   0);
+        }
+        for (size_t i = 0; i < num_inputs; ++i) {
+            if (!m_input_slots[i].m_streamed) { continue; }
+            m_drop_inputs[i].assign(m_input_slots[i].m_channels * m_session->input_hop(i) *
+                                        m_input_slots[i].m_element_size,
+                                    0);
+        }
+    }
+    // ANIRA_MISS_CALLBACK's arrays for a dropped hop: an empty tensor of the slot's dtype for
+    // every slot; drop() points the Streamed ones at the hop.
+    m_drop_input_tensors = m_empty_inputs;
+    m_drop_output_tensors.assign(num_outputs, anira_tensor{});
+    for (size_t i = 0; i < num_outputs; ++i) {
+        const std::array<int64_t, 2> shape{static_cast<int64_t>(m_output_slots[i].m_channels), 0};
+        anira_tensor_init_host(&m_drop_output_tensors[i],
+                               nullptr,
+                               m_output_slots[i].m_dtype,
+                               2,
+                               shape.data());
+    }
+    m_session->m_dropped_hops = this;
+}
+
+unsigned char* InferenceManager::drop_store_at(size_t slot, size_t hop, size_t channel) noexcept {
+    const size_t samples = m_session->output_hop(slot);
+    return m_drop_store[slot].data() + (((hop * m_output_slots[slot].m_channels) + channel) *
+                                        samples * m_output_slots[slot].m_element_size);
+}
+
+void InferenceManager::drop() {
+    if (m_drop_capacity == 0) {  // ZEROS: the input goes, place() pushes zeros
+        for (size_t i = 0; i < m_input_slots.size(); ++i) {
+            if (!m_input_slots[i].m_streamed) { continue; }
+            for (size_t channel = 0; channel < m_input_slots[i].m_channels; ++channel) {
+                m_session->send_ring(i).discard(channel, m_session->input_hop(i));
+            }
+        }
+        return;
+    }
+    if (m_drop_held == m_drop_capacity) {
+        // The oldest fill held is past the host (see prepare()): its hop is placed as zeros.
+        m_drop_head = (m_drop_head + 1) % m_drop_capacity;
+        --m_drop_held;
+        ++m_drop_clipped;
+    }
+    // The hop of every Streamed input, out of the send rings: kept for BYPASS (the anchored
+    // input's) and CALLBACK (every one's), discarded otherwise.
+    for (size_t i = 0; i < m_input_slots.size(); ++i) {
+        if (!m_input_slots[i].m_streamed) { continue; }
+        const size_t hop = m_session->input_hop(i);
+        const bool keep = m_on_miss == ANIRA_MISS_CALLBACK ||
+                          (m_on_miss == ANIRA_MISS_BYPASS && m_session->reference_is_input() &&
+                           i == m_session->reference_slot());
+        for (size_t channel = 0; channel < m_input_slots[i].m_channels; ++channel) {
+            if (keep) {
+                m_session->send_ring(i).pop_block(
+                    channel,
+                    m_drop_inputs[i].data() + (channel * hop * m_input_slots[i].m_element_size),
+                    m_input_slots[i].m_dtype,
+                    hop);
+            } else {
+                m_session->send_ring(i).discard(channel, hop);
+            }
+        }
+    }
+    fill_dropped_hop((m_drop_head + m_drop_held) % m_drop_capacity);
+    ++m_drop_held;
+}
+
+void InferenceManager::fill_dropped_hop(size_t hop) {
+    const size_t num_outputs = m_output_slots.size();
+    // CALLBACK: the host fills the hop of every Streamed output; zeros when it declines.
+    if (m_on_miss == ANIRA_MISS_CALLBACK && m_drop_hook != nullptr) {
+        for (size_t i = 0; i < m_input_slots.size(); ++i) {
+            if (!m_input_slots[i].m_streamed) { continue; }
+            const std::array<int64_t, 2> shape{static_cast<int64_t>(m_input_slots[i].m_channels),
+                                               static_cast<int64_t>(m_session->input_hop(i))};
+            anira_tensor_init_host(&m_drop_input_tensors[i],
+                                   m_drop_inputs[i].data(),
+                                   m_input_slots[i].m_dtype,
+                                   2,
+                                   shape.data());
+        }
+        for (size_t i = 0; i < num_outputs; ++i) {
+            if (!m_output_slots[i].m_streamed) { continue; }
+            const std::array<int64_t, 2> shape{static_cast<int64_t>(m_output_slots[i].m_channels),
+                                               static_cast<int64_t>(m_session->output_hop(i))};
+            anira_tensor_init_host(&m_drop_output_tensors[i],
+                                   drop_store_at(i, hop, 0),
+                                   m_output_slots[i].m_dtype,
+                                   2,
+                                   shape.data());
+        }
+        if (m_drop_hook(m_drop_hook_ctx,
+                        m_drop_input_tensors.data(),
+                        static_cast<uint32_t>(m_drop_input_tensors.size()),
+                        m_drop_output_tensors.data(),
+                        static_cast<uint32_t>(num_outputs))) {
+            return;
+        }
+    }
+    for (size_t i = 0; i < num_outputs; ++i) {
+        if (!m_output_slots[i].m_streamed) { continue; }
+        const SlotCopy& slot = m_output_slots[i];
+        const size_t samples = m_session->output_hop(i);
+        for (size_t channel = 0; channel < slot.m_channels; ++channel) {
+            unsigned char* dst = drop_store_at(i, hop, channel);
+            size_t copied = 0;
+            if (m_on_miss == ANIRA_MISS_BYPASS && m_session->reference_is_input()) {
+                // The dropped hop of the anchored input itself, the dry signal at its own
+                // stream position (prepare refuses BYPASS without an anchored input of the
+                // output's channel count); nothing converts, so another dtype is zeros.
+                const size_t reference = m_session->reference_slot();
+                const SlotCopy& source = m_input_slots[reference];
+                const size_t in_hop = m_session->input_hop(reference);
+                if (source.m_dtype == slot.m_dtype && channel < source.m_channels) {
+                    copied = std::min(in_hop, samples);
+                    tensor_run::copy_run(dst,
+                                         1,
+                                         m_drop_inputs[reference].data() +
+                                             (channel * in_hop * source.m_element_size),
+                                         1,
+                                         copied,
+                                         slot.m_element_size);
+                }
+            } else if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
+                // The head of the last block the output delivered, as a missed block repeats it.
+                copied = std::min(samples, m_hold_len[i]);
+                tensor_run::copy_run(
+                    dst,
+                    1,
+                    m_hold[i].data() + (channel * m_hold_capacity[i] * slot.m_element_size),
+                    1,
+                    copied,
+                    slot.m_element_size);
+            }
+            tensor_run::zero_run(dst + (copied * slot.m_element_size),
+                                 1,
+                                 samples - copied,
+                                 slot.m_element_size);
+        }
+    }
+}
+
+void InferenceManager::place() {
+    const bool zeros = m_drop_capacity == 0 || m_drop_clipped > 0 || m_drop_held == 0;
+    for (size_t i = 0; i < m_output_slots.size(); ++i) {
+        if (!m_output_slots[i].m_streamed) { continue; }
+        const size_t samples = m_session->output_hop(i);
+        for (size_t channel = 0; channel < m_output_slots[i].m_channels; ++channel) {
+            if (zeros) {
+                m_session->receive_ring(i).push_zeros(channel, samples);
+            } else {
+                m_session->receive_ring(i).push_block(channel,
+                                                      drop_store_at(i, m_drop_head, channel),
+                                                      m_output_slots[i].m_dtype,
+                                                      samples);
+            }
+        }
+    }
+    if (m_drop_clipped > 0) {
+        --m_drop_clipped;
+    } else if (m_drop_held > 0 && m_drop_capacity > 0) {
+        m_drop_head = (m_drop_head + 1) % m_drop_capacity;
+        --m_drop_held;
     }
 }
 
@@ -579,6 +775,10 @@ void InferenceManager::reset() {
     for (size_t& hold_len : m_hold_len) {
         hold_len = 0;  // HOLD_LAST holds nothing until the next delivered block
     }
+    // The reset dropped the owed fills with the stream (SessionElement::clear).
+    m_drop_head = 0;
+    m_drop_held = 0;
+    m_drop_clipped = 0;
     m_last_missed = false;
 }
 

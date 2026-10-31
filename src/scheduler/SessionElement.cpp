@@ -222,6 +222,7 @@ void SessionElement::clear() {
     m_time_stamps.clear();
     m_current_queue = 0;
     m_pending_pull_samples = 0;
+    m_pending_fills = 0;
 
     for (auto& inference : m_inference_queue) {
         // Only a free struct is exclusively ours to reset; skip anything a worker may
@@ -541,6 +542,56 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
 bool SessionElement::has_streamable_input() const {
     return std::ranges::any_of(m_derived.m_inputs,
                                [](const capi::DerivedSpec& spec) { return spec.m_hop > 0; });
+}
+
+void SessionElement::drop_hop() {
+    if (m_dropped_hops != nullptr) {
+        m_dropped_hops->drop();
+        return;
+    }
+    for (size_t i = 0; i < num_inputs(); ++i) {
+        const size_t hop = input_hop(i);
+        if (hop == 0) { continue; }
+        for (size_t channel = 0; channel < input_channels(i); ++channel) {
+            send_ring(i).discard(channel, hop);
+        }
+    }
+}
+
+void SessionElement::owe_fills(size_t hops) {
+    // The youngest chunk not yet collected is the newest timestamp (pre_process inserts at the
+    // front); every struct that holds one is of the current generation (a reset clears the
+    // list).
+    if (!m_time_stamps.empty()) {
+        for (const auto& chunk : m_inference_queue) {
+            if (!chunk->m_free.load(std::memory_order::relaxed) &&
+                chunk->m_time_stamp == m_time_stamps.front()) {
+                chunk->m_fills_after += hops;
+                return;
+            }
+        }
+    }
+    m_pending_fills += hops;
+    static_cast<void>(place_pending_fills());
+}
+
+bool SessionElement::place_pending_fills() {
+    while (m_pending_fills > 0) {
+        if (!receive_rings_have_room()) { return false; }
+        if (m_dropped_hops != nullptr) {
+            m_dropped_hops->place();
+        } else {
+            for (size_t i = 0; i < num_outputs(); ++i) {
+                const size_t hop = output_hop(i);
+                if (hop == 0) { continue; }
+                for (size_t channel = 0; channel < output_channels(i); ++channel) {
+                    receive_ring(i).push_zeros(channel, hop);
+                }
+            }
+        }
+        --m_pending_fills;
+    }
+    return true;
 }
 
 bool SessionElement::receive_rings_have_room() {

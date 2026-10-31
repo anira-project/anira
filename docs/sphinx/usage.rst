@@ -450,6 +450,28 @@ minted again. On an Async handle it throws ``anira::Error`` with
   ``ANIRA_ERROR_CONFIG`` at ``prepare``, naming ``on_miss``. A contract file can say
   ``"on_miss": "callback"`` but cannot carry a function: set the pair on the parsed contract
   before ``prepare``.
+
+  **The policy fills dropped hops too.** When every inference slot of the handler is still
+  busy (an inference ran far over its budget, the machine stalled), the hops a call completes
+  get no inference: each one is dropped and costs exactly one hop of the policy's fill at its
+  own stream position, behind the inferences submitted before it, and nothing else: the stream
+  stays on its hop grid and is back at its latency once the late inferences are collected.
+  ``ANIRA_MISS_ZEROS`` places zeros; ``ANIRA_MISS_BYPASS`` the dropped input hop of the anchored
+  input itself, the dry signal at its own position; ``ANIRA_MISS_HOLD_LAST`` the head of the
+  last block the output delivered; ``ANIRA_MISS_CALLBACK`` what the host's function makes of the
+  hop. The function is called once per dropped hop, at the drop, on the driver thread inside
+  the entry whose call dropped it, with hop-shaped arrays instead of the call's: every Streamed
+  input slot carries the dropped hop (``[channels, hop]`` of the slot's ring dtype, packed,
+  without ``ANIRA_TENSOR_PLANAR``, the handler's memory, valid for the call), every Streamed
+  output slot a ``[channels, hop]`` tensor of the handler's memory to fill, every other slot
+  an empty tensor; a status other than ``ANIRA_OK`` places zeros, and the entry's own return
+  is not touched (a function that needs to tell the two apart reads the flags: a block's
+  tensors are the caller's own). A fill can wait behind late inferences for at most the
+  latency: a fill held longer would only reach the host late, so the handler keeps the fills
+  of the last ``ceil(latency / hop) + 2`` dropped hops (allocated at ``prepare``) and places
+  an older one as zeros. ``rt_error`` reports a drop as ``ANIRA_ERROR_CAPACITY`` under every
+  policy (:doc:`logging`). A dropped hop never reaches the model: a stateful model's state
+  continues from the last hop it ran, as if the input had jumped by the dropped hops.
 - **Wait ratio.** ``wait_ratio`` is the fraction of the block period a ``_wait`` entry
   (``anira_handler_process_wait`` and its twins, section 3.2) may spend waiting for the
   block's inference when called with ``ANIRA_WAIT_CONTRACT``; ``0`` (the default) never
@@ -2336,7 +2358,7 @@ The call is wait-free and real-time safe for all handler configurations, includi
     :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom engine or a processor's ``before_inference`` / ``after_inference`` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own engine.
 
 ..  note::
-    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
+    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected hops are dropped and filled under the miss policy at their own stream positions (section 1.3, *Miss policy*); the stream stays on its hop grid and recovers by itself.
 
 ..  note::
     What a reset re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_engines`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the processor's own state** (a resampler, an overlap buffer, a filter's history), through the processor's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp.

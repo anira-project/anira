@@ -53,7 +53,7 @@ struct RtLatch;
  *
  * @see InferenceThread, Core, SessionElement
  */
-class ANIRA_API InferenceManager {
+class ANIRA_API InferenceManager : private DroppedHops {
 public:
     /**
      * @brief Default constructor is deleted to prevent uninitialized instances
@@ -95,7 +95,7 @@ public:
      * Ensures proper shutdown of inference threads, cleanup of sessions,
      * and release of all managed resources.
      */
-    ~InferenceManager();
+    ~InferenceManager() override;
 
     /**
      * @brief Prepares the session for the Hard contract it reads
@@ -428,6 +428,26 @@ public:
     }
 
     /**
+     * @brief Sets the hook of ANIRA_MISS_CALLBACK for a dropped hop
+     *
+     * Called once per hop the scheduler drops (no inference slot was free), at the drop, on
+     * the driver thread inside the entry whose call dropped it: `inputs` are one tensor per
+     * input slot, the dropped hop of every Streamed one ([channels, hop] of the ring dtype,
+     * packed, the manager's memory) and an empty tensor for every other; `outputs` one per
+     * output slot, a [channels, hop] tensor of the ring dtype for every Streamed one, which the
+     * hook fills and the manager places at the hop's stream position, and an empty tensor for
+     * every other. `false`, or no hook, places zeros. Set before prepare(); never on the driver
+     * thread.
+     *
+     * @param hook The hook, or nullptr
+     * @param ctx Handed to the hook as it is
+     */
+    void set_drop_hook(MissHook hook, void* ctx) noexcept {
+        m_drop_hook = hook;
+        m_drop_hook_ctx = ctx;
+    }
+
+    /**
      * @brief Whether the last process or pop form delivered a missed block
      *
      * True when the last process_output() took the starvation path: the miss policy filled
@@ -617,6 +637,17 @@ private:
     /// The arithmetic of contract_wait_budget() for a reference block of `reference_samples`.
     std::chrono::steady_clock::duration wait_budget_of(size_t reference_samples) const noexcept;
 
+    /// DroppedHops: consumes the hop every Streamed send ring holds at its read
+    /// position and keeps its fill under the miss policy (ZEROS keeps none).
+    void drop() ANIRA_NONBLOCKING override;
+    /// DroppedHops: pushes the oldest fill not placed yet into every Streamed
+    /// receive ring.
+    void place() ANIRA_NONBLOCKING override;
+    /// The fill of the dropped hop in store position `hop`, under the miss policy.
+    void fill_dropped_hop(size_t hop) ANIRA_NONBLOCKING;
+    /// The first byte of channel `channel` of output `slot` in store position `hop`.
+    unsigned char* drop_store_at(size_t slot, size_t hop, size_t channel) noexcept;
+
     /**
      * @brief Registers the host's output demand on a generator session
      *
@@ -663,6 +694,25 @@ private:
                                                ///< count; what the tensor stems return
     std::vector<anira_tensor> m_empty_inputs;  ///< One empty tensor per input slot: the inputs
                                                ///< of a pop
+
+    // The fills of the hops the scheduler drops (DroppedHops), under m_on_miss,
+    // in a ring of hops allocated by prepare(): a dropped hop's fill is made at the drop and
+    // placed behind every chunk claimed before it. ZEROS keeps none (its fill is placed as
+    // zeros). The ring holds the fills of the last m_drop_capacity dropped hops; a fill older
+    // than that cannot be on time any more (see prepare()), and its hop is placed as zeros.
+    MissHook m_drop_hook = nullptr;   ///< ANIRA_MISS_CALLBACK: fills a dropped hop
+    void* m_drop_hook_ctx = nullptr;  ///< The hook's first argument
+    size_t m_drop_capacity = 0;       ///< Hops the ring holds; 0 under ZEROS
+    size_t m_drop_head = 0;           ///< The oldest fill held
+    size_t m_drop_held = 0;           ///< Fills held
+    size_t m_drop_clipped = 0;        ///< Dropped hops ahead of the held fills whose fill went
+    std::vector<std::vector<unsigned char>> m_drop_store;   ///< Per output slot: capacity x
+                                                            ///< channels x hop elements of the
+                                                            ///< ring dtype, hop after hop
+    std::vector<std::vector<unsigned char>> m_drop_inputs;  ///< Per input slot: channels x hop
+                                                            ///< elements, the hop being dropped
+    std::vector<anira_tensor> m_drop_input_tensors;         ///< ANIRA_MISS_CALLBACK: per input slot
+    std::vector<anira_tensor> m_drop_output_tensors;  ///< ANIRA_MISS_CALLBACK: per output slot
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

@@ -1293,29 +1293,36 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
         bool const success = pre_process(session);
 
         if (!success) {
-            // One hop of every Streamed input is consumed and one hop of zeros (of the ring's
-            // own element type) produced on every Streamed output; a non-streamable slot has no
-            // ring.
-            for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
-                const size_t hop = session->input_hop(tensor_index);
-                if (hop == 0) { continue; }
-                for (size_t channel = 0; channel < session->input_channels(tensor_index);
-                     channel++) {
-                    session->send_ring(tensor_index).discard(channel, hop);
+            // No slot is free: every slot holds a chunk not yet collected. This hop and every
+            // other one the call made ready get no inference. Each is dropped (drop_hop: one hop
+            // of every Streamed input, its fill kept under the miss policy) and owes one hop of
+            // that fill on every Streamed output at its own stream position, behind the chunks
+            // claimed before it (owe_fills): the stream stays on its hop grid, the send ring
+            // never holds more than one call's leftover (a full ring would overwrite its oldest
+            // samples), and every hop of input yields exactly one hop of output, in order, so the
+            // output is back at its latency once the late chunks are collected. A generator drops
+            // every hop of the demand. A non-streamable slot has no ring. The handler's rt_error
+            // records ANIRA_ERROR_CAPACITY.
+            size_t dropped = 0;
+            while (true) {
+                session->drop_hop();
+                ++dropped;
+                if (session->m_input_driven) {
+                    if (!inputs_ready(session)) { break; }
+                } else {
+                    size_t const hop = session->output_hop(session->reference_slot());
+                    if (session->m_pending_pull_samples < hop) { break; }
+                    session->m_pending_pull_samples -= hop;
                 }
             }
-            for (size_t tensor_index = 0; tensor_index < session->num_outputs(); tensor_index++) {
-                const size_t hop = session->output_hop(tensor_index);
-                if (hop == 0) { continue; }
-                for (size_t channel = 0; channel < session->output_channels(tensor_index);
-                     channel++) {
-                    session->receive_ring(tensor_index).push_zeros(channel, hop);
-                }
-            }
+            session->owe_fills(dropped);
+            static_cast<void>(session->m_rt->record_drop());
             ANIRA_LOG_RT_WARNING_ONCE(RtSite::NoFreeInferenceQueue,
                                       log_group::k_core,
-                                      "No free inference queue found in session: %d!",
-                                      session->m_session_id);
+                                      "No free inference slot in session %d: %zu hops dropped, "
+                                      "filled under the miss policy",
+                                      session->m_session_id,
+                                      dropped);
             return;
         }
     }
@@ -1347,7 +1354,10 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
     // CAS + at most one token enqueue, the normal dispatch path).
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    while (session->m_time_stamps.size() > 0) {
+    while (true) {
+        // The silence of dropped hops owed ahead of the next chunk goes first.
+        if (!session->place_pending_fills()) { return false; }
+        if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp != session->m_time_stamps.back() ||
@@ -1394,7 +1404,10 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
     constexpr auto k_forever_slice = std::chrono::milliseconds(10);
     // The atomic path's cadence, as in wait_for_completion().
     constexpr auto k_poll = std::chrono::milliseconds(1);
-    while (!session->m_time_stamps.empty()) {
+    while (true) {
+        // The silence of dropped hops owed ahead of the next chunk goes first.
+        if (!session->place_pending_fills()) { return WaitOutcome::Done; }
+        if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             SessionElement::ThreadSafeStruct& next = *session->m_inference_queue[i];
@@ -1488,6 +1501,7 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
+            session->m_inference_queue[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
@@ -1575,8 +1589,11 @@ void Core::post_process(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
     // Every chunk reaches its post_process, whatever it returns: the processor runner records a
-    // failure and keeps the output rings aligned.
+    // failure and keeps the output rings aligned. The silence of the hops dropped behind it is
+    // owed next, ahead of every later chunk (SessionElement::owe_fills).
     static_cast<void>(session->m_processor.post_process(*thread_safe_struct));
+    session->m_pending_fills += thread_safe_struct->m_fills_after;
+    thread_safe_struct->m_fills_after = 0;
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 

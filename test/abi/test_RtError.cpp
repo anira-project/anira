@@ -1,8 +1,9 @@
 // anira/abi/handler.h: anira_handler_rt_error and its latches. The first occurrence of a
 // kind records once and later ones are counted; prepare and reset re-arm, logging the count;
 // the drain's summary reports a persisting condition; the scheduler's sites latch once per
-// prepare; a throwing inference zero-fills, records ENGINE and keeps the pool; CAPACITY never
-// latches; the violation record carries its flags and the drain thread delivers it.
+// prepare; a throwing inference zero-fills, records ENGINE and keeps the pool; an entry's
+// CAPACITY never latches, a dropped hop's does; the violation record carries its flags and the
+// drain thread delivers it.
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
@@ -327,12 +328,19 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     EXPECT_EQ(rearm.m_group, "anira.scheduler");
 #endif
     gate.m_open.store(false);
-    for (int i = 0; i < 6; ++i) { starved_call(); }
+    // The priming block and one miss, while a slot is still free: a miss records nothing.
+    starved_call();
+    starved_call();
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "a miss records nothing";
+    for (int i = 0; i < 4; ++i) { starved_call(); }
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(count_records(collector, "Missing samples", "rt"), 2U);
 #endif
+    // Once every slot is busy the hops are dropped, which rt_error records.
+    const size_t slots = anira_test::session_of(h)->m_inference_queue.size();
+    for (size_t i = 0; i < slots; ++i) { starved_call(); }
     gate.m_open.store(true);
-    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "a miss records nothing";
+    EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CAPACITY) << "a dropped hop is recorded";
 }
 
 // ============================================================================================
@@ -415,13 +423,23 @@ TEST(AbiRtError, EngineAfterAThrowingInferenceZeroFillsAndKeepsTheThread) {
 // The latch itself, the flags
 // ============================================================================================
 
-TEST(AbiRtLatch, CapacityNeverLatches) {
+// An entry's ANIRA_ERROR_CAPACITY is back-pressure and never latches; a hop the scheduler
+// dropped for want of a free slot latches it under its own kind.
+TEST(AbiRtLatch, AnEntrysCapacityNeverLatchesADroppedHopDoes) {
     anira::RtLatch latch;
     EXPECT_EQ(anira::rt_kind_bit(ANIRA_ERROR_CAPACITY), 0U);
     EXPECT_FALSE(latch.record(ANIRA_ERROR_CAPACITY));
     EXPECT_EQ(latch.rt_error(), ANIRA_OK);
     EXPECT_EQ(latch.m_latched.load(), 0U);
     EXPECT_EQ(latch.m_suppressed.load(), 0U);
+    {
+        anira::RtLatch dropped;
+        EXPECT_TRUE(dropped.record_drop());
+        EXPECT_FALSE(dropped.record_drop());
+        EXPECT_EQ(dropped.rt_error(), ANIRA_ERROR_CAPACITY);
+        EXPECT_EQ(dropped.m_latched.load(), static_cast<uint32_t>(anira::RtKind::Dropped));
+        EXPECT_EQ(dropped.m_suppressed.load(), 1U);
+    }
 
     EXPECT_TRUE(latch.record(ANIRA_ERROR_WRONG_CONTRACT));
     EXPECT_FALSE(latch.record(ANIRA_ERROR_WRONG_CONTRACT));

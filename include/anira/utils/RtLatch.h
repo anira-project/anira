@@ -29,8 +29,9 @@
 
 namespace anira {
 
-/// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY is
-/// back-pressure and never latches.
+/// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY as an
+/// entry's return is back-pressure and never latches; a hop the scheduler dropped for want of a
+/// free inference slot latches it under its own kind (RtLatch::record_drop).
 enum class RtKind : uint32_t {
     WrongContract = 1U << 0,
     NotPrepared = 1U << 1,
@@ -39,7 +40,8 @@ enum class RtKind : uint32_t {
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
     NotSupported = 1U << 6,
-    Other = 1U << 7,  ///< any other status, through record_any only (a processor callback's)
+    Other = 1U << 7,    ///< any other status, through record_any only (a processor callback's)
+    Dropped = 1U << 8,  ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -96,6 +98,16 @@ struct RtLatch {
     bool record_any(anira_status status) noexcept ANIRA_NONBLOCKING {
         const uint32_t bit = rt_kind_bit(status);
         return record_kind(status, bit != 0 ? bit : static_cast<uint32_t>(RtKind::Other));
+    }
+
+    /**
+     * @brief Records a hop the scheduler dropped because no inference slot was free
+     * (Core::new_data_submitted): ANIRA_ERROR_CAPACITY under RtKind::Dropped. The operational
+     * site RtSite::NoFreeInferenceQueue logs it.
+     * @return True on the first drop since the last re-arm.
+     */
+    bool record_drop() noexcept ANIRA_NONBLOCKING {
+        return record_kind(ANIRA_ERROR_CAPACITY, static_cast<uint32_t>(RtKind::Dropped));
     }
 
     /**

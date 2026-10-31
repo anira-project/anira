@@ -722,6 +722,23 @@ bool miss_hook(void* ctx,
                               handler->m_miss_user_data) == ANIRA_OK;
 }
 
+// ANIRA_MISS_CALLBACK for a dropped hop: the host's function with the hop's tensors. A hop
+// carries no Static slot and fills nothing of the running call, so neither the Static outputs nor
+// m_miss_fn_ran are touched.
+bool drop_hook(void* ctx,
+               const anira_tensor* inputs,
+               uint32_t num_inputs,
+               const anira_tensor* outputs,
+               uint32_t num_outputs) noexcept ANIRA_NONBLOCKING {
+    auto* handler = static_cast<anira_handler*>(ctx);
+    return handler->m_miss_fn(handler,
+                              inputs,
+                              num_inputs,
+                              outputs,
+                              num_outputs,
+                              handler->m_miss_user_data) == ANIRA_OK;
+}
+
 void clear_report(anira_plan_report& report) noexcept {
     report.m_plans.clear();
     report.m_inputs.clear();
@@ -1689,6 +1706,9 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_miss_user_data = prepared_hard.m_miss_user_data;
     handler.m_manager->set_miss_hook(
         prepared_hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
+        &handler);
+    handler.m_manager->set_drop_hook(
+        prepared_hard.m_on_miss == ANIRA_MISS_CALLBACK ? &drop_hook : nullptr,
         &handler);
     // The report's plan rows and the initial selection, on the session before it is prepared.
     build_plans(handler, model, prepared, prepared_hard);
