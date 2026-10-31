@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Benchmarks:** the advanced benchmark selects its model config and its contract in one call: `model_and_contract(model, buffer_size)` returns both (`ModelAndContract`, the contract loaded from the model's contract file), replacing `model_config_of`, whose name said half and which handed the contract file back through an out-parameter. `docs/sphinx/benchmarking.rst` shows the new shape. The simple and cnn-size benchmarks and the fixture had no such out-parameter.
 - **The core on the 3.x types (internal; no behaviour change, every figure, stream and copy-path golden as before):**
   - **The processor runs on the chunk.** `Core::pre_process`, the inference thread and `Core::post_process` call the handler's `capi::ProcessorRunner` with the chunk itself, and each phase returns its status; the 2.x `PrePostProcessor` leaves the session, `Core` and the inference thread, with the runner's struct table and its lookup by buffer address, the chunk's status field and the per-claim re-pointing of the descriptors. The plan's 2.x backend leaves the core with it (`PlanRequest` / `PlanSlot::m_legacy_backend`, `SessionElement::plan_backend`).
   - **The chunk's storage is anira's:** one allocation per chunk, every slot's buffer on a 64-byte boundary, the descriptors built once by the session's prepare; a State slot has no buffer (its pair is bound per inference). The 2.x `BufferF` vectors of the chunk are gone.

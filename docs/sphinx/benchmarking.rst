@@ -303,7 +303,11 @@ For complex configuration testing, define argument combinations using a custom f
     // builders of extras/models/cnn/CNNConfig.h and friends) and loads the model's contract
     // file (see examples/benchmark/advanced-benchmark)
     constexpr int num_models = 3;
-    anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json);
+    struct ModelAndContract {
+        anira::ModelConfig m_model_config;
+        anira::ContractHandle m_contract;
+    };
+    ModelAndContract model_and_contract(int model, int buffer_size);
 
     // Define argument combinations
     static void Arguments(::benchmark::internal::Benchmark* b) {
@@ -322,9 +326,7 @@ For complex configuration testing, define argument combinations using a custom f
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
         // Extract configuration from arguments
         const anira::BackendId backend = benchmark_backends()[state.range(2)];
-        const char* contract_json = nullptr;
-        const anira::ModelConfig model = model_config_of(state.range(1), get_buffer_size(), contract_json);
-        anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+        auto [model, contract] = model_and_contract(state.range(1), get_buffer_size());
         contract.hard_geometry(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
 
         // Setup with selected configuration: the one backend as the single candidate
