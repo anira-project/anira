@@ -192,6 +192,10 @@ private:
     std::array<float, 4> latent_space{};
     std::array<float*, 4> latent_space_ptrs{};
     anira::Tensor latent{};
+    // The "Latent 0" to "Latent 3" offsets: stored by the parameter listener, added to every
+    // latent frame by processBlock.
+    std::array<std::atomic<float>, 4> latent_offsets{};
+    // Input samples towards the next latent frame; reset by prepareToPlay with the handlers.
     int m_count_input_samples = 0;
 #elif MODEL_TO_USE == 1
     AniraModel model{context, embedded_model_config(), embedded_contract()};

@@ -133,6 +133,9 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 #else
     encoder.prepare(block_max, sampleRate);
     decoder.prepare(block_max, sampleRate);
+    // A new stream on both handlers: the count of input samples towards the next latent frame
+    // starts over with it, so the frames are popped in step with the encoder's new stream.
+    m_count_input_samples = 0;
 #endif
 
     const auto num_channels = static_cast<size_t>(getTotalNumInputChannels());
@@ -214,15 +217,12 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
         encoder.handler.pop_data(latent, 0, &received_samples);
         if (received_samples == 0) { break; }
         m_count_input_samples -= 2048;
-        // Make some latent space modulation :)
-        latent_space[0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_0_ID.getParamID()).getValue());
-        latent_space[1] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_1_ID.getParamID()).getValue());
-        latent_space[2] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_2_ID.getParamID()).getValue());
-        latent_space[3] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_3_ID.getParamID()).getValue());
+        // Make some latent space modulation :) The offsets are the parameter listener's atomics:
+        // reading the parameters' ValueTree here (getParameterAsValue) would allocate and
+        // register a ValueTree listener on the audio thread, beside the message thread's use.
+        for (size_t i = 0; i < latent_space.size(); ++i) {
+            latent_space[i] += latent_offsets[i].load();
+        }
         decoder.handler.push_data(latent, 0);
     }
     decoder.handler.pop_data(audio, 0);
@@ -264,6 +264,16 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         gain.store(newValue);
+#endif
+#if MODEL_TO_USE == 7
+    } else if (parameterID == PluginParameters::LATENT_0_ID.getParamID()) {
+        latent_offsets[0].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_1_ID.getParamID()) {
+        latent_offsets[1].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_2_ID.getParamID()) {
+        latent_offsets[2].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_3_ID.getParamID()) {
+        latent_offsets[3].store(newValue);
 #endif
     }
 }
