@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdint>
 
-#include "anira/CoreConfig.h"
 #include "anira/system/Exports.h"
 #include "anira/utils/RtLatch.h"
 
@@ -31,8 +30,8 @@
  *   locale-free printf subset (see tanh/core/RtFormat.h for the supported
  *   conversions) and pushed into the core's own bounded lock-free queue
  *   (thl::Logger::rt::Queue, sized by the queue capacity of the context config in
- *   effect: anira_context_config_set_log_queue_capacity, LogConfig::m_queue_capacity on
- *   the 2.x path), which a core-owned low-priority thread or the host (the drain mode)
+ *   effect: anira_context_config_set_log_queue_capacity), which a core-owned low-priority
+ *   thread or the host (the drain mode)
  *   forwards to the sinks.
  *   Use these anywhere reachable from an ANIRA_NONBLOCKING entry point or from an
  *   inference thread. A full queue drops and counts; no queue (no core yet)
@@ -76,62 +75,52 @@ inline bool is_logging_enabled() {
 #endif
 }
 
-/// anira::LogLevel (Debug=0 … Error=3, matching the backends' numeric scales) to
-/// thl::Logger::LogLevel (Error=1 … Debug=4).
-inline constexpr thl::Logger::LogLevel to_thl_log_level(LogLevel log_level) {
-    switch (log_level) {
-        case LogLevel::Debug: return thl::Logger::LogLevel::Debug;
-        case LogLevel::Info: return thl::Logger::LogLevel::Info;
-        case LogLevel::Warning: return thl::Logger::LogLevel::Warning;
-        case LogLevel::Error: return thl::Logger::LogLevel::Error;
+/// The C level (anira_log_level: DEBUG 0 … ERROR 3, the engines' numeric scales too) to
+/// thl::Logger::LogLevel (Error=1 … Debug=4); anything outside the four values is Error.
+inline constexpr thl::Logger::LogLevel to_thl_log_level(anira_log_level level) noexcept {
+    switch (level) {
+        case ANIRA_LOG_DEBUG: return thl::Logger::LogLevel::Debug;
+        case ANIRA_LOG_INFO: return thl::Logger::LogLevel::Info;
+        case ANIRA_LOG_WARNING: return thl::Logger::LogLevel::Warning;
+        case ANIRA_LOG_ERROR:
+        default: return thl::Logger::LogLevel::Error;
     }
-    return thl::Logger::LogLevel::Error;
 }
 
-// The backends cast anira::LogLevel to their numeric scales and the core stores the C
-// level; the two enums agree number for number, and to_log_level below keeps them in step.
-static_assert(static_cast<int>(LogLevel::Debug) == ANIRA_LOG_DEBUG);
-static_assert(static_cast<int>(LogLevel::Info) == ANIRA_LOG_INFO);
-static_assert(static_cast<int>(LogLevel::Warning) == ANIRA_LOG_WARNING);
-static_assert(static_cast<int>(LogLevel::Error) == ANIRA_LOG_ERROR);
-
-/// The C level of a context config (anira_log_level, anira/abi/enums.h) to anira::LogLevel;
-/// anything outside the four values is Error.
-inline constexpr LogLevel to_log_level(anira_log_level level) noexcept {
-    switch (level) {
-        case ANIRA_LOG_DEBUG: return LogLevel::Debug;
-        case ANIRA_LOG_INFO: return LogLevel::Info;
-        case ANIRA_LOG_WARNING: return LogLevel::Warning;
-        case ANIRA_LOG_ERROR:
-        default: return LogLevel::Error;
-    }
+/// The level of a process before a context config is in effect: ANIRA_LOG_ERROR in a release
+/// build (NDEBUG), ANIRA_LOG_INFO otherwise.
+inline constexpr anira_log_level default_log_level() noexcept {
+#ifdef NDEBUG
+    return ANIRA_LOG_ERROR;
+#else
+    return ANIRA_LOG_INFO;
+#endif
 }
 
 /**
  * @brief Process-global minimum log severity, applied from the log level of the context
- * config in effect (anira_context_config_set_log_level; CoreConfig::m_log.m_level on the
- * 2.x path) whenever a core is created. Defaults to the build-type dependent
- * default_log_level() until then.
+ * config in effect (anira_context_config_set_log_level) whenever a core is created. Defaults
+ * to the build-type dependent default_log_level() until then.
  *
- * Kept as anira's own atomic (in anira's enum) because the backend processors
- * forward it to their runtimes; set_log_level() mirrors it onto thl::Logger's
+ * Kept as anira's own atomic because the engines read it at their init (anira_init_info::
+ * log_level) and forward it to their runtimes; set_log_level() mirrors it onto thl::Logger's
  * runtime level, which is what filters the records.
  */
-inline std::atomic<LogLevel>& runtime_log_level() {
-    static std::atomic<LogLevel> level{default_log_level()};
+inline std::atomic<anira_log_level>& runtime_log_level() {
+    static std::atomic<anira_log_level> level{default_log_level()};
     return level;
 }
 
-inline void set_log_level(LogLevel log_level) {
-    runtime_log_level().store(log_level, std::memory_order_relaxed);
+inline void set_log_level(anira_log_level level) {
+    runtime_log_level().store(level, std::memory_order_relaxed);
 #ifdef ENABLE_LOGGING
     // thl::Logger's level is process-global and may be shared with a host that logs
     // through tanh-lib itself; with anira's logging compiled out it is left alone.
-    thl::Logger::set_level(to_thl_log_level(log_level));
+    thl::Logger::set_level(to_thl_log_level(level));
 #endif
 }
 
-inline LogLevel get_log_level() {
+inline anira_log_level get_log_level() {
     return runtime_log_level().load(std::memory_order_relaxed);
 }
 

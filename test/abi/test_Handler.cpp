@@ -1,11 +1,7 @@
-// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp, with the 2.x handler
-// (anira_test::V2Handler, test/support/v2_handler.h) as the in-binary oracle. Both handlers drive
-// the same bundled model (gain on the custom plan's pass-through engine on every leg; the CNN where
-// an engine is present) block by block, each waiting for its own inference, so no block is ever
-// missed and the outputs are compared bit for bit.
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
+// anira/abi/handler.h: the C twins of test_InferenceHandlerApi.cpp. The bundled gain model runs
+// block by block (on the custom plan's pass-through engine on every leg, on an engine's plan where
+// one is present), each block waiting for its own inference, so no block is ever missed and every
+// output is compared bit for bit with the closed form of the stream (anira_test::DelayLine).
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
 #include <anira/abi/engine.h>
@@ -17,14 +13,15 @@
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
+#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -34,14 +31,16 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
-#include "../support/inference_config_eq.h"
+#include "../support/engine_oracle.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
+#include "capi/handler.h"
 #include "capi/port.h"
+#include "capi/validate.h"
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -51,7 +50,6 @@ namespace {
 using anira_test::Context;
 using anira_test::custom_candidates;
 using anira_test::DestroyFirst;
-using anira_test::engine_candidates;
 using anira_test::expect_all;
 using anira_test::expect_same_block;
 using anira_test::explicit_contract;
@@ -75,13 +73,9 @@ constexpr std::array<Form, 5> k_forms{Form::InPlace,
                                       Form::PushPop,
                                       Form::PushPopMulti};
 
-/// The 2.x side's core config: the same threads, wait strategy and drain as the Context
-/// default, so the two users reconcile without a mismatch warning.
-anira::CoreConfig oracle_core_config() {
-    anira::CoreConfig config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
-    config.m_log.m_drain = anira::LogDrain::Manual;
-    return config;
-}
+/// The latency of the bundled gain model under its contract at 512 samples and 48 kHz (a
+/// 5 ms budget, no wait ratio): the closed form of LatencyCalculator, one hop.
+constexpr uint32_t k_gain_latency = 512U;
 
 /// The plan rows of a prepared handler.
 std::vector<anira_plan_info> plans_of(const anira_handler* handler) {
@@ -92,33 +86,6 @@ std::vector<anira_plan_info> plans_of(const anira_handler* handler) {
     EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, rows.data()),
               ANIRA_OK);
     return rows;
-}
-
-/// The 2.x backend a plan row runs on.
-anira::InferenceBackend backend_of(const anira_plan_info& info) {
-    // The 2.x enumerators exist only for the engines this build carries.
-    switch (info.engine) {
-#ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return anira::InferenceBackend::ONNX;
-#endif
-#ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return anira::InferenceBackend::LIBTORCH;
-#endif
-#ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return anira::InferenceBackend::TFLITE;
-#endif
-#ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return anira::InferenceBackend::LITERT;
-#endif
-#ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return anira::InferenceBackend::EXECUTORCH;
-#endif
-        default: break;
-    }
-    EXPECT_EQ(info.engine, ANIRA_ENGINE_CUSTOM);
-    EXPECT_NE(info.engine_id, nullptr);
-    if (info.engine_id != nullptr) { EXPECT_STREQ(info.engine_id, k_custom); }
-    return anira::InferenceBackend::CUSTOM;
 }
 
 /// An engine this build does not carry, if there is one.
@@ -138,33 +105,23 @@ std::optional<anira_engine> missing_engine() {
     return std::nullopt;
 }
 
-/// One C handler and one 2.x handler over the same model, driven in lockstep.
+/// A C handler over the bundled gain model with the custom row, driven block by block, each
+/// block waited for and checked bit for bit against the closed form of the stream
+/// (anira_test::DelayLine): the custom plan's pass-through copies the input and the gain, an
+/// engine plan multiplies by the Static gain and answers the peak of the window.
 struct Oracle {
-    Oracle(const Context& context,
-           const anira::ModelConfig& model,
-           std::span<const anira_backend_id> candidates,
-           anira::InferenceConfig config_2x)
-        : m_c(context, model, candidates)
-        , m_config_2x(std::move(config_2x))
-        , m_pp(m_config_2x)
-        , m_v2(m_pp, m_config_2x, oracle_core_config()) {}
+    explicit Oracle(const Context& context, bool default_custom = true)
+        : m_c(context, gain_with_custom(default_custom), custom_candidates())
+        , m_pass_through(default_custom) {}
 
     anira_handler* h() { return m_c.m_handler; }
 
-    /// The C side takes the contract, the 2.x side the host geometry; as the precondition of
-    /// the pooling claim the two InferenceConfigs must compare equal.
-    void prepare(const anira::ContractHandle& contract, size_t block) {
+    void prepare(const anira::ContractHandle& contract) {
         ASSERT_EQ(m_c.prepare(contract), ANIRA_OK) << m_c.m_err.message;
         m_face = std::make_unique<anira_test::FloatFace>(m_c.m_handler);
-        m_v2.prepare(anira::HostConfig(static_cast<float>(block), static_cast<float>(k_rate)));
-        anira_test::expect_inference_config_eq(m_c.m_handler->m_inference_config, m_config_2x);
-        m_num_inputs = m_c.m_handler->m_num_inputs;
-        m_num_outputs = m_c.m_handler->m_num_outputs;
-        if (m_num_outputs > 1) {
-            m_previous_gain_out = c_static_output(1);
-            EXPECT_EQ(m_previous_gain_out, m_pp.get_output(1, 0))
-                << "the Static outputs at prepare";
-        }
+        m_line = anira_test::DelayLine(anira_handler_get_latency(h(), 0));
+        m_previous_gain_out = c_static_output(1);
+        EXPECT_EQ(m_previous_gain_out, 0.0F) << "zero until an inference is collected";
     }
 
     /// The C side's stored Static output of `slot`, read whole in the spec's shape: the value
@@ -181,64 +138,48 @@ struct Oracle {
         return value;
     }
 
-    /// One block on both sides; c and v receive the outputs, n_c and n_v the counts. The
-    /// static gain slot travels through the multi forms with one value, 1.0F: on the C side as
-    /// the whole tensor in the spec's shape (FloatFace presents a carried Static slot that way),
-    /// on the 2.x side as a count of values inside the float*** block.
-    void run_block(size_t k,
-                   size_t block,
-                   Form form,
-                   std::vector<float>& c,
-                   std::vector<float>& v,
-                   size_t& n_c,
-                   size_t& n_v) {
+    /// One block through `form`; c receives the output, n_c the count, m_expected the closed
+    /// form of the block. The static gain slot travels through the multi forms with one value,
+    /// 1.0F, as the whole tensor in the spec's shape (FloatFace presents a carried Static slot
+    /// that way).
+    void run_block(size_t k, size_t block, Form form, std::vector<float>& c, size_t& n_c) {
         ASSERT_NE(m_face, nullptr) << "run_block before a successful prepare";
         const std::vector<float> in = ramp(k, block);
         c = in;
-        v = in;
         std::vector<float> c_out(block, -1.0F);
-        std::vector<float> v_out(block, -1.0F);
-        const float gain_in_c = 1.0F;
-        const float gain_in_v = 1.0F;
-        float gain_out_c = -1.0F;
-        float gain_out_v = -1.0F;
+        const float gain_in = m_gain;
+        float gain_out = -1.0F;
+        // The Static output of a block carrying the gain: the custom plan's pass-through copies
+        // the gain, the gain model's engines answer the peak of the window.
+        const float expected_static = m_pass_through ? gain_in : anira_test::gain_peak(in, gain_in);
 
-        const size_t prev_c = anira_test::available(h());
-        const size_t prev_v = m_v2.get_available_samples(0);
+        const size_t prev = anira_test::available(h());
 
         switch (form) {
             case Form::InPlace: {
                 const std::array<float*, 1> c_ch{c.data()};
-                const std::array<float*, 1> v_ch{v.data()};
                 EXPECT_EQ(m_face->process_inplace(c_ch.data(), block, 0, &n_c), ANIRA_OK)
                     << "block " << k;
-                wait_for_block(h(), prev_c);
-                n_v = m_v2.process(v_ch.data(), block);
-                wait_for_block(m_v2, prev_v);
+                wait_for_block(h(), prev);
                 break;
             }
             case Form::Separate: {
                 const std::array<const float*, 1> c_in{c.data()};
                 const std::array<float*, 1> c_ch{c_out.data()};
-                const std::array<const float*, 1> v_in{v.data()};
-                const std::array<float*, 1> v_ch{v_out.data()};
                 EXPECT_EQ(m_face->process(c_in.data(), block, c_ch.data(), block, 0, &n_c),
                           ANIRA_OK)
                     << "block " << k;
-                wait_for_block(h(), prev_c);
-                n_v = m_v2.process(v_in.data(), block, v_ch.data(), block);
-                wait_for_block(m_v2, prev_v);
+                wait_for_block(h(), prev);
                 c = c_out;
-                v = v_out;
                 break;
             }
             case Form::Multi: {
                 const std::array<const float*, 1> c_in_ch{c.data()};
-                const std::array<const float*, 1> c_gain_ch{&gain_in_c};
+                const std::array<const float*, 1> c_gain_ch{&gain_in};
                 const std::array<const float* const*, 2> c_in{c_in_ch.data(), c_gain_ch.data()};
                 const std::array<size_t, 2> c_num_in{block, 1};
                 const std::array<float*, 1> c_out_ch{c_out.data()};
-                const std::array<float*, 1> c_gout_ch{&gain_out_c};
+                const std::array<float*, 1> c_gout_ch{&gain_out};
                 const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
                 const std::array<size_t, 2> c_num_out{block, 1};
                 std::array<size_t, 2> c_delivered{7, 7};
@@ -249,135 +190,87 @@ struct Oracle {
                                                 c_delivered.data()),
                           ANIRA_OK);
                 n_c = c_delivered[0];
-                wait_for_block(h(), prev_c);
-
-                const std::array<const float*, 1> v_in_ch{v.data()};
-                const std::array<const float*, 1> v_gain_ch{&gain_in_v};
-                const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
-                std::array<size_t, 2> v_num_in{block, 1};
-                const std::array<float*, 1> v_out_ch{v_out.data()};
-                const std::array<float*, 1> v_gout_ch{&gain_out_v};
-                const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
-                std::array<size_t, 2> v_num_out{block, 1};
-                n_v =
-                    m_v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
-                wait_for_block(m_v2, prev_v);
-                if (m_num_outputs > 1) {
-                    EXPECT_EQ(c_delivered[1], 1U) << "block " << k;
-                    EXPECT_EQ(v_num_out[1], 1U) << "block " << k;
-                    // A call's Static output is the latest inference collected when it ran: the
-                    // previous block's, or this block's when its collect ran within the call.
-                    // Each side collects on its own schedule, so only the settled values, read
-                    // once both have waited for the block, agree (test_Compat's
-                    // expect_same_static).
-                    const float before = m_previous_gain_out;
-                    const float c_settled = c_static_output(1);
-                    const float v_settled = m_pp.get_output(1, 0);
-                    EXPECT_EQ(c_settled, v_settled)
-                        << "block " << k << ": the settled Static outputs";
-                    EXPECT_TRUE(gain_out_c == before || gain_out_c == c_settled)
-                        << "block " << k << ": the C call answered " << gain_out_c
-                        << ", neither the previous " << before << " nor the settled " << c_settled;
-                    EXPECT_TRUE(gain_out_v == before || gain_out_v == v_settled)
-                        << "block " << k << ": the 2.x call answered " << gain_out_v
-                        << ", neither the previous " << before << " nor the settled " << v_settled;
-                    m_previous_gain_out = c_settled;
-                }
+                wait_for_block(h(), prev);
+                EXPECT_EQ(c_delivered[1], 1U) << "block " << k;
+                // A call's Static output is the latest inference collected when it ran: the
+                // previous block's, or this block's when its collect ran within the call. Only
+                // the settled value, read once the block has been waited for, is certain.
+                const float before = m_previous_gain_out;
+                const float settled = c_static_output(1);
+                EXPECT_EQ(settled, expected_static)
+                    << "block " << k << ": the settled Static output";
+                EXPECT_TRUE(gain_out == before || gain_out == settled)
+                    << "block " << k << ": the call answered " << gain_out
+                    << ", neither the previous " << before << " nor the settled " << settled;
+                m_previous_gain_out = settled;
                 c = c_out;
-                v = v_out;
                 break;
             }
             case Form::PushPop: {
                 const std::array<const float*, 1> c_in{c.data()};
                 const std::array<float*, 1> c_ch{c_out.data()};
                 EXPECT_EQ(m_face->push_data(c_in.data(), block, 0), ANIRA_OK);
-                wait_for_push(h(), prev_c, block);
+                wait_for_push(h(), prev, block);
                 EXPECT_EQ(m_face->pop_data(c_ch.data(), block, 0, &n_c), ANIRA_OK) << "block " << k;
-                const std::array<const float*, 1> v_in{v.data()};
-                const std::array<float*, 1> v_ch{v_out.data()};
-                m_v2.push_data(v_in.data(), block);
-                wait_for_push(m_v2, prev_v, block);
-                n_v = m_v2.pop_data(v_ch.data(), block);
                 c = c_out;
-                v = v_out;
                 break;
             }
             case Form::PushPopMulti: {
                 const std::array<const float*, 1> c_in_ch{c.data()};
-                const std::array<const float*, 1> c_gain_ch{&gain_in_c};
+                const std::array<const float*, 1> c_gain_ch{&gain_in};
                 const std::array<const float* const*, 2> c_in{c_in_ch.data(), c_gain_ch.data()};
                 const std::array<size_t, 2> c_num_in{block, 1};
                 const std::array<float*, 1> c_out_ch{c_out.data()};
-                const std::array<float*, 1> c_gout_ch{&gain_out_c};
+                const std::array<float*, 1> c_gout_ch{&gain_out};
                 const std::array<float* const*, 2> c_outs{c_out_ch.data(), c_gout_ch.data()};
                 const std::array<size_t, 2> c_num_out{block, 1};
                 std::array<size_t, 2> c_delivered{7, 7};
                 EXPECT_EQ(m_face->push_data_multi(c_in.data(), c_num_in.data()), ANIRA_OK);
-                wait_for_push(h(), prev_c, block);
+                wait_for_push(h(), prev, block);
                 EXPECT_EQ(
                     m_face->pop_data_multi(c_outs.data(), c_num_out.data(), c_delivered.data()),
                     ANIRA_OK);
                 n_c = c_delivered[0];
-
-                const std::array<const float*, 1> v_in_ch{v.data()};
-                const std::array<const float*, 1> v_gain_ch{&gain_in_v};
-                const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
-                std::array<size_t, 2> v_num_in{block, 1};
-                const std::array<float*, 1> v_out_ch{v_out.data()};
-                const std::array<float*, 1> v_gout_ch{&gain_out_v};
-                const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
-                std::array<size_t, 2> v_num_out{block, 1};
-                m_v2.push_data(v_in.data(), v_num_in.data());
-                wait_for_push(m_v2, prev_v, block);
-                n_v = m_v2.pop_data(v_outs.data(), v_num_out.data())[0];
-                if (m_num_outputs > 1) { EXPECT_EQ(gain_out_c, gain_out_v) << "block " << k; }
+                EXPECT_EQ(gain_out, expected_static) << "block " << k;
                 c = c_out;
-                v = v_out;
                 break;
             }
         }
+        // The closed form of the block: the multi forms carry the Static gain, the others leave
+        // the store at its value (zero until a call carries one).
+        if (form == Form::Multi || form == Form::PushPopMulti) { m_static_gain = gain_in; }
+        m_expected = m_line.next(in, m_pass_through ? 1.0F : m_static_gain);
     }
 
-    /// `blocks` blocks in lockstep; every block is delivered in full on both sides and the
-    /// outputs are bit-equal.
+    /// `blocks` blocks; every block is delivered in full and equals the closed form.
     void run_blocks(size_t blocks, size_t block, Form form) {
         for (size_t i = 0; i < blocks; ++i) {
             const size_t k = m_next_block++;
             std::vector<float> c;
-            std::vector<float> v;
             size_t n_c = 0;
-            size_t n_v = 0;
-            run_block(k, block, form, c, v, n_c, n_v);
+            run_block(k, block, form, c, n_c);
             if (::testing::Test::HasFatalFailure()) { return; }
-            EXPECT_EQ(n_c, n_v) << "block " << k;
             EXPECT_EQ(n_c, block) << "block " << k;
-            expect_same_block(c, v, k);
+            expect_same_block(c, m_expected, k);
         }
     }
 
     void reset() {
         anira_handler_reset(h());
-        m_v2.reset();
+        m_line.reset();
     }
 
     Handler m_c;
-    anira::InferenceConfig m_config_2x;
-    anira::PrePostProcessor m_pp;
-    anira_test::V2Handler m_v2;
-    uint32_t m_num_inputs = 0;
-    uint32_t m_num_outputs = 0;
+    /// The Static gain the multi forms carry; the gain model's engines scale by it, the custom
+    /// row's pass-through copies the stream whatever it is.
+    float m_gain = 1.0F;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
     float m_previous_gain_out = 0.0F;  ///< the settled Static output after the last Multi block
     size_t m_next_block = 1;
-};
-
-/// A prepared gain oracle on the custom plan.
-struct GainOracle : Oracle {
-    explicit GainOracle(const Context& context, bool default_custom = true)
-        : Oracle(context,
-                 gain_with_custom(default_custom),
-                 custom_candidates(),
-                 anira_test::config_2x_of(k_gain_model_json, k_gain_contract_json, true)) {}
+    anira_test::DelayLine m_line;
+    std::vector<float> m_expected;  ///< the closed form of the last block run_block() ran
+    bool m_pass_through = true;     ///< the running plan copies (the custom plan)
+    float m_static_gain = 0.0F;     ///< the Static gain input the engines multiply by
 };
 
 }  // namespace
@@ -536,13 +429,11 @@ TEST(AbiHandler, UnpreparedEntriesRecordNotPrepared) {
 // The oracle
 // ============================================================================================
 
-TEST(AbiHandler, ProcessMatchesTheTwoPointXHandlerOnTheCustomPlan) {
+TEST(AbiHandler, ProcessMatchesTheClosedFormOnTheCustomPlan) {
     const Context context;
-    GainOracle oracle(context);
-    oracle.m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
-    ASSERT_EQ(anira_handler_get_latency(oracle.h(), 0), oracle.m_v2.get_latency(0));
-    ASSERT_GT(anira_handler_get_latency(oracle.h(), 0), 0U);
+    Oracle oracle(context);
+    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block)));
+    ASSERT_EQ(anira_handler_get_latency(oracle.h(), 0), k_gain_latency);
     oracle.run_blocks(32, k_block, Form::InPlace);
 
     // The custom row is the last entry of gain_with_custom, and the rows keep entry order.
@@ -551,23 +442,32 @@ TEST(AbiHandler, ProcessMatchesTheTwoPointXHandlerOnTheCustomPlan) {
     EXPECT_EQ(anira_handler_get_plan(oracle.h()), num_plans - 1);
 }
 
-TEST(AbiHandler, SetPlanSwitchesLikeSetInferenceBackend) {
+TEST(AbiHandler, SetPlanSwitchesTheRunningPlan) {
     const Context context;
     {
-        GainOracle oracle(context, /*default_custom=*/false);
-        ASSERT_NO_FATAL_FAILURE(
-            oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
+        Oracle oracle(context, /*default_custom=*/false);
+        ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block)));
         const std::vector<anira_plan_info> info = plans_of(oracle.h());
         if (info.size() == 1) { GTEST_SKIP() << "one plan: no engine in this build"; }
         // No default engine anywhere: the first entry of the file that is in this build.
         EXPECT_EQ(anira_handler_get_plan(oracle.h()), 0U);
 
-        for (uint32_t i = 0; i < info.size(); ++i) {
-            EXPECT_EQ(anira_handler_set_plan(oracle.h(), i), ANIRA_OK);
-            EXPECT_EQ(anira_handler_get_plan(oracle.h()), i);
-            oracle.m_v2.set_inference_backend(backend_of(info[i]));
-            oracle.run_blocks(16, k_block, Form::InPlace);
-            oracle.reset();
+        // The plans answer distinguishable, non-zero streams: under a Static gain of 0.5 the gain
+        // model's engines halve the stream, the custom row's pass-through copies it. Every
+        // switch goes from one kind to the other (each engine's plan, then the custom one), so
+        // the closed form of every block says which plan ran it, and a switch that did not take
+        // effect fails the blocks behind it.
+        oracle.m_gain = 0.5F;
+        const auto custom = static_cast<uint32_t>(info.size() - 1);
+        ASSERT_EQ(info[custom].engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+        for (uint32_t i = 0; i < custom; ++i) {
+            for (const uint32_t plan : {i, custom}) {
+                ASSERT_EQ(anira_handler_set_plan(oracle.h(), plan), ANIRA_OK);
+                EXPECT_EQ(anira_handler_get_plan(oracle.h()), plan);
+                oracle.m_pass_through = plan == custom;
+                oracle.run_blocks(8, k_block, Form::Multi);
+                oracle.reset();
+            }
         }
 
         for (size_t i = 0; i < info.size(); ++i) {
@@ -659,7 +559,8 @@ TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
         const uint32_t selected = anira_handler_get_plan(h);
         ASSERT_LT(selected, 2U) << "round " << round;
         EXPECT_EQ(h->m_manager->get_plan(), selected) << "round " << round;
-        EXPECT_EQ(h->m_plans[selected].m_backend, h->m_manager->get_backend())
+        EXPECT_EQ(static_cast<uint32_t>(anira_test::session_of(h)->m_plans[selected].m_engine),
+                  h->m_plans[selected].m_info.engine)
             << "round " << round << ": get_plan names a plan whose engine is not the one running";
     }
 
@@ -667,56 +568,29 @@ TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
     for (uint32_t i = 0; i < info.size(); ++i) {
         EXPECT_EQ(anira_handler_set_plan(h, i), ANIRA_OK);
         EXPECT_EQ(anira_handler_get_plan(h), i);
-        EXPECT_EQ(h->m_plans[i].m_backend, h->m_manager->get_backend());
+        EXPECT_EQ(h->m_manager->get_plan(), i);
     }
 }
-
-#if defined(USE_LIBTORCH) || defined(USE_ONNXRUNTIME)
-TEST(AbiHandler, CnnMatchesTheTwoPointXHandler) {
-    constexpr size_t k_cnn_block = 2048;
-    const Context context;
-    const std::vector<anira_backend_id> candidates = engine_candidates();
-    Oracle oracle(context,
-                  anira_test::cnn_model(),
-                  candidates,
-                  anira_test::config_2x_of(k_cnn_model_json, k_cnn_contract_json, false));
-    ASSERT_NO_FATAL_FAILURE(
-        oracle.prepare(file_contract(k_cnn_contract_json, k_cnn_block), k_cnn_block));
-    EXPECT_EQ(anira_handler_get_latency(oracle.h(), 0), oracle.m_v2.get_latency(0));
-    const std::vector<anira_plan_info> info = plans_of(oracle.h());
-    ASSERT_FALSE(info.empty());
-    for (uint32_t i = 0; i < info.size(); ++i) {
-        ASSERT_EQ(anira_handler_set_plan(oracle.h(), i), ANIRA_OK);
-        oracle.m_v2.set_inference_backend(backend_of(info[i]));
-        oracle.run_blocks(12, k_cnn_block, Form::InPlace);
-        oracle.reset();
-    }
-}
-#endif
 
 TEST(AbiHandler, SingleMultiPushAndPopFormsAgree) {
     const Context context;
-    std::vector<std::unique_ptr<GainOracle>> oracles;
+    std::vector<std::unique_ptr<Oracle>> oracles;
     for (size_t i = 0; i < std::size(k_forms); ++i) {
-        oracles.push_back(std::make_unique<GainOracle>(context));
-        oracles.back()->m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
+        oracles.push_back(std::make_unique<Oracle>(context));
         ASSERT_NO_FATAL_FAILURE(
-            oracles.back()->prepare(file_contract(k_gain_contract_json, k_block), k_block));
+            oracles.back()->prepare(file_contract(k_gain_contract_json, k_block)));
     }
     for (size_t k = 1; k <= 16; ++k) {
         std::vector<float> reference;
         for (size_t i = 0; i < oracles.size(); ++i) {
             std::vector<float> c;
-            std::vector<float> v;
             size_t n_c = 0;
-            size_t n_v = 0;
-            oracles[i]->run_block(k, k_block, k_forms[i], c, v, n_c, n_v);
+            oracles[i]->run_block(k, k_block, k_forms[i], c, n_c);
             ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "block " << k << ", form " << i;
             EXPECT_EQ(n_c, k_block) << "block " << k << ", form " << i;
-            EXPECT_EQ(n_v, k_block) << "block " << k << ", form " << i;
             if (reference.empty()) { reference = c; }
             expect_same_block(c, reference, k);
-            expect_same_block(v, reference, k);
+            expect_same_block(c, oracles[i]->m_expected, k);
         }
     }
 }
@@ -769,9 +643,8 @@ TEST(AbiHandler, AvailableSamplesTracksTheOutputRing) {
 
 TEST(AbiHandler, LatencyVectorIsIndexAlignedWithZeroForStaticOutputs) {
     const Context context;
-    GainOracle oracle(context);
-    oracle.m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
+    Oracle oracle(context);
+    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block)));
     const anira_handler* h = oracle.h();
 
     uint32_t count = 0;
@@ -794,18 +667,14 @@ TEST(AbiHandler, LatencyVectorIsIndexAlignedWithZeroForStaticOutputs) {
     EXPECT_EQ(count, 2U);
     EXPECT_EQ(anira_handler_get_latencies(h, nullptr, out.data()), ANIRA_ERROR_INVALID_ARGUMENT);
 
-    const std::vector<unsigned int> v2 = oracle.m_v2.get_latency_vector();
-    ASSERT_EQ(v2.size(), 2U);
-    EXPECT_EQ(v2[0], out[0]);
-    EXPECT_EQ(v2[1], out[1]);
+    EXPECT_EQ(out[0], k_gain_latency);
     EXPECT_EQ(anira_handler_get_latency(h, 99), 0U);
 }
 
 TEST(AbiHandler, ResetReSeedsTheStreamAndClearsRtError) {
     const Context context;
-    GainOracle oracle(context);
-    oracle.m_v2.set_inference_backend(anira::InferenceBackend::CUSTOM);
-    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block), k_block));
+    Oracle oracle(context);
+    ASSERT_NO_FATAL_FAILURE(oracle.prepare(file_contract(k_gain_contract_json, k_block)));
     anira_handler* h = oracle.h();
     oracle.run_blocks(3, k_block, Form::InPlace);
 
@@ -852,6 +721,163 @@ TEST(AbiHandler, SetPlanOutOfRangeIsAConfigNoOp) {
         1U)
         << "a second refusal of the same kind adds no record";
 #endif
+}
+
+// ============================================================================================
+// A neural model's stream
+// ============================================================================================
+
+// The steerable-nafx CNN through a C handler with no processor, on every plan of the build's
+// engines, a fresh stream per plan: the latency priming, then per 2048-sample block the CNN's own
+// output on the window anira's default fill builds (the 15380 samples ending with the block, the
+// receptive field ahead of the hop), the model run directly in the engine room on windows built
+// by hand (anira_test::EngineOracle, anira_test::receptive_window). The CNN has no closed form;
+// the oracle shares nothing with the handler but the plan's record.
+TEST(AbiHandler, TheCnnStreamIsTheModelOnItsWindows) {
+    constexpr size_t k_cnn_block = 2048;
+    constexpr size_t k_cnn_window = 15380;
+    constexpr size_t k_blocks = 6;
+    const std::vector<anira_backend_id> candidates = anira_test::engine_candidates();
+    if (candidates.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const Context context;
+    uint32_t num_plans = 1;
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        SCOPED_TRACE("plan " + std::to_string(plan));
+        Handler handler(context, anira_test::cnn_model(), candidates);
+        ASSERT_EQ(handler.prepare(file_contract(k_cnn_contract_json, k_cnn_block)), ANIRA_OK)
+            << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
+        ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
+        anira_test::EngineOracle oracle(h, plan);
+        ASSERT_TRUE(oracle.ready());
+
+        const size_t priming = anira_test::available(h);
+        std::vector<float> signal;
+        std::vector<float> stream;
+        for (size_t k = 0; k < k_blocks; ++k) {
+            std::vector<float> block(k_cnn_block);
+            for (size_t i = 0; i < k_cnn_block; ++i) {
+                block[i] = 0.5F * std::sin(static_cast<float>(signal.size() + i) * 0.003F);
+            }
+            signal.insert(signal.end(), block.begin(), block.end());
+            const std::array<float*, 1> ptrs{block.data()};
+            const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_cnn_block);
+            const size_t prev = anira_test::available(h);
+            size_t delivered = 0;
+            ASSERT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
+            ASSERT_EQ(delivered, k_cnn_block) << "block " << k << " missed";
+            wait_for_block(h, prev);
+            stream.insert(stream.end(), block.begin(), block.end());
+        }
+
+        std::vector<float> expected(priming, 0.0F);
+        for (size_t j = 0; expected.size() < stream.size(); ++j) {
+            const std::vector<std::vector<float>> out =
+                oracle.run({anira_test::receptive_window(signal, j, k_cnn_block, k_cnn_window)});
+            ASSERT_FALSE(out.empty()) << "the oracle's inference " << j << " failed";
+            expected.insert(expected.end(), out[0].begin(), out[0].end());
+        }
+        size_t wrong = 0;
+        for (size_t n = 0; n < stream.size(); ++n) {
+            if (std::abs(stream[n] - expected[n]) > 1e-5F) {
+                if (wrong == 0) {
+                    ADD_FAILURE() << "sample " << n << ": " << stream[n] << ", the CNN on its "
+                                  << "window " << expected[n];
+                }
+                ++wrong;
+            }
+        }
+        EXPECT_EQ(wrong, 0U) << "of " << stream.size() << " samples";
+        EXPECT_GT(*std::max_element(expected.begin() + static_cast<std::ptrdiff_t>(priming),
+                                    expected.end()),
+                  0.0F)
+            << "the oracle's output is not silence";
+    }
+}
+
+// ============================================================================================
+// The ports
+// ============================================================================================
+
+namespace {
+
+// Whether a port container has anything that changes its count (what would move every port).
+template <typename P>
+constexpr bool k_resizes =
+    requires(P& ports) { ports.resize(1); } || requires(P& ports) { ports.clear(); } ||
+    requires(P& ports, anira::capi::Port&& port) { ports.push_back(std::move(port)); } ||
+    requires(P& ports) { ports.emplace_back(); } || requires(P& ports) { ports.reserve(1); };
+
+}  // namespace
+
+// The ports of a side never move: capi::Ports has no copy, no move and nothing that changes
+// its count, so the addresses the session (its rings), the processor runner and every processor
+// frame hold across calls are the type's guarantee. The check sees a container that resizes.
+static_assert(!k_resizes<anira::capi::Ports>);
+static_assert(k_resizes<std::vector<anira::capi::Port>>);
+static_assert(!std::is_copy_constructible_v<anira::capi::Ports> &&
+              !std::is_copy_assignable_v<anira::capi::Ports>);
+static_assert(!std::is_move_constructible_v<anira::capi::Ports> &&
+              !std::is_move_assignable_v<anira::capi::Ports>);
+
+// And so they keep their addresses for the handler's life: every port, a stream port's ring and
+// a static port's value stay where create made them through two prepares of different
+// geometries (the rings are re-initialised in place).
+TEST(AbiHandler, ThePortsKeepTheirAddressesAcrossPrepares) {
+    const Context context;
+    Handler handler(context, gain_with_custom(), custom_candidates());
+    anira_handler* h = handler.m_handler;
+    std::vector<const anira::capi::Port*> ports;
+    for (const anira::capi::Port& port : h->m_input_ports) { ports.push_back(&port); }
+    for (const anira::capi::Port& port : h->m_output_ports) { ports.push_back(&port); }
+    const anira::RingBuffer* ring = &anira::capi::stream_port(h->m_input_ports, 0)->m_ring;
+    const anira::capi::StaticSlot* gain = anira::capi::static_slot(h->m_input_ports, 1);
+    ASSERT_NE(gain, nullptr);
+    for (const size_t block : {k_block, k_block / 2}) {
+        ASSERT_EQ(
+            handler.prepare(file_contract(k_gain_contract_json, static_cast<uint32_t>(block))),
+            ANIRA_OK)
+            << handler.m_err.message;
+        size_t i = 0;
+        for (const anira::capi::Port& port : h->m_input_ports) { EXPECT_EQ(&port, ports[i++]); }
+        for (const anira::capi::Port& port : h->m_output_ports) { EXPECT_EQ(&port, ports[i++]); }
+        EXPECT_EQ(&anira::capi::stream_port(h->m_input_ports, 0)->m_ring, ring);
+        EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 1), gain);
+    }
+}
+
+// Every tensor with a stream has a stream port, the invariant every reader of a ring relies on
+// (SessionElement::send_ring / receive_ring): it holds for a prepared handler over a Streamed
+// and a Static tensor per side, and stream_port_refusal, what create and prepare refuse on
+// (ANIRA_ERROR_INTERNAL), names a derivation that gives the Static slot a hop and one whose
+// count is not the ports'.
+TEST(AbiHandler, EveryTensorWithAStreamHasAStreamPort) {
+    const Context context;
+    Handler handler(context, gain_with_custom(), custom_candidates());
+    ASSERT_EQ(handler.prepare(file_contract(k_gain_contract_json, k_block)), ANIRA_OK)
+        << handler.m_err.message;
+    const anira_handler* h = handler.m_handler;
+    const anira::capi::Derived& derived = h->m_derived;
+    EXPECT_EQ(anira::capi::stream_port_refusal(derived, h->m_input_ports, h->m_output_ports), "");
+    size_t streams = 0;
+    for (size_t slot = 0; slot < derived.m_inputs.size(); ++slot) {
+        const bool stream = derived.m_inputs[slot].m_hop > 0;
+        streams += stream ? 1 : 0;
+        EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, slot) != nullptr, stream)
+            << "input slot " << slot;
+    }
+    EXPECT_EQ(streams, 1U) << "the stream, beside the Static gain";
+
+    anira::capi::Derived broken = derived;
+    ASSERT_EQ(broken.m_inputs.size(), 2U);
+    broken.m_inputs[1].m_hop = 1;  // the Static gain with a stream
+    EXPECT_EQ(anira::capi::stream_port_refusal(broken, h->m_input_ports, h->m_output_ports),
+              "input slot 1 has a stream (a hop of 1) but no stream port");
+    broken = derived;
+    broken.m_outputs.pop_back();
+    EXPECT_EQ(anira::capi::stream_port_refusal(broken, h->m_input_ports, h->m_output_ports),
+              "the output side has 2 ports for 1 tensors");
 }
 
 // ============================================================================================

@@ -196,7 +196,9 @@ environment there, with the level in effect as its
 logger's severity, and every session of every loaded model is created over it; LiteRT its
 environment likewise, with the accelerators its registration finds, which a load's record is
 checked against; ExecuTorch initialises its runtime; LibTorch sets its intra-op thread count
-to one and c10's log level; TensorFlow Lite has nothing per process. What an engine builds at
+to one, OpenBLAS's too where the build carries it (the Linux aarch64 package, whose OpenBLAS
+pool ``torch::set_num_threads`` does not reach), and c10's log level; TensorFlow Lite has
+nothing per process. What an engine builds at
 init outlives every loaded model of the engine that holds the object (a custom engine's for as
 long as its handle, its pipelines or a loaded model holds it; a built-in engine's for as long
 as a loaded model does), and a load before the init is ``ANIRA_ERROR_INVALID_STATE`` on both.
@@ -993,7 +995,7 @@ private: compile that ``.cpp`` with hidden visibility (see :doc:`troubleshooting
 application ships its own engine runtime").
 
 .. note::
-    Subclassing :cpp:class:`anira::BackendBase` was the 2.x runtime's way of adding an
+    Subclassing ``anira::BackendBase`` was the 2.x runtime's way of adding an
     engine; :doc:`migration` maps each of its virtuals onto the descriptor above. A 2.x custom backend
     becomes an :cpp:class:`anira::Engine` constructed with ``anira::v2::k_custom_engine_id``
     (``"anira.v2.custom"``, the id a 2.x ``CUSTOM`` row names); ``anira::v2::PassthroughEngine``

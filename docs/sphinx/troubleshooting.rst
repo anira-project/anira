@@ -101,6 +101,17 @@ Audio Glitches or Dropouts
     4. Check if other processes are consuming CPU resources
     5. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
 
+``ANIRA_MISSED`` from a Hard entry, or ``anira_handler_rt_error`` reporting ``ANIRA_ERROR_CAPACITY``, tells the two kinds apart: a missed block (an inference late for its block) and a dropped hop (every inference slot busy, the hop never inferred). Both are filled by the contract's miss policy at their own stream positions, a late result is discarded and never delivered, and the output returns to exactly the reported latency by itself once the inferences keep up again (:doc:`latency`, *When the inference does not keep up*). A host that pops faster than it pushes keeps missing: every sample that arrives is late for a pop it already made.
+
+Missed blocks right after a JUCE standalone starts
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+**Issue**: A JUCE plugin's standalone build logs a few ``Missing samples`` warnings right after it starts (two or three blocks with the examples' RAVE models), then runs clean.
+
+**Cause**: JUCE's standalone wrapper starts the audio device before it hands the processor to its ``AudioProcessorPlayer``, whose ``setProcessor`` calls ``prepareToPlay`` while holding the lock the player's audio callback takes. The audio thread waits out the whole prepare (the model loads and their warm-up), the device's capture buffer fills meanwhile, and the first ``processBlock`` calls arrive back to back. A Hard contract's latency is sized for blocks at the host's real-time pace, so such a burst outruns the first inferences. A plugin host resumes processing at its real-time pace after a prepare, so the plugin builds do not see this.
+
+**Solution**: None needed: the stream stays time-aligned and recovers by itself. If you chain handlers by hand (one handler's ``pop_data`` feeding another's ``push_data``, as the JUCE example's RAVE encoder and decoder do), treat a pop that returns ``ANIRA_MISSED`` like a delivered block (the miss policy filled it): the missed position is consumed, and waiting for it instead puts the chain out of step for good.
+
 Model Loading Failures
 ^^^^^^^^^^^^^^^^^^^^^^
 
@@ -236,7 +247,13 @@ even from late-running static destructors) and is reclaimed at unload.
        inference on a thread, or an engine that does not return), so the hook writes
        ``anira: the library is being unloaded while an inference is still running ...``
        to stderr and aborts, instead of hanging the host for good. At process exit the
-       hook waits without a bound and the process exits normally. On Windows nothing that
+       pool is stopped earlier, by the core's exit handler, which waits up to two seconds for
+       the inferences in flight before the static state the engines' runtimes built at their
+       first load is torn down (an inference running over it would crash the process); the
+       hook then joins the pool without a bound, and the process exits normally. Both run on the
+       thread that called ``exit``, and neither waits for the core's lifecycle lock when that
+       thread holds it: an engine whose init or load ends the process from inside
+       ``anira_handler_prepare`` exits with its own status. On Windows nothing that
        runs at ``DLL_PROCESS_DETACH`` may join a thread (loader lock), so call
        ``anira_shutdown()`` from your module-exit entry point, as
        ``examples/clap-audio-plugin`` does, after destroying the handlers. It is

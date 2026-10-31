@@ -3,12 +3,21 @@
 // pointers over engine-free sessions, and compared with the transcripts of
 // copy_path_oracle_golden.h. The golden transcripts were written by the float copy core as it
 // stood before it was rewritten over anira_tensor, through the seven float*** functions the
-// manager had then, so a core that passes reproduces that one bit for bit: the delivered
-// counts, the miss flag, every float a call wrote and every float it left alone.
+// manager had then, on a 2.x session, so a core that passes reproduces that one bit for bit:
+// the delivered counts, the miss flag, every float a call wrote and every float it left alone.
 //
-// The manager takes host tensors only now. The float face is anira::PlanarFloatAdapter
+// The session is a C handler's now (anira_test::oracle::HandlerSession, copy_oracle.h): its one
+// model entry is the custom row, its engine the gate, its contract the twin of the 2.x
+// configuration the transcripts were recorded on. The rig drives the handler's own
+// InferenceManager directly, below the C entries and their block rule, so a call may carry
+// more than one block, as it could on the 2.x session. A BYPASS rig prepares under ZEROS and
+// sets BYPASS on the manager afterwards: the C prepare refuses BYPASS where no anchored input
+// matches the outputs (the generator, the mono-to-stereo model), the manager does not, and the
+// policy needs nothing at prepare.
+//
+// The manager takes host tensors only. The float face is anira::PlanarFloatAdapter
 // (test/support/PlanarFloatAdapter.h), which the 2.x handler owned, and the rig drives
-// it the way that class does: the adapter presents the channel pointers, the
+// it the way that class did: the adapter presents the channel pointers, the
 // tensor stem of the same name runs on its tensors (the seven: process, process_nowait,
 // process_wait, push_data, pop_data, its deadline form, pop_data_wait), and deliver_counts()
 // writes the delivered counts into the caller's array. Every word of a transcript's header is
@@ -16,32 +25,28 @@
 // manager's miss flag, the outcome of a wait.
 //
 // The non-streamable (Static) tensors of a block are the 2.x face's own business: the stems
-// move streamed slots, and anira::NonStreamableRouter (test/support/NonStreamableRouter.h),
-// which anira_test::V2Handler owns beside the adapter, stores and reads back the others around
-// every stem call, with the clamp, the clamped count and the miss rules the transcripts pin.
-// The rig calls every stem through it, as that class does.
+// move streamed slots, and anira::NonStreamableRouter (test/support/NonStreamableRouter.h)
+// stores and reads back the others around every stem call, with the clamp, the clamped count
+// and the miss rules the transcripts pin, over the handler's Static ports, which the processor
+// runner materialises into the model's inputs and captures from its outputs. The rig calls
+// every stem through it, as the 2.x handler did.
 //
 // test/support/copy_oracle.h says what a transcript is and why a scenario is a pure function
 // of its calls; test/abi/test_HandlerCopyOracle.cpp is the twin one level up, the same kind of
 // recording under the Hard entries of the C ABI, presented through the same adapter.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
+#include <anira/anira.hpp>
 #include <chrono>
 #include <cstddef>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
 #include "../abi/handler_support.h"
@@ -57,56 +62,22 @@ namespace {
 
 namespace oracle = anira_test::oracle;
 
-constexpr size_t k_hop = 8;  // the window of every streamed tensor, and the host block
+using oracle::Model;
 
-// ---- the models --------------------------------------------------------------------------------
-// Engine-free: the session's custom backend is the gate. The stereo and the multi model run
-// BackendBase::process through it (tensor i of the output is tensor i of the input); the two
-// others have a model of their own (Model below), because BackendBase delivers zeros when the
-// two sides differ in channels or samples.
+// ---- the models
+// ---------------------------------------------------------------------------------- Engine-free:
+// the one model path is the custom row, its engine the gate (copy_oracle.h). The stereo and the
+// multi model pass the input through (tensor i of the output is tensor i of the input); the
+// mono-to-stereo model fans its one channel out (oracle::FanOutEngine), the generator ramps from
+// its Static input (oracle::ParamRampEngine).
 
-InferenceConfig make_config(TensorShape shape, ProcessingSpec spec, float blocking_ratio = 0.F) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{std::move(shape)},
-        std::move(spec),
-        1.F,    // max_inference_time, in ms
-        0,      // warm_up
-        false,  // session_exclusive_processor
-        blocking_ratio,
-        2);  // num_parallel_processors
-}
-
-/// Two channels in, two channels out.
-InferenceConfig stereo_config(float blocking_ratio = 0.F) {
-    return make_config(TensorShape({{1, 2, k_hop}}, {{1, 2, k_hop}}),
-                       ProcessingSpec({2}, {2}),
-                       blocking_ratio);
-}
-
-/// A three-channel stream and three Static values on either side.
-InferenceConfig multi_config() {
-    return make_config(TensorShape({{1, 3, k_hop}, {1, 3}}, {{1, 3, k_hop}, {1, 3}}),
-                       ProcessingSpec({3, 1}, {3, 1}, {k_hop, 0}, {k_hop, 0}));
-}
-
-/// One channel in, two out (oracle::FanOutGate): a BYPASS miss has one input channel for two
-/// output channels.
-InferenceConfig mono_to_stereo_config() {
-    return make_config(TensorShape({{1, 1, k_hop}}, {{1, 2, k_hop}}), ProcessingSpec({1}, {2}));
-}
-
-/// Four Static values in, one streamed channel out (oracle::ParamRampGate): the session is
-/// driven by its pops.
-InferenceConfig generator_config() {
-    return make_config(TensorShape({{1, 4}}, {{1, 1, k_hop}}),
-                       ProcessingSpec({1}, {1}, {0}, {k_hop}));
-}
-
-/// Blocks of up to k_hop samples at 800 Hz: a hop lasts 10 ms against 1 ms of inference, so
-/// the latency is small and a transcript stays short.
-HostConfig host_config() {
-    return {static_cast<float>(k_hop), 800.F, true};
+/// Blocks of up to oracle::k_hop samples at 800 Hz: a hop lasts 10 ms against 1 ms of inference,
+/// so the latency is small and a transcript stays short. BYPASS is prepared as ZEROS (the file
+/// comment) and set on the manager by the rig.
+anira::ContractHandle contract_of(anira_miss_policy policy, double wait_ratio = 0.0) {
+    return oracle::recording_contract(policy == ANIRA_MISS_BYPASS ? ANIRA_MISS_ZEROS : policy,
+                                      oracle::k_hop,
+                                      wait_ratio);
 }
 
 // ---- the rig -----------------------------------------------------------------------------------
@@ -155,18 +126,6 @@ enum class Mode {
               ///< waits for every submitted inference, so the waiting stems can be recorded
 };
 
-/// What the session's custom backend computes behind the gate.
-enum class Model { PassThrough, FanOut, ParamRamp };
-
-std::unique_ptr<anira_test::GateBackend> make_gate(Model model, InferenceConfig& config) {
-    switch (model) {
-        case Model::FanOut: return std::make_unique<oracle::FanOutGate>(config);
-        case Model::ParamRamp: return std::make_unique<oracle::ParamRampGate>(config);
-        case Model::PassThrough: break;
-    }
-    return std::make_unique<anira_test::GateBackend>(config);
-}
-
 /// shape[1] of the first `count` tensors of an array (none for a NULL array): the counts a
 /// side was presented with, as they stand after the call.
 std::vector<size_t> presented_counts(const anira_tensor* tensors, size_t count) {
@@ -181,52 +140,34 @@ std::vector<size_t> presented_counts(const anira_tensor* tensors, size_t count) 
 
 class ManagerRig {
 public:
-    ManagerRig(InferenceConfig config,
+    ManagerRig(const anira::ModelConfig& model,
                anira_miss_policy policy,
                Mode mode = Mode::Clocked,
-               Model model = Model::PassThrough)
-        : m_config(std::move(config))
-        , m_pp_processor(m_config)
-        , m_gate(make_gate(model, m_config))
-        , m_manager(m_pp_processor, m_config, m_gate.get(), CoreConfig(2))
-        , m_mode(mode)
-        , m_positions(m_config.get_tensor_input_shape().size(), 0) {
-        m_manager.set_miss_policy(policy);
-        m_manager.prepare(host_config());
-        m_adapter.prepare(m_config);
-        m_router.prepare();
-        for (const std::shared_ptr<SessionElement>& session : Core::get_sessions()) {
-            if (session->m_session_id == m_manager.get_session_id()) { m_session = session; }
-        }
-        if (m_session == nullptr) {
-            ADD_FAILURE() << "the manager's session is not registered";
-            return;
-        }
+               Model engine = Model::PassThrough,
+               double wait_ratio = 0.0)
+        : m_handler(model, contract_of(policy, wait_ratio), engine), m_mode(mode) {
+        if (!m_handler.ready()) { return; }
+        m_manager = &m_handler.manager();
+        m_session = &m_handler.session();
+        m_manager->set_miss_policy(policy);
+        m_adapter.prepare(m_handler.input_ports(), m_handler.output_ports());
+        m_router = std::make_unique<NonStreamableRouter>(*m_manager,
+                                                         m_handler.input_ports(),
+                                                         m_handler.output_ports());
+        m_router->prepare();
+        m_positions.assign(m_handler.input_ports().size(), 0);
         if (m_mode == Mode::Waiting) {
-            m_manager.set_non_realtime(true);
+            m_manager->set_non_realtime(true);
         } else {
-            m_gate->m_open.store(false);
+            m_handler.gate().m_open.store(false);
         }
-        std::string line = "latency=[";
-        for (size_t i = 0; i < m_manager.get_latency().size(); ++i) {
-            line += (i > 0 ? "," : "") + std::to_string(m_manager.get_latency()[i]);
-        }
-        line += "] send_capacity=[";
-        for (size_t i = 0; i < m_session->m_send_buffer.size(); ++i) {
-            line +=
-                (i > 0 ? "," : "") + std::to_string(m_session->m_send_buffer[i].get_num_samples());
-        }
-        line += "] recv_capacity=[";
-        for (size_t i = 0; i < m_session->m_receive_buffer.size(); ++i) {
-            line += (i > 0 ? "," : "") +
-                    std::to_string(m_session->m_receive_buffer[i].get_num_samples());
-        }
-        m_transcript.add(line + "] structs=" + std::to_string(m_session->m_num_structs) + " " +
-                         oracle::format_rings(*m_session));
+        m_transcript.add(oracle::prepared_line(m_manager->get_latency(), *m_session));
     }
-    ~ManagerRig() { m_gate->m_open.store(true); }  // before the manager releases the session
     ManagerRig(const ManagerRig&) = delete;
     ManagerRig& operator=(const ManagerRig&) = delete;
+    ManagerRig(ManagerRig&&) = delete;
+    ManagerRig& operator=(ManagerRig&&) = delete;
+    ~ManagerRig() = default;
 
     /// A process or a pop stem; a pop takes no input counts.
     void call(Stem stem,
@@ -238,8 +179,11 @@ public:
             stem == Stem::PopData || stem == Stem::PopDataUntil || stem == Stem::PopDataWait;
         const size_t call = ++m_calls;
         const size_t shared_length = options.m_in_place ? out_counts[0] : 0;
-        std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, shared_length, call);
+        std::vector<oracle::SlotBlock> inputs = oracle::make_inputs(m_handler.input_ports(),
+                                                                    m_positions,
+                                                                    in_counts,
+                                                                    shared_length,
+                                                                    call);
         const oracle::Snapshot inputs_before = oracle::snapshot(inputs);
         std::vector<const float* const*> in_planes;
         for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -250,7 +194,7 @@ public:
         outputs.reserve(out_counts.size());
         std::vector<float* const*> out_planes;
         for (size_t slot = 0; slot < out_counts.size(); ++slot) {
-            outputs.emplace_back(m_config.get_postprocess_output_channels()[slot],
+            outputs.emplace_back(oracle::channels_of(m_handler.output_ports(), slot),
                                  out_counts[slot]);
             const bool unused = options.m_null_unused && out_counts[slot] == 0;
             const bool shared = options.m_in_place && slot == 0;
@@ -268,25 +212,25 @@ public:
             m_adapter.present_outputs(out_planes.data(), num_out.data());
         const size_t* delivered = nullptr;
         switch (stem) {
-            case Stem::Process: delivered = m_router.process(in_tensors, out_tensors); break;
+            case Stem::Process: delivered = m_router->process(in_tensors, out_tensors); break;
             case Stem::ProcessNowait:
-                delivered = m_router.process_nowait(in_tensors, out_tensors);
+                delivered = m_router->process_nowait(in_tensors, out_tensors);
                 break;
             case Stem::ProcessWait:
-                delivered = m_router.process_wait(in_tensors,
-                                                  out_tensors,
-                                                  std::chrono::steady_clock::duration::max(),
-                                                  outcome);
-                break;
-            case Stem::PopData: delivered = m_router.pop_data(out_tensors); break;
-            case Stem::PopDataUntil:
-                delivered =
-                    m_router.pop_data(out_tensors, std::chrono::steady_clock::time_point::max());
-                break;
-            case Stem::PopDataWait:
-                delivered = m_router.pop_data_wait(out_tensors,
+                delivered = m_router->process_wait(in_tensors,
+                                                   out_tensors,
                                                    std::chrono::steady_clock::duration::max(),
                                                    outcome);
+                break;
+            case Stem::PopData: delivered = m_router->pop_data(out_tensors); break;
+            case Stem::PopDataUntil:
+                delivered =
+                    m_router->pop_data(out_tensors, std::chrono::steady_clock::time_point::max());
+                break;
+            case Stem::PopDataWait:
+                delivered = m_router->pop_data_wait(out_tensors,
+                                                    std::chrono::steady_clock::duration::max(),
+                                                    outcome);
                 break;
         }
         // The count protocol of the float face: the stem's counts into the caller's array,
@@ -303,7 +247,7 @@ public:
         if (!pops) { header += " in=" + oracle::format_counts(num_in); }
         header += " out=" + oracle::format_counts(num_out);
         header += returned == num_out.data() ? " returned=out" : " returned=other";
-        header += std::string(" missed=") + (m_manager.last_block_missed() ? "1" : "0");
+        header += std::string(" missed=") + (m_manager->last_block_missed() ? "1" : "0");
         if (stem == Stem::ProcessWait || stem == Stem::PopDataWait) {
             header += std::string(" outcome=") + name_of(outcome);
         }
@@ -326,7 +270,7 @@ public:
         if (m_session == nullptr) { return; }
         const size_t call = ++m_calls;
         std::vector<oracle::SlotBlock> inputs =
-            oracle::make_inputs(m_config, m_positions, in_counts, 0, call);
+            oracle::make_inputs(m_handler.input_ports(), m_positions, in_counts, 0, call);
         const oracle::Snapshot inputs_before = oracle::snapshot(inputs);
         std::vector<const float* const*> in_planes;
         for (size_t slot = 0; slot < in_counts.size(); ++slot) {
@@ -335,7 +279,7 @@ public:
         }
         const anira_tensor* in_tensors =
             m_adapter.present_inputs(in_planes.data(), in_counts.data());
-        m_router.push_data(in_tensors);
+        m_router->push_data(in_tensors);
         const std::vector<size_t> num_in = presented_counts(in_tensors, in_counts.size());
         std::string header =
             "#" + std::to_string(call) + " push_data in=" + oracle::format_counts(in_counts);
@@ -348,7 +292,7 @@ public:
 
     void reset() {
         if (m_session == nullptr) { return; }
-        m_manager.reset();
+        m_manager->reset();
         m_transcript.add("#" + std::to_string(++m_calls) + " reset " +
                          oracle::format_rings(*m_session));
     }
@@ -358,9 +302,11 @@ public:
     void settle() {
         if (m_session == nullptr) { return; }
         if (m_mode == Mode::Clocked) {
-            oracle::settle(*m_gate, *m_session, [this] { m_manager.get_available_samples(0, 0); });
+            oracle::settle(m_handler.gate(), *m_session, [this] {
+                m_manager->get_available_samples(0, 0);
+            });
         } else {
-            m_manager.get_available_samples(0, 0);
+            m_manager->get_available_samples(0, 0);
         }
         m_transcript.add("  settled: " + oracle::format_rings(*m_session));
     }
@@ -368,21 +314,19 @@ public:
     const oracle::Transcript& transcript() const { return m_transcript; }
 
 private:
-    InferenceConfig m_config;
-    PrePostProcessor m_pp_processor;
-    std::unique_ptr<anira_test::GateBackend> m_gate;
-    InferenceManager m_manager;
-    PlanarFloatAdapter m_adapter;  ///< the float face, sized beside the manager's prepare
-    NonStreamableRouter m_router{m_manager, m_pp_processor, m_config};  ///< the Static slots
+    oracle::HandlerSession m_handler;  ///< the session, prepared; dies last
     Mode m_mode;
-    std::shared_ptr<SessionElement> m_session;
-    std::vector<size_t> m_positions;  ///< per input slot, the samples pushed so far
+    InferenceManager* m_manager = nullptr;          ///< the handler's; NULL when the prepare failed
+    SessionElement* m_session = nullptr;            ///< likewise
+    PlanarFloatAdapter m_adapter;                   ///< the float face, sized after the prepare
+    std::unique_ptr<NonStreamableRouter> m_router;  ///< the Static slots, over the ports
+    std::vector<size_t> m_positions;                ///< per input slot, the samples pushed so far
     size_t m_calls = 0;
     oracle::Transcript m_transcript;
 };
 
 // ---- the scenarios -----------------------------------------------------------------------------
-// The figures in the comments are those of the stereo model under host_config(): a latency
+// The figures in the comments are those of the stereo model under contract_of(): a latency
 // of 15 samples, a send ring of 15, a receive ring of 47, 4 inference structs, a hold
 // capacity of 8 (the host block). The golden transcripts print them.
 
@@ -391,7 +335,7 @@ private:
 /// request below the pushed count), the catch-up after the misses, a reset in the middle of
 /// the stream, and a push larger than the send ring, of which the ring keeps the tail.
 void run_block_sizes(anira_miss_policy policy, const char* name, std::string_view golden) {
-    ManagerRig rig(stereo_config(), policy);
+    ManagerRig rig(oracle::stereo_model(), policy);
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {3}, {3});
@@ -423,7 +367,7 @@ void run_block_sizes(anira_miss_policy policy, const char* name, std::string_vie
 /// count and on a pop; the gate opens, the catch-up discards the late blocks; a reset, after
 /// which HOLD_LAST holds nothing.
 void run_starved_blocks(anira_miss_policy policy, const char* name, std::string_view golden) {
-    ManagerRig rig(stereo_config(), policy);
+    ManagerRig rig(oracle::stereo_model(), policy);
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {13}, {13}, k_gate_closed);
@@ -446,7 +390,7 @@ void run_starved_blocks(anira_miss_policy policy, const char* name, std::string_
 /// cannot serve, the deadline form of pop_data on a session without a blocking ratio (it
 /// collects nothing and pops what is there).
 void run_push_pop(anira_miss_policy policy, const char* name, std::string_view golden) {
-    ManagerRig rig(stereo_config(), policy);
+    ManagerRig rig(oracle::stereo_model(), policy);
     rig.push({8});
     rig.push({3});
     rig.push({5});
@@ -466,7 +410,7 @@ void run_push_pop(anira_miss_policy policy, const char* name, std::string_view g
 /// handed over as NULL, a Static request above and below the value count, the split calls, a
 /// starved request on both outputs at once, the catch-up and a reset.
 void run_multi_slot(anira_miss_policy policy, const char* name, std::string_view golden) {
-    ManagerRig rig(multi_config(), policy);
+    ManagerRig rig(oracle::multi_model(), policy);
     rig.call(Stem::ProcessNowait, {8, 3}, {8, 3});
     rig.call(Stem::ProcessNowait, {8, 3}, {8, 3});
     rig.call(Stem::ProcessNowait, {8, 0}, {8, 0}, k_null_unused);
@@ -532,7 +476,7 @@ TEST(CopyPathOracle, MultiSlotWithStaticTensors) {
 // One input channel for two output channels: a BYPASS miss copies the channel the input has
 // and zero-fills the other, for equal counts, a longer request and a shorter one.
 TEST(CopyPathOracle, MonoToStereoBypass) {
-    ManagerRig rig(mono_to_stereo_config(), ANIRA_MISS_BYPASS, Mode::Clocked, Model::FanOut);
+    ManagerRig rig(oracle::mono_to_stereo_model(), ANIRA_MISS_BYPASS, Mode::Clocked, Model::FanOut);
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {8}, {8});
     rig.call(Stem::ProcessNowait, {13}, {13}, k_gate_closed);
@@ -550,7 +494,7 @@ TEST(CopyPathOracle, MonoToStereoBypass) {
 // A generator: the Static input is pushed, the pops drive the inferences (request_output),
 // and a process call does both. BYPASS has no anchored input here and zero-fills.
 TEST(CopyPathOracle, GeneratorPulledByItsPops) {
-    ManagerRig rig(generator_config(), ANIRA_MISS_BYPASS, Mode::Clocked, Model::ParamRamp);
+    ManagerRig rig(oracle::generator_model(), ANIRA_MISS_BYPASS, Mode::Clocked, Model::ParamRamp);
     rig.push({4});
     rig.call(Stem::PopData, {}, {8});
     rig.call(Stem::PopData, {}, {8});
@@ -570,7 +514,11 @@ TEST(CopyPathOracle, GeneratorPulledByItsPops) {
 // dispatcher (which takes process_wait here), process_wait, the deadline form of pop_data,
 // pop_data_wait and the non-waiting stems beside them, a request none of them can serve.
 TEST(CopyPathOracle, WaitingStems) {
-    ManagerRig rig(stereo_config(0.5F), ANIRA_MISS_BYPASS, Mode::Waiting);
+    ManagerRig rig(oracle::stereo_model(),
+                   ANIRA_MISS_BYPASS,
+                   Mode::Waiting,
+                   Model::PassThrough,
+                   0.5);
     rig.call(Stem::Process, {8}, {8});
     rig.call(Stem::Process, {8}, {8});
     rig.call(Stem::ProcessWait, {8}, {8});

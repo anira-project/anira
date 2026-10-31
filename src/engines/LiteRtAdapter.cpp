@@ -14,7 +14,6 @@
  */
 #ifdef USE_LITERT
 
-#include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
@@ -235,8 +234,8 @@ EngineTensor engine_tensor_of(LiteRtSignature signature, const char* name, bool 
 /// severity (the logger C API is not exported from the prebuilt runtime, so the env option is
 /// the only route, else LiteRT spams INFO logs on every environment creation and model
 /// compilation; severity values follow litert/c/internal/litert_logging.h: verbose=0, info=1,
-/// warning=2, error=3, numerically identical to anira's LogLevel enum, with Debug mapping to
-/// LiteRT's verbose severity), and the accelerators its automatic registration loaded, which a
+/// warning=2, error=3, numerically identical to anira_log_level, with ANIRA_LOG_DEBUG mapping
+/// to LiteRT's verbose severity), and the accelerators its automatic registration loaded, which a
 /// load's record is checked against. Every loaded model holds the object, so the environment
 /// outlives every compiled model and is destroyed with the object; the core keeps one object
 /// per engine (Core::builtin_engine).
@@ -422,7 +421,7 @@ public:
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing call.
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
     std::vector<EngineTensor> side_of(bool inputs);
@@ -612,7 +611,7 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     try {
         run(ctx);
         m_failures.succeeded();
@@ -744,7 +743,7 @@ std::vector<ProviderInfo> litert_providers() {
     // logger keeps errors alone, whatever anira's level. The engine object's environment, made
     // at init with anira's level, is not touched, so the query runs beside an init on another
     // thread, and a load that asks for an accelerator says why it failed.
-    const auto severity = static_cast<int64_t>(anira::LogLevel::Error);
+    const auto severity = static_cast<int64_t>(ANIRA_LOG_ERROR);
     const std::array<LiteRtEnvOption, 1> env_options = {{
         {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
          .value = {.type = kLiteRtAnyTypeInt, .int_value = severity}},

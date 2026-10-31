@@ -5,28 +5,40 @@
 #include <cstdint>
 #include <vector>
 
-#include "../InferenceConfig.h"
-#include "../utils/HostConfig.h"
+#include "../system/Exports.h"
 
 namespace anira {
+
+namespace capi {
+/// What the validator derives for a model config and the Hard half of a contract
+/// (src/capi/validate.h and src/capi/handles.h, private): the constructor reads both by
+/// reference, and no public header includes their definitions.
+struct Derived;
+struct HardContract;
+}  // namespace capi
 
 /**
  * @brief Latency, inference-slot count and ring-buffer sizing of a session, in closed form
  *
- * Everything a SessionElement needs to size itself for a host configuration is a
- * function of five numbers, all derived from the InferenceConfig and the HostConfig:
+ * Everything a SessionElement needs to size itself for a Hard contract is a function of
+ * five numbers, all read from what the validator derived for the model config
+ * (capi::Derived), the contract's Hard half (capi::HardContract) and the session's instance
+ * count:
  *
  * - @f$\rho = B / R@f$, the host block measured in hops: @f$B@f$ is the host buffer size
- *   in samples of the reference stream and @f$R@f$ that stream's samples per inference
- *   (HostConfig::get_reference_size). @f$\rho@f$ is stored as a reduced fraction
+ *   in samples of the reference stream (the contract's block_max) and @f$R@f$ that
+ *   stream's samples per inference (the hop of the model config's anchor, which the
+ *   validator resolves). @f$\rho@f$ is stored as a reduced fraction
  *   @f$p / q@f$ (see rationalize()).
- * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the maximum inference time @f$T@f$ (ms)
- *   measured in hop periods (@f$f_s@f$ is the host sample rate of the reference stream).
- * - @f$\beta@f$, the blocking ratio: the driving thread waits @f$\beta@f$ host block
+ * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the contract's budget @f$T@f$ (ms)
+ *   measured in hop periods (@f$f_s@f$ is the contract's rate, in samples of the reference
+ *   stream per second).
+ * - @f$\beta@f$, the contract's wait ratio: the driving thread waits @f$\beta@f$ host block
  *   periods for results inside every callback.
- * - @f$n@f$, the number of parallel processors of the session.
+ * - @f$n@f$, the session's instance count (the model config's max_instances, resolved
+ *   against the thread pool by Core::create_session).
  * - @f$H@f$, the largest hop of any streamable tensor: the stream in which the host's
- *   block size is finest, and the unit of the `allow_smaller_buffers` block grid.
+ *   block size is finest, and the unit of the smaller-block grid.
  *
  * The model is the scheduler's actual worst case: every inference takes exactly
  * @f$T@f$, at most @f$n@f$ run at once in submission order, an inference is submitted by
@@ -41,7 +53,8 @@ namespace anira {
  * (their corollary 3.8, replacing the PortAudio-style LCM loop). In hop units this is
  * @f$1 - 1/q@f$ for every stream at once, because @f$\gcd(\rho P, P) = P / q@f$
  * whenever @f$\rho P@f$ is an integer. When the host block may vary
- * (`allow_smaller_buffers`) or is fractional on a stream, the worst case is
+ * (the contract's block_min below its block_max) or is fractional on a stream, the worst
+ * case is
  * @f$P - 1@f$ samples (their section 5).
  *
  * @par Inference queue
@@ -72,8 +85,9 @@ namespace anira {
  * ThreadSafeStructs so that a wait-free reset, which strands the in-flight inferences
  * in their slots until the workers finish, never starves the fresh schedule.
  *
- * @par allow_smaller_buffers
- * The host may then use any block of @f$j@f$ samples of the finest stream,
+ * @par Smaller host blocks
+ * With the contract's block_min below its block_max the host may use any block of @f$j@f$
+ * samples of the finest stream,
  * @f$1 \le j \le \lfloor \rho H \rfloor@f$, i.e. @f$\rho' = j / H@f$ hops, with
  * @f$\tau' = \kappa / \rho'@f$. The worst case over that grid uses the flexible-host
  * adaptation @f$(H - 1)/H@f$ and the maximum of @f$\rho' d_m(\rho') - m n@f$ and of the
@@ -97,15 +111,23 @@ public:
     };
 
     /**
-     * @brief Computes every quantity for one host configuration
+     * @brief Computes every quantity for one Hard contract
      *
-     * @param inference_config Model configuration (hops, max inference time, blocking ratio,
-     * parallel processors)
-     * @param host_config Host configuration (buffer size and sample rate in reference-stream
-     * samples, allow_smaller_buffers, reference selection)
-     * @throws std::invalid_argument if the host config's reference stream cannot be resolved
+     * The geometry is the contract's own, in double precision: a fractional block_max reaches
+     * rationalize() as the host stated it.
+     *
+     * @param derived What the validator derived for the model config: the hop and channel
+     * count of every tensor, its extents (the history an input peeks at), the anchor
+     * @param hard The contract's Hard half: block_max and rate (samples of the anchor's
+     * stream), block_min (below block_max: the smaller-block grid applies), the budget in ms
+     * and the wait ratio
+     * @param num_instances The session's instance count, @f$n@f$ (at least 1 is used)
+     * @throws std::invalid_argument if the anchor has no stream, or if block_max or the rate
+     * is not positive or the block too small to represent
      */
-    LatencyCalculator(const InferenceConfig& inference_config, const HostConfig& host_config);
+    LatencyCalculator(const capi::Derived& derived,
+                      const capi::HardContract& hard,
+                      uint32_t num_instances);
 
     /**
      * @brief The worst-case latency in hops, @f$\Lambda@f$ (fixed host block)
@@ -117,7 +139,7 @@ public:
     /**
      * @brief The worst-case latency in hops over the smaller-block grid
      *
-     * Equal to get_latency_hops() unless HostConfig::m_allow_smaller_buffers is set.
+     * Equal to get_latency_hops() unless the contract's block_min is below its block_max.
      *
      * @return Latency in hops, as a floating-point number
      */
@@ -192,6 +214,20 @@ public:
      * @brief The inference time in hop periods, @f$\kappa@f$
      */
     double get_inference_hop_periods() const;
+
+    /**
+     * @brief One host block in samples of a stream, @f$\lceil \rho P \rceil@f$
+     *
+     * What a host block may carry on a Streamed slot (the most samples its port admits per
+     * call) and what a held output block is sized by: floor(b) and ceil(b) of a fractional
+     * block b both fit. The block of the send ring's size (get_send_buffer_sizes()) is the
+     * same figure.
+     *
+     * @param block_hops The host block in hops, @f$\rho@f$ (get_block_hops())
+     * @param stream_size Samples per inference of the stream, @f$P@f$
+     * @return The block in samples of the stream; 0 for a stream size of 0 (no stream)
+     */
+    static size_t block_samples(const Rational& block_hops, size_t stream_size);
 
     /**
      * @brief Greatest common divisor

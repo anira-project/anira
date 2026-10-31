@@ -58,7 +58,6 @@ add_custom_target(breathe-apidocs
     COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
     ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
     -g class,struct,union -f
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_thread_safe_struct.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_plan_slot.rst
     # anira::scheduler::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
@@ -72,7 +71,7 @@ add_custom_target(breathe-apidocs
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1ext_1_1_provider_options_1_1_set.rst
     # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessor::Prepared, the
     # private Loaded and Prepared of PassthroughEngine (EXTRACT_PRIVATE lists them), the
-    # Defaults of anira::v2::InferenceConfig (as the 2.x one's above), and the three aggregates
+    # Defaults of anira::v2::InferenceConfig, and the three aggregates
     # of anira::SpecView (Axis, Window, TimeRatio).
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_loaded.rst

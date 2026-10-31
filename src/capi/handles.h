@@ -97,7 +97,8 @@ struct ModelEntry {
     }
 };
 
-/// The Hard (real-time) half of a contract: v2's HostConfig geometry, budget and warmup.
+/// The Hard (real-time) half of a contract: the geometry, the budget, the warmup, the miss
+/// policy and the wait ratio, which the session reads by reference.
 /// Namespace-level (not nested in anira_contract): clang parses a nested class's default
 /// member initializers only once the enclosing class is complete, which would leave
 /// std::variant without a default constructor.

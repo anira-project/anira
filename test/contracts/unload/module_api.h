@@ -25,15 +25,42 @@ ANIRA_TEST_EXPORT void* unloadtest_create_builtin(void);
 /// The engines of unloadtest_create_engine, all of this module on the custom row: an inference
 /// that never ends on its own (it sleeps until the process dies); one that needs the loader
 /// lock again and again until the process dies (dlopen on glibc, which a dlclose in progress
-/// holds; elsewhere it stalls); one that sleeps slow_ms, then passes the block through.
+/// holds; elsewhere it stalls); one that sleeps slow_ms, then passes the block through; one
+/// whose runtime keeps static state, built when the instance is created (before its prepare
+/// starts the pool, as an engine's runtime builds its environment at its first load) and
+/// torn down by the exit handler that construction registered, which sleeps slow_ms and then
+/// exits the process with UNLOADTEST_TORN_DOWN_EXIT_CODE when that state is gone, else passes
+/// the block through (with unloadtest_hold_until_exit, it waits for the process to start
+/// exiting instead of sleeping, and writes UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER to stderr
+/// when it finds the state alive); one whose load (inside anira_handler_prepare, under the core's
+/// lifecycle lock) writes UNLOADTEST_EXIT_IN_LOAD_MARKER to stderr and calls exit(0), so the
+/// instance's create never returns.
 enum {
     UNLOADTEST_ENGINE_STALLING = 1,
     UNLOADTEST_ENGINE_LOADER_LOCK = 2,
     UNLOADTEST_ENGINE_SLOW = 3,
+    UNLOADTEST_ENGINE_RUNTIME_STATICS = 4,
+    UNLOADTEST_ENGINE_EXIT_IN_LOAD = 5,
 };
+/// What an UNLOADTEST_ENGINE_RUNTIME_STATICS inference held until the exit writes to stderr when
+/// the runtime's state is still alive once it runs on.
+#define UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER \
+    "unloadtest: the inference ran over live runtime state\n"
+/// How a held inference exits the process when no exit started within 10 s.
+#define UNLOADTEST_HOLD_TIMEOUT_EXIT_CODE 7
+/// What the load of UNLOADTEST_ENGINE_EXIT_IN_LOAD writes to stderr before it exits.
+#define UNLOADTEST_EXIT_IN_LOAD_MARKER "unloadtest: the engine's load calls exit(0)\n"
+/// The exit status of a process whose UNLOADTEST_ENGINE_RUNTIME_STATICS inference ran over
+/// its torn-down runtime state.
+#define UNLOADTEST_TORN_DOWN_EXIT_CODE 9
 /// Creates and prepares an instance over the module engine of `behaviour` (above; slow_ms
-/// for UNLOADTEST_ENGINE_SLOW); nullptr, with nothing left behind, if a step failed.
+/// for UNLOADTEST_ENGINE_SLOW and UNLOADTEST_ENGINE_RUNTIME_STATICS); nullptr, with nothing
+/// left behind, if a step failed.
 ANIRA_TEST_EXPORT void* unloadtest_create_engine(int behaviour, int slow_ms);
+/// From now on an UNLOADTEST_ENGINE_RUNTIME_STATICS inference waits until the process starts
+/// exiting: registers an exit handler that releases it, which runs ahead of every exit handler
+/// registered before this call (the core's, which its prepare registered, among them).
+ANIRA_TEST_EXPORT void unloadtest_hold_until_exit(void);
 /// The inferences of the engines of unloadtest_create_engine that reached their process.
 ANIRA_TEST_EXPORT int unloadtest_engine_entered(void);
 /// anira_handler_prepare with a 512-sample / 48 kHz Hard contract — starts the pool threads.

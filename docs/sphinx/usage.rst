@@ -403,7 +403,9 @@ minted again. On an Async handle it throws ``anira::Error`` with
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the
-  buffers hold, and the stream stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies
+  buffers hold, and the stream stays time-aligned). The samples a missed block stood in for are
+  discarded when they arrive, never delivered later: a delivered block is the stream at exactly
+  its latency, and a host that stays ahead of the stream keeps missing. ``ANIRA_MISS_BYPASS`` (the default) copies
   the block the same call pushed into the anchored input into the output (``process`` /
   ``process_multi`` with the anchored input's slot; a call on another slot,
   and a pop, which has no input block, deliver zeros), which needs an anchored input ring with
@@ -450,6 +452,28 @@ minted again. On an Async handle it throws ``anira::Error`` with
   ``ANIRA_ERROR_CONFIG`` at ``prepare``, naming ``on_miss``. A contract file can say
   ``"on_miss": "callback"`` but cannot carry a function: set the pair on the parsed contract
   before ``prepare``.
+
+  **The policy fills dropped hops too.** When every inference slot of the handler is still
+  busy (an inference ran far over its budget, the machine stalled), the hops a call completes
+  get no inference: each one is dropped and costs exactly one hop of the policy's fill at its
+  own stream position, behind the inferences submitted before it, and nothing else: the stream
+  stays on its hop grid and is back at its latency once the late inferences are collected.
+  ``ANIRA_MISS_ZEROS`` places zeros; ``ANIRA_MISS_BYPASS`` the dropped input hop of the anchored
+  input itself, the dry signal at its own position; ``ANIRA_MISS_HOLD_LAST`` the head of the
+  last block the output delivered; ``ANIRA_MISS_CALLBACK`` what the host's function makes of the
+  hop. The function is called once per dropped hop, at the drop, on the driver thread inside
+  the entry whose call dropped it, with hop-shaped arrays instead of the call's: every Streamed
+  input slot carries the dropped hop (``[channels, hop]`` of the slot's ring dtype, packed,
+  without ``ANIRA_TENSOR_PLANAR``, the handler's memory, valid for the call), every Streamed
+  output slot a ``[channels, hop]`` tensor of the handler's memory to fill, every other slot
+  an empty tensor; a status other than ``ANIRA_OK`` places zeros, and the entry's own return
+  is not touched (a function that needs to tell the two apart reads the flags: a block's
+  tensors are the caller's own). A fill can wait behind late inferences for at most the
+  latency: a fill held longer would only reach the host late, so the handler keeps the fills
+  of the last ``ceil(latency / hop) + 2`` dropped hops (allocated at ``prepare``) and places
+  an older one as zeros. ``rt_error`` reports a drop as ``ANIRA_ERROR_CAPACITY`` under every
+  policy (:doc:`logging`). A dropped hop never reaches the model: a stateful model's state
+  continues from the last hop it ran, as if the input had jumped by the dropped hops.
 - **Wait ratio.** ``wait_ratio`` is the fraction of the block period a ``_wait`` entry
   (``anira_handler_process_wait`` and its twins, section 3.2) may spend waiting for the
   block's inference when called with ``ANIRA_WAIT_CONTRACT``; ``0`` (the default) never
@@ -507,13 +531,17 @@ frame per 2048 audio samples, say), has an anchor whose block is a fraction of a
 on a stream at the host rate whenever the model has one (the RAVE decoder of the JUCE example
 anchors on its audio output, ``"anchor": "audio_out"``, and passes the host's own block); the
 fractional geometry is for the model that has none. Its geometry is then the host block
-measured on the anchor, and the rate is in anchor samples per second as well:
+measured on the anchor, and the rate is in anchor samples per second as well. A fractional
+geometry is a fixed block: the count below assumes the same block on every call, so the host
+behind it delivers one block size, and a plugin, whose host promises only a largest block (section
+4.1), anchors on a stream at the host rate and declares its range there, as the RAVE decoder of
+the JUCE example does.
 
 .. code-block:: cpp
 
-    // prepareToPlay(sample_rate, samples_per_block) of a control-rate model: one latent frame
-    // per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
-    const double block = samples_per_block / 2048.0;
+    // A host with a fixed block of host_block samples at sample_rate, for a control-rate model:
+    // one latent frame per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
+    const double block = host_block / 2048.0;
     contract.hard_geometry(block, block, sample_rate / 2048.0);
 
 anira takes the block as the rational the latency calculation recovers from it (a relative
@@ -2050,11 +2078,17 @@ A contract written in code names the geometry on the aggregate, the budget besid
                                           .budget = 10ms,
                                           .warmup = ANIRA_WARMUP_NONE});
 
-``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver. A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
+``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver, each held from call to call. A host that changes the size between calls can still miss a block in rare sequences (a full block right after a short one that completed a hop, `issue #228 <https://github.com/anira-project/anira/issues/228>`_). A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
 
 .. code-block:: cpp
 
     contract.hard_geometry(1, 2048, 44100.0);  // blocks of 1 to 2048 samples
+
+A plugin host promises a largest block, not a fixed one (JUCE's ``prepareToPlay`` names the maximum
+only, CLAP's ``activate`` both ends), so a plugin declares that range: the latency anira reports then
+covers the smallest block as well (up to the varying sequences above), and the plugin hands it to
+the host for compensation. A fixed block is for a host that never changes it, at the lower
+latency.
 
 The anchor is the streamed tensor whose samples are the unit of both values. By default it is resolved automatically: the first streamed input, or, for generator models with no streamed input, the first streamed output. For models with several streamed tensors, name it with ``model_config.anchor("audio_out")`` (section 1.2) or ``"anchor": "audio_out"`` in the model file; a name that is not a streamed tensor is refused at prepare with ``ANIRA_ERROR_CONFIG``.
 
@@ -2326,7 +2360,7 @@ The call is wait-free and real-time safe for all handler configurations, includi
     :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom engine or a processor's ``before_inference`` / ``after_inference`` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own engine.
 
 ..  note::
-    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
+    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected hops are dropped and filled under the miss policy at their own stream positions (section 1.3, *Miss policy*); the stream stays on its hop grid and recovers by itself.
 
 ..  note::
     What a reset re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_engines`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the processor's own state** (a resampler, an overlap buffer, a filter's history), through the processor's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp.

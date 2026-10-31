@@ -18,11 +18,24 @@ Where the 2.x API stands in this pre-release
   ``using namespace anira::v2;`` (:ref:`migration-compat`); C++ against the 3.x API includes
   ``<anira/anira.hpp>``.
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
-  JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
-  :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
-  :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape`,
-  :cpp:struct:`anira::ProcessingSpec` and :cpp:class:`anira::JsonConfigLoader` remain public and
-  exported through the alpha releases of the 3.x line.
+  JSON files of its section 1.5. The library's own 2.x classes are removed:
+  ``anira::InferenceConfig`` with ``ModelData``, ``TensorShape`` and ``ProcessingSpec``
+  (``<anira/InferenceConfig.h>``), ``anira::HostConfig`` (``<anira/utils/HostConfig.h>``),
+  ``anira::InferenceBackend``, ``anira::PrePostProcessor``, ``anira::Buffer`` / ``BufferF`` /
+  ``MemoryBlock`` and ``<anira/utils/helperFunctions.h>``, and ``anira::CoreConfig`` with its
+  ``LogConfig`` and the ``LogLevel`` / ``LogDrain`` / ``WaitStrategy`` enums
+  (``<anira/CoreConfig.h>``). Nothing in anira used them once the core ran on the 3.x types.
+  ``anira/compat/v2.hpp`` declares the ones a 2.x host's code names in ``namespace anira::v2``
+  (:ref:`migration-compat-config`): ``InferenceConfig`` with ``ModelData``, ``TensorShape`` and
+  ``ProcessingSpec``, ``HostConfig``, ``InferenceBackend``, ``PrePostProcessor``, ``BufferF``
+  (a view of one channel, without the owning constructor) and ``RingBuffer``, and in place of
+  ``CoreConfig`` the 2.x ``ContextConfig`` with ``LogConfig`` and the three enums. It has no
+  ``Buffer`` template, no ``MemoryBlock`` and nothing of ``helperFunctions.h``: a host buffer is
+  the host's own container, an ``anira_tensor`` describes it. ``anira::ContextConfig`` of
+  ``anira/anira.hpp`` is the 3.x context configuration. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
+  document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
+  (:ref:`migration-compat-config`).
 - **The runtime** is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``, the C++
   face of the C handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5): created on a
   context from a pipeline, prepared with the contract, the Hard entries over host tensors. The
@@ -30,9 +43,9 @@ Where the 2.x API stands in this pre-release
   ``<anira/compat/v3_to_v2.h>`` that fed it the 2.x configuration classes are removed
   (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
   :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
-  and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
+  and its 2.x ``float***`` functions are gone. A custom 2.x ``PrePostProcessor``
   becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
-  custom :cpp:class:`anira::BackendBase` a *registered engine* (``anira_engine_desc``,
+  custom ``anira::BackendBase`` a *registered engine* (``anira_engine_desc``,
   :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
   :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps its code
   compiles against ``anira/compat/v2.hpp``, which runs it on the same C handler
@@ -71,8 +84,8 @@ Configuration in code
 One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one Hard
 ``anira::ContractHandle``; one 2.x ``ContextConfig`` becomes one ``anira::ContextConfig`` (the
 3.x name is the 2.x name: it is the same role, the per-handler request that the shared *core*
-reconciles; the 2.x struct itself is ``anira::CoreConfig`` on the 3.x line, and what it
-configures is ``anira::Core``, the object the 2.x API called ``Context``); the
+reconciles; the 2.x struct itself was ``anira::CoreConfig`` in the first alphas of the 3.x
+line, and what it configures is ``anira::Core``, the object the 2.x API called ``Context``); the
 ``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
 the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
 ``spec``, ``contract`` and ``context`` are the handles) with the C entry of
@@ -269,7 +282,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
      - ``anira::InferenceThread thread(context)`` on a ``context.threads(0)`` context
        (``anira_inference_thread_create``).
 
-What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
+What each virtual and helper of a custom 2.x ``PrePostProcessor`` becomes on the
 processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Processor` in C++):
 
 .. list-table::
@@ -356,7 +369,7 @@ processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Proc
        (``anira_processor_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
        (:doc:`custom_preprocessing`).
 
-What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
+What each virtual of a custom ``anira::BackendBase`` becomes on the engine (the C
 descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_engines`):
 
 .. list-table::
@@ -561,7 +574,7 @@ The classes and what differs from 2.x
 ``namespace anira::v2`` under the names of the last 2.x release (v2.3.0):
 ``InferenceBackend`` with ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH`` and
 ``CUSTOM``, ``ModelData``, ``TensorShape``, ``ProcessingSpec``, ``InferenceConfig``,
-``JsonConfigLoader``, ``ContextConfig`` (this pre-release's ``anira::CoreConfig``) with
+``JsonConfigLoader``, ``ContextConfig`` (``anira::CoreConfig`` in the first alphas) with
 ``LogConfig``, ``LogLevel``, ``LogDrain`` and ``WaitStrategy``, and ``HostConfig``. The header
 is header-only C++20 over ``anira/anira.hpp`` and the C entries, includes nothing of the 2.x
 tree, and compiles beside ``<anira/anira.h>``. A 2.x configuration compiles unchanged with a
@@ -746,12 +759,10 @@ When the 2.x classes go
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The 2.x handler is removed in this pre-release, the transitional bridge with it
-(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
-(the configuration classes, :cpp:class:`anira::PrePostProcessor`,
-:cpp:class:`anira::BackendBase`, :cpp:class:`anira::JsonConfigLoader`) stay installed, each
-included by its own path, until a later pre-release makes them private. From then on
-``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
-after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The library's own 2.x
+classes are removed too: the configuration classes, ``PrePostProcessor``, ``CoreConfig``,
+``JsonConfigLoader`` and ``BackendBase``, with their headers. ``anira/compat/v2.hpp`` is what
+2.x code compiles against, and it is removed one minor release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.
 
 .. _migration-bridge:
@@ -946,24 +957,24 @@ format).
     anira_model_config_to_json(cfg, text, len + 1, &len);
     /* write text to model.json */
 
-**The 2.x C++ loader.** :cpp:class:`anira::JsonConfigLoader` still reads the 2.x document into
-the 2.x structs in this pre-release:
+**The 2.x C++ loader** is removed with ``<anira/utils/JsonConfigLoader.h>``. The 2.x document
+loads through ``anira::ModelConfig::from_file`` (with ``take_legacy_contract()`` for the Hard
+contract) and ``anira::ContextConfig::from_file``, or, in the 2.x spelling, through
+``anira::v2::JsonConfigLoader`` of ``<anira/compat/v2.hpp>`` (:ref:`migration-compat-config`):
 
 .. code-block:: cpp
 
-    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
-    anira::CoreConfig core_config = std::move(*json_config_loader.get_core_config());
-    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
+    #include <anira/compat/v2.hpp>
 
-Its getters return a ``std::unique_ptr`` each; move the value out before using it. The loader
-also accepts a ``std::istream``. It is lenient where the 3.x loaders are strict: a malformed
-value is reported through the log and skipped, an unparseable ``model_data`` or
-``tensor_shape`` entry is dropped, an out-of-range scalar falls back to its default, and only a
-configuration that still has model data, a tensor shape and ``max_inference_time`` yields an
-:cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must
-check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"`` and ``drain`` to
-``"manual"``, each with a warning; ``num_threads`` sizes the pool as natively, its threads being
-Wasm Workers.
+    anira::v2::JsonConfigLoader json_config_loader("path/to/Config.json");
+    anira::v2::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::v2::InferenceConfig inference_config =
+        std::move(*json_config_loader.get_inference_config());
+
+The 2.x loader was lenient where the 3.x loaders are strict: it logged a malformed value and
+skipped it, dropped an unparseable ``model_data`` or ``tensor_shape`` entry, and answered
+``nullptr`` for a configuration without model data, a tensor shape or ``max_inference_time``.
+Each of these is an ``anira::Error`` from the constructor now.
 
 .. _migration-web:
 

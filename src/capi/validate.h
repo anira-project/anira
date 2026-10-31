@@ -7,9 +7,10 @@
  * on a provider per plan, and the default-set rule), and the per-slot facts it resolves from
  * the contract and the model (ring dtypes, host domains, declared state pairs). What the
  * pipeline's processor and engines mean to it arrives as ProcessorFacts and EngineFacts. It is what
- * anira_handler_create and anira_handler_prepare run before anything is loaded; the 2.x
- * configuration objects the scheduler still takes are made from its results by the bridge
- * (v3_to_v2.h). Private to src/capi (the tests reach it through the src/ include directory).
+ * anira_handler_create and anira_handler_prepare run before anything is loaded; the C
+ * handler keeps what it derived at prepare (anira_handler::m_derived), and the session reads
+ * it for as long as it lives. Private to src/capi (the scheduler's .cpp files and the tests
+ * reach it through the src/ include directory).
  *
  * Every function here throws anira::StatusError (the status the C boundary returns, with the
  * message the caller reads); the exported entries catch at the boundary and say it once.
@@ -21,7 +22,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/system/Exports.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -78,6 +78,12 @@ struct Derived {
                                    ///< Streamed output (2.x k_first_streamable)
     bool m_anchor_is_input = true;
     size_t m_anchor_index = 0;
+    /// The handler's inferences run one at a time and in order (the session-exclusive
+    /// dispatch gate, a loaded model with no shared call slot): a stateful model, or one with
+    /// a declared State pair, whatever it says (the state of inference k is the input of
+    /// inference k + 1, which also serialises the processor runner's feed, capture and
+    /// re-initialisation of the state).
+    bool m_exclusive = false;
 };
 
 /// What a pipeline's processor means to the validator (processor_facts() of processor.h builds it
@@ -160,12 +166,9 @@ ANIRA_API bool row_is_candidate(const ModelEntry& row,
                                 const anira_backend_id* candidates,
                                 uint32_t num_candidates);
 
-/// The 2.x backend a model row maps to: CUSTOM for every custom row (whether its id is served
-/// is check_rows' question: an engine registered on the pipeline, or anira.v2.custom on the
-/// bridge), the
-/// engine's own backend for a built-in engine of this build, nullopt for an engine this build
-/// does not carry.
-ANIRA_API std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept;
+/// Whether this build carries an adapter for a built-in engine (enabled_engines() names it);
+/// false for ANIRA_ENGINE_CUSTOM, whose rows are served by the pipeline's registered engines.
+ANIRA_API bool engine_enabled(anira_engine engine);
 
 /// The engine's extents of one slot under one row: the spec's derived extents (its dynamic
 /// Time extent resolved) reordered by the row's layout for the slot (layout.h engine_dims), or
@@ -257,21 +260,6 @@ ANIRA_API std::vector<StateLink> state_links(const anira_model_config& model);
 /// contract and spec bags are walked at anira_handler_create and prepare). Throws
 /// StatusError with ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED naming the kind.
 ANIRA_API void check_context_extensions(const anira_context_config& config);
-
-/// The stream a model's host block counts in (anira_model_config_set_anchor): the named
-/// Streamed tensor or, unnamed, the first Streamed input, else the first Streamed output.
-struct Anchor {
-    bool m_named = false;  ///< false: the default choice (2.x k_first_streamable)
-    bool m_is_input = true;
-    size_t m_index = 0;  ///< the tensor's position in the list of its side
-};
-
-/// The anchor of a model without a contract: the tensor spec rules that need none (the
-/// extents, the roles, the windows; no window is pinned), then the anchor rule. Throws
-/// StatusError with ANIRA_ERROR_CONFIG for a model without an input or an output, a spec that
-/// breaks a rule, no Streamed tensor, or an anchor that names no Streamed tensor. What the
-/// bridge's HostConfig of the host's own geometry reads (v3_to_v2.h make_host_config).
-ANIRA_API Anchor anchor_of(const anira_model_config& model);
 
 }  // namespace anira::capi
 

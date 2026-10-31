@@ -12,7 +12,6 @@
  * memory and handed to Session::Run, so no result is copied. File-local over
  * anira::engine::Model: nothing of ONNX Runtime enters a public header.
  */
-#include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
@@ -58,14 +57,14 @@ anira_status ort_status(const Ort::Exception& e, anira_status otherwise) {
 
 // Maps anira's log level to the severity of the ONNX Runtime environment.
 // Debug maps to VERBOSE, ONNX Runtime's most detailed severity.
-OrtLoggingLevel to_ort_logging_level(anira::LogLevel log_level) {
+OrtLoggingLevel to_ort_logging_level(anira_log_level log_level) {
     switch (log_level) {
-        case anira::LogLevel::Debug: return ORT_LOGGING_LEVEL_VERBOSE;
-        case anira::LogLevel::Info: return ORT_LOGGING_LEVEL_INFO;
-        case anira::LogLevel::Warning: return ORT_LOGGING_LEVEL_WARNING;
-        case anira::LogLevel::Error: return ORT_LOGGING_LEVEL_ERROR;
+        case ANIRA_LOG_DEBUG: return ORT_LOGGING_LEVEL_VERBOSE;
+        case ANIRA_LOG_INFO: return ORT_LOGGING_LEVEL_INFO;
+        case ANIRA_LOG_WARNING: return ORT_LOGGING_LEVEL_WARNING;
+        case ANIRA_LOG_ERROR: return ORT_LOGGING_LEVEL_ERROR;
+        default: return ORT_LOGGING_LEVEL_WARNING;
     }
-    return ORT_LOGGING_LEVEL_WARNING;
 }
 
 // If ONNX Runtime's symbols leak out of the module embedding anira (misconfigured
@@ -229,7 +228,7 @@ protected:
     void do_init(const anira_init_info& info) override {
         throw_if_foreign_onnxruntime();
         const OrtLoggingLevel severity =
-            to_ort_logging_level(static_cast<anira::LogLevel>(info.log_level));
+            to_ort_logging_level(static_cast<anira_log_level>(info.log_level));
         try {
 #ifdef USE_ANIRA_WEB
             // No session-owned threads in WebAssembly: the environment carries global thread
@@ -309,7 +308,7 @@ public:
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing run.
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
     /// Binds every descriptor of the context and runs; throws StatusError for a descriptor
@@ -488,7 +487,7 @@ void Instance::warm_up(uint32_t iterations) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     try {
         run(ctx);
         m_failures.succeeded();

@@ -20,7 +20,6 @@
 // one number the host's entries, a processor, the engine, the latency vector and the plan report's
 // rows use. The role decides which entries take it: no Hard entry carries a State tensor.
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/engine.h>
@@ -657,8 +656,8 @@ TEST(AbiState, OneSlotSpacePerSide) {
     ASSERT_NE(data, nullptr);
     ASSERT_NE(processed, nullptr);
     EXPECT_EQ(data->m_ring_dtype, static_cast<anira_dtype>(ANIRA_DTYPE_F32));
-    EXPECT_EQ(data->m_ring, &h->m_manager->session().m_send_buffer[2]);
-    EXPECT_EQ(processed->m_ring, &h->m_manager->session().m_receive_buffer[1]);
+    EXPECT_EQ(&data->m_ring, &h->m_manager->session().send_ring(2));
+    EXPECT_EQ(&processed->m_ring, &h->m_manager->session().receive_ring(1));
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 0), nullptr);
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 3), nullptr) << "beyond the side's count";
 
@@ -888,7 +887,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
     EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(stored_input(), (std::array<float, 3>{})) << "a refused call set nothing";
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U)
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U)
         << "a refused call pushed samples";
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
     // A zeroed record is rank 0: not the empty tensor.
@@ -916,7 +915,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 3, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U);
     EXPECT_EQ(state, (std::array<float, static_cast<size_t>(k_channels) * k_state_width>{}))
         << "the memory a State element names is never touched";
     anira_drain_log();
@@ -1217,7 +1216,7 @@ TEST(AbiState, StatePairForcesStateful) {
     model.max_instances(4);
     Rig rig(model, k_accumulator, {}, ANIRA_MISS_ZEROS, 4 * k_hop);
     ASSERT_TRUE(rig.ready());
-    EXPECT_TRUE(rig.get()->m_inference_config.m_session_exclusive_processor);
+    EXPECT_TRUE(rig.get()->m_derived.m_exclusive);
     rig.gate().m_sleep_us = 300;
 
     // Host blocks of four hops: four inferences per call, on a pool of four threads.
@@ -2681,7 +2680,10 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         EngineRig rig(engine);
         ASSERT_TRUE(rig.ready());
         const anira_handler* h = rig.get();
-        EXPECT_EQ(h->m_inference_config.m_warm_up, 1U) << "the contract file's fixed warm-up";
+        const anira::capi::HardContract* hard = h->m_contract.hard();
+        ASSERT_NE(hard, nullptr);
+        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED) << "the contract file's fixed warm-up";
+        EXPECT_EQ(hard->m_warmup_iterations, 1U) << "the contract file's fixed warm-up";
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
         ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }

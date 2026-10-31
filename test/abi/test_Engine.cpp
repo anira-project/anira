@@ -2973,7 +2973,7 @@ TEST(AbiEngine, ResetIsCalledAtTheFirstInferenceOfANewGeneration) {
         ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
         anira_error err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
-        EXPECT_TRUE(handler->m_inference_config.m_session_exclusive_processor);
+        EXPECT_TRUE(handler->m_derived.m_exclusive);
         EXPECT_EQ(gain.m_resets.load(), 0) << "nothing before the first inference";
         ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 3));
         EXPECT_EQ(gain.m_resets.load(), 1) << "once, at the first inference after prepare";

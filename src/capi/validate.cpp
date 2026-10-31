@@ -5,7 +5,6 @@
 #include <anira/abi/status.h>
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -693,7 +692,7 @@ void check_rows(const anira_model_config& model,
                               "' is not added to this pipeline "
                               "(anira_pipeline_add_engine)");
             }
-        } else if (!backend_of(row).has_value()) {
+        } else if (!engine_enabled(row.m_engine)) {
             not_supported(
                 at_row(i) + "engine '" + engine_word(row.m_engine) +
                 "' is not in this build (its engines: " + engines_list(enabled_engines()) +
@@ -939,31 +938,6 @@ std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
     return consumers;
 }
 
-std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
-    // Every custom row is a plan on the 2.x CUSTOM backend, resolved by row in the plan
-    // table: a registered engine, or the bridge's pass-through of anira.v2.custom (check_rows
-    // refuses an id that neither serves).
-    if (row.is_custom()) { return anira::InferenceBackend::CUSTOM; }
-    switch (row.m_engine) {
-#ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return anira::InferenceBackend::ONNX;
-#endif
-#ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return anira::InferenceBackend::LIBTORCH;
-#endif
-#ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return anira::InferenceBackend::TFLITE;
-#endif
-#ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return anira::InferenceBackend::LITERT;
-#endif
-#ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return anira::InferenceBackend::EXECUTORCH;
-#endif
-        default: return std::nullopt;
-    }
-}
-
 std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
                                     const DerivedSpec& derived,
                                     const std::vector<uint32_t>& layout) {
@@ -995,6 +969,11 @@ std::vector<anira_engine> enabled_engines() {
     return engines;
 }
 
+bool engine_enabled(anira_engine engine) {
+    const std::vector<anira_engine> engines = enabled_engines();
+    return std::ranges::find(engines, engine) != engines.end();
+}
+
 void validate(const anira_model_config& model,
               const anira_contract* contract,
               const anira_backend_id* candidates,
@@ -1019,6 +998,10 @@ void validate(const anira_model_config& model,
     }
     resolve_anchor(model, out);
     pin_anchor_hop(model, hard, out);
+    out.m_exclusive = model.m_state == ANIRA_MODEL_STATEFUL ||
+                      std::ranges::any_of(model.m_inputs, [](const anira_tensor_spec& spec) {
+                          return spec.m_role == ANIRA_ROLE_STATE;
+                      });
     check_rows(model, candidates, num_candidates, engines, out, default_set);
     check_layouts(model, out);
     const std::vector<ExtConsumer> consumers = pipeline_consumers(processors, engines);
@@ -1101,24 +1084,6 @@ std::vector<StateLink> state_links(const anira_model_config& model) {
 void check_context_extensions(const anira_context_config& config) {
     const anira_model_config no_model;
     check_extensions(no_model, &config, nullptr, nullptr, 0);
-}
-
-Anchor anchor_of(const anira_model_config& model) {
-    if (model.m_inputs.empty()) { config_error("no input tensor"); }
-    if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    Derived derived;
-    derived.m_inputs.resize(model.m_inputs.size());
-    derived.m_outputs.resize(model.m_outputs.size());
-    for (size_t i = 0; i < model.m_inputs.size(); ++i) {
-        check_spec(model.m_inputs[i], true, derived.m_inputs[i]);
-    }
-    for (size_t i = 0; i < model.m_outputs.size(); ++i) {
-        check_spec(model.m_outputs[i], false, derived.m_outputs[i]);
-    }
-    resolve_anchor(model, derived);
-    return {.m_named = derived.m_anchor_named,
-            .m_is_input = derived.m_anchor_is_input,
-            .m_index = derived.m_anchor_index};
 }
 
 }  // namespace anira::capi

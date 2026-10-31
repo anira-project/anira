@@ -1230,11 +1230,14 @@ ANIRA_API void ANIRA_CALL anira_handler_reset(anira_handler* handler)
  * ANIRA_ERROR_WRONG_CONTRACT, ANIRA_ERROR_CONFIG, ANIRA_ERROR_INVALID_STATE,
  * ANIRA_ERROR_INVALID_ARGUMENT, ANIRA_ERROR_NOT_SUPPORTED for a host tensor with a flag
  * this library does not know) or ANIRA_ERROR_ENGINE after a failed inference (its output
- * is zeros). ANIRA_ERROR_CAPACITY is back-pressure and never lands here. Last-wins;
- * cleared by prepare and reset. Each kind is logged once per prepare or reset through
- * the real-time queue (a violation flagged ANIRA_LOG_RECORD_CONTRACT_VIOLATION), later
- * occurrences are counted and the drain reports a persisting condition at most every 10
- * seconds. One relaxed load: readable from any thread, a callback, a crash handler.
+ * is zeros), or ANIRA_ERROR_CAPACITY after a hop the scheduler dropped because no
+ * inference slot was free (its output is the miss policy's fill, at its stream
+ * position). An entry's ANIRA_ERROR_CAPACITY return is back-pressure and never lands
+ * here. Last-wins; cleared by prepare and reset. Each kind is logged once per prepare or
+ * reset through the real-time queue (a violation flagged
+ * ANIRA_LOG_RECORD_CONTRACT_VIOLATION), later occurrences are counted and the drain
+ * reports a persisting condition at most every 10 seconds. One relaxed load: readable
+ * from any thread, a callback, a crash handler.
  * @param handler The handler.
  * @return ANIRA_OK when nothing was recorded since the last prepare or reset (or for a NULL
  *         handler); else the status.

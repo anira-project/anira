@@ -1,147 +1,96 @@
-// The struct-pool cases of one-sided streaming, white-box on the 2.x session: what
+// The struct-pool cases of one-sided streaming, white-box on a C handler's session: what
 // Core::get_sessions() and SessionElement show of the inference queue, the timestamps and the
 // receive ring after a generator's pushes, an analyser's push-only stream (issue #99) and a
-// two-sided stream pushed without popping. Moved verbatim from test/test_OneSidedStreaming.cpp
-// (whose cases move onto anira/compat/v2.hpp, where no session is visible; the partition in
-// test/CMakeLists.txt), the helpers they need copied from it. Deterministic custom backends, no
-// model files.
+// two-sided stream pushed without popping. Moved from test/test_OneSidedStreaming.cpp (whose
+// cases run on anira/compat/v2.hpp, where no session is visible; the partition in
+// test/CMakeLists.txt). Deterministic custom engines (test/abi/handler_support.h), no model
+// files.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
 #include <anira/abi/log.h>
-#include <anira/backends/BackendBase.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <anira/scheduler/Core.h>
+#include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RingBuffer.h>
 
+#include <anira/anira.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
-#include <utility>
 #include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/float_face.h"
+#include "../abi/handler_support.h"
 #include "gtest/gtest.h"
 #include "tanh/core/Logger.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 namespace {
 
 constexpr size_t k_hop = 2048;
 
-InferenceConfig make_config(std::vector<TensorShape> shapes,
-                            ProcessingSpec spec,
-                            bool session_exclusive = false,
-                            float blocking_ratio = 0.f,
-                            unsigned int num_parallel = 2) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::move(shapes),
-        std::move(spec),
-        10.f,  // max_inference_time
-        0,     // warm_up
-        session_exclusive,
-        blocking_ratio,
-        num_parallel);
+// The 2.x configurations' budget of 10 ms, blocks of 512 samples of the anchor.
+anira::ContractHandle contract_of() {
+    return anira_test::explicit_contract(512,
+                                         anira_test::k_rate,
+                                         ANIRA_MISS_ZEROS,
+                                         0.0,
+                                         /*budget_ms=*/10.0);
 }
 
-// Generator: 4 control parameters in, a 2048-sample audio stream out.
-InferenceConfig generator_config(bool session_exclusive = false, float blocking_ratio = 0.f) {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                       ProcessingSpec({1}, {1}, {0}, {k_hop}),
-                       session_exclusive,
-                       blocking_ratio,
-                       session_exclusive ? 1U : 2U);
+// A planar float32 tensor over one channel of `samples` samples (0: a slot the call does not
+// carry).
+anira_tensor mono_block(float* const* channel, size_t samples) {
+    const std::array<int64_t, 2> shape{1, static_cast<int64_t>(samples)};
+    anira_tensor tensor{};
+    anira_tensor_init_host_planar(&tensor,
+                                  static_cast<const void*>(channel),
+                                  1,
+                                  ANIRA_DTYPE_F32,
+                                  2,
+                                  shape.data());
+    return tensor;
 }
-
-// Fills every output sample with the value of parameter 0, so the streamed output
-// carries the parameter that was current when the inference was submitted.
-class ParamFillGeneratorBackend : public BackendBase {
-public:
-    explicit ParamFillGeneratorBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
-        // The very first inference may stall for longer than the others (a cold start,
-        // a page fault, a preempted worker): m_first_sleep_us applies to it alone.
-        int const sleep_us =
-            m_started.fetch_add(1) == 0 && m_first_sleep_us > 0 ? m_first_sleep_us : m_sleep_us;
-        if (sleep_us > 0) { std::this_thread::sleep_for(std::chrono::microseconds(sleep_us)); }
-        float const value = input[0].get_sample(0, 0);  // parameter 0
-        for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
-            float* write_ptr = output[0].get_write_pointer(ch);
-            for (size_t s = 0; s < output[0].get_num_samples(); ++s) { write_ptr[s] = value; }
-        }
-        m_calls.fetch_add(1);
-    }
-
-    std::atomic<int> m_calls{0};
-    std::atomic<int> m_started{0};
-    int m_sleep_us = 0;
-    int m_first_sleep_us = 0;
-};
 
 // Analyser: a 2048-sample audio stream in plus one control parameter in, one
 // non-streamable scalar out.
-InferenceConfig analyser_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, k_hop}, {1, 1}}, {{1, 1}})},
-                       ProcessingSpec({1, 1}, {1}, {k_hop, 0}, {0}));
+anira::ModelConfig analyser_model() {
+    anira::ModelConfig model = anira_test::custom_model(2);
+    model.input(anira_test::stream_tensor("audio", 1, k_hop, k_hop));
+    model.input(anira_test::static_tensor("param", {1, 1}));
+    model.output(anira_test::static_tensor("result", {1, 1}));
+    return model;
 }
 
 // Writes mean(audio window) + parameter into the scalar output.
-class MeanPlusParamAnalyserBackend : public BackendBase {
+class MeanPlusParamAnalyserEngine : public anira_test::GateEngine {
 public:
-    explicit MeanPlusParamAnalyserBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const float* audio = anira_tensor_data_f32(&ctx.inputs[0]);
+        const float* param = anira_tensor_data_f32(&ctx.inputs[1]);
+        float* result = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (audio == nullptr || param == nullptr || result == nullptr) {
+            return ANIRA_ERROR_INVALID_ARGUMENT;
+        }
         double sum = 0.0;
-        size_t const n = input[0].get_num_samples();
-        for (size_t s = 0; s < n; ++s) { sum += static_cast<double>(input[0].get_sample(0, s)); }
+        size_t const n = anira_test::elements_of(ctx.inputs[0]);
+        for (size_t s = 0; s < n; ++s) { sum += static_cast<double>(audio[s]); }
         float const mean = n > 0 ? static_cast<float>(sum / static_cast<double>(n)) : 0.f;
-        output[0].set_sample(0, 0, mean + input[1].get_sample(0, 0));
-        m_calls.fetch_add(1);
+        result[0] = mean + param[0];
+        return ANIRA_OK;
     }
-
-    std::atomic<int> m_calls{0};
-};
-
-// Two-sided passthrough twin (2048 in / 2048 out); counts calls, delegates the
-// copy to the default CUSTOM roundtrip.
-InferenceConfig two_sided_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 1, k_hop}}, {{1, 1, k_hop}})},
-                       ProcessingSpec({1}, {1}, {k_hop}, {k_hop}));
-}
-
-class CountingCopyBackend : public BackendBase {
-public:
-    explicit CountingCopyBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process(std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 std::shared_ptr<SessionElement> session) override {
-        BackendBase::process(input, output, session);
-        m_calls.fetch_add(1);
-    }
-
-    std::atomic<int> m_calls{0};
 };
 
 bool wait_for(const std::function<bool()>& condition) {
@@ -155,9 +104,9 @@ bool wait_for(const std::function<bool()>& condition) {
 
 // Collects what thl::Logger delivers to its sinks, so a test can assert on records anira
 // logs from the real-time paths. Those go into the core's lock-free queue; under
-// LogDrain::Manual the test delivers them deterministically with
-// V2Handler::drain_log() before it looks (instead of a drain thread racing the
-// assertions, or a stderr capture that never sees the sinks).
+// ANIRA_LOG_DRAIN_MANUAL the test delivers them deterministically with anira_drain_log()
+// before it looks (instead of a drain thread racing the assertions, or a stderr capture
+// that never sees the sinks).
 struct LogRecordCollector {
     LogRecordCollector() {
         m_sink = anira::detail::add_log_sink(&on_record, this, ANIRA_LOG_DEBUG);
@@ -190,22 +139,27 @@ struct LogRecordCollector {
 }  // namespace
 
 TEST(OneSidedStreamingInternals, GeneratorPushDataNeverSubmits) {
-    InferenceConfig config = generator_config();
-    PrePostProcessor pp_processor(config);
-    ParamFillGeneratorBackend backend(config);
-    V2Handler handler(pp_processor, config, backend, CoreConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
+    // Fills every output sample with the value of parameter 0, so the streamed output
+    // carries the parameter that was current when the inference was submitted.
+    anira_test::SleepingParamFillEngine engine;
+    const anira_test::Context context(2);
+    anira_test::Handler handler(context, anira_test::generator_model(), {}, {}, engine.engine());
+    const anira_test::DestroyFirst destroy_first(handler, &engine);
+    ASSERT_EQ(handler.prepare(contract_of()), ANIRA_OK) << handler.m_err.message;
 
-    unsigned int const latency = handler.get_latency(0);
+    unsigned int const latency = anira_handler_get_latency(handler.m_handler, 0);
 
-    std::vector<float> params{5.f, 0.f, 0.f, 0.f};
-    std::array<const float*, 1> param_channels{params.data()};
-    for (int i = 0; i < 64; ++i) { handler.push_data(param_channels.data(), 4, 0); }
+    // A multi push carries the Static parameter tensor whole.
+    std::array<float, 4> params{5.f, 0.f, 0.f, 0.f};
+    const anira_tensor param_tensor = anira_test::whole_f32(params.data(), {1, 4});
+    for (int i = 0; i < 64; ++i) {
+        ASSERT_EQ(anira_handler_push_data_multi(handler.m_handler, &param_tensor, 1), ANIRA_OK);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
 
-    EXPECT_EQ(backend.m_calls.load(), 0)
+    EXPECT_EQ(engine.m_calls.load(), 0)
         << "push_data on a generator must only store parameters, never submit.";
-    EXPECT_EQ(handler.get_available_samples(0, 0), static_cast<size_t>(latency))
+    EXPECT_EQ(anira_test::available(handler.m_handler), static_cast<size_t>(latency))
         << "Only the latency pre-fill may be in the ring.";
 
     // The struct pool must be untouched: every struct free, no pending timestamps.
@@ -216,76 +170,90 @@ TEST(OneSidedStreamingInternals, GeneratorPushDataNeverSubmits) {
         EXPECT_TRUE(ts_struct->m_free.load());
     }
 
-    // One full hop of demand submits exactly one inference.
+    // One full hop of demand submits exactly one inference. The hop is above the declared
+    // block, which the C entries refuse: the pop is the copy path's own (the manager's stem).
     std::vector<float> out(k_hop, -1.f);
-    std::array<float*, 1> out_channels{out.data()};
-    size_t const received = handler.pop_data(out_channels.data(), k_hop, 0);
-    EXPECT_EQ(received, k_hop);
-    EXPECT_TRUE(wait_for([&] { return backend.m_calls.load() == 1; }))
+    const std::array<float*, 1> out_channels{out.data()};
+    const anira_tensor out_tensor = mono_block(out_channels.data(), k_hop);
+    const size_t* received = handler.m_handler->m_manager->pop_data(&out_tensor);
+    ASSERT_NE(received, nullptr);
+    EXPECT_EQ(received[0], k_hop);
+    EXPECT_TRUE(wait_for([&] { return engine.m_calls.load() == 1; }))
         << "The first hop of demand must submit exactly one inference.";
 }
 
 TEST(OneSidedStreamingInternals, AnalyserPushOnlyNeverStalls) {
-    // Issue #99: a push-only host (mic in, probability out via get_output) stalled
+    // Issue #99: a push-only host (mic in, probability out via the Static output) stalled
     // permanently once all inference structs were used, because completed
     // inferences were only collected on the pop side.
-    InferenceConfig config = analyser_config();
-    PrePostProcessor pp_processor(config);
-    MeanPlusParamAnalyserBackend backend(config);
-    V2Handler handler(pp_processor, config, backend, CoreConfig(2));
-    handler.prepare(HostConfig(512, 48000, false));
+    MeanPlusParamAnalyserEngine engine;
+    const anira_test::Context context(2);
+    anira_test::Handler handler(context, analyser_model(), {}, {}, engine.engine());
+    const anira_test::DestroyFirst destroy_first(handler, &engine);
+    ASSERT_EQ(handler.prepare(contract_of()), ANIRA_OK) << handler.m_err.message;
 
-    float const param = 10.f;
-    pp_processor.set_input(param, 1, 0);
+    float param = 10.f;
+    const anira_tensor param_tensor = anira_test::whole_f32(&param, {1, 1});
+    ASSERT_EQ(anira_handler_set_static_input(handler.m_handler, 1, &param_tensor), ANIRA_OK);
 
     auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
     size_t const num_structs = sessions[0]->m_num_structs;
     ASSERT_GE(num_structs, 1u);
 
+    float result = -1.f;
+    const anira_tensor result_tensor = anira_test::whole_f32(&result, {1, 1});
+    const std::array<float*, 1> no_channel{nullptr};
+    const anira_tensor nothing = mono_block(no_channel.data(), 0);
     size_t const windows = 8 * num_structs + 4;
-    std::vector<float> fed;
     for (size_t window = 0; window < windows; ++window) {
         for (size_t block = 0; block < k_hop / 512; ++block) {
             std::vector<float> audio(512, static_cast<float>(window));
-            std::array<const float*, 1> audio_channels{audio.data()};
-            handler.push_data(audio_channels.data(), 512, 0);
-            fed.insert(fed.end(), audio.begin(), audio.end());
+            const std::array<float*, 1> audio_channels{audio.data()};
+            const anira_tensor audio_tensor = mono_block(audio_channels.data(), 512);
+            ASSERT_EQ(anira_handler_push_data(handler.m_handler, &audio_tensor, 0), ANIRA_OK);
         }
         // Stay push-only: poll by pushing zero samples (a pure collection point).
         float const expected = static_cast<float>(window) + param;
         ASSERT_TRUE(wait_for([&] {
-            std::array<const float*, 1> empty_channels{nullptr};
-            handler.push_data(empty_channels.data(), 0, 0);
-            return pp_processor.get_output(0, 0) == expected;
+            static_cast<void>(anira_handler_push_data(handler.m_handler, &nothing, 0));
+            static_cast<void>(
+                anira_handler_get_static_output(handler.m_handler, 0, &result_tensor));
+            return result == expected;
         })) << "window "
             << window << ": push-only pipeline stalled (issue #99)";
     }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), windows)
+    EXPECT_EQ(static_cast<size_t>(engine.m_calls.load()), windows)
         << "Every window must have been inferred; a stall stops at m_num_structs.";
 }
 
 TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
-    InferenceConfig config = two_sided_config();
-    PrePostProcessor pp_processor(config);
-    CountingCopyBackend backend(config);
-    // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level
-    // the core applies from its CoreConfig (Error in release builds), and queued
-    // in the core's real-time log queue: with LogDrain::Manual the test drains it
-    // itself, right before each assertion, into the LogRecordCollector below.
-    CoreConfig core_config(2, WaitStrategy::SpinBackoff, LogLevel::Warning);
-    core_config.m_log.m_drain = LogDrain::Manual;
-    V2Handler handler(pp_processor, config, backend, core_config);
-    handler.prepare(HostConfig(512, 48000, false));
+    // Two-sided pass-through (2048 in / 2048 out); the gate engine counts its calls.
+    anira_test::GateEngine engine;
+    // The warning asserted below is an ANIRA_LOG_RT_WARNING, filtered by the log level the
+    // core applies from its context config (Error in release builds), and queued in the
+    // core's real-time log queue: with ANIRA_LOG_DRAIN_MANUAL the test drains it itself,
+    // right before each assertion, into the LogRecordCollector below.
+    const anira_test::Context context(2,
+                                      ANIRA_WAIT_SPIN_BACKOFF,
+                                      ANIRA_LOG_WARNING,
+                                      ANIRA_LOG_DRAIN_MANUAL);
+    anira_test::Handler handler(context,
+                                anira_test::mono_stream_model(static_cast<int64_t>(k_hop)),
+                                {},
+                                {},
+                                engine.engine());
+    const anira_test::DestroyFirst destroy_first(handler, &engine);
+    ASSERT_EQ(handler.prepare(contract_of()), ANIRA_OK) << handler.m_err.message;
     LogRecordCollector log_records;
 
-    unsigned int const latency = handler.get_latency(0);
+    unsigned int const latency = anira_handler_get_latency(handler.m_handler, 0);
     auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
-    SessionElement& session = *sessions[0];
+    const SessionElement& session = *sessions[0];
     size_t const num_structs = session.m_num_structs;
     ASSERT_EQ(session.m_inference_queue.size(), num_structs);
-    RingBuffer& ring = session.m_receive_buffer[0];
+    RingBuffer& ring = session.receive_ring(0);
     size_t const ring_capacity = ring.get_num_samples();
     ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
         << "The receive ring holds the latency pre-fill plus one hop per struct.";
@@ -293,23 +261,24 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     std::vector<float> fed;
     auto push_window = [&](size_t window) {
         for (size_t block = 0; block < k_hop / 512; ++block) {
-            std::vector<float> const audio(
-                512,
-                static_cast<float>(window) + static_cast<float>(block) / 10.f);
-            std::array<const float*, 1> audio_channels{audio.data()};
-            handler.push_data(audio_channels.data(), 512, 0);
+            std::vector<float> audio(512,
+                                     static_cast<float>(window) + static_cast<float>(block) / 10.f);
+            const std::array<float*, 1> audio_channels{audio.data()};
+            const anira_tensor audio_tensor = mono_block(audio_channels.data(), 512);
+            ASSERT_EQ(anira_handler_push_data(handler.m_handler, &audio_tensor, 0), ANIRA_OK);
             fed.insert(fed.end(), audio.begin(), audio.end());
         }
     };
     // A push without samples only collects; polling with it keeps the test push-only.
+    const std::array<float*, 1> no_channel{nullptr};
+    const anira_tensor nothing = mono_block(no_channel.data(), 0);
     auto push_collect_only = [&] {
-        std::array<const float*, 1> empty_channels{nullptr};
-        handler.push_data(empty_channels.data(), 0, 0);
+        static_cast<void>(anira_handler_push_data(handler.m_handler, &nothing, 0));
     };
     auto wait_for_window = [&](size_t window) {
         return wait_for([&] {
             push_collect_only();
-            return static_cast<size_t>(backend.m_calls.load()) >= window + 1;
+            return static_cast<size_t>(engine.m_calls.load()) >= window + 1;
         });
     };
 
@@ -327,7 +296,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     for (const auto& ts_struct : session.m_inference_queue) {
         EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
     }
-    handler.drain_log();
+    anira_drain_log();
     std::string const captured_fitting = log_records.take();
     EXPECT_EQ(captured_fitting.find("Output stream not consumed"), std::string::npos)
         << "No warning while every result fits into the receive ring.";
@@ -350,11 +319,11 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
         EXPECT_FALSE(ts_struct->m_free.load())
             << "Every struct holds a result the full ring cannot take.";
     }
-    handler.drain_log();
+    anira_drain_log();
     std::string const captured_gated = log_records.take();
     // tanh-lib compiles records above THL_LOG_COMPILED_MAX_LEVEL out (Error only in
-    // Release builds, see the note on CoreConfig::m_log), so the warning can only be
-    // asserted where Warning is compiled in; the gate itself is asserted either way.
+    // Release builds), so the warning can only be asserted where Warning is compiled in;
+    // the gate itself is asserted either way.
     constexpr bool k_warning_compiled_in =
         static_cast<std::uint32_t>(THL_LOG_COMPILED_MAX_LEVEL) >=
         static_cast<std::uint32_t>(thl::Logger::LogLevel::Warning);
@@ -373,10 +342,14 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     ASSERT_TRUE(wait_for([&] {
         while (received_all.size() < total_samples) {
             std::vector<float> out(512, -1.f);
-            std::array<float*, 1> out_channels{out.data()};
-            size_t const received = handler.pop_data(out_channels.data(), 512, 0);
+            const std::array<float*, 1> out_channels{out.data()};
+            const anira_tensor out_tensor = mono_block(out_channels.data(), 512);
+            size_t received = 0;
+            static_cast<void>(anira_handler_pop_data(handler.m_handler, &out_tensor, 0, &received));
             if (received == 0) { break; }
-            received_all.insert(received_all.end(), out.begin(), out.begin() + received);
+            received_all.insert(received_all.end(),
+                                out.begin(),
+                                out.begin() + static_cast<std::ptrdiff_t>(received));
         }
         return received_all.size() >= total_samples;
     })) << "Draining after over-pushing must eventually deliver every window.";
@@ -385,5 +358,5 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
         float const expected = g < latency ? 0.f : fed[g - latency];
         ASSERT_EQ(received_all[g], expected) << "sample " << g << " corrupted or lost";
     }
-    EXPECT_EQ(static_cast<size_t>(backend.m_calls.load()), total_windows);
+    EXPECT_EQ(static_cast<size_t>(engine.m_calls.load()), total_windows);
 }

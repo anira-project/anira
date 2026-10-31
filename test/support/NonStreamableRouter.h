@@ -2,18 +2,19 @@
 #define ANIRA_NONSTREAMABLEROUTER_H
 
 /*
- * The 2.x face's own route for its non-streamable tensors. The 2.x handler takes a
+ * The 2.x face's own route for its non-streamable tensors. A 2.x-shaped float host passes a
  * non-streamable tensor inside its float*** blocks, as a count of values beside the sample
- * counts of the streamed slots, and keeps doing so; the copy core (InferenceManager's tensor
- * stems) moves streamed slots only and never reads the tensor of another. This helper stands
- * between the two: it is the core's former non-streamed code, moved here as it was, over the
- * tensor arrays a caller presents (the planar float32 tensors of a PlanarFloatAdapter, or
- * hand-built tensors under any memory description TensorRun.h reads) and the float atomics of
- * the session's PrePostProcessor, which are the 2.x store of those values.
+ * counts of the streamed slots; the copy core (InferenceManager's tensor stems) moves streamed
+ * slots only and never reads the tensor of another. This helper stands between the two: it is
+ * the core's former non-streamed code, moved here as it was, over the tensor arrays a caller
+ * presents (the planar float32 tensors of a PlanarFloatAdapter, or hand-built tensors under any
+ * memory description TensorRun.h reads) and the store of those values: the Static ports of a C
+ * handler (capi/port.h), whose values the processor runner materialises into the model's inputs
+ * and captures from its outputs.
  *
  * One call of a stem through the router is:
- *  1. every carried non-streamable input is stored in the PrePostProcessor, value by value, the
- *     count clamped to the tensor's size (a stream-sized count cannot write past it);
+ *  1. every carried non-streamable input is stored, value by value, the count clamped to the
+ *     tensor's size (a stream-sized count cannot write past it), the values past it kept;
  *  2. the tensor stem of the same name runs over the same two arrays and moves the streamed
  *     slots;
  *  3. every requested non-streamable output is read back. A delivered block: the latest
@@ -29,14 +30,12 @@
  * ANIRA_MISS_CALLBACK is a 3.x contract's and no 2.x face sets one; here a missed block under
  * that policy is zeroed like a ZEROS miss.
  *
- * A test helper (the library's 2.x handler was its consumer; anira_test::V2Handler and the
- * copy-oracle rigs are, over the scheduler's private headers, src/ on their include path):
- * header-inline, in no library. prepare() allocates; every other function is legal on the driver
- * thread wherever the stem it wraps is.
+ * A test helper (the library's 2.x handler was its consumer; the copy-oracle rigs, which
+ * record under its rules, are, over the scheduler's private headers, src/ on their include
+ * path): header-inline, in no library. prepare() allocates; every other
+ * function is legal on the driver thread wherever the stem it wraps is.
  */
 
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/Core.h>
@@ -50,18 +49,19 @@
 #include <cstdint>
 #include <vector>
 
+#include "capi/port.h"
 #include "scheduler/TensorRun.h"
 
 namespace anira {
 
 class NonStreamableRouter {
 public:
-    /// The three outlive the router; the manager is the one built over `pp_processor` and
-    /// `inference_config`.
+    /// The store of a C handler: its two port vectors, whose Static ports hold the values; the
+    /// manager is the handler's. The three outlive the router.
     NonStreamableRouter(InferenceManager& manager,
-                        PrePostProcessor& pp_processor,
-                        const InferenceConfig& inference_config)
-        : m_manager(manager), m_pp_processor(pp_processor), m_inference_config(inference_config) {}
+                        capi::Ports& input_ports,
+                        capi::Ports& output_ports)
+        : m_manager(manager), m_input_ports(&input_ports), m_output_ports(&output_ports) {}
     ~NonStreamableRouter() = default;
     // The count array is handed out by pointer: one router, one place.
     NonStreamableRouter(const NonStreamableRouter&) = delete;
@@ -74,12 +74,8 @@ public:
      * count array. Allocates: beside the manager's prepare, never on the driver thread.
      */
     void prepare() {
-        make_side(m_input_streamed,
-                  m_inference_config.get_tensor_input_shape().size(),
-                  m_inference_config.get_preprocess_input_size());
-        make_side(m_output_streamed,
-                  m_inference_config.get_tensor_output_shape().size(),
-                  m_inference_config.get_postprocess_output_size());
+        make_side(m_input_streamed, m_input_values, *m_input_ports);
+        make_side(m_output_streamed, m_output_values, *m_output_ports);
         m_delivered.assign(m_output_streamed.size(), 0);
     }
 
@@ -129,7 +125,7 @@ public:
     }
 
 private:
-    /// Whether a carried non-streamable tensor is float32, the dtype of the 2.x store; a
+    /// Whether a carried non-streamable tensor is float32, the dtype of the float face; a
     /// mismatch is recorded the way the core records one. The names are read by the record
     /// only, which ANIRA_WITH_LOGGING=OFF compiles out.
     bool is_float32(const anira_tensor& tensor,
@@ -158,13 +154,17 @@ private:
             if (input.shape[1] <= 0 || !is_float32(input, "input", tensor_index)) { continue; }
             // Non-streamable parameters are one run; the sample count is a value count,
             // clamped to the tensor so a stream-sized count cannot write past it.
-            size_t const num_values =
-                std::min(static_cast<size_t>(input.shape[1]),
-                         m_inference_config.get_tensor_input_size()[tensor_index]);
+            std::vector<float>& values = m_input_values[tensor_index];
+            size_t const num_values = std::min(static_cast<size_t>(input.shape[1]), values.size());
             const tensor_run::Run run = tensor_run::channel_run(input, 0, sizeof(float));
+            // A port takes its value whole: the values past the count stay what they were.
+            capi::StaticSlot* store = capi::static_slot(*m_input_ports, tensor_index);
+            if (store == nullptr) { continue; }  // a State slot: neither streamed nor Static
+            store->read_packed(values.data(), values.size() * sizeof(float));
             for (size_t sample = 0; sample < num_values; ++sample) {
-                m_pp_processor.set_input(tensor_run::load_f32(run, sample), tensor_index, sample);
+                values[sample] = tensor_run::load_f32(run, sample);
             }
+            store->write_packed(values.data(), values.size() * sizeof(float));
         }
     }
 
@@ -191,23 +191,14 @@ private:
             const tensor_run::Run run = tensor_run::channel_run(output, 0, sizeof(float));
             // Non-streamable outputs are one run; the sample count is a value count, clamped
             // to the tensor.
-            const size_t num_values =
-                std::min(request, m_inference_config.get_tensor_output_size()[tensor_index]);
+            const size_t num_values = std::min(request, m_output_values[tensor_index].size());
             if (!missed) {
                 // Reported back clamped.
-                for (size_t sample = 0; sample < num_values; ++sample) {
-                    tensor_run::store_f32(run,
-                                          sample,
-                                          m_pp_processor.get_output(tensor_index, sample));
-                }
+                store_outputs(run, tensor_index, num_values);
                 m_delivered[tensor_index] = num_values;
             } else if (m_manager.miss_policy() == ANIRA_MISS_HOLD_LAST) {
                 // "Repeat the last output": the latest completed value.
-                for (size_t sample = 0; sample < num_values; ++sample) {
-                    tensor_run::store_f32(run,
-                                          sample,
-                                          m_pp_processor.get_output(tensor_index, sample));
-                }
+                store_outputs(run, tensor_index, num_values);
             } else {
                 // The 2.x clear rule: the request is zeroed as it came, not clamped.
                 tensor_run::zero_run(run.m_data, run.m_step, request, sizeof(float));
@@ -216,16 +207,44 @@ private:
         return m_delivered.data();
     }
 
+    /// The first `num_values` stored values of an output into the caller's run: the latest
+    /// completed ones.
+    void store_outputs(const tensor_run::Run& run, size_t tensor_index, size_t num_values) {
+        std::vector<float>& values = m_output_values[tensor_index];
+        const capi::StaticSlot* store = capi::static_slot(*m_output_ports, tensor_index);
+        if (store == nullptr) {
+            std::ranges::fill(values, 0.F);  // a State slot holds no value here
+        } else {
+            store->read_packed(values.data(), values.size() * sizeof(float));
+        }
+        for (size_t sample = 0; sample < num_values; ++sample) {
+            tensor_run::store_f32(run, sample, values[sample]);
+        }
+    }
+
+    /// A C handler's side: a slot streams when its port is a stream port; a Static port holds
+    /// its element count of values.
     static void make_side(std::vector<bool>& streamed,
-                          size_t num_slots,
-                          const std::vector<size_t>& stream_sizes) {
-        streamed.assign(num_slots, false);
-        for (size_t slot = 0; slot < num_slots; ++slot) { streamed[slot] = stream_sizes[slot] > 0; }
+                          std::vector<std::vector<float>>& values,
+                          const capi::Ports& ports) {
+        streamed.assign(ports.size(), false);
+        values.assign(ports.size(), {});
+        for (size_t slot = 0; slot < ports.size(); ++slot) {
+            streamed[slot] = capi::stream_port(ports, slot) != nullptr;
+            if (const capi::StaticSlot* store = capi::static_slot(ports, slot)) {
+                values[slot].assign(store->num_elements(), 0.F);
+            }
+        }
     }
 
     InferenceManager& m_manager;
-    PrePostProcessor& m_pp_processor;  ///< The 2.x store of the non-streamable values
-    const InferenceConfig& m_inference_config;
+    capi::Ports* m_input_ports = nullptr;   ///< The C handler's store
+    capi::Ports* m_output_ports = nullptr;  ///< Likewise
+    /// Per slot, the values of a non-streamable slot: the scratch a port's value is read into
+    /// and written from (sized by prepare(), so a call allocates nothing); its size is the
+    /// slot's value count on either store.
+    std::vector<std::vector<float>> m_input_values;
+    std::vector<std::vector<float>> m_output_values;
 
     std::vector<bool> m_input_streamed;   ///< Per input slot: whether the slot has a ring
     std::vector<bool> m_output_streamed;  ///< Likewise, per output slot

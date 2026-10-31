@@ -565,10 +565,20 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * a slot). Return ANIRA_OK when the outputs are filled; any other status makes anira
  * zero-fill every requested Streamed output. Either way the block counts as missed: the
  * entry returns ANIRA_MISSED with a delivered count of 0 for every Streamed slot, and
- * the stream stays time-aligned. The function has the last word on every output of the
- * block, the Static ones of a _multi form included: anira fills them with the stored
- * value before the call and does not touch them afterwards. What the function writes
- * there reaches the caller's memory only, never the handler's store:
+ * the stream stays time-aligned. It also fills every hop the scheduler drops because no
+ * inference slot was free (anira_handler_rt_error then reports ANIRA_ERROR_CAPACITY):
+ * once per dropped hop, at the drop, on the driver thread inside the Hard entry whose
+ * call dropped it. For a hop, inputs carry the dropped hop of every Streamed input slot
+ * ([channels, hop] of the slot's ring dtype, packed, without ANIRA_TENSOR_PLANAR, the
+ * handler's memory, valid for the call) and an empty tensor for every other slot;
+ * outputs carry a [channels, hop] tensor of the ring dtype for every Streamed output
+ * slot, the handler's memory, which anira places at the hop's stream position behind the
+ * inferences submitted before it, and an empty tensor for every other slot (a hop
+ * carries no Static slot). A status other than ANIRA_OK places zeros. The entry's own
+ * return and counts are not touched by a hop. The function has the last word on every
+ * output of the block, the Static ones of a _multi form included: anira fills them with
+ * the stored value before the call and does not touch them afterwards. What the function
+ * writes there reaches the caller's memory only, never the handler's store:
  * anira_handler_get_static_output keeps returning what the model produced. The function
  * must not call a Hard entry, anira_handler_reset or anira_handler_prepare of the same
  * handler, and it is real-time code: no allocation, no lock, no system call. Under clang

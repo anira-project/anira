@@ -12,8 +12,6 @@
 #include <utility>
 #include <variant>
 
-#include "Buffer.h"
-
 namespace anira {
 
 struct RtLatch;
@@ -93,17 +91,15 @@ struct RingOwner {
  *  - available() (get_available_samples()) is the unread count; available_past()
  *    (get_available_past_samples()) is the number of consumed samples still retained as history
  *    (0 right after initialise/clear, growing as samples are popped).
- *  - The ring does not derive from Buffer: there is no direct pointer/sample access to the
- *    storage.
+ *  - There is no direct pointer/sample access to the storage.
  *
  * The float API (push_sample, pop_sample, the float block calls, get_future_sample,
- * get_past_sample, the two-argument initialize_with_positions) is the face the 2.x classes
- * and their pre/post processors were written against; it is the float32 arm of this type. On a
- * ring of another dtype it does nothing and returns 0: the 3.x entries check the ring dtype
- * before they reach it. anira::RingBuffer names this type for the 2.x classes of this
- * pre-release and leaves with them.
+ * get_past_sample, the two-argument initialize_with_positions) is the face the 2.x pre/post
+ * processors were written against; it is the float32 arm of this type. On a ring of another
+ * dtype it does nothing and returns 0: the 3.x entries check the ring dtype before they reach
+ * it. anira::RingBuffer names this type for the core's C++ headers (the session's rings).
  *
- * @see anira::RingBufferT, Buffer, PrePostProcessor
+ * @see anira::RingBufferT
  */
 struct anira_ring {
 public:

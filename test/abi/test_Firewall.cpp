@@ -6,8 +6,8 @@
 #include <mutex>
 #include <string>
 
-#include "../support/v2_handler.h"
 #include "capi/capi_internal.h"
+#include "handler_support.h"
 
 using anira::capi::firewall_probe;
 
@@ -69,14 +69,9 @@ TEST(AbiFirewall, LongMessagesAreTruncatedAndTerminated) {
 
 // ---- the error strategy: what the firewall logs, and what it never logs ------------------
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <vector>
 
@@ -187,20 +182,10 @@ TEST(AbiFirewallLogging, TheTraceFlagEmitsTheErrorMessageOnce) {
 TEST(AbiFirewallLogging, AFailingEntryDrainsTheRealTimeQueueFirst) {
     const TraceOff off;
     // Manual drain: nothing pumps the queue but anira_drain_log, or a failing entry.
-    anira::CoreConfig core_config(1, anira::WaitStrategy::Blocking, anira::LogLevel::Error);
-    core_config.m_log.m_drain = anira::LogDrain::Manual;
-    anira::InferenceConfig inference_config(
-        std::vector<anira::ModelData>{
-            anira::ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<anira::TensorShape>{anira::TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-    anira::PrePostProcessor pp_processor(inference_config);
-    anira_test::V2Handler handler(pp_processor, inference_config, core_config);
-    handler.prepare(anira::HostConfig(512, 48000));
+    const anira_test::Instance instance{1,
+                                        ANIRA_WAIT_BLOCKING,
+                                        ANIRA_LOG_ERROR,
+                                        ANIRA_LOG_DRAIN_MANUAL};
 
     FreshCollector collector;
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "queued before the failure", 7, 8);

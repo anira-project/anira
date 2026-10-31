@@ -17,6 +17,8 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <thread>
 
@@ -106,20 +108,91 @@ anira_status ANIRA_CALL slow_process(const anira_engine_ctx* ctx, void* prepared
     return passthrough_process(ctx, prepared, user_data);
 }
 
+// The static state of UNLOADTEST_ENGINE_RUNTIME_STATICS's runtime, what ONNX Runtime keeps in
+// static storage (its environment, its type tables): built once, its destructor registered
+// for the process's exit then, and torn down by it. The flag beside it is trivially
+// destructible, so the process reads it after the teardown too.
+std::atomic<bool> s_runtime_statics_alive{false};
+
+struct RuntimeStatics {
+    RuntimeStatics() { s_runtime_statics_alive.store(true); }
+    ~RuntimeStatics() { s_runtime_statics_alive.store(false); }
+    RuntimeStatics(const RuntimeStatics&) = delete;
+    RuntimeStatics& operator=(const RuntimeStatics&) = delete;
+    RuntimeStatics(RuntimeStatics&&) = delete;
+    RuntimeStatics& operator=(RuntimeStatics&&) = delete;
+};
+
+void build_runtime_statics() {
+    static const RuntimeStatics k_statics;
+}
+
+// Whether an inference of the runtime waits for the exit (unloadtest_hold_until_exit), and
+// whether the exit started: set by the exit handler that call registers.
+std::atomic<bool> s_hold_until_exit{false};
+std::atomic<bool> s_exit_started{false};
+
+void release_held_inference() {
+    s_exit_started.store(true);
+}
+
+// The pass-through over the runtime's static state, after s_slow_ms of sleep or, held, once the
+// process started exiting: an inference that finds the state torn down exits the process with
+// the code the test looks for (ONNX Runtime fails there with "GetElementType is not
+// implemented" and crashes); a held one that finds it alive says so on stderr.
+anira_status ANIRA_CALL runtime_statics_process(const anira_engine_ctx* ctx,
+                                                void* prepared,
+                                                void* user_data) {
+    s_entered.fetch_add(1);
+    if (s_hold_until_exit.load()) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!s_exit_started.load()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                std::_Exit(UNLOADTEST_HOLD_TIMEOUT_EXIT_CODE);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(s_slow_ms.load()));
+    }
+    if (!s_runtime_statics_alive.load()) { std::_Exit(UNLOADTEST_TORN_DOWN_EXIT_CODE); }
+    if (s_hold_until_exit.load()) {
+        std::fputs(UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER, stderr);
+        std::fflush(stderr);
+    }
+    return passthrough_process(ctx, prepared, user_data);
+}
+
+// The load of UNLOADTEST_ENGINE_EXIT_IN_LOAD: a runtime that ends the process from inside its
+// load (a fatal-error handler, a failed licence check) while anira_handler_prepare holds the
+// core's lifecycle lock. The marker says the exit came from here.
+anira_status ANIRA_CALL exit_in_load(const anira_engine_load_info* /*info*/,
+                                     void* /*user_data*/,
+                                     void** /*out_loaded*/) {
+    std::fputs(UNLOADTEST_EXIT_IN_LOAD_MARKER, stderr);
+    std::fflush(stderr);
+    std::exit(0);
+}
+
 // The process of an engine of unloadtest_create_engine; nullptr for an unknown behaviour.
 anira_engine_process_fn engine_process_of(int behaviour) {
     switch (behaviour) {
         case UNLOADTEST_ENGINE_STALLING: return stalling_process;
         case UNLOADTEST_ENGINE_LOADER_LOCK: return loader_lock_process;
         case UNLOADTEST_ENGINE_SLOW: return slow_process;
+        case UNLOADTEST_ENGINE_RUNTIME_STATICS: return runtime_statics_process;
+        case UNLOADTEST_ENGINE_EXIT_IN_LOAD: return passthrough_process;
         default: return nullptr;
     }
 }
 
-// A new engine object over `process` under k_custom_engine; nullptr when the create fails.
-anira_custom_engine* make_engine(anira_engine_process_fn process) {
+// A new engine object over `process` (and `load`, when set) under k_custom_engine; nullptr when
+// the create fails.
+anira_custom_engine* make_engine(anira_engine_process_fn process,
+                                 anira_engine_load_fn load = nullptr) {
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     desc.process = process;
+    desc.load = load;
     anira_custom_engine* engine = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
     if (anira_custom_engine_create(k_custom_engine, &desc, &engine, &err) != ANIRA_OK) {
@@ -220,9 +293,11 @@ void destroy_instance(Instance* instance) {
 }
 
 // A context (2 pool threads, SpinBackoff, Warning) and a handler over the model of the kind,
-// the custom row on an engine over `process`; nullptr, with nothing left behind, when a step
-// fails.
-Instance* make_instance(Kind kind, anira_engine_process_fn process = passthrough_process) {
+// the custom row on an engine over `process` and `load`; nullptr, with nothing left behind,
+// when a step fails.
+Instance* make_instance(Kind kind,
+                        anira_engine_process_fn process = passthrough_process,
+                        anira_engine_load_fn load = nullptr) {
     const bool custom = kind == Kind::Custom;
     auto* instance = new Instance();
     anira_error err = ANIRA_ERROR_INIT;
@@ -240,7 +315,7 @@ Instance* make_instance(Kind kind, anira_engine_process_fn process = passthrough
         if (ok && custom) {
             // The custom row's engine, added before the handler copies the pipeline; the
             // pipeline holds the object, so the handle goes right away.
-            anira_custom_engine* engine = make_engine(process);
+            anira_custom_engine* engine = make_engine(process, load);
             ok = engine != nullptr && anira_pipeline_add_engine(pipeline, engine, &err) == ANIRA_OK;
             anira_custom_engine_destroy(engine);
         }
@@ -332,9 +407,14 @@ void* unloadtest_create_engine(int behaviour, int slow_ms) {
     s_slow_ms.store(slow_ms);
     const anira_engine_process_fn process = engine_process_of(behaviour);
     if (process == nullptr) { return nullptr; }
+    // The runtime builds its static state before the prepare starts the pool.
+    if (behaviour == UNLOADTEST_ENGINE_RUNTIME_STATICS) { build_runtime_statics(); }
     Instance* instance = nullptr;
     try {
-        instance = make_instance(Kind::Custom, process);
+        instance =
+            make_instance(Kind::Custom,
+                          process,
+                          behaviour == UNLOADTEST_ENGINE_EXIT_IN_LOAD ? exit_in_load : nullptr);
     } catch (...) { return nullptr; }
     if (instance == nullptr) { return nullptr; }
     if (prepare_instance(*instance) != ANIRA_OK) {
@@ -342,6 +422,11 @@ void* unloadtest_create_engine(int behaviour, int slow_ms) {
         return nullptr;
     }
     return instance;
+}
+
+void unloadtest_hold_until_exit(void) {
+    s_hold_until_exit.store(true);
+    static_cast<void>(std::atexit(release_held_inference));
 }
 
 int unloadtest_engine_entered(void) {

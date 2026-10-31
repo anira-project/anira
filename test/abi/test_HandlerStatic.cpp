@@ -808,13 +808,12 @@ TEST(AbiHandlerStatic, AChunkCompletedAsZerosDoesNotOverwriteTheStore) {
 
 template <typename T>
 void typed_round_trip(anira_dtype dtype) {
-    auto handler = std::make_unique<anira_handler>();
+    // What anira_handler_create builds: one port per tensor, made with the handler and the
+    // static port's value constructed in place (it holds atomics and does not move), and the
+    // slot counts, the lengths of the model config's two lists (one tensor per side here,
+    // slot 0).
+    auto handler = std::make_unique<anira_handler>(1, 1);
     const std::vector<int64_t> shape{2, 3};
-    // What anira_handler_create builds: one port per tensor, sized once and the static port's
-    // value constructed in place (it holds atomics and does not move), and the slot counts, the
-    // lengths of the model config's two lists (one tensor per side here, slot 0).
-    handler->m_input_ports = std::vector<anira::capi::Port>(1);
-    handler->m_output_ports = std::vector<anira::capi::Port>(1);
     handler->m_input_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
     handler->m_output_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
     handler->m_num_inputs = 1;

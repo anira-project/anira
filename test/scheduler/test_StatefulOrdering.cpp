@@ -1,106 +1,80 @@
+#include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
-#include <anira/utils/RingBuffer.h>
-
+#include <algorithm>
+#include <anira/anira.hpp>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <iostream>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/handler_support.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 // =============================================================================
-// A stateful custom backend that tracks execution order.
-// Each call increments an internal counter and writes it to the output.
-// If inferences execute out of order, the counter sequence in the output
-// will not match the submission order.
+// A custom engine that records what it ran: the stream position of every window it was handed
+// (its first sample, which the host wrote as the sample's own index) and the most inferences
+// inside it at once. Submission order is stream order, so a session that runs its inferences
+// one at a time and in submission order hands it 0, hop, 2 hop, ... with never two inside.
 // =============================================================================
 
-class StatefulCounterBackend : public BackendBase {
+class StreamPositionEngine : public anira_test::GateEngine {
 public:
-    StatefulCounterBackend(InferenceConfig& config) : BackendBase(config) {}
-
-    void process([[maybe_unused]] std::vector<BufferF>& input,
-                 std::vector<BufferF>& output,
-                 [[maybe_unused]] std::shared_ptr<SessionElement> session) override {
-        // Small delay to increase the window for out-of-order dequeuing
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const int inside = m_inside.fetch_add(1) + 1;
+        int most = m_most_inside.load();
+        while (inside > most && !m_most_inside.compare_exchange_weak(most, inside)) {}
+        // A window for another inference to overlap this one or overtake it.
         std::this_thread::sleep_for(std::chrono::microseconds(100));
-
-        int const counter_val = m_counter.fetch_add(1);
-
-        // Write the counter value to all output samples
-        for (size_t ch = 0; ch < output[0].get_num_channels(); ++ch) {
-            float* write_ptr = output[0].get_write_pointer(ch);
-            size_t const num_samples = output[0].get_num_samples();
-            for (size_t s = 0; s < num_samples; ++s) {
-                write_ptr[s] = static_cast<float>(counter_val);
-            }
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        anira_status status = ANIRA_ERROR_INVALID_ARGUMENT;
+        if (in != nullptr && out != nullptr) {
+            std::copy_n(in, anira_test::elements_of(ctx.outputs[0]), out);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_positions.push_back(static_cast<int64_t>(in[0]));
+            status = ANIRA_OK;
         }
-
-        // Record the actual execution order
-        std::lock_guard<std::mutex> const lock(m_order_mutex);
-        m_execution_order.push_back(counter_val);
+        m_inside.fetch_sub(1);
+        return status;
     }
 
-    std::atomic<int> m_counter{0};
-    std::vector<int> m_execution_order;
-    std::mutex m_order_mutex;
-};
-
-// Simple pass-through pre/post processor
-class PassthroughPrePostProcessor : public PrePostProcessor {
-public:
-    using PrePostProcessor::PrePostProcessor;
-
-    void pre_process(std::vector<RingBuffer>& input,
-                     std::vector<BufferF>& output,
-                     [[maybe_unused]] InferenceBackend current_inference_backend) override {
-        size_t const num_samples = m_inference_config.get_preprocess_input_size()[0];
-        for (size_t ch = 0; ch < m_inference_config.get_preprocess_input_channels()[0]; ++ch) {
-            for (size_t s = 0; s < num_samples; ++s) {
-                float const sample = input[0].pop_sample(ch);
-                output[0].set_sample(ch, s, sample);
+    /// Waits until `count` inferences ran, at most 10 s; false at the bound.
+    bool wait_for_runs(size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (true) {
+            {
+                const std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_positions.size() >= count) { return true; }
             }
+            if (std::chrono::steady_clock::now() > deadline) { return false; }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
         }
     }
 
-    void post_process(std::vector<BufferF>& input,
-                      std::vector<RingBuffer>& output,
-                      [[maybe_unused]] InferenceBackend current_inference_backend) override {
-        size_t const num_samples = m_inference_config.get_postprocess_output_size()[0];
-        for (size_t ch = 0; ch < m_inference_config.get_postprocess_output_channels()[0]; ++ch) {
-            for (size_t s = 0; s < num_samples; ++s) {
-                output[0].push_sample(ch, input[0].get_sample(ch, s));
-            }
-        }
-    }
+    std::atomic<int> m_inside{0};
+    std::atomic<int> m_most_inside{0};
+    std::vector<int64_t> m_positions;  ///< the first sample of every window, in run order
+    std::mutex m_mutex;
 };
 
 // =============================================================================
-// Test: Verify that a session-exclusive processor enforces execution order
+// Test: Verify that a stateful model's session enforces execution order
 // =============================================================================
 
 struct StatefulTestParams {
-    bool m_session_exclusive;
-    float m_host_buffer_size;
-    float m_sample_rate;
-    size_t m_hop_size;
+    double m_host_buffer_size;
+    double m_sample_rate;
+    int64_t m_hop_size;
 };
 
 class StatefulOrderingTest : public ::testing::TestWithParam<StatefulTestParams> {};
@@ -108,98 +82,80 @@ class StatefulOrderingTest : public ::testing::TestWithParam<StatefulTestParams>
 TEST_P(StatefulOrderingTest, ExecutionOrder) {
     auto const& params = GetParam();
 
-    // Config: hop_size samples in, hop_size samples out, 1 channel
-    // Host buffer > hop_size to force multiple inferences per callback
-    std::vector<ModelData> const model_data = {ModelData("placeholder", InferenceBackend::CUSTOM)};
+    // hop_size samples in, hop_size samples out, 1 channel, declared stateful: its
+    // inferences run one at a time and in order. The host buffer is above hop_size, to
+    // force multiple inferences per callback.
+    anira::ModelConfig model = anira_test::custom_model(1);
+    model.input(anira_test::stream_tensor("in", 1, params.m_hop_size, params.m_hop_size));
+    model.output(anira_test::stream_tensor("out", 1, params.m_hop_size, params.m_hop_size));
+    model.state(ANIRA_MODEL_STATEFUL);
 
-    std::vector<TensorShape> const tensor_shape = {
-        {{{1, 1, static_cast<int64_t>(params.m_hop_size)}},
-         {{1, 1, static_cast<int64_t>(params.m_hop_size)}}}};
+    StreamPositionEngine engine;
+    {
+        // Use multiple threads to increase chance of out-of-order dequeue
+        const anira_test::Context context(4);
+        anira_test::Handler handler(context, model, {}, {}, engine.engine());
+        const anira_test::DestroyFirst destroy_first(handler, &engine);
+        const auto block = static_cast<uint32_t>(params.m_host_buffer_size);
+        ASSERT_EQ(handler.prepare(anira_test::explicit_contract(block,
+                                                                params.m_sample_rate,
+                                                                ANIRA_MISS_ZEROS,
+                                                                0.0,
+                                                                /*budget_ms=*/5.0)),
+                  ANIRA_OK)
+            << handler.m_err.message;
 
-    ProcessingSpec const processing_spec({1},                  // preprocess_input_channels
-                                         {1},                  // postprocess_output_channels
-                                         {params.m_hop_size},  // preprocess_input_size
-                                         {params.m_hop_size}   // postprocess_output_size
-    );
+        std::vector<float> test_buffer(block);
+        const std::array<float*, 1> channels{test_buffer.data()};
+        const std::array<int64_t, 2> shape{1, static_cast<int64_t>(block)};
+        anira_tensor io{};
+        anira_tensor_init_host_planar(&io,
+                                      static_cast<const void*>(channels.data()),
+                                      1,
+                                      ANIRA_DTYPE_F32,
+                                      2,
+                                      shape.data());
 
-    InferenceConfig config(model_data,
-                           tensor_shape,
-                           processing_spec,
-                           5.f,                                  // max_inference_time ms
-                           0,                                    // warm_up
-                           params.m_session_exclusive,           // session_exclusive_processor
-                           0.0f,                                 // blocking_ratio
-                           params.m_session_exclusive ? 1u : 4u  // num_parallel_processors
-    );
-
-    PassthroughPrePostProcessor pp_processor(config);
-    StatefulCounterBackend backend(config);
-
-    // Use multiple threads to increase chance of out-of-order dequeue
-    CoreConfig core_config;
-    core_config.m_num_threads = 4;
-
-    V2Handler handler(pp_processor, config, backend, core_config);
-
-    HostConfig const host_config(params.m_host_buffer_size, params.m_sample_rate);
-    handler.prepare(host_config);
-    handler.set_inference_backend(InferenceBackend::CUSTOM);
-
-    auto const buffer_size = static_cast<size_t>(params.m_host_buffer_size);
-    BufferF test_buffer(1, buffer_size);
-
-    // Simulate real-time audio callbacks at the correct pace
-    auto callback_interval = std::chrono::microseconds(
-        static_cast<long long>(params.m_host_buffer_size / params.m_sample_rate * 1e6));
-
-    constexpr size_t k_num_iterations = 300;
-    auto next_callback = std::chrono::steady_clock::now();
-
-    for (size_t iter = 0; iter < k_num_iterations; ++iter) {
-        for (size_t s = 0; s < buffer_size; ++s) { test_buffer.set_sample(0, s, 0.f); }
-        handler.process(test_buffer.get_array_of_write_pointers(), buffer_size);
-
-        next_callback += callback_interval;
-        std::this_thread::sleep_until(next_callback);
-    }
-
-    // Wait for all pending inferences to complete
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
-
-    // Check execution order
-    std::lock_guard<std::mutex> const lock(backend.m_order_mutex);
-
-    ASSERT_GT(backend.m_execution_order.size(), 0u) << "No inferences were executed";
-
-    bool in_order = true;
-    for (size_t i = 1; i < backend.m_execution_order.size(); ++i) {
-        if (backend.m_execution_order[i] <= backend.m_execution_order[i - 1]) {
-            in_order = false;
-            break;
+        // Every window a call submits has run before the next call. A chunk that finds every
+        // slot of the session taken is not run (its window is dropped and its hop of output is
+        // zeros), which a slow runner hit under real-time pacing; here no chunk can, so window
+        // k is exactly the one starting at k * hop. The windows of one call (two to four) still
+        // go out together to a pool of four threads.
+        constexpr size_t k_num_iterations = 300;
+        const auto hop = static_cast<size_t>(params.m_hop_size);
+        for (size_t iter = 0; iter < k_num_iterations; ++iter) {
+            // Every sample is its own index in the stream (exact in float up to 2^24).
+            for (size_t i = 0; i < block; ++i) {
+                test_buffer[i] = static_cast<float>((iter * block) + i);
+            }
+            size_t delivered = 0;
+            static_cast<void>(anira_handler_process(handler.m_handler, &io, 0, &io, 0, &delivered));
+            const size_t submitted = ((iter + 1) * block) / hop;
+            ASSERT_TRUE(engine.wait_for_runs(submitted))
+                << "call " << iter << ": " << submitted << " windows submitted, fewer ran";
         }
-    }
+    }  // the handler's destroy drains the inferences in flight
 
-    if (params.m_session_exclusive) {
-        // With session_exclusive_processor=true, execution MUST be in order
-        EXPECT_TRUE(in_order)
-            << "Session-exclusive processor is set but inferences executed out of order!"
-            << " (total inferences: " << backend.m_execution_order.size() << ")";
-    } else {
-        // Log whether out-of-order happened (for diagnostic purposes)
-        std::cout << "session_exclusive=false: execution was "
-                  << (in_order ? "IN ORDER (race not triggered)" : "OUT OF ORDER (race triggered)")
-                  << " (" << backend.m_execution_order.size() << " inferences)" << '\n';
+    // A stateful model's inferences run one at a time, every window in stream order: inference
+    // k ran the window that starts at sample k * hop.
+    const std::lock_guard<std::mutex> lock(engine.m_mutex);
+    ASSERT_GT(engine.m_positions.size(), 0U) << "no inference ran";
+    EXPECT_EQ(engine.m_most_inside.load(), 1) << "inferences of a stateful model overlapped";
+    for (size_t k = 0; k < engine.m_positions.size(); ++k) {
+        ASSERT_EQ(engine.m_positions[k], static_cast<int64_t>(k) * params.m_hop_size)
+            << "inference " << k << " of " << engine.m_positions.size()
+            << " ran another window: out of order, or one skipped";
     }
 }
 
 INSTANTIATE_TEST_SUITE_P(StatefulModel,
                          StatefulOrderingTest,
                          ::testing::Values(
-                             // session_exclusive=true, host_buffer > hop_size to force multiple
-                             // inferences. 512 was dropped (same dispatch path at the
-                             // weakest race pressure) and the non-exclusive reference row
-                             // with it: it asserted only executions > 0, its comparison
-                             // being a printout (audit, docs/ci-overhaul.md step 9a).
-                             StatefulTestParams{true, 1024.f, 48000.f, 480},
-                             StatefulTestParams{true, 2048.f, 48000.f, 480},
-                             StatefulTestParams{true, 1024.f, 48000.f, 512}));
+                             // host_buffer > hop_size to force multiple inferences. 512 was
+                             // dropped (same dispatch path at the weakest race pressure) and the
+                             // non-exclusive reference row with it: it asserted only executions
+                             // > 0, its comparison being a printout (audit,
+                             // docs/ci-overhaul.md step 9a).
+                             StatefulTestParams{1024.0, 48000.0, 480},
+                             StatefulTestParams{2048.0, 48000.0, 480},
+                             StatefulTestParams{1024.0, 48000.0, 512}));

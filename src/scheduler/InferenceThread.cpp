@@ -3,7 +3,6 @@
 #include <anira/abi/status.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <tanh/core/threading/Thread.h>
@@ -16,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/processor.h"
 #include "../capi/words.h"
 #include "../engines/Adapter.h"
 #include "../utils/Backoff.h"
@@ -521,13 +521,13 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
                            session->m_generation.load(std::memory_order::seq_cst);
 
         if (stale) {
-            if (session->m_inference_config.m_blocking_ratio > 0.f) {
+            if (session->uses_semaphore()) {
                 thread_safe_struct->m_done_semaphore.release();
             } else {
                 thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
             }
             signalled = true;
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
                 dispatch_next_pending(session);
             }
@@ -542,7 +542,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
             // entries are the drainer's job (force_reset_dispatch_chain in prepare).
             session->complete_with_zeros(thread_safe_struct);
             signalled = true;
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
             }
         }
@@ -551,7 +551,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         // stranded without its done signal, and never signalled twice.
         if (!signalled) {
             session->complete_with_zeros(thread_safe_struct);
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
             }
             if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
@@ -597,33 +597,29 @@ void InferenceThread::do_inference(
     // the session's atomic: the hooks and the engine call below agree with each other and
     // with the chunk's pre_process and post_process, whatever select_plan() does meanwhile.
     const uint32_t plan = thread_safe_struct->m_plan;
-    InferenceBackend const backend = session->plan_backend(plan);
-    // A 2.x processor or a before/after hook that throws must not unwind the pool thread:
-    // the failed inference delivers zeros, the done signal is published below exactly as on
-    // success, and the failure is ENGINE on the session's latch (a 3.x handler's word),
-    // logged on its first occurrence since the latch's re-arm.
+    // A before or after hook, or an engine, that throws must not unwind the pool thread: the
+    // failed inference delivers zeros, the done signal is published below exactly as on
+    // success, and the failure is ENGINE on the session's latch, logged on its first occurrence
+    // since the latch's re-arm.
     try {
-        // A 3.x processor runner feeds the declared state inside before_inference, ahead of the
-        // processor's own hook, and captures it inside after_inference, behind the processor's hook
-        // (capi/processor.h): the session knows nothing of it.
-        session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-        // A processor runner leaves the status of a failed before_inference or after_inference on
-        // the chunk (it records the failure itself; a 2.x processor never writes the field):
-        // the rest is skipped and the chunk delivers zeros.
-        if (thread_safe_struct->m_processor_status == ANIRA_OK) {
-            const anira_status status = inference(session, plan, *thread_safe_struct, instance);
-            if (status == ANIRA_OK) {
-                session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
-                                                        backend);
+        // The processor runner feeds the declared state inside before_inference, ahead of the
+        // processor's own hook, and captures it inside after_inference, behind the processor's
+        // hook (capi/processor.h): the session knows nothing of it. A failed hook (it recorded
+        // itself) skips the rest, and the chunk delivers zeros.
+        anira_status status = session->m_processor.before_inference(*thread_safe_struct);
+        if (status == ANIRA_OK) {
+            const anira_status engine = inference(session, plan, *thread_safe_struct, instance);
+            if (engine == ANIRA_OK) {
+                status = session->m_processor.after_inference(*thread_safe_struct);
             } else {
                 // The engine failed the chunk: zeros at its stream position, no
                 // after_inference (the rule of a failed hook), ENGINE on the latch with the
                 // status the adapter returned. A waiting job a thread told to stop gave up fails
                 // the same way (ANIRA_ERROR_INVALID_STATE, no engine call); the log says so,
                 // since no engine ran.
-                for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+                thread_safe_struct->zero_outputs();
                 thread_safe_struct->m_completed_as_zeros = true;
-                if (status == ANIRA_ERROR_INVALID_STATE && should_exit()) {
+                if (engine == ANIRA_ERROR_INVALID_STATE && should_exit()) {
                     if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                         ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                            "%s failed in session %d: the inference thread was "
@@ -640,17 +636,17 @@ void InferenceThread::do_inference(
                                        capi::phase_word(ANIRA_PHASE_INFERENCE),
                                        session->m_session_id,
                                        plan,
-                                       static_cast<int>(status),
-                                       anira_status_string(status));
+                                       static_cast<int>(engine),
+                                       anira_status_string(engine));
                 }
             }
         }
-        if (thread_safe_struct->m_processor_status != ANIRA_OK) {
-            for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        if (status != ANIRA_OK) {
+            thread_safe_struct->zero_outputs();
             thread_safe_struct->m_completed_as_zeros = true;
         }
     } catch (const std::exception& e) {
-        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->zero_outputs();
         thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
@@ -659,7 +655,7 @@ void InferenceThread::do_inference(
                                e.what());
         }
     } catch (...) {
-        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->zero_outputs();
         thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
@@ -668,7 +664,7 @@ void InferenceThread::do_inference(
                                session->m_session_id);
         }
     }
-    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+    if (session->uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
@@ -679,7 +675,7 @@ void InferenceThread::do_inference(
     // completed), so release the dispatch slot and hand the next pending task to
     // the pool. Only one task per session is ever in flight, keeping execution in
     // order and mutually exclusive with no spinning.
-    if (session->m_inference_config.m_session_exclusive_processor) {
+    if (session->exclusive()) {
         session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
         dispatch_next_pending(session);
     }
@@ -695,15 +691,6 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // keeps a defect from reading past the table.
     if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
     SessionElement::PlanSlot& slot = session->m_plans[plan];
-    if (slot.m_missing_model) {
-        ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoModelForBackend,
-                                log_group::k_scheduler,
-                                "no model for backend %d of plan %u in session %d has been "
-                                "provided; the default processor runs",
-                                static_cast<int>(slot.m_legacy_backend),
-                                plan,
-                                session->m_session_id);
-    }
 
     // The engine context of the chunk, on this stack for the duration of the call: the
     // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,
@@ -728,33 +715,29 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // session's atomic: a reset that lands between the stale check and this read belongs to
     // the next chunk.
     bool reset_first = false;
-    if (session->m_inference_config.m_session_exclusive_processor &&
-        chunk.m_dispatch_generation != slot.m_engine_generation) {
+    if (session->exclusive() && chunk.m_dispatch_generation != slot.m_engine_generation) {
         slot.m_engine_generation = chunk.m_dispatch_generation;
         reset_first = true;
     }
 
-    // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an executor of the
-    // descriptor shape reads the context alone. A plan without a prepared handle (a registered
-    // engine's whose handler never prepared it) is anira's own bug: the chunk fails.
-    engine::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
-                                 .m_outputs = &chunk.m_tensor_output_data};
+    // A plan without a prepared handle (a registered engine's whose handler never prepared it)
+    // is anira's own bug: the chunk fails.
     if (slot.m_prepared == nullptr) { return ANIRA_ERROR_INTERNAL; }
     // A waiting job this thread, told to stop, gave up: no engine call.
     if (instance == k_given_up) { return ANIRA_ERROR_INVALID_STATE; }
     // A shared call on the instance process_dequeued_inference claimed for the job.
-    if (instance != k_unclaimed) { return slot.m_prepared->run_claimed(ctx, &buffers, instance); }
-    // Everything else (an exclusive session's call, a 2.x backend's) through run, which
-    // claims nothing for them. A shared call reaches its claim loop only without a wait list,
-    // which a pooled model always has; the stop flag is for that loop: a thread told to stop
-    // gives up waiting for a free instance instead of holding up the join of its pool.
+    if (instance != k_unclaimed) { return slot.m_prepared->run_claimed(ctx, instance); }
+    // Everything else (an exclusive session's call) through run, which claims nothing for it. A
+    // shared call reaches its claim loop only without a wait list, which a pooled model always has;
+    // the stop flag is for that loop: a thread told to stop gives up waiting for a free instance
+    // instead of holding up the join of its pool.
     const engine::StopSignal stop{
         .m_stopping =
             [](const void* thread) noexcept {
                 return static_cast<const InferenceThread*>(thread)->should_exit();
             },
         .m_context = this};
-    return slot.m_prepared->run(ctx, &buffers, reset_first, stop);
+    return slot.m_prepared->run(ctx, reset_first, stop);
 }
 
 }  // namespace scheduler

@@ -22,8 +22,9 @@ find_package(nlohmann_json REQUIRED)
 # Statically linked backends put Threads::Threads on their target's link interface.
 find_dependency(Threads)
 
-# anira's Buffer / RingBuffer / MemoryBlock are aliases over tanh-lib's
-# Apache-2.0 core component, installed alongside anira into the same prefix.
+# anira's ring storage (anira::RingBuffer over thl::core::RingBuffer), its logger and
+# its inference threads (thl::core::Thread) come from tanh-lib's Apache-2.0 core
+# component, installed alongside anira into the same prefix.
 find_dependency(tanh COMPONENTS Core)
 
 if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)

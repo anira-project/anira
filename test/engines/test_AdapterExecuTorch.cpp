@@ -1,19 +1,16 @@
 // The ExecuTorch adapter, driven directly through the engine room's interface (the built-in
-// adapter of the engine, the record of a 2.x configuration, one run over a context built by
+// adapter of the engine, a model record written out, one run over a context built by
 // hand: no Context, no threads), on the paths test_ExecuTorchModelFunction.cpp does not take:
 // a program handed over as bytes rather than a path, a program that cannot be loaded at all,
 // a method the program lacks, and the check against the method meta's planned bounds.
 
 #ifdef USE_EXECUTORCH
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 
 #include <algorithm>
@@ -39,7 +36,9 @@ using anira::engine::Model;
 using anira_test::context_of;
 using anira_test::descriptors_of;
 using anira_test::filled_buffers;
+using anira_test::model_record;
 using anira_test::read_model_file;
+using anira_test::with_bytes;
 
 std::string multifunction_model_path() {
     return std::string(ANIRA_EXTRAS_MODELS_DIR
@@ -54,7 +53,7 @@ std::string gain_model_path() {
 
 /// A loaded model and one prepared handle over it, driven directly (no core, no session): the
 /// shape the inference thread runs. prepare loads the record and prepares one session on it,
-/// exclusive when the record has no shared slot (a session-exclusive configuration).
+/// exclusive when the record has no shared slot (a stateful model's).
 class Rig {
 public:
     explicit Rig(std::shared_ptr<anira::engine::Loaded> loaded) : m_loaded(std::move(loaded)) {}
@@ -73,10 +72,8 @@ public:
     bool prepared() const noexcept { return m_loaded->loaded() && m_prepared != nullptr; }
     const anira::engine::Model& model() const noexcept { return m_loaded->model(); }
     const anira::engine::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
-    anira_status run(const anira_engine_ctx& ctx,
-                     anira::engine::ChunkBuffers* chunk,
-                     bool reset_first) noexcept {
-        return m_prepared->run(ctx, chunk, reset_first);
+    anira_status run(const anira_engine_ctx& ctx, bool reset_first) noexcept {
+        return m_prepared->run(ctx, reset_first);
     }
 
 private:
@@ -100,19 +97,13 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
     const std::vector<char> bytes = read_model_file(multifunction_model_path());
     ASSERT_FALSE(bytes.empty()) << "fixture missing: " << multifunction_model_path();
 
-    const anira::InferenceConfig config(
-        {anira::ModelData(const_cast<char*>(bytes.data()),
-                          bytes.size(),
-                          anira::InferenceBackend::EXECUTORCH,
-                          "gain2",
-                          /*is_binary=*/true)},
-        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                            {{1, 1, static_cast<int64_t>(k_size)}})},
-        5.0F,
-        /*warm_up=*/1,
-        /*session_exclusive_processor=*/true);
-    ASSERT_TRUE(config.is_model_binary(anira::InferenceBackend::EXECUTORCH));
-    const Model model = anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    const Model model = with_bytes(model_record(ANIRA_ENGINE_EXECUTORCH,
+                                                "",
+                                                {{1, 1, static_cast<int64_t>(k_size)}},
+                                                {{1, 1, static_cast<int64_t>(k_size)}},
+                                                1,
+                                                "gain2"),
+                                   bytes);
     ASSERT_NE(model.m_bytes, nullptr);
     ASSERT_EQ(model.m_entry, "gain2");
 
@@ -121,14 +112,12 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
     EXPECT_EQ(adapter->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 
-    std::vector<anira::BufferF> input = filled_buffers({k_size}, 0.25F);
-    std::vector<anira::BufferF> output = filled_buffers({k_size}, 0.F);
+    anira_test::Buffers input = filled_buffers({k_size}, 0.25F);
+    anira_test::Buffers output = filled_buffers({k_size}, 0.F);
     const std::vector<anira_tensor> input_tensors = descriptors_of(input, model.m_inputs);
     std::vector<anira_tensor> output_tensors = descriptors_of(output, model.m_outputs);
-    EXPECT_EQ(adapter->run(context_of(input_tensors, output_tensors), nullptr, false), ANIRA_OK);
-    for (size_t i = 0; i < k_size; ++i) {
-        EXPECT_FLOAT_EQ(output[0].get_sample(0, i), 0.5F) << "sample " << i;
-    }
+    EXPECT_EQ(adapter->run(context_of(input_tensors, output_tensors), false), ANIRA_OK);
+    for (size_t i = 0; i < k_size; ++i) { EXPECT_FLOAT_EQ(output[0][i], 0.5F) << "sample " << i; }
 }
 
 // The provider of the record on ExecuTorch is the delegate (ExecuTorch's backend) an export
@@ -166,16 +155,12 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
         << loaded.provider_reason();
 
     // The multifunction export's "gain2" (one input, one output), a portable method.
-    const anira::InferenceConfig config(
-        {anira::ModelData(multifunction_model_path(),
-                          anira::InferenceBackend::EXECUTORCH,
-                          "gain2")},
-        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                            {{1, 1, static_cast<int64_t>(k_size)}})},
-        5.0F,
-        /*warm_up=*/1,
-        /*session_exclusive_processor=*/true);
-    Model neutral = anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH);
+    const Model neutral = model_record(ANIRA_ENGINE_EXECUTORCH,
+                                       multifunction_model_path(),
+                                       {{1, 1, static_cast<int64_t>(k_size)}},
+                                       {{1, 1, static_cast<int64_t>(k_size)}},
+                                       1,
+                                       "gain2");
     ASSERT_EQ(neutral.m_entry, "gain2");
     adapter->prepare(neutral);
     EXPECT_TRUE(adapter->prepared()) << "a portable export on the CPU path";
@@ -209,35 +194,26 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
 
 // The contract create_session() rolls back on: a StatusError, which is a std::runtime_error.
 TEST(AdapterExecuTorch, UnloadableModelThrowsRuntimeError) {
-    const anira::InferenceConfig config(
-        {anira::ModelData("this/model/does/not/exist.pte", anira::InferenceBackend::EXECUTORCH)},
-        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                            {{1, 1, static_cast<int64_t>(k_size)}})},
-        5.0F,
-        /*warm_up=*/0,
-        /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = executorch_adapter();
-    EXPECT_THROW(
-        adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH)),
-        std::runtime_error);
+    EXPECT_THROW(adapter->prepare(model_record(ANIRA_ENGINE_EXECUTORCH,
+                                               "this/model/does/not/exist.pte",
+                                               {{1, 1, static_cast<int64_t>(k_size)}},
+                                               {{1, 1, static_cast<int64_t>(k_size)}})),
+                 std::runtime_error);
     EXPECT_FALSE(adapter->prepared());
 }
 
 // A method name the program does not carry must fail the same way rather than silently
 // falling back to forward().
 TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
-    const anira::InferenceConfig config(
-        {anira::ModelData(multifunction_model_path(),
-                          anira::InferenceBackend::EXECUTORCH,
-                          "no_such_method")},
-        {anira::TensorShape({{1, 1, static_cast<int64_t>(k_size)}},
-                            {{1, 1, static_cast<int64_t>(k_size)}})},
-        5.0F,
-        /*warm_up=*/0,
-        /*session_exclusive_processor=*/true);
     const std::shared_ptr<Rig> adapter = executorch_adapter();
     try {
-        adapter->prepare(anira::engine::model_of(config, anira::InferenceBackend::EXECUTORCH));
+        adapter->prepare(model_record(ANIRA_ENGINE_EXECUTORCH,
+                                      multifunction_model_path(),
+                                      {{1, 1, static_cast<int64_t>(k_size)}},
+                                      {{1, 1, static_cast<int64_t>(k_size)}},
+                                      0,
+                                      "no_such_method"));
         FAIL() << "a missing method loaded";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD);
@@ -250,24 +226,17 @@ TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
 // the bundled gain program plans [1, 1, 65536] for its block, so a record of 512 binds and one
 // above the bound, or of another rank, is CONFIG at prepare naming both shapes.
 TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
-    const auto config_of = [](const std::vector<int64_t>& block) {
-        return anira::InferenceConfig(
-            {anira::ModelData(gain_model_path(), anira::InferenceBackend::EXECUTORCH)},
-            {anira::TensorShape({block, {1}}, {block, {1}})},
-            5.0F,
-            /*warm_up=*/0,
-            /*session_exclusive_processor=*/true);
+    const auto record_of = [](const std::vector<int64_t>& block) {
+        return model_record(ANIRA_ENGINE_EXECUTORCH, gain_model_path(), {block, {1}}, {block, {1}});
     };
     const std::shared_ptr<Rig> adapter = executorch_adapter();
-    adapter->prepare(
-        anira::engine::model_of(config_of({1, 1, 512}), anira::InferenceBackend::EXECUTORCH));
+    adapter->prepare(record_of({1, 1, 512}));
     EXPECT_TRUE(adapter->prepared());
     EXPECT_EQ(adapter->bindings().m_inputs,
               (std::vector<anira_binding>{ANIRA_BINDING_POSITION, ANIRA_BINDING_POSITION}));
 
     try {
-        executorch_adapter()->prepare(
-            anira::engine::model_of(config_of({1, 1, 70000}), anira::InferenceBackend::EXECUTORCH));
+        executorch_adapter()->prepare(record_of({1, 1, 70000}));
         FAIL() << "a block above the planned bound bound";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
@@ -277,8 +246,7 @@ TEST(AdapterExecuTorch, TheMethodMetasPlannedBoundsAreTheCheck) {
             << message;
     }
     try {
-        executorch_adapter()->prepare(
-            anira::engine::model_of(config_of({1, 512}), anira::InferenceBackend::EXECUTORCH));
+        executorch_adapter()->prepare(record_of({1, 512}));
         FAIL() << "a block of another rank bound";
     } catch (const anira::StatusError& error) {
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
