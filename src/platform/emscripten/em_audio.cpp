@@ -461,8 +461,7 @@ anira_status resolve_streams(const anira_handler& handler,
                              bool partial,
                              std::vector<Stream>& streams,
                              anira_error* err) {
-    const std::vector<anira::capi::Port>& ports =
-        input ? handler.m_input_ports : handler.m_output_ports;
+    const anira::capi::Ports& ports = input ? handler.m_input_ports : handler.m_output_ports;
     const char* side = input ? "input" : "output";
     std::vector<uint32_t> listed;
     if (slots == nullptr) {

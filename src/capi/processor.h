@@ -107,8 +107,8 @@ ANIRA_API ProcessorFacts processor_facts(const ProcessorCarrier* processor);
 struct ProcessorFrame {
     /// The handler's ports per side, indexed by slot: the role of a slot is its port's arm, the
     /// ring of a Streamed slot its stream port's.
-    const std::vector<Port>* m_input_ports = nullptr;
-    const std::vector<Port>* m_output_ports = nullptr;
+    const Ports* m_input_ports = nullptr;
+    const Ports* m_output_ports = nullptr;
     /// The chunk's descriptors on the side the phase exposes (one anira_tensor per slot over
     /// the struct's buffer, ThreadSafeStruct::m_input_tensors / m_output_tensors): the inputs
     /// in pre_process and before_inference, the outputs in after_inference and post_process.
@@ -162,9 +162,7 @@ public:
     /// by slot, the tensor's position in the model config's list of its side: the one
     /// numbering of the handler's entries too. The vectors are never resized and no arm
     /// changes while the processor lives.
-    ProcessorRunner(const ProcessorCarrier* processor,
-                    std::vector<Port>& input_ports,
-                    std::vector<Port>& output_ports);
+    ProcessorRunner(const ProcessorCarrier* processor, Ports& input_ports, Ports& output_ports);
 
     /// Control thread, after the session's prepare and before its first chunk: the session (its
     /// plan table is what a ctx reports the engine and the provider of a chunk's plan from, its
@@ -186,8 +184,8 @@ public:
 
     /// The handler's ports, indexed by slot; the session reads the rings of its Streamed slots
     /// through them (SessionElement::send_ring / receive_ring).
-    std::vector<Port>& input_ports() noexcept { return m_input_ports; }
-    std::vector<Port>& output_ports() noexcept { return m_output_ports; }
+    Ports& input_ports() noexcept { return m_input_ports; }
+    Ports& output_ports() noexcept { return m_output_ports; }
 
     using Chunk = anira::SessionElement::ThreadSafeStruct;
 
@@ -247,7 +245,7 @@ private:
     /// repairs a shortfall (an input ring discards to its hop, an output ring is topped up with
     /// zeros) and, with `report`, records ANIRA_ERROR_CONFIG with one latched record for the first
     /// channel that moved another count than its hop.
-    void snapshot(const std::vector<Port>& ports) noexcept ANIRA_NONBLOCKING;
+    void snapshot(const Ports& ports) noexcept ANIRA_NONBLOCKING;
     void check_input_hops(bool report) noexcept ANIRA_NONBLOCKING;
     void check_output_hops(bool report) noexcept ANIRA_NONBLOCKING;
     void report_hop(uint32_t phase,
@@ -267,8 +265,8 @@ private:
     const ProcessorCarrier* m_processor;  ///< NULL: the defaults everywhere
     /// The handler's ports. The stream ports hold the rings; pre_process reads the static input
     /// ports, post_process writes the static output ports.
-    std::vector<Port>& m_input_ports;
-    std::vector<Port>& m_output_ports;
+    Ports& m_input_ports;
+    Ports& m_output_ports;
     bool m_fills_pre = false;     ///< the processor fills pre_process; else the default body runs
     bool m_fills_post = false;    ///< the same for post_process
     bool m_fills_before = false;  ///< the processor fills before_inference; else the hook returns

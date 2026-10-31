@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -144,12 +145,18 @@ void SessionElement::ThreadSafeStruct::zero_outputs() noexcept {
     }
 }
 
+// A slot with a hop has a stream port: anira_handler_create and anira_handler_prepare refuse a
+// derivation where it has not (capi::stream_port_refusal).
 RingBuffer& SessionElement::send_ring(size_t slot) const noexcept {
-    return capi::stream_port(m_processor.input_ports(), slot)->m_ring;
+    const capi::StreamPort* port = capi::stream_port(m_processor.input_ports(), slot);
+    assert(port != nullptr && "the ring of an input slot without a stream port");
+    return port->m_ring;
 }
 
 RingBuffer& SessionElement::receive_ring(size_t slot) const noexcept {
-    return capi::stream_port(m_processor.output_ports(), slot)->m_ring;
+    const capi::StreamPort* port = capi::stream_port(m_processor.output_ports(), slot);
+    assert(port != nullptr && "the ring of an output slot without a stream port");
+    return port->m_ring;
 }
 
 size_t SessionElement::num_inputs() const noexcept {
@@ -504,7 +511,7 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // State slot gets no storage: its port's pair is bound per inference.
     m_inference_queue.clear();
 
-    const auto state_slots = [](const std::vector<capi::Port>& ports) {
+    const auto state_slots = [](const capi::Ports& ports) {
         std::vector<bool> state(ports.size(), false);
         for (size_t slot = 0; slot < ports.size(); ++slot) {
             state[slot] = std::holds_alternative<capi::StatePort>(ports[slot]);

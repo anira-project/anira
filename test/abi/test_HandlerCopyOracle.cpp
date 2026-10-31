@@ -560,8 +560,8 @@ private:
         return options.m_wait ? name + "_wait" : name;
     }
 
-    const std::vector<anira::capi::Port>& input_ports() const { return m_handler.input_ports(); }
-    const std::vector<anira::capi::Port>& output_ports() const { return m_handler.output_ports(); }
+    const anira::capi::Ports& input_ports() const { return m_handler.input_ports(); }
+    const anira::capi::Ports& output_ports() const { return m_handler.output_ports(); }
 
     size_t output_channels(uint32_t slot) const {
         return oracle::channels_of(output_ports(), slot);
@@ -864,7 +864,7 @@ private:
         return oracle::channels_of(m_handler.output_ports(), slot);
     }
     /// The element count of a Static slot (0 for any other).
-    static size_t values_of(const std::vector<anira::capi::Port>& ports, size_t slot) {
+    static size_t values_of(const anira::capi::Ports& ports, size_t slot) {
         const anira::capi::StaticSlot* store = anira::capi::static_slot(ports, slot);
         return store != nullptr ? store->num_elements() : 0;
     }

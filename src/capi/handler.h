@@ -9,6 +9,7 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/InferenceManager.h>
+#include <anira/system/Exports.h>
 #include <anira/utils/RtLatch.h>
 
 #include <atomic>
@@ -97,6 +98,11 @@ struct anira_plan_report {
 };
 
 struct anira_handler {
+    /// A handler over `num_inputs` and `num_outputs` tensors: its ports, one per tensor, made
+    /// here once (anira::capi::Ports never resizes).
+    anira_handler(size_t num_inputs, size_t num_outputs)
+        : m_input_ports(num_inputs), m_output_ports(num_outputs) {}
+
     anira_context* m_context = nullptr;  ///< add-ref'd at create, released at destroy
     anira_pipeline m_pipeline;           ///< the copy
     /// What the queries of the pipeline's custom engines answered at create (the main
@@ -119,13 +125,15 @@ struct anira_handler {
     /// read and one written per inference, and the generation they were last bound under; the
     /// output half: the input slot it feeds), a buffer port (nothing: refused under a Hard
     /// contract). Built by anira_handler_create from the pipeline copy, the Static and State
-    /// values zeroed, and never resized; an arm never changes. prepare fills the stream ports'
-    /// fields, zeroes the State buffers (a new session starts on a fresh state) and leaves the
-    /// Static values alone, and so does reset (m_pp and m_manager are rebuilt by every prepare,
+    /// values zeroed; never resized (the type has nothing that resizes) and an arm never
+    /// changes. Every tensor with a stream (a hop) has a stream port: create and prepare refuse
+    /// a derivation that breaks it (anira::capi::stream_port_refusal). prepare fills the stream
+    /// ports' fields, zeroes the State buffers (a new session starts on a fresh state) and leaves
+    /// the Static values alone, and so does reset (m_pp and m_manager are rebuilt by every prepare,
     /// the Static values set before one survive it). Declared before m_pp, which reads and
     /// writes them: destroyed after.
-    std::vector<anira::capi::Port> m_input_ports;
-    std::vector<anira::capi::Port> m_output_ports;
+    anira::capi::Ports m_input_ports;
+    anira::capi::Ports m_output_ports;
     std::unique_ptr<anira::capi::ProcessorRunner> m_pp;      ///< the processor runner over
                                                              ///< m_pipeline.m_processor, rebuilt by
                                                              ///< every prepare
@@ -193,5 +201,20 @@ struct anira_handler {
 };
 
 // NOLINTEND(readability-identifier-naming)
+
+namespace anira::capi {
+
+/// What breaks the invariant every reader of a ring relies on, for a derivation and the ports of
+/// a handler: one port per tensor on either side, and a stream port for every tensor with a
+/// stream (a hop above 0; SessionElement::send_ring / receive_ring reach the ring through it).
+/// Empty when both hold, else the side and the slot. anira_handler_create and
+/// anira_handler_prepare refuse a derivation it names (ANIRA_ERROR_INTERNAL; an assertion in a
+/// debug build): validate gives a hop to a Streamed tensor alone and create gives every one a
+/// stream port, so neither ever does.
+ANIRA_API std::string stream_port_refusal(const Derived& derived,
+                                          const Ports& inputs,
+                                          const Ports& outputs);
+
+}  // namespace anira::capi
 
 #endif  // ANIRA_CAPI_HANDLER_H

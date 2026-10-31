@@ -13,6 +13,7 @@
 #include <anira/abi/thread.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
+#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -30,12 +31,16 @@
 #include <span>
 #include <string>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
 #include "../support/engine_oracle.h"
 #include "../support/log_record_collector.h"
+#include "capi/handler.h"
 #include "capi/port.h"
+#include "capi/validate.h"
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -789,6 +794,90 @@ TEST(AbiHandler, TheCnnStreamIsTheModelOnItsWindows) {
                   0.0F)
             << "the oracle's output is not silence";
     }
+}
+
+// ============================================================================================
+// The ports
+// ============================================================================================
+
+namespace {
+
+// Whether a port container has anything that changes its count (what would move every port).
+template <typename P>
+constexpr bool k_resizes =
+    requires(P& ports) { ports.resize(1); } || requires(P& ports) { ports.clear(); } ||
+    requires(P& ports, anira::capi::Port&& port) { ports.push_back(std::move(port)); } ||
+    requires(P& ports) { ports.emplace_back(); } || requires(P& ports) { ports.reserve(1); };
+
+}  // namespace
+
+// The ports of a side never move: capi::Ports has no copy, no move and nothing that changes
+// its count, so the addresses the session (its rings), the processor runner and every processor
+// frame hold across calls are the type's guarantee. The check sees a container that resizes.
+static_assert(!k_resizes<anira::capi::Ports>);
+static_assert(k_resizes<std::vector<anira::capi::Port>>);
+static_assert(!std::is_copy_constructible_v<anira::capi::Ports> &&
+              !std::is_copy_assignable_v<anira::capi::Ports>);
+static_assert(!std::is_move_constructible_v<anira::capi::Ports> &&
+              !std::is_move_assignable_v<anira::capi::Ports>);
+
+// And so they keep their addresses for the handler's life: every port, a stream port's ring and
+// a static port's value stay where create made them through two prepares of different
+// geometries (the rings are re-initialised in place).
+TEST(AbiHandler, ThePortsKeepTheirAddressesAcrossPrepares) {
+    const Context context;
+    Handler handler(context, gain_with_custom(), custom_candidates());
+    anira_handler* h = handler.m_handler;
+    std::vector<const anira::capi::Port*> ports;
+    for (const anira::capi::Port& port : h->m_input_ports) { ports.push_back(&port); }
+    for (const anira::capi::Port& port : h->m_output_ports) { ports.push_back(&port); }
+    const anira::RingBuffer* ring = &anira::capi::stream_port(h->m_input_ports, 0)->m_ring;
+    const anira::capi::StaticSlot* gain = anira::capi::static_slot(h->m_input_ports, 1);
+    ASSERT_NE(gain, nullptr);
+    for (const size_t block : {k_block, k_block / 2}) {
+        ASSERT_EQ(
+            handler.prepare(file_contract(k_gain_contract_json, static_cast<uint32_t>(block))),
+            ANIRA_OK)
+            << handler.m_err.message;
+        size_t i = 0;
+        for (const anira::capi::Port& port : h->m_input_ports) { EXPECT_EQ(&port, ports[i++]); }
+        for (const anira::capi::Port& port : h->m_output_ports) { EXPECT_EQ(&port, ports[i++]); }
+        EXPECT_EQ(&anira::capi::stream_port(h->m_input_ports, 0)->m_ring, ring);
+        EXPECT_EQ(anira::capi::static_slot(h->m_input_ports, 1), gain);
+    }
+}
+
+// Every tensor with a stream has a stream port, the invariant every reader of a ring relies on
+// (SessionElement::send_ring / receive_ring): it holds for a prepared handler over a Streamed
+// and a Static tensor per side, and stream_port_refusal, what create and prepare refuse on
+// (ANIRA_ERROR_INTERNAL), names a derivation that gives the Static slot a hop and one whose
+// count is not the ports'.
+TEST(AbiHandler, EveryTensorWithAStreamHasAStreamPort) {
+    const Context context;
+    Handler handler(context, gain_with_custom(), custom_candidates());
+    ASSERT_EQ(handler.prepare(file_contract(k_gain_contract_json, k_block)), ANIRA_OK)
+        << handler.m_err.message;
+    const anira_handler* h = handler.m_handler;
+    const anira::capi::Derived& derived = h->m_derived;
+    EXPECT_EQ(anira::capi::stream_port_refusal(derived, h->m_input_ports, h->m_output_ports), "");
+    size_t streams = 0;
+    for (size_t slot = 0; slot < derived.m_inputs.size(); ++slot) {
+        const bool stream = derived.m_inputs[slot].m_hop > 0;
+        streams += stream ? 1 : 0;
+        EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, slot) != nullptr, stream)
+            << "input slot " << slot;
+    }
+    EXPECT_EQ(streams, 1U) << "the stream, beside the Static gain";
+
+    anira::capi::Derived broken = derived;
+    ASSERT_EQ(broken.m_inputs.size(), 2U);
+    broken.m_inputs[1].m_hop = 1;  // the Static gain with a stream
+    EXPECT_EQ(anira::capi::stream_port_refusal(broken, h->m_input_ports, h->m_output_ports),
+              "input slot 1 has a stream (a hop of 1) but no stream port");
+    broken = derived;
+    broken.m_outputs.pop_back();
+    EXPECT_EQ(anira::capi::stream_port_refusal(broken, h->m_input_ports, h->m_output_ports),
+              "the output side has 2 ports for 1 tensors");
 }
 
 // ============================================================================================

@@ -500,7 +500,7 @@ struct HandBuiltCtx {
     float* data() { return m_buffers[0].data(); }
     anira::RingBuffer& ring() { return std::get<anira::capi::StreamPort>(m_ports[0]).m_ring; }
 
-    std::vector<anira::capi::Port> m_ports;
+    anira::capi::Ports m_ports;
     std::vector<std::vector<float>> m_buffers;
     std::vector<anira_tensor> m_tensors;
     anira::capi::ProcessorFrame m_frame;

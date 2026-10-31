@@ -53,8 +53,7 @@ public:
      * one run of values). Allocates: after the handler's prepare, never on the driver thread.
      * Before the first prepare() the adapter has no slots.
      */
-    void prepare(const std::vector<capi::Port>& input_ports,
-                 const std::vector<capi::Port>& output_ports) {
+    void prepare(const capi::Ports& input_ports, const capi::Ports& output_ports) {
         make_side(m_inputs,
                   m_input_planes,
                   channels_of(input_ports),
@@ -166,7 +165,7 @@ private:
 
     /// The channels per slot of a C handler's side: a stream port's channel count, 1 for every
     /// other port.
-    static std::vector<size_t> channels_of(const std::vector<capi::Port>& ports) {
+    static std::vector<size_t> channels_of(const capi::Ports& ports) {
         std::vector<size_t> channels(ports.size(), 1);
         for (size_t slot = 0; slot < ports.size(); ++slot) {
             if (const capi::StreamPort* stream = capi::stream_port(ports, slot)) {

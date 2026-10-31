@@ -172,13 +172,13 @@ private:
 
 /// The channels of one slot of a prepared C handler: a Streamed slot's stream port says (the
 /// channel count a host block of it carries), every other slot is one run of values.
-inline size_t channels_of(const std::vector<anira::capi::Port>& ports, size_t slot) {
+inline size_t channels_of(const anira::capi::Ports& ports, size_t slot) {
     const anira::capi::StreamPort* stream = anira::capi::stream_port(ports, slot);
     return stream != nullptr ? stream->m_channels : 1;
 }
 
 /// Whether a slot of a prepared C handler streams (it has a ring).
-inline bool is_streamed(const std::vector<anira::capi::Port>& ports, size_t slot) {
+inline bool is_streamed(const anira::capi::Ports& ports, size_t slot) {
     return anira::capi::stream_port(ports, slot) != nullptr;
 }
 
@@ -186,7 +186,7 @@ inline bool is_streamed(const std::vector<anira::capi::Port>& ports, size_t slot
 /// slot continues its ramps from `positions` (the samples pushed so far, advanced here), a
 /// Static slot carries static_value(slot, call, index). Slot 0 is `slot0_length` floats long
 /// when that is more than its count: the memory an in-place call shares with output slot 0.
-inline std::vector<SlotBlock> make_inputs(const std::vector<anira::capi::Port>& input_ports,
+inline std::vector<SlotBlock> make_inputs(const anira::capi::Ports& input_ports,
                                           std::vector<size_t>& positions,
                                           const std::vector<size_t>& in_counts,
                                           size_t slot0_length,
@@ -508,12 +508,8 @@ public:
     anira::InferenceManager& manager() const { return *m_handler.m_handler->m_manager; }
     anira::SessionElement& session() const { return *m_session; }
     GateEngine& gate() const { return *m_gate; }
-    std::vector<anira::capi::Port>& input_ports() const {
-        return m_handler.m_handler->m_input_ports;
-    }
-    std::vector<anira::capi::Port>& output_ports() const {
-        return m_handler.m_handler->m_output_ports;
-    }
+    anira::capi::Ports& input_ports() const { return m_handler.m_handler->m_input_ports; }
+    anira::capi::Ports& output_ports() const { return m_handler.m_handler->m_output_ports; }
 
 private:
     Context m_context;

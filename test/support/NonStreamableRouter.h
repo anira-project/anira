@@ -59,8 +59,8 @@ public:
     /// The store of a C handler: its two port vectors, whose Static ports hold the values; the
     /// manager is the handler's. The three outlive the router.
     NonStreamableRouter(InferenceManager& manager,
-                        std::vector<capi::Port>& input_ports,
-                        std::vector<capi::Port>& output_ports)
+                        capi::Ports& input_ports,
+                        capi::Ports& output_ports)
         : m_manager(manager), m_input_ports(&input_ports), m_output_ports(&output_ports) {}
     ~NonStreamableRouter() = default;
     // The count array is handed out by pointer: one router, one place.
@@ -226,7 +226,7 @@ private:
     /// its element count of values.
     static void make_side(std::vector<bool>& streamed,
                           std::vector<std::vector<float>>& values,
-                          const std::vector<capi::Port>& ports) {
+                          const capi::Ports& ports) {
         streamed.assign(ports.size(), false);
         values.assign(ports.size(), {});
         for (size_t slot = 0; slot < ports.size(); ++slot) {
@@ -238,8 +238,8 @@ private:
     }
 
     InferenceManager& m_manager;
-    std::vector<capi::Port>* m_input_ports = nullptr;   ///< The C handler's store
-    std::vector<capi::Port>* m_output_ports = nullptr;  ///< Likewise
+    capi::Ports* m_input_ports = nullptr;   ///< The C handler's store
+    capi::Ports* m_output_ports = nullptr;  ///< Likewise
     /// Per slot, the values of a non-streamable slot: the scratch a port's value is read into
     /// and written from (sized by prepare(), so a call allocates nothing); its size is the
     /// slot's value count on either store.

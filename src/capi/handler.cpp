@@ -56,6 +56,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -207,11 +208,24 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
 
 // ==== the slots ===============================================================================
 
+// The invariant of create and prepare (anira::capi::stream_port_refusal): asserted in a debug
+// build and refused (ANIRA_ERROR_INTERNAL) in every build, before anything reads a ring.
+void check_stream_ports(const anira::capi::Derived& derived,
+                        const anira_handler& handler,
+                        const char* entry) {
+    const std::string refusal =
+        anira::capi::stream_port_refusal(derived, handler.m_input_ports, handler.m_output_ports);
+    assert(refusal.empty() && "a tensor with a stream has no stream port");
+    if (!refusal.empty()) {
+        throw StatusError(ANIRA_ERROR_INTERNAL, std::string(entry) + ": " + refusal);
+    }
+}
+
 // The port of a slot answers what the tensor is in here (port.h): anira_handler_create fixed
 // the arm from the spec's role, and nothing changes it. Every question below is a plain read
 // of the handler's port vector (std::get_if), a slot at or beyond the side's count included.
-const std::vector<anira::capi::Port>& side_ports(const anira_handler& handler,
-                                                 bool input) noexcept ANIRA_NONBLOCKING {
+const anira::capi::Ports& side_ports(const anira_handler& handler,
+                                     bool input) noexcept ANIRA_NONBLOCKING {
     return input ? handler.m_input_ports : handler.m_output_ports;
 }
 
@@ -449,7 +463,7 @@ anira_status side_tensors_status(anira_handler& handler,
                                  const anira_tensor* tensors,
                                  bool input,
                                  const char* entry) noexcept ANIRA_NONBLOCKING {
-    const std::vector<anira::capi::Port>& ports = side_ports(handler, input);
+    const anira::capi::Ports& ports = side_ports(handler, input);
     for (uint32_t slot = 0; slot < ports.size(); ++slot) {
         const anira::capi::Port& port = ports[slot];
         anira_status status = ANIRA_OK;
@@ -1519,7 +1533,7 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
 // memory, no pointer. The channel count and the dtype are the stream port's; a slot without a
 // host block has 1 channel and the spec's dtype (a static port) or the resolved ring dtype of
 // its position (`ring_dtypes`, float32 where the contract names none).
-std::vector<anira_tensor> empty_tensors(const std::vector<anira::capi::Port>& ports,
+std::vector<anira_tensor> empty_tensors(const anira::capi::Ports& ports,
                                         const std::vector<anira_dtype>& ring_dtypes) {
     std::vector<anira_tensor> tensors(ports.size());
     for (size_t i = 0; i < ports.size(); ++i) {
@@ -1651,6 +1665,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // plan per surviving row, in entry order, what build_plans reports under the same indices.
     // The session reads the configuration by reference: the snapshot's Hard half and the
     // derivation are the handler's from here on, beside the variant.
+    check_stream_ports(derived, handler, "anira_handler_prepare");
     handler.m_contract = std::move(snapshot);
     handler.m_derived = std::move(derived);
     const anira_contract& prepared_contract = handler.m_contract;
@@ -1874,6 +1889,28 @@ anira_model_config clone_model_config(const anira_model_config& model) {
     copy.m_upgraded = model.m_upgraded;
     // m_legacy_contract stays null: the copy is what the handler runs, not a JSON upgrade.
     return copy;
+}
+
+std::string stream_port_refusal(const Derived& derived, const Ports& inputs, const Ports& outputs) {
+    const auto side = [](const std::vector<DerivedSpec>& rows,
+                         const Ports& ports,
+                         const char* word) -> std::string {
+        if (rows.size() != ports.size()) {
+            return std::string("the ") + word + " side has " + std::to_string(ports.size()) +
+                   " ports for " + std::to_string(rows.size()) + " tensors";
+        }
+        for (size_t slot = 0; slot < rows.size(); ++slot) {
+            if (rows[slot].m_hop > 0 && !std::holds_alternative<StreamPort>(ports[slot])) {
+                return std::string(word) + " slot " + std::to_string(slot) +
+                       " has a stream (a hop of " + std::to_string(rows[slot].m_hop) +
+                       ") but no stream port";
+            }
+        }
+        return {};
+    };
+    std::string refusal = side(derived.m_inputs, inputs, "input");
+    if (refusal.empty()) { refusal = side(derived.m_outputs, outputs, "output"); }
+    return refusal;
 }
 
 }  // namespace anira::capi
@@ -2400,13 +2437,16 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     check_providers(*context, *pipeline, derived, answers, anira::capi::QueryUse::Ask);
     check_option_sets(*context, *pipeline, answers);
 
-    auto handler = std::make_unique<anira_handler>();
+    // The ports, one per tensor of either list of the variant (the copy below has the same
+    // lists), made with the handler.
+    auto handler = std::make_unique<anira_handler>(pipeline->m_variants[0].m_inputs.size(),
+                                                   pipeline->m_variants[0].m_outputs.size());
     handler->m_pipeline = anira_pipeline(*pipeline);
     handler->m_query_answers = std::move(answers);
-    // The ports: one per tensor of either list, the arm by the spec's role (the copy fixes the
-    // specs, so the vectors are never resized and no arm ever changes). A static port holds
-    // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
-    // move): from here on the two Static entries work, prepared or not. A stream port gets
+    // The ports: one per tensor of either list, made with the handler (capi::Ports never
+    // resizes), the arm by the spec's role (the copy fixes the specs, so no arm ever changes). A
+    // static port holds its zeroed value in the spec's shape and dtype, built in place (an atomic
+    // does not move): from here on the two Static entries work, prepared or not. A stream port gets
     // its fields at prepare. A State input holds the state's two buffers, which the processor
     // processor binds the pair's model tensors to and flips on the inference thread, and a
     // State output names the input it feeds; no entry of the handler carries either. A Buffer
@@ -2417,9 +2457,8 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
                                bool inputs,
-                               std::vector<anira::capi::Port>& side) {
-        side = std::vector<anira::capi::Port>(specs.size());  // stream ports
-        for (size_t i = 0; i < specs.size(); ++i) {
+                               anira::capi::Ports& side) {
+        for (size_t i = 0; i < specs.size(); ++i) {  // stream ports until here
             switch (specs[i].m_role) {
                 case ANIRA_ROLE_STATIC:
                     side[i].emplace<anira::capi::StaticPort>(rows[i].m_dims, specs[i].m_dtype);
@@ -2446,6 +2485,7 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
         if (input != nullptr) { input->m_partner = static_cast<uint32_t>(link.m_output); }
         if (output != nullptr) { output->m_partner = static_cast<uint32_t>(link.m_input); }
     }
+    check_stream_ports(derived, *handler, "anira_handler_create");
     // The slot counts, the lengths of the model config's two lists: the bound of every entry
     // that names a slot, the two Static entries on an unprepared handler included.
     handler->m_num_inputs = static_cast<uint32_t>(model.m_inputs.size());

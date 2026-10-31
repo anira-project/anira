@@ -120,6 +120,7 @@ void* element_at(void* base, size_t offset, size_t element_size) noexcept ANIRA_
 }
 
 using anira::capi::Port;
+using anira::capi::Ports;
 using anira::capi::ProcessorFrame;
 
 // The frame a ctx names; NULL for a NULL ctx and for a ctx without one. A forged frame is not
@@ -137,7 +138,7 @@ bool frame_record(const ProcessorFrame& frame, anira_status status) noexcept ANI
 // The ring of a slot as the default bodies read it: its stream port's, or NULL for a slot at or
 // beyond the side's count, a port of another role and a stream port without a ring. A plain
 // read, never a refusal.
-anira_ring* slot_ring(const std::vector<Port>& ports, size_t slot) noexcept ANIRA_NONBLOCKING {
+anira_ring* slot_ring(const Ports& ports, size_t slot) noexcept ANIRA_NONBLOCKING {
     const anira::capi::StreamPort* stream = anira::capi::stream_port(ports, slot);
     return stream != nullptr ? &stream->m_ring : nullptr;
 }
@@ -151,7 +152,7 @@ const Port* ctx_port(const anira_processor_ctx* ctx,
                      [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
     const ProcessorFrame* frame = frame_of(ctx);
     if (frame == nullptr) { return nullptr; }
-    const std::vector<Port>* ports = input ? frame->m_input_ports : frame->m_output_ports;
+    const Ports* ports = input ? frame->m_input_ports : frame->m_output_ports;
     if (ports == nullptr) { return nullptr; }
     if (slot < ports->size()) { return &(*ports)[slot]; }
     if (frame_record(*frame, ANIRA_ERROR_INVALID_ARGUMENT)) {
@@ -584,8 +585,8 @@ ProcessorFacts processor_facts(const ProcessorCarrier* processor) {
 }
 
 ProcessorRunner::ProcessorRunner(const ProcessorCarrier* processor,
-                                 std::vector<Port>& input_ports,
-                                 std::vector<Port>& output_ports)
+                                 Ports& input_ports,
+                                 Ports& output_ports)
     : m_processor(processor), m_input_ports(input_ports), m_output_ports(output_ports) {
     m_has_state = std::ranges::any_of(m_input_ports, [](const Port& port) {
         return std::holds_alternative<StatePort>(port);
@@ -602,7 +603,7 @@ void ProcessorRunner::bind(anira::SessionElement& session) {
     m_session = &session;
     // The count check's scratch: one entry per channel of the larger side's rings, which the
     // session's prepare sized in their stream ports (a Streamed slot only has one).
-    const auto channels_of = [](const std::vector<Port>& ports) {
+    const auto channels_of = [](const Ports& ports) {
         size_t channels = 0;
         for (const Port& port : ports) {
             if (const auto* stream = std::get_if<StreamPort>(&port)) {
@@ -702,7 +703,7 @@ void ProcessorRunner::reset_if_new_stream(const Chunk& chunk) noexcept ANIRA_NON
     m_processor->desc().reset(&ctx, m_prepared, m_processor->desc().user_data);
 }
 
-void ProcessorRunner::snapshot(const std::vector<Port>& ports) noexcept ANIRA_NONBLOCKING {
+void ProcessorRunner::snapshot(const Ports& ports) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
     for (const Port& port : ports) {
         const auto* stream = std::get_if<StreamPort>(&port);
