@@ -142,7 +142,7 @@ struct Oracle {
         const std::vector<float> in = ramp(k, block);
         c = in;
         std::vector<float> c_out(block, -1.0F);
-        const float gain_in = 1.0F;
+        const float gain_in = m_gain;
         float gain_out = -1.0F;
         // The Static output of a block carrying the gain: the custom plan's pass-through copies
         // the gain, the gain model's engines answer the peak of the window.
@@ -256,6 +256,9 @@ struct Oracle {
     }
 
     Handler m_c;
+    /// The Static gain the multi forms carry; the gain model's engines scale by it, the custom
+    /// row's pass-through copies the stream whatever it is.
+    float m_gain = 1.0F;
     std::unique_ptr<anira_test::FloatFace> m_face;  ///< the C side's float face, built by prepare()
     float m_previous_gain_out = 0.0F;  ///< the settled Static output after the last Multi block
     size_t m_next_block = 1;
@@ -444,12 +447,22 @@ TEST(AbiHandler, SetPlanSwitchesTheRunningPlan) {
         // No default engine anywhere: the first entry of the file that is in this build.
         EXPECT_EQ(anira_handler_get_plan(oracle.h()), 0U);
 
-        for (uint32_t i = 0; i < info.size(); ++i) {
-            EXPECT_EQ(anira_handler_set_plan(oracle.h(), i), ANIRA_OK);
-            EXPECT_EQ(anira_handler_get_plan(oracle.h()), i);
-            oracle.m_pass_through = info[i].engine == static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
-            oracle.run_blocks(16, k_block, Form::InPlace);
-            oracle.reset();
+        // The plans answer distinguishable, non-zero streams: under a Static gain of 0.5 the gain
+        // model's engines halve the stream, the custom row's pass-through copies it. Every
+        // switch goes from one kind to the other (each engine's plan, then the custom one), so
+        // the closed form of every block says which plan ran it, and a switch that did not take
+        // effect fails the blocks behind it.
+        oracle.m_gain = 0.5F;
+        const auto custom = static_cast<uint32_t>(info.size() - 1);
+        ASSERT_EQ(info[custom].engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+        for (uint32_t i = 0; i < custom; ++i) {
+            for (const uint32_t plan : {i, custom}) {
+                ASSERT_EQ(anira_handler_set_plan(oracle.h(), plan), ANIRA_OK);
+                EXPECT_EQ(anira_handler_get_plan(oracle.h()), plan);
+                oracle.m_pass_through = plan == custom;
+                oracle.run_blocks(8, k_block, Form::Multi);
+                oracle.reset();
+            }
         }
 
         for (size_t i = 0; i < info.size(); ++i) {

@@ -127,15 +127,39 @@ void build_runtime_statics() {
     static const RuntimeStatics k_statics;
 }
 
-// The pass-through after s_slow_ms of sleep, over the runtime's static state: an inference that
-// finds it torn down exits the process with the code the test looks for (ONNX Runtime fails
-// there with "GetElementType is not implemented" and crashes).
+// Whether an inference of the runtime waits for the exit (unloadtest_hold_until_exit), and
+// whether the exit started: set by the exit handler that call registers.
+std::atomic<bool> s_hold_until_exit{false};
+std::atomic<bool> s_exit_started{false};
+
+void release_held_inference() {
+    s_exit_started.store(true);
+}
+
+// The pass-through over the runtime's static state, after s_slow_ms of sleep or, held, once the
+// process started exiting: an inference that finds the state torn down exits the process with
+// the code the test looks for (ONNX Runtime fails there with "GetElementType is not
+// implemented" and crashes); a held one that finds it alive says so on stderr.
 anira_status ANIRA_CALL runtime_statics_process(const anira_engine_ctx* ctx,
                                                 void* prepared,
                                                 void* user_data) {
     s_entered.fetch_add(1);
-    std::this_thread::sleep_for(std::chrono::milliseconds(s_slow_ms.load()));
+    if (s_hold_until_exit.load()) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!s_exit_started.load()) {
+            if (std::chrono::steady_clock::now() > deadline) {
+                std::_Exit(UNLOADTEST_HOLD_TIMEOUT_EXIT_CODE);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    } else {
+        std::this_thread::sleep_for(std::chrono::milliseconds(s_slow_ms.load()));
+    }
     if (!s_runtime_statics_alive.load()) { std::_Exit(UNLOADTEST_TORN_DOWN_EXIT_CODE); }
+    if (s_hold_until_exit.load()) {
+        std::fputs(UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER, stderr);
+        std::fflush(stderr);
+    }
     return passthrough_process(ctx, prepared, user_data);
 }
 
@@ -398,6 +422,11 @@ void* unloadtest_create_engine(int behaviour, int slow_ms) {
         return nullptr;
     }
     return instance;
+}
+
+void unloadtest_hold_until_exit(void) {
+    s_hold_until_exit.store(true);
+    static_cast<void>(std::atexit(release_held_inference));
 }
 
 int unloadtest_engine_entered(void) {

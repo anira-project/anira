@@ -30,9 +30,11 @@ ANIRA_TEST_EXPORT void* unloadtest_create_builtin(void);
 /// starts the pool, as an engine's runtime builds its environment at its first load) and
 /// torn down by the exit handler that construction registered, which sleeps slow_ms and then
 /// exits the process with UNLOADTEST_TORN_DOWN_EXIT_CODE when that state is gone, else passes
-/// the block through; one whose load (inside anira_handler_prepare, under the core's lifecycle
-/// lock) writes UNLOADTEST_EXIT_IN_LOAD_MARKER to stderr and calls exit(0), so the instance's
-/// create never returns.
+/// the block through (with unloadtest_hold_until_exit, it waits for the process to start
+/// exiting instead of sleeping, and writes UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER to stderr
+/// when it finds the state alive); one whose load (inside anira_handler_prepare, under the core's
+/// lifecycle lock) writes UNLOADTEST_EXIT_IN_LOAD_MARKER to stderr and calls exit(0), so the
+/// instance's create never returns.
 enum {
     UNLOADTEST_ENGINE_STALLING = 1,
     UNLOADTEST_ENGINE_LOADER_LOCK = 2,
@@ -40,6 +42,12 @@ enum {
     UNLOADTEST_ENGINE_RUNTIME_STATICS = 4,
     UNLOADTEST_ENGINE_EXIT_IN_LOAD = 5,
 };
+/// What an UNLOADTEST_ENGINE_RUNTIME_STATICS inference held until the exit writes to stderr when
+/// the runtime's state is still alive once it runs on.
+#define UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER \
+    "unloadtest: the inference ran over live runtime state\n"
+/// How a held inference exits the process when no exit started within 10 s.
+#define UNLOADTEST_HOLD_TIMEOUT_EXIT_CODE 7
 /// What the load of UNLOADTEST_ENGINE_EXIT_IN_LOAD writes to stderr before it exits.
 #define UNLOADTEST_EXIT_IN_LOAD_MARKER "unloadtest: the engine's load calls exit(0)\n"
 /// The exit status of a process whose UNLOADTEST_ENGINE_RUNTIME_STATICS inference ran over
@@ -49,6 +57,10 @@ enum {
 /// for UNLOADTEST_ENGINE_SLOW and UNLOADTEST_ENGINE_RUNTIME_STATICS); nullptr, with nothing
 /// left behind, if a step failed.
 ANIRA_TEST_EXPORT void* unloadtest_create_engine(int behaviour, int slow_ms);
+/// From now on an UNLOADTEST_ENGINE_RUNTIME_STATICS inference waits until the process starts
+/// exiting: registers an exit handler that releases it, which runs ahead of every exit handler
+/// registered before this call (the core's, which its prepare registered, among them).
+ANIRA_TEST_EXPORT void unloadtest_hold_until_exit(void);
 /// The inferences of the engines of unloadtest_create_engine that reached their process.
 ANIRA_TEST_EXPORT int unloadtest_engine_entered(void);
 /// anira_handler_prepare with a 512-sample / 48 kHz Hard contract — starts the pool threads.

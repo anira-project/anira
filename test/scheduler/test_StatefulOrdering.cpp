@@ -21,36 +21,37 @@
 using namespace anira;
 
 // =============================================================================
-// A stateful custom engine that tracks execution order.
-// Each call increments an internal counter and writes it to the output.
-// If inferences execute out of order, the counter sequence in the output
-// will not match the submission order.
+// A custom engine that records what it ran: the stream position of every window it was handed
+// (its first sample, which the host wrote as the sample's own index) and the most inferences
+// inside it at once. Submission order is stream order, so a session that runs its inferences
+// one at a time and in submission order hands it 0, hop, 2 hop, ... with never two inside.
 // =============================================================================
 
-class StatefulCounterEngine : public anira_test::GateEngine {
+class StreamPositionEngine : public anira_test::GateEngine {
 public:
     anira_status run(const anira_engine_ctx& ctx) noexcept override {
-        // Small delay to increase the window for out-of-order dequeuing
+        const int inside = m_inside.fetch_add(1) + 1;
+        int most = m_most_inside.load();
+        while (inside > most && !m_most_inside.compare_exchange_weak(most, inside)) {}
+        // A window for another inference to overlap this one or overtake it.
         std::this_thread::sleep_for(std::chrono::microseconds(100));
-
-        int const counter_val = m_counter.fetch_add(1);
-
-        // Write the counter value to all output samples
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
         float* out = anira_tensor_data_f32(&ctx.outputs[0]);
-        if (out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-        for (size_t s = 0; s < anira_test::elements_of(ctx.outputs[0]); ++s) {
-            out[s] = static_cast<float>(counter_val);
+        anira_status status = ANIRA_ERROR_INVALID_ARGUMENT;
+        if (in != nullptr && out != nullptr) {
+            std::copy_n(in, anira_test::elements_of(ctx.outputs[0]), out);
+            const std::lock_guard<std::mutex> lock(m_mutex);
+            m_positions.push_back(static_cast<int64_t>(in[0]));
+            status = ANIRA_OK;
         }
-
-        // Record the actual execution order
-        std::lock_guard<std::mutex> const lock(m_order_mutex);
-        m_execution_order.push_back(counter_val);
-        return ANIRA_OK;
+        m_inside.fetch_sub(1);
+        return status;
     }
 
-    std::atomic<int> m_counter{0};
-    std::vector<int> m_execution_order;
-    std::mutex m_order_mutex;
+    std::atomic<int> m_inside{0};
+    std::atomic<int> m_most_inside{0};
+    std::vector<int64_t> m_positions;  ///< the first sample of every window, in run order
+    std::mutex m_mutex;
 };
 
 // =============================================================================
@@ -76,7 +77,7 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
     model.output(anira_test::stream_tensor("out", 1, params.m_hop_size, params.m_hop_size));
     model.state(ANIRA_MODEL_STATEFUL);
 
-    StatefulCounterEngine engine;
+    StreamPositionEngine engine;
     {
         // Use multiple threads to increase chance of out-of-order dequeue
         const anira_test::Context context(4);
@@ -110,34 +111,28 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
         auto next_callback = std::chrono::steady_clock::now();
 
         for (size_t iter = 0; iter < k_num_iterations; ++iter) {
-            std::ranges::fill(test_buffer, 0.F);
+            // Every sample is its own index in the stream (exact in float up to 2^24).
+            for (size_t i = 0; i < block; ++i) {
+                test_buffer[i] = static_cast<float>((iter * block) + i);
+            }
             size_t delivered = 0;
             static_cast<void>(anira_handler_process(handler.m_handler, &io, 0, &io, 0, &delivered));
 
             next_callback += callback_interval;
             std::this_thread::sleep_until(next_callback);
         }
+    }  // the handler's destroy drains the inferences in flight
 
-        // Wait for all pending inferences to complete
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // A stateful model's inferences run one at a time, every window in stream order: inference
+    // k ran the window that starts at sample k * hop.
+    const std::lock_guard<std::mutex> lock(engine.m_mutex);
+    ASSERT_GT(engine.m_positions.size(), 0U) << "no inference ran";
+    EXPECT_EQ(engine.m_most_inside.load(), 1) << "inferences of a stateful model overlapped";
+    for (size_t k = 0; k < engine.m_positions.size(); ++k) {
+        ASSERT_EQ(engine.m_positions[k], static_cast<int64_t>(k) * params.m_hop_size)
+            << "inference " << k << " of " << engine.m_positions.size()
+            << " ran another window: out of order, or one skipped";
     }
-
-    // Check execution order
-    std::lock_guard<std::mutex> const lock(engine.m_order_mutex);
-
-    ASSERT_GT(engine.m_execution_order.size(), 0u) << "No inferences were executed";
-
-    bool in_order = true;
-    for (size_t i = 1; i < engine.m_execution_order.size(); ++i) {
-        if (engine.m_execution_order[i] <= engine.m_execution_order[i - 1]) {
-            in_order = false;
-            break;
-        }
-    }
-
-    // A stateful model's inferences MUST execute in order
-    EXPECT_TRUE(in_order) << "The model is stateful but inferences executed out of order!"
-                          << " (total inferences: " << engine.m_execution_order.size() << ")";
 }
 
 INSTANTIATE_TEST_SUITE_P(StatefulModel,

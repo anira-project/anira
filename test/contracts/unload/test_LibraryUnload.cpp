@@ -121,6 +121,9 @@ constexpr int k_engine_exit_in_load = 5;
 // UNLOADTEST_EXIT_IN_LOAD_MARKER, as a death test's stderr pattern.
 constexpr const char* k_exit_in_load_marker = "unloadtest: the engine's load calls exit\\(0\\)";
 constexpr int k_torn_down_exit_code = 9;  // UNLOADTEST_TORN_DOWN_EXIT_CODE
+// UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER, as a death test's stderr pattern.
+constexpr const char* k_ran_over_live_state_marker =
+    "unloadtest: the inference ran over live runtime state";
 
 using CreateFn = void* (*)();
 using CreateEngineFn = void* (*)(int, int);
@@ -147,6 +150,7 @@ struct Api {
     IntFn m_has_core = nullptr;
     VoidFn m_shutdown = nullptr;
     VoidFn m_leak_thread = nullptr;
+    VoidFn m_hold_until_exit = nullptr;
 };
 
 // The loaded module, plus the resolved API. Mirrors what a host does with a plugin.
@@ -181,7 +185,8 @@ public:
                resolve(m_api.m_num_sessions, "unloadtest_num_sessions") &&
                resolve(m_api.m_has_core, "unloadtest_has_core") &&
                resolve(m_api.m_shutdown, "unloadtest_shutdown") &&
-               resolve(m_api.m_leak_thread, "unloadtest_leak_thread");
+               resolve(m_api.m_leak_thread, "unloadtest_leak_thread") &&
+               resolve(m_api.m_hold_until_exit, "unloadtest_hold_until_exit");
     }
 
     void unload() {
@@ -621,7 +626,10 @@ TEST(LibraryUnloadDeathTest, ExitWithASlowInferenceInFlightExitsNormally) {
 // starts the pool, stops the pool and waits for the inference before the handler registered
 // ahead of it tears that state down. Without that wait the inference ran over it (ONNX Runtime:
 // "GetElementType is not implemented", then a SIGSEGV), which the module's engine reports with
-// its own exit status.
+// its own exit status. The inference is in flight when the exit starts by construction: it
+// waits for the exit handler the module registers after the prepare (which runs first), and
+// once released it writes its marker over the live state; without the marker the exit 0 would
+// not show that the inference ran inside the exit.
 TEST(LibraryUnloadDeathTest, ExitWaitsForTheInferenceBeforeTheRuntimesStaticsGo) {
     pin_backend_runtimes();
 #if defined(_WIN32)
@@ -633,14 +641,15 @@ TEST(LibraryUnloadDeathTest, ExitWaitsForTheInferenceBeforeTheRuntimesStaticsGo)
             pin_backend_runtimes();
             Module module;
             if (!module.load()) { _exit(3); }
-            void* instance = module.api().m_create_engine(k_engine_runtime_statics, 300);
+            void* instance = module.api().m_create_engine(k_engine_runtime_statics, 0);
             if (instance == nullptr) { _exit(3); }
+            module.api().m_hold_until_exit();
             module.api().m_process(instance, 1);
             if (!wait_for_entered(module.api(), 1)) { _exit(4); }
             std::exit(0);
         },
         ::testing::ExitedWithCode(0),
-        "");
+        k_ran_over_live_state_marker);
     static_cast<void>(k_torn_down_exit_code);
 #endif
 }
