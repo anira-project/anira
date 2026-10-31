@@ -12,7 +12,6 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -45,6 +44,7 @@
 #include "dlpack_producer.h"
 #include "fixtures.h"
 #include "handler_support.h"
+#include "utils/RingBuffer.h"
 
 namespace {
 

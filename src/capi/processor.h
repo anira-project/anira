@@ -37,9 +37,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +45,9 @@
 #include <string>
 #include <vector>
 
+#include "../scheduler/SessionElement.h"
+#include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
 #include "port.h"
 #include "validate.h"
 

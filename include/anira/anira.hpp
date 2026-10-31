@@ -6,8 +6,9 @@
  * Header-only and not ABI-stable: it is compiled into the user's binary, so the promise it
  * carries is the C ABI's. Nothing here is exported from libanira, and libanira defines no
  * class of namespace anira that this header declares (the library's own scheduler thread is
- * anira::scheduler::InferenceThread). It includes no anira/system, anira/utils or third-party
- * header, and it can be included beside <anira/anira.h>, the C umbrella.
+ * anira::scheduler::InferenceThread, a private class). It includes no private or third-party
+ * header (anira's C++ core lives under src/ and is not installed), and it can be included beside
+ * <anira/anira.h>, the C umbrella.
  *
  * Scope at this pre-release: the configuration half (tensor specs, model, context and
  * contract configuration, job options) with their read-back (SpecView, the ModelConfig

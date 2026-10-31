@@ -8,7 +8,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 
 #include <array>
 #include <atomic>
@@ -29,6 +28,7 @@
 #include <utility>
 #include <vector>
 
+#include "../utils/Logger.h"
 #include "capi_internal.h"
 #include "ext_registry.h"
 #include "handles.h"

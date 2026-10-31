@@ -1,5 +1,4 @@
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/utils/Logger.h>
+#include "LatencyCalculator.h"
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +10,7 @@
 
 #include "../capi/handles.h"
 #include "../capi/validate.h"
+#include "../utils/Logger.h"
 
 namespace anira {
 

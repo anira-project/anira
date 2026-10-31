@@ -31,7 +31,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -58,6 +57,7 @@
 #include "capi/port.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/SessionElement.h"
 
 namespace {
 

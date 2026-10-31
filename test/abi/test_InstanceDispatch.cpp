@@ -19,8 +19,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -39,7 +37,9 @@
 #include "engines/Adapter.h"  // IWYU pragma: keep (the complete engine::Loaded)
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/InferenceThread.h"
 #include "scheduler/InstanceWaitList.h"
+#include "scheduler/SessionElement.h"
 
 namespace {
 

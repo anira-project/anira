@@ -1,7 +1,6 @@
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
 #include <cstddef>
@@ -16,6 +15,7 @@
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "fixtures.h"
+#include "utils/Logger.h"
 
 namespace {
 

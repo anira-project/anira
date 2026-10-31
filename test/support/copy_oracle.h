@@ -46,9 +46,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -71,6 +68,9 @@
 
 #include "../abi/handler_support.h"
 #include "capi/port.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
+#include "utils/RingBuffer.h"
 
 namespace anira_test::oracle {
 

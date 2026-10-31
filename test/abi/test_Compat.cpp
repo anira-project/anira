@@ -15,7 +15,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -50,6 +49,7 @@
 #include "fixtures.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "utils/Logger.h"
 
 namespace {
 

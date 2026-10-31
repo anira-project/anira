@@ -20,13 +20,12 @@
  * pause hints, then a yield and a sleep), so a holder preempted inside it is never spun out of
  * its core by an equal-priority thread. Inference threads only, never the audio thread.
  */
-#include <anira/scheduler/SessionElement.h>
-
 #include <atomic>
 #include <cstdint>
 #include <utility>
 
 #include "../utils/Backoff.h"
+#include "SessionElement.h"
 
 namespace anira {
 

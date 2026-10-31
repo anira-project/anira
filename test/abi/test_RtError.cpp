@@ -11,9 +11,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -29,6 +26,9 @@
 #include "../support/log_record_collector.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceThread.h"
+#include "utils/RtLatch.h"
 
 namespace {
 

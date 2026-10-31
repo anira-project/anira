@@ -11,7 +11,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -26,6 +25,7 @@
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
 #include "gtest/gtest.h"
+#include "utils/Logger.h"
 #include "utils/StatusError.h"
 
 namespace {

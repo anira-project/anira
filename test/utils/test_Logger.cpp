@@ -1,7 +1,5 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
 #include <chrono>
@@ -13,6 +11,8 @@
 #include "../abi/handler_support.h"
 #include "../support/log_record_collector.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "utils/Logger.h"
 
 using namespace anira;
 

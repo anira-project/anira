@@ -1,5 +1,4 @@
 #include <anira/abi/enums.h>
-#include <anira/scheduler/LatencyCalculator.h>
 
 #include <algorithm>
 #include <cmath>
@@ -12,6 +11,7 @@
 #include "capi/handles.h"
 #include "capi/validate.h"
 #include "gtest/gtest.h"
+#include "scheduler/LatencyCalculator.h"
 
 using namespace anira;
 

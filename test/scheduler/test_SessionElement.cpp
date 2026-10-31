@@ -3,7 +3,8 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/SessionElement.h>
+
+#include "scheduler/SessionElement.h"
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
 #include <sanitizer/lsan_interface.h>

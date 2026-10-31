@@ -31,14 +31,25 @@ endif()
 tanh_set_install_rpath(${PROJECT_NAME} ${_anira_apple_rpaths})
 unset(_anira_apple_rpaths)
 
-# the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/include/anira
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
-    COMPONENT dev
-    # The nested tooling markers of the generated abi/ headers are not headers.
-    PATTERN ".clang-format" EXCLUDE
-    PATTERN ".clang-tidy" EXCLUDE
-)
+# The public header set, file by file (cmake/public-headers.cmake): nothing else under
+# include/anira is installed, and the core's C++ headers live under src/.
+include(${CMAKE_CURRENT_LIST_DIR}/public-headers.cmake)
+foreach(_anira_header IN LISTS ANIRA_PUBLIC_UMBRELLAS ANIRA_PUBLIC_PLATFORM ANIRA_PUBLIC_ABI ANIRA_PUBLIC_CXX)
+    if(_anira_header IN_LIST ANIRA_PUBLIC_ABI)
+        set(_anira_file "abi/${_anira_header}.h")
+    elseif(_anira_header IN_LIST ANIRA_PUBLIC_CXX)
+        set(_anira_file "${_anira_header}")
+    else()
+        set(_anira_file "${_anira_header}.h")
+    endif()
+    get_filename_component(_anira_dir "${_anira_file}" DIRECTORY)
+    install(FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/anira/${_anira_file}"
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/anira/${_anira_dir}
+        COMPONENT dev)
+endforeach()
+unset(_anira_header)
+unset(_anira_file)
+unset(_anira_dir)
 # The configure-time header (cmake/build-info.cmake) lives in the build tree; it lands
 # in the same layout as the committed abi headers.
 install(FILES "${ANIRA_GENERATED_INCLUDE_DIR}/anira/abi/build_info.h"

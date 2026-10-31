@@ -21,9 +21,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -48,6 +45,9 @@
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/SessionElement.h"
+#include "utils/RingBuffer.h"
+#include "utils/RtLatch.h"
 
 namespace {
 

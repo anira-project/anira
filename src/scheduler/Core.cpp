@@ -1,11 +1,8 @@
+#include "Core.h"
+
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 #include <tanh/core/Logger.h>
 
@@ -25,6 +22,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
+#include "InferenceThread.h"
+#include "SessionElement.h"
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <unistd.h>

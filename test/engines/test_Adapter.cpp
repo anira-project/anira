@@ -9,7 +9,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <array>
@@ -22,6 +21,8 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "utils/Logger.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX

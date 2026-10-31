@@ -1,7 +1,5 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 
 #include <array>
 #include <atomic>
@@ -13,6 +11,8 @@
 #include <stdexcept>
 #include <string>
 
+#include "../scheduler/Core.h"
+#include "../utils/Logger.h"
 #include "capi_internal.h"
 
 namespace anira::capi {

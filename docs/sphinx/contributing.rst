@@ -184,13 +184,16 @@ Testing
 Test layout
 ~~~~~~~~~~~
 
-``test/`` mirrors ``include/anira/``: a test file lives in the directory of the unit
-it covers, and the directory decides which ``test_*`` binary compiles it (see
-``test/CMakeLists.txt``).
+``test/`` mirrors ``src/``: a test file lives in the directory of the unit it covers, and the
+directory decides which ``test_*`` binary compiles it (see ``test/CMakeLists.txt``).
 
-- ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` covers
-  ``src/engines/`` (the engine adapters), which has no public header.
+- ``test/<dir>/test_<Unit>.cpp`` covers ``src/<dir>/<Unit>.h`` — so ``scheduler/``, ``utils/``
+  and ``engines/`` (the engine adapters) each map one to one, and ``test/abi/`` covers the C ABI
+  (``include/anira/abi/``, implemented under ``src/capi/``). The core's C++ headers are private:
+  they live next to their sources under ``src/`` and are never installed; what anira installs
+  is the public header set of ``cmake/public-headers.cmake`` (the C umbrellas, ``anira/abi/``,
+  ``anira.hpp`` and ``compat/v2.hpp``), and a header under ``include/anira`` that is not listed
+  there fails the configure.
 - The ``anira.hpp`` handler (``test_InferenceHandler``) and the 2.x face
   (``test_InferenceHandlerApi``) are covered by root-level ``test_*.cpp`` files, alongside the
   cross-unit integration suites (``test_OneSidedStreaming``). A test file's binary follows the
@@ -380,7 +383,9 @@ handles and byte sizes at their wire width; the rationale is that nothing which 
 handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
 C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
 ``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
-``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``:
+``anira_header_compat_with_hpp`` (the C umbrella, ``anira.hpp`` and the shim in one TU, both
+orders), the internal ``anira_header_scheduler_coexist`` (the private scheduler classes beside
+``anira.hpp``) and ``anira_abi_rt_contract``:
 nonblocking C functions calling every ``[callback-safe]`` tensor entry and the nonblocking
 Hard entries over host tensors, and a backup function of ``ANIRA_MISS_CALLBACK`` handed to
 its setter, compiled with ``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1

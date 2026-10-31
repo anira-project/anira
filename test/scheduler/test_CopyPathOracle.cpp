@@ -37,9 +37,6 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
 
 #include <anira/anira.hpp>
 #include <chrono>
@@ -55,6 +52,9 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
 
 using namespace anira;
 

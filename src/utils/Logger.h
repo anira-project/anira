@@ -9,7 +9,7 @@
 #include <atomic>
 #include <cstdint>
 
-#include "anira/utils/RtLatch.h"
+#include "RtLatch.h"
 
 /**
  * @file Logger.h

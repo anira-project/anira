@@ -137,7 +137,6 @@ anira_add_test_binary(test_utils WHITE_BOX
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
 	utils/test_Logger.cpp
-	system/test_HighPriorityThread.cpp
 )
 # test_Logger reads its C handlers white-box through test/abi/handler_support.h, which includes
 # the private headers.
@@ -220,8 +219,7 @@ anira_add_test_binary(test_abi WHITE_BOX
 add_subdirectory(abi)
 
 # Header-isolation check: anira's public headers must compile with anira's own include
-# directory (plus those of its public dependencies — the queue, JSON and tanh-lib
-# headers the public headers include) and no engine include directory at all. The
+# directories alone: no engine include directory and none of anira's private dependencies. The
 # engine state lives in each engine adapter's own translation unit under src/engines; this
 # is what lets anira link its backends PRIVATE and makes
 # "include an engine header -> link anira::<engine>" true at compile time. The object
@@ -234,13 +232,9 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
         CXX_STANDARD_REQUIRED ON)
     target_include_directories(anira_header_isolation PRIVATE
         "${anira_SOURCE_DIR}/include"
-        "${ANIRA_GENERATED_INCLUDE_DIR}"
-        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
+        "${ANIRA_GENERATED_INCLUDE_DIR}")
     target_compile_definitions(anira_header_isolation PRIVATE
         ${ANIRA_COMPILE_DEFINITIONS}
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
         $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
     add_test(NAME anira_header_isolation
         COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>

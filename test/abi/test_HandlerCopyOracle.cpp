@@ -77,9 +77,6 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -98,6 +95,9 @@
 #include "float_face.h"
 #include "handler_copy_oracle_golden.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
 
 namespace {
 

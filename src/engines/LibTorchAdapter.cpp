@@ -15,7 +15,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -28,6 +27,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "../utils/Logger.h"
 
 #if defined(__linux__)
 #include <dlfcn.h>

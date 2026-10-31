@@ -17,7 +17,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/Logger.h>
 #include <onnxruntime_c_api.h>
 #include <onnxruntime_cxx_api.h>
 
@@ -34,6 +33,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"

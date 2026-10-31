@@ -1,10 +1,8 @@
+#include "InferenceThread.h"
+
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 #include <tanh/core/threading/Thread.h>
 
 #include <array>
@@ -19,7 +17,10 @@
 #include "../capi/words.h"
 #include "../engines/Adapter.h"
 #include "../utils/Backoff.h"
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
 #include "InstanceWaitList.h"
+#include "SessionElement.h"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>

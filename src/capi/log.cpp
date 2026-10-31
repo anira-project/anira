@@ -1,14 +1,14 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/log.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
 
+#include "../scheduler/Core.h"
+#include "../utils/Logger.h"
 #include "capi_internal.h"
 
 size_t ANIRA_CALL anira_drain_log(void) ANIRA_NOEXCEPT try {

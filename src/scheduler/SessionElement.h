@@ -6,7 +6,10 @@
 #include <blockingconcurrentqueue.h>
 #endif
 
+#include <anira/abi/enums.h>
 #include <anira/abi/export.h>
+#include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 
 #include <atomic>
 #include <cstddef>
@@ -16,9 +19,6 @@
 #include <string>
 #include <vector>
 
-#include "../abi/enums.h"
-#include "../abi/status.h"
-#include "../abi/tensor.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"

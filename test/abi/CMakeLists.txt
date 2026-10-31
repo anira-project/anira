@@ -13,18 +13,14 @@
 #   anira_header_cxx17    gate 4: the same as C++17
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
-#   anira_header_coexist  the core's C++ headers and the C headers in one TU, both orders
-#   anira_header_cxx20_with_v2
-#                         the core's C++ headers and anira.hpp in one TU, both orders (no class
-#                         of namespace anira defined both in libanira and in anira.hpp)
 #   anira_header_compat   anira/compat/v2.hpp alone as C++20 under the strict flags, the
 #                         shim's API exercised at compile time (nothing runs)
-#   anira_header_compat_with_v2
-#                         the core's C++ headers, the C umbrella, anira.hpp and the shim in one
-#                         TU, both orders
+#   anira_header_compat_with_hpp
+#                         the C umbrella, anira.hpp and the shim in one TU, both orders, under
+#                         the strict flags
 #   anira_header_scheduler_coexist
-#                         the library's scheduler classes (scheduler/Core.h,
-#                         scheduler/InferenceThread.h) beside anira.hpp: no class of namespace
+#                         internal: the library's private scheduler classes (src/scheduler/Core.h,
+#                         src/scheduler/InferenceThread.h) beside anira.hpp: no class of namespace
 #                         anira in both
 #   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
 #                         calling every [callback-safe] tensor entry and the nonblocking Hard
@@ -57,12 +53,14 @@
 #                         and thread-local block, inside anira_inference_thread_run_loop
 #                         (the park on the wake word, the notify, the has_exited stop)
 
-set(_abi_headers export status version enums log tensor config context core thread lifecycle processor engine handler draft/tensor_platform)
-# The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
-# other target, so the per-file wrappers include them everywhere.
-set(_abi_platform_headers anira_em)
-# The umbrellas the registry generates (`umbrellas:`), beside the platform headers.
-set(_abi_umbrella_headers anira anira_all)
+# The public header set, one list for the gates and the install rule (cmake/public-headers.cmake):
+# the C ABI headers, the platform headers of the registry (`platform:`, beside the umbrellas:
+# empty on every other target, so the per-file wrappers include them everywhere) and the
+# umbrellas the registry generates (`umbrellas:`).
+include("${anira_SOURCE_DIR}/cmake/public-headers.cmake")
+set(_abi_headers ${ANIRA_PUBLIC_ABI})
+set(_abi_platform_headers ${ANIRA_PUBLIC_PLATFORM})
+set(_abi_umbrella_headers ${ANIRA_PUBLIC_UMBRELLAS})
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -121,21 +119,15 @@ function(anira_abi_consumer_target target lang)
     endif()
 endfunction()
 
-# A target holding the core's C++ headers (core_headers.inc): the include and define set
-# anira_header_isolation (test/CMakeLists.txt) uses for them, C++20 (their floor), and only the
-# default warnings, as errors, since those headers are not held to -Wall -Wextra.
-function(anira_abi_umbrella_target target)
+# A target holding the library's private C++ headers (src/): the usage requirements the library's
+# own sources compile with (anira_objects; an OBJECT target takes no objects from another), the
+# white-box include and define set (src/, ANIRA_STATIC), C++20 (their floor), and only the default
+# warnings, as errors, since those headers are not held to -Wall -Wextra.
+function(anira_abi_internal_target target)
     set_target_properties(${target} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_include_directories(${target} PRIVATE
-        ${_abi_include_dirs}
-        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
-    set_property(TARGET ${target} PROPERTY COMPILE_DEFINITIONS "")
-    target_compile_definitions(${target} PRIVATE
-        ${ANIRA_COMPILE_DEFINITIONS}
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
-        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
+    target_link_libraries(${target} PRIVATE anira_objects)
+    target_include_directories(${target} PRIVATE "${anira_SOURCE_DIR}/src")
+    target_compile_definitions(${target} PRIVATE ANIRA_STATIC)
     target_compile_options(${target} PRIVATE ${_abi_werror})
 endfunction()
 
@@ -459,26 +451,20 @@ if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
 endif()
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
-# header_coexist.inc includes the core's headers (core_headers.inc) and the C headers in the order
-# its two drivers select; header_cxx20_with_v2.inc does the same for the core's headers and
-# <anira/anira.hpp>, header_compat_with_v2.inc for the core's headers and the compat shim. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
-# GCC's "redefined") or a name both declare in namespace anira is what these gates are for.
+# header_compat_with_hpp.inc includes the C umbrella, <anira/anira.hpp> and the compat shim in the
+# order its two drivers select, consumer-shaped (the strict flags, C++20). A macro redefined
+# between the headers (C4005 / -Wmacro-redefined / GCC's "redefined") or a name both declare in
+# namespace anira is what it is for. header_scheduler_coexist.cpp is the internal twin: the
+# library's private scheduler headers beside anira.hpp, as the library's own sources and the
+# white-box tests compile them.
 if(NOT _abi_on_device)
-    add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
-        header_coexist_v2_first.cpp header_coexist_abi_first.cpp)
-    anira_abi_umbrella_target(anira_header_coexist)
-    anira_abi_build_test(anira_header_coexist)
-    add_library(anira_header_cxx20_with_v2 OBJECT EXCLUDE_FROM_ALL
-        header_cxx20_with_v2.cpp header_cxx20_with_v2_reverse.cpp)
-    anira_abi_umbrella_target(anira_header_cxx20_with_v2)
-    anira_abi_build_test(anira_header_cxx20_with_v2)
-    add_library(anira_header_compat_with_v2 OBJECT EXCLUDE_FROM_ALL
-        header_compat_with_v2.cpp header_compat_with_v2_reverse.cpp)
-    anira_abi_umbrella_target(anira_header_compat_with_v2)
-    anira_abi_build_test(anira_header_compat_with_v2)
+    add_library(anira_header_compat_with_hpp OBJECT EXCLUDE_FROM_ALL
+        header_compat_with_hpp.cpp header_compat_with_hpp_reverse.cpp)
+    anira_abi_consumer_target(anira_header_compat_with_hpp CXX 20)
+    anira_abi_build_test(anira_header_compat_with_hpp)
     add_library(anira_header_scheduler_coexist OBJECT EXCLUDE_FROM_ALL
         header_scheduler_coexist.cpp)
-    anira_abi_umbrella_target(anira_header_scheduler_coexist)
+    anira_abi_internal_target(anira_header_scheduler_coexist)
     anira_abi_build_test(anira_header_scheduler_coexist)
 endif()
 

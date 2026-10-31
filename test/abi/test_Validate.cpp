@@ -9,7 +9,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/LatencyCalculator.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -31,6 +30,7 @@
 #include "capi/handles.h"
 #include "capi/validate.h"
 #include "fixtures.h"
+#include "scheduler/LatencyCalculator.h"
 #include "utils/StatusError.h"
 
 namespace {

@@ -20,7 +20,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <array>
@@ -39,6 +38,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"

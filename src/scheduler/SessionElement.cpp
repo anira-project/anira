@@ -1,11 +1,8 @@
+#include "SessionElement.h"
+
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 
 #include <algorithm>
@@ -31,7 +28,11 @@
 #include "../capi/processor.h"
 #include "../capi/validate.h"
 #include "../engines/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
-#include "InstanceWaitList.h"    // IWYU pragma: keep (the complete wait list of PlanSlot)
+#include "../utils/Logger.h"
+#include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
+#include "InstanceWaitList.h"  // IWYU pragma: keep (the complete wait list of PlanSlot)
+#include "LatencyCalculator.h"
 
 namespace anira {
 

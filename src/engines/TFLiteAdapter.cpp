@@ -17,7 +17,6 @@
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 #include <tensorflow/lite/core/c/c_api.h>
 #include <tensorflow/lite/core/c/c_api_types.h>
 #include <tensorflow/lite/core/c/common.h>
@@ -31,6 +30,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"

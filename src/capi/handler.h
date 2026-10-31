@@ -8,8 +8,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/utils/RtLatch.h>
 
 #include <atomic>
 #include <chrono>
@@ -20,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "../scheduler/InferenceManager.h"
+#include "../utils/RtLatch.h"
 #include "engine.h"
 #include "handles.h"
 #include "port.h"

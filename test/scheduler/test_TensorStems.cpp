@@ -27,11 +27,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <anira/anira.hpp>
@@ -52,7 +47,12 @@
 #include "../support/copy_oracle.h"
 #include "copy_path_oracle_golden.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
 #include "scheduler/TensorRun.h"
+#include "utils/RingBuffer.h"
+#include "utils/RtLatch.h"
 
 using namespace anira;
 

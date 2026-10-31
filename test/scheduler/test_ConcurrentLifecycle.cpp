@@ -1,11 +1,10 @@
-#include <anira/scheduler/Core.h>
-
 #include <atomic>
 #include <memory>
 #include <thread>
 
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
 
 using namespace anira;
 

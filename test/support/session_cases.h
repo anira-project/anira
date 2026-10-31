@@ -14,7 +14,6 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <anira/anira.hpp>
@@ -28,6 +27,7 @@
 #include <vector>
 
 #include "../abi/handler_support.h"
+#include "scheduler/SessionElement.h"
 
 namespace anira_test {
 

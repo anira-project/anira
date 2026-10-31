@@ -1,12 +1,8 @@
+#include "InferenceManager.h"
+
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <array>
@@ -20,6 +16,11 @@
 
 #include "../capi/handles.h"
 #include "../engines/Adapters.h"
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
+#include "Core.h"
+#include "LatencyCalculator.h"
+#include "SessionElement.h"
 #include "TensorRun.h"
 
 namespace anira {

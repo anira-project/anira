@@ -1,10 +1,11 @@
 // anira/abi/core.h: the steady clock and the shutdown family of the core. Every control
 // entry sits behind the exception firewall of capi_internal.h.
+#include "../scheduler/Core.h"
+
 #include <anira/abi/core.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
 
 #include <chrono>
 #include <cstdint>

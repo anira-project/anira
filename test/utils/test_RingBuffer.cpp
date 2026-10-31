@@ -1,5 +1,4 @@
 #include <anira/abi/enums.h>
-#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
 #include <array>
@@ -8,6 +7,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
+#include "utils/RingBuffer.h"
 
 using namespace anira;
 
