@@ -521,13 +521,13 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
                            session->m_generation.load(std::memory_order::seq_cst);
 
         if (stale) {
-            if (session->m_inference_config.m_blocking_ratio > 0.f) {
+            if (session->uses_semaphore()) {
                 thread_safe_struct->m_done_semaphore.release();
             } else {
                 thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
             }
             signalled = true;
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
                 dispatch_next_pending(session);
             }
@@ -542,7 +542,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
             // entries are the drainer's job (force_reset_dispatch_chain in prepare).
             session->complete_with_zeros(thread_safe_struct);
             signalled = true;
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
             }
         }
@@ -551,7 +551,7 @@ void InferenceThread::process_job(InferenceData& job, uint32_t instance, Instanc
         // stranded without its done signal, and never signalled twice.
         if (!signalled) {
             session->complete_with_zeros(thread_safe_struct);
-            if (session->m_inference_config.m_session_exclusive_processor) {
+            if (session->exclusive()) {
                 session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
             }
             if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
@@ -664,7 +664,7 @@ void InferenceThread::do_inference(
                                session->m_session_id);
         }
     }
-    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+    if (session->uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
@@ -675,7 +675,7 @@ void InferenceThread::do_inference(
     // completed), so release the dispatch slot and hand the next pending task to
     // the pool. Only one task per session is ever in flight, keeping execution in
     // order and mutually exclusive with no spinning.
-    if (session->m_inference_config.m_session_exclusive_processor) {
+    if (session->exclusive()) {
         session->release_dispatch(thread_safe_struct->m_dispatch_epoch);
         dispatch_next_pending(session);
     }
@@ -715,8 +715,7 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // session's atomic: a reset that lands between the stale check and this read belongs to
     // the next chunk.
     bool reset_first = false;
-    if (session->m_inference_config.m_session_exclusive_processor &&
-        chunk.m_dispatch_generation != slot.m_engine_generation) {
+    if (session->exclusive() && chunk.m_dispatch_generation != slot.m_engine_generation) {
         slot.m_engine_generation = chunk.m_dispatch_generation;
         reset_first = true;
     }

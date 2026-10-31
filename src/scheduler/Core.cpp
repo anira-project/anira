@@ -1,12 +1,10 @@
 #include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
@@ -34,7 +32,9 @@
 #endif
 
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
+#include "../capi/handles.h"
 #include "../capi/processor.h"
+#include "../capi/validate.h"
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../utils/StatusError.h"
@@ -729,7 +729,9 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
 }
 
 std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
-                                                     InferenceConfig& inference_config,
+                                                     const anira_model_config& model,
+                                                     const capi::Derived& derived,
+                                                     const capi::HardContract& hard,
                                                      std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
                                                      RtLatch* rt_latch) {
@@ -757,21 +759,21 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     // that leave the count to the pool share one loaded model.
     const size_t pool_size = prospective_pool_size_locked(state, config);
     const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
-    if (inference_config.m_num_parallel_processors == ANIRA_INSTANCES_AUTO) {
-        inference_config.m_num_parallel_processors = resolved_auto;
-    }
+    // An exclusive session runs one inference at a time: one instance, whatever the model
+    // config says (its loaded model has no shared call slot either, the request's count of 0).
+    uint32_t num_instances = derived.m_exclusive ? 1U : model.m_max_instances;
+    if (num_instances == ANIRA_INSTANCES_AUTO) { num_instances = resolved_auto; }
     for (engine::PlanRequest& request : requests) {
         if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
             request.m_model.m_instances = resolved_auto;
         }
     }
-    if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
+    if (pool_size > 0 && num_instances > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "Session %d requested more parallel processors than threads are "
-                          "available in the core. Using number of threads as number of parallel "
-                          "processors.",
+                          "Session %d requested more instances than threads are available in "
+                          "the core. Using the number of threads as the number of instances.",
                           session_id);
-        inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
+        num_instances = static_cast<uint32_t>(pool_size);
     }
     for (engine::PlanRequest& request : requests) {
         if (pool_size > 0 && request.m_model.m_instances > pool_size) {
@@ -786,7 +788,10 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
                                          processor,
-                                         inference_config,
+                                         model,
+                                         derived,
+                                         hard,
+                                         num_instances,
                                          moodycamel::ProducerToken(state.m_next_inference),
                                          rt_latch);
 
@@ -818,9 +823,8 @@ std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& proc
             session->m_plans.push_back(std::move(slot));
             SessionElement::PlanSlot& placed = session->m_plans.back();
             if (!placed.m_registered) {
-                placed.m_prepared = placed.m_loaded->prepare(engine::PrepareRequest{
-                    .m_exclusive = inference_config.m_session_exclusive_processor,
-                    .m_info = nullptr});
+                placed.m_prepared = placed.m_loaded->prepare(
+                    engine::PrepareRequest{.m_exclusive = session->exclusive(), .m_info = nullptr});
             }
         }
 
@@ -1096,7 +1100,6 @@ bool Core::release_core_if_idle() {
 }
 
 void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
-                           HostConfig new_config,
                            const CustomLatencies& custom_latencies,
                            const RingDtypes& ring_dtypes) {
     // Every prepare re-arms the scheduler's site latches, and nothing else does: a
@@ -1129,7 +1132,7 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     drain_inference_queue(session);
 
-    session->prepare(new_config, custom_latencies, ring_dtypes);
+    session->prepare(custom_latencies, ring_dtypes);
 
     {
         // Only the pool start touches shared state; the drain and the
@@ -1143,16 +1146,11 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
 }
 
 bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
-    for (size_t tensor_index = 0;
-         tensor_index < session->m_inference_config.get_tensor_input_shape().size();
-         tensor_index++) {
-        if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-            for (size_t channel = 0;
-                 channel <
-                 session->m_inference_config.get_preprocess_input_channels()[tensor_index];
-                 channel++) {
+    for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
+        if (session->input_hop(tensor_index) > 0) {
+            for (size_t channel = 0; channel < session->input_channels(tensor_index); channel++) {
                 if (session->send_ring(tensor_index).get_available_samples(channel) <
-                    session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+                    session->input_hop(tensor_index)) {
                     return false;
                 }
             }
@@ -1175,8 +1173,7 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
             // output samples. The demand is consumed before the attempt, mirroring the
             // input-driven failure path below, which consumes one hop of input and produces
             // one hop of zeros -- so the demand stays bounded even when the pool is exhausted.
-            size_t const hop = session->m_inference_config
-                                   .get_postprocess_output_size()[session->m_reference.m_index];
+            size_t const hop = session->output_hop(session->reference_slot());
             if (session->m_pending_pull_samples < hop) { return; }
             session->m_pending_pull_samples -= hop;
         }
@@ -1186,28 +1183,18 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
             // One hop of every Streamed input is consumed and one hop of zeros (of the ring's
             // own element type) produced on every Streamed output; a non-streamable slot has no
             // ring.
-            for (size_t tensor_index = 0;
-                 tensor_index < session->m_inference_config.get_tensor_input_shape().size();
-                 tensor_index++) {
-                const size_t hop =
-                    session->m_inference_config.get_preprocess_input_size()[tensor_index];
+            for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
+                const size_t hop = session->input_hop(tensor_index);
                 if (hop == 0) { continue; }
-                for (size_t channel = 0;
-                     channel <
-                     session->m_inference_config.get_preprocess_input_channels()[tensor_index];
+                for (size_t channel = 0; channel < session->input_channels(tensor_index);
                      channel++) {
                     session->send_ring(tensor_index).discard(channel, hop);
                 }
             }
-            for (size_t tensor_index = 0;
-                 tensor_index < session->m_inference_config.get_tensor_output_shape().size();
-                 tensor_index++) {
-                const size_t hop =
-                    session->m_inference_config.get_postprocess_output_size()[tensor_index];
+            for (size_t tensor_index = 0; tensor_index < session->num_outputs(); tensor_index++) {
+                const size_t hop = session->output_hop(tensor_index);
                 if (hop == 0) { continue; }
-                for (size_t channel = 0;
-                     channel <
-                     session->m_inference_config.get_postprocess_output_channels()[tensor_index];
+                for (size_t channel = 0; channel < session->output_channels(tensor_index);
                      channel++) {
                     session->receive_ring(tensor_index).push_zeros(channel, hop);
                 }
@@ -1257,7 +1244,7 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
             if (!session->receive_rings_have_room()) { return false; }
             if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
                 wait_for_completion(session, i);
-            } else if (session->m_inference_config.m_blocking_ratio > 0.f) {
+            } else if (session->uses_semaphore()) {
                 if (!session->m_inference_queue[i]->m_done_semaphore.try_acquire()) { return true; }
             } else {
                 if (!session->m_inference_queue[i]->m_done_atomic.exchange(
@@ -1277,7 +1264,7 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
 }
 
 // The bounded collect: waits for each pending result on the primitive the session runs on
-// (the semaphore when blocking_ratio > 0, the atomic flag polled otherwise), up to the
+// (the semaphore under a wait ratio above 0, the atomic flag polled otherwise), up to the
 // deadline. Not real-time safe for as long as it waits; the InferenceManager callers pass
 // the budget the host chose.
 Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& session,
@@ -1285,9 +1272,9 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
     // See the stalled-chain kick rationale in collect_completed().
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    // InferenceThread::do_inference() releases the semaphore when blocking_ratio > 0 and
+    // InferenceThread::do_inference() releases the semaphore under a wait ratio above 0 and
     // stores the atomic otherwise, for the whole life of the session.
-    const bool use_semaphore = session->m_inference_config.m_blocking_ratio > 0.f;
+    const bool use_semaphore = session->uses_semaphore();
     const bool forever = wait_until == std::chrono::steady_clock::time_point::max();
     const bool try_once = wait_until.time_since_epoch().count() == 0;
     // The unbounded semaphore wait is cut into slices so the thread count is re-checked.
@@ -1349,7 +1336,7 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
 }
 
 // Mirrors the completion signal InferenceThread::do_inference() uses for this
-// session (semaphore when blocking_ratio > 0.f, atomic otherwise) so both
+// session (the semaphore under a wait ratio above 0, the atomic otherwise) so both
 // new_data_request() overloads above wait correctly in non-real-time mode
 // regardless of which one is called.
 void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
@@ -1358,7 +1345,7 @@ void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, s
     // task). No further submission may be coming to restart the chain, so kick
     // it before blocking.
     try_dispatch_stateful(session);
-    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+    if (session->uses_semaphore()) {
         session->m_inference_queue[index]->m_done_semaphore.acquire();
     } else {
         while (!session->m_inference_queue[index]->m_done_atomic.exchange(
@@ -1406,7 +1393,7 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
                 // enqueued, the path a full queue takes, so exactly one chunk was consumed and
                 // exactly one (silent) chunk will be produced.
                 session->complete_with_zeros(session->m_inference_queue[i]);
-            } else if (session->m_inference_config.m_session_exclusive_processor) {
+            } else if (session->exclusive()) {
                 // A session-exclusive processor carries its state across calls, so
                 // its tasks must execute strictly in order and never concurrently.
                 // Defer dispatch so at most one of this session's tasks is ever in
@@ -1433,7 +1420,7 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
 }
 
 void Core::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
-    if (!session->m_inference_config.m_session_exclusive_processor) { return; }
+    if (!session->exclusive()) { return; }
     if (auto next = session->try_acquire_next_dispatch()) {
         if (!enqueue_inference_or_drop(session, next)) {
             session->release_dispatch(next->m_dispatch_epoch);
@@ -1529,7 +1516,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 // the drain) and end its turn on the stateful dispatch chain so
                 // the gate cannot stay wedged.
                 session->complete_with_zeros(inference_data.m_thread_safe_struct);
-                if (session->m_inference_config.m_session_exclusive_processor) {
+                if (session->exclusive()) {
                     session->release_dispatch(
                         inference_data.m_thread_safe_struct->m_dispatch_epoch);
                 }
@@ -1549,7 +1536,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                                         "Could not requeue inference data! Dropping the "
                                         "inference and zero-filling its output.");
                 other.m_session->complete_with_zeros(other.m_thread_safe_struct);
-                if (other.m_session->m_inference_config.m_session_exclusive_processor) {
+                if (other.m_session->exclusive()) {
                     other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
                 }
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
@@ -1591,7 +1578,7 @@ void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
 
     session->clear();
 
-    if (session->m_inference_config.m_session_exclusive_processor) {
+    if (session->exclusive()) {
         // Reconcile the stateful dispatch chain. Gate free: every pending entry
         // (all stale — this runs on the session's single driving thread, so
         // nothing fresh can have been prepared since the bump) is returned to
@@ -1618,7 +1605,7 @@ void Core::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session)
         // free, so this loop skips it. Until the signal arrives a struct is genuinely
         // in flight — leave it for a later call.
         bool done;
-        if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        if (session->uses_semaphore()) {
             done = s->m_done_semaphore.try_acquire();
             if (done) {
                 while (s->m_done_semaphore.try_acquire()) {}  // drain any extra signals

@@ -1,11 +1,10 @@
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
+#include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 
@@ -19,19 +18,23 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/handles.h"
 #include "../engines/Adapters.h"
 #include "TensorRun.h"
 
 namespace anira {
 
 InferenceManager::InferenceManager(capi::ProcessorRunner& processor,
-                                   InferenceConfig& inference_config,
+                                   const anira_model_config& model,
+                                   const capi::Derived& derived,
+                                   const capi::HardContract& hard,
                                    std::vector<engine::PlanRequest> requests,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
-    : m_inference_config(inference_config)
-    , m_session(Core::create_session(processor,
-                                     inference_config,
+    : m_session(Core::create_session(processor,
+                                     model,
+                                     derived,
+                                     hard,
                                      std::move(requests),
                                      context_config,
                                      rt_latch)) {}
@@ -48,39 +51,33 @@ uint32_t InferenceManager::get_plan() const noexcept {
     return m_session->m_current_plan.load(std::memory_order_relaxed);
 }
 
-void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {
-    prepare(new_config, CustomLatencies{std::move(custom_latency)}, RingDtypes{});
-}
-
-void InferenceManager::prepare(HostConfig new_config,
-                               const CustomLatencies& custom_latencies,
+void InferenceManager::prepare(const CustomLatencies& custom_latencies,
                                const RingDtypes& ring_dtypes) {
-    m_host_config = new_config;
     m_last_missed = false;  // no block of the new stream has been processed
 
-    Core::prepare_session(m_session, m_host_config, custom_latencies, ring_dtypes);
+    Core::prepare_session(m_session, custom_latencies, ring_dtypes);
 
-    const size_t num_outputs = m_inference_config.get_tensor_output_shape().size();
+    const size_t num_outputs = m_session->num_outputs();
     m_missing_samples.clear();
     m_missing_samples.resize(num_outputs, 0);
 
     // What the copy path knows about every slot: a streamed slot has its ring's element type
     // and the config's channel count; a non-streamable slot has no ring and is not the copy
     // path's (m_streamed stays false: the stems leave its tensor alone).
-    const size_t num_inputs = m_inference_config.get_tensor_input_shape().size();
+    const size_t num_inputs = m_session->num_inputs();
     m_input_slots.assign(num_inputs, SlotCopy{});
     for (size_t i = 0; i < num_inputs; ++i) {
-        if (m_inference_config.get_preprocess_input_size()[i] == 0) { continue; }
+        if (m_session->input_hop(i) == 0) { continue; }
         m_input_slots[i].m_streamed = true;
-        m_input_slots[i].m_channels = m_inference_config.get_preprocess_input_channels()[i];
+        m_input_slots[i].m_channels = m_session->input_channels(i);
         m_input_slots[i].m_dtype = m_session->send_ring(i).dtype();
         m_input_slots[i].m_element_size = m_session->send_ring(i).element_size();
     }
     m_output_slots.assign(num_outputs, SlotCopy{});
     for (size_t i = 0; i < num_outputs; ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] == 0) { continue; }
+        if (m_session->output_hop(i) == 0) { continue; }
         m_output_slots[i].m_streamed = true;
-        m_output_slots[i].m_channels = m_inference_config.get_postprocess_output_channels()[i];
+        m_output_slots[i].m_channels = m_session->output_channels(i);
         m_output_slots[i].m_dtype = m_session->receive_ring(i).dtype();
         m_output_slots[i].m_element_size = m_session->receive_ring(i).element_size();
     }
@@ -107,9 +104,9 @@ void InferenceManager::prepare(HostConfig new_config,
     if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
         for (size_t i = 0; i < num_outputs; ++i) {
             if (!m_output_slots[i].m_streamed) { continue; }
-            // block_max scaled by the output's size relative to the reference stream.
-            const auto capacity = static_cast<size_t>(
-                std::ceil(m_host_config.get_relative_buffer_size(m_inference_config, i, false)));
+            // One host block of block_max on the output's stream.
+            const size_t capacity =
+                LatencyCalculator::block_samples(m_session->m_block_hops, m_session->output_hop(i));
             m_hold_capacity[i] = capacity;
             m_hold[i].assign(
                 m_output_slots[i].m_channels * capacity * m_output_slots[i].m_element_size,
@@ -179,9 +176,9 @@ const size_t* InferenceManager::pop_data_wait(const anira_tensor* outputs,
 }
 
 const size_t* InferenceManager::process(const anira_tensor* inputs, const anira_tensor* outputs) {
-    // The 2.x call: with a blocking ratio the block's own duration times the ratio is
+    // The 2.x call: with a wait ratio the block's own duration times the ratio is
     // waited for on the semaphore, else nothing is waited for.
-    if (m_inference_config.m_blocking_ratio > 0.f) {
+    if (m_session->uses_semaphore()) {
         Core::WaitOutcome ignored = Core::WaitOutcome::Done;
         return process_wait(inputs, outputs, contract_wait_budget(inputs, outputs), ignored);
     }
@@ -190,17 +187,17 @@ const size_t* InferenceManager::process(const anira_tensor* inputs, const anira_
 
 const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
                                          std::chrono::steady_clock::time_point wait_until) {
-    // The 2.x deadline form keeps its own body: the blocking_ratio branch and its record.
+    // The 2.x deadline form keeps its own body: the wait ratio branch and its record.
     load_counts(m_empty_inputs.data(), m_input_slots, m_input_counts);
     load_counts(outputs, m_output_slots, m_output_counts);
     request_output(m_output_counts.data());
     if (!m_session->m_input_driven) { Core::new_data_submitted(m_session); }
-    if (m_inference_config.m_blocking_ratio > 0.f) {
+    if (m_session->uses_semaphore()) {
         Core::new_data_request(m_session, wait_until);
     } else {
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::WaitWithoutSemaphore,
                                 log_group::k_scheduler,
-                                "InferenceConfig does not use blocking_ratio and does not use "
+                                "The contract has no wait ratio and does not use "
                                 "semaphores for data acquisition, cannot wait for data!");
     }
     return process_output(outputs,
@@ -212,20 +209,19 @@ const size_t* InferenceManager::pop_data(const anira_tensor* outputs,
 std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
     const anira_tensor* inputs,
     const anira_tensor* outputs) const noexcept {
-    const anira_tensor& reference = m_session->m_reference.m_is_input
-                                        ? inputs[m_session->m_reference.m_index]
-                                        : outputs[m_session->m_reference.m_index];
+    const anira_tensor& reference = m_session->reference_is_input()
+                                        ? inputs[m_session->reference_slot()]
+                                        : outputs[m_session->reference_slot()];
     return wait_budget_of(reference.shape[1] > 0 ? static_cast<size_t>(reference.shape[1]) : 0);
 }
 
 std::chrono::steady_clock::duration InferenceManager::wait_budget_of(
     size_t reference_samples) const noexcept {
-    // The host block is measured in samples of the reference stream (input or output); the
-    // float arithmetic and the truncation are the 2.x process()'s, so its deadline is the
-    // same.
-    auto buffer_size_in_sec = static_cast<float>(reference_samples) / m_host_config.m_sample_rate;
+    // The host block is measured in samples of the reference stream (input or output), at
+    // the contract's rate; the wait is truncated to whole microseconds.
+    const double block_seconds = static_cast<double>(reference_samples) / m_session->m_hard.m_rate;
     return std::chrono::microseconds(
-        static_cast<long>(buffer_size_in_sec * 1e6 * m_inference_config.m_blocking_ratio));
+        static_cast<long>(block_seconds * 1e6 * m_session->m_hard.m_wait_ratio));
 }
 
 void InferenceManager::push_data(const anira_tensor* inputs) {
@@ -253,7 +249,7 @@ void InferenceManager::request_output(const size_t* num_output_samples) {
     // demand that drives inference (see Core::new_data_submitted). Input-driven sessions
     // are unaffected.
     if (!m_session->m_input_driven) {
-        m_session->m_pending_pull_samples += num_output_samples[m_session->m_reference.m_index];
+        m_session->m_pending_pull_samples += num_output_samples[m_session->reference_slot()];
     }
 }
 
@@ -326,7 +322,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
                                          size_t* num_samples,
                                          const anira_tensor* bypass_inputs,
                                          const size_t* bypass_num_input) {
-    const size_t num_outputs = m_inference_config.get_tensor_output_shape().size();
+    const size_t num_outputs = m_session->num_outputs();
     m_last_missed = false;
     // Before anything moves: an output whose dtype is not the slot's is zero-filled at its
     // own element size and is from here on an output the call did not request.
@@ -342,7 +338,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
         num_samples[i] = 0;
     }
     for (size_t i = 0; i < num_outputs; ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+        if (m_session->output_hop(i) > 0) {
             int const missing_samples_before = static_cast<int>(m_missing_samples[i]);
             if (m_missing_samples[i] > 0) {
                 // Catch up in one go: drop as many missing samples as can be spared while
@@ -351,9 +347,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
                 if (available > num_samples[i]) {
                     size_t const to_drop =
                         std::min(m_missing_samples[i], available - num_samples[i]);
-                    for (size_t channel = 0;
-                         channel < m_inference_config.get_postprocess_output_channels()[i];
-                         ++channel) {
+                    for (size_t channel = 0; channel < m_session->output_channels(i); ++channel) {
                         m_session->receive_ring(i).discard(channel, to_drop);
                     }
                     m_missing_samples[i] -= to_drop;
@@ -372,7 +366,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     }
     bool enough_samples = true;
     for (size_t i = 0; i < num_outputs; ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
+        if (m_session->output_hop(i) > 0) {
             if (m_session->receive_ring(i).get_available_samples(0) < num_samples[i]) {
                 enough_samples = false;
                 break;
@@ -419,10 +413,10 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     // the late block arrives (HOLD_LAST and BYPASS substitute a block, they do not shift
     // time); the returned count is 0 under every policy.
     m_last_missed = true;
-    const size_t reference = m_session->m_reference.m_index;
+    const size_t reference = m_session->reference_slot();
     // The source is read only under this: a pop, or a call that pushed another slot,
     // leaves the anchor's count at 0.
-    const bool bypass_ready = m_on_miss == ANIRA_MISS_BYPASS && m_session->m_reference.m_is_input &&
+    const bool bypass_ready = m_on_miss == ANIRA_MISS_BYPASS && m_session->reference_is_input() &&
                               bypass_num_input[reference] > 0;
     // ANIRA_MISS_CALLBACK: one call for the whole block, with the arrays this call was handed.
     // The counts are not zeroed yet, shape[1] of every output is its request, and the input
@@ -500,7 +494,7 @@ void InferenceManager::bypass_output(const anira_tensor& output,
                                      const anira_tensor& input,
                                      size_t num_input) {
     const SlotCopy& slot = m_output_slots[tensor_index];
-    const size_t in_channels = m_input_slots[m_session->m_reference.m_index].m_channels;
+    const size_t in_channels = m_input_slots[m_session->reference_slot()].m_channels;
     const size_t copied = std::min(num_input, num_samples);
     for (size_t channel = 0; channel < slot.m_channels; ++channel) {
         const tensor_run::Run dst = tensor_run::channel_run(output, channel, slot.m_element_size);
@@ -542,9 +536,9 @@ std::vector<unsigned int> InferenceManager::get_latency() const {
 
 size_t InferenceManager::get_available_samples(size_t tensor_index, size_t channel) const {
     // Collect with the completion signal this session actually uses: before, the realtime
-    // overload polled m_done_atomic, which a blocking_ratio > 0 session never sets.
+    // overload polled m_done_atomic, which a session with a wait ratio never sets.
     Core::collect_completed(m_session);
-    if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
+    if (m_session->output_hop(tensor_index) > 0) {
         return m_session->receive_ring(tensor_index).get_available_samples(channel);
     } else {
         return 0;

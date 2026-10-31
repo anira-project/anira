@@ -5,12 +5,10 @@
  * the handler. Private to src/capi (and the tests through the src/ include directory): the
  * layouts never enter the ABI.
  */
-#include <anira/InferenceConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/InferenceManager.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/RtLatch.h>
 
 #include <atomic>
@@ -105,9 +103,14 @@ struct anira_handler {
     /// thread); every prepare checks the plans' providers against these answers and calls no
     /// query. Never changed after create.
     anira::capi::QueryAnswers m_query_answers;
-    anira_contract m_contract;  ///< the snapshot of the last successful prepare (Hard)
-    anira::InferenceConfig m_inference_config;  ///< built at prepare; must outlive m_manager
-                                                ///< and m_pp
+    /// The snapshot of the last prepare (Hard), installed before the session is built: the
+    /// session reads its Hard half by reference. Read while the handler is runnable, and while
+    /// prepared by the session; a failed prepare unprepares the handler.
+    anira_contract m_contract;
+    /// What the validator derived for the variant under m_contract, installed with it: the
+    /// session reads it by reference (every tensor's extents, hop and channel count, the
+    /// anchor, the exclusivity, the plan table), and so do the handler's own getters.
+    anira::capi::Derived m_derived;
     /// The ports: per side one entry per tensor of the model config's list, indexed by slot
     /// like everything else of the handler and the processor runner, and a variant of what the
     /// tensor is in here (port.h): a stream port (what a host block must carry, the session's
@@ -123,14 +126,12 @@ struct anira_handler {
     /// writes them: destroyed after.
     std::vector<anira::capi::Port> m_input_ports;
     std::vector<anira::capi::Port> m_output_ports;
-    std::unique_ptr<anira::capi::ProcessorRunner> m_pp;  ///< the processor runner over
-                                                         ///< m_pipeline.m_processor, rebuilt by
-                                                         ///< every prepare (needs
-                                                         ///< m_inference_config)
-    std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
-                                                         ///< unprepared (declared after m_pp:
-                                                         ///< destroyed first)
-    anira::HostConfig m_host_config;
+    std::unique_ptr<anira::capi::ProcessorRunner> m_pp;      ///< the processor runner over
+                                                             ///< m_pipeline.m_processor, rebuilt by
+                                                             ///< every prepare
+    std::unique_ptr<anira::InferenceManager> m_manager;      ///< the session; null while
+                                                             ///< unprepared (declared after m_pp:
+                                                             ///< destroyed first)
     std::chrono::steady_clock::duration m_contract_wait{0};  ///< ANIRA_WAIT_CONTRACT of the pop
                                                              ///< twins: wait_ratio x block_max
                                                              ///< / rate

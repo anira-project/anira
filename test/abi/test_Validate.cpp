@@ -1,19 +1,15 @@
-// The translator the C handler prepares its sessions with (the validator of src/capi/validate.h
-// and the 2.x translators of src/capi/v3_to_v2.h), white-box, under the classification of the C
-// firewall (see translated() below): every section-2 rule the 2.x runtime can honour is
-// ANIRA_ERROR_CONFIG with a message naming the tensor or the entry, everything the 2.x runtime
-// cannot do is ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration maps onto the 2.x
-// InferenceConfig and HostConfig the same way the 2.x constructors would build them. Retired
-// with the translator when the core takes the 3.x types (PR 10b).
+// The validator the C handler prepares its sessions with (src/capi/validate.h), white-box, under
+// the classification of the C firewall (see classified() below): every section-2 rule is
+// ANIRA_ERROR_CONFIG with a message naming the tensor or the entry, everything this pre-release
+// cannot do is ANIRA_ERROR_NOT_SUPPORTED, and a valid configuration derives the facts the session
+// reads by reference (capi::Derived: every tensor's extents, hop and channel count, the surviving
+// rows, the anchor, the exclusivity).
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/LatencyCalculator.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -30,9 +26,9 @@
 #include <string_view>
 #include <vector>
 
-#include "../support/inference_config_eq.h"
 #include "../support/v2_documents.h"
-#include "capi/v3_to_v2.h"
+#include "capi/ext_registry.h"
+#include "capi/handles.h"
 #include "capi/validate.h"
 #include "fixtures.h"
 #include "utils/StatusError.h"
@@ -99,11 +95,11 @@ Hard geometry(double block) {
     return hard;
 }
 
-/// The translator's throw as the status the C entries return, the classification of the C
+/// The validator's throw as the status the C entries return, the classification of the C
 /// firewall (src/capi/error.cpp): an anira::StatusError is its status, a std::invalid_argument
-/// (the 2.x constructors' cross-checks) ANIRA_ERROR_CONFIG; the message lands in err.
+/// ANIRA_ERROR_CONFIG; the message lands in err.
 template <class Body>
-anira_status translated(anira_error* err, Body&& body) {
+anira_status classified(anira_error* err, Body&& body) {
     const auto fail = [err](anira_status status, const char* what) {
         if (err != nullptr) {
             err->status = status;
@@ -119,76 +115,88 @@ anira_status translated(anira_error* err, Body&& body) {
     } catch (const std::invalid_argument& e) { return fail(ANIRA_ERROR_CONFIG, e.what()); }
 }
 
-/// The 2.x InferenceConfig of a model under a Hard contract; the candidates name engines on the
-/// CPU path, ANIRA_ENGINE_CUSTOM the 2.x custom rows (the custom engine anira.v2.custom).
-anira_status to_inference_config(const anira_model_config* model,
-                                 const anira_contract* contract,
-                                 const anira_engine* candidates,
-                                 uint32_t num_candidates,
-                                 anira::InferenceConfig& out,
-                                 anira_error* err) {
-    std::vector<anira_backend_id> ids;
-    for (uint32_t i = 0; candidates != nullptr && i < num_candidates; ++i) {
-        const bool custom = candidates[i] == ANIRA_ENGINE_CUSTOM;
-        ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
-                                       .engine = static_cast<uint32_t>(candidates[i]),
-                                       .provider = ANIRA_PROVIDER_CPU,
-                                       .engine_id = custom ? k_custom : nullptr});
-    }
-    return translated(err, [&] {
-        out = anira::capi::make_inference_config(*model,
-                                                 *contract,
-                                                 candidates != nullptr ? ids.data() : nullptr,
-                                                 num_candidates);
-    });
-}
-
-/// The 2.x HostConfig of a Hard contract's geometry and the model's anchor.
-anira_status to_host_config(const anira_contract* contract,
-                            const anira_model_config* model,
-                            anira::HostConfig& out,
-                            anira_error* err) {
-    return translated(err, [&] { out = anira::capi::make_host_config(*contract, *model); });
-}
-
-/// The 2.x HostConfig with the host's own (possibly fractional) geometry.
-anira_status to_host_config(const anira_model_config* model,
-                            float buffer_size,
-                            float sample_rate,
-                            bool allow_smaller_buffers,
-                            anira::HostConfig& out,
-                            anira_error* err) {
-    return translated(err, [&] {
-        out =
-            anira::capi::make_host_config(*model, buffer_size, sample_rate, allow_smaller_buffers);
-    });
-}
-
 struct Outcome {
     anira_status m_status = ANIRA_OK;
     std::string m_message;
-    anira::InferenceConfig m_config;
+    anira::capi::Derived m_derived;
 };
 
-Outcome bridge(const ModelConfig& model,
+/// What the validator derives for a model under a Hard contract; the candidates name engines on
+/// the CPU path, ANIRA_ENGINE_CUSTOM the custom rows of anira.v2.custom; none keeps every row.
+Outcome derive(const ModelConfig& model,
                const ContractHandle& contract,
                const std::vector<anira_engine>* candidates = nullptr) {
+    std::vector<anira_backend_id> ids;
+    for (size_t i = 0; candidates != nullptr && i < candidates->size(); ++i) {
+        const bool custom = (*candidates)[i] == ANIRA_ENGINE_CUSTOM;
+        ids.push_back(anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                                       .engine = static_cast<uint32_t>((*candidates)[i]),
+                                       .provider = ANIRA_PROVIDER_CPU,
+                                       .engine_id = custom ? k_custom : nullptr});
+    }
     Outcome outcome;
     anira_error err = ANIRA_ERROR_INIT;
-    outcome.m_status =
-        to_inference_config(model.native(),
-                            contract.native(),
-                            candidates != nullptr ? candidates->data() : nullptr,
-                            candidates != nullptr ? static_cast<uint32_t>(candidates->size()) : 0U,
-                            outcome.m_config,
-                            &err);
+    outcome.m_status = classified(&err, [&] {
+        anira::capi::validate(*model.native(),
+                              contract.native(),
+                              candidates != nullptr ? ids.data() : nullptr,
+                              static_cast<uint32_t>(ids.size()),
+                              outcome.m_derived);
+    });
     outcome.m_message = err.message;
     return outcome;
 }
 
-Outcome bridge(const ModelConfig& model, const Hard& hard = explicit_hard()) {
+Outcome derive(const ModelConfig& model, const Hard& hard = explicit_hard()) {
     const ContractHandle contract(hard);
-    return bridge(model, contract);
+    return derive(model, contract);
+}
+
+/// The facts of one side of a derivation, per slot, in the shape of the expectations below.
+using Shapes = std::vector<std::vector<int64_t>>;
+Shapes dims(const std::vector<anira::capi::DerivedSpec>& side) {
+    Shapes shapes;
+    shapes.reserve(side.size());
+    for (const anira::capi::DerivedSpec& spec : side) { shapes.push_back(spec.m_dims); }
+    return shapes;
+}
+std::vector<size_t> hops(const std::vector<anira::capi::DerivedSpec>& side) {
+    std::vector<size_t> result;
+    result.reserve(side.size());
+    for (const anira::capi::DerivedSpec& spec : side) {
+        result.push_back(static_cast<size_t>(spec.m_hop));
+    }
+    return result;
+}
+std::vector<size_t> channels(const std::vector<anira::capi::DerivedSpec>& side) {
+    std::vector<size_t> result;
+    result.reserve(side.size());
+    for (const anira::capi::DerivedSpec& spec : side) {
+        result.push_back(static_cast<size_t>(spec.m_channels));
+    }
+    return result;
+}
+std::vector<size_t> elements(const std::vector<anira::capi::DerivedSpec>& side) {
+    std::vector<size_t> result;
+    result.reserve(side.size());
+    for (const anira::capi::DerivedSpec& spec : side) {
+        size_t count = 1;
+        for (const int64_t extent : spec.m_dims) { count *= static_cast<size_t>(extent); }
+        result.push_back(count);
+    }
+    return result;
+}
+
+/// The extents a row's engine is handed for one tensor: the derived extents under the row's
+/// layout for it, if it has one.
+std::vector<int64_t> engine_dims(const anira::capi::ModelEntry& row,
+                                 const anira_tensor_spec& spec,
+                                 const anira::capi::DerivedSpec& derived) {
+    const auto binding = row.m_tensors.find(spec.m_name);
+    return anira::capi::engine_dims_of(
+        spec,
+        derived,
+        binding == row.m_tensors.end() ? std::vector<uint32_t>{} : binding->second.m_layout);
 }
 
 void expect_contains(const std::string& message, std::string_view needle) {
@@ -215,48 +223,43 @@ std::optional<anira_engine> missing_engine() {
 // The mapping of a valid configuration
 // ============================================================================
 
-// The v3 twin of test_InferenceConfig's custom_model_data() + universal_shape() equals the
-// InferenceConfig the 2.x constructor builds from them.
-TEST(AbiTranslate, TwinOfTheMinimalV2ConfigEqualsTheV2Constructor) {
-    ModelConfig model = minimal();
-    model.max_instances(anira::InferenceConfig::Defaults::m_num_parallel_processors);
-    const Outcome outcome = bridge(model);
+// The smallest valid configuration: one custom row, one Streamed input and one output of
+// [batch 1, channel 1, time 512] with a fixed window and no context.
+TEST(AbiValidate, TheMinimalConfigDerivesOneStreamEachWay) {
+    const Outcome outcome = derive(minimal());
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-
-    const anira::InferenceConfig expected(
-        {anira::ModelData("model.custom", anira::InferenceBackend::CUSTOM)},
-        {anira::TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        5.0F);
-    anira_test::expect_inference_config_eq(outcome.m_config, expected);
+    const anira::capi::Derived& d = outcome.m_derived;
+    EXPECT_EQ(dims(d.m_inputs), (Shapes{{1, 1, 512}}));
+    EXPECT_EQ(dims(d.m_outputs), (Shapes{{1, 1, 512}}));
+    EXPECT_EQ(hops(d.m_inputs), (std::vector<size_t>{512}));
+    EXPECT_EQ(hops(d.m_outputs), (std::vector<size_t>{512}));
+    EXPECT_EQ(channels(d.m_inputs), (std::vector<size_t>{1}));
+    EXPECT_EQ(channels(d.m_outputs), (std::vector<size_t>{1}));
+    EXPECT_EQ(d.m_rows, (std::vector<size_t>{0}));
+    EXPECT_FALSE(d.m_anchor_named);
+    EXPECT_TRUE(d.m_anchor_is_input);
+    EXPECT_EQ(d.m_anchor_index, 0U);
+    EXPECT_FALSE(d.m_exclusive);
 }
 
-TEST(AbiTranslate, ContractScalarsAndModelScalarsLandInTheConfig) {
+// A stateful model runs one inference at a time, whatever its instance count says (the core
+// takes one instance for an exclusive session); a stateless one without a State pair does not.
+TEST(AbiValidate, AStatefulModelIsExclusive) {
     ModelConfig model = minimal();
     model.state(ANIRA_MODEL_STATEFUL).max_instances(3);
-    Hard hard = explicit_hard();
-    hard.budget = std::chrono::microseconds(42660);
-    hard.warmup_iterations = 2;
-    hard.wait_ratio = 0.5;
-    const Outcome outcome = bridge(model, hard);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_FLOAT_EQ(outcome.m_config.m_max_inference_time, 42.66F);
-    EXPECT_EQ(outcome.m_config.m_warm_up, 2U);
-    EXPECT_FLOAT_EQ(outcome.m_config.m_blocking_ratio, 0.5F);
-    EXPECT_TRUE(outcome.m_config.m_session_exclusive_processor);
-    EXPECT_EQ(outcome.m_config.m_num_parallel_processors, 1U)
-        << "a stateful (session-exclusive) config runs one processor, as in 2.x";
-}
+    EXPECT_TRUE(outcome.m_derived.m_exclusive);
 
-TEST(AbiTranslate, WarmupNoneIsZeroWarmUpInferences) {
-    Hard hard = explicit_hard();
-    hard.warmup = ANIRA_WARMUP_NONE;
-    const Outcome outcome = bridge(minimal(), hard);
-    ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.m_warm_up, 0U);
+    ModelConfig stateless = minimal();
+    stateless.state(ANIRA_MODEL_STATELESS);
+    const Outcome plain = derive(stateless);
+    ASSERT_EQ(plain.m_status, ANIRA_OK) << plain.m_message;
+    EXPECT_FALSE(plain.m_derived.m_exclusive);
 }
 
 // The CNN shape: window 15380 with overlap 13332 is a hop of 2048 over a {1, 1, 15380} tensor.
-TEST(AbiTranslate, WindowMinusContextIsThePreprocessSize) {
+TEST(AbiValidate, WindowMinusContextIsTheHop) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(TensorSpec("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
@@ -265,18 +268,18 @@ TEST(AbiTranslate, WindowMinusContextIsThePreprocessSize) {
                     .axis(2, ANIRA_AXIS_TIME, 15380)
                     .window(15380, 15380, 13332));
     model.output(streamed("out", 2048));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    const anira::InferenceConfig& cfg = outcome.m_config;
-    EXPECT_EQ(cfg.get_tensor_input_shape(), (anira::TensorShapeList{{1, 1, 15380}}));
-    EXPECT_EQ(cfg.get_preprocess_input_size(), (std::vector<size_t>{2048}));
-    EXPECT_EQ(cfg.get_postprocess_output_size(), (std::vector<size_t>{2048}));
-    EXPECT_EQ(cfg.get_tensor_input_size(), (std::vector<size_t>{15380}));
+    const anira::capi::Derived& cfg = outcome.m_derived;
+    EXPECT_EQ(dims(cfg.m_inputs), (Shapes{{1, 1, 15380}}));
+    EXPECT_EQ(hops(cfg.m_inputs), (std::vector<size_t>{2048}));
+    EXPECT_EQ(hops(cfg.m_outputs), (std::vector<size_t>{2048}));
+    EXPECT_EQ(elements(cfg.m_inputs), (std::vector<size_t>{15380}));
 }
 
 // The upgraded HybridNN literal: {256, 1, 150} with size 256 is window 38400 / overlap 38144.
 // The fixture names one ONNX Runtime row, so the case needs that engine in the build.
-TEST(AbiTranslate, UpgradedHybridNnLiteralKeepsTheV2ProcessingSize) {
+TEST(AbiValidate, UpgradedHybridNnLiteralKeepsTheV2Hop) {
 #ifndef USE_ONNXRUNTIME
     GTEST_SKIP() << "the fixture's only model entry is an ONNX Runtime row";
 #else
@@ -285,35 +288,37 @@ TEST(AbiTranslate, UpgradedHybridNnLiteralKeepsTheV2ProcessingSize) {
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
     const std::vector<anira_engine> candidates = anira::capi::enabled_engines();
-    const Outcome outcome = bridge(model, *legacy, &candidates);
+    const Outcome outcome = derive(model, *legacy, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{256}));
-    EXPECT_EQ(outcome.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{256, 1, 150}}));
+    EXPECT_EQ(hops(outcome.m_derived.m_inputs), (std::vector<size_t>{256}));
+    EXPECT_EQ(dims(outcome.m_derived.m_inputs), (Shapes{{256, 1, 150}}));
 #endif
 }
 
-TEST(AbiTranslate, ChannelExtentAndOutputLatencyLandInTheProcessingSpec) {
+TEST(AbiValidate, ChannelExtentAndHopLandInTheDerivedSpecs) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in", 2048, 2));
     model.input(scalar("gain"));
     model.output(streamed("out", 2048, 2).latency(2048));
     model.output(scalar("gain_out"));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    const anira::InferenceConfig& cfg = outcome.m_config;
-    EXPECT_EQ(cfg.get_preprocess_input_channels(), (std::vector<size_t>{2, 1}));
-    EXPECT_EQ(cfg.get_postprocess_output_channels(), (std::vector<size_t>{2, 1}));
-    EXPECT_EQ(cfg.get_preprocess_input_size(), (std::vector<size_t>{2048, 0}));
-    EXPECT_EQ(cfg.get_postprocess_output_size(), (std::vector<size_t>{2048, 0}));
-    EXPECT_EQ(cfg.get_internal_model_latency(), (std::vector<size_t>{2048, 0}));
-    EXPECT_EQ(cfg.get_tensor_input_shape(), (anira::TensorShapeList{{1, 2, 2048}, {1}}));
+    const anira::capi::Derived& cfg = outcome.m_derived;
+    EXPECT_EQ(channels(cfg.m_inputs), (std::vector<size_t>{2, 1}));
+    EXPECT_EQ(channels(cfg.m_outputs), (std::vector<size_t>{2, 1}));
+    EXPECT_EQ(hops(cfg.m_inputs), (std::vector<size_t>{2048, 0}));
+    EXPECT_EQ(hops(cfg.m_outputs), (std::vector<size_t>{2048, 0}));
+    // The model's own latency the session primes the ring with is the spec's.
+    EXPECT_EQ(model.native()->m_outputs[0].m_latency, 2048);
+    EXPECT_EQ(model.native()->m_outputs[1].m_latency, 0);
+    EXPECT_EQ(dims(cfg.m_inputs), (Shapes{{1, 2, 2048}, {1}}));
 }
 
 // The Channel tag maps onto ring channels on a Streamed tensor only. A Static or a Buffer
-// tensor has the spec's shape, a Channel axis of any extent included: the 2.x config carries it
-// as one channel with the full dims in every shape, and it moves as the product of its extents.
-TEST(AbiTranslate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
+// tensor has the spec's shape, a Channel axis of any extent included: it is one channel with
+// the full extents, and it moves as the product of its extents.
+TEST(AbiValidate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in", 512, 2));
@@ -333,26 +338,23 @@ TEST(AbiTranslate, AChannelAxisOfAnyExtentOnANonStreamedSpec) {
                      .axis(0, ANIRA_AXIS_CHANNEL, 3)
                      .axis(1, ANIRA_AXIS_HEIGHT, 2)
                      .axis(2, ANIRA_AXIS_WIDTH, 2));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    const anira::InferenceConfig& cfg = outcome.m_config;
-    EXPECT_EQ(cfg.get_preprocess_input_channels(), (std::vector<size_t>{2, 1, 1}));
-    EXPECT_EQ(cfg.get_postprocess_output_channels(), (std::vector<size_t>{2, 1, 1}));
-    EXPECT_EQ(cfg.get_preprocess_input_size(), (std::vector<size_t>{512, 0, 0}));
-    EXPECT_EQ(cfg.get_postprocess_output_size(), (std::vector<size_t>{512, 0, 0}));
-    EXPECT_EQ(cfg.get_tensor_input_shape(),
-              (anira::TensorShapeList{{1, 2, 512}, {1, 2, 3}, {1, 4, 64}}));
-    EXPECT_EQ(cfg.get_tensor_output_shape(),
-              (anira::TensorShapeList{{1, 2, 512}, {2, 5}, {3, 2, 2}}));
-    EXPECT_EQ(cfg.get_tensor_input_size(), (std::vector<size_t>{1024, 6, 256}));
-    EXPECT_EQ(cfg.get_tensor_output_size(), (std::vector<size_t>{1024, 10, 12}));
+    const anira::capi::Derived& cfg = outcome.m_derived;
+    EXPECT_EQ(channels(cfg.m_inputs), (std::vector<size_t>{2, 1, 1}));
+    EXPECT_EQ(channels(cfg.m_outputs), (std::vector<size_t>{2, 1, 1}));
+    EXPECT_EQ(hops(cfg.m_inputs), (std::vector<size_t>{512, 0, 0}));
+    EXPECT_EQ(hops(cfg.m_outputs), (std::vector<size_t>{512, 0, 0}));
+    EXPECT_EQ(dims(cfg.m_inputs), (Shapes{{1, 2, 512}, {1, 2, 3}, {1, 4, 64}}));
+    EXPECT_EQ(dims(cfg.m_outputs), (Shapes{{1, 2, 512}, {2, 5}, {3, 2, 2}}));
+    EXPECT_EQ(elements(cfg.m_inputs), (std::vector<size_t>{1024, 6, 256}));
+    EXPECT_EQ(elements(cfg.m_outputs), (std::vector<size_t>{1024, 10, 12}));
 }
 
-// Declared state in the shared translator, which the handler pairs its ports by: a State spec
-// rides the 2.x configuration like a Static one, at its own position of the list (size 0, one
-// channel, its dims in the tensor shape, a Channel axis of any extent), and a pair forces the
-// session-exclusive processor.
-TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
+// Declared state, which the handler pairs its ports by: a State spec is derived like a Static
+// one, at its own position of the list (hop 0, one channel, its extents, a Channel axis of any
+// extent), and a pair makes the session exclusive.
+TEST(AbiValidate, AStatePairKeepsItsListPositionsAndForcesStateful) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.state(ANIRA_MODEL_STATELESS);
@@ -365,16 +367,16 @@ TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
     model.input(h_in).input(streamed("in", 512, 2));
     model.output(streamed("out", 512, 2)).output(h_out);
 
-    const ContractHandle contract(explicit_hard());
-    const anira::InferenceConfig cfg =
-        anira::capi::make_inference_config(*model.native(), *contract.native(), nullptr, 0);
-    EXPECT_EQ(cfg.get_preprocess_input_size(), (std::vector<size_t>{0, 512}));
-    EXPECT_EQ(cfg.get_postprocess_output_size(), (std::vector<size_t>{512, 0}));
-    EXPECT_EQ(cfg.get_preprocess_input_channels(), (std::vector<size_t>{1, 2}));
-    EXPECT_EQ(cfg.get_postprocess_output_channels(), (std::vector<size_t>{2, 1}));
-    EXPECT_EQ(cfg.get_tensor_input_shape(), (anira::TensorShapeList{{1, 2, 2}, {1, 2, 512}}));
-    EXPECT_EQ(cfg.get_tensor_output_shape(), (anira::TensorShapeList{{1, 2, 512}, {1, 2, 2}}));
-    EXPECT_TRUE(cfg.m_session_exclusive_processor) << "a pair forces Stateful";
+    const Outcome outcome = derive(model);
+    ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    const anira::capi::Derived& cfg = outcome.m_derived;
+    EXPECT_EQ(hops(cfg.m_inputs), (std::vector<size_t>{0, 512}));
+    EXPECT_EQ(hops(cfg.m_outputs), (std::vector<size_t>{512, 0}));
+    EXPECT_EQ(channels(cfg.m_inputs), (std::vector<size_t>{1, 2}));
+    EXPECT_EQ(channels(cfg.m_outputs), (std::vector<size_t>{2, 1}));
+    EXPECT_EQ(dims(cfg.m_inputs), (Shapes{{1, 2, 2}, {1, 2, 512}}));
+    EXPECT_EQ(dims(cfg.m_outputs), (Shapes{{1, 2, 512}, {1, 2, 2}}));
+    EXPECT_TRUE(cfg.m_exclusive) << "a pair forces Stateful";
 
     const std::vector<anira::capi::StateLink> links = anira::capi::state_links(*model.native());
     ASSERT_EQ(links.size(), 1U);
@@ -382,16 +384,15 @@ TEST(AbiTranslate, AStatePairKeepsItsListPositionsAndForcesStateful) {
     EXPECT_EQ(links[0].m_output, 1U);
 
     // The same model without the pair keeps what it says.
-    const anira::InferenceConfig plain =
-        anira::capi::make_inference_config(*minimal().state(ANIRA_MODEL_STATELESS).native(),
-                                           *contract.native(),
-                                           nullptr,
-                                           0);
-    EXPECT_FALSE(plain.m_session_exclusive_processor);
+    ModelConfig stateless = minimal();
+    stateless.state(ANIRA_MODEL_STATELESS);
+    const Outcome plain = derive(stateless);
+    ASSERT_EQ(plain.m_status, ANIRA_OK) << plain.m_message;
+    EXPECT_FALSE(plain.m_derived.m_exclusive);
     EXPECT_TRUE(anira::capi::state_links(*minimal().native()).empty());
 }
 
-TEST(AbiTranslate, ADynamicTimeExtentResolvesToTheWindow) {
+TEST(AbiValidate, ADynamicTimeExtentResolvesToTheWindow) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(TensorSpec("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
@@ -400,14 +401,14 @@ TEST(AbiTranslate, ADynamicTimeExtentResolvesToTheWindow) {
                     .axis(2, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
                     .window(1024, 1024, 0));
     model.output(streamed("out", 1024));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{1, 1, 1024}}));
+    EXPECT_EQ(dims(outcome.m_derived.m_inputs), (Shapes{{1, 1, 1024}}));
 }
 
 // A flexible window covers one host block per inference when the anchor hop can be the block:
 // block_max scaled by the time ratio, plus the context, within [window_min, window_max].
-TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
+TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(TensorSpec("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
@@ -420,19 +421,19 @@ TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     hard.block_min = 512;
     hard.block_max = 512;
     hard.rate = 48000;
-    const Outcome pinned = bridge(model, hard);
+    const Outcome pinned = derive(model, hard);
     ASSERT_EQ(pinned.m_status, ANIRA_OK) << pinned.m_message;
-    EXPECT_EQ(pinned.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{576}}));
-    EXPECT_EQ(pinned.m_config.get_preprocess_input_size(), (std::vector<size_t>{512}));
-    EXPECT_EQ(pinned.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{512}}));
+    EXPECT_EQ(dims(pinned.m_derived.m_inputs), (Shapes{{576}}));
+    EXPECT_EQ(hops(pinned.m_derived.m_inputs), (std::vector<size_t>{512}));
+    EXPECT_EQ(dims(pinned.m_derived.m_outputs), (Shapes{{512}}));
 
     // Without a geometry the smallest anchor hop is used: the input's smallest window, and the
     // output (time ratio 1/1, a flexible window's default) follows that hop of 192.
-    const Outcome smallest = bridge(model);
+    const Outcome smallest = derive(model);
     ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
-    EXPECT_EQ(smallest.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{256}}));
-    EXPECT_EQ(smallest.m_config.get_preprocess_input_size(), (std::vector<size_t>{192}));
-    EXPECT_EQ(smallest.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{192}}));
+    EXPECT_EQ(dims(smallest.m_derived.m_inputs), (Shapes{{256}}));
+    EXPECT_EQ(hops(smallest.m_derived.m_inputs), (std::vector<size_t>{192}));
+    EXPECT_EQ(dims(smallest.m_derived.m_outputs), (Shapes{{192}}));
 
     // window_max caps the pinned window.
     ModelConfig capped;
@@ -441,25 +442,25 @@ TEST(AbiTranslate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
                      .axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
                      .window(256, 300, 64));
     capped.output(streamed("out", 512));
-    const Outcome clamped = bridge(capped, hard);
+    const Outcome clamped = derive(capped, hard);
     ASSERT_EQ(clamped.m_status, ANIRA_OK) << clamped.m_message;
-    EXPECT_EQ(clamped.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{300}}));
+    EXPECT_EQ(dims(clamped.m_derived.m_inputs), (Shapes{{300}}));
 }
 
 // A flexible window follows the anchor hop scaled by its time ratio. The anchor's fixed window
 // is the anchor hop whatever the block: under the block 1024 one inference runs every second
 // call, and the output still gets its whole sample per inference.
-TEST(AbiTranslate, ATimeRatioScalesTheAnchorHopIntoTheFlexibleWindow) {
+TEST(AbiValidate, ATimeRatioScalesTheAnchorHopIntoTheFlexibleWindow) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in", 2048));
     model.output(flexible("out", 1).time_ratio(1, 2048));
     for (const double block : {2048.0, 1024.0, 4096.0}) {
         SCOPED_TRACE(block);
-        const Outcome outcome = bridge(model, geometry(block));
+        const Outcome outcome = derive(model, geometry(block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-        EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{2048}));
-        EXPECT_EQ(outcome.m_config.get_postprocess_output_size(), (std::vector<size_t>{1}));
+        EXPECT_EQ(hops(outcome.m_derived.m_inputs), (std::vector<size_t>{2048}));
+        EXPECT_EQ(hops(outcome.m_derived.m_outputs), (std::vector<size_t>{1}));
     }
 }
 
@@ -468,7 +469,7 @@ TEST(AbiTranslate, ATimeRatioScalesTheAnchorHopIntoTheFlexibleWindow) {
 // 1/2048 makes every anchor hop a multiple of 2048, so a block of 3000 runs 2048 per inference
 // (one or two inferences per call), and a block below the step, a fractional one included, the
 // step (one inference every few calls).
-TEST(AbiTranslate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
+TEST(AbiValidate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(flexible("audio", 1));
@@ -483,33 +484,32 @@ TEST(AbiTranslate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
                          Case{.m_block = 512.0, .m_anchor_hop = 2048},
                          Case{.m_block = 0.25, .m_anchor_hop = 2048}}) {
         SCOPED_TRACE(c.m_block);
-        const Outcome outcome = bridge(model, geometry(c.m_block));
+        const Outcome outcome = derive(model, geometry(c.m_block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-        EXPECT_EQ(outcome.m_config.get_tensor_input_shape(),
-                  (anira::TensorShapeList{{static_cast<int64_t>(c.m_anchor_hop)}}));
-        EXPECT_EQ(outcome.m_config.get_postprocess_output_size(),
-                  (std::vector<size_t>{c.m_anchor_hop / 2048}));
+        EXPECT_EQ(dims(outcome.m_derived.m_inputs),
+                  (Shapes{{static_cast<int64_t>(c.m_anchor_hop)}}));
+        EXPECT_EQ(hops(outcome.m_derived.m_outputs), (std::vector<size_t>{c.m_anchor_hop / 2048}));
     }
 
     // Without a geometry the smallest step.
-    const Outcome smallest = bridge(model);
+    const Outcome smallest = derive(model);
     ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
-    EXPECT_EQ(smallest.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{2048}}));
+    EXPECT_EQ(dims(smallest.m_derived.m_inputs), (Shapes{{2048}}));
 
     // window_max caps the hop below the block: the largest step within it.
     ModelConfig capped;
     capped.add_model_path(k_custom, "model.custom");
     capped.input(flexible("audio", 1, 5000));
     capped.output(flexible("latent", 1).time_ratio(1, 2048));
-    const Outcome clamped = bridge(capped, geometry(8192.0));
+    const Outcome clamped = derive(capped, geometry(8192.0));
     ASSERT_EQ(clamped.m_status, ANIRA_OK) << clamped.m_message;
-    EXPECT_EQ(clamped.m_config.get_tensor_input_shape(), (anira::TensorShapeList{{4096}}));
-    EXPECT_EQ(clamped.m_config.get_postprocess_output_size(), (std::vector<size_t>{2}));
+    EXPECT_EQ(dims(clamped.m_derived.m_inputs), (Shapes{{4096}}));
+    EXPECT_EQ(hops(clamped.m_derived.m_outputs), (std::vector<size_t>{2}));
 }
 
 // A fixed anchor window is the anchor hop, and every flexible window follows it, the host block
 // aside: an output without a declared ratio at 1/1, a declared one scaled by it.
-TEST(AbiTranslate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
+TEST(AbiValidate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
     struct Case {
         int64_t m_anchor;
         int64_t m_num;
@@ -526,18 +526,17 @@ TEST(AbiTranslate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
         model.add_model_path(k_custom, "model.custom");
         model.input(streamed("in", c.m_anchor));
         model.output(flexible("out", 1).time_ratio(c.m_num, c.m_den));
-        const Outcome outcome = bridge(model, geometry(c.m_block));
+        const Outcome outcome = derive(model, geometry(c.m_block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-        EXPECT_EQ(outcome.m_config.get_tensor_output_shape(),
-                  (anira::TensorShapeList{{c.m_window}}));
+        EXPECT_EQ(dims(outcome.m_derived.m_outputs), (Shapes{{c.m_window}}));
     }
 }
 
 // What no anchor hop satisfies is refused, naming the tensor and what it needs against what the
 // tensors before it allow.
-TEST(AbiTranslate, NoAnchorHopFitsEveryTensor) {
+TEST(AbiValidate, NoAnchorHopFitsEveryTensor) {
     const auto refused = [](const ModelConfig& model, std::string_view expected) {
-        const Outcome outcome = bridge(model, geometry(512.0));
+        const Outcome outcome = derive(model, geometry(512.0));
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
         expect_contains(outcome.m_message, expected);
     };
@@ -583,41 +582,45 @@ TEST(AbiTranslate, NoAnchorHopFitsEveryTensor) {
 
 // A declared ratio must agree with the hops the fixed windows give (the RAVE encoder: 2048
 // samples in, one latent frame out).
-TEST(AbiTranslate, ADeclaredRatioMustMatchTheFixedHops) {
+TEST(AbiValidate, ADeclaredRatioMustMatchTheFixedHops) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in", 2048));
     model.output(streamed("out", 1).time_ratio(1, 2048));
-    EXPECT_EQ(bridge(model).m_status, ANIRA_OK);
+    EXPECT_EQ(derive(model).m_status, ANIRA_OK);
 
     ModelConfig wrong;
     wrong.add_model_path(k_custom, "model.custom");
     wrong.input(streamed("in", 2048));
     wrong.output(streamed("out", 1).time_ratio(1, 1024));
-    const Outcome outcome = bridge(wrong);
+    const Outcome outcome = derive(wrong);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'out'");
     expect_contains(outcome.m_message, "time ratio 1/1024");
 }
 
-TEST(AbiTranslate, TheEntryExtensionIsTheModelFunction) {
+// The entry extension names the method the row's engine runs (what the engine record carries).
+TEST(AbiValidate, TheEntryExtensionNamesTheEntryPoint) {
 #ifdef USE_LIBTORCH
     ModelConfig model;
     const uint32_t torch = model.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
     model.model_ext(torch, anira::ext::Entry{"encode"});
     model.input(streamed("in"));
     model.output(streamed("out"));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_model_function(anira::InferenceBackend::LIBTORCH), "encode");
+    const auto* entry =
+        model.native()->m_models[torch].m_ext.payload<anira::capi::EntryPayload>("entry");
+    ASSERT_NE(entry, nullptr);
+    EXPECT_EQ(entry->m_name, "encode");
 #else
     GTEST_SKIP() << "needs the LibTorch adapter (the consumer of the entry extension)";
 #endif
 }
 
 // Decision 11: a LibTorch entry row that is not a candidate is neither loaded nor walked, so
-// a config carrying one bridges on a build without LibTorch.
-TEST(AbiTranslate, AnEntryRowOutsideTheCandidatesIsSkippedNotRefused) {
+// a config carrying one validates on a build without LibTorch.
+TEST(AbiValidate, AnEntryRowOutsideTheCandidatesIsSkippedNotRefused) {
     ModelConfig model;
     const uint32_t torch = model.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
     model.model_ext(torch, anira::ext::Entry{"encode"});
@@ -627,18 +630,18 @@ TEST(AbiTranslate, AnEntryRowOutsideTheCandidatesIsSkippedNotRefused) {
     std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom row
     const ContractHandle contract(explicit_hard());
-    const Outcome outcome = bridge(model, contract, &candidates);
+    const Outcome outcome = derive(model, contract, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_model_data(anira::InferenceBackend::CUSTOM)->m_model_function,
-              "");
+    EXPECT_EQ(model.native()->m_models[1].m_ext.payload<anira::capi::EntryPayload>("entry"),
+              nullptr);
 #ifdef USE_LIBTORCH
-    EXPECT_EQ(outcome.m_config.m_model_data.size(), 2U);
+    EXPECT_EQ(outcome.m_derived.m_rows, (std::vector<size_t>{0, 1}));
 #else
-    EXPECT_EQ(outcome.m_config.m_model_data.size(), 1U) << "the LibTorch row was skipped";
+    EXPECT_EQ(outcome.m_derived.m_rows, (std::vector<size_t>{1})) << "the LibTorch row was skipped";
 #endif
 }
 
-TEST(AbiTranslate, BytesAreBorrowedNotCopied) {
+TEST(AbiValidate, BytesAreBorrowedNotCopied) {
     static constexpr std::array<std::byte, 4> k_bytes{std::byte{1},
                                                       std::byte{2},
                                                       std::byte{3},
@@ -647,92 +650,89 @@ TEST(AbiTranslate, BytesAreBorrowedNotCopied) {
     model.add_model_bytes(k_custom, k_bytes, ANIRA_BYTES_BORROW);
     model.input(streamed("in"));
     model.output(streamed("out"));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    const anira::ModelData* data = outcome.m_config.get_model_data(anira::InferenceBackend::CUSTOM);
-    ASSERT_NE(data, nullptr);
-    EXPECT_TRUE(data->m_is_binary);
-    EXPECT_EQ(data->m_data, static_cast<const void*>(k_bytes.data()));
-    EXPECT_EQ(data->m_size, k_bytes.size());
+    EXPECT_EQ(outcome.m_derived.m_rows, (std::vector<size_t>{0}));
+    const anira::capi::ModelEntry& row = model.native()->m_models[0];
+    ASSERT_TRUE(row.has_bytes());
+    EXPECT_EQ(static_cast<const void*>(row.m_bytes->data()),
+              static_cast<const void*>(k_bytes.data()));
+    EXPECT_EQ(row.m_bytes->size(), k_bytes.size());
 }
 
-// A layout on an entry becomes one backend-qualified TensorShape beside the universal one.
-TEST(AbiTranslate, ALayoutBecomesABackendShape) {
+// A layout on an entry reorders the extents its engine is handed; the derived extents stay the
+// spec's.
+TEST(AbiValidate, ALayoutReordersTheEnginesExtents) {
     ModelConfig model;
     const uint32_t custom = model.add_model_path(k_custom, "model.custom");
     model.tensor_name(custom, "in", "args_0");
     model.tensor_layout(custom, "in", std::array{0U, 2U, 1U});
     model.input(streamed("in", 15380));
     model.output(streamed("out", 2048));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    const anira::InferenceConfig& cfg = outcome.m_config;
-    EXPECT_EQ(cfg.get_tensor_input_shape(), (anira::TensorShapeList{{1, 1, 15380}}));
-    EXPECT_EQ(cfg.get_tensor_input_shape(anira::InferenceBackend::CUSTOM),
-              (anira::TensorShapeList{{1, 15380, 1}}));
-    EXPECT_EQ(cfg.get_tensor_output_shape(anira::InferenceBackend::CUSTOM),
-              (anira::TensorShapeList{{1, 1, 2048}}));
-    EXPECT_EQ(cfg.get_tensor_input_size(), (std::vector<size_t>{15380}));
+    const anira::capi::Derived& cfg = outcome.m_derived;
+    EXPECT_EQ(dims(cfg.m_inputs), (Shapes{{1, 1, 15380}}));
+    const anira_model_config& native = *model.native();
+    const anira::capi::ModelEntry& row = native.m_models[custom];
+    EXPECT_EQ(engine_dims(row, native.m_inputs[0], cfg.m_inputs[0]),
+              (std::vector<int64_t>{1, 15380, 1}));
+    EXPECT_EQ(engine_dims(row, native.m_outputs[0], cfg.m_outputs[0]),
+              (std::vector<int64_t>{1, 1, 2048}));
+    EXPECT_EQ(elements(cfg.m_inputs), (std::vector<size_t>{15380}));
 }
 
 #if !defined(__ANDROID__) && !defined(__APPLE__)
-// The SimpleGain 2.x document (test/support/v2_documents.h), upgraded and bridged, equals the
-// 2.x fixture header of anira 2.x built by hand (SimpleGainConfig.h, copied inline).
-TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
+// The SimpleGain 2.x document (test/support/v2_documents.h), upgraded and validated, derives the
+// figures of the 2.x fixture header of anira 2.x (SimpleGainConfig.h).
+TEST(AbiValidate, UpgradedSimpleGainDerivesTheV2FixturesFigures) {
     ModelConfig model = ModelConfig::from_json(anira_test::gain_v2_document());
     ASSERT_TRUE(model.upgraded());
     const std::optional<ContractHandle> legacy = model.take_legacy_contract();
     if (!legacy.has_value()) { FAIL() << "the upgrade holds back a legacy contract"; }
     const std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     if (candidates.empty()) { GTEST_SKIP() << "no engine in this build"; }
-    const Outcome outcome = bridge(model, *legacy, &candidates);
+    const Outcome outcome = derive(model, *legacy, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
+    const anira::capi::Derived& d = outcome.m_derived;
+    EXPECT_EQ(dims(d.m_inputs), (Shapes{{1, 1, 512}, {1}}));
+    EXPECT_EQ(dims(d.m_outputs), (Shapes{{1, 1, 512}, {1}}));
+    EXPECT_EQ(hops(d.m_inputs), (std::vector<size_t>{512, 0}));
+    EXPECT_EQ(hops(d.m_outputs), (std::vector<size_t>{512, 0}));
+    EXPECT_EQ(channels(d.m_inputs), (std::vector<size_t>{1, 1}));
+    EXPECT_EQ(channels(d.m_outputs), (std::vector<size_t>{1, 1}));
+    EXPECT_FALSE(d.m_exclusive);
+
+    // One row per engine of the build, each on the fixture's file. The TensorFlow export holds
+    // the static gain at rank 3: the two TensorFlow rows of the document say so, and the upgrade
+    // carries them as a layout (the 2.x fixture header had [1] there, which the adapters' shape
+    // check refuses since anira 3).
     const std::string dir =
         ANIRA_EXTRAS_MODELS_DIR "/model-pool/example-models/SimpleGainNetwork/models";
-    const std::vector<anira::ModelData> model_data = {
-#ifdef USE_LIBTORCH
-        {dir + std::string("/simple_gain_network_mono.pt"), anira::InferenceBackend::LIBTORCH},
-#endif
-#ifdef USE_ONNXRUNTIME
-        {dir + std::string("/simple_gain_network_mono.onnx"), anira::InferenceBackend::ONNX},
-#endif
-#ifdef USE_TFLITE
-        {dir + std::string("/simple_gain_network_mono.tflite"), anira::InferenceBackend::TFLITE},
-#endif
-#ifdef USE_LITERT
-        {dir + std::string("/simple_gain_network_mono.tflite"), anira::InferenceBackend::LITERT},
-#endif
-#ifdef USE_EXECUTORCH
-        {dir + std::string("/simple_gain_network_mono.pte"), anira::InferenceBackend::EXECUTORCH},
-#endif
-    };
-    // The TensorFlow export holds the static gain at rank 3: the two TensorFlow rows of the
-    // document say so, and the upgrade carries them as a layout the bridge turns back into a
-    // backend-qualified shape, listed before the universal one (the 2.x fixture header had [1]
-    // there, which the adapters' shape check refuses since anira 3).
-    const std::vector<anira::TensorShape> tensor_shape = {
-#ifdef USE_TFLITE
-        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::TFLITE},
-#endif
-#ifdef USE_LITERT
-        {{{1, 1, 512}, {1, 1, 1}}, {{1, 1, 512}, {1}}, anira::InferenceBackend::LITERT},
-#endif
-        {{{1, 1, 512}, {1}}, {{1, 1, 512}, {1}}},
-    };
-    const anira::ProcessingSpec processing_spec = {{1, 1}, {1, 1}, {512, 0}, {512, 0}};
-    // The count the 2.x file leaves out is the pool's (ANIRA_INSTANCES_AUTO, what 2.x's default
-    // of half the hardware threads meant): the bridge carries the sentinel, the core resolves it.
-    const anira::InferenceConfig expected(
-        model_data,
-        tensor_shape,
-        processing_spec,
-        5.f,
-        1,
-        anira::InferenceConfig::Defaults::k_session_exclusive_processor,
-        anira::InferenceConfig::Defaults::k_blocking_ratio,
-        ANIRA_INSTANCES_AUTO);
-    anira_test::expect_inference_config_eq(outcome.m_config, expected);
+    const anira_model_config& native = *model.native();
+    ASSERT_EQ(d.m_rows.size(), candidates.size());
+    for (const size_t index : d.m_rows) {
+        const anira::capi::ModelEntry& row = native.m_models[index];
+        SCOPED_TRACE(row.m_path);
+        EXPECT_EQ(row.m_path.rfind(dir + "/simple_gain_network_mono.", 0), 0U);
+        const bool tensorflow =
+            row.m_engine == ANIRA_ENGINE_TFLITE || row.m_engine == ANIRA_ENGINE_LITERT;
+        EXPECT_EQ(engine_dims(row, native.m_inputs[1], d.m_inputs[1]),
+                  tensorflow ? (std::vector<int64_t>{1, 1, 1}) : (std::vector<int64_t>{1}));
+        EXPECT_EQ(engine_dims(row, native.m_inputs[0], d.m_inputs[0]),
+                  (std::vector<int64_t>{1, 1, 512}));
+    }
+
+    // The 2.x max_inference_time and warm_up ride the legacy contract; the count the 2.x file
+    // leaves out is the pool's (ANIRA_INSTANCES_AUTO, what 2.x's default of half the hardware
+    // threads meant), which the core resolves.
+    const anira::capi::HardContract* hard = legacy->native()->hard();
+    ASSERT_NE(hard, nullptr);
+    EXPECT_DOUBLE_EQ(hard->m_budget_ms, 5.0);
+    EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED);
+    EXPECT_EQ(hard->m_warmup_iterations, 1U);
+    EXPECT_EQ(native.m_max_instances, ANIRA_INSTANCES_AUTO);
 }
 #endif
 
@@ -740,23 +740,23 @@ TEST(AbiTranslate, UpgradedSimpleGainEqualsTheV2Fixture) {
 // The rules: each returns its status and names the tensor or the entry
 // ============================================================================
 
-TEST(AbiTranslate, NoInputOrNoOutputIsConfig) {
+TEST(AbiValidate, NoInputOrNoOutputIsConfig) {
     ModelConfig no_input;
     no_input.add_model_path(k_custom, "model.custom");
     no_input.output(streamed("out"));
-    Outcome outcome = bridge(no_input);
+    Outcome outcome = derive(no_input);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "no input tensor");
 
     ModelConfig no_output;
     no_output.add_model_path(k_custom, "model.custom");
     no_output.input(streamed("in"));
-    outcome = bridge(no_output);
+    outcome = derive(no_output);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "no output tensor");
 }
 
-TEST(AbiTranslate, AxisRulesNameTheTensor) {
+TEST(AbiValidate, AxisRulesNameTheTensor) {
     // A slot below ndim never set.
     ModelConfig gap;
     gap.add_model_path(k_custom, "model.custom");
@@ -764,7 +764,7 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
                   .axis(2, ANIRA_AXIS_TIME, 512)
                   .window(512, 512, 0));
     gap.output(streamed("out"));
-    Outcome outcome = bridge(gap);
+    Outcome outcome = derive(gap);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': axis 0 was never set");
 
@@ -773,7 +773,7 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
     none.add_model_path(k_custom, "model.custom");
     none.input(TensorSpec("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED).window(512, 512, 0));
     none.output(streamed("out"));
-    outcome = bridge(none);
+    outcome = derive(none);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': no axis was set");
 
@@ -785,7 +785,7 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
                        .axis(1, ANIRA_AXIS_TIME, 512)
                        .window(512, 512, 0));
     two_time.output(streamed("out"));
-    outcome = bridge(two_time);
+    outcome = derive(two_time);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': has 2 Time axes");
 
@@ -798,7 +798,7 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
                           .axis(2, ANIRA_AXIS_TIME, 512)
                           .window(512, 512, 0));
     two_channel.output(streamed("out"));
-    outcome = bridge(two_channel);
+    outcome = derive(two_channel);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': has 2 Channel axes");
 
@@ -809,7 +809,7 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
                       .axis(0, ANIRA_AXIS_ANY, 512)
                       .window(512, 512, 0));
     no_time.output(streamed("out"));
-    outcome = bridge(no_time);
+    outcome = derive(no_time);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': a Streamed tensor needs a Time axis");
 
@@ -820,12 +820,12 @@ TEST(AbiTranslate, AxisRulesNameTheTensor) {
     static_time.input(
         TensorSpec("gain", ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC).axis(0, ANIRA_AXIS_TIME, 1));
     static_time.output(streamed("out"));
-    outcome = bridge(static_time);
+    outcome = derive(static_time);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'gain': a Static tensor has no Time axis");
 }
 
-TEST(AbiTranslate, DynamicExtentRules) {
+TEST(AbiValidate, DynamicExtentRules) {
     // Dynamic off the Time axis.
     ModelConfig batch;
     batch.add_model_path(k_custom, "model.custom");
@@ -834,7 +834,7 @@ TEST(AbiTranslate, DynamicExtentRules) {
                     .axis(1, ANIRA_AXIS_TIME, 512)
                     .window(512, 512, 0));
     batch.output(streamed("out"));
-    Outcome outcome = bridge(batch);
+    Outcome outcome = derive(batch);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': axis 0 is dynamic");
 
@@ -845,12 +845,12 @@ TEST(AbiTranslate, DynamicExtentRules) {
     buffer.input(TensorSpec("whole", ANIRA_DTYPE_F32, ANIRA_ROLE_BUFFER)
                      .axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC));
     buffer.output(streamed("out"));
-    outcome = bridge(buffer);
+    outcome = derive(buffer);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "tensor 'whole': a dynamic Time extent on a Buffer tensor");
 }
 
-TEST(AbiTranslate, WindowRules) {
+TEST(AbiValidate, WindowRules) {
     const auto with_window = [](int64_t window_min, int64_t window_max, int64_t context) {
         ModelConfig model;
         model.add_model_path(k_custom, "model.custom");
@@ -858,7 +858,7 @@ TEST(AbiTranslate, WindowRules) {
                         .axis(0, ANIRA_AXIS_TIME, 512)
                         .window(window_min, window_max, context));
         model.output(streamed("out"));
-        return bridge(model);
+        return derive(model);
     };
     Outcome outcome = with_window(0, 0, 0);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
@@ -872,7 +872,7 @@ TEST(AbiTranslate, WindowRules) {
     EXPECT_EQ(with_window(512, ANIRA_UNBOUNDED, 511).m_status, ANIRA_OK);
 }
 
-TEST(AbiTranslate, StaticAndBufferRules) {
+TEST(AbiValidate, StaticAndBufferRules) {
     ModelConfig windowed;
     windowed.add_model_path(k_custom, "model.custom");
     windowed.input(streamed("in"));
@@ -880,7 +880,7 @@ TEST(AbiTranslate, StaticAndBufferRules) {
                        .axis(0, ANIRA_AXIS_ANY, 1)
                        .window(1, 1, 0));
     windowed.output(streamed("out"));
-    Outcome outcome = bridge(windowed);
+    Outcome outcome = derive(windowed);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'gain': a Static tensor has no window");
 
@@ -891,7 +891,7 @@ TEST(AbiTranslate, StaticAndBufferRules) {
                     .axis(0, ANIRA_AXIS_TIME, 64)
                     .time_ratio(1, 2));
     ratio.output(streamed("out"));
-    outcome = bridge(ratio);
+    outcome = derive(ratio);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'whole': a Buffer tensor has no time ratio");
 
@@ -903,7 +903,7 @@ TEST(AbiTranslate, StaticAndBufferRules) {
                        .axis(0, ANIRA_AXIS_CHANNEL, 2)
                        .axis(1, ANIRA_AXIS_CHANNEL, 3));
     channels.output(streamed("out"));
-    outcome = bridge(channels);
+    outcome = derive(channels);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'gain': has 2 Channel axes");
 
@@ -915,7 +915,7 @@ TEST(AbiTranslate, StaticAndBufferRules) {
                               .axis(1, ANIRA_AXIS_CHANNEL, 2)
                               .axis(2, ANIRA_AXIS_TIME, 64));
     buffer_channels.output(streamed("out"));
-    outcome = bridge(buffer_channels);
+    outcome = derive(buffer_channels);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'whole': has 2 Channel axes");
 
@@ -926,48 +926,48 @@ TEST(AbiTranslate, StaticAndBufferRules) {
     buffer.input(
         TensorSpec("whole", ANIRA_DTYPE_F32, ANIRA_ROLE_BUFFER).axis(0, ANIRA_AXIS_TIME, 64));
     buffer.output(streamed("out"));
-    outcome = bridge(buffer);
+    outcome = derive(buffer);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_preprocess_input_size(), (std::vector<size_t>{512, 0}));
+    EXPECT_EQ(hops(outcome.m_derived.m_inputs), (std::vector<size_t>{512, 0}));
 }
 
-TEST(AbiTranslate, LatencyIsAnOutputProperty) {
+TEST(AbiValidate, LatencyIsAnOutputProperty) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in").latency(8));
     model.output(streamed("out"));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': latency is an output property");
 }
 
-TEST(AbiTranslate, ANonFloat32DtypeIsNotSupported) {
+TEST(AbiValidate, ANonFloat32DtypeIsNotSupported) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
     model.output(TensorSpec("out", ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED)
                      .axis(0, ANIRA_AXIS_TIME, 512)
                      .window(512, 512, 0));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "tensor 'out': dtype");
     expect_contains(outcome.m_message, "the queue stores float32");
 }
 
-TEST(AbiTranslate, NoStreamedTensorIsConfig) {
+TEST(AbiValidate, NoStreamedTensorIsConfig) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(scalar("gain"));
     model.output(scalar("gain_out"));
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "no Streamed tensor");
 }
 
-TEST(AbiTranslate, AnchorRules) {
+TEST(AbiValidate, AnchorRules) {
     ModelConfig unknown = minimal();
     unknown.anchor("nobody");
-    Outcome outcome = bridge(unknown);
+    Outcome outcome = derive(unknown);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "anchor 'nobody' names no tensor");
 
@@ -977,7 +977,7 @@ TEST(AbiTranslate, AnchorRules) {
     not_streamed.input(scalar("gain"));
     not_streamed.output(streamed("out"));
     not_streamed.anchor("gain");
-    outcome = bridge(not_streamed);
+    outcome = derive(not_streamed);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "anchor 'gain' is Static");
 
@@ -986,16 +986,16 @@ TEST(AbiTranslate, AnchorRules) {
     ratio.input(streamed("in"));
     ratio.output(streamed("out").time_ratio(1, 2));
     ratio.anchor("out");
-    outcome = bridge(ratio);
+    outcome = derive(ratio);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'out': the anchor's time ratio is 1:1");
 }
 
-TEST(AbiTranslate, RowRules) {
+TEST(AbiValidate, RowRules) {
     ModelConfig empty;
     empty.input(streamed("in"));
     empty.output(streamed("out"));
-    Outcome outcome = bridge(empty);
+    Outcome outcome = derive(empty);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "no model entry");
 
@@ -1003,7 +1003,7 @@ TEST(AbiTranslate, RowRules) {
     foreign.add_model_path("de.tu-berlin.coreml", "model.mlmodelc");
     foreign.input(streamed("in"));
     foreign.output(streamed("out"));
-    outcome = bridge(foreign);
+    outcome = derive(foreign);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message,
                     "models[0]: custom engine 'de.tu-berlin.coreml' is not added to this "
@@ -1014,14 +1014,14 @@ TEST(AbiTranslate, RowRules) {
     twice.add_model_path(k_custom, "b.custom");
     twice.input(streamed("in"));
     twice.output(streamed("out"));
-    outcome = bridge(twice);
+    outcome = derive(twice);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message,
                     "models[0]: and models[1] both name engine 'anira.v2.custom'");
 
     ModelConfig no_default = minimal();
     no_default.default_engine(ANIRA_ENGINE_ONNXRUNTIME);
-    outcome = bridge(no_default);
+    outcome = derive(no_default);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "default_engine 'onnxruntime' names no model entry");
 
@@ -1029,12 +1029,12 @@ TEST(AbiTranslate, RowRules) {
     const std::vector<anira_engine> only_onnx{ANIRA_ENGINE_ONNXRUNTIME};
     const ContractHandle contract(explicit_hard());
     const ModelConfig custom_only = minimal();
-    outcome = bridge(custom_only, contract, &only_onnx);
+    outcome = derive(custom_only, contract, &only_onnx);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "none of the 1 model entries runs on a candidate backend");
 }
 
-TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
+TEST(AbiValidate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
     const std::optional<anira_engine> missing = missing_engine();
     if (!missing.has_value()) { GTEST_SKIP() << "every engine is in this build"; }
     ModelConfig model;
@@ -1042,7 +1042,7 @@ TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
     model.output(streamed("out"));
-    Outcome outcome = bridge(model);
+    Outcome outcome = derive(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "models[0]: engine '");
     expect_contains(outcome.m_message, "' is not in this build");
@@ -1050,18 +1050,18 @@ TEST(AbiTranslate, AnEngineNotInThisBuildIsNotSupportedUnlessFilteredOut) {
     std::vector<anira_engine> candidates = anira::capi::enabled_engines();
     candidates.push_back(ANIRA_ENGINE_CUSTOM);
     const ContractHandle contract(explicit_hard());
-    outcome = bridge(model, contract, &candidates);
+    outcome = derive(model, contract, &candidates);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.m_model_data.size(), 1U);
+    EXPECT_EQ(outcome.m_derived.m_rows, (std::vector<size_t>{1}));
 }
 
-TEST(AbiTranslate, LayoutRules) {
+TEST(AbiValidate, LayoutRules) {
     ModelConfig transpose;
     const uint32_t row = transpose.add_model_path(k_custom, "model.custom");
     transpose.tensor_layout(row, "in", std::array{2U, 1U, 0U});
     transpose.input(streamed("in", 512, 2));
     transpose.output(streamed("out"));
-    Outcome outcome = bridge(transpose);
+    Outcome outcome = derive(transpose);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "models[0]: tensor 'in': the layout moves an axis");
 
@@ -1070,7 +1070,7 @@ TEST(AbiTranslate, LayoutRules) {
     nobody.tensor_name(row2, "ghost", "args_0");
     nobody.input(streamed("in"));
     nobody.output(streamed("out"));
-    outcome = bridge(nobody);
+    outcome = derive(nobody);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "models[0]: the tensor record names no tensor 'ghost'");
 
@@ -1080,7 +1080,7 @@ TEST(AbiTranslate, LayoutRules) {
     short_layout.tensor_layout(row3, "in", std::array{0U, 1U});
     short_layout.input(streamed("in"));
     short_layout.output(streamed("out"));
-    outcome = bridge(short_layout);
+    outcome = derive(short_layout);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "models[0]: tensor 'in': layout");
 }
@@ -1090,13 +1090,13 @@ TEST(AbiTranslate, LayoutRules) {
 // returns unnamed tensors) and its inputs by the method's argument names; ExecuTorch binds
 // both sides by position. A layout on such a side stays legal.
 #ifdef USE_LIBTORCH
-TEST(AbiTranslate, ANameOnALibTorchOutputIsNotSupportedOnAnInputItBinds) {
+TEST(AbiValidate, ANameOnALibTorchOutputIsNotSupportedOnAnInputItBinds) {
     ModelConfig output_named;
     const uint32_t row = output_named.add_model_path(ANIRA_ENGINE_LIBTORCH, "model.pt");
     output_named.tensor_name(row, "out", "y");
     output_named.input(streamed("in"));
     output_named.output(streamed("out"));
-    Outcome outcome = bridge(output_named);
+    Outcome outcome = derive(output_named);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message,
                     "models[0]: tensor 'out': libtorch binds its outputs by position; drop the "
@@ -1108,19 +1108,19 @@ TEST(AbiTranslate, ANameOnALibTorchOutputIsNotSupportedOnAnInputItBinds) {
     input_named.tensor_layout(row2, "out", std::array{0U, 1U, 2U});
     input_named.input(streamed("in"));
     input_named.output(streamed("out"));
-    outcome = bridge(input_named);
+    outcome = derive(input_named);
     EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 }
 #endif
 
 #ifdef USE_EXECUTORCH
-TEST(AbiTranslate, ANameOnAnExecuTorchRowIsNotSupported) {
+TEST(AbiValidate, ANameOnAnExecuTorchRowIsNotSupported) {
     ModelConfig named;
     const uint32_t row = named.add_model_path(ANIRA_ENGINE_EXECUTORCH, "model.pte");
     named.tensor_name(row, "in", "x");
     named.input(streamed("in"));
     named.output(streamed("out"));
-    Outcome outcome = bridge(named);
+    Outcome outcome = derive(named);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message,
                     "models[0]: tensor 'in': executorch binds its inputs by position; drop the "
@@ -1131,131 +1131,102 @@ TEST(AbiTranslate, ANameOnAnExecuTorchRowIsNotSupported) {
     laid_out.tensor_layout(row2, "in", std::array{0U, 1U, 2U});
     laid_out.input(streamed("in"));
     laid_out.output(streamed("out"));
-    outcome = bridge(laid_out);
+    outcome = derive(laid_out);
     EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 }
 #endif
 
-TEST(AbiTranslate, AnUnknownExtensionFailsByName) {
+TEST(AbiValidate, AnUnknownExtensionFailsByName) {
     ModelConfig model = minimal();
     model.ext_json("de.example.unknown", R"({"version": 1})");
-    const Outcome outcome = bridge(model);
+    const Outcome outcome = derive(model);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_EXTENSION_UNKNOWN);
     expect_contains(outcome.m_message, "de.example.unknown");
 }
 
-TEST(AbiTranslate, ContractRules) {
+TEST(AbiValidate, ContractRules) {
     const ModelConfig model = minimal();
-    Outcome outcome = bridge(model, Hard{.budget = anira::Budget::measured()});
+    Outcome outcome = derive(model, Hard{.budget = anira::Budget::measured()});
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: a MEASURED budget");
 
     Hard until_stable = explicit_hard();
     until_stable.warmup = ANIRA_WARMUP_UNTIL_STABLE;
-    outcome = bridge(model, until_stable);
+    outcome = derive(model, until_stable);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: UNTIL_STABLE warmup");
 
     // Every miss policy passes the bridge: the policy is the scheduler's, not a 2.x limit.
     Hard zeros = explicit_hard();
     zeros.on_miss = ANIRA_MISS_ZEROS;
-    outcome = bridge(model, zeros);
+    outcome = derive(model, zeros);
     EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
     Hard hold_last = explicit_hard();
     hold_last.on_miss = ANIRA_MISS_HOLD_LAST;
-    outcome = bridge(model, hold_last);
+    outcome = derive(model, hold_last);
     EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
 
     const ContractHandle async_contract{anira::Async{}};
-    outcome = bridge(model, async_contract);
+    outcome = derive(model, async_contract);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "contract: an Async contract");
 
     ContractHandle dtype(explicit_hard());
     dtype.hard_ring_dtype("in", ANIRA_DTYPE_I16);
-    outcome = bridge(model, dtype);
+    outcome = derive(model, dtype);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "contract: the ring dtype of 'in'");
     expect_contains(outcome.m_message, "nothing converts");
 
     ContractHandle ghost(explicit_hard());
     ghost.hard_ring_dtype("ghost", ANIRA_DTYPE_F32);
-    outcome = bridge(model, ghost);
+    outcome = derive(model, ghost);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "contract: the ring dtype of 'ghost' names no tensor");
 
     ContractHandle f32(explicit_hard());
     f32.hard_ring_dtype("in", ANIRA_DTYPE_F32).hard_ring_dtype("out", ANIRA_DTYPE_F32);
-    EXPECT_EQ(bridge(model, f32).m_status, ANIRA_OK);
+    EXPECT_EQ(derive(model, f32).m_status, ANIRA_OK);
 }
 
 // ============================================================================
-// HostConfig
+// The anchor and the geometry
 // ============================================================================
 
-TEST(AbiTranslate, HardGeometryAndAnchorLandInTheHostConfig) {
-    const ModelConfig model = minimal();
-    Hard hard = explicit_hard();
-    hard.block_min = 1;
-    hard.block_max = 512;
-    hard.rate = 48000;
-    const ContractHandle contract(hard);
-    anira::HostConfig host;
-    anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
-        << err.message;
-    EXPECT_EQ(host,
-              anira::HostConfig(512.F, 48000.F, true, anira::HostConfig::k_first_streamable, true));
+// The anchor is the first Streamed input, else the first Streamed output (a generator), unless
+// the model config names one.
+TEST(AbiValidate, TheAnchorIsTheFirstStreamedTensorUnlessNamed) {
+    const Outcome first = derive(minimal());
+    ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_message;
+    EXPECT_FALSE(first.m_derived.m_anchor_named);
+    EXPECT_TRUE(first.m_derived.m_anchor_is_input);
+    EXPECT_EQ(first.m_derived.m_anchor_index, 0U);
+
+    ModelConfig generator;
+    generator.add_model_path(k_custom, "model.custom");
+    generator.input(scalar("gain"));
+    generator.output(streamed("out"));
+    generator.output(streamed("clock"));
+    const Outcome unnamed = derive(generator);
+    ASSERT_EQ(unnamed.m_status, ANIRA_OK) << unnamed.m_message;
+    EXPECT_FALSE(unnamed.m_derived.m_anchor_named);
+    EXPECT_FALSE(unnamed.m_derived.m_anchor_is_input);
+    EXPECT_EQ(unnamed.m_derived.m_anchor_index, 0U);
 
     // A named output anchor is an explicit index.
-    ModelConfig anchored;
-    anchored.add_model_path(k_custom, "model.custom");
-    anchored.input(scalar("gain"));
-    anchored.output(streamed("out"));
-    anchored.output(streamed("clock"));
-    anchored.anchor("clock");
-    hard.block_min = 512;
-    const ContractHandle fixed(hard);
-    ASSERT_EQ(to_host_config(fixed.native(), anchored.native(), host, &err), ANIRA_OK)
-        << err.message;
-    EXPECT_EQ(host, anira::HostConfig(512.F, 48000.F, false, 1, false));
-
-    // The geometry is required here (to_inference_config does without it).
-    const ContractHandle bare(explicit_hard());
-    EXPECT_EQ(to_host_config(bare.native(), model.native(), host, &err), ANIRA_ERROR_CONFIG);
-    expect_contains(err.message, "contract: Hard geometry missing");
-
-    const ContractHandle async_contract{anira::Async{}};
-    EXPECT_EQ(to_host_config(async_contract.native(), model.native(), host, &err),
-              ANIRA_ERROR_NOT_SUPPORTED);
-
-    // A spec rule applies here too.
-    ModelConfig broken;
-    broken.add_model_path(k_custom, "model.custom");
-    broken.input(streamed("in").latency(1));
-    broken.output(streamed("out"));
-    EXPECT_EQ(to_host_config(fixed.native(), broken.native(), host, &err), ANIRA_ERROR_CONFIG);
-    expect_contains(err.message, "tensor 'in': latency");
+    generator.anchor("clock");
+    const Outcome named = derive(generator);
+    ASSERT_EQ(named.m_status, ANIRA_OK) << named.m_message;
+    EXPECT_TRUE(named.m_derived.m_anchor_named);
+    EXPECT_FALSE(named.m_derived.m_anchor_is_input);
+    EXPECT_EQ(named.m_derived.m_anchor_index, 1U);
 }
 
-TEST(AbiTranslate, TheHostsOwnGeometryMayBeFractional) {
-    const ModelConfig model = minimal();
-    anira::HostConfig host;
-    anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(to_host_config(model.native(), 1024.F / 2048.F, 48000.F / 2048.F, true, host, &err),
-              ANIRA_OK)
-        << err.message;
-    EXPECT_EQ(host, anira::HostConfig(0.5F, 48000.F / 2048.F, true));
-    EXPECT_EQ(to_host_config(model.native(), 0.F, 48000.F, false, host, &err),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    expect_contains(err.message, "buffer_size and sample_rate must be positive");
-}
-
-// A fractional Hard geometry reaches the 2.x HostConfig as the nearest float, and the latency
-// calculation recovers from it exactly the rational the host meant: 1/3 and 1/4 of an anchor
+// A fractional Hard geometry reaches the latency calculation as the double the host stated, and
+// the calculation recovers from it exactly the rational the host meant: 1/3 and 1/4 of an anchor
 // sample, and the same blocks on an anchor hop of 4 (1/12 and 1/16 of a hop).
-TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
+TEST(AbiValidate, AFractionalGeometryIsTheCalculatorsRational) {
     struct Case {
         double m_block;
         int64_t m_hop;
@@ -1283,16 +1254,11 @@ TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
         hard.rate = 100.0;
         const ContractHandle contract(hard);
         EXPECT_EQ(contract.hard().block_max, c.m_block) << "the double is stored as it is";
-        anira::HostConfig host;
-        anira_error err = ANIRA_ERROR_INIT;
-        ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
-            << err.message;
-        EXPECT_EQ(host.m_buffer_size, static_cast<float>(c.m_block));
-        EXPECT_FALSE(host.m_allow_smaller_buffers);
-        const Outcome outcome = bridge(model, contract);
+        const Outcome outcome = derive(model, contract);
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
         const anira::LatencyCalculator::Rational hops =
-            anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
+            anira::LatencyCalculator(outcome.m_derived, *contract.native()->hard(), 1)
+                .get_block_hops();
         EXPECT_EQ(hops.m_numerator, c.m_hops.m_numerator);
         EXPECT_EQ(hops.m_denominator, c.m_hops.m_denominator);
     }
@@ -1302,7 +1268,7 @@ TEST(AbiTranslate, AFractionalGeometryIsTheCalculatorsRational) {
 // element of the output per call) is no window, so the window follows the anchor hop instead,
 // the anchor's fixed window of 1. The output at time ratio 2/1 gets a window of 2, one inference
 // every fourth call, which the latency calculation counts as a quarter of a hop per block.
-TEST(AbiTranslate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
+TEST(AbiValidate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("latent", 1));
@@ -1312,22 +1278,18 @@ TEST(AbiTranslate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
     hard.block_max = 0.25;
     hard.rate = 100.0;
     const ContractHandle contract(hard);
-    const Outcome outcome = bridge(model, contract);
+    const Outcome outcome = derive(model, contract);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
-    EXPECT_EQ(outcome.m_config.get_tensor_output_shape(), (anira::TensorShapeList{{2}}));
-    EXPECT_EQ(outcome.m_config.get_postprocess_output_size(), (std::vector<size_t>{2}));
+    EXPECT_EQ(dims(outcome.m_derived.m_outputs), (Shapes{{2}}));
+    EXPECT_EQ(hops(outcome.m_derived.m_outputs), (std::vector<size_t>{2}));
 
-    anira::HostConfig host;
-    anira_error err = ANIRA_ERROR_INIT;
-    ASSERT_EQ(to_host_config(contract.native(), model.native(), host, &err), ANIRA_OK)
-        << err.message;
     const anira::LatencyCalculator::Rational hops =
-        anira::LatencyCalculator(outcome.m_config, host).get_block_hops();
+        anira::LatencyCalculator(outcome.m_derived, *contract.native()->hard(), 1).get_block_hops();
     EXPECT_EQ(hops.m_numerator, 1);
     EXPECT_EQ(hops.m_denominator, 4);
 }
 
-TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
+TEST(AbiValidate, EnabledEnginesMatchTheBuild) {
     const std::vector<anira_engine> engines = anira::capi::enabled_engines();
     const std::vector<anira_engine> expected = [] {
         std::vector<anira_engine> list;
@@ -1349,4 +1311,14 @@ TEST(AbiTranslate, EnabledEnginesMatchTheBuild) {
         return list;
     }();
     EXPECT_EQ(engines, expected);
+    for (const anira_engine engine : {ANIRA_ENGINE_ONNXRUNTIME,
+                                      ANIRA_ENGINE_LIBTORCH,
+                                      ANIRA_ENGINE_TFLITE,
+                                      ANIRA_ENGINE_LITERT,
+                                      ANIRA_ENGINE_EXECUTORCH}) {
+        EXPECT_EQ(anira::capi::engine_enabled(engine),
+                  std::ranges::find(expected, engine) != expected.end());
+    }
+    EXPECT_FALSE(anira::capi::engine_enabled(ANIRA_ENGINE_CUSTOM))
+        << "a custom row is served by the pipeline's engines";
 }

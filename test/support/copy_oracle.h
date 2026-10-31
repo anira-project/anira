@@ -532,13 +532,10 @@ private:
 inline std::vector<const anira::RingBuffer*> rings_of(const anira::SessionElement& session,
                                                       bool inputs) {
     static const anira::RingBuffer k_none;
-    const anira::InferenceConfig& config = session.m_inference_config;
-    const size_t slots =
-        inputs ? config.get_tensor_input_shape().size() : config.get_tensor_output_shape().size();
+    const size_t slots = inputs ? session.num_inputs() : session.num_outputs();
     std::vector<const anira::RingBuffer*> rings(slots, &k_none);
     for (size_t slot = 0; slot < slots; ++slot) {
-        const size_t hop = inputs ? config.get_preprocess_input_size()[slot]
-                                  : config.get_postprocess_output_size()[slot];
+        const size_t hop = inputs ? session.input_hop(slot) : session.output_hop(slot);
         if (hop > 0) {
             rings[slot] = inputs ? &session.send_ring(slot) : &session.receive_ring(slot);
         }

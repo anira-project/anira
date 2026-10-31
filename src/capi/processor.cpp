@@ -14,7 +14,6 @@
 // processor's own flags promise: anira's side is real-time regardless.
 #include "processor.h"
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/lifecycle.h>
@@ -584,16 +583,10 @@ ProcessorFacts processor_facts(const ProcessorCarrier* processor) {
     return facts;
 }
 
-ProcessorRunner::ProcessorRunner(anira::InferenceConfig& config,
-                                 const ProcessorCarrier* processor,
+ProcessorRunner::ProcessorRunner(const ProcessorCarrier* processor,
                                  std::vector<Port>& input_ports,
                                  std::vector<Port>& output_ports)
-    : m_inference_config(config)
-    , m_processor(processor)
-    , m_input_ports(input_ports)
-    , m_output_ports(output_ports)
-    , m_input_shapes(config.get_tensor_input_shape())
-    , m_output_shapes(config.get_tensor_output_shape()) {
+    : m_processor(processor), m_input_ports(input_ports), m_output_ports(output_ports) {
     m_has_state = std::ranges::any_of(m_input_ports, [](const Port& port) {
         return std::holds_alternative<StatePort>(port);
     });
@@ -667,8 +660,8 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
         ctx.provider_id = provider_id.empty() ? nullptr : provider_id.c_str();
     }
     ctx.variant = 0;
-    ctx.num_inputs = static_cast<uint32_t>(m_input_shapes.size());
-    ctx.num_outputs = static_cast<uint32_t>(m_output_shapes.size());
+    ctx.num_inputs = static_cast<uint32_t>(m_input_ports.size());
+    ctx.num_outputs = static_cast<uint32_t>(m_output_ports.size());
     ctx.ticket = ANIRA_TICKET_INVALID;
     ctx.entry = chunk.m_entry;
     ctx.frame = &frame;
@@ -810,9 +803,9 @@ anira_status ProcessorRunner::pre_process(Chunk& chunk) noexcept {
          ++tensor) {
         const auto* fixed = std::get_if<StaticPort>(&m_input_ports[tensor]);
         if (fixed == nullptr) { continue; }
-        fixed->m_value.read_packed(
-            chunk.m_input_tensors[tensor].handle.host.ptr,
-            m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
+        const anira_tensor& model_end = chunk.m_input_tensors[tensor];
+        fixed->m_value.read_packed(model_end.handle.host.ptr,
+                                   anira_tensor_num_elements(&model_end) * sizeof(float));
     }
     const ProcessorFrame frame = make_frame_with_inputs(chunk);
     const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, chunk, frame);
@@ -859,9 +852,9 @@ anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
          ++tensor) {
         auto* fixed = std::get_if<StaticPort>(&m_output_ports[tensor]);
         if (fixed == nullptr) { continue; }
-        fixed->m_value.write_packed(
-            chunk.m_output_tensors[tensor].handle.host.ptr,
-            m_inference_config.get_tensor_output_size()[tensor] * sizeof(float));
+        const anira_tensor& model_end = chunk.m_output_tensors[tensor];
+        fixed->m_value.write_packed(model_end.handle.host.ptr,
+                                    anira_tensor_num_elements(&model_end) * sizeof(float));
     }
     return status;
 }

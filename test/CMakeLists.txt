@@ -111,14 +111,14 @@ endfunction()
 #       (test_abi's internal probes and the 2.x arms, PR 12).
 #   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
 #       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
-#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_Translate,
-#       test_PrePostProcessor, and every use of the two support headers below.
+#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite,
+#       test_PrePostProcessor, and the 2.x configuration comparison of test_Translate, which is
+#       test_Validate now (what the validator derives, which the session reads).
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
 # No suite drives a 2.x session any more (PR 10b): the 2.x handler and the 2.x objects of the
-# white-box suites left the tests, and the arms of test_abi check the 3.x side against closed
-# forms. test/support/inference_config_eq.h stays with test_Translate, the translator's own
-# suite, until the session runs on the 3.x configuration.
+# white-box suites left the tests, the arms of test_abi check the 3.x side against closed
+# forms, and the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils
 	utils/test_Buffer.cpp
@@ -185,7 +185,7 @@ anira_add_test_binary(test_abi
 	abi/test_Json.cpp
 	abi/test_JsonUpgrade.cpp
 	abi/test_anira_hpp.cpp
-	abi/test_Translate.cpp
+	abi/test_Validate.cpp
 	abi/test_ExtrasFixtures.cpp
 	abi/test_Extras.cpp
 	abi/test_Context.cpp

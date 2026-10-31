@@ -8,8 +8,6 @@
 #include <cstddef>
 #include <vector>
 
-#include "../InferenceConfig.h"
-#include "../utils/HostConfig.h"
 #include "Core.h"
 #include "InferenceThread.h"
 
@@ -53,7 +51,7 @@ struct RtLatch;
  *       as the primary interface for inference operations rather than directly
  *       accessing lower-level components.
  *
- * @see InferenceThread, Core, HostConfig, InferenceConfig
+ * @see InferenceThread, Core, SessionElement
  */
 class ANIRA_API InferenceManager {
 public:
@@ -73,7 +71,10 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings (it outlives the manager)
-     * @param inference_config Reference to the inference configuration containing model settings
+     * @param model The handler's model config (its variant)
+     * @param derived What the validator derived for it under the contract
+     * @param hard The Hard half of the contract the handler is prepared under (the three
+     * outlive the manager: the session reads them by reference)
      * @param requests The plans, in dense-index order; never empty
      * @param context_config The context's configuration (anira_context_config_*)
      * @param rt_latch The handler's latch the session records its failures into; nullptr
@@ -81,7 +82,9 @@ public:
      * @throws std::invalid_argument for an empty request list
      */
     InferenceManager(capi::ProcessorRunner& processor,
-                     InferenceConfig& inference_config,
+                     const anira_model_config& model,
+                     const capi::Derived& derived,
+                     const capi::HardContract& hard,
                      std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,
                      anira::RtLatch* rt_latch = nullptr);
@@ -95,31 +98,18 @@ public:
     ~InferenceManager();
 
     /**
-     * @brief Prepares the inference manager for processing with new audio configuration
+     * @brief Prepares the session for the Hard contract it reads
      *
-     * Initializes the inference pipeline with the specified host configuration and
-     * optional custom latency settings. This method must be called before processing
-     * begins or when audio settings change.
+     * Sizes the session for the contract's geometry, budget and wait ratio (Core::
+     * prepare_session()), with the caller's latencies and the element type of every send and
+     * receive ring named per slot, and readies the copy path. This method must be called
+     * before processing begins, and again whenever the contract changes.
      *
-     * @param config Host configuration containing sample rate, buffer size, and audio settings
-     * @param custom_latency Optional vector of custom latency values for each tensor (empty for
-     * automatic calculation)
-     */
-    void prepare(HostConfig config, std::vector<long> custom_latency = {});
-
-    /**
-     * @brief The prepare of the 3.x path: like prepare(HostConfig, std::vector<long>), with
-     * the caller's latencies and the element type of every send and receive ring named per
-     * slot.
-     *
-     * @param config Host configuration containing sample rate, buffer size, and audio settings
      * @param custom_latencies A caller's latency per output tensor (see CustomLatencies)
-     * @param ring_dtypes The ring dtype of every slot (see RingDtypes); the two-argument
-     * overload passes float32 for every slot
+     * @param ring_dtypes The ring dtype of every slot (see RingDtypes; float32 for every slot
+     * not named)
      */
-    void prepare(HostConfig config,
-                 const CustomLatencies& custom_latencies,
-                 const RingDtypes& ring_dtypes);
+    void prepare(const CustomLatencies& custom_latencies = {}, const RingDtypes& ring_dtypes = {});
 
     /**
      * @name The tensor stems
@@ -127,10 +117,10 @@ public:
      * The host<->ring copy path, and the only way into it: what an entry that takes host
      * tensors calls. A call hands over one anira_tensor per slot, in slot order and
      * covering every slot of that side: `inputs` has one tensor per input tensor of the
-     * InferenceConfig, `outputs` one per output tensor.
+     * model config, `outputs` one per output tensor.
      *
-     * The stems move the streamed slots. A non-streamable slot (no stream size in the
-     * InferenceConfig: a Static tensor of a 3.x model) has no ring and is not the copy path's:
+     * The stems move the streamed slots. A non-streamable slot (no hop: a Static or a State
+     * tensor) has no ring and is not the copy path's:
      * its tensor is never read, whatever it holds, its delivered count is always 0, and a miss
      * leaves its memory alone. Its values travel beside the stems: through the static ports of a
      * 3.x handler (whole tensors in the spec's shape, src/capi/port.h).
@@ -181,7 +171,7 @@ public:
      *
      * None of them allocates. process_nowait(), push_data() and pop_data() never wait and
      * are real-time safe; process_wait(), pop_data_wait() and the deadline form of pop_data()
-     * wait, and process() waits when the InferenceConfig has a blocking ratio.
+     * wait, and process() waits when the contract has a wait ratio.
      */
     ///@{
 
@@ -192,7 +182,7 @@ public:
      * results that have completed (Core::new_data_request() without a deadline) before
      * popping; a block that has not completed is delivered through the miss policy
      * (set_miss_policy()) and counted as missing. The 3.x path's process form; process() is
-     * this when InferenceConfig::m_blocking_ratio is 0.
+     * this when the contract's wait ratio is 0.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
@@ -207,7 +197,7 @@ public:
      *
      * Like process_nowait(), but waits for the submitted block's result on the session's
      * completion primitive (Core::new_data_request() with a deadline): the semaphore when
-     * InferenceConfig::m_blocking_ratio > 0, else the atomic flag polled every
+     * the contract's wait ratio is above 0, else the atomic flag polled every
      * millisecond. The deadline is read from the clock after the submit, exactly where the
      * 2.x process() read it. A budget of std::chrono::steady_clock::duration::max() waits
      * without limit, re-checking that an inference thread runs (Core::WaitOutcome::NoThread
@@ -277,10 +267,10 @@ public:
                                 Core::WaitOutcome& outcome);
 
     /**
-     * @brief The 2.x process call over host tensors: the dispatcher on
-     * InferenceConfig::m_blocking_ratio
+     * @brief The 2.x process call over host tensors: the dispatcher on the contract's wait
+     * ratio
      *
-     * With a blocking ratio above 0 this is process_wait() with the budget of
+     * With a wait ratio above 0 this is process_wait() with the budget of
      * contract_wait_budget() (the block's own duration times the ratio, waited for on the
      * semaphore) and the outcome dropped; without one it is process_nowait(). The tensors
      * pass through as they are.
@@ -289,7 +279,7 @@ public:
      * @param outputs One tensor per output slot; the same tensor as the input for in place
      * @return The delivered count per output slot (0 on a miss)
      *
-     * @note Real-time safe without a blocking ratio; with one it waits up to the budget.
+     * @note Real-time safe without a wait ratio; with one it waits up to the budget.
      */
     const size_t* process(const anira_tensor* inputs, const anira_tensor* outputs);
 
@@ -298,7 +288,7 @@ public:
      *
      * Registers the output demand (a generator is submitted here), then waits until
      * `wait_until` for the next result on the session's semaphore and pops. A session without
-     * a blocking ratio has no semaphore to wait on: nothing is waited for and nothing is
+     * a wait ratio has no semaphore to wait on: nothing is waited for and nothing is
      * collected, the call pops what the receive rings hold, and the site
      * RtSite::WaitWithoutSemaphore records it once. The 2.x
      * face's deadline pop; pop_data_wait() is the 3.x form, which waits on either completion
@@ -314,12 +304,12 @@ public:
                            std::chrono::steady_clock::time_point wait_until);
 
     /**
-     * @brief The 2.x blocking_ratio wait of one process call
+     * @brief The wait of one process call under the contract's wait ratio
      *
-     * InferenceConfig::m_blocking_ratio times the reference block's duration: `shape[1]` of the
-     * anchored tensor over the host sample rate, in the arithmetic of the 2.x process(), so
-     * the deadline the 2.x path waits for is unchanged. What a waiting entry computes before
-     * it calls process_wait(). The process forms only: a pop has no input block to measure.
+     * The contract's wait ratio times the reference block's duration: `shape[1]` of the
+     * anchored tensor over the contract's rate, truncated to whole microseconds. What a
+     * waiting entry computes before it calls process_wait(). The process forms only: a pop has no
+     * input block to measure.
      *
      * @param inputs One tensor per input slot
      * @param outputs One tensor per output slot
@@ -474,7 +464,7 @@ public:
      *
      * When enabled, Core::new_data_request() blocks the calling thread until
      * every pending inference for this session completes, instead of returning
-     * early (blocking_ratio == 0) or giving up at a deadline (blocking_ratio > 0).
+     * early (a wait ratio of 0) or giving up at a deadline (a wait ratio above 0).
      * This means process()/pop_data() always yield complete output -- never a
      * dropped/zero-filled chunk -- at the cost of an unbounded wait, so it is
      * intended for offline rendering (e.g. bounce-to-disk), not the live audio
@@ -642,15 +632,12 @@ private:
      * @brief Collects finished inferences without waiting
      *
      * Uses the completion signal the session actually runs on: the semaphore
-     * (try_acquire) for blocking_ratio > 0, the atomic flag otherwise.
+     * (try_acquire) under a wait ratio above 0, the atomic flag otherwise.
      */
     void collect_nonblocking();
 
 private:
-    InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
-                                          ///< model settings
     std::shared_ptr<SessionElement> m_session;  ///< Shared pointer to the current inference session
-    HostConfig m_host_config;                   ///< Current host audio configuration
 
     std::vector<size_t> m_missing_samples;  ///< Track missing samples for latency compensation and
                                             ///< buffering

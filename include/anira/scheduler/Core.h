@@ -10,7 +10,6 @@
 #include <memory>
 #include <vector>
 
-#include "../utils/HostConfig.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
@@ -117,15 +116,17 @@ public:
     /**
      * @brief Creates and registers a new inference session
      *
-     * Applies or reconciles the given context config (see the class description), builds
-     * the session with its preprocessing/postprocessing pipeline and inference
-     * configuration, builds its plan table from the requests (one plan per request, in
-     * order: a built-in or a registered engine's loaded model is taken from the pool when
-     * an equal one exists there and loaded once else, whether the session is exclusive or
-     * not, with this session's prepared handle over it; a 2.x backend and the roundtrip get
-     * a legacy loaded model of their own), and registers it. When this is the first
-     * session, the inference thread pool is built from
-     * the configuration in effect (its threads are started by prepare_session()).
+     * Applies or reconciles the given context config (see the class description), resolves
+     * the session's instance count (1 for an exclusive session, else the model config's
+     * max_instances: ANIRA_INSTANCES_AUTO becomes the pool's size, at least 1, and a count
+     * above the pool's size is clamped to it, with a warning; every request's instance count
+     * takes the same rule), builds the
+     * session over the handler's processor runner and configuration, builds its plan table
+     * from the requests (one plan per request, in order: a built-in or a registered engine's
+     * loaded model is taken from the pool when an equal one exists there and loaded once
+     * else, whether the session is exclusive or not, with this session's prepared handle over
+     * it), and registers it. When this is the first session, the inference thread pool is
+     * built from the configuration in effect (its threads are started by prepare_session()).
      *
      * Registration is the last step: if anything before it throws (typically an engine
      * that cannot load its model), the registry, the thread pool and the configuration are
@@ -134,7 +135,10 @@ public:
      *
      * @param processor The handler's processor runner: the phases of every chunk, and the port
      * vectors that hold the session's rings
-     * @param inference_config Reference to the inference configuration
+     * @param model The handler's model config (its variant), read by the session
+     * @param derived What the validator derived for it under the contract, read by the session
+     * @param hard The Hard half of the contract of the prepare, read by the session (the three
+     * outlive the session: the C handler holds them)
      * @param requests One plan per entry, in dense-index order: what the session's plan
      * table holds (the C handler asks for exactly its plans); never empty
      * @param context_config Configuration of the core as requested by this session: the
@@ -151,7 +155,9 @@ public:
      */
     static std::shared_ptr<SessionElement> create_session(
         capi::ProcessorRunner& processor,
-        InferenceConfig& inference_config,
+        const anira_model_config& model,
+        const capi::Derived& derived,
+        const capi::HardContract& hard,
         std::vector<engine::PlanRequest> requests,
         const anira_context_config& context_config,
         RtLatch* rt_latch = nullptr);
@@ -359,28 +365,26 @@ public:
     static size_t prospective_thread_pool_size(const anira_context_config& context_config);
 
     /**
-     * @brief Prepares a session for processing with new audio configuration
+     * @brief Prepares a session for the Hard contract it reads
      *
-     * Configures the specified session with new audio host settings and optional
-     * custom latency values. This method handles buffer allocation, latency
+     * Configures the specified session for the geometry, budget and wait ratio of its
+     * contract, with optional custom latency values. This method handles buffer allocation, latency
      * calculation, and session state updates, and starts the inference thread pool if it is
      * not running yet. Every prepare of every session also re-arms the process-wide latches
      * of the scheduler's real-time sites (anira::RtSite; the only place they are re-armed),
      * logging one Warning per site with the count it suppressed since the last prepare.
      *
      * @param session Shared pointer to the session to prepare
-     * @param new_config New host configuration with audio settings
      * @param custom_latencies A caller's latency per output tensor (see CustomLatencies;
      * empty keeps every computed latency)
      * @param ring_dtypes The element type of every send and receive ring, per slot (see
-     * RingDtypes; float32 for every slot not named, which is what the 2.x path passes)
+     * RingDtypes; float32 for every slot not named)
      *
      * @note Thread-safe with respect to other sessions' lifecycle calls. Not
      *       safe against concurrent processing calls on the *same* session —
      *       the host must not process a session it is currently preparing.
      */
     static void prepare_session(const std::shared_ptr<SessionElement>& session,
-                                HostConfig new_config,
                                 const CustomLatencies& custom_latencies = {},
                                 const RingDtypes& ring_dtypes = {});
 
@@ -455,7 +459,8 @@ public:
      *
      * Collects the session's pending results in submission order, waiting for each on the
      * completion primitive the session runs on: the semaphore when
-     * InferenceConfig::m_blocking_ratio > 0 (InferenceThread::do_inference() signals it
+     * the contract's wait ratio is above 0 (SessionElement::uses_semaphore();
+     * InferenceThread::do_inference() signals it
      * then), else the atomic flag polled every millisecond. Completed results are placed
      * only while the streamable receive rings have room for them (see
      * collect_completed()).
@@ -827,7 +832,8 @@ private:
      *
      * Waits on whichever synchronization primitive the session actually signals
      * on completion: InferenceThread::do_inference() releases m_done_semaphore
-     * when m_inference_config.m_blocking_ratio > 0.f, and stores to m_done_atomic
+     * when the session uses semaphores (SessionElement::uses_semaphore()), and stores to
+     * m_done_atomic
      * otherwise, for the whole lifetime of the session. Mirroring that same
      * condition here -- instead of each new_data_request() overload re-deriving it
      * independently -- means both overloads wait correctly regardless of which

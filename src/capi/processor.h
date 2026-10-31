@@ -32,7 +32,6 @@
  * is materialised ahead of pre_process and a Static output captured behind post_process, by
  * the library, whoever fills the phase.
  */
-#include <anira/InferenceConfig.h>
 #include <anira/abi/export.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/processor.h>
@@ -158,13 +157,12 @@ struct ProcessorFrame {
 /// as on the inference thread.
 class ANIRA_API ProcessorRunner final {
 public:
-    /// `config`, `processor` (NULL for a pipeline without one) and the two port vectors must
-    /// outlive the processor (the handler owns all four). The ports and the model's tensors
-    /// are indexed by slot, the tensor's position in the model config's list of its side: the
-    /// one numbering of the handler's entries too. The vectors are never resized and no arm
+    /// `processor` (NULL for a pipeline without one) and the two port vectors must outlive the
+    /// processor (the handler owns all three). The ports and the model's tensors are indexed
+    /// by slot, the tensor's position in the model config's list of its side: the one
+    /// numbering of the handler's entries too. The vectors are never resized and no arm
     /// changes while the processor lives.
-    ProcessorRunner(anira::InferenceConfig& config,
-                    const ProcessorCarrier* processor,
+    ProcessorRunner(const ProcessorCarrier* processor,
                     std::vector<Port>& input_ports,
                     std::vector<Port>& output_ports);
 
@@ -266,8 +264,7 @@ private:
     static constexpr const char* k_the_processor = "the processor";
     static constexpr const char* k_the_default = "the default body";
 
-    anira::InferenceConfig& m_inference_config;  ///< the handler's, what the sizes are read from
-    const ProcessorCarrier* m_processor;         ///< NULL: the defaults everywhere
+    const ProcessorCarrier* m_processor;  ///< NULL: the defaults everywhere
     /// The handler's ports. The stream ports hold the rings; pre_process reads the static input
     /// ports, post_process writes the static output ports.
     std::vector<Port>& m_input_ports;
@@ -284,8 +281,6 @@ private:
     /// The dispatch stamp the last pre_process ran under; k_no_generation after construction.
     /// Written and read on the thread that runs pre_process alone.
     uint64_t m_pre_generation = k_no_generation;
-    std::vector<std::vector<int64_t>> m_input_shapes;   ///< the spec's extents per tensor
-    std::vector<std::vector<int64_t>> m_output_shapes;  ///< the spec's extents per tensor
     /// The count check's scratch: available() of every channel of every ring of one side,
     /// read ahead of the phase (one entry per channel, in slot order). Driving thread only.
     std::vector<size_t> m_before;

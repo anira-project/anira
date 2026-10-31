@@ -310,7 +310,7 @@ private:
 };
 
 /// A Streamed tensor. The fields are prepare's (the contract resolves the ring dtype, the
-/// InferenceConfig the channel count, the session sizes the ring); create leaves the defaults.
+/// validator the channel count, the session sizes the ring); create leaves the defaults.
 struct StreamPort {
     uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
     anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry

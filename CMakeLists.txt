@@ -343,7 +343,6 @@ target_sources(${PROJECT_NAME} PRIVATE
     src/capi/thread.cpp
     src/capi/validate.cpp
     src/capi/providers.cpp
-    src/capi/v3_to_v2.cpp
     src/capi/version.cpp
     src/capi/handler.cpp
     src/capi/processor.cpp

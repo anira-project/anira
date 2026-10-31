@@ -1,9 +1,8 @@
-#include <anira/InferenceConfig.h>
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/RtLatch.h>
@@ -26,8 +25,10 @@
 #include <variant>
 #include <vector>
 
+#include "../capi/handles.h"
 #include "../capi/port.h"
 #include "../capi/processor.h"
+#include "../capi/validate.h"
 #include "../engines/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
 #include "InstanceWaitList.h"    // IWYU pragma: keep (the complete wait list of PlanSlot)
 
@@ -42,19 +43,25 @@ SessionElement::PlanSlot& SessionElement::PlanSlot::operator=(PlanSlot&&) noexce
 
 SessionElement::SessionElement(int new_session_id,
                                capi::ProcessorRunner& processor,
-                               InferenceConfig& inference_config,
+                               const anira_model_config& model,
+                               const capi::Derived& derived,
+                               const capi::HardContract& hard,
+                               uint32_t num_instances,
                                moodycamel::ProducerToken&& producer_token,
                                anira::RtLatch* rt_latch)
     : m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
     // One slot per ThreadSafeStruct plus this queue's single explicit producer,
     // so enqueue_pending_dispatch() never allocates after construction.
-    , m_dispatch_pending(inference_config.m_num_parallel_processors,
+    , m_dispatch_pending(num_instances,
                          /*maxExplicitProducers=*/1,
                          /*maxImplicitProducers=*/0)
     , m_dispatch_producer_token(m_dispatch_pending)
     , m_processor(processor)
-    , m_inference_config(inference_config)
+    , m_model(model)
+    , m_derived(derived)
+    , m_hard(hard)
+    , m_num_instances(num_instances)
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
     , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
@@ -65,8 +72,8 @@ bool SessionElement::select_plan(uint32_t plan) noexcept {
     return true;
 }
 
-SessionElement::ThreadSafeStruct::ThreadSafeStruct(const TensorShapeList& input_shapes,
-                                                   const TensorShapeList& output_shapes,
+SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
+                                                   const std::vector<capi::DerivedSpec>& outputs,
                                                    const std::vector<bool>& input_state,
                                                    const std::vector<bool>& output_state) {
     // The bytes of one slot's buffer, rounded up to the alignment so that the next one starts
@@ -85,11 +92,11 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const TensorShapeList& input_
         return slot >= state.size() || !state[slot];
     };
     size_t total = 0;
-    for (size_t slot = 0; slot < input_shapes.size(); ++slot) {
-        if (stored(input_state, slot)) { total += padded(bytes_of(input_shapes[slot])); }
+    for (size_t slot = 0; slot < inputs.size(); ++slot) {
+        if (stored(input_state, slot)) { total += padded(bytes_of(inputs[slot].m_dims)); }
     }
-    for (size_t slot = 0; slot < output_shapes.size(); ++slot) {
-        if (stored(output_state, slot)) { total += padded(bytes_of(output_shapes[slot])); }
+    for (size_t slot = 0; slot < outputs.size(); ++slot) {
+        if (stored(output_state, slot)) { total += padded(bytes_of(outputs[slot].m_dims)); }
     }
     // Value-initialised: every buffer starts at zeros.
     m_block = std::vector<std::byte>(total + k_alignment);
@@ -99,16 +106,17 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const TensorShapeList& input_
     // The spec's rank and extents over the slot's buffer, the storage's dtype (float32 in this
     // pre-release), all-zero strides; a State slot's descriptor has the shape and no memory
     // until the processor runner binds it over its pair.
-    const auto side = [&](const TensorShapeList& shapes,
+    const auto side = [&](const std::vector<capi::DerivedSpec>& specs,
                           const std::vector<bool>& state,
                           std::vector<anira_tensor>& tensors,
                           std::vector<std::span<std::byte>>& buffers) {
-        tensors.assign(shapes.size(), anira_tensor{});
-        buffers.assign(shapes.size(), std::span<std::byte>{});
-        for (size_t slot = 0; slot < shapes.size(); ++slot) {
+        tensors.assign(specs.size(), anira_tensor{});
+        buffers.assign(specs.size(), std::span<std::byte>{});
+        for (size_t slot = 0; slot < specs.size(); ++slot) {
+            const std::vector<int64_t>& dims = specs[slot].m_dims;
             std::byte* data = nullptr;
             if (stored(state, slot)) {
-                const size_t bytes = bytes_of(shapes[slot]);
+                const size_t bytes = bytes_of(dims);
                 data = m_block.data() + offset;
                 buffers[slot] = std::span<std::byte>(data, bytes);
                 offset += padded(bytes);
@@ -116,12 +124,12 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const TensorShapeList& input_
             anira_tensor_init_host(&tensors[slot],
                                    data,
                                    ANIRA_DTYPE_F32,
-                                   static_cast<uint32_t>(shapes[slot].size()),
-                                   shapes[slot].data());
+                                   static_cast<uint32_t>(dims.size()),
+                                   dims.data());
         }
     };
-    side(input_shapes, input_state, m_input_tensors, m_input_bytes);
-    side(output_shapes, output_state, m_output_tensors, m_output_bytes);
+    side(inputs, input_state, m_input_tensors, m_input_bytes);
+    side(outputs, output_state, m_output_tensors, m_output_bytes);
 }
 
 void SessionElement::ThreadSafeStruct::zero_inputs() noexcept {
@@ -144,6 +152,50 @@ RingBuffer& SessionElement::receive_ring(size_t slot) const noexcept {
     return capi::stream_port(m_processor.output_ports(), slot)->m_ring;
 }
 
+size_t SessionElement::num_inputs() const noexcept {
+    return m_derived.m_inputs.size();
+}
+
+size_t SessionElement::num_outputs() const noexcept {
+    return m_derived.m_outputs.size();
+}
+
+size_t SessionElement::input_hop(size_t slot) const noexcept {
+    return static_cast<size_t>(m_derived.m_inputs[slot].m_hop);
+}
+
+size_t SessionElement::output_hop(size_t slot) const noexcept {
+    return static_cast<size_t>(m_derived.m_outputs[slot].m_hop);
+}
+
+size_t SessionElement::input_channels(size_t slot) const noexcept {
+    return static_cast<size_t>(m_derived.m_inputs[slot].m_channels);
+}
+
+size_t SessionElement::output_channels(size_t slot) const noexcept {
+    return static_cast<size_t>(m_derived.m_outputs[slot].m_channels);
+}
+
+bool SessionElement::reference_is_input() const noexcept {
+    return m_derived.m_anchor_is_input;
+}
+
+size_t SessionElement::reference_slot() const noexcept {
+    return m_derived.m_anchor_index;
+}
+
+bool SessionElement::uses_semaphore() const noexcept {
+    return m_hard.m_wait_ratio > 0.0;
+}
+
+bool SessionElement::exclusive() const noexcept {
+    return m_derived.m_exclusive;
+}
+
+size_t SessionElement::output_model_latency(size_t slot) const noexcept {
+    return static_cast<size_t>(m_model.m_outputs[slot].m_latency);
+}
+
 void SessionElement::clear() {
     // Wait-free: NO drain is required, so worker threads may still be mid-inference
     // on this session's in-flight structs. We therefore reset only state the audio
@@ -154,15 +206,11 @@ void SessionElement::clear() {
     // bump in Core::reset_session() makes their eventual result be ignored
     // (Core::new_data_request generation guard) and Core::reclaim_stale_structs()
     // (run from new_data_submitted) reclaims them once the worker publishes completion.
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
-        if (m_inference_config.get_preprocess_input_size()[i] > 0) {
-            send_ring(i).clear_with_positions();
-        }
+    for (size_t i = 0; i < num_inputs(); ++i) {
+        if (input_hop(i) > 0) { send_ring(i).clear_with_positions(); }
     }
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            receive_ring(i).clear_with_positions();
-        }
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        if (output_hop(i) > 0) { receive_ring(i).clear_with_positions(); }
     }
     m_time_stamps.clear();
     m_current_queue = 0;
@@ -172,7 +220,7 @@ void SessionElement::clear() {
         // Only a free struct is exclusively ours to reset; skip anything a worker may
         // still be reading/writing.
         if (!inference->m_free.load(std::memory_order_acquire)) { continue; }
-        if (m_inference_config.m_blocking_ratio > 0.f) {
+        if (uses_semaphore()) {
             while (inference->m_done_semaphore.try_acquire()) {}
         } else {
             inference->m_done_atomic.store(false, std::memory_order_relaxed);
@@ -184,12 +232,10 @@ void SessionElement::clear() {
 
     // Re-seed the latency zero-padding (matches prepare()'s seed). Only a streamable
     // output has a ring to seed.
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] > 0 && m_latency[i] > 0) {
-            for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-                receive_ring(i).push_zeros(
-                    j,
-                    m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        if (output_hop(i) > 0 && m_latency[i] > 0) {
+            for (size_t j = 0; j < output_channels(i); ++j) {
+                receive_ring(i).push_zeros(j, m_latency[i] - output_model_latency(i));
             }
         }
     }
@@ -334,28 +380,23 @@ void SessionElement::complete_with_zeros(
     // and frees the struct, it just yields silence for this chunk.
     thread_safe_struct->zero_outputs();
     thread_safe_struct->m_completed_as_zeros = true;  // before the done signal
-    if (m_inference_config.m_blocking_ratio > 0.f) {
+    if (uses_semaphore()) {
         thread_safe_struct->m_done_semaphore.release();
     } else {
         thread_safe_struct->m_done_atomic.store(true, std::memory_order::release);
     }
 }
 
-void SessionElement::prepare(const HostConfig& host_config,
-                             const CustomLatencies& custom_latencies,
+void SessionElement::prepare(const CustomLatencies& custom_latencies,
                              const RingDtypes& ring_dtypes) {
     const std::vector<long>& custom_latency = custom_latencies.m_outputs;
-    // Resolve the reference stream first: an unresolvable host config throws before any
-    // session state is touched. The result is read on the real-time path and never
-    // re-resolved there.
-    m_reference = host_config.resolve_reference(m_inference_config);
-    m_input_driven = has_streamable_input();
-    m_host_config = host_config;
-
     // Latency and inference-slot count in closed form (see LatencyCalculator): the
     // buffer-adaptation delay of Rath & Geier, the inference-queue term and, when the
-    // host allows smaller buffers, the worst case over every smaller block size.
-    LatencyCalculator const latency_calculator(m_inference_config, host_config);
+    // contract allows smaller blocks, the worst case over every smaller block size. A
+    // geometry that cannot size the session throws here, before any session state is touched.
+    LatencyCalculator const latency_calculator(m_derived, m_hard, m_num_instances);
+    m_block_hops = latency_calculator.get_block_hops();
+    m_input_driven = has_streamable_input();
     m_latency = latency_calculator.get_synced_output_latencies();
     // Twice the steady-state bound: a wait-free reset() leaves every in-flight
     // inference in its struct until the worker publishes completion (see
@@ -364,24 +405,20 @@ void SessionElement::prepare(const HostConfig& host_config,
     m_num_structs = 2 * latency_calculator.get_num_structs();
 
     // Add the internal model latency to the latency
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            m_latency[i] += m_inference_config.get_internal_model_latency()[i];
-        }
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        if (output_hop(i) > 0) { m_latency[i] += output_model_latency(i); }
     }
 
     // Overwrite with custom latency if provided. A custom value replaces the whole
     // latency, so it must still cover the model's internal latency: the receive
     // buffer is primed with (latency - internal_model_latency) zeros, and an
     // unsigned underflow there would prime it with ~4G samples.
-    if (custom_latency.size() == m_inference_config.get_tensor_output_shape().size()) {
+    if (custom_latency.size() == num_outputs()) {
         for (size_t i = 0; i < custom_latency.size(); ++i) {
             if (custom_latency[i] < 0) { continue; }
-            auto const internal_latency =
-                static_cast<unsigned int>(m_inference_config.get_internal_model_latency()[i]);
+            auto const internal_latency = static_cast<unsigned int>(output_model_latency(i));
             auto requested = static_cast<unsigned int>(custom_latency[i]);
-            if (m_inference_config.get_postprocess_output_size()[i] > 0 &&
-                requested < internal_latency) {
+            if (output_hop(i) > 0 && requested < internal_latency) {
                 ANIRA_LOG_WARNING(log_group::k_scheduler,
                                   "Custom latency %u for tensor %zu is below the internal model "
                                   "latency %u; clamping.",
@@ -397,17 +434,17 @@ void SessionElement::prepare(const HostConfig& host_config,
     // A non-streamable output has no stream and therefore no stream latency, whatever a
     // custom latency vector says: nothing downstream may assume m_latency[i] > 0 implies a
     // ring buffer.
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        if (m_inference_config.get_postprocess_output_size()[i] == 0) { m_latency[i] = 0; }
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        if (output_hop(i) == 0) { m_latency[i] = 0; }
     }
 
     // Send rings: one host block plus the adaptation leftover (LatencyCalculator).
     // Receive rings: every inference slot's result plus the latency priming.
     m_send_buffer_size = latency_calculator.get_send_buffer_sizes();
     m_receive_buffer_size.clear();
-    m_receive_buffer_size.reserve(m_inference_config.get_tensor_output_shape().size());
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        size_t const postprocess_output_size = m_inference_config.get_postprocess_output_size()[i];
+    m_receive_buffer_size.reserve(num_outputs());
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        size_t const postprocess_output_size = output_hop(i);
         m_receive_buffer_size.push_back(postprocess_output_size > 0
                                             ? m_num_structs * postprocess_output_size + m_latency[i]
                                             : 0);
@@ -432,31 +469,27 @@ void SessionElement::prepare(const HostConfig& host_config,
     // What the C ring accessors and the default processor bodies need of a ring besides its
     // storage: its hop, and the way back to this session's latch (abi/processor.h).
     m_ring_owner.m_rt = m_rt;
-    for (size_t i = 0; i < m_inference_config.get_tensor_input_shape().size(); ++i) {
+    for (size_t i = 0; i < num_inputs(); ++i) {
         if (m_send_buffer_size[i] == 0) { continue; }
         const anira_dtype dtype = ring_dtype(ring_dtypes.m_inputs, i);
         RingBuffer& ring = send_ring(i);
-        if (!ring.initialize_with_positions(m_inference_config.get_preprocess_input_channels()[i],
-                                            m_send_buffer_size[i],
-                                            dtype)) {
+        if (!ring.initialize_with_positions(input_channels(i), m_send_buffer_size[i], dtype)) {
             refuse("input", i, dtype);
         }
-        ring.set_owner(m_inference_config.get_preprocess_input_size()[i], &m_ring_owner);
+        ring.set_owner(input_hop(i), &m_ring_owner);
     }
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
+    for (size_t i = 0; i < num_outputs(); ++i) {
         if (m_receive_buffer_size[i] == 0) { continue; }
         const anira_dtype dtype = ring_dtype(ring_dtypes.m_outputs, i);
         RingBuffer& ring = receive_ring(i);
-        if (!ring.initialize_with_positions(m_inference_config.get_postprocess_output_channels()[i],
-                                            m_receive_buffer_size[i],
-                                            dtype)) {
+        if (!ring.initialize_with_positions(output_channels(i), m_receive_buffer_size[i], dtype)) {
             refuse("output", i, dtype);
         }
-        ring.set_owner(m_inference_config.get_postprocess_output_size()[i], &m_ring_owner);
+        ring.set_owner(output_hop(i), &m_ring_owner);
         // The latency, primed with zeros of the ring's own element type.
         if (m_latency[i] == 0) { continue; }
-        for (size_t j = 0; j < m_inference_config.get_postprocess_output_channels()[i]; ++j) {
-            ring.push_zeros(j, m_latency[i] - m_inference_config.get_internal_model_latency()[i]);
+        for (size_t j = 0; j < output_channels(i); ++j) {
+            ring.push_zeros(j, m_latency[i] - output_model_latency(i));
         }
     }
 
@@ -471,8 +504,6 @@ void SessionElement::prepare(const HostConfig& host_config,
     // State slot gets no storage: its port's pair is bound per inference.
     m_inference_queue.clear();
 
-    const TensorShapeList& input_shapes = m_inference_config.get_tensor_input_shape();
-    const TensorShapeList& output_shapes = m_inference_config.get_tensor_output_shape();
     const auto state_slots = [](const std::vector<capi::Port>& ports) {
         std::vector<bool> state(ports.size(), false);
         for (size_t slot = 0; slot < ports.size(); ++slot) {
@@ -484,8 +515,8 @@ void SessionElement::prepare(const HostConfig& host_config,
     const std::vector<bool> output_state = state_slots(m_processor.output_ports());
 
     for (size_t i = 0; i < m_num_structs; ++i) {
-        m_inference_queue.emplace_back(std::make_shared<ThreadSafeStruct>(input_shapes,
-                                                                          output_shapes,
+        m_inference_queue.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
+                                                                          m_derived.m_outputs,
                                                                           input_state,
                                                                           output_state));
         m_inference_queue.back()->m_entry = static_cast<uint32_t>(i);
@@ -501,13 +532,13 @@ void SessionElement::prepare(const HostConfig& host_config,
 }
 
 bool SessionElement::has_streamable_input() const {
-    return std::ranges::any_of(m_inference_config.get_preprocess_input_size(),
-                               [](size_t size) { return size > 0; });
+    return std::ranges::any_of(m_derived.m_inputs,
+                               [](const capi::DerivedSpec& spec) { return spec.m_hop > 0; });
 }
 
 bool SessionElement::receive_rings_have_room() {
-    for (size_t i = 0; i < m_inference_config.get_tensor_output_shape().size(); ++i) {
-        size_t const hop = m_inference_config.get_postprocess_output_size()[i];
+    for (size_t i = 0; i < num_outputs(); ++i) {
+        size_t const hop = output_hop(i);
         if (hop == 0) { continue; }  // Non-streamable outputs have no ring
         const RingBuffer& ring = receive_ring(i);
         if (ring.get_num_samples() - ring.get_available_samples(0) < hop) { return false; }
