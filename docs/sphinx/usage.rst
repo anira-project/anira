@@ -507,13 +507,17 @@ frame per 2048 audio samples, say), has an anchor whose block is a fraction of a
 on a stream at the host rate whenever the model has one (the RAVE decoder of the JUCE example
 anchors on its audio output, ``"anchor": "audio_out"``, and passes the host's own block); the
 fractional geometry is for the model that has none. Its geometry is then the host block
-measured on the anchor, and the rate is in anchor samples per second as well:
+measured on the anchor, and the rate is in anchor samples per second as well. A fractional
+geometry is a fixed block: the count below assumes the same block on every call, so the host
+behind it delivers one block size, and a plugin, whose host promises only a largest block (section
+4.1), anchors on a stream at the host rate and declares its range there, as the RAVE decoder of
+the JUCE example does.
 
 .. code-block:: cpp
 
-    // prepareToPlay(sample_rate, samples_per_block) of a control-rate model: one latent frame
-    // per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
-    const double block = samples_per_block / 2048.0;
+    // A host with a fixed block of host_block samples at sample_rate, for a control-rate model:
+    // one latent frame per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
+    const double block = host_block / 2048.0;
     contract.hard_geometry(block, block, sample_rate / 2048.0);
 
 anira takes the block as the rational the latency calculation recovers from it (a relative
@@ -2050,7 +2054,7 @@ A contract written in code names the geometry on the aggregate, the budget besid
                                           .budget = 10ms,
                                           .warmup = ANIRA_WARMUP_NONE});
 
-``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver. A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
+``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver, each held from call to call. A host that changes the size between calls can still miss a block in rare sequences (a full block right after a short one that completed a hop, `issue #228 <https://github.com/anira-project/anira/issues/228>`_). A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
 
 .. code-block:: cpp
 
@@ -2058,8 +2062,9 @@ A contract written in code names the geometry on the aggregate, the budget besid
 
 A plugin host promises a largest block, not a fixed one (JUCE's ``prepareToPlay`` names the maximum
 only, CLAP's ``activate`` both ends), so a plugin declares that range: the latency anira reports then
-covers the smallest block as well, and the plugin hands it to the host for compensation. A fixed
-block is for a host that never changes it, at the lower latency.
+covers the smallest block as well (up to the varying sequences above), and the plugin hands it to
+the host for compensation. A fixed block is for a host that never changes it, at the lower
+latency.
 
 The anchor is the streamed tensor whose samples are the unit of both values. By default it is resolved automatically: the first streamed input, or, for generator models with no streamed input, the first streamed output. For models with several streamed tensors, name it with ``model_config.anchor("audio_out")`` (section 1.2) or ``"anchor": "audio_out"`` in the model file; a name that is not a streamed tensor is refused at prepare with ``ANIRA_ERROR_CONFIG``.
 

@@ -24,10 +24,15 @@ Where the 2.x API stands in this pre-release
   ``anira::InferenceBackend``, ``anira::PrePostProcessor``, ``anira::Buffer`` / ``BufferF`` /
   ``MemoryBlock`` and ``<anira/utils/helperFunctions.h>``, and ``anira::CoreConfig`` with its
   ``LogConfig`` and the ``LogLevel`` / ``LogDrain`` / ``WaitStrategy`` enums
-  (``<anira/CoreConfig.h>``). Nothing in anira used them once the core ran on the 3.x types:
-  ``anira/compat/v2.hpp`` declares every one in ``namespace anira::v2``
-  (:ref:`migration-compat-config`), and ``anira::ContextConfig`` of ``anira/anira.hpp`` is the
-  3.x context configuration. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  (``<anira/CoreConfig.h>``). Nothing in anira used them once the core ran on the 3.x types.
+  ``anira/compat/v2.hpp`` declares the ones a 2.x host's code names in ``namespace anira::v2``
+  (:ref:`migration-compat-config`): ``InferenceConfig`` with ``ModelData``, ``TensorShape`` and
+  ``ProcessingSpec``, ``HostConfig``, ``InferenceBackend``, ``PrePostProcessor``, ``BufferF``
+  (a view of one channel, without the owning constructor) and ``RingBuffer``, and in place of
+  ``CoreConfig`` the 2.x ``ContextConfig`` with ``LogConfig`` and the three enums. It has no
+  ``Buffer`` template, no ``MemoryBlock`` and nothing of ``helperFunctions.h``: a host buffer is
+  the host's own container, an ``anira_tensor`` describes it. ``anira::ContextConfig`` of
+  ``anira/anira.hpp`` is the 3.x context configuration. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
   removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
   document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
   (:ref:`migration-compat-config`).

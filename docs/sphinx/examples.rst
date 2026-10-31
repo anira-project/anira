@@ -102,7 +102,12 @@ with ``hard_geometry(max(1, minFrameCount), maxFrameCount, sampleRate)``. Every
 every block size of the range (at 48 kHz and a 512-sample maximum the CNN reports 4602 samples
 instead of 3584, SimpleGainNetwork 1024 instead of 512, GuitarLSTM 767 instead of 512), which the
 plugins report to the host (``setLatencySamples``, the CLAP latency extension) for compensation. A
-fixed contract under a host that changes its block size misses blocks instead.
+fixed contract under a host that changes its block size misses blocks instead. The figure covers
+every block size of the range held from call to call; a host that changes the size between calls
+can still miss a block, rarely: a full block right after a short one that completed a hop. At
+48 kHz, 480 calls of 1 to 512 samples paced in real time missed 1 block on SimpleGainNetwork and
+2 on GuitarLSTM under the range, 314 and 159 under the fixed contract
+(`issue #228 <https://github.com/anira-project/anira/issues/228>`_).
 
 CLAP Plugin Example
 ~~~~~~~~~~~~~~~~~~~
