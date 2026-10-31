@@ -27,6 +27,7 @@
 #include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <cmath>
@@ -1942,12 +1943,15 @@ TEST(AbiHandlerTensor, AFlexibleWindowUnderAFractionalBlockRunsAtTheAnchorHop) {
 // 0.25, while its input moves by the rule -- is not refused (one sample is ceil of the block,
 // the most a call may carry, AHostBlockAboveTheDeclaredBlockIsRefused): a pop the settled ring
 // cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and the miss
-// policy's zeros in the block.
+// policy's zeros in the block. Every sample a missed pop stood in for is late when it arrives
+// and is discarded, never delivered (the catch-up): a host that stays ahead of the stream keeps
+// missing. `owed` follows that rule, the samples missed pops stood in for.
 TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
     const FractionalRig rig;
     ASSERT_NE(rig.get(), nullptr);
     size_t moved = 0;
     size_t missed = 0;
+    size_t owed = 0;
     for (size_t k = 1; k <= 16; ++k) {
         const size_t count = moved_by_call(FractionalRig::k_fraction, k) - moved;
         const size_t before = anira_test::available(rig.get());
@@ -1960,7 +1964,9 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
         // Settled: the pushed sample's inference is in the ring before the pop asks.
         anira_test::wait_for_available(rig.get(), before + count);
         ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
-        const bool covered = before + count >= 1;
+        const size_t late = std::min(owed, before + count);
+        owed -= late;
+        const bool covered = before + count - late >= 1;
 
         std::array<float, 2> out{};
         out.fill(k_untouched);
@@ -1974,6 +1980,7 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
             EXPECT_EQ(delivered, 1U) << "call " << k;
         } else {
             ++missed;
+            ++owed;
             EXPECT_EQ(status, ANIRA_MISSED) << "call " << k;
             EXPECT_EQ(delivered, 0U) << "call " << k;
             EXPECT_EQ(out[0], 0.F) << "call " << k;

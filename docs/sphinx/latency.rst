@@ -105,7 +105,7 @@ When the inference does not keep up
 
 The latency holds while the inferences take at most the budget the contract states. When one runs far over it (a stalled machine, a model slower than declared), two things happen, and neither moves the stream:
 
-- A block whose inference has not been collected when the host pops it is a **miss**: the entry returns ``ANIRA_MISSED`` with a count of ``0`` and the miss policy fills the block (usage guide, section 1.3). The late result is discarded when it arrives, so the next blocks are the stream at its latency again. In this pre-release the first block after a run of misses can still begin with late samples, those the catch-up could not discard yet because the next ones had not arrived.
+- A block whose inference has not been collected when the host pops it is a **miss**: the entry returns ``ANIRA_MISSED`` with a count of ``0`` and the miss policy fills the block (usage guide, section 1.3). The late result is discarded when it arrives, and so is every other late sample: a delivered block is the stream at its latency, never late.
 - A hop that finds every inference slot busy is **dropped**: it gets no inference and costs exactly one hop of the miss policy's fill at its own stream position, behind the inferences submitted before it; every other hop of the call is dropped the same way, so the input stays on its hop grid. ``rt_error`` reports ``ANIRA_ERROR_CAPACITY``.
 
 Every hop of input therefore yields exactly one hop of output, in order: the model's result, or a fill. Once the late inferences are collected, the output is the model's at exactly the reported latency again.

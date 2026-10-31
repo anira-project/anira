@@ -39,8 +39,7 @@
 //    fill), and the late result is discarded;
 //  - every other sample is the model's output at exactly the reported latency, the window
 //    starts stay on the hop grid, and the output is back at its latency once the late chunks
-//    are collected. The first block after a run of misses may still begin with late samples,
-//    what the catch-up has not discarded yet (InferenceManager::process_output).
+//    are collected; a late sample is never delivered.
 
 namespace {
 
@@ -241,7 +240,6 @@ size_t expect_the_overload_contract(const Case& c, const Recording& r) {
         }
     };
     size_t wrong = 0;
-    size_t late = 0;
     for (size_t k = 0; k < r.m_calls.size(); ++k) {
         const Call& call = r.m_calls[k];
         if (call.m_status == ANIRA_MISSED) {
@@ -264,13 +262,7 @@ size_t expect_the_overload_contract(const Case& c, const Recording& r) {
         }
         EXPECT_EQ(call.m_status, ANIRA_OK) << "call " << k;
         EXPECT_EQ(call.m_delivered, call.m_block) << "call " << k;
-        // Right after a miss, the block may begin with late samples the catch-up kept.
-        uint32_t i = 0;
-        if (k > 0 && r.m_calls[k - 1].m_status == ANIRA_MISSED) {
-            while (i < call.m_block && call.m_out[i] != on_time(call.m_first + i)) { ++i; }
-            late += i;
-        }
-        for (; i < call.m_block; ++i) {
+        for (uint32_t i = 0; i < call.m_block; ++i) {
             const float expected = on_time(call.m_first + i);
             if (call.m_out[i] != expected && wrong++ == 0) {
                 ADD_FAILURE() << "call " << k << ", sample " << i << " (output " << call.m_first + i
@@ -279,7 +271,6 @@ size_t expect_the_overload_contract(const Case& c, const Recording& r) {
         }
     }
     EXPECT_EQ(wrong, 0U) << "samples neither the stream at its latency nor the policy's fill";
-    ::testing::Test::RecordProperty(c.m_name + " late samples", static_cast<int>(late));
     // Recovered: the last ten calls deliver the model's output at its latency.
     for (size_t k = r.m_calls.size() - 10; k < r.m_calls.size(); ++k) {
         EXPECT_EQ(r.m_calls[k].m_status, ANIRA_OK) << "call " << k << " after the recovery";

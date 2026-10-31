@@ -533,32 +533,35 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
         }
         num_samples[i] = 0;
     }
-    for (size_t i = 0; i < num_outputs; ++i) {
-        if (m_session->output_hop(i) > 0) {
-            int const missing_samples_before = static_cast<int>(m_missing_samples[i]);
-            if (m_missing_samples[i] > 0) {
-                // Catch up in one go: drop as many missing samples as can be spared while
-                // still leaving num_samples[i] for this block.
-                size_t const available = m_session->receive_ring(i).get_available_samples(0);
-                if (available > num_samples[i]) {
-                    size_t const to_drop =
-                        std::min(m_missing_samples[i], available - num_samples[i]);
-                    for (size_t channel = 0; channel < m_session->output_channels(i); ++channel) {
-                        m_session->receive_ring(i).discard(channel, to_drop);
-                    }
-                    m_missing_samples[i] -= to_drop;
-                }
+    // Catch up: the rings deliver the stream in order, one hop per hop (an inferred hop's
+    // result, or a dropped hop's fill), so the oldest m_missing_samples[i] samples of a ring are
+    // the ones a missed block stood in for and are late. Every one of them that has arrived
+    // goes, never into a block: a block is either the stream at its latency or, short of it, a
+    // miss under the policy. What the discards free is filled again at once (the collection
+    // places what waited for room: late chunks, the fills of dropped hops), until the late
+    // samples are gone or nothing more has arrived.
+    while (true) {
+        size_t discarded = 0;
+        for (size_t i = 0; i < num_outputs; ++i) {
+            if (m_session->output_hop(i) == 0 || m_missing_samples[i] == 0) { continue; }
+            size_t const available = m_session->receive_ring(i).get_available_samples(0);
+            size_t const to_drop = std::min(m_missing_samples[i], available);
+            if (to_drop == 0) { continue; }
+            for (size_t channel = 0; channel < m_session->output_channels(i); ++channel) {
+                m_session->receive_ring(i).discard(channel, to_drop);
             }
-            if (missing_samples_before - m_missing_samples[i] > 0) {
-                ANIRA_LOG_RT_WARNING_ONCE(RtSite::CatchUpMissingSamples,
-                                          log_group::k_scheduler,
-                                          "Catch up missing samples: %zu in session: %d for "
-                                          "tensor index: %zu!",
-                                          missing_samples_before - m_missing_samples[i],
-                                          m_session->m_session_id,
-                                          i);
-            }
+            m_missing_samples[i] -= to_drop;
+            discarded += to_drop;
+            ANIRA_LOG_RT_WARNING_ONCE(RtSite::CatchUpMissingSamples,
+                                      log_group::k_scheduler,
+                                      "Catch up missing samples: %zu in session: %d for "
+                                      "tensor index: %zu!",
+                                      to_drop,
+                                      m_session->m_session_id,
+                                      i);
         }
+        if (discarded == 0) { break; }
+        static_cast<void>(Core::collect_completed(m_session));
     }
     bool enough_samples = true;
     for (size_t i = 0; i < num_outputs; ++i) {

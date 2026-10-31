@@ -403,7 +403,9 @@ minted again. On an Async handle it throws ``anira::Error`` with
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the
-  buffers hold, and the stream stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies
+  buffers hold, and the stream stays time-aligned). The samples a missed block stood in for are
+  discarded when they arrive, never delivered later: a delivered block is the stream at exactly
+  its latency, and a host that stays ahead of the stream keeps missing. ``ANIRA_MISS_BYPASS`` (the default) copies
   the block the same call pushed into the anchored input into the output (``process`` /
   ``process_multi`` with the anchored input's slot; a call on another slot,
   and a pop, which has no input block, deliver zeros), which needs an anchored input ring with
