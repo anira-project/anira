@@ -12,11 +12,8 @@ endif()
 # anira.dll only exists for a shared build; a static anira (.lib) is baked into the
 # consumer, so there is nothing to copy.
 if(BUILD_SHARED_LIBS)
-    if(CMAKE_GENERATOR MATCHES "Visual Studio")
-        set(ANIRA_DLL "${anira_BINARY_DIR}/${CMAKE_BUILD_TYPE}/anira.dll")
-    else()
-        set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
-    endif()
+    # anira-<ABI major>.dll (CMakeLists.txt), wherever the generator puts it.
+    set(ANIRA_DLL "$<TARGET_FILE:anira>")
     list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
 endif()
 

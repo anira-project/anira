@@ -120,7 +120,7 @@ tanh_add_export_check(NAME anira_exports
     FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
     TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
 
-# Windows: the module, anira.dll and every runtime DLL are searched relative to the
+# Windows: the module, anira's DLL and every runtime DLL are searched relative to the
 # application, so copy them next to the executable (the module is built into the same
 # directory already). Same pattern as test/CMakeLists.txt.
 if(MSVC AND ANIRA_SHARED_LIBS_WIN)

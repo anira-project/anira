@@ -389,10 +389,11 @@ configure_package_config_file(${CMAKE_CURRENT_SOURCE_DIR}/Config.cmake.in
 )
 
 # generate the version file for the config file
+# find_package(anira 3) takes any 3.x; a request for another major never matches.
 write_basic_package_version_file(
     "${CMAKE_CURRENT_BINARY_DIR}/aniraConfigVersion.cmake"
     VERSION "${PROJECT_VERSION}"
-    COMPATIBILITY AnyNewerVersion
+    COMPATIBILITY SameMajorVersion
 )
 
 # install config files

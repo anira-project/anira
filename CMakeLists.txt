@@ -295,7 +295,20 @@ tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 # static: compiled hidden with an empty TANH_API, they can neither be exported nor be bound to a
 # tanh-lib of the host's (section 6b of docs/anira-v3-architecture.md).
 add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
-set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
+# The shared object is named after the ABI pair (cmake/build-info.cmake), not after the release:
+# the soname is the ABI major (libanira.so.0, libanira.0.dylib and anira-0.dll through the 3.0.0
+# pre-releases; 3 from v3.0.0 on) and the file version is the pair. On Mach-O the current and the
+# compatibility version are the pair too, so a client linked against one ABI minor refuses an
+# older library. On PE, where a DLL has no soname, the major is part of the DLL's name; a static
+# archive keeps the plain name.
+set_target_properties(${PROJECT_NAME} PROPERTIES
+    VERSION ${ANIRA_ABI_MAJOR}.${ANIRA_ABI_MINOR}
+    SOVERSION ${ANIRA_ABI_MAJOR}
+    MACHO_CURRENT_VERSION ${ANIRA_ABI_MAJOR}.${ANIRA_ABI_MINOR}
+    MACHO_COMPATIBILITY_VERSION ${ANIRA_ABI_MAJOR}.${ANIRA_ABI_MINOR})
+if(BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "PE")
+    set_target_properties(${PROJECT_NAME} PROPERTIES OUTPUT_NAME ${PROJECT_NAME}-${ANIRA_ABI_MAJOR})
+endif()
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
 # The exported surface is the C ABI alone: the entry points anira_* (extern "C"). No C++ symbol
 # of anira crosses the library boundary; anira.hpp and compat/v2.hpp are header-only over the C

@@ -510,7 +510,7 @@ endif()
 if(NOT _abi_on_device)
     add_test(NAME anira_abi_link COMMAND anira_abi_link)
     if(MSVC AND ANIRA_SHARED_LIBS_WIN)
-        # Windows: anira.dll and the runtime DLLs are searched next to the executable.
+        # Windows: anira's DLL and the runtime DLLs are searched next to the executable.
         add_custom_command(TARGET anira_abi_link PRE_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${ANIRA_SHARED_LIBS_WIN} $<TARGET_FILE_DIR:anira_abi_link>)

@@ -11,7 +11,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED True)
 add_compile_definitions(ANIRA_EXTRAS_MODELS_DIR="${ANIRA_EXTRAS_MODELS_DIR}")
 
 
-# Windows: anira.dll and the runtime DLLs are searched next to the executable. Every test
+# Windows: anira's DLL (anira-<ABI major>.dll) and the runtime DLLs are searched next to the executable. Every test
 # binary of this directory is built into the same directory, so one target copies them there
 # once and each binary depends on it; a PRE_BUILD copy per binary had parallel links race on
 # the same file ("Permission denied"). Only when there are DLLs (a fully static build has none).
@@ -28,7 +28,7 @@ if (MSVC AND ANIRA_SHARED_LIBS_WIN)
                 "${_anira_test_bin_dir}"
         COMMENT "Copying the runtime DLLs next to the test binaries"
         VERBATIM)
-    # The list names files the build makes, not only prebuilt ones: anira.dll by its path and
+    # The list names files the build makes, not only prebuilt ones: anira's DLL and
     # gtest's DLLs as $<TARGET_FILE:...>. The copy waits for every target that
     # builds one (the per-binary copy ran after its binary's own link dependencies).
     if (BUILD_SHARED_LIBS)
