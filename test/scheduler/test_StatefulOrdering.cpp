@@ -48,6 +48,19 @@ public:
         return status;
     }
 
+    /// Waits until `count` inferences ran, at most 10 s; false at the bound.
+    bool wait_for_runs(size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (true) {
+            {
+                const std::lock_guard<std::mutex> lock(m_mutex);
+                if (m_positions.size() >= count) { return true; }
+            }
+            if (std::chrono::steady_clock::now() > deadline) { return false; }
+            std::this_thread::sleep_for(std::chrono::microseconds(200));
+        }
+    }
+
     std::atomic<int> m_inside{0};
     std::atomic<int> m_most_inside{0};
     std::vector<int64_t> m_positions;  ///< the first sample of every window, in run order
@@ -103,13 +116,13 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
                                       2,
                                       shape.data());
 
-        // Simulate real-time audio callbacks at the correct pace
-        auto callback_interval = std::chrono::microseconds(
-            static_cast<long long>(params.m_host_buffer_size / params.m_sample_rate * 1e6));
-
+        // Every window a call submits has run before the next call. A chunk that finds every
+        // slot of the session taken is not run (its window is dropped and its hop of output is
+        // zeros), which a slow runner hit under real-time pacing; here no chunk can, so window
+        // k is exactly the one starting at k * hop. The windows of one call (two to four) still
+        // go out together to a pool of four threads.
         constexpr size_t k_num_iterations = 300;
-        auto next_callback = std::chrono::steady_clock::now();
-
+        const auto hop = static_cast<size_t>(params.m_hop_size);
         for (size_t iter = 0; iter < k_num_iterations; ++iter) {
             // Every sample is its own index in the stream (exact in float up to 2^24).
             for (size_t i = 0; i < block; ++i) {
@@ -117,9 +130,9 @@ TEST_P(StatefulOrderingTest, ExecutionOrder) {
             }
             size_t delivered = 0;
             static_cast<void>(anira_handler_process(handler.m_handler, &io, 0, &io, 0, &delivered));
-
-            next_callback += callback_interval;
-            std::this_thread::sleep_until(next_callback);
+            const size_t submitted = ((iter + 1) * block) / hop;
+            ASSERT_TRUE(engine.wait_for_runs(submitted))
+                << "call " << iter << ": " << submitted << " windows submitted, fewer ran";
         }
     }  // the handler's destroy drains the inferences in flight
 
