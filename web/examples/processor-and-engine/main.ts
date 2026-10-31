@@ -102,9 +102,9 @@ export async function createGainExample(
   //    back to back; the latency the handler reports covers it).
   const geometry = await measureRenderGeometry(audioContext)
   const contract = ContractHandle.hard(anira, {
-    blockMin: geometry.quantum,
-    blockMax: geometry.burst,
-    rate: audioContext.sampleRate,
+    hostBlockMin: geometry.quantum,
+    hostBlockMax: geometry.burst,
+    hostRate: audioContext.sampleRate,
     budgetMs: 2,
   })
   const handler = InferenceHandler.create(context, pipeline)
@@ -140,7 +140,7 @@ export async function createGainExample(
   // the callback's run) and re-prepare the running node, then re-read the latency.
   const remeasure = async () => {
     const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-    contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
+    contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract)
     applyLatency()
   }

@@ -57,6 +57,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
 #include <array>
@@ -309,18 +310,21 @@ private:
 };
 
 /// A Streamed tensor. The fields are prepare's (the contract resolves the ring dtype, the
-/// InferenceConfig the channel count, the session owns the ring); create leaves the defaults.
+/// validator the channel count, the session sizes the ring); create leaves the defaults.
 struct StreamPort {
     uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
     anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry
     /// The most samples a host block of the slot may carry, shape[1]: one host block of the
-    /// geometry's block_max on the slot's stream, ceil(rho * P) with rho the block in hops and
+    /// contract's host_block_max on the slot's stream, ceil(rho * P) with rho the block in hops and
     /// P the slot's samples per hop (LatencyCalculator), what the latency and the rings were
     /// sized for. 0 before prepare.
     size_t m_max_samples = 0;
-    /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
-    /// by ProcessorRunner::bind and valid while that session lives; NULL before.
-    anira_ring* m_ring = nullptr;
+    /// The slot's ring: the port's for the handler's life, sized and re-initialised in place by
+    /// every session prepare (SessionElement::prepare), so its address never changes; empty
+    /// (no channel) before the first prepare. Mutable: the stream moves through it while the
+    /// port itself (its arm, its fields) stays what prepare made it, so a const view of the
+    /// ports (a processor frame's) still hands out the ring.
+    mutable anira_ring m_ring;
 };
 
 /// A Static tensor: the typed whole-tensor value with its sequence counter. Constructed in
@@ -459,6 +463,36 @@ struct BufferPort {};
 /// changes after anira_handler_create.
 using Port = std::variant<StreamPort, StaticPort, StatePort, BufferPort>;
 
+/// The ports of one side of a handler, indexed by slot: one per tensor of the model config's
+/// list of that side. Made once, with its count, by anira_handler_create (which then sets each
+/// arm by the spec's role), and never resized, copied or moved: no port moves for the handler's
+/// life, so neither does the ring of a stream port or the value of a static or a state port,
+/// whose addresses the session (SessionElement::send_ring / receive_ring), the processor runner
+/// and every processor frame hold across calls. The guarantee is the type's: nothing here
+/// resizes.
+class Ports {
+public:
+    /// `count` stream ports.
+    explicit Ports(size_t count) : m_ports(count) {}
+    ~Ports() = default;
+    Ports(const Ports&) = delete;
+    Ports& operator=(const Ports&) = delete;
+    Ports(Ports&&) = delete;
+    Ports& operator=(Ports&&) = delete;
+
+    size_t size() const noexcept { return m_ports.size(); }
+    bool empty() const noexcept { return m_ports.empty(); }
+    Port& operator[](size_t slot) noexcept { return m_ports[slot]; }
+    const Port& operator[](size_t slot) const noexcept { return m_ports[slot]; }
+    std::vector<Port>::iterator begin() noexcept { return m_ports.begin(); }
+    std::vector<Port>::iterator end() noexcept { return m_ports.end(); }
+    std::vector<Port>::const_iterator begin() const noexcept { return m_ports.begin(); }
+    std::vector<Port>::const_iterator end() const noexcept { return m_ports.end(); }
+
+private:
+    std::vector<Port> m_ports;  ///< sized by the constructor, never again
+};
+
 /// The role a port's arm stands for: a plain read of the variant's index.
 inline anira_role port_role(const Port& port) noexcept {
     if (std::holds_alternative<StreamPort>(port)) { return ANIRA_ROLE_STREAMED; }
@@ -469,24 +503,24 @@ inline anira_role port_role(const Port& port) noexcept {
 
 /// The stream port of a slot, or NULL for a tensor of another role and for a slot at or beyond
 /// the side's count.
-inline const StreamPort* stream_port(const std::vector<Port>& ports, size_t slot) noexcept {
+inline const StreamPort* stream_port(const Ports& ports, size_t slot) noexcept {
     return slot < ports.size() ? std::get_if<StreamPort>(&ports[slot]) : nullptr;
 }
 
 /// The stored value of a Static slot, or NULL for a tensor of another role and for a slot at
 /// or beyond the side's count.
-inline StaticSlot* static_slot(std::vector<Port>& ports, size_t slot) noexcept {
+inline StaticSlot* static_slot(Ports& ports, size_t slot) noexcept {
     StaticPort* port = slot < ports.size() ? std::get_if<StaticPort>(&ports[slot]) : nullptr;
     return port != nullptr ? &port->m_value : nullptr;
 }
 
-inline const StaticSlot* static_slot(const std::vector<Port>& ports, size_t slot) noexcept {
+inline const StaticSlot* static_slot(const Ports& ports, size_t slot) noexcept {
     const StaticPort* port = slot < ports.size() ? std::get_if<StaticPort>(&ports[slot]) : nullptr;
     return port != nullptr ? &port->m_value : nullptr;
 }
 
 /// Whether the slot is one half of a declared state pair (false at or beyond the side's count).
-inline bool is_state_port(const std::vector<Port>& ports, size_t slot) noexcept {
+inline bool is_state_port(const Ports& ports, size_t slot) noexcept {
     return slot < ports.size() && std::holds_alternative<StatePort>(ports[slot]);
 }
 

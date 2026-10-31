@@ -1,55 +1,26 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/abi/version.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/InferenceBackend.h>
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdint>
 #include <thread>
-#include <vector>
 
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
+#include "handler_support.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 namespace {
 
-// One CUSTOM model, one blocking inference thread, manual drain: the same fixture the
-// Logger suite uses, so that anira_drain_log() is the only pump.
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-}
-
-CoreConfig make_core_config(LogDrain drain) {
-    CoreConfig config(1, WaitStrategy::Blocking, LogLevel::Error);
-    config.m_log.m_drain = drain;
-    config.m_log.m_drain_interval_ms = 1;
-    return config;
-}
-
-struct Instance {
-    explicit Instance(const CoreConfig& core_config)
-        : m_handler(m_pp_processor, m_inference_config, core_config) {
-        m_handler.prepare(HostConfig(512, 48000));
+// One blocking inference thread, manual drain: the same fixture the Logger suite uses, so that
+// anira_drain_log() is the only pump.
+struct Instance : anira_test::Instance {
+    Instance()
+        : anira_test::Instance(1, ANIRA_WAIT_BLOCKING, ANIRA_LOG_ERROR, ANIRA_LOG_DRAIN_MANUAL, 1) {
     }
-
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    V2Handler m_handler;
 };
 
 using anira_test::RecordCollector;
@@ -86,7 +57,7 @@ TEST(AbiLog, NullArgumentsAreIgnored) {
 
 TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
     RecordCollector collector;
-    const Instance instance{make_core_config(LogDrain::Manual)};
+    const Instance instance;
     // Error level: the only one tanh-lib compiles in for Release builds.
     anira_log_rt(ANIRA_LOG_ERROR, "anira.test", "abi rt record", 1, 2);
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -98,7 +69,7 @@ TEST(AbiLog, RtRecordReachesTheSinkWhenTheHostDrains) {
 
 TEST(AbiLog, SyncRecordReachesTheSinkImmediately) {
     RecordCollector collector;
-    const Instance instance{make_core_config(LogDrain::Manual)};
+    const Instance instance;
     anira_log(ANIRA_LOG_ERROR, "anira.test", "abi sync record");
     EXPECT_TRUE(collector.has("abi sync record", "native"));
 }

@@ -349,7 +349,7 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         EXPECT_GE(huge.m_elapsed, std::chrono::milliseconds(100)) << "it waited for the stall";
     }
     {
-        // ANIRA_WAIT_CONTRACT on the pop twin is wait_ratio x block_max / rate: about the
+        // ANIRA_WAIT_CONTRACT on the pop twin is wait_ratio x host_block_max / host_rate: about the
         // block's duration on a stalled block.
         SleepingParamFillEngine generator;
         generator.m_first_sleep_us = 1000000;

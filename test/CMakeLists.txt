@@ -104,41 +104,35 @@ endfunction()
 #       test_InferenceHandlerApi, test_OneSidedStreaming (PR 8).
 #   (b) rewritten on anira/anira.hpp: test_InferenceHandler (PR 10, with the extras as Processors).
 #   (c) white-box over the private headers (the src include directory): test_scheduler,
-#       test_engines, test_utils, plus test_InferenceConfig and test_CoreConfig (moved into
-#       test_utils in PR 8), test_OneSidedStreamingInternals (the struct-pool cases of
-#       test_OneSidedStreaming on the 2.x session, PR 8), test_PrePostProcessor (the 2.x
-#       default processor's window fill, in test_scheduler since PR 10), and test_capi_internal
+#       test_engines, test_utils, plus test_OneSidedStreamingInternals (the struct-pool cases of
+#       test_OneSidedStreaming on the 2.x session, PR 8), and test_capi_internal
 #       (test_abi's internal probes and the 2.x arms, PR 12).
 #   (d) retired with their subject: test_Bridge (PR 10, with the bridge; what the C prepare
 #       owns is in test_Prepare), test_HighPriorityThread (PR 12); with the 2.x configuration
-#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_Translate,
-#       test_PrePostProcessor, and every use of the two support headers below.
+#       types of the core (PR 10b): test_JsonConfigLoader and its Errors suite, test_CoreConfig,
+#       test_InferenceConfig, test_PrePostProcessor, test_Buffer, test_HelperFunctions, and the
+#       2.x configuration comparison of test_Translate, which is test_Validate now (what the
+#       validator derives, which the session reads).
 #   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
 #       onto the enabled-engines entry in PR 12).
-# test/support/v2_objects.h builds the 2.x objects of (c) through the private translator;
-# test/support/v2_handler.h is the 2.x handler those suites and the 2.x arms of test_abi
-# (test_Handler, test_HandlerTensor, test_Processor, test_Compat) drive; both go in PR 10b.
+# No suite drives a 2.x session any more (PR 10b): the 2.x handler and the 2.x objects of the
+# white-box suites left the tests, the arms of test_abi check the 3.x side against closed
+# forms, and the session runs on the 3.x configuration.
 
 anira_add_test_binary(test_utils
-	utils/test_Buffer.cpp
 	utils/test_RingBuffer.cpp
 	utils/test_Semaphore.cpp
-	utils/test_JsonConfigLoader.cpp
-	utils/test_JsonConfigLoaderErrors.cpp
-	utils/test_HelperFunctions.cpp
 	utils/test_Logger.cpp
 	system/test_HighPriorityThread.cpp
-	test_CoreConfig.cpp
-	test_InferenceConfig.cpp
 )
-# test_Logger drives a 2.x session through test/support/v2_handler.h, which includes the
-# scheduler's private helpers.
+# test_Logger reads its C handlers white-box through test/abi/handler_support.h, which includes
+# the private headers.
 target_include_directories(test_utils PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_scheduler
 	scheduler/test_PlanSwitch.cpp
 	scheduler/test_ConcurrentLifecycle.cpp
-	scheduler/test_CoreConfigMismatch.cpp
+	scheduler/test_ContextConfigMismatch.cpp
 	scheduler/test_CopyPathOracle.cpp
 	scheduler/test_CoreLifecycle.cpp
 	scheduler/test_CreateSessionFailure.cpp
@@ -147,25 +141,29 @@ anira_add_test_binary(test_scheduler
 	scheduler/test_InferenceThread.cpp
 	scheduler/test_LatencyCalculator.cpp
 	scheduler/test_OneSidedStreamingInternals.cpp
+	scheduler/test_Overload.cpp
 	scheduler/test_ProcessorPooling.cpp
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
-	test_PrePostProcessor.cpp
 )
-# handles.h (anira_context_config, what Core::create_session takes) for test_ProcessorPooling,
-# and the private translator (src/capi/v3_to_v2.h) test/support/v2_objects.h builds on.
+# The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
+# engine room (src/engines/Adapter.h) the suites read white-box.
 target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_engines
 	engines/test_Adapter.cpp
-	engines/test_BackendBase.cpp
 	engines/test_ExecuTorchModelFunction.cpp
 	engines/test_AdapterExecuTorch.cpp
 	engines/test_AdapterLibTorch.cpp
 )
 # The engine room (src/engines/Adapter.h and the adapters) for test_Adapter.
 target_include_directories(test_engines PRIVATE "${anira_SOURCE_DIR}/src")
+# test_AdapterLibTorch looks OpenBLAS up with dlsym; glibc before 2.34 keeps it in libdl
+# (the plain signature, as anira_add_test_binary links the target).
+if(TANH_BINARY_FORMAT STREQUAL "ELF")
+	target_link_libraries(test_engines ${CMAKE_DL_LIBS})
+endif()
 
 anira_add_test_binary(test_handler
 	contracts/test_EngineLinkage.cpp
@@ -187,7 +185,7 @@ anira_add_test_binary(test_abi
 	abi/test_Json.cpp
 	abi/test_JsonUpgrade.cpp
 	abi/test_anira_hpp.cpp
-	abi/test_Translate.cpp
+	abi/test_Validate.cpp
 	abi/test_ExtrasFixtures.cpp
 	abi/test_Extras.cpp
 	abi/test_Context.cpp
@@ -213,8 +211,8 @@ add_subdirectory(abi)
 # Header-isolation check: anira's public headers must compile with anira's own include
 # directory (plus those of its public dependencies — the queue, JSON and tanh-lib
 # headers the public headers include) and no engine include directory at all. The
-# engine state lives behind the named pimpl of each backend processor (see
-# BackendBase.h); this is what lets anira link its backends PRIVATE and makes
+# engine state lives in each engine adapter's own translation unit under src/engines; this
+# is what lets anira link its backends PRIVATE and makes
 # "include an engine header -> link anira::<engine>" true at compile time. The object
 # is excluded from the default build and compiled by a CTest, so that a regression
 # shows up as a failed test with the compiler's error instead of a broken build.

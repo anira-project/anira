@@ -176,9 +176,9 @@ TEST(AbiCxx, MoveCarriesTheUpgradedFlagAndTheHandleContents) {
 }
 
 TEST(AbiCxx, ReleaseHandsTheContractOutAndEmptiesTheHandle) {
-    ContractHandle handle(anira::Hard{.block_min = 64,
-                                      .block_max = 64,
-                                      .rate = 48000.0,
+    ContractHandle handle(anira::Hard{.host_block_min = 64,
+                                      .host_block_max = 64,
+                                      .host_rate = 48000.0,
                                       .budget = anira::Budget::measured()});
     anira_contract* raw = handle.release();
     ASSERT_NE(raw, nullptr);
@@ -374,9 +374,9 @@ TEST(AbiCxx, AVersionThreeDocumentIsNotUpgradedAndCarriesNoLegacyContract) {
 
 TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     const anira::Hard hard{
-        .block_min = 256,
-        .block_max = 512,
-        .rate = 44100.0,
+        .host_block_min = 256,
+        .host_block_max = 512,
+        .host_rate = 44100.0,
         .budget = std::chrono::milliseconds{42} + std::chrono::microseconds{660},
         .warmup = ANIRA_WARMUP_FIXED,
         .warmup_iterations = 3,
@@ -390,9 +390,9 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_EQ(handle.kind(), ANIRA_CONTRACT_HARD);
     EXPECT_FALSE(handle.upgraded());
     const anira::Hard minted = handle.hard();
-    EXPECT_EQ(minted.block_min, 256u);
-    EXPECT_EQ(minted.block_max, 512u);
-    EXPECT_DOUBLE_EQ(minted.rate, 44100.0);
+    EXPECT_EQ(minted.host_block_min, 256u);
+    EXPECT_EQ(minted.host_block_max, 512u);
+    EXPECT_DOUBLE_EQ(minted.host_rate, 44100.0);
     EXPECT_EQ(minted.budget.kind(), ANIRA_BUDGET_EXPLICIT);
     EXPECT_EQ(minted.budget.value(), std::chrono::microseconds{42660}) << "42 ms 660 us";
     EXPECT_EQ(minted.warmup, ANIRA_WARMUP_FIXED);
@@ -403,13 +403,13 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_EQ(minted.latencies, hard.latencies);
     EXPECT_EQ(minted.edge_cost, ANIRA_EDGE_COST_STRICT);
 
-    handle.hard_geometry(1, 512, 48000.0);
+    handle.hard_host_blocks(1, 512, 48000.0);
     const anira::Hard patched = handle.hard();
-    EXPECT_EQ(patched.block_min, 1u);
-    EXPECT_EQ(patched.block_max, 512u);
-    EXPECT_DOUBLE_EQ(patched.rate, 48000.0);
+    EXPECT_EQ(patched.host_block_min, 1u);
+    EXPECT_EQ(patched.host_block_max, 512u);
+    EXPECT_DOUBLE_EQ(patched.host_rate, 48000.0);
     EXPECT_EQ(patched.budget.value(), std::chrono::microseconds{42660})
-        << "the geometry patch leaves the rest";
+        << "the host-block patch leaves the rest";
     EXPECT_EQ(patched.ring_dtypes, hard.ring_dtypes);
 
     const ContractHandle defaults{anira::Hard{.budget = anira::Budget::measured()}};
@@ -461,10 +461,10 @@ TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
     EXPECT_DOUBLE_EQ(variant.native()->asynchronous()->m_deadline_ms, 33.3);
 
     const Thrown wrong =
-        thrown_by([&] { ContractHandle(anira::Async{}).hard_geometry(1, 1, 1.0); });
+        thrown_by([&] { ContractHandle(anira::Async{}).hard_host_blocks(1, 1, 1.0); });
     EXPECT_TRUE(wrong.m_thrown);
     EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
-    EXPECT_NE(wrong.m_what.find("anira_contract_hard_set_geometry"), std::string::npos)
+    EXPECT_NE(wrong.m_what.find("anira_contract_hard_set_host_blocks"), std::string::npos)
         << wrong.m_what;
 }
 
@@ -473,7 +473,7 @@ TEST(AbiCxx, ContractHandleFromJsonReportsAnUpgrade) {
     EXPECT_EQ(hard.kind(), ANIRA_CONTRACT_HARD);
     EXPECT_FALSE(hard.upgraded());
     ASSERT_NE(hard.native()->hard(), nullptr);
-    EXPECT_EQ(hard.native()->hard()->m_block_max, 512u);
+    EXPECT_EQ(hard.native()->hard()->m_host_block_max, 512u);
     EXPECT_FALSE(hard.native()->m_legacy);
 
     const ContractHandle asynchronous = ContractHandle::from_json(anira_test::k_contract_async_v3);
@@ -608,7 +608,7 @@ TEST(AbiCxx, ContextAndContractFromFileReadTheFixtures) {
     EXPECT_EQ(hard.kind(), ANIRA_CONTRACT_HARD);
     EXPECT_FALSE(hard.upgraded());
     ASSERT_NE(hard.native()->hard(), nullptr);
-    EXPECT_DOUBLE_EQ(hard.native()->hard()->m_rate, 48000.0);
+    EXPECT_DOUBLE_EQ(hard.native()->hard()->m_host_rate, 48000.0);
 
     const ContractHandle asynchronous =
         ContractHandle::from_file(scratch.write("async.json", anira_test::k_contract_async_v3));
@@ -731,9 +731,9 @@ anira_status ANIRA_CALL cxx_decline_miss(anira_handler* /*handler*/,
 TEST(AbiCxx, TheMissFunctionTravelsThroughTheAggregateAndTheSetter) {
     int user = 0;
     const anira::Hard hard{
-        .block_min = 64,
-        .block_max = 64,
-        .rate = 48000.0,
+        .host_block_min = 64,
+        .host_block_max = 64,
+        .host_rate = 48000.0,
         .budget = anira::Budget::measured(),
         .on_miss = ANIRA_MISS_CALLBACK,
         .miss_fn = &cxx_decline_miss,
@@ -3134,9 +3134,9 @@ TEST(AbiCxx, TheHandlerIsMoveOnlyAndPreparesFromEveryContractForm) {
     EXPECT_EQ(handler.plan_report().num_plans(), 0U) << "no report before the first prepare";
     EXPECT_TRUE(handler.get_latencies().empty());
 
-    const anira::Hard hard{.block_min = static_cast<double>(k_hop),
-                           .block_max = static_cast<double>(k_hop),
-                           .rate = anira_test::k_rate,
+    const anira::Hard hard{.host_block_min = static_cast<double>(k_hop),
+                           .host_block_max = static_cast<double>(k_hop),
+                           .host_rate = anira_test::k_rate,
                            .budget = std::chrono::milliseconds(5),
                            .warmup = ANIRA_WARMUP_NONE};
     EXPECT_EQ(handler.prepare(hard).num_plans(), 1U) << "the Hard aggregate";

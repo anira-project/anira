@@ -33,8 +33,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  nullptr,
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
-    , dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
-{
+    , dry_wet_mixer(k_max_dry_latency) {
     for (const juce::String& choice : PluginParameters::backendTypes) {
         backend_queries.push_back(backend_query(choice));
     }
@@ -120,15 +119,22 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     dry_wet_mixer.prepare(spec);
 
-    // The host geometry completes the contract: a fixed block of samplesPerBlock samples at
-    // sampleRate (a block_min of 1 would allow smaller blocks, at the price of more latency).
-    // The decoder of variant 7 anchors on its audio output, so it takes the same geometry.
-    const auto block = static_cast<double>(samplesPerBlock);
+    // The host blocks complete the contract: the host's real block range at sampleRate.
+    // samplesPerBlock is the largest block JUCE promises, not a fixed one (a host may pass
+    // smaller blocks, splitting at an automation point, say), and JUCE names no minimum, so the
+    // range starts at one sample. The latency anira reports covers every block size of that
+    // range, and setLatencySamples below hands it to the host, which compensates it. Each
+    // processBlock carries its own block (the tensor's extent is set per call). The decoder of
+    // variant 7 anchors on its audio output, so it takes the same host blocks.
+    const auto host_block_max = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
-    model.prepare(block, sampleRate);
+    model.prepare(host_block_max, sampleRate);
 #else
-    encoder.prepare(block, sampleRate);
-    decoder.prepare(block, sampleRate);
+    encoder.prepare(host_block_max, sampleRate);
+    decoder.prepare(host_block_max, sampleRate);
+    // A new stream on both handlers: the count of input samples towards the next latent frame
+    // starts over with it, so the frames are popped in step with the encoder's new stream.
+    m_count_input_samples = 0;
 #endif
 
     const auto num_channels = static_cast<size_t>(getTotalNumInputChannels());
@@ -145,6 +151,7 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 #endif
 
     setLatencySamples(new_latency);
+    jassert(new_latency <= k_max_dry_latency);  // the dry path's delay covers it
     dry_wet_mixer.setWetLatency((float)new_latency);
 
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
@@ -206,19 +213,20 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
     m_count_input_samples += buffer.getNumSamples();
     encoder.handler.push_data(audio, 0);
     while (m_count_input_samples >= 2048) {
-        size_t received_samples = 0;
-        encoder.handler.pop_data(latent, 0, &received_samples);
-        if (received_samples == 0) { break; }
+        // A missed frame still takes its place in the stream: anira keeps the stream
+        // time-aligned (the miss policy filled the frame, with zeros here, and the late frame
+        // is dropped when it arrives), so it is counted and passed on like any other. Waiting
+        // for it instead would leave the count ahead of the encoder's stream from then on:
+        // every later pop too early, the decoder fed out of step, misses on every block.
+        const anira_status popped = encoder.handler.pop_data(latent, 0);
+        if (popped != ANIRA_OK && popped != ANIRA_MISSED) { break; }
         m_count_input_samples -= 2048;
-        // Make some latent space modulation :)
-        latent_space[0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_0_ID.getParamID()).getValue());
-        latent_space[1] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_1_ID.getParamID()).getValue());
-        latent_space[2] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_2_ID.getParamID()).getValue());
-        latent_space[3] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_3_ID.getParamID()).getValue());
+        // Make some latent space modulation :) The offsets are the parameter listener's atomics:
+        // reading the parameters' ValueTree here (getParameterAsValue) would allocate and
+        // register a ValueTree listener on the audio thread, beside the message thread's use.
+        for (size_t i = 0; i < latent_space.size(); ++i) {
+            latent_space[i] += latent_offsets[i].load();
+        }
         decoder.handler.push_data(latent, 0);
     }
     decoder.handler.pop_data(audio, 0);
@@ -260,6 +268,16 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
         gain.store(newValue);
+#endif
+#if MODEL_TO_USE == 7
+    } else if (parameterID == PluginParameters::LATENT_0_ID.getParamID()) {
+        latent_offsets[0].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_1_ID.getParamID()) {
+        latent_offsets[1].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_2_ID.getParamID()) {
+        latent_offsets[2].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_3_ID.getParamID()) {
+        latent_offsets[3].store(newValue);
 #endif
     }
 }

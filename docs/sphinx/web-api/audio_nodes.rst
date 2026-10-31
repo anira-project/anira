@@ -47,7 +47,7 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    of the audio system as a run of quanta with no time between them (2048 frames, 16 quanta, in
    headless Chromium; the device buffer on real hardware). An inference started in a run cannot
    complete before the run's next quantum, so a handler prepared for one quantum alone misses
-   most quanta live; with ``block_max`` the burst, the latency the handler reports covers the run
+   most quanta live; with ``host_block_max`` the burst, the latency the handler reports covers the run
    and every quantum is served. The callback's size is never exposed: the spec calls it "a
    varying number of sample-frames" (`Rendering an Audio Graph
    <https://webaudio.github.io/web-audio-api/#rendering-loop>`_), and no attribute gives it across
@@ -110,7 +110,7 @@ block range too small for the context: measure first.
    the browser deems best for the device instead of a fixed 128 (Chromium chooses 128; Firefox's
    patches for it, bug 2034508, the audio system's smallest callback). A quantum of the
    callback's size is one ``process()`` call per callback, a burst of one quantum
-   (``block_min == block_max``).
+   (``host_block_min == host_block_max``).
 
    .. literalinclude:: ../../../web/examples/model-file/main.ts
       :language: ts
@@ -140,7 +140,7 @@ Device changes
    .. code-block:: ts
 
       const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-      contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
+      contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
       audioNode.prepare(contract)
 
    A node's rendering on the audio thread hides the callback's runs from the probe: in headless

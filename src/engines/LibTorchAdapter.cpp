@@ -29,6 +29,10 @@
 #include <utility>
 #include <vector>
 
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
+
 #include "../capi/words.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
@@ -154,7 +158,7 @@ public:
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing run or
     /// a result of another dtype or shape than the record's.
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
     /// Binds every input descriptor and runs the method; throws StatusError for a descriptor
@@ -407,7 +411,7 @@ void Instance::warm_up(uint32_t iterations) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     try {
         deliver(execute(ctx), ctx);
         m_failures.succeeded();
@@ -436,11 +440,37 @@ anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chun
     }
 }
 
+/// One thread for OpenBLAS, where the LibTorch build carries it: the BLAS of the Linux aarch64
+/// package (the x86_64 packages use MKL, which torch::set_num_threads governs; macOS uses
+/// Accelerate, Windows arm64 Eigen). torch::set_num_threads leaves OpenBLAS's own worker pool
+/// alone, so every matrix product of an inference fans out over a pool of one thread per core,
+/// whose workers wait for the next product spinning in sched_yield: beside anira's inference
+/// threads they take every core, efficiency cores included, and inferences that need a fraction
+/// of their budget alone miss it. OpenBLAS is looked up by name in this library's scope
+/// (libtorch_cpu loads it as a dependency); a build without it has no such symbol, and nothing
+/// is done. The setting is OpenBLAS's, so it holds for the whole process.
+void pin_openblas_to_one_thread() {
+#if defined(__linux__)
+    using SetNumThreads = void (*)(int);
+    using GetNumThreads = int (*)();
+    void* const set_symbol = dlsym(RTLD_DEFAULT, "openblas_set_num_threads");
+    if (set_symbol == nullptr) { return; }
+    void* const get_symbol = dlsym(RTLD_DEFAULT, "openblas_get_num_threads");
+    const int before = get_symbol != nullptr ? reinterpret_cast<GetNumThreads>(get_symbol)() : -1;
+    reinterpret_cast<SetNumThreads>(set_symbol)(1);
+    ANIRA_LOG_DEBUG(log_group::k_engine_libtorch,
+                    "OpenBLAS ran %d threads; pinned to one (torch::set_num_threads does not "
+                    "reach its pool)",
+                    before);
+#endif
+}
+
 /// The engine object: what LibTorch keeps per process, set at the engine's init: one intra-op
-/// thread (anira's inference threads are the parallelism) and c10's glog-style log level from
-/// anira's (INFO=0, WARNING=1, ERROR=2, FATAL=3; c10 has no severity below INFO, so Debug and
-/// Info both map to INFO). The core keeps one object per engine (Core::builtin_engine); every
-/// loaded model holds it.
+/// thread (anira's inference threads are the parallelism), for OpenBLAS's pool too where the
+/// build carries it (pin_openblas_to_one_thread), and c10's glog-style log level from anira's
+/// (INFO=0, WARNING=1, ERROR=2, FATAL=3; c10 has no severity below INFO, so Debug and Info both
+/// map to INFO). The core keeps one object per engine (Core::builtin_engine); every loaded model
+/// holds it.
 class LibTorchEngine final : public BuiltinEngine {
 public:
     LibTorchEngine() : BuiltinEngine(ANIRA_ENGINE_LIBTORCH) {}
@@ -448,6 +478,7 @@ public:
 protected:
     void do_init(const anira_init_info& info) override {
         torch::set_num_threads(1);
+        pin_openblas_to_one_thread();
         FLAGS_caffe2_log_level = std::max(static_cast<int>(info.log_level) - 1, 0);
     }
 };

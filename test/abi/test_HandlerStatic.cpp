@@ -160,7 +160,7 @@ public:
         m_gate.m_open.store(true);
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, m_policy, 0.0, 1.0);
-        contract.hard_geometry(1, k_hop, k_rate);
+        contract.hard_host_blocks(1, k_hop, k_rate);
         contract.hard_miss_fn(m_miss_fn, m_miss_user_data);
         const anira_status prepared = m_handler.prepare(contract);
         ASSERT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
@@ -333,7 +333,7 @@ TEST(AbiHandlerStatic, ABufferSpecUnderAHardContractIsRefusedAtPrepare) {
 
     anira::ContractHandle contract =
         anira_test::explicit_contract(k_hop, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-    contract.hard_geometry(1, k_hop, k_rate);
+    contract.hard_host_blocks(1, k_hop, k_rate);
     EXPECT_EQ(handler.prepare(contract), ANIRA_ERROR_NOT_SUPPORTED);
     const std::string message = handler.m_err.message;
     EXPECT_NE(message.find("'buffer_in'"), std::string::npos) << message;
@@ -808,13 +808,12 @@ TEST(AbiHandlerStatic, AChunkCompletedAsZerosDoesNotOverwriteTheStore) {
 
 template <typename T>
 void typed_round_trip(anira_dtype dtype) {
-    auto handler = std::make_unique<anira_handler>();
+    // What anira_handler_create builds: one port per tensor, made with the handler and the
+    // static port's value constructed in place (it holds atomics and does not move), and the
+    // slot counts, the lengths of the model config's two lists (one tensor per side here,
+    // slot 0).
+    auto handler = std::make_unique<anira_handler>(1, 1);
     const std::vector<int64_t> shape{2, 3};
-    // What anira_handler_create builds: one port per tensor, sized once and the static port's
-    // value constructed in place (it holds atomics and does not move), and the slot counts, the
-    // lengths of the model config's two lists (one tensor per side here, slot 0).
-    handler->m_input_ports = std::vector<anira::capi::Port>(1);
-    handler->m_output_ports = std::vector<anira::capi::Port>(1);
     handler->m_input_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
     handler->m_output_ports[0].emplace<anira::capi::StaticPort>(shape, dtype);
     handler->m_num_inputs = 1;

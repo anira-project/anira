@@ -75,7 +75,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_CNNSIZE)(::benchmark::State& state) {
     model_config.add_model(k_bypass_engine_id);  // the bypass needs no model file
     anira::ContractHandle contract = anira::ContractHandle::from_file(k_contracts[size]);
     const auto block = static_cast<double>(get_buffer_size());
-    contract.hard_geometry(block, block, SAMPLE_RATE);
+    contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.

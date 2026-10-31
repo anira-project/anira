@@ -4,7 +4,6 @@
  * of it over nlohmann::json, which never reaches a header. Loaders are dumb: strings to
  * enums, numbers, construct; semantic validation is prepare's.
  */
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -760,14 +759,20 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
     require_object(node, path);
     for (const auto& [key, value] : node.items()) {
         const std::string key_path = child(path, key.c_str());
-        if (key == "block_min") {
-            // Any number: a fractional block is legal (geometry_refusal below).
-            hard.m_block_min = require_number(value, key_path);
-        } else if (key == "block_max") {
-            hard.m_block_max = require_number(value, key_path);
-        } else if (key == "rate") {
-            hard.m_rate = require_number(value, key_path);
-            if (hard.m_rate < 0.0) { fail_json(key_path, "must not be negative"); }
+        // One spelling per fact: the 3.0 alpha keys name the new ones.
+        if (key == "block_min" || key == "block_max" || key == "rate") {
+            std::string renamed = "\"";
+            renamed.append(key).append("\" is now \"host_").append(key).append("\"");
+            fail_json(key_path, renamed);
+        }
+        if (key == "host_block_min") {
+            // Any number: a fractional block is legal (host_blocks_refusal below).
+            hard.m_host_block_min = require_number(value, key_path);
+        } else if (key == "host_block_max") {
+            hard.m_host_block_max = require_number(value, key_path);
+        } else if (key == "host_rate") {
+            hard.m_host_rate = require_number(value, key_path);
+            if (hard.m_host_rate < 0.0) { fail_json(key_path, "must not be negative"); }
         } else if (key == "budget") {
             if (value.is_string()) {
                 if (value.get<std::string>() != "measured") {
@@ -830,8 +835,9 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             fail_json(key_path, "unknown hard contract key");
         }
     }
-    const std::string refusal =
-        anira::capi::geometry_refusal(hard.m_block_min, hard.m_block_max, hard.m_rate);
+    const std::string refusal = anira::capi::host_blocks_refusal(hard.m_host_block_min,
+                                                                 hard.m_host_block_max,
+                                                                 hard.m_host_rate);
     if (!refusal.empty()) { fail_json(path, refusal); }
 }
 
@@ -1288,14 +1294,14 @@ void upgrade_model_v2(const Json& root, const char* base_dir, anira_model_config
     }
     static_cast<void>(sizes_given);
     static_cast<void>(has_contract_key);
-    // The keys a 2.x file may leave out took the InferenceConfig constructor's defaults: a
-    // fixed warm-up count (0), which the upgrade writes, so the bridge to the 2.x runtime
-    // yields the same configuration, and half the hardware threads as parallel processors,
-    // which was 2.x's way of saying as many as the default pool has threads: a count left out
-    // stays ANIRA_INSTANCES_AUTO, the pool's thread count once the handler is prepared.
+    // The keys a 2.x file may leave out took the 2.x InferenceConfig constructor's defaults: a
+    // fixed warm-up count of none, which the upgrade writes (the contract's own default
+    // count), and half the hardware threads as parallel processors, which was 2.x's way of
+    // saying as many as the default pool has threads: a count left out stays
+    // ANIRA_INSTANCES_AUTO, the pool's thread count once the handler is prepared.
     if (!warm_up_given) {
         hard.m_warmup = ANIRA_WARMUP_FIXED;
-        hard.m_warmup_iterations = anira::InferenceConfig::Defaults::k_warm_up;
+        hard.m_warmup_iterations = anira::capi::HardContract{}.m_warmup_iterations;
     }
     hard.m_on_miss = ANIRA_MISS_ZEROS;  // the 2.x runtime delivered zeros on a miss
     legacy->m_kind = hard;

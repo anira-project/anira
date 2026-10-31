@@ -18,11 +18,24 @@ Where the 2.x API stands in this pre-release
   ``using namespace anira::v2;`` (:ref:`migration-compat`); C++ against the 3.x API includes
   ``<anira/anira.hpp>``.
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
-  JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
-  :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
-  :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape`,
-  :cpp:struct:`anira::ProcessingSpec` and :cpp:class:`anira::JsonConfigLoader` remain public and
-  exported through the alpha releases of the 3.x line.
+  JSON files of its section 1.5. The library's own 2.x classes are removed:
+  ``anira::InferenceConfig`` with ``ModelData``, ``TensorShape`` and ``ProcessingSpec``
+  (``<anira/InferenceConfig.h>``), ``anira::HostConfig`` (``<anira/utils/HostConfig.h>``),
+  ``anira::InferenceBackend``, ``anira::PrePostProcessor``, ``anira::Buffer`` / ``BufferF`` /
+  ``MemoryBlock`` and ``<anira/utils/helperFunctions.h>``, and ``anira::CoreConfig`` with its
+  ``LogConfig`` and the ``LogLevel`` / ``LogDrain`` / ``WaitStrategy`` enums
+  (``<anira/CoreConfig.h>``). Nothing in anira used them once the core ran on the 3.x types.
+  ``anira/compat/v2.hpp`` declares the ones a 2.x host's code names in ``namespace anira::v2``
+  (:ref:`migration-compat-config`): ``InferenceConfig`` with ``ModelData``, ``TensorShape`` and
+  ``ProcessingSpec``, ``HostConfig``, ``InferenceBackend``, ``PrePostProcessor``, ``BufferF``
+  (a view of one channel, without the owning constructor) and ``RingBuffer``, and in place of
+  ``CoreConfig`` the 2.x ``ContextConfig`` with ``LogConfig`` and the three enums. It has no
+  ``Buffer`` template, no ``MemoryBlock`` and nothing of ``helperFunctions.h``: a host buffer is
+  the host's own container, an ``anira_tensor`` describes it. ``anira::ContextConfig`` of
+  ``anira/anira.hpp`` is the 3.x context configuration. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
+  document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
+  (:ref:`migration-compat-config`).
 - **The runtime** is :cpp:class:`anira::InferenceHandler` of ``anira/anira.hpp``, the C++
   face of the C handler of ``anira/abi/handler.h`` (:doc:`usage` sections 3 to 5): created on a
   context from a pipeline, prepared with the contract, the Hard entries over host tensors. The
@@ -30,9 +43,9 @@ Where the 2.x API stands in this pre-release
   ``<anira/compat/v3_to_v2.h>`` that fed it the 2.x configuration classes are removed
   (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
   :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
-  and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
+  and its 2.x ``float***`` functions are gone. A custom 2.x ``PrePostProcessor``
   becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
-  custom :cpp:class:`anira::BackendBase` a *registered engine* (``anira_engine_desc``,
+  custom ``anira::BackendBase`` a *registered engine* (``anira_engine_desc``,
   :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
   :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps its code
   compiles against ``anira/compat/v2.hpp``, which runs it on the same C handler
@@ -71,9 +84,9 @@ Configuration in code
 One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one Hard
 ``anira::ContractHandle``; one 2.x ``ContextConfig`` becomes one ``anira::ContextConfig`` (the
 3.x name is the 2.x name: it is the same role, the per-handler request that the shared *core*
-reconciles; the 2.x struct itself is ``anira::CoreConfig`` on the 3.x line, and what it
-configures is ``anira::Core``, the object the 2.x API called ``Context``); the
-``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
+reconciles; the 2.x struct itself was ``anira::CoreConfig`` in the first alphas of the 3.x
+line, and what it configures is ``anira::Core``, the object the 2.x API called ``Context``); the
+``anira::HostConfig`` handed to ``prepare`` becomes the host blocks of the Hard contract and the anchor of
 the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
 ``spec``, ``contract`` and ``context`` are the handles) with the C entry of
 ``anira/abi/config.h`` beside it; section 1 of the :doc:`usage` guide describes both.
@@ -152,12 +165,12 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        ``set_log_queue_capacity``), or all at once with ``context.log(desc)``
        (``anira_context_config_set_log``).
    * - ``anira::HostConfig{buffer_size, sample_rate}``
-     - ``hard.block_min``, ``block_max``, ``rate`` (``anira_contract_create_hard``) or
-       ``contract.hard_geometry(block_min, block_max, rate)``
-       (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
-       against ``block_min == block_max``. The blocks are doubles, so a fractional
+     - ``hard.host_block_min``, ``host_block_max``, ``host_rate`` (``anira_contract_create_hard``) or
+       ``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``
+       (``anira_contract_hard_set_host_blocks``); ``allow_smaller_buffers`` is ``host_block_min = 1``
+       against ``host_block_min == host_block_max``. The blocks are doubles, so a fractional
        ``buffer_size`` (the ``samplesPerBlock / 2048.f`` idiom of a control-rate model) is a
-       fractional geometry: ``contract.hard_geometry(samples_per_block / 2048.0, ...)``.
+       fractional block: ``contract.hard_host_blocks(samples_per_block / 2048.0, ...)``.
    * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
      - ``cfg.anchor(canonical)`` with the tensor's canonical name
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
@@ -253,8 +266,8 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
        prepare refuses it with ``ANIRA_ERROR_CONFIG``, as it refuses a name that is no
        Streamed output; an output never named keeps the computed figure.
    * - ``prepare(host_config)``
-     - ``handler.prepare(contract)`` with the host geometry on the Hard contract
-       (``contract.hard_geometry(block_min, block_max, rate)``); it returns the
+     - ``handler.prepare(contract)`` with the host blocks on the Hard contract
+       (``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``); it returns the
        :cpp:class:`anira::PlanReport`.
    * - ``reset()``
      - ``handler.reset()`` (``anira_handler_reset``); it also re-initialises declared state.
@@ -269,7 +282,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
      - ``anira::InferenceThread thread(context)`` on a ``context.threads(0)`` context
        (``anira_inference_thread_create``).
 
-What each virtual and helper of a custom :cpp:class:`anira::PrePostProcessor` becomes on the
+What each virtual and helper of a custom 2.x ``PrePostProcessor`` becomes on the
 processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Processor` in C++):
 
 .. list-table::
@@ -356,7 +369,7 @@ processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Proc
        (``anira_processor_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
        (:doc:`custom_preprocessing`).
 
-What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
+What each virtual of a custom ``anira::BackendBase`` becomes on the engine (the C
 descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_engines`):
 
 .. list-table::
@@ -488,7 +501,7 @@ rest of this page is the way forward, and the header lets that happen one class 
      - Present, wait-free, before ``prepare`` too; from any thread while audio runs, but not
        while ``prepare`` or the destructor runs on another thread.
    * - ``prepare(HostConfig)``
-     - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
+     - Present; a fractional block size is a fractional Hard host block, as in 2.x; a
        reference tensor that is not streamable is refused.
    * - ``prepare(HostConfig, custom_latency, tensor_index)``, ``prepare(HostConfig, vector)``
      - Present: the declared stream latency of the Hard contract
@@ -561,7 +574,7 @@ The classes and what differs from 2.x
 ``namespace anira::v2`` under the names of the last 2.x release (v2.3.0):
 ``InferenceBackend`` with ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH`` and
 ``CUSTOM``, ``ModelData``, ``TensorShape``, ``ProcessingSpec``, ``InferenceConfig``,
-``JsonConfigLoader``, ``ContextConfig`` (this pre-release's ``anira::CoreConfig``) with
+``JsonConfigLoader``, ``ContextConfig`` (``anira::CoreConfig`` in the first alphas) with
 ``LogConfig``, ``LogLevel``, ``LogDrain`` and ``WaitStrategy``, and ``HostConfig``. The header
 is header-only C++20 over ``anira/anira.hpp`` and the C entries, includes nothing of the 2.x
 tree, and compiles beside ``<anira/anira.h>``. A 2.x configuration compiles unchanged with a
@@ -587,7 +600,7 @@ contract, and read the 2.x public fields and getters back from the handles.
 canonical one with that entry's axis layout applied (the channels-last TensorFlow rows read
 channels last, as the 2.x HybridNN processor expects). ``model_config()`` hands out the handle,
 ``model_config_copy()`` a fresh one of the same document, ``hard()`` the legacy contract
-without geometry. It is copyable (a copy loads its document again) and compares equal when
+without host blocks. It is copyable (a copy loads its document again) and compares equal when
 anira 3 holds the same configuration, whatever the spelling.
 ``anira::v2::JsonConfigLoader`` reads the document once and builds both objects, the
 ``ContextConfig`` read back from ``anira::ContextConfig::from_json``; ``get_context_config()``
@@ -674,7 +687,7 @@ What differs from 2.x:
 ``BackendBase``), build a context, a pipeline of a private copy of the configuration's model
 config (the custom engine, the inference stage under the default candidate set, a
 ``LegacyProcessor`` over the processor) and one ``anira_handler``; ``prepare`` mints the
-legacy contract with the host geometry, the ``process``, ``push_data`` and ``pop_data`` forms
+legacy contract with the host blocks, the ``process``, ``push_data`` and ``pop_data`` forms
 present the caller's channel pointers as planar float tensors and route the non-streamable
 values through the processor's atomics, and the rest forwards to the entry of the same name. A
 2.x host compiles unchanged:
@@ -700,11 +713,11 @@ What differs from 2.x:
   construction.
 - **Loading** happens at ``prepare``, not at construction: a model that does not load fails
   ``prepare`` (``ANIRA_ERROR_NO_SUCH_FILE``, ``ANIRA_ERROR_MODEL_LOAD``). A ``prepare`` with the
-  settings of the last one only resets the stream; another geometry prepares again and loads the
+  settings of the last one only resets the stream; other host blocks prepare again and load the
   models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
   the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size``
   works as in 2.x (``samplesPerBlock / 2048.f`` for a control-rate reference): it becomes the
-  Hard geometry as it is (``block_min`` is half of it when smaller blocks come and it is one
+  Hard host block as it is (``host_block_min`` is half of it when smaller blocks come and it is one
   sample or less); a block that is not finite and above 0 is ``ANIRA_ERROR_CONFIG``.
 - **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
   contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
@@ -746,12 +759,10 @@ When the 2.x classes go
 ~~~~~~~~~~~~~~~~~~~~~~~
 
 The 2.x handler is removed in this pre-release, the transitional bridge with it
-(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
-(the configuration classes, :cpp:class:`anira::PrePostProcessor`,
-:cpp:class:`anira::BackendBase`, :cpp:class:`anira::JsonConfigLoader`) stay installed, each
-included by its own path, until a later pre-release makes them private. From then on
-``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
-after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
+(:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The library's own 2.x
+classes are removed too: the configuration classes, ``PrePostProcessor``, ``CoreConfig``,
+``JsonConfigLoader`` and ``BackendBase``, with their headers. ``anira/compat/v2.hpp`` is what
+2.x code compiles against, and it is removed one minor release after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.
 
 .. _migration-bridge:
@@ -778,7 +789,7 @@ drove the 2.x handler through the bridge hands the same objects to
    * - ``to_core_config(context_config)``
      - ``anira::Context context(context_config)``, which the handler is created on.
    * - ``to_host_config(hard, cfg)``, ``to_host_config(cfg, buffer_size, sample_rate)``
-     - The Hard contract's geometry (``contract.hard_geometry(block_min, block_max, rate)``,
+     - The Hard contract's host blocks (``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``,
        fractional where the host's numbers are) and ``handler.prepare(contract)``.
    * - ``enabled_engines()``
      - ``anira::enabled_engines()``.
@@ -798,8 +809,8 @@ drove the 2.x handler through the bridge hands the same objects to
     pipeline.add_inference(cfg);
     anira::InferenceHandler handler(context, pipeline);
 
-    // prepare, once the host geometry is known
-    contract.hard_geometry(samples_per_block, samples_per_block, sample_rate);
+    // prepare, once the host blocks are known
+    contract.hard_host_blocks(samples_per_block, samples_per_block, sample_rate);
     const anira::PlanReport report = handler.prepare(contract);
 
 What the bridge refused because the 2.x runtime could not run it runs on the 3.x handler: a
@@ -946,24 +957,24 @@ format).
     anira_model_config_to_json(cfg, text, len + 1, &len);
     /* write text to model.json */
 
-**The 2.x C++ loader.** :cpp:class:`anira::JsonConfigLoader` still reads the 2.x document into
-the 2.x structs in this pre-release:
+**The 2.x C++ loader** is removed with ``<anira/utils/JsonConfigLoader.h>``. The 2.x document
+loads through ``anira::ModelConfig::from_file`` (with ``take_legacy_contract()`` for the Hard
+contract) and ``anira::ContextConfig::from_file``, or, in the 2.x spelling, through
+``anira::v2::JsonConfigLoader`` of ``<anira/compat/v2.hpp>`` (:ref:`migration-compat-config`):
 
 .. code-block:: cpp
 
-    anira::JsonConfigLoader json_config_loader("path/to/Config.json");
-    anira::CoreConfig core_config = std::move(*json_config_loader.get_core_config());
-    anira::InferenceConfig inference_config = std::move(*json_config_loader.get_inference_config());
+    #include <anira/compat/v2.hpp>
 
-Its getters return a ``std::unique_ptr`` each; move the value out before using it. The loader
-also accepts a ``std::istream``. It is lenient where the 3.x loaders are strict: a malformed
-value is reported through the log and skipped, an unparseable ``model_data`` or
-``tensor_shape`` entry is dropped, an out-of-range scalar falls back to its default, and only a
-configuration that still has model data, a tensor shape and ``max_inference_time`` yields an
-:cpp:struct:`anira::InferenceConfig`; anything less returns ``nullptr``, which the caller must
-check. On WebAssembly builds ``"blocking"`` is coerced to ``"spin_backoff"`` and ``drain`` to
-``"manual"``, each with a warning; ``num_threads`` sizes the pool as natively, its threads being
-Wasm Workers.
+    anira::v2::JsonConfigLoader json_config_loader("path/to/Config.json");
+    anira::v2::ContextConfig context_config = std::move(*json_config_loader.get_context_config());
+    anira::v2::InferenceConfig inference_config =
+        std::move(*json_config_loader.get_inference_config());
+
+The 2.x loader was lenient where the 3.x loaders are strict: it logged a malformed value and
+skipped it, dropped an unparseable ``model_data`` or ``tensor_shape`` entry, and answered
+``nullptr`` for a configuration without model data, a tensor shape or ``max_inference_time``.
+Each of these is an ``anira::Error`` from the constructor now.
 
 .. _migration-web:
 
@@ -985,10 +996,10 @@ path is a Wasm Audio Worklet node whose render callback is C.
   config: ``await ModelConfig.fromUrl(anira, url)`` reads the 3.x model file a native host reads
   (a 2.x JSON document is read too, :ref:`migration-json`) and fetches its model files.
 - ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
-  ``ContractHandle.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate, budgetMs })``
+  ``ContractHandle.hard(anira, { hostBlockMin: g.quantum, hostBlockMax: g.burst, hostRate: context.sampleRate, budgetMs })``
   with ``g = await measureRenderGeometry(context)``, or a contract file
-  (``ContractHandle.fromUrl``, then ``hardGeometry``): the render quantum is the smallest block,
-  the context's burst of quanta the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
+  (``ContractHandle.fromUrl``, then ``hardHostBlocks``): the render quantum is the smallest block,
+  the context's burst of quanta the largest. A running node changes its host blocks through ``audioNode.prepare(contract)``.
 - ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
   ``Pipeline.create(anira).addInference(model)``, ``InferenceHandler.create(context, pipeline)`` and
   ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core

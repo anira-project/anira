@@ -7,24 +7,22 @@
 #endif
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
-#include "../InferenceConfig.h"
-#include "../PrePostProcessor.h"
 #include "../abi/enums.h"
 #include "../abi/status.h"
 #include "../abi/tensor.h"
-#include "../utils/Buffer.h"
-#include "../utils/HostConfig.h"
-#include "../utils/InferenceBackend.h"
+#include "../system/Exports.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
 #include "../utils/Semaphore.h"
+#include "LatencyCalculator.h"
 
 namespace anira {
 
@@ -41,6 +39,21 @@ class Prepared;
 /// InstanceWaitList.h, private to the scheduler): held through a smart pointer like the two
 /// engine-room types above.
 class InstanceWaitList;
+
+namespace capi {
+/// The processor of a C-created handler's session (src/capi/processor.h, private): what the
+/// session runs every phase of a chunk on, and what holds the handler's two port vectors, the
+/// rings of the session's Streamed slots among them. Held by reference; the session's .cpp
+/// files include the private header.
+class ProcessorRunner;
+/// What the validator derived for the handler's model config, and the Hard half of the
+/// contract the handler was prepared under (src/capi/validate.h and src/capi/handles.h,
+/// private): the session reads both, with the model config, by reference, for as long as it
+/// lives; the handler holds all three.
+struct Derived;
+struct DerivedSpec;
+struct HardContract;
+}  // namespace capi
 
 /**
  * @brief Session management class for individual inference instances
@@ -60,8 +73,15 @@ class InstanceWaitList;
  * The session uses ring buffers for efficient audio streaming and maintains
  * multiple thread-safe structures to enable concurrent processing without
  * blocking the audio thread. Latency, the number of those structures and the ring
- * sizes are computed in closed form by LatencyCalculator from the model
- * characteristics and the host audio configuration.
+ * sizes are computed in closed form by LatencyCalculator from what the validator derived
+ * for the model config and from the Hard contract.
+ *
+ * The session's configuration is the C handler's, read by reference and never copied: the
+ * model config of its variant, what the validator derived for it under the contract
+ * (capi::Derived: every tensor's extents, hop and channel count, the anchor, the
+ * exclusivity) and the contract's Hard half (capi::HardContract: the host blocks, the budget, the
+ * wait ratio). The handler installs the three before it builds the session and keeps them
+ * until the session is released.
  *
  * @note Each session has a unique ID and maintains its own processing state
  *       while participating in the global inference scheduling system.
@@ -71,8 +91,7 @@ class InstanceWaitList;
  *
  * What the driver pushes into an input ring and pops out of an output ring: the ring dtype the
  * host declared for the slot on the Hard contract (`anira_contract_hard_set_ring_dtype`). A slot
- * beyond the end of a vector, or an empty vector, is float32, the 2.x default and what the 2.x
- * InferenceManager::prepare() passes for every slot.
+ * beyond the end of a vector, or an empty vector, is float32.
  */
 struct RingDtypes {
     std::vector<anira_dtype> m_inputs;   ///< Per input tensor: the send ring's element type
@@ -93,18 +112,50 @@ struct CustomLatencies {
     std::vector<long> m_outputs;  ///< Per output tensor: the latency in samples, or negative
 };
 
+/**
+ * @brief What fills the hops a session's submission drops: the InferenceManager, under the
+ * contract's miss policy
+ *
+ * drop() runs once per dropped hop, at the drop, while every Streamed send ring holds the hop at
+ * its read position: it consumes the hop and keeps its fill. place() runs once per dropped hop at
+ * its ordered placement (SessionElement::place_pending_fills), in the order of the drops: it
+ * pushes the oldest fill not yet placed into every Streamed receive ring, each of which has room
+ * for a hop. Driving thread only; real-time safe.
+ */
+class DroppedHops {
+public:
+    DroppedHops() = default;
+    virtual ~DroppedHops() = default;
+    DroppedHops(const DroppedHops&) = delete;
+    DroppedHops& operator=(const DroppedHops&) = delete;
+    DroppedHops(DroppedHops&&) = delete;
+    DroppedHops& operator=(DroppedHops&&) = delete;
+
+    virtual void drop() ANIRA_NONBLOCKING = 0;
+    virtual void place() ANIRA_NONBLOCKING = 0;
+};
+
 class ANIRA_API SessionElement {
 public:
     /**
      * @brief Constructor that initializes a session with specified components
      *
-     * Creates a new session element with a unique ID and associates it with
-     * the provided preprocessing/postprocessing pipeline and inference configuration.
-     * The session is not fully initialized until prepare() is called.
+     * Creates a new session element with a unique ID and associates it with the C handler's
+     * processor runner and configuration. The session is not fully initialized until prepare()
+     * is called.
      *
      * @param new_session_id Unique identifier for this session
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
+     * @param processor The handler's processor runner: every phase of a chunk runs on it, and
+     * its port vectors hold the session's rings (it outlives the session)
+     * @param model The handler's model config (its variant): the model's own latency of every
+     * output (it outlives the session)
+     * @param derived What the validator derived for the model config under the contract (it
+     * outlives the session)
+     * @param hard The Hard half of the contract the handler is prepared under (it outlives the
+     * session)
+     * @param num_instances The instance count, resolved by Core::create_session (1 for an
+     * exclusive session, else the model config's max_instances, ANIRA_INSTANCES_AUTO the
+     * pool's size, clamped to the pool)
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
      * @param rt_latch The real-time latch this session records its failures into (see m_rt):
@@ -112,15 +163,18 @@ public:
      * gives the session its own latch (m_rt_own)
      */
     SessionElement(int new_session_id,
-                   PrePostProcessor& pp_processor,
-                   InferenceConfig& inference_config,
+                   capi::ProcessorRunner& processor,
+                   const anira_model_config& model,
+                   const capi::Derived& derived,
+                   const capi::HardContract& hard,
+                   uint32_t num_instances,
                    moodycamel::ProducerToken&& producer_token,
                    anira::RtLatch* rt_latch = nullptr);
 
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
      *
-     * Resets the audio-thread-owned state (send/receive ring buffers, timestamp
+     * Resets the audio-thread-owned state (the rings of the Streamed slots, timestamp
      * bookkeeping, latency re-seed) and any ThreadSafeStruct that is currently
      * free, but never touches a struct that a worker still holds in flight
      * (m_free == false). It therefore does NOT require Core::drain_inference_queue()
@@ -138,30 +192,24 @@ public:
     void clear();
 
     /**
-     * @brief Prepares the session for processing with specified audio configuration
+     * @brief Prepares the session for the Hard contract it reads
      *
-     * Initializes all buffers, calculates latencies, and configures the session
-     * for processing with the provided host audio configuration. This method
-     * must be called before the session can process audio data.
+     * Calculates the latencies, sizes the ring of every Streamed slot in its stream port and
+     * builds the chunks, for the contract's host blocks, budget and wait ratio. This method must
+     * be called before the session can process audio data. The host block in hops is stored
+     * in m_block_hops and whether an input streams in m_input_driven, for the real-time path.
      *
-     * The host configuration's reference stream (HostConfig::resolve_reference) is
-     * resolved here, once, and stored in m_reference / m_input_driven for the
-     * real-time path.
-     *
-     * @param spec Host configuration containing sample rate, buffer size, and audio settings
      * @param custom_latencies A caller's latency per output tensor (see CustomLatencies; empty
      * keeps every computed latency); entries for non-streamable outputs are ignored, their
      * latency is always 0
      * @param ring_dtypes The element type of every send and receive ring, per slot (see
      * RingDtypes; float32 for every slot the vectors do not name); the ring sizes are element
      * counts, so they do not depend on it
-     * @throws std::invalid_argument if the host config's reference stream cannot be resolved
-     *         (explicit reference out of range or not streamable, or no streamable tensor at all),
-     *         or if a ring dtype is not one of the scalar dtypes the rings store
+     * @throws std::invalid_argument if the contract's host blocks cannot size the session (see
+     *         LatencyCalculator), or if a ring dtype is not one of the scalar dtypes the rings
+     *         store
      */
-    void prepare(const HostConfig& spec,
-                 const CustomLatencies& custom_latencies = {},
-                 const RingDtypes& ring_dtypes = {});
+    void prepare(const CustomLatencies& custom_latencies = {}, const RingDtypes& ring_dtypes = {});
 
     /**
      * @brief Whether every streamable receive ring can take one more inference result
@@ -175,9 +223,81 @@ public:
      */
     bool receive_rings_have_room();
 
-    std::vector<RingBuffer> m_send_buffer;  ///< Ring buffers for input data streaming to inference
-    std::vector<RingBuffer> m_receive_buffer;  ///< Ring buffers for output data streaming from
-                                               ///< inference
+    /// Drops one hop: consumes it from every Streamed send ring and keeps its fill
+    /// (m_dropped_hops; without one, the fill is silence). Driving thread only.
+    void drop_hop();
+
+    /**
+     * @brief Owes the receive rings one hop of fill per dropped hop, in stream order
+     *
+     * A hop the submission dropped (no slot was free: every slot holds a chunk not yet
+     * collected) produces one hop of fill on every streamable output at its own stream
+     * position, behind every chunk claimed before it: counted on the youngest chunk not yet
+     * collected (ThreadSafeStruct::m_fills_after), which Core::post_process moves to
+     * m_pending_fills behind its own output. With no such chunk (after a wait-free reset the
+     * slots in flight are stale), the fill is due at once. Driving thread only.
+     *
+     * @param hops The hops dropped
+     */
+    void owe_fills(size_t hops);
+
+    /**
+     * @brief Places the fills owed ahead of every chunk not yet collected
+     *
+     * One hop of fill on every streamable output per owed hop (DroppedHops::place, or zeros),
+     * while every receive ring has room for one; the collection calls it before it places the
+     * next chunk. Driving thread only.
+     *
+     * @return True when nothing is owed any more, false when a ring is full
+     */
+    bool place_pending_fills();
+
+    /**
+     * @brief The ring of a Streamed input or output slot
+     *
+     * The ring lives in the slot's stream port, in the handler's port vector the processor
+     * runner holds (one container, one index space); the session's prepare sizes it in place.
+     * Only a Streamed slot has one: the caller checks that the slot streams (its hop is above 0)
+     * before it asks.
+     *
+     * @param slot The slot, the tensor's position in its side of the model config
+     */
+    RingBuffer& send_ring(size_t slot) const noexcept;
+    RingBuffer& receive_ring(size_t slot) const noexcept;
+
+    /**
+     * @name The facts of the configuration the core reads
+     *
+     * Read from the handler's model config, what the validator derived for it and the Hard
+     * contract (m_model, m_derived, m_hard), one source each: nothing is copied into the
+     * session. A slot is a tensor's position in its side of the model config.
+     * @{
+     */
+    /// The number of input and output tensors of the model config.
+    size_t num_inputs() const noexcept;
+    size_t num_outputs() const noexcept;
+    /// A slot's hop: the samples per channel one inference consumes or produces on a
+    /// Streamed slot (its window minus its context); 0 for a slot without a stream (Static,
+    /// State), which has no ring.
+    size_t input_hop(size_t slot) const noexcept;
+    size_t output_hop(size_t slot) const noexcept;
+    /// A slot's channel count: the Channel axis extent of a Streamed slot, 1 without one and
+    /// for every other slot.
+    size_t input_channels(size_t slot) const noexcept;
+    size_t output_channels(size_t slot) const noexcept;
+    /// The reference stream: the model config's anchor as the validator resolved it (the named
+    /// Streamed tensor, else the first Streamed input, else the first Streamed output), the
+    /// stream the contract's host blocks count in.
+    bool reference_is_input() const noexcept;
+    size_t reference_slot() const noexcept;
+    /// Whether every chunk's completion is signalled on its semaphore: the contract's wait
+    /// ratio is above 0, so the driving thread waits for results there; without a wait it
+    /// polls the chunk's atomic flag.
+    bool uses_semaphore() const noexcept;
+    /// Whether the session runs one inference at a time and in order (capi::Derived::
+    /// m_exclusive: a stateful model or a declared State pair): the dispatch gate.
+    bool exclusive() const noexcept;
+    /** @} */
 
     /**
      * @brief Thread-safe data structure for concurrent inference processing
@@ -194,41 +314,41 @@ public:
      */
     struct ThreadSafeStruct {
         /**
-         * @brief Constructor that initializes thread-safe structure with tensor dimensions
+         * @brief The chunk's storage and its descriptors, built once by the session's prepare
          *
-         * Creates buffers for input and output tensors with the specified sizes
-         * and initializes synchronization primitives.
+         * One allocation holds the buffer of every slot of either side but a State slot, each
+         * buffer starting on a 64-byte boundary, in the storage's dtype (float32 in this
+         * pre-release) with the spec's extents, zeroed. Every slot gets one descriptor over its
+         * buffer, with the spec's rank and extents and all-zero strides: what the engine call
+         * hands its adapter (anira_engine_ctx::inputs / outputs) and what a processor context
+         * copies for a slot. A State slot has no buffer: its descriptor is the processor
+         * runner's to bind over the pair's port ahead of every inference.
          *
-         * @param tensor_input_size Vector of input tensor sizes
-         * @param tensor_output_size Vector of output tensor sizes
+         * @param inputs What the validator derived per input tensor: the spec's extents
+         * (capi::DerivedSpec::m_dims)
+         * @param outputs The same per output tensor
+         * @param input_state Per input tensor: whether it is a State slot
+         * @param output_state Per output tensor: whether it is a State slot
          */
-        ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
-                         const std::vector<size_t>& tensor_output_size);
+        ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
+                         const std::vector<capi::DerivedSpec>& outputs,
+                         const std::vector<bool>& input_state,
+                         const std::vector<bool>& output_state);
+        ~ThreadSafeStruct() = default;
+        // The descriptors name the block: one struct, one place.
+        ThreadSafeStruct(const ThreadSafeStruct&) = delete;
+        ThreadSafeStruct& operator=(const ThreadSafeStruct&) = delete;
+        ThreadSafeStruct(ThreadSafeStruct&&) = delete;
+        ThreadSafeStruct& operator=(ThreadSafeStruct&&) = delete;
 
-        /**
-         * @brief Builds the descriptor of every tensor of the chunk over its buffer
-         *
-         * Control thread, once per prepare, after the buffers exist: one anira_tensor per
-         * slot of either side, over the buffer's memory, with the spec's rank and extents
-         * (the universal TensorShape rows) and the storage's dtype, float32, all-zero
-         * strides. What the engine call hands its adapter (anira_engine_ctx::inputs /
-         * outputs) and what a processor context copies for a slot.
-         *
-         * @param input_shapes The spec's extents per input tensor
-         * @param output_shapes The spec's extents per output tensor
-         */
-        void bind_tensors(const TensorShapeList& input_shapes,
-                          const TensorShapeList& output_shapes);
+        /// Zeroes the buffers of the chunk's inputs, State slots excepted (they have none).
+        void zero_inputs() noexcept;
+        /// Zeroes the buffers of the chunk's outputs: what a chunk that completes as zeros
+        /// delivers. A State slot has no buffer; its pair keeps its own value.
+        void zero_outputs() noexcept;
 
-        /**
-         * @brief Re-points every descriptor at its buffer's memory of the moment
-         *
-         * A field fill on the driving thread at every claim of the struct
-         * (Core::pre_process). No adapter swaps a buffer's memory any more, so the fill
-         * re-points every descriptor at the memory it already names; it stays until the
-         * queue's storage is anira's own and described once (PR 10).
-         */
-        void rebind_tensors() noexcept;
+        /// The alignment of every slot's buffer, in bytes.
+        static constexpr size_t k_alignment = 64;
 
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
@@ -266,31 +386,27 @@ public:
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
-        // What a processor left on the chunk (a 3.x handler's ProcessorRunner; a 2.x
-        // processor never writes it): ANIRA_OK, or the status of the phase callback that
-        // failed. Core::pre_process resets it, then completes the chunk as zeros without
-        // enqueueing it when pre_process failed; InferenceThread::do_inference reads it around
-        // the hooks and skips the engine call, or zeroes the outputs, on a failure. Plain
-        // field: written by the thread that holds the struct, synced by the queue handoffs
-        // like the stamps above.
-        anira_status m_processor_status{ANIRA_OK};
         // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
         // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
         // inference thread (a throw, a failed before_inference or after_inference), its output
-        // buffers cleared. Core::pre_process resets it. A 3.x processor runner reads it in
+        // buffers zeroed. Core::pre_process resets it. The processor runner reads it in
         // post_process: such a chunk does not overwrite the handler's Static output store.
         // Plain field, synced by the queue handoffs like the stamps above (written before the
         // done signal, read after it).
         bool m_completed_as_zeros{false};
+        // The hops dropped while this chunk was the youngest one not yet collected: no slot
+        // was free for them (SessionElement::owe_fills). Their fill follows this chunk's
+        // output into the receive rings, ahead of every later chunk. Driving thread only (set
+        // by the submission, moved out by Core::post_process); Core::pre_process resets it.
+        size_t m_fills_after{0};
         // The struct's position in SessionElement::m_inference_queue: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
-        std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
-        std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
-        // One descriptor per slot of either side over the buffers above (bind_tensors,
-        // rebind_tensors): the engine call's anira_engine_ctx names these arrays, a processor
-        // context copies one for a slot. Written on the driving thread at the claim, read on
-        // the inference thread; synced by the queue handoffs like the fields above.
+        // One descriptor per slot of either side over the chunk's storage (built by the
+        // constructor; a State slot's bound by the processor runner per inference): the engine
+        // call's anira_engine_ctx names these arrays, a processor context copies one for a
+        // slot. Written by the thread that holds the struct, synced by the queue handoffs like
+        // the fields above.
         std::vector<anira_tensor> m_input_tensors;
         std::vector<anira_tensor> m_output_tensors;
         // The chunk's links while its job waits for a free instance of its plan's loaded model
@@ -300,6 +416,14 @@ public:
         // under its lock; empty and null otherwise.
         std::shared_ptr<SessionElement> m_waiting_session;
         ThreadSafeStruct* m_waiting_next = nullptr;
+
+    private:
+        /// The one allocation of the chunk's buffers, over-allocated by k_alignment so that the
+        /// first buffer starts on a boundary whatever the allocator handed out.
+        std::vector<std::byte> m_block;
+        /// Per slot of either side, its buffer in m_block; empty for a State slot.
+        std::vector<std::span<std::byte>> m_input_bytes;
+        std::vector<std::span<std::byte>> m_output_bytes;
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
@@ -350,13 +474,6 @@ public:
         anira_provider m_provider = ANIRA_PROVIDER_CPU;
         std::string m_engine_id;
         std::string m_provider_id;
-        /// The 2.x backend the plan runs on: what set_backend selects by and get_backend
-        /// answers (InferenceManager); the value the 2.x pre- and post-processing virtuals
-        /// receive for the chunk.
-        InferenceBackend m_legacy_backend = InferenceBackend::CUSTOM;
-        /// A 2.x row for a backend of the build without a model: the roundtrip runs for the
-        /// plan, and the inference thread logs RtSite::NoModelForBackend once per prepare.
-        bool m_missing_model = false;
         /// The plan's engine keeps its own aliasing of a declared State pair
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
@@ -381,12 +498,10 @@ public:
     /**
      * @brief The plan table: dense plan index -> the plan.
      *
-     * Built by Core::create_session from the requests it is given (engine::PlanRequest): the
-     * 2.x constructors ask for one row per configured model, in m_model_data order, then every
-     * other backend of this build, so that every backend a 2.x caller can name has a row; a
-     * 3.x handler asks for exactly its plans. Several rows may name one backend. Never empty
-     * in a registered session, and never changed afterwards, so the driving thread and the
-     * inference threads read it without synchronization.
+     * Built by Core::create_session from the requests the C handler gives it
+     * (engine::PlanRequest): exactly its plans. Never empty in a registered session, and never
+     * changed afterwards, so the driving thread and the inference threads read it without
+     * synchronization.
      */
     std::vector<PlanSlot> m_plans;
 
@@ -395,20 +510,13 @@ public:
      *
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
-     * Always below m_plans.size(). Initialized by Core::create_session to the first
-     * configured model whose engine has an adapter (the CUSTOM row when a custom backend
-     * was provided or nothing matches).
+     * Always below m_plans.size(). 0 when Core::create_session returns; the C handler
+     * selects its initial plan before the first prepare.
      */
     std::atomic<uint32_t> m_current_plan{0};
 
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
-
-    /// The 2.x backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
-    InferenceBackend plan_backend(uint32_t plan) const noexcept;
-
-    /// The first plan that runs on a 2.x backend (the 2.x selection by backend), if any does.
-    std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
 
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
@@ -417,6 +525,13 @@ public:
                                         ///< that no submitted inference covers yet. Plain field,
                                         ///< written and read only on the session's driving thread
                                         ///< (like m_time_stamps).
+    size_t m_pending_fills = 0;  ///< Hops of fill the receive rings owe behind the last chunk
+                                 ///< collected and ahead of every later one (owe_fills,
+                                 ///< place_pending_fills). Driving thread only; a reset clears
+                                 ///< it.
+    DroppedHops* m_dropped_hops = nullptr;  ///< What fills a dropped hop: the manager of the
+                                            ///< session, set by its prepare and cleared before it
+                                            ///< releases the session; nullptr: silence
 
     const int m_session_id;  ///< Unique identifier for this session (immutable)
 
@@ -479,7 +594,7 @@ public:
     std::atomic<uint64_t> m_stateful_dispatch_gate{0};  ///< {epoch, busy} dispatch gate; busy while
                                                         ///< a stateful task of this session is
                                                         ///< queued or running
-    // Pre-sized in the constructor to m_num_parallel_processors — a pending
+    // Pre-sized in the constructor to m_num_instances — a pending
     // entry is always a distinct ThreadSafeStruct, so the depth is bounded —
     // and fed exclusively through m_dispatch_producer_token, so enqueues never
     // allocate: neither on the audio thread (real-time safety) nor, on
@@ -526,8 +641,16 @@ public:
      * yields (silent) output at its correct stream position and the struct is freed normally. */
     void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
 
-    PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
-    InferenceConfig& m_inference_config;  ///< Reference to the inference configuration
+    capi::ProcessorRunner& m_processor;  ///< The handler's processor runner: the four phases of
+                                         ///< every chunk, and the port vectors of the rings
+    const anira_model_config& m_model;   ///< The handler's model config (its variant)
+    const capi::Derived& m_derived;      ///< What the validator derived for it under the contract
+    const capi::HardContract& m_hard;    ///< The Hard half of the contract of the prepare
+    /// The instance count (Core::create_session: 1 for an exclusive session, else the model
+    /// config's, ANIRA_INSTANCES_AUTO resolved and clamped to the pool): at most this many
+    /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
+    /// queue of an exclusive session is sized by it.
+    const uint32_t m_num_instances;
 
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
                        ///< constructor received no latch (a 2.x session); nothing reads its
@@ -547,7 +670,7 @@ public:
     // data race between those two threads, so this needs real synchronization.
     std::atomic<bool> m_is_non_real_time{false};  ///< True forces new_data_request() to
                                                   ///< block until each pending inference
-                                                  ///< completes, ignoring blocking_ratio
+                                                  ///< completes, ignoring the wait ratio
                                                   ///< and any deadline, trading real-time
                                                   ///< safety for complete, deterministic
                                                   ///< output (see Core::new_data_request).
@@ -555,19 +678,22 @@ public:
     std::vector<unsigned int> m_latency;  ///< Calculated latency values for each output tensor in
                                           ///< samples, index-aligned with the output tensor list;
                                           ///< 0 for non-streamable outputs
-    ReferenceStream m_reference;  ///< Reference stream resolved once in prepare(); read on the
-                                  ///< real-time path, never re-resolved there
-    bool m_input_driven = true;   ///< True if any input tensor is streamable: inference is
-                                  ///< triggered by arriving input samples. False for a generator
-                                  ///< (no streamable input), whose inference is triggered by
-                                  ///< output demand (see m_pending_pull_samples).
-    size_t m_num_structs = 0;     ///< Number of allocated thread-safe structures: twice the
-                               ///< steady-state bound of LatencyCalculator::get_num_structs(), so
-                               ///< that the inferences a wait-free reset() strands until their
-                               ///< workers finish never starve the fresh schedule (for testing
-                               ///< access)
-    std::vector<size_t> m_send_buffer_size;  ///< Calculated send buffer sizes (for testing access)
-    std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive buffer sizes (for testing
+    LatencyCalculator::Rational m_block_hops;  ///< The host block in hops, rho = host_block_max / R
+                                               ///< (LatencyCalculator::get_block_hops), set by
+                                               ///< prepare(): what a host block may carry on a
+                                               ///< Streamed slot (LatencyCalculator::
+                                               ///< block_samples)
+    bool m_input_driven = true;  ///< True if any input tensor is streamable: inference is
+                                 ///< triggered by arriving input samples. False for a generator
+                                 ///< (no streamable input), whose inference is triggered by
+                                 ///< output demand (see m_pending_pull_samples).
+    size_t m_num_structs = 0;    ///< Number of allocated thread-safe structures: twice the
+                                 ///< steady-state bound of LatencyCalculator::get_num_structs(), so
+                                 ///< that the inferences a wait-free reset() strands until their
+                                 ///< workers finish never starve the fresh schedule (for testing
+                                 ///< access)
+    std::vector<size_t> m_send_buffer_size;     ///< Calculated send ring sizes (for testing access)
+    std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive ring sizes (for testing
                                                 ///< access)
 
 private:
@@ -578,12 +704,12 @@ private:
      */
     bool has_streamable_input() const;
 
-    HostConfig m_host_config;  ///< Stored host configuration for this session
+    /// The model's own latency of an output, in samples of its stream (the spec's latency).
+    size_t output_model_latency(size_t slot) const noexcept;
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
     ThreadSafeStruct* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-    RingBuffer* __doxygen_force_1;        ///< Placeholder for Doxygen documentation
 #endif
 };
 
@@ -617,10 +743,10 @@ struct InferenceData {
  *
  * On native builds this is a moodycamel::BlockingConcurrentQueue so that
  * inference threads can optionally block on the queue's semaphore instead of
- * polling (see WaitStrategy). The blocking queue is a strict superset of the
+ * polling (see anira_wait_strategy). The blocking queue is a strict superset of the
  * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
- * enqueue never makes a syscall — so CoreConfigs using
- * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
+ * enqueue never makes a syscall — so context configs on
+ * ANIRA_WAIT_SPIN_BACKOFF keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *
  * On WebAssembly builds the plain ConcurrentQueue is used: the pool's threads

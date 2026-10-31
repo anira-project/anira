@@ -65,7 +65,7 @@ export type AniraAudioNode = {
   setStaticInput(slot: number, values: ArrayBufferView | ArrayLike<number>): void
   /**
    * Re-prepare the node's handler under `contract` while the node streams: the way to change the
-   * geometry of a running node (`measureRenderGeometry` again after an output-device change).
+   * host blocks of a running node (`measureRenderGeometry` again after an output-device change).
    * The render callback is held off (silence) while the handler re-prepares, then resumes; read
    * the handler's latency again afterwards. Returns the plan report of this prepare, as
    * `InferenceHandler.prepare` does. `handler.prepare` refuses while a node streams through the

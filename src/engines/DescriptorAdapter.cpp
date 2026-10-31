@@ -251,8 +251,7 @@ const anira_engine_ctx& DescriptorPrepared::engine_view(const anira_engine_ctx& 
     return view.m_ctx;
 }
 
-anira_status DescriptorPrepared::process(const anira_engine_ctx& call,
-                                         ChunkBuffers* /*chunk*/) noexcept {
+anira_status DescriptorPrepared::process(const anira_engine_ctx& call) noexcept {
     const anira_engine_desc& desc = m_carrier->desc();
     return desc.process(&engine_view(call), m_prepared, desc.user_data);
 }

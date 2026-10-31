@@ -64,8 +64,8 @@ const render = async (
     .addInference(model)
     .addEngine(engine, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
   const contract = ContractHandle.hard(anira, {
-    blockMin: QUANTUM,
-    rate: RATE,
+    hostBlockMin: QUANTUM,
+    hostRate: RATE,
     budgetMs: 2,
   })
   anira.abi.anira_contract_hard_set_on_miss(contract.native(), onMiss)

@@ -71,7 +71,7 @@ const run = async () => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(128, 128, 48000)
+  ).hardHostBlocks(128, 128, 48000)
   const first = handlerOn(anira, context, model, contract)
   first.destroy()
   const withCore = fill(m)

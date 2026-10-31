@@ -116,6 +116,14 @@ bool is_mapped(const char* path) {
 constexpr int k_engine_stalling = 1;
 constexpr int k_engine_loader_lock = 2;
 constexpr int k_engine_slow = 3;
+constexpr int k_engine_runtime_statics = 4;
+constexpr int k_engine_exit_in_load = 5;
+// UNLOADTEST_EXIT_IN_LOAD_MARKER, as a death test's stderr pattern.
+constexpr const char* k_exit_in_load_marker = "unloadtest: the engine's load calls exit\\(0\\)";
+constexpr int k_torn_down_exit_code = 9;  // UNLOADTEST_TORN_DOWN_EXIT_CODE
+// UNLOADTEST_RAN_OVER_LIVE_STATE_MARKER, as a death test's stderr pattern.
+constexpr const char* k_ran_over_live_state_marker =
+    "unloadtest: the inference ran over live runtime state";
 
 using CreateFn = void* (*)();
 using CreateEngineFn = void* (*)(int, int);
@@ -142,6 +150,7 @@ struct Api {
     IntFn m_has_core = nullptr;
     VoidFn m_shutdown = nullptr;
     VoidFn m_leak_thread = nullptr;
+    VoidFn m_hold_until_exit = nullptr;
 };
 
 // The loaded module, plus the resolved API. Mirrors what a host does with a plugin.
@@ -176,7 +185,8 @@ public:
                resolve(m_api.m_num_sessions, "unloadtest_num_sessions") &&
                resolve(m_api.m_has_core, "unloadtest_has_core") &&
                resolve(m_api.m_shutdown, "unloadtest_shutdown") &&
-               resolve(m_api.m_leak_thread, "unloadtest_leak_thread");
+               resolve(m_api.m_leak_thread, "unloadtest_leak_thread") &&
+               resolve(m_api.m_hold_until_exit, "unloadtest_hold_until_exit");
     }
 
     void unload() {
@@ -607,6 +617,92 @@ TEST(LibraryUnloadDeathTest, ExitWithASlowInferenceInFlightExitsNormally) {
         },
         ::testing::ExitedWithCode(0),
         "");
+#endif
+}
+
+// A program that exits while an inference of an engine whose runtime keeps static state runs
+// (ONNX Runtime: its environment and type tables, built at its first load): the exit handlers
+// run in the reverse order of their registration, and the core's, registered when the prepare
+// starts the pool, stops the pool and waits for the inference before the handler registered
+// ahead of it tears that state down. Without that wait the inference ran over it (ONNX Runtime:
+// "GetElementType is not implemented", then a SIGSEGV), which the module's engine reports with
+// its own exit status. The inference is in flight when the exit starts by construction: it
+// waits for the exit handler the module registers after the prepare (which runs first), and
+// once released it writes its marker over the live state; without the marker the exit 0 would
+// not show that the inference ran inside the exit.
+TEST(LibraryUnloadDeathTest, ExitWaitsForTheInferenceBeforeTheRuntimesStaticsGo) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler of the core on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* instance = module.api().m_create_engine(k_engine_runtime_statics, 0);
+            if (instance == nullptr) { _exit(3); }
+            module.api().m_hold_until_exit();
+            module.api().m_process(instance, 1);
+            if (!wait_for_entered(module.api(), 1)) { _exit(4); }
+            std::exit(0);
+        },
+        ::testing::ExitedWithCode(0),
+        k_ran_over_live_state_marker);
+    static_cast<void>(k_torn_down_exit_code);
+#endif
+}
+
+// A program whose engine ends the process from inside its load (a runtime's fatal-error handler,
+// a failed licence check): the load runs inside anira_handler_prepare under the core's lifecycle
+// lock, and the exit runs anira's exit handler and its unload hook on that same thread, neither
+// of which may wait for the lock the thread holds. The process exits with the status the load
+// asked for, the load's marker on stderr. Here the instance is the first: no pool runs yet, so
+// only the unload hook runs (it takes the exit for an unload: no exit handler was registered).
+TEST(LibraryUnloadDeathTest, ExitInsideAnEnginesLoadExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler or unload hook of the core that locks on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            static_cast<void>(module.api().m_create_engine(k_engine_exit_in_load, 0));
+            _exit(4);  // the load exits: the create never returns
+        },
+        ::testing::ExitedWithCode(0),
+        k_exit_in_load_marker);
+#endif
+}
+
+// The same while another instance's pool runs: its prepare registered the core's exit handler,
+// which stops the pool and waits for it from inside the exit, on the thread that holds the
+// lifecycle lock; then the unload hook joins it.
+TEST(LibraryUnloadDeathTest, ExitInsideAnEnginesLoadWithAPoolRunningExitsNormally) {
+    pin_backend_runtimes();
+#if defined(_WIN32)
+    GTEST_SKIP() << "exit runs no exit handler or unload hook of the core that locks on Windows";
+#else
+    EXPECT_EXIT(
+        {
+            start_watchdog(std::chrono::seconds(30));
+            pin_backend_runtimes();
+            Module module;
+            if (!module.load()) { _exit(3); }
+            void* running = module.api().m_create();
+            if (running == nullptr) { _exit(3); }
+            module.api().m_prepare(running);
+            module.api().m_process_wait(running, 4);
+            if (module.api().m_num_inference_threads() == 0) { _exit(6); }
+            static_cast<void>(module.api().m_create_engine(k_engine_exit_in_load, 0));
+            _exit(4);  // the load exits: the create never returns
+        },
+        ::testing::ExitedWithCode(0),
+        k_exit_in_load_marker);
 #endif
 }
 

@@ -53,13 +53,13 @@ const run = async () => {
       abi.anira_model_config_model_path(model.native(), libtorch) !== null,
     'an entry of an engine this module lacks keeps its path, unfetched'
   )
-  // The file leaves the geometry to the host: the render quantum at the context's rate.
+  // The file leaves the host blocks to the host: the render quantum at the context's rate.
   const contract = (
     await ContractHandle.fromUrl(
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(QUANTUM, QUANTUM, RATE)
+  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
   check(
     abi.anira_contract_hard_budget(contract.native()).explicit_ms === 5,
     'the contract file is read as written (budget 5 ms)'

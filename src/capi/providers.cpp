@@ -2,11 +2,11 @@
 // anira_handler_prepare and the pipeline's capabilities entries take for every kind of engine.
 #include "providers.h"
 
-#include <anira/CoreConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
+#include <anira/scheduler/Core.h>
 #include <anira/utils/Logger.h>
 
 #include <cstddef>
@@ -68,7 +68,7 @@ anira_init_info query_info(const anira_context& context) {
     anira_init_info info = ANIRA_INIT_INFO_INIT;
     info.log_level = static_cast<uint32_t>(anira::get_log_level());
     info.num_threads = context.m_config.m_num_threads == ANIRA_THREADS_AUTO
-                           ? anira::default_num_threads()
+                           ? anira::Core::default_num_threads()
                            : context.m_config.m_num_threads;
     info.context = &context;
     return info;

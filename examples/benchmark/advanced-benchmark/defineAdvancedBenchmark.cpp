@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <memory>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../../../extras/models/cnn/CNNConfig.h"
@@ -49,10 +50,6 @@ const std::vector<anira::BackendId>& benchmark_backends() {
     return backends;
 }
 
-/// The model config of `model` at `buffer_size`, with the clear engine's entry, and its
-/// contract file.
-anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json);
-
 // define the buffer sizes, models and engines to be used in the benchmark
 static void Arguments(::benchmark::internal::Benchmark* b) {
     for (int i = 0; i < buffer_sizes.size(); ++i) {
@@ -70,6 +67,35 @@ static void Arguments(::benchmark::internal::Benchmark* b) {
     }
 }
 
+/// What a run of `model` at one buffer size benchmarks: the model config, with the clear
+/// engine's entry, and the contract of the model's contract file.
+struct ModelAndContract {
+    anira::ModelConfig m_model_config;
+    anira::ContractHandle m_contract;
+};
+
+ModelAndContract model_and_contract(int model, int buffer_size) {
+    anira::ModelConfig model_config;
+    const char* contract_json = nullptr;
+    if (model == 0) {
+        // The CNN: the hop follows the buffer size, the receptive field stays.
+        model_config = cnn_model_config(buffer_size);
+        contract_json = k_cnn_contract_json;
+    } else if (model == 1) {
+        // GuitarLSTM: one window per buffer sample; the TensorFlow export is per batch count.
+        model_config = hybridnn_model_config(buffer_size);
+        contract_json = k_hybridnn_contract_json;
+    } else {
+        // The stateful LSTM: one chunk per buffer (Arguments() skips ONNX Runtime and
+        // ExecuTorch, which cannot run it at every size).
+        model_config = rnn_model_config(buffer_size);
+        contract_json = k_rnn_contract_json;
+    }
+    model_config.add_model(k_clear_engine_id);  // the baseline needs no model file
+    return {.m_model_config = std::move(model_config),
+            .m_contract = anira::ContractHandle::from_file(contract_json)};
+}
+
 /* ============================================================ *
  * ================== BENCHMARK DEFINITIONS =================== *
  * ============================================================ */
@@ -81,12 +107,9 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     // the model (state.range(1)) and the backend (state.range(2)) of this run.
     const int model = static_cast<int>(state.range(1));
     const anira::BackendId backend = benchmark_backends()[static_cast<size_t>(state.range(2))];
-    const char* contract_json = nullptr;
-    const anira::ModelConfig model_config =
-        model_config_of(model, get_buffer_size(), contract_json);
-    anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
+    auto [model_config, contract] = model_and_contract(model, get_buffer_size());
     const auto block = static_cast<double>(get_buffer_size());
-    contract.hard_geometry(block, block, SAMPLE_RATE);
+    contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.
@@ -138,23 +161,3 @@ BENCHMARK_REGISTER_F(ProcessBlockFixture, BM_ADVANCED)
                         })
     ->DisplayAggregatesOnly(false)
     ->UseManualTime();
-
-anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json) {
-    anira::ModelConfig model_config;
-    if (model == 0) {
-        // The CNN: the hop follows the buffer size, the receptive field stays.
-        model_config = cnn_model_config(buffer_size);
-        contract_json = k_cnn_contract_json;
-    } else if (model == 1) {
-        // GuitarLSTM: one window per buffer sample; the TensorFlow export is per batch count.
-        model_config = hybridnn_model_config(buffer_size);
-        contract_json = k_hybridnn_contract_json;
-    } else {
-        // The stateful LSTM: one chunk per buffer (Arguments() skips ONNX Runtime and
-        // ExecuTorch, which cannot run it at every size).
-        model_config = rnn_model_config(buffer_size);
-        contract_json = k_rnn_contract_json;
-    }
-    model_config.add_model(k_clear_engine_id);  // the baseline needs no model file
-    return model_config;
-}

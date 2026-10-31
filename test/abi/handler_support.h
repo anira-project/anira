@@ -3,12 +3,10 @@
 // their lifetimes, the bundled gain model with the custom row, the hand-built generator and
 // channel-mismatch models, the contracts, the block data, the waits, the engines a custom row
 // runs on (the pass-through every Handler adds under anira.v2.custom, the gate engines of the
-// C rigs), the 2.x GateBackend the oracles' 2.x arms still take, and the guard that destroys
-// the handler before a gate engine's rig dies.
+// C rigs), and the guard that destroys the handler before a gate engine's rig dies.
 #ifndef ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 #define ANIRA_TEST_ABI_HANDLER_SUPPORT_H
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
@@ -19,31 +17,32 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RtLatch.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <deque>
+#include <initializer_list>
 #include <memory>
 #include <mutex>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
-#include "../support/v2_objects.h"
 #include "capi/handler.h"
 
 namespace anira_test {
@@ -59,15 +58,21 @@ constexpr const char* k_custom = "anira.v2.custom";
 /// A context over its own config: MANUAL drain by default, so a test decides when
 /// anira_drain_log() delivers the real-time records to its RecordCollector.
 struct Context {
+    /// `queue_capacity` 0 keeps the config's default capacity of the real-time log queue.
     explicit Context(uint32_t threads = 2,
                      anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF,
                      anira_log_level level = ANIRA_LOG_ERROR,
                      anira_log_drain drain = ANIRA_LOG_DRAIN_MANUAL,
-                     uint32_t interval_ms = 10) {
+                     uint32_t interval_ms = 10,
+                     uint32_t queue_capacity = 0) {
         EXPECT_EQ(anira_context_config_create(&m_config, &m_err), ANIRA_OK) << m_err.message;
         EXPECT_EQ(anira_context_config_set_threads(m_config, threads, wait), ANIRA_OK);
         EXPECT_EQ(anira_context_config_set_log_level(m_config, level), ANIRA_OK);
         EXPECT_EQ(anira_context_config_set_log_drain(m_config, drain, interval_ms), ANIRA_OK);
+        if (queue_capacity > 0) {
+            EXPECT_EQ(anira_context_config_set_log_queue_capacity(m_config, queue_capacity),
+                      ANIRA_OK);
+        }
         EXPECT_EQ(anira_context_create(m_config, &m_context, &m_err), ANIRA_OK) << m_err.message;
     }
     ~Context() {
@@ -102,11 +107,11 @@ inline anira::ModelConfig stereo_gain_with_custom(bool default_custom = true) {
     return model;
 }
 
-/// The engines of this build the bundled gain and CNN files run on, on both sides of the
-/// oracle. LiteRT is left out: its signature lists the gain export's outputs as [peak,
-/// processed], so the file's litert row names them (a tensors record), and the 2.x side of the
-/// oracle, whose InferenceConfig has no tensor names, binds them by position and fails the
-/// shape check at prepare; the oracle compares the plans that load on both sides.
+/// The engines of this build the bundled gain and CNN files run on in the suites that also
+/// drive the shim's 2.x configurations. LiteRT is left out: its signature lists the gain
+/// export's outputs as [peak, processed], which the file's litert row names (a tensors record),
+/// and a 2.x configuration, which has no tensor names, binds them by position and fails the
+/// shape check at prepare.
 inline std::vector<anira_engine> oracle_engines() {
     std::vector<anira_engine> out;
     for (const anira::BackendId& id : anira::enabled_engines()) {
@@ -144,22 +149,6 @@ inline std::vector<anira_backend_id> engine_candidates() {
                        .engine_id = nullptr});
     }
     return out;
-}
-
-/// The 2.x InferenceConfig of a bundled model over the same engines the C side runs
-/// (oracle_engines(), plus the custom row when with_custom): what the oracle's 2.x handler
-/// takes, so both sides' configs compare equal and the core pools one processor per engine.
-inline anira::InferenceConfig config_2x_of(const char* model_json,
-                                           const char* contract_json,
-                                           bool with_custom) {
-    anira::ModelConfig cfg = anira::ModelConfig::from_file(model_json);
-    std::vector<anira_engine> candidates = oracle_engines();
-    if (with_custom) {
-        cfg.add_model_path(k_custom, "custom-processor");
-        candidates.push_back(ANIRA_ENGINE_CUSTOM);  // keeps the custom entry
-    }
-    const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    return anira_test::inference_config_of(cfg, contract, candidates);
 }
 
 /// The bundled CNN without a custom row (the pass-through would zero its 15380 -> 2048 output).
@@ -201,14 +190,14 @@ inline anira::ModelConfig mismatched_channels_model() {
 /// A Hard contract with an explicit budget and a fixed warm-up (5 ms is gain.contract.json's
 /// figure; the generator tests pass 10 ms, test_OneSidedStreaming's max_inference_time).
 inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
-                                               double rate = k_rate,
+                                               double host_rate = k_rate,
                                                anira_miss_policy on_miss = ANIRA_MISS_BYPASS,
                                                double wait_ratio = 0.0,
                                                double budget_ms = 5.0,
                                                uint32_t warmup_iterations = 0) {
-    anira::Hard hard{.block_min = static_cast<double>(block),
-                     .block_max = static_cast<double>(block),
-                     .rate = rate,
+    anira::Hard hard{.host_block_min = static_cast<double>(block),
+                     .host_block_max = static_cast<double>(block),
+                     .host_rate = host_rate,
                      .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = warmup_iterations;
@@ -217,13 +206,51 @@ inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
     return anira::ContractHandle(hard);
 }
 
-/// A bundled contract file with the host geometry patched in: what the 2.x side bridges,
-/// so both handlers' InferenceConfigs compare equal and the core pools one processor.
+/// A Streamed tensor of `channels` channels of `time` samples ([Channel, Time]) that moves `hop`
+/// samples per inference (a window of `hop`, no overlap): the 2.x tensor of channels * time
+/// elements with that preprocess or postprocess size.
+inline anira::TensorSpec stream_tensor(std::string_view name,
+                                       int64_t channels,
+                                       int64_t time,
+                                       int64_t hop) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_CHANNEL, channels).axis(1, ANIRA_AXIS_TIME, time).window(hop, hop, 0);
+    return spec;
+}
+
+/// A Static tensor of the given extents, every axis ANIRA_AXIS_ANY.
+inline anira::TensorSpec static_tensor(std::string_view name,
+                                       std::initializer_list<int64_t> extents) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
+    uint32_t axis = 0;
+    for (const int64_t extent : extents) { spec.axis(axis++, ANIRA_AXIS_ANY, extent); }
+    return spec;
+}
+
+/// The custom row alone (a Handler runs it on the pass-through, or on the engine it is handed)
+/// with `max_instances` instances; the caller adds the tensors.
+inline anira::ModelConfig custom_model(uint32_t max_instances = 2) {
+    anira::ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    model.max_instances(max_instances);
+    return model;
+}
+
+/// custom_model() with one mono Streamed tensor of `window` samples on either side ("in",
+/// "out"): the 2.x [1, 1, window] in and out of the engine-free scheduler suites.
+inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t max_instances = 2) {
+    anira::ModelConfig model = custom_model(max_instances);
+    model.input(stream_tensor("in", 1, window, window));
+    model.output(stream_tensor("out", 1, window, window));
+    return model;
+}
+
+/// A bundled contract file with the host blocks patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
-                                           double rate = k_rate) {
+                                           double host_rate = k_rate) {
     anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    contract.hard_geometry(block, block, rate);
+    contract.hard_host_blocks(block, block, host_rate);
     return contract;
 }
 
@@ -238,7 +265,7 @@ inline size_t elements_of(const anira_tensor& tensor) noexcept {
     return count;
 }
 
-/// The C twin of the 2.x pass-through (BackendBase::process, src/engines/BackendBase.cpp):
+/// The C twin of the 2.x pass-through (2.x's BackendBase::process):
 /// output i is a copy of input i when both carry the same element count and dtype, zeros
 /// otherwise; every output beyond the input count is zeros; State and Static slots pair by
 /// index like every other slot. ANIRA_ERROR_INVALID_ARGUMENT for a tensor that is no packed
@@ -476,6 +503,29 @@ struct Handler {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
+/// One "plugin instance": a context over its own config (Context's arguments) and a handler
+/// over the mono pass-through (mono_stream_model), prepared on construction under the explicit
+/// contract, so that a session (and with it the pool) exists.
+struct Instance {
+    explicit Instance(uint32_t threads = 2,
+                      anira_wait_strategy wait = ANIRA_WAIT_SPIN_BACKOFF,
+                      anira_log_level level = ANIRA_LOG_ERROR,
+                      anira_log_drain drain = ANIRA_LOG_DRAIN_MANUAL,
+                      uint32_t interval_ms = 10,
+                      uint32_t queue_capacity = 0)
+        : m_context(threads, wait, level, drain, interval_ms, queue_capacity) {
+        EXPECT_EQ(m_handler.prepare(explicit_contract()), ANIRA_OK) << m_handler.m_err.message;
+    }
+    ~Instance() = default;
+    Instance(const Instance&) = delete;
+    Instance& operator=(const Instance&) = delete;
+    Instance(Instance&&) = delete;
+    Instance& operator=(Instance&&) = delete;
+
+    Context m_context;
+    Handler m_handler{m_context, mono_stream_model()};
+};
+
 // ---- data, waiting, comparing ------------------------------------------------------------------
 
 /// Block block_index of a deterministic ramp: distinct across blocks, exactly representable.
@@ -512,25 +562,46 @@ inline void wait_for_block(anira_handler* handler, size_t prev, uint32_t slot = 
     wait_for_available(handler, prev, slot);
 }
 
-/// The 2.x twin of wait_for_block.
-inline void wait_for_block(anira_test::V2Handler& handler, size_t prev) {
-    const auto start = std::chrono::steady_clock::now();
-    while (handler.get_available_samples(0) != prev) {
-        if (std::chrono::steady_clock::now() > start + std::chrono::seconds(k_wait_s)) {
-            FAIL() << "timeout while waiting for the 2.x block (" << prev << " expected, have "
-                   << handler.get_available_samples(0) << ")";
-        }
-        std::this_thread::sleep_for(std::chrono::microseconds(10));
-    }
-}
-
 /// After a push: the inference of the pushed block adds one hop to the ring.
 inline void wait_for_push(anira_handler* handler, size_t prev, size_t block) {
     wait_for_available(handler, prev + block);
 }
 
-inline void wait_for_push(anira_test::V2Handler& handler, size_t prev, size_t block) {
-    wait_for_block(handler, prev + block);
+/// The closed form of a stream through a model that maps every sample on its own (the gain
+/// model, a pass-through) when every block's inference is waited for: the processed input
+/// delayed by the reported latency, silence first. Fed the input blocks in order since the
+/// prepare (or the last reset), each with the factor the plan that ran it applies (the gain an
+/// engine of the gain model multiplies by; 1 for a pass-through, which copies), it answers each
+/// output block. A plan switch between blocks keeps the line: what is in flight comes out as
+/// it was processed.
+class DelayLine {
+public:
+    explicit DelayLine(size_t latency = 0) : m_latency(latency) { reset(); }
+
+    /// The stream restarts: the latency's silence comes first again.
+    void reset() { m_pending.assign(m_latency, 0.0F); }
+
+    std::vector<float> next(std::span<const float> in, float factor = 1.0F) {
+        for (const float sample : in) { m_pending.push_back(sample * factor); }
+        std::vector<float> out(m_pending.begin(),
+                               m_pending.begin() + static_cast<std::ptrdiff_t>(in.size()));
+        m_pending.erase(m_pending.begin(),
+                        m_pending.begin() + static_cast<std::ptrdiff_t>(in.size()));
+        return out;
+    }
+
+    size_t latency() const noexcept { return m_latency; }
+
+private:
+    size_t m_latency;
+    std::deque<float> m_pending;
+};
+
+/// The Static output of the gain model's engines for one window: the peak, max |x * gain|.
+inline float gain_peak(std::span<const float> in, float gain) {
+    float peak = 0.0F;
+    for (const float sample : in) { peak = std::max(peak, std::abs(sample * gain)); }
+    return peak;
 }
 
 /// Bit equality per sample.
@@ -599,31 +670,6 @@ inline RecordCollector::Record find_record(RecordCollector& collector,
     }
     return {};
 }
-
-// ---- the 2.x gate ------------------------------------------------------------------------------
-
-/// The 2.x twin of GateEngine for the 2.x arms of the oracles (copy_oracle.h, the 2.x rigs of
-/// test_CopyPathOracle and test_TensorStems): holds every submitted inference on its inference
-/// thread while the gate is closed, so the driver's next block finds the output ring starved.
-/// Opens itself on destruction so a stuck inference cannot hang the session release.
-class GateBackend : public anira::BackendBase {
-public:
-    explicit GateBackend(anira::InferenceConfig& config) : anira::BackendBase(config) {}
-    ~GateBackend() override { m_open.store(true); }
-    GateBackend(const GateBackend&) = delete;
-    GateBackend& operator=(const GateBackend&) = delete;
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        while (!m_open.load()) { std::this_thread::sleep_for(std::chrono::microseconds(100)); }
-        anira::BackendBase::process(input, output, std::move(session));
-        ++m_calls;
-    }
-
-    std::atomic<bool> m_open{true};
-    std::atomic<int> m_calls{0};
-};
 
 /// Declared right after the Handler a gate engine runs in, so at scope exit it runs first: it
 /// opens the held gate so the in-flight inference can finish, then destroys the handler, which

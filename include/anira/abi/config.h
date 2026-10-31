@@ -445,35 +445,36 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_ext_json(anira_tensor_sp
 ANIRA_API void ANIRA_CALL anira_tensor_spec_destroy(anira_tensor_spec* spec) ANIRA_NOEXCEPT;
 
 /**
- * @brief Creates a Hard (real-time) contract with the stream geometry; the fixed-block host
- * earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on
- * miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left
- * unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here) or
- * both finite and > 0 with block_min <= block_max; block_min < block_max allows every
- * smaller block. A block need not be whole: a fractional block (for a model with no
- * stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0) is
- * taken as the rational the latency calculation recovers from it (1e-6 relative,
- * denominator at most 2^20), and the host moves an element of a stream only once a whole
- * one has accumulated: after its k-th call it has pushed and popped floor(k * b)
- * elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of them
- * (0 or 1 for 0.25, the 1 on every fourth call).
- * @param block_min Smallest block the host callback delivers, in Time-axis elements of the
- *        anchor tensor; may be fractional (0.25: one element every fourth callback).
- * @param block_max Largest; block_min == block_max is the fixed-block host. May be fractional
- *        like block_min.
- * @param rate Anchor elements per second (48000 for audio).
+ * @brief Creates a Hard (real-time) contract with the host blocks; the fixed-block host earns
+ * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on miss,
+ * wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left unset,
+ * completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal here) or
+ * both finite and > 0 with host_block_min <= host_block_max; host_block_min <
+ * host_block_max allows every smaller block. A block need not be whole: a fractional
+ * block (for a model with no stream at the host rate, e.g. a control-rate decoder at
+ * samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers
+ * from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a
+ * stream only once a whole one has accumulated: after its k-th call it has pushed and
+ * popped floor(k * b) elements of a stream whose block is b, so one call carries
+ * floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
+ * @param host_block_min Smallest block the host callback delivers, in Time-axis elements of the
+ *        anchor tensor; may be fractional (0.25: one element every fourth
+ *        callback).
+ * @param host_block_max Largest; host_block_min == host_block_max is the fixed-block host. May
+ *        be fractional like host_block_min.
+ * @param host_rate Anchor elements per second the host runs at (48000 for audio).
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a block that is NaN, infinite or
- *         negative, one block 0 and the other not, block_min > block_max, a negative rate, or a
- *         NULL out; the message names the value.
+ *         negative, one block 0 and the other not, host_block_min > host_block_max, a negative
+ *         host_rate, or a NULL out; the message names the value.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double block_min,
-                                                             double block_max,
-                                                             double rate,
+ANIRA_API anira_status ANIRA_CALL anira_contract_create_hard(double host_block_min,
+                                                             double host_block_max,
+                                                             double host_rate,
                                                              anira_contract** out,
                                                              anira_error* err) ANIRA_NOEXCEPT;
 
@@ -491,23 +492,24 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_create_async(anira_contract** o
                                                               anira_error* err) ANIRA_NOEXCEPT;
 
 /**
- * @brief Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under
- * the rules of anira_contract_create_hard; a refusal leaves the geometry as it was.
+ * @brief Patches the host blocks, e.g. of a contract loaded from a file (section 8), under the
+ * rules of anira_contract_create_hard; a refusal leaves the host blocks as they were.
  * @param contract A Hard contract.
- * @param block_min See anira_contract_create_hard; may be fractional.
- * @param block_max See anira_contract_create_hard; may be fractional.
- * @param rate See anira_contract_create_hard.
+ * @param host_block_min See anira_contract_create_hard; may be fractional.
+ * @param host_block_max See anira_contract_create_hard; may be fractional.
+ * @param host_rate See anira_contract_create_hard.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or
- *         negative, one block 0 and the other not, block_min > block_max, or a negative rate.
+ *         negative, one block 0 and the other not, host_block_min > host_block_max, or a
+ *         negative host_rate.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
-ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
-                                                                   double block_min,
-                                                                   double block_max,
-                                                                   double rate) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_host_blocks(anira_contract* contract,
+                                                                      double host_block_min,
+                                                                      double host_block_max,
+                                                                      double host_rate) ANIRA_NOEXCEPT;
 
 /**
  * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).
@@ -565,10 +567,20 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_on_miss(anira_contract
  * a slot). Return ANIRA_OK when the outputs are filled; any other status makes anira
  * zero-fill every requested Streamed output. Either way the block counts as missed: the
  * entry returns ANIRA_MISSED with a delivered count of 0 for every Streamed slot, and
- * the stream stays time-aligned. The function has the last word on every output of the
- * block, the Static ones of a _multi form included: anira fills them with the stored
- * value before the call and does not touch them afterwards. What the function writes
- * there reaches the caller's memory only, never the handler's store:
+ * the stream stays time-aligned. It also fills every hop the scheduler drops because no
+ * inference slot was free (anira_handler_rt_error then reports ANIRA_ERROR_CAPACITY):
+ * once per dropped hop, at the drop, on the driver thread inside the Hard entry whose
+ * call dropped it. For a hop, inputs carry the dropped hop of every Streamed input slot
+ * ([channels, hop] of the slot's ring dtype, packed, without ANIRA_TENSOR_PLANAR, the
+ * handler's memory, valid for the call) and an empty tensor for every other slot;
+ * outputs carry a [channels, hop] tensor of the ring dtype for every Streamed output
+ * slot, the handler's memory, which anira places at the hop's stream position behind the
+ * inferences submitted before it, and an empty tensor for every other slot (a hop
+ * carries no Static slot). A status other than ANIRA_OK places zeros. The entry's own
+ * return and counts are not touched by a hop. The function has the last word on every
+ * output of the block, the Static ones of a _multi form included: anira fills them with
+ * the stored value before the call and does not touch them afterwards. What the function
+ * writes there reaches the caller's memory only, never the handler's store:
  * anira_handler_get_static_output keeps returning what the model produced. The function
  * must not call a Hard entry, anira_handler_reset or anira_handler_prepare of the same
  * handler, and it is real-time code: no allocation, no lock, no system call. Under clang
@@ -1494,11 +1506,12 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_set_max_instances(anira_mod
 
 /**
  * @brief The anchor: the streamed tensor whose Time axis is the model's clock. A Hard
- * contract's block range and rate are counted in its elements, and every other streamed
- * tensor's time ratio is stated against it (v2's HostConfig reference stream). Default:
- * the first streamed input, or, for a model without one (a generator), the first
- * streamed output. Resolved at prepare, where a name that is not a streamed tensor of
- * this config fails with ANIRA_ERROR_CONFIG.
+ * contract's host blocks and host rate (host_block_min, host_block_max, host_rate) are
+ * counted in its elements, and every other streamed tensor's time ratio is stated
+ * against it (v2's HostConfig reference stream). Default: the first streamed input, or,
+ * for a model without one (a generator), the first streamed output. Resolved at prepare,
+ * where a name that is not a streamed tensor of this config fails with
+ * ANIRA_ERROR_CONFIG.
  * @param config The config.
  * @param canonical Your canonical name of a streamed tensor, copied; NULL or empty restores the
  *        default.
@@ -1713,7 +1726,7 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_to_json(const anira_model_c
 
 /**
  * @brief Hands out the Hard contract a version 2 upgrade held back (budget, warmup and wait
- * ratio; no geometry). Non-NULL only once after an upgrade: a second call, or a v3
+ * ratio; no host blocks). Non-NULL only once after an upgrade: a second call, or a v3
  * document, yields NULL.
  * @param config The config.
  * @param out Receives the contract (caller destroys it), or NULL when there is none.
@@ -2089,22 +2102,22 @@ ANIRA_API const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const 
                                                                           const char* kind) ANIRA_NOEXCEPT;
 
 /**
- * @brief The geometry as anira_contract_create_hard or anira_contract_hard_set_geometry stored
- * it; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
+ * @brief The host blocks as anira_contract_create_hard or anira_contract_hard_set_host_blocks
+ * stored them; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
  * @param contract A Hard contract.
- * @param block_min Receives the smallest block as stored, a fractional one included.
- * @param block_max Receives the largest block as stored.
- * @param rate Receives the rate.
+ * @param host_block_min Receives the smallest block as stored, a fractional one included.
+ * @param host_block_max Receives the largest block as stored.
+ * @param host_rate Receives the host rate.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a NULL out-parameter.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
-                                                               double* block_min,
-                                                               double* block_max,
-                                                               double* rate) ANIRA_NOEXCEPT;
+ANIRA_API anira_status ANIRA_CALL anira_contract_hard_host_blocks(const anira_contract* contract,
+                                                                  double* host_block_min,
+                                                                  double* host_block_max,
+                                                                  double* host_rate) ANIRA_NOEXCEPT;
 
 /**
  * @brief The budget as anira_contract_hard_set_budget stored it.
@@ -2112,7 +2125,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contr
  * @param kind Receives the budget kind.
  * @param explicit_ms Receives the explicit budget in milliseconds; 0 unless the kind is
  *        ANIRA_BUDGET_EXPLICIT.
- * @return As anira_contract_hard_geometry.
+ * @return As anira_contract_hard_host_blocks.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2126,7 +2139,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_budget(const anira_contrac
  * @param contract A Hard contract.
  * @param mode Receives the warmup mode.
  * @param iterations Receives the iterations; 0 unless the mode is ANIRA_WARMUP_FIXED.
- * @return As anira_contract_hard_geometry.
+ * @return As anira_contract_hard_host_blocks.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2139,7 +2152,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_warmup(const anira_contrac
  * @brief The miss policy as anira_contract_hard_set_on_miss stored it.
  * @param contract A Hard contract.
  * @param policy Receives the miss policy.
- * @return As anira_contract_hard_geometry.
+ * @return As anira_contract_hard_host_blocks.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2153,7 +2166,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_on_miss(const anira_contra
  * @param contract A Hard contract.
  * @param fn Receives the backup function; NULL when none is set.
  * @param user_data Receives its user_data; NULL when no function is set.
- * @return As anira_contract_hard_geometry.
+ * @return As anira_contract_hard_host_blocks.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -2166,7 +2179,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_miss_fn(const anira_contra
  * @brief The wait ratio as anira_contract_hard_set_wait_ratio stored it.
  * @param contract A Hard contract.
  * @param ratio Receives the wait ratio.
- * @return As anira_contract_hard_geometry.
+ * @return As anira_contract_hard_host_blocks.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2

@@ -55,7 +55,7 @@ public:
      *
      * @param model The model config the handler runs (for the model's name)
      * @param hard The Hard contract it was prepared with (the buffer size and the sample rate:
-     *        block_max and rate)
+     *        host_block_max and rate)
      * @param plan The plan of the handler's report that is measured (set with set_plan)
      * @param sleep_after_repetition Whether TearDown sleeps as long as the repetition took, so
      *        the system cools down between repetitions

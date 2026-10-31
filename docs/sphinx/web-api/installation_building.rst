@@ -147,7 +147,7 @@ against the fixed 512 MiB build:
   46.7 ms (+5 %);
 * a render that waits for a JavaScript engine on two Workers (a window of 4096 samples, 20 s):
   468 against 469 ms in both, paced by the inferences either way;
-* a binding call (``anira_contract_hard_geometry``): 127 to 132 ns in both builds, ``heap()``
+* a binding call (``anira_contract_hard_host_blocks``): 127 to 132 ns in both builds, ``heap()``
   being one comparison when nothing grew;
 * the glue's own heap reads (``UTF8ToString`` of 16 bytes): 83 against 77 ns in Chromium, 81
   against 65 ns in Firefox.

@@ -1,12 +1,15 @@
 // The bundled configuration files, extras/models/**/*.model.json and *.contract.json: each one
-// loads as a 3.x document and translates to the 2.x InferenceConfig the 2.x fixture header used
-// to spell out by hand (the literals below are those headers), and the three builders the
-// benchmarks sweep with equal their file at the default size.
+// loads as a 3.x document, and what the validator derives for it under its contract equals what
+// the 2.x fixture header of the model used to spell out by hand (the literals below are those
+// headers: the tensor shapes, the TensorFlow layout, the channels, the hops, the latencies, the
+// budget, the warm-up, whether the model is stateful); the three builders the benchmarks sweep
+// with equal their file at the default size.
 
-#include <anira/InferenceConfig.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/utils/InferenceBackend.h>
+#include <anira/scheduler/Core.h>
+#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -15,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -25,14 +29,14 @@
 #include "../../extras/models/hybrid-nn/HybridNNConfig.h"
 #include "../../extras/models/model_files.h"
 #include "../../extras/models/stateful-rnn/StatefulRNNConfig.h"
-#include "../support/inference_config_eq.h"
-#include "../support/v2_objects.h"
+#include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "capi/validate.h"
+#include "handler_support.h"
 
 namespace {
 
-using anira::TensorShapeList;
+using Shapes = std::vector<std::vector<int64_t>>;
 
 constexpr std::array<anira_engine, 5> k_every_engine{ANIRA_ENGINE_LIBTORCH,
                                                      ANIRA_ENGINE_ONNXRUNTIME,
@@ -43,9 +47,9 @@ constexpr std::array<anira_engine, 1> k_libtorch_only{ANIRA_ENGINE_LIBTORCH};
 
 /// What the 2.x fixture header of a model said.
 struct Oracle {
-    TensorShapeList m_in;  ///< the universal shapes (the PyTorch export's order)
-    TensorShapeList m_out;
-    std::optional<std::pair<TensorShapeList, TensorShapeList>> m_tensorflow;  ///< when they differ
+    Shapes m_in;  ///< the universal shapes (the PyTorch export's order)
+    Shapes m_out;
+    std::optional<std::pair<Shapes, Shapes>> m_tensorflow;  ///< when they differ
     std::vector<size_t> m_in_channels;
     std::vector<size_t> m_out_channels;
     std::vector<size_t> m_in_size;
@@ -58,7 +62,110 @@ struct Oracle {
     std::span<const anira_engine> m_engines;  ///< the engines the file names
 };
 
-/// The engines of this build the file names; empty means the bridge refuses the file here.
+/// One model entry of this build that survived the candidates: its engine, the engine's
+/// extents of either side (its layout applied), its file, its entry point and whether it is
+/// bytes.
+struct RowFacts {
+    anira_engine m_engine = ANIRA_ENGINE_NONE;
+    Shapes m_in;
+    Shapes m_out;
+    std::string m_path;
+    std::string m_entry;
+    bool m_bytes = false;
+
+    bool operator==(const RowFacts& other) const = default;
+};
+
+/// What the validator derives for a model under its contract, one candidate per engine of
+/// this build on the CPU path.
+struct Facts {
+    Shapes m_in;
+    Shapes m_out;
+    std::vector<RowFacts> m_rows;
+    std::vector<size_t> m_in_channels;
+    std::vector<size_t> m_out_channels;
+    std::vector<size_t> m_in_size;
+    std::vector<size_t> m_out_size;
+    std::vector<size_t> m_latency;
+    double m_max_ms = 0.0;
+    unsigned m_warm_up = 0;
+    bool m_stateful = false;
+    uint32_t m_instances = 0;
+
+    bool operator==(const Facts& other) const = default;
+};
+
+Facts facts_of(const anira::ModelConfig& model, const anira::ContractHandle& contract) {
+    std::vector<anira_backend_id> candidates;
+    for (const anira_engine engine : anira::capi::enabled_engines()) {
+        candidates.push_back({.struct_size = sizeof(anira_backend_id),
+                              .engine = static_cast<uint32_t>(engine),
+                              .provider = ANIRA_PROVIDER_CPU,
+                              .engine_id = nullptr});
+    }
+    const anira_model_config& cfg = *model.native();
+    const anira::capi::EngineFacts no_engines;
+    anira::capi::Derived derived;
+    anira::capi::validate(cfg,
+                          contract.native(),
+                          candidates.data(),
+                          static_cast<uint32_t>(candidates.size()),
+                          derived,
+                          nullptr,
+                          &no_engines);
+    Facts facts;
+    for (size_t i = 0; i < cfg.m_inputs.size(); ++i) {
+        const anira::capi::DerivedSpec& spec = derived.m_inputs[i];
+        facts.m_in.push_back(spec.m_dims);
+        facts.m_in_channels.push_back(static_cast<size_t>(spec.m_channels));
+        facts.m_in_size.push_back(static_cast<size_t>(spec.m_hop));
+    }
+    for (size_t i = 0; i < cfg.m_outputs.size(); ++i) {
+        const anira::capi::DerivedSpec& spec = derived.m_outputs[i];
+        facts.m_out.push_back(spec.m_dims);
+        facts.m_out_channels.push_back(static_cast<size_t>(spec.m_channels));
+        facts.m_out_size.push_back(static_cast<size_t>(spec.m_hop));
+        facts.m_latency.push_back(static_cast<size_t>(cfg.m_outputs[i].m_latency));
+    }
+    for (const size_t index : derived.m_rows) {
+        const anira::capi::ModelEntry& row = cfg.m_models[index];
+        RowFacts row_facts{.m_engine = row.m_engine,
+                           .m_path = row.m_path,
+                           .m_bytes = row.has_bytes()};
+        const auto dims_of = [&row](const std::vector<anira_tensor_spec>& specs,
+                                    const std::vector<anira::capi::DerivedSpec>& derived_specs) {
+            Shapes shapes;
+            for (size_t i = 0; i < specs.size(); ++i) {
+                const auto binding = row.m_tensors.find(specs[i].m_name);
+                shapes.push_back(anira::capi::engine_dims_of(specs[i],
+                                                             derived_specs[i],
+                                                             binding == row.m_tensors.end()
+                                                                 ? std::vector<uint32_t>{}
+                                                                 : binding->second.m_layout));
+            }
+            return shapes;
+        };
+        row_facts.m_in = dims_of(cfg.m_inputs, derived.m_inputs);
+        row_facts.m_out = dims_of(cfg.m_outputs, derived.m_outputs);
+        if (const auto* entry = row.m_ext.payload<anira::capi::EntryPayload>("entry")) {
+            row_facts.m_entry = entry->m_name;
+        }
+        facts.m_rows.push_back(std::move(row_facts));
+    }
+    const anira::capi::HardContract* hard = contract.native()->hard();
+    if (hard != nullptr) {
+        facts.m_max_ms = hard->m_budget_ms;
+        facts.m_warm_up = hard->m_warmup == ANIRA_WARMUP_FIXED ? hard->m_warmup_iterations : 0U;
+    }
+    facts.m_stateful = cfg.m_state == ANIRA_MODEL_STATEFUL ||
+                       std::ranges::any_of(cfg.m_inputs, [](const anira_tensor_spec& spec) {
+                           return spec.m_role == ANIRA_ROLE_STATE;
+                       });
+    facts.m_instances = cfg.m_max_instances;
+    return facts;
+}
+
+/// The engines of this build the file names; empty means the validator refuses the file here.
 std::vector<anira_engine> usable(std::span<const anira_engine> named) {
     std::vector<anira_engine> out;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
@@ -67,87 +174,74 @@ std::vector<anira_engine> usable(std::span<const anira_engine> named) {
     return out;
 }
 
-bool is_tensorflow(anira::InferenceBackend backend) {
-    bool tensorflow = false;
-#ifdef USE_TFLITE
-    tensorflow = tensorflow || backend == anira::InferenceBackend::TFLITE;
-#endif
-#ifdef USE_LITERT
-    tensorflow = tensorflow || backend == anira::InferenceBackend::LITERT;
-#endif
-    return tensorflow;
+bool is_tensorflow(anira_engine engine) {
+    return engine == ANIRA_ENGINE_TFLITE || engine == ANIRA_ENGINE_LITERT;
 }
 
-void expect_matches(const anira::InferenceConfig& cfg, const Oracle& oracle) {
-    EXPECT_EQ(cfg.get_tensor_input_shape(), oracle.m_in);
-    EXPECT_EQ(cfg.get_tensor_output_shape(), oracle.m_out);
-    EXPECT_EQ(cfg.m_model_data.size(), usable(oracle.m_engines).size())
+void expect_matches(const Facts& facts, const Oracle& oracle) {
+    EXPECT_EQ(facts.m_in, oracle.m_in);
+    EXPECT_EQ(facts.m_out, oracle.m_out);
+    EXPECT_EQ(facts.m_rows.size(), usable(oracle.m_engines).size())
         << "one entry per engine of this build the file names";
-    for (const anira::ModelData& row : cfg.m_model_data) {
-        const bool tensorflow = is_tensorflow(row.m_backend) && oracle.m_tensorflow.has_value();
-        EXPECT_EQ(cfg.get_tensor_input_shape(row.m_backend),
-                  tensorflow ? oracle.m_tensorflow->first : oracle.m_in)
-            << "backend " << static_cast<int>(row.m_backend);
-        EXPECT_EQ(cfg.get_tensor_output_shape(row.m_backend),
-                  tensorflow ? oracle.m_tensorflow->second : oracle.m_out)
-            << "backend " << static_cast<int>(row.m_backend);
-        EXPECT_FALSE(row.m_is_binary);
-        EXPECT_EQ(row.m_model_function, oracle.m_model_function);
+    for (const RowFacts& row : facts.m_rows) {
+        const bool tensorflow = is_tensorflow(row.m_engine) && oracle.m_tensorflow.has_value();
+        EXPECT_EQ(row.m_in, tensorflow ? oracle.m_tensorflow->first : oracle.m_in)
+            << "engine " << static_cast<int>(row.m_engine);
+        EXPECT_EQ(row.m_out, tensorflow ? oracle.m_tensorflow->second : oracle.m_out)
+            << "engine " << static_cast<int>(row.m_engine);
+        EXPECT_FALSE(row.m_bytes);
+        EXPECT_EQ(row.m_entry, oracle.m_model_function);
     }
-    EXPECT_EQ(cfg.get_preprocess_input_channels(), oracle.m_in_channels);
-    EXPECT_EQ(cfg.get_postprocess_output_channels(), oracle.m_out_channels);
-    EXPECT_EQ(cfg.get_preprocess_input_size(), oracle.m_in_size);
-    EXPECT_EQ(cfg.get_postprocess_output_size(), oracle.m_out_size);
-    EXPECT_EQ(cfg.get_internal_model_latency(), oracle.m_latency);
-    EXPECT_FLOAT_EQ(cfg.m_max_inference_time, oracle.m_max_ms);
-    EXPECT_EQ(cfg.m_warm_up, oracle.m_warm_up);
-    EXPECT_EQ(cfg.m_session_exclusive_processor, oracle.m_stateful);
-    // The files set no instance ceiling: the pool's thread count, resolved by the core; a
-    // session-exclusive configuration runs on one processor whatever the count says.
-    EXPECT_EQ(cfg.m_num_parallel_processors, oracle.m_stateful ? 1U : ANIRA_INSTANCES_AUTO);
+    EXPECT_EQ(facts.m_in_channels, oracle.m_in_channels);
+    EXPECT_EQ(facts.m_out_channels, oracle.m_out_channels);
+    EXPECT_EQ(facts.m_in_size, oracle.m_in_size);
+    EXPECT_EQ(facts.m_out_size, oracle.m_out_size);
+    EXPECT_EQ(facts.m_latency, oracle.m_latency);
+    EXPECT_FLOAT_EQ(static_cast<float>(facts.m_max_ms), oracle.m_max_ms);
+    EXPECT_EQ(facts.m_warm_up, oracle.m_warm_up);
+    EXPECT_EQ(facts.m_stateful, oracle.m_stateful);
+    // The files set no instance ceiling: the pool's thread count, resolved by the core at
+    // prepare, and 1 for a stateful model whatever the count says (the session's exclusive
+    // dispatch). ThePrepareResolvesTheFilesInstanceCount pins both resolutions.
+    EXPECT_EQ(facts.m_instances, ANIRA_INSTANCES_AUTO);
 }
 
-/// Loads, bridges and checks one model against its oracle; skips when this build has no
-/// engine the file names (the bridge refuses such a file, which test_Translate covers).
+/// Loads and derives one model and checks it against its oracle; skips when this build has no
+/// engine the file names (the validator refuses such a file, which test_Translate covers).
 void check_files(const char* model_json, const char* contract_json, const Oracle& oracle) {
     if (usable(oracle.m_engines).empty()) {
         GTEST_SKIP() << "this build has no engine " << model_json << " names";
     }
     const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
     EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
-    const anira::InferenceConfig cfg = anira_test::inference_config_of(model_json, contract_json);
-    expect_matches(cfg, oracle);
+    expect_matches(facts_of(loaded, anira::ContractHandle::from_file(contract_json)), oracle);
 }
 
 /// The builder at its default size equals the file, so the benchmarks sweep the same model.
 void check_builder(const char* model_json,
                    const char* contract_json,
-                   anira::ModelConfig built,
+                   const anira::ModelConfig& built,
                    std::span<const anira_engine> engines) {
     if (usable(engines).empty()) {
         GTEST_SKIP() << "this build has no engine " << model_json << " names";
     }
     const anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    const anira::InferenceConfig from_builder =
-        anira_test::inference_config_of(built, contract, anira::capi::enabled_engines());
-    anira_test::expect_inference_config_eq(
-        anira_test::inference_config_of(model_json, contract_json),
-        from_builder);
+    EXPECT_EQ(facts_of(anira::ModelConfig::from_file(model_json), contract),
+              facts_of(built, contract));
 }
 
 Oracle cnn_oracle(int64_t window, unsigned warm_up) {
-    return Oracle{
-        .m_in = {{1, 1, window}},
-        .m_out = {{1, 1, 2048}},
-        .m_tensorflow = std::pair{TensorShapeList{{1, window, 1}}, TensorShapeList{{1, 2048, 1}}},
-        .m_in_channels = {1},
-        .m_out_channels = {1},
-        .m_in_size = {2048},
-        .m_out_size = {2048},
-        .m_latency = {0},
-        .m_max_ms = 42.66F,
-        .m_warm_up = warm_up,
-        .m_engines = k_every_engine};
+    return Oracle{.m_in = {{1, 1, window}},
+                  .m_out = {{1, 1, 2048}},
+                  .m_tensorflow = std::pair{Shapes{{1, window, 1}}, Shapes{{1, 2048, 1}}},
+                  .m_in_channels = {1},
+                  .m_out_channels = {1},
+                  .m_in_size = {2048},
+                  .m_out_size = {2048},
+                  .m_latency = {0},
+                  .m_max_ms = 42.66F,
+                  .m_warm_up = warm_up,
+                  .m_engines = k_every_engine};
 }
 
 // The TensorFlow export holds the static gain at rank 3 ([1, 1, 1]): the tflite and litert
@@ -155,8 +249,8 @@ Oracle cnn_oracle(int64_t window, unsigned warm_up) {
 Oracle gain_oracle(int64_t channels) {
     return Oracle{.m_in = {{1, channels, 512}, {1}},
                   .m_out = {{1, channels, 512}, {1}},
-                  .m_tensorflow = std::pair{TensorShapeList{{1, channels, 512}, {1, 1, 1}},
-                                            TensorShapeList{{1, channels, 512}, {1}}},
+                  .m_tensorflow = std::pair{Shapes{{1, channels, 512}, {1, 1, 1}},
+                                            Shapes{{1, channels, 512}, {1}}},
                   .m_in_channels = {static_cast<size_t>(channels), 1},
                   .m_out_channels = {static_cast<size_t>(channels), 1},
                   .m_in_size = {512, 0},
@@ -180,20 +274,19 @@ TEST(ExtrasFixtures, SmallCnn) {
 }
 
 TEST(ExtrasFixtures, HybridNn) {
-    check_files(
-        k_hybridnn_model_json,
-        k_hybridnn_contract_json,
-        Oracle{.m_in = {{256, 1, 150}},
-               .m_out = {{256, 1}},
-               .m_tensorflow = std::pair{TensorShapeList{{256, 150, 1}}, TensorShapeList{{256, 1}}},
-               .m_in_channels = {1},
-               .m_out_channels = {1},
-               .m_in_size = {256},
-               .m_out_size = {256},
-               .m_latency = {0},
-               .m_max_ms = 5.33F,
-               .m_warm_up = 3,
-               .m_engines = k_every_engine});
+    check_files(k_hybridnn_model_json,
+                k_hybridnn_contract_json,
+                Oracle{.m_in = {{256, 1, 150}},
+                       .m_out = {{256, 1}},
+                       .m_tensorflow = std::pair{Shapes{{256, 150, 1}}, Shapes{{256, 1}}},
+                       .m_in_channels = {1},
+                       .m_out_channels = {1},
+                       .m_in_size = {256},
+                       .m_out_size = {256},
+                       .m_latency = {0},
+                       .m_max_ms = 5.33F,
+                       .m_warm_up = 3,
+                       .m_engines = k_every_engine});
 }
 
 TEST(ExtrasFixtures, StatefulRnn) {
@@ -201,8 +294,7 @@ TEST(ExtrasFixtures, StatefulRnn) {
                 k_rnn_contract_json,
                 Oracle{.m_in = {{2048, 1, 1}},
                        .m_out = {{2048, 1, 1}},
-                       .m_tensorflow =
-                           std::pair{TensorShapeList{{1, 2048, 1}}, TensorShapeList{{1, 2048, 1}}},
+                       .m_tensorflow = std::pair{Shapes{{1, 2048, 1}}, Shapes{{1, 2048, 1}}},
                        .m_in_channels = {1},
                        .m_out_channels = {1},
                        .m_in_size = {2048},
@@ -212,6 +304,33 @@ TEST(ExtrasFixtures, StatefulRnn) {
                        .m_warm_up = 2,
                        .m_stateful = true,
                        .m_engines = k_every_engine});
+}
+
+// The instance count the files leave to anira (ANIRA_INSTANCES_AUTO, expect_matches), as a
+// prepare resolves it on a pool of three threads: the stateful RNN's session is exclusive, one
+// inference at a time on one instance; the stateless gain model's session runs as many
+// instances as the pool has threads.
+TEST(ExtrasFixtures, ThePrepareResolvesTheFilesInstanceCount) {
+    if (usable(k_every_engine).empty()) { GTEST_SKIP() << "no engine of this build"; }
+    ASSERT_EQ(anira::Core::get_num_sessions(), 0) << "a previous test left a session";
+    static constexpr uint32_t k_threads = 3;
+    const anira_test::Context context(k_threads);
+    const auto resolved =
+        [&context](const char* model_json, const char* contract_json, uint32_t block) {
+            anira_test::Handler handler(context, anira::ModelConfig::from_file(model_json));
+            EXPECT_EQ(handler.prepare(anira_test::file_contract(contract_json, block)), ANIRA_OK)
+                << handler.m_err.message;
+            const std::shared_ptr<anira::SessionElement> session =
+                anira_test::session_of(handler.m_handler);
+            EXPECT_NE(session, nullptr) << model_json;
+            EXPECT_EQ(anira::Core::get_thread_pool_size(), k_threads);
+            return session == nullptr ? std::pair{false, 0U}
+                                      : std::pair{session->exclusive(), session->m_num_instances};
+        };
+    EXPECT_EQ(resolved(k_rnn_model_json, k_rnn_contract_json, 2048), std::pair(true, 1U))
+        << "the stateful RNN: exclusive, one instance";
+    EXPECT_EQ(resolved(k_gain_model_json, k_gain_contract_json, 512), std::pair(false, k_threads))
+        << "the gain model: one instance per pool thread";
 }
 
 TEST(ExtrasFixtures, Gain) {
@@ -378,26 +497,20 @@ TEST(ExtrasFixtures, SweptBuildersFollowTheHop) {
     if (usable(k_every_engine).empty()) { GTEST_SKIP() << "no engine in this build"; }
     const anira::ContractHandle cnn_contract =
         anira::ContractHandle::from_file(k_cnn_contract_json);
-    const anira::ModelConfig cnn = cnn_model_config(512);
-    const anira::InferenceConfig cnn_cfg =
-        anira_test::inference_config_of(cnn, cnn_contract, anira::capi::enabled_engines());
-    EXPECT_EQ(cnn_cfg.get_tensor_input_shape(), (TensorShapeList{{1, 1, 512 + 13332}}));
-    EXPECT_EQ(cnn_cfg.get_preprocess_input_size(), (std::vector<size_t>{512}));
-    EXPECT_EQ(cnn_cfg.get_postprocess_output_size(), (std::vector<size_t>{512}));
+    const Facts cnn = facts_of(cnn_model_config(512), cnn_contract);
+    EXPECT_EQ(cnn.m_in, (Shapes{{1, 1, 512 + 13332}}));
+    EXPECT_EQ(cnn.m_in_size, (std::vector<size_t>{512}));
+    EXPECT_EQ(cnn.m_out_size, (std::vector<size_t>{512}));
 
     const anira::ContractHandle hybrid_contract =
         anira::ContractHandle::from_file(k_hybridnn_contract_json);
-    const anira::ModelConfig hybrid = hybridnn_model_config(1024);
-    const anira::InferenceConfig hybrid_cfg =
-        anira_test::inference_config_of(hybrid, hybrid_contract, anira::capi::enabled_engines());
-    EXPECT_EQ(hybrid_cfg.get_tensor_input_shape(), (TensorShapeList{{1024, 1, 150}}));
-    EXPECT_EQ(hybrid_cfg.get_preprocess_input_size(), (std::vector<size_t>{1024}));
+    const Facts hybrid = facts_of(hybridnn_model_config(1024), hybrid_contract);
+    EXPECT_EQ(hybrid.m_in, (Shapes{{1024, 1, 150}}));
+    EXPECT_EQ(hybrid.m_in_size, (std::vector<size_t>{1024}));
 
     const anira::ContractHandle rnn_contract =
         anira::ContractHandle::from_file(k_rnn_contract_json);
-    const anira::ModelConfig rnn = rnn_model_config(256);
-    const anira::InferenceConfig rnn_cfg =
-        anira_test::inference_config_of(rnn, rnn_contract, anira::capi::enabled_engines());
-    EXPECT_EQ(rnn_cfg.get_tensor_input_shape(), (TensorShapeList{{256, 1, 1}}));
-    EXPECT_EQ(rnn_cfg.get_preprocess_input_size(), (std::vector<size_t>{256}));
+    const Facts rnn = facts_of(rnn_model_config(256), rnn_contract);
+    EXPECT_EQ(rnn.m_in, (Shapes{{256, 1, 1}}));
+    EXPECT_EQ(rnn.m_in_size, (std::vector<size_t>{256}));
 }

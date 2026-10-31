@@ -39,8 +39,8 @@ const renderGain = async (anira, context, model) => {
     .addInference(model)
     .addEngine(ONNXRUNTIME_WEB_ENGINE_ID)
   const contract = ContractHandle.hard(anira, {
-    blockMin: QUANTUM,
-    rate: RATE,
+    hostBlockMin: QUANTUM,
+    hostRate: RATE,
     budgetMs: 2,
   })
   const handler = InferenceHandler.create(context, pipeline)

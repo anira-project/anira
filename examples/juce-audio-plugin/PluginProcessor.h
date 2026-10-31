@@ -113,9 +113,10 @@ struct AniraModel {
           ) {
     }
 
-    /// The host geometry completes the contract; prepare returns the plan report.
-    void prepare(double block, double sample_rate) {
-        contract.hard_geometry(block, block, sample_rate);
+    /// The host blocks complete the contract, blocks of 1 to host_block_max samples; prepare
+    /// returns the plan report.
+    void prepare(double host_block_max, double sample_rate) {
+        contract.hard_host_blocks(1, host_block_max, sample_rate);
         plan_report = handler.prepare(contract);
     }
     /// The plan of the report that runs the query's backend; none: the selection stays.
@@ -191,6 +192,10 @@ private:
     std::array<float, 4> latent_space{};
     std::array<float*, 4> latent_space_ptrs{};
     anira::Tensor latent{};
+    // The "Latent 0" to "Latent 3" offsets: stored by the parameter listener, added to every
+    // latent frame by processBlock.
+    std::array<std::atomic<float>, 4> latent_offsets{};
+    // Input samples towards the next latent frame; reset by prepareToPlay with the handlers.
     int m_count_input_samples = 0;
 #elif MODEL_TO_USE == 1
     AniraModel model{context, embedded_model_config(), embedded_contract()};
@@ -213,6 +218,10 @@ private:
     std::array<float*, 2> channels{};
     anira::Tensor audio{};
 
+    // The dry path is delayed by the reported latency through a delay line of this many samples
+    // (juce::dsp::DryWetMixer delays sample by sample, so a latency above the block is fine; it
+    // clamps one above its capacity).
+    static constexpr int k_max_dry_latency = 32768;
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     std::atomic<bool> non_realtime = false;

@@ -1,25 +1,22 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
+#include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/export.h>
+#include <anira/abi/handler.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
+#include <anira/anira.hpp>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <ios>
-#include <stdexcept>
 #include <string>
 #include <thread>
-#include <vector>
 
-#include "../support/v2_handler.h"
+#include "../abi/handler_support.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::V2Handler;
 
 // Regression tests for issue #106: Core::create_session() used to count the
 // session before doing the work that can throw (loading the model in a backend
@@ -28,7 +25,8 @@ using anira_test::V2Handler;
 // incremented with nothing registered, and since the thread-pool teardown was gated
 // on that counter reaching zero, the inference threads (and the context) lived on for
 // the rest of the process. Registration is now the last step of create_session(),
-// and everything before it is rolled back on failure.
+// and everything before it is rolled back on failure. The sessions are C handlers'
+// (anira_handler_prepare creates the session); a failed prepare returns the status.
 
 namespace {
 
@@ -43,22 +41,38 @@ bool wait_for_num_inference_threads(unsigned int expected) {
     return true;
 }
 
-InferenceConfig make_custom_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
+// An engine whose load fails the way an engine's load does for an unloadable model: inside
+// create_session(), after the session id was handed out.
+anira_status ANIRA_CALL refuse_load(const anira_engine_load_info* /*info*/,
+                                    void* /*user_data*/,
+                                    void** /*out_loaded*/) noexcept {
+    return ANIRA_ERROR_MODEL_LOAD;
 }
 
-// A backend whose prepare() fails the way a backend constructor does for an
-// unloadable model: inside create_session(), after the session id was handed out.
-struct ThrowingProcessor : public BackendBase {
-    using BackendBase::BackendBase;
-    void prepare() override { throw std::runtime_error("test backend: cannot load model"); }
+anira_status ANIRA_CALL never_runs(const anira_engine_ctx* /*ctx*/,
+                                   void* /*prepared*/,
+                                   void* /*user_data*/) noexcept {
+    return ANIRA_ERROR_INTERNAL;
+}
+
+// The refusing engine object under the custom row's id; the pipelines that add it hold it.
+struct RefusingEngine {
+    RefusingEngine() {
+        anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+        desc.load = refuse_load;
+        desc.process = never_runs;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_custom_engine_create(anira_test::k_custom, &desc, &m_engine, &err),
+                  ANIRA_OK)
+            << err.message;
+    }
+    ~RefusingEngine() { anira_custom_engine_destroy(m_engine); }
+    RefusingEngine(const RefusingEngine&) = delete;
+    RefusingEngine& operator=(const RefusingEngine&) = delete;
+    RefusingEngine(RefusingEngine&&) = delete;
+    RefusingEngine& operator=(RefusingEngine&&) = delete;
+
+    anira_custom_engine* m_engine = nullptr;
 };
 
 void expect_clean_slate() {
@@ -72,14 +86,24 @@ void expect_clean_slate() {
 // A later, valid handler must get a fresh pool and tear it down again.
 void expect_next_handler_lifecycle_intact() {
     {
-        InferenceConfig inference_config = make_custom_config();
-        PrePostProcessor pp_processor(inference_config);
-        V2Handler handler(pp_processor, inference_config, CoreConfig(2));
-        handler.prepare(HostConfig(512, 48000));
+        const anira_test::Context context(2);
+        anira_test::Handler handler(context, anira_test::mono_stream_model());
+        EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+            << handler.m_err.message;
         EXPECT_EQ(Core::get_num_sessions(), 1);
         EXPECT_TRUE(wait_for_num_inference_threads(2));
     }
     expect_clean_slate();
+}
+
+// One prepare over the refusing engine: its status, and the record names the refused load.
+void expect_refused_prepare(const anira_test::Context& context) {
+    const RefusingEngine engine;
+    anira_test::Handler handler(context, anira_test::mono_stream_model(), {}, {}, engine.m_engine);
+    EXPECT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_ERROR_MODEL_LOAD)
+        << handler.m_err.message;
+    EXPECT_NE(std::string(handler.m_err.message).find("refused load"), std::string::npos)
+        << handler.m_err.message;
 }
 
 }  // namespace
@@ -88,30 +112,10 @@ void expect_next_handler_lifecycle_intact() {
 // report: "each failed load adds another increment").
 TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
-
-    InferenceConfig inference_config = make_custom_config();
-    PrePostProcessor pp_processor(inference_config);
-    ThrowingProcessor throwing_processor(inference_config);
-
     for (int i = 0; i < 3; ++i) {
-        // The first iteration also pins the exception type (the standalone
-        // single-failure test it absorbed — audit, docs/ci-overhaul.md step 9a).
-        if (i == 0) {
-            EXPECT_THROW(
-                {
-                    const V2Handler handler(pp_processor,
-                                            inference_config,
-                                            throwing_processor,
-                                            CoreConfig(2));
-                },
-                std::runtime_error);
-        } else {
-            EXPECT_ANY_THROW({
-                const V2Handler handler(pp_processor,
-                                        inference_config,
-                                        throwing_processor,
-                                        CoreConfig(2));
-            });
+        {
+            const anira_test::Context context(2);
+            expect_refused_prepare(context);
         }
         expect_clean_slate();
     }
@@ -122,27 +126,40 @@ TEST(CreateSessionFailureTest, RepeatedFailuresLeakNothing) {
 TEST(CreateSessionFailureTest, FailureBesideLiveSessionKeepsItsPool) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
 
-    InferenceConfig live_config = make_custom_config();
-    PrePostProcessor live_pp(live_config);
-    V2Handler live_handler(live_pp, live_config, CoreConfig(2));
-    live_handler.prepare(HostConfig(512, 48000));
+    const anira_test::Context context(2);
+    anira_test::Handler live_handler(context, anira_test::mono_stream_model());
+    ASSERT_EQ(live_handler.prepare(anira_test::explicit_contract()), ANIRA_OK)
+        << live_handler.m_err.message;
     ASSERT_TRUE(wait_for_num_inference_threads(2));
 
-    InferenceConfig inference_config = make_custom_config();
-    PrePostProcessor pp_processor(inference_config);
-    ThrowingProcessor throwing_processor(inference_config);
-    EXPECT_ANY_THROW({
-        const V2Handler handler(pp_processor, inference_config, throwing_processor, CoreConfig(2));
-    });
+    expect_refused_prepare(context);
 
     EXPECT_EQ(Core::get_num_sessions(), 1);
     EXPECT_TRUE(wait_for_num_inference_threads(2));
 }
 
+namespace {
+
+// A model of one engine over a mono stream of 2048 samples.
+ModelConfig engine_model(anira_engine engine, const std::filesystem::path& path) {
+    ModelConfig model;
+    model.add_model_path(engine, path);
+    model.input(anira_test::stream_tensor("in", 1, 2048, 2048));
+    model.output(anira_test::stream_tensor("out", 1, 2048, 2048));
+    return model;
+}
+
+// The 2.x configuration's 42.66 ms budget, a block of one hop.
+ContractHandle engine_contract() {
+    return anira_test::explicit_contract(2048, anira_test::k_rate, ANIRA_MISS_BYPASS, 0.0, 42.66);
+}
+
+}  // namespace
+
 #ifdef USE_ONNXRUNTIME
 // The reproduction from the issue: a file ONNX Runtime cannot parse throws from the
-// ONNX Runtime adapter's prepare, i.e. from inside create_session()'s adapter
-// setup — the same path as the custom processor above, but through a real backend.
+// ONNX Runtime adapter's load, i.e. from inside create_session()'s plan setup — the
+// same path as the refusing engine above, but through a real engine.
 TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
 
@@ -154,14 +171,9 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
     }
 
     {
-        InferenceConfig inference_config(
-            std::vector<ModelData>{ModelData(model_path.string(), InferenceBackend::ONNX)},
-            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-            42.66f);
-        PrePostProcessor pp_processor(inference_config);
-
-        EXPECT_ANY_THROW(
-            { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
+        const anira_test::Context context(2);
+        anira_test::Handler handler(context, engine_model(ANIRA_ENGINE_ONNXRUNTIME, model_path));
+        EXPECT_NE(handler.prepare(engine_contract()), ANIRA_OK);
     }
     std::filesystem::remove(model_path);
 
@@ -176,37 +188,22 @@ TEST(CreateSessionFailureTest, UnloadableOnnxModelLeaksNothing) {
 // engine refuses is ANIRA_ERROR_MODEL_LOAD with the engine's own text.
 // ============================================================================
 
-#include <anira/abi/status.h>
-
-#include "../../src/utils/StatusError.h"
-
 namespace {
 
-template <class Body>
-anira::StatusError status_error_of(Body&& body) {
-    try {
-        body();
-    } catch (const anira::StatusError& e) { return e; }
-    ADD_FAILURE() << "expected an anira::StatusError";
-    return {ANIRA_OK, ""};
-}
-
-void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* engine) {
+void expect_missing_file_is_no_such_file(anira_engine engine, const char* engine_name) {
     const std::filesystem::path model_path =
         std::filesystem::temp_directory_path() / "anira_create_session_failure_missing_model";
     std::filesystem::remove(model_path);
-    InferenceConfig inference_config(
-        std::vector<ModelData>{ModelData(model_path.string(), backend)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-        42.66f);
-    PrePostProcessor pp_processor(inference_config);
-    const anira::StatusError error = status_error_of(
-        [&] { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
-    EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE) << error.what();
-    const std::string what = error.what();
-    EXPECT_NE(what.find(engine), std::string::npos) << what;
-    EXPECT_NE(what.find(model_path.filename().string()), std::string::npos) << what;
-    EXPECT_NE(what.find("no such file"), std::string::npos) << what;
+    {
+        const anira_test::Context context(2);
+        anira_test::Handler handler(context, engine_model(engine, model_path));
+        EXPECT_EQ(handler.prepare(engine_contract()), ANIRA_ERROR_NO_SUCH_FILE)
+            << handler.m_err.message;
+        const std::string what = handler.m_err.message;
+        EXPECT_NE(what.find(engine_name), std::string::npos) << what;
+        EXPECT_NE(what.find(model_path.filename().string()), std::string::npos) << what;
+        EXPECT_NE(what.find("no such file"), std::string::npos) << what;
+    }
     expect_clean_slate();
 }
 
@@ -215,19 +212,19 @@ void expect_missing_file_is_no_such_file(InferenceBackend backend, const char* e
 TEST(CreateSessionFailureTest, MissingModelFileIsNoSuchFileOnEveryBackend) {
     ASSERT_EQ(Core::get_num_sessions(), 0);
 #ifdef USE_ONNXRUNTIME
-    expect_missing_file_is_no_such_file(InferenceBackend::ONNX, "onnxruntime");
+    expect_missing_file_is_no_such_file(ANIRA_ENGINE_ONNXRUNTIME, "onnxruntime");
 #endif
 #ifdef USE_LIBTORCH
-    expect_missing_file_is_no_such_file(InferenceBackend::LIBTORCH, "libtorch");
+    expect_missing_file_is_no_such_file(ANIRA_ENGINE_LIBTORCH, "libtorch");
 #endif
 #ifdef USE_TFLITE
-    expect_missing_file_is_no_such_file(InferenceBackend::TFLITE, "tflite");
+    expect_missing_file_is_no_such_file(ANIRA_ENGINE_TFLITE, "tflite");
 #endif
 #ifdef USE_LITERT
-    expect_missing_file_is_no_such_file(InferenceBackend::LITERT, "litert");
+    expect_missing_file_is_no_such_file(ANIRA_ENGINE_LITERT, "litert");
 #endif
 #ifdef USE_EXECUTORCH
-    expect_missing_file_is_no_such_file(InferenceBackend::EXECUTORCH, "executorch");
+    expect_missing_file_is_no_such_file(ANIRA_ENGINE_EXECUTORCH, "executorch");
 #endif
     expect_next_handler_lifecycle_intact();
 }
@@ -242,15 +239,11 @@ TEST(CreateSessionFailureTest, UnloadableModelIsModelLoadWithTheEngineText) {
         file << "definitely not a model";
     }
     {
-        InferenceConfig inference_config(
-            std::vector<ModelData>{ModelData(model_path.string(), InferenceBackend::ONNX)},
-            std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-            42.66f);
-        PrePostProcessor pp_processor(inference_config);
-        const anira::StatusError error = status_error_of(
-            [&] { const V2Handler handler(pp_processor, inference_config, CoreConfig(2)); });
-        EXPECT_EQ(error.status(), ANIRA_ERROR_MODEL_LOAD) << error.what();
-        const std::string what = error.what();
+        const anira_test::Context context(2);
+        anira_test::Handler handler(context, engine_model(ANIRA_ENGINE_ONNXRUNTIME, model_path));
+        EXPECT_EQ(handler.prepare(engine_contract()), ANIRA_ERROR_MODEL_LOAD)
+            << handler.m_err.message;
+        const std::string what = handler.m_err.message;
         EXPECT_EQ(what.rfind("onnxruntime: ", 0), 0) << "the engine name leads: " << what;
         EXPECT_NE(what.find(model_path.filename().string()), std::string::npos) << what;
     }

@@ -1,14 +1,9 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
@@ -25,7 +20,6 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -37,14 +31,62 @@
 #endif
 
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
+#include "../capi/handles.h"
+#include "../capi/processor.h"
+#include "../capi/validate.h"
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
-#include "../engines/LegacyAdapter.h"
 #include "../utils/StatusError.h"
 #include "InstanceWaitList.h"
 #include "LogDrainLoop.h"
 
 namespace anira {
+
+namespace detail {
+
+/// The core's lifecycle lock: a mutex that knows which thread holds it. The exit paths (the
+/// process-exit handler and the library-unload hook, UnloadHook below) run on the thread that
+/// called exit(), and that thread may be inside a lifecycle call that holds the lock: an
+/// engine's init or load that ends the process from inside anira_handler_prepare. Such a call
+/// never resumes, so the state is that thread's alone, and a wait for the lock would never end;
+/// lock_unless_held() is what the exit paths take instead. try_lock() answers false to the
+/// holder (std::mutex's is undefined there).
+class LifecycleMutex {
+public:
+    void lock() {
+        m_mutex.lock();
+        m_owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+    }
+    bool try_lock() {
+        if (held_by_this_thread() || !m_mutex.try_lock()) { return false; }
+        m_owner.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        return true;
+    }
+    void unlock() {
+        m_owner.store(std::thread::id{}, std::memory_order_relaxed);
+        m_mutex.unlock();
+    }
+
+    /// Whether the calling thread holds the lock: exact for the caller, since only the holder
+    /// writes its own id and clears it before it lets go.
+    bool held_by_this_thread() const noexcept {
+        return m_owner.load(std::memory_order_relaxed) == std::this_thread::get_id();
+    }
+
+    /// The lock of an exit path: taken, or left alone (not owned) when the calling thread holds
+    /// it already.
+    std::unique_lock<LifecycleMutex> lock_unless_held() {
+        std::unique_lock<LifecycleMutex> lock(*this, std::defer_lock);
+        if (!held_by_this_thread()) { lock.lock(); }
+        return lock;
+    }
+
+private:
+    std::mutex m_mutex;
+    std::atomic<std::thread::id> m_owner{};
+};
+
+}  // namespace detail
 
 // The core's entire state. Allocated once by Core::get_state() and never destroyed
 // while the library is loaded: the only static is the trivially destructible pointer
@@ -52,13 +94,12 @@ namespace anira {
 // into the core stays valid until the library's pages are unmapped. Freed only by
 // Core::release_core_if_idle() (from the unload hook) once nothing uses it.
 struct Core::State {
-    std::mutex m_lifecycle_mutex;  ///< Serializes mutation of the shared lifecycle state
-                                   ///< below (registry, thread pool, the pool of prepared
-                                   ///< models, configuration) across create_session /
-                                   ///< release_session / prepare_session / shutdown.
-                                   ///< Hosts may drive several sessions' lifecycles
-                                   ///< from different threads concurrently. Never taken
-                                   ///< on realtime paths; never taken by pool threads.
+    /// Serializes mutation of the shared lifecycle state below (registry, thread pool, the
+    /// pool of prepared models, configuration) across create_session / release_session /
+    /// prepare_session / shutdown. Hosts may drive several sessions' lifecycles from different
+    /// threads concurrently. Never taken on realtime paths; never taken by pool threads; not
+    /// waited for by an exit path on the thread that holds it (detail::LifecycleMutex).
+    detail::LifecycleMutex m_lifecycle_mutex;
 
     std::vector<std::shared_ptr<SessionElement>> m_sessions;  ///< Session registry
 
@@ -119,8 +160,8 @@ struct Core::State {
      * The queue is initialized with minimum capacity and pre-allocation hints for
      * explicit and implicit producers (moodycamel signature: minCapacity,
      * maxExplicitProducers, maxImplicitProducers).
-     * See InferenceQueue for the type choice per platform and the WaitStrategy
-     * interaction.
+     * See InferenceQueue for the type choice per platform and the wait strategy
+     * (anira_wait_strategy) interaction.
      */
     InferenceQueue m_next_inference{k_min_capacity_inference_queue,
                                     k_max_num_instances,
@@ -159,6 +200,28 @@ struct Core::State {
     std::vector<PoolEntry> m_loaded_models;  ///< The pool of loaded models
 };
 
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
+namespace detail {
+
+/// The bodies of the process-exit handler and the library-unload hook below; Core's friend,
+/// since both tell the pool's threads to stop without joining them.
+struct UnloadHook {
+    /// The exit handler's: tells every pool thread to stop and waits a bounded time for the
+    /// threads to leave their loops and the inferences in flight to finish.
+    static void stop_at_exit();
+    /// The unload hook's.
+    static void run();
+
+private:
+    /// Tells every thread of the pool to stop (under the lifecycle lock, unless the calling
+    /// thread holds it: exit() from inside a lifecycle call) and returns them; the pool keeps
+    /// the threads, which only shutdown() empties, so the pointers outlive a wait.
+    static std::vector<const scheduler::InferenceThread*> stop_pool();
+};
+
+}  // namespace detail
+#endif
+
 namespace {
 // The one static of the core: a pointer. Trivially destructible, so nothing is
 // registered for static teardown. Null until the first call that needs the core; a
@@ -173,11 +236,26 @@ std::atomic<void*> s_state{nullptr};
 // runs after the hook (the image's __cxa_finalize comes last in its fini pass), too late to
 // matter. A core first put to work before main (a static constructor) registers the handler
 // before the loader's and is not told: its hook takes every exit for an unload.
+//
+// The exit handler and the unload hook run on the thread that called exit(), which holds the
+// core's lifecycle lock when it called it from inside a lifecycle call (an engine's init or
+// load, under anira_handler_prepare): neither waits for that lock then
+// (detail::LifecycleMutex::lock_unless_held), so such an exit ends with its own status.
+//
+// The exit handlers run in the reverse order of their registration, so this one runs before
+// every one registered ahead of it, the destructors of the static state an engine's runtime
+// built at its first load among them (ONNX Runtime's environment and type tables): the models
+// load in the session's create, before the prepare starts the pool. The handler therefore
+// stops the pool and waits for the inferences in flight (UnloadHook::stop_at_exit) before that
+// state goes, instead of leaving the threads running into the loader's exit pass: an ONNX
+// Runtime inference in flight over its torn-down type tables fails ("GetElementType is not
+// implemented") and the process crashes.
 std::atomic<bool> s_process_exiting{false};
 std::atomic<bool> s_exit_watched{false};
 
 void mark_process_exiting() {
     s_process_exiting.store(true, std::memory_order_release);
+    detail::UnloadHook::stop_at_exit();
 }
 
 void watch_process_exit() {
@@ -186,32 +264,51 @@ void watch_process_exit() {
     static_cast<void>(std::atexit(mark_process_exiting));
 }
 
-// How long the unload hook waits for the inferences in flight before it gives up on them.
-constexpr std::chrono::milliseconds k_unload_wait_for_inferences{2000};
+// How long a hook waits for the inferences in flight before it gives up on them.
+constexpr std::chrono::milliseconds k_wait_for_inferences{2000};
 
-// The unload hook's wait: until every thread of the pool has left its loop and no inference is
+// What a hook's wait left running: the inferences in flight and the pool threads still in their
+// loops.
+struct StillRunning {
+    unsigned int m_in_flight = 0;
+    unsigned int m_threads = 0;
+};
+
+// The wait of both hooks: until every thread of the pool has left its loop and no inference is
 // in flight (InferenceThread::get_num_in_flight(), an atomic the inference threads keep),
-// polling every millisecond, which touches nothing the loader lock guards. The loop exit is
-// what makes the join below safe: a pool thread checks its stop flag and then dequeues, two
-// steps, so a thread that passed the check just before the hook told it to stop still takes one
-// more job, which counts as in flight only from its dequeue, possibly after the hook first
-// looked; it leaves its loop only once that job is done. When a thread or an inference is still
-// running at the bound it never will be while the hook holds the unload: a thread waiting for
-// the loader lock that the dlclose holds, or an engine that does not return. Joining it would
-// hang the host for good, returning would unmap the code under it, so the hook writes the rule
-// to stderr (not through anira's log queue or sinks, which may be gone or be what is stuck) and
-// aborts.
-void wait_for_inferences_or_abort(const std::vector<const scheduler::InferenceThread*>& pool) {
-    const auto deadline = std::chrono::steady_clock::now() + k_unload_wait_for_inferences;
+// polling every millisecond, which touches nothing the loader lock guards, at most
+// k_wait_for_inferences. The loop exit is what makes the join of shutdown() safe: a pool thread
+// checks its stop flag and then dequeues, two steps, so a thread that passed the check just
+// before the hook told it to stop still takes one more job, which counts as in flight only from
+// its dequeue, possibly after the hook first looked; it leaves its loop only once that job is
+// done. Returns what is still running at the bound, nothing when the wait ended before it.
+StillRunning wait_for_inferences(const std::vector<const scheduler::InferenceThread*>& pool) {
+    const auto deadline = std::chrono::steady_clock::now() + k_wait_for_inferences;
     const auto threads_in_loop = [&pool]() {
         return static_cast<unsigned int>(std::ranges::count_if(
             pool,
             [](const scheduler::InferenceThread* thread) { return thread->is_in_loop(); }));
     };
-    unsigned int in_flight = scheduler::InferenceThread::get_num_in_flight();
-    unsigned int running = threads_in_loop();
-    while (in_flight > 0 || running > 0) {
-        if (std::chrono::steady_clock::now() >= deadline) {
+    StillRunning still{.m_in_flight = scheduler::InferenceThread::get_num_in_flight(),
+                       .m_threads = threads_in_loop()};
+    while (still.m_in_flight > 0 || still.m_threads > 0) {
+        if (std::chrono::steady_clock::now() >= deadline) { return still; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        still = {.m_in_flight = scheduler::InferenceThread::get_num_in_flight(),
+                 .m_threads = threads_in_loop()};
+    }
+    return still;
+}
+
+// The unload hook's wait. When a thread or an inference is still running at the bound it never
+// will be while the hook holds the unload: a thread waiting for the loader lock that the
+// dlclose holds, or an engine that does not return. Joining it would hang the host for good,
+// returning would unmap the code under it, so the hook writes the rule to stderr (not through
+// anira's log queue or sinks, which may be gone or be what is stuck) and aborts.
+void wait_for_inferences_or_abort(const std::vector<const scheduler::InferenceThread*>& pool) {
+    const StillRunning still = wait_for_inferences(pool);
+    if (still.m_in_flight > 0 || still.m_threads > 0) {
+        {
             std::array<char, 384> message{};
             const int length = std::snprintf(
                 message.data(),
@@ -219,17 +316,14 @@ void wait_for_inferences_or_abort(const std::vector<const scheduler::InferenceTh
                 "anira: the library is being unloaded while an inference is still running "
                 "(%u in flight, %u inference threads not stopped); destroy every anira handler, "
                 "or call anira_shutdown(), before unloading. Aborting instead of hanging.\n",
-                in_flight,
-                running);
+                still.m_in_flight,
+                still.m_threads);
             if (length > 0) {
                 const auto size = std::min(static_cast<size_t>(length), message.size() - 1);
                 static_cast<void>(::write(STDERR_FILENO, message.data(), size));
             }
             std::abort();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        in_flight = scheduler::InferenceThread::get_num_in_flight();
-        running = threads_in_loop();
     }
 }
 #endif
@@ -239,32 +333,37 @@ void wait_for_inferences_or_abort(const std::vector<const scheduler::InferenceTh
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 namespace detail {
 
-/// The body of the library-unload hook below; Core's friend, since it tells the pool's
-/// threads to stop without joining them.
-struct UnloadHook {
-    static void run();
-};
+std::vector<const scheduler::InferenceThread*> UnloadHook::stop_pool() {
+    std::vector<const scheduler::InferenceThread*> pool;
+    void* existing = s_state.load(std::memory_order_acquire);
+    if (existing == nullptr) { return pool; }
+    Core::State& state = *static_cast<Core::State*>(existing);
+    // Not waited for when this thread holds it: exit() from inside a lifecycle call.
+    const std::unique_lock<LifecycleMutex> lifecycle_lock =
+        state.m_lifecycle_mutex.lock_unless_held();
+    pool.reserve(state.m_thread_pool.size());
+    for (const std::unique_ptr<scheduler::InferenceThread>& thread : state.m_thread_pool) {
+        thread->request_stop();
+        pool.push_back(thread.get());
+    }
+    return pool;
+}
+
+void UnloadHook::stop_at_exit() {
+    // Every pool thread is told to stop, so no new inference starts and a thread that holds an
+    // instance gives the jobs waiting for it up (they count as in flight until then); then the
+    // threads and the inferences in flight get the bounded wait. At exit no loader lock is held:
+    // what still runs at the bound is the unload hook's join's, which waits for it whatever it
+    // takes, as it always did. A user-managed thread is the host's: its inference in flight is
+    // waited for all the same, and the thread itself is left alone.
+    static_cast<void>(wait_for_inferences(stop_pool()));
+}
 
 void UnloadHook::run() {
-    void* existing = s_state.load(std::memory_order_acquire);
-    if (existing != nullptr && !s_process_exiting.load(std::memory_order_acquire)) {
-        // An unload: every pool thread is told to stop first, so no new inference starts and a
-        // thread that holds an instance gives the jobs waiting for it up (they count as in
-        // flight until then); then the threads and the inferences in flight get the bounded wait.
-        // At exit no loader lock is held, so the join below waits for them whatever they take,
-        // as it always did. The threads are kept by the pool, which only shutdown() below
-        // empties, so their pointers outlive the wait.
-        Core::State& state = *static_cast<Core::State*>(existing);
-        std::vector<const scheduler::InferenceThread*> pool;
-        {
-            const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
-            pool.reserve(state.m_thread_pool.size());
-            for (const std::unique_ptr<scheduler::InferenceThread>& thread : state.m_thread_pool) {
-                thread->request_stop();
-                pool.push_back(thread.get());
-            }
-        }
-        wait_for_inferences_or_abort(pool);
+    if (!s_process_exiting.load(std::memory_order_acquire)) {
+        // An unload: the same stop and the bounded wait, which aborts on what still runs. At
+        // exit the exit handler stopped the pool already, and the join below waits.
+        wait_for_inferences_or_abort(stop_pool());
     }
     Core::shutdown();
     Core::release_core_if_idle();
@@ -313,7 +412,7 @@ struct UnloadGuard {
 #endif
 
 // The words of the mismatch warnings: the JSON vocabulary (json.cpp's k_waits / k_levels /
-// k_drains), the same words CoreConfig.h's to_string spells.
+// k_drains).
 const char* wait_word(anira_wait_strategy wait) {
     return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
 }
@@ -385,7 +484,7 @@ bool Core::has_core() {
 void Core::register_context(const anira_context_config& context_config) {
     State& state = get_state();
     const anira_context_config config = sanitize_config(context_config);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
     apply_or_compare_config_locked(state, config, /*builds_pool=*/false);
@@ -403,7 +502,7 @@ unsigned int Core::get_num_contexts() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_num_contexts;
 }
 
@@ -412,7 +511,7 @@ void Core::register_handler() {
     // created, so the queue and the drain already exist; the handler's session brings the
     // configuration when it is prepared.
     State& state = get_state();
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     ++state.m_num_handlers;
 }
 
@@ -427,7 +526,7 @@ unsigned int Core::get_num_handlers() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_num_handlers;
 }
 
@@ -435,7 +534,7 @@ void Core::unregister_user(State& state, unsigned int& counter) {
     std::unique_ptr<LogDrainLoop> log_drain_to_stop;
     bool was_last_user = false;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         if (counter == 0) { return; }
         --counter;
         was_last_user = !has_users_locked(state);
@@ -454,7 +553,7 @@ anira_wait_strategy Core::get_wait_strategy() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return ANIRA_WAIT_SPIN_BACKOFF; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return has_users_locked(state) ? state.m_core_config.m_wait : ANIRA_WAIT_SPIN_BACKOFF;
 }
 
@@ -462,14 +561,19 @@ size_t Core::get_thread_pool_size() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_thread_pool.size();
 }
 
 size_t Core::prospective_thread_pool_size(const anira_context_config& context_config) {
     State& state = get_state();
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return prospective_pool_size_locked(state, sanitize_config(context_config));
+}
+
+unsigned int Core::default_num_threads() noexcept {
+    const unsigned int hardware = std::thread::hardware_concurrency();
+    return hardware / 2 > 0 ? hardware / 2 : 1;
 }
 
 anira_context_config Core::sanitize_config(anira_context_config context_config) {
@@ -510,7 +614,7 @@ void Core::apply_log_level_locked(State& state, const anira_context_config& cont
         has_users_locked(state)
             ? std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level)
             : context_config.m_log_level;
-    set_log_level(to_log_level(level));
+    set_log_level(level);
 }
 
 bool Core::has_users_locked(const State& state) {
@@ -731,8 +835,10 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
 }
 
-std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
-                                                     InferenceConfig& inference_config,
+std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
+                                                     const anira_model_config& model,
+                                                     const capi::Derived& derived,
+                                                     const capi::HardContract& hard,
                                                      std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
                                                      RtLatch* rt_latch) {
@@ -743,7 +849,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // Whole function locked: applies or reconciles the configuration, hands out shared
     // loaded models from the pool, builds the thread pool for a first session and
     // registers the session — one decision, one critical section.
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     const anira_context_config config = sanitize_config(context_config);
     // Apply the log level before anything (including this function) logs.
     apply_log_level_locked(state, config);
@@ -760,21 +866,21 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // that leave the count to the pool share one loaded model.
     const size_t pool_size = prospective_pool_size_locked(state, config);
     const auto resolved_auto = static_cast<uint32_t>(std::max<size_t>(pool_size, 1));
-    if (inference_config.m_num_parallel_processors == ANIRA_INSTANCES_AUTO) {
-        inference_config.m_num_parallel_processors = resolved_auto;
-    }
+    // An exclusive session runs one inference at a time: one instance, whatever the model
+    // config says (its loaded model has no shared call slot either, the request's count of 0).
+    uint32_t num_instances = derived.m_exclusive ? 1U : model.m_max_instances;
+    if (num_instances == ANIRA_INSTANCES_AUTO) { num_instances = resolved_auto; }
     for (engine::PlanRequest& request : requests) {
         if (request.m_model.m_instances == ANIRA_INSTANCES_AUTO) {
             request.m_model.m_instances = resolved_auto;
         }
     }
-    if (pool_size > 0 && inference_config.m_num_parallel_processors > pool_size) {
+    if (pool_size > 0 && num_instances > pool_size) {
         ANIRA_LOG_WARNING(log_group::k_core,
-                          "Session %d requested more parallel processors than threads are "
-                          "available in the core. Using number of threads as number of parallel "
-                          "processors.",
+                          "Session %d requested more instances than threads are available in "
+                          "the core. Using the number of threads as the number of instances.",
                           session_id);
-        inference_config.m_num_parallel_processors = static_cast<unsigned int>(pool_size);
+        num_instances = static_cast<uint32_t>(pool_size);
     }
     for (engine::PlanRequest& request : requests) {
         if (pool_size > 0 && request.m_model.m_instances > pool_size) {
@@ -788,8 +894,11 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // before register_session_locked() publishes the session under this lock.
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
-                                         pp_processor,
-                                         inference_config,
+                                         processor,
+                                         model,
+                                         derived,
+                                         hard,
+                                         num_instances,
                                          moodycamel::ProducerToken(state.m_next_inference),
                                          rt_latch);
 
@@ -801,20 +910,18 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     try {
         // The plan table: one plan per request, in order, each on its loaded model, with this
         // session's prepared handle over it. A registered engine's handle is the C handler's
-        // to make, once the plan report exists (the engine's prepare reads it); every other
-        // plan's is made here, with no record (a built-in engine and a 2.x backend read none).
-        bool has_custom_backend = false;
+        // to make, once the plan report exists (the engine's prepare reads it); a built-in
+        // engine's is made here, with no record (it reads none). The C handler selects the
+        // initial plan once the table exists.
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
-            acquire_loaded_locked(state, request, inference_config, pool_size, slot);
+            acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
             slot.m_provider_id = request.m_model.m_provider_id;
-            slot.m_legacy_backend = request.m_legacy_backend;
-            slot.m_missing_model = request.m_missing_model;
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
@@ -823,34 +930,8 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             session->m_plans.push_back(std::move(slot));
             SessionElement::PlanSlot& placed = session->m_plans.back();
             if (!placed.m_registered) {
-                placed.m_prepared = placed.m_loaded->prepare(engine::PrepareRequest{
-                    .m_exclusive = inference_config.m_session_exclusive_processor,
-                    .m_info = nullptr});
-            }
-            has_custom_backend = has_custom_backend || request.m_source == engine::Source::Legacy;
-        }
-
-        // The initial selection: the CUSTOM row when the table has one (a 2.x table always
-        // has), else plan 0. A 3.x handler selects its own plan afterwards.
-        if (const std::optional<uint32_t> custom =
-                session->plan_of_backend(InferenceBackend::CUSTOM)) {
-            session->select_plan(*custom);
-        }
-
-        // Default the active plan to the first plan with a loaded model of an engine,
-        // instead of the CUSTOM roundtrip. Sessions used to start on CUSTOM until
-        // set_inference_backend() — forgetting that call silently passed audio through. A
-        // caller-provided custom backend keeps CUSTOM active: running it is why it was
-        // passed. A 2.x row without a model (a backend of the build the configuration names
-        // no model for) is the roundtrip and is skipped; when nothing matches, CUSTOM
-        // remains, as before.
-        if (!has_custom_backend) {
-            for (uint32_t plan = 0; plan < requests.size(); ++plan) {
-                const engine::Source source = requests[plan].m_source;
-                if (source == engine::Source::BuiltIn || source == engine::Source::Registered) {
-                    session->select_plan(plan);
-                    break;
-                }
+                placed.m_prepared = placed.m_loaded->prepare(
+                    engine::PrepareRequest{.m_exclusive = session->exclusive(), .m_info = nullptr});
             }
         }
 
@@ -890,33 +971,8 @@ std::shared_ptr<engine::BuiltinEngine> Core::find_or_make_builtin_engine(State& 
 
 void Core::acquire_loaded_locked(State& state,
                                  const engine::PlanRequest& request,
-                                 InferenceConfig& inference_config,
                                  size_t pool_size,
                                  SessionElement::PlanSlot& slot) {
-    switch (request.m_source) {
-        case engine::Source::Legacy: {
-            // A caller's 2.x backend: this session's alone, loaded through the adapter.
-            if (request.m_backend == nullptr) {
-                throw StatusError(ANIRA_ERROR_INTERNAL,
-                                  "Core::create_session: a Legacy plan request without a "
-                                  "backend");
-            }
-            auto loaded = std::make_shared<engine::LegacyLoaded>(*request.m_backend);
-            loaded->load(request.m_model);
-            slot.m_loaded = std::move(loaded);
-            return;
-        }
-        case engine::Source::Roundtrip: {
-            // The 2.x default processor over this session's configuration: its own.
-            auto loaded = std::make_shared<engine::LegacyLoaded>(inference_config);
-            loaded->load(request.m_model);
-            slot.m_loaded = std::move(loaded);
-            return;
-        }
-        case engine::Source::BuiltIn:
-        case engine::Source::Registered: break;
-    }
-
     // Shared: the entry whose record equals the request's on the same carrier.
     const void* const carrier = request.m_carrier.get();
     for (const State::PoolEntry& entry : state.m_loaded_models) {
@@ -1003,7 +1059,7 @@ void Core::release_session(const std::shared_ptr<SessionElement>& session) {
     // context keeps the queue and its drain alive past the last session.
     bool was_last_user = false;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         unregister_session_locked(state, session);
         was_last_user = !has_users_locked(state);
         if (was_last_user) { log_drain_to_stop = take_log_drain_locked(state); }
@@ -1027,7 +1083,11 @@ void Core::shutdown() {
     State& state = *static_cast<State*>(existing);
     std::unique_ptr<LogDrainLoop> log_drain_to_stop;
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        // The unload hook runs this at exit, on the thread that called exit(), which holds the
+        // lock when it called it from inside a lifecycle call (an engine's load): not waited
+        // for then, since that call never resumes (detail::LifecycleMutex).
+        const std::unique_lock<detail::LifecycleMutex> lifecycle_lock =
+            state.m_lifecycle_mutex.lock_unless_held();
         if (!state.m_sessions.empty()) {
             ANIRA_LOG_ERROR(log_group::k_core,
                             "Core::shutdown() called with %zu registered session(s): the "
@@ -1106,7 +1166,8 @@ void Core::report_rt_latches() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return; }
     State& state = *static_cast<State*>(existing);
-    const std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
+    const std::unique_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex,
+                                                                  std::try_to_lock);
     if (!lifecycle_lock.owns_lock()) { return; }
     for (const auto& session : state.m_sessions) {
         uint32_t delta = 0;
@@ -1128,7 +1189,8 @@ bool Core::release_core_if_idle() {
     State& state = *static_cast<State*>(existing);
     // Never block: this runs at library unload, possibly under a loader lock. A held
     // lifecycle lock means someone is inside the core — then it is not idle.
-    std::unique_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex, std::try_to_lock);
+    std::unique_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex,
+                                                            std::try_to_lock);
     if (!lifecycle_lock.owns_lock()) { return false; }
     // User-managed threads (make_inference_thread) reference the queue inside the core; a
     // registered context or handler is a user; on WebAssembly a Worker may still be inside
@@ -1151,7 +1213,6 @@ bool Core::release_core_if_idle() {
 }
 
 void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
-                           HostConfig new_config,
                            const CustomLatencies& custom_latencies,
                            const RingDtypes& ring_dtypes) {
     // Every prepare re-arms the scheduler's site latches, and nothing else does: a
@@ -1184,13 +1245,13 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     drain_inference_queue(session);
 
-    session->prepare(new_config, custom_latencies, ring_dtypes);
+    session->prepare(custom_latencies, ring_dtypes);
 
     {
         // Only the pool start touches shared state; the drain and the
         // session's own prepare above are session-local and stay unlocked.
         State& state = get_state();
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         start_thread_pool_locked(state);
     }
 
@@ -1198,16 +1259,11 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
 }
 
 bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
-    for (size_t tensor_index = 0;
-         tensor_index < session->m_inference_config.get_tensor_input_shape().size();
-         tensor_index++) {
-        if (session->m_inference_config.get_preprocess_input_size()[tensor_index] > 0) {
-            for (size_t channel = 0;
-                 channel <
-                 session->m_inference_config.get_preprocess_input_channels()[tensor_index];
-                 channel++) {
-                if (session->m_send_buffer[tensor_index].get_available_samples(channel) <
-                    session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
+    for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
+        if (session->input_hop(tensor_index) > 0) {
+            for (size_t channel = 0; channel < session->input_channels(tensor_index); channel++) {
+                if (session->send_ring(tensor_index).get_available_samples(channel) <
+                    session->input_hop(tensor_index)) {
                     return false;
                 }
             }
@@ -1230,45 +1286,43 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
             // output samples. The demand is consumed before the attempt, mirroring the
             // input-driven failure path below, which consumes one hop of input and produces
             // one hop of zeros -- so the demand stays bounded even when the pool is exhausted.
-            size_t const hop = session->m_inference_config
-                                   .get_postprocess_output_size()[session->m_reference.m_index];
+            size_t const hop = session->output_hop(session->reference_slot());
             if (session->m_pending_pull_samples < hop) { return; }
             session->m_pending_pull_samples -= hop;
         }
         bool const success = pre_process(session);
 
         if (!success) {
-            for (size_t tensor_index = 0;
-                 tensor_index < session->m_inference_config.get_tensor_input_shape().size();
-                 tensor_index++) {
-                for (size_t channel = 0;
-                     channel <
-                     session->m_inference_config.get_preprocess_input_channels()[tensor_index];
-                     channel++) {
-                    // Non-streamable parameters have no input size
-                    session->m_send_buffer[tensor_index].discard(
-                        channel,
-                        session->m_inference_config.get_preprocess_input_size()[tensor_index]);
+            // No slot is free: every slot holds a chunk not yet collected. This hop and every
+            // other one the call made ready get no inference. Each is dropped (drop_hop: one hop
+            // of every Streamed input, its fill kept under the miss policy) and owes one hop of
+            // that fill on every Streamed output at its own stream position, behind the chunks
+            // claimed before it (owe_fills): the stream stays on its hop grid, the send ring
+            // never holds more than one call's leftover (a full ring would overwrite its oldest
+            // samples), and every hop of input yields exactly one hop of output, in order, so the
+            // output is back at its latency once the late chunks are collected. A generator drops
+            // every hop of the demand. A non-streamable slot has no ring. The handler's rt_error
+            // records ANIRA_ERROR_CAPACITY.
+            size_t dropped = 0;
+            while (true) {
+                session->drop_hop();
+                ++dropped;
+                if (session->m_input_driven) {
+                    if (!inputs_ready(session)) { break; }
+                } else {
+                    size_t const hop = session->output_hop(session->reference_slot());
+                    if (session->m_pending_pull_samples < hop) { break; }
+                    session->m_pending_pull_samples -= hop;
                 }
             }
-            for (size_t tensor_index = 0;
-                 tensor_index < session->m_inference_config.get_tensor_output_shape().size();
-                 tensor_index++) {
-                for (size_t channel = 0;
-                     channel <
-                     session->m_inference_config.get_postprocess_output_channels()[tensor_index];
-                     channel++) {
-                    // Non-streamable parameters have no output size; the zeros are of the
-                    // ring's own element type
-                    session->m_receive_buffer[tensor_index].push_zeros(
-                        channel,
-                        session->m_inference_config.get_postprocess_output_size()[tensor_index]);
-                }
-            }
+            session->owe_fills(dropped);
+            static_cast<void>(session->m_rt->record_drop());
             ANIRA_LOG_RT_WARNING_ONCE(RtSite::NoFreeInferenceQueue,
                                       log_group::k_core,
-                                      "No free inference queue found in session: %d!",
-                                      session->m_session_id);
+                                      "No free inference slot in session %d: %zu hops dropped, "
+                                      "filled under the miss policy",
+                                      session->m_session_id,
+                                      dropped);
             return;
         }
     }
@@ -1300,7 +1354,10 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
     // CAS + at most one token enqueue, the normal dispatch path).
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    while (session->m_time_stamps.size() > 0) {
+    while (true) {
+        // The silence of dropped hops owed ahead of the next chunk goes first.
+        if (!session->place_pending_fills()) { return false; }
+        if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             if (session->m_inference_queue[i]->m_time_stamp != session->m_time_stamps.back() ||
@@ -1310,7 +1367,7 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
             if (!session->receive_rings_have_room()) { return false; }
             if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
                 wait_for_completion(session, i);
-            } else if (session->m_inference_config.m_blocking_ratio > 0.f) {
+            } else if (session->uses_semaphore()) {
                 if (!session->m_inference_queue[i]->m_done_semaphore.try_acquire()) { return true; }
             } else {
                 if (!session->m_inference_queue[i]->m_done_atomic.exchange(
@@ -1330,7 +1387,7 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
 }
 
 // The bounded collect: waits for each pending result on the primitive the session runs on
-// (the semaphore when blocking_ratio > 0, the atomic flag polled otherwise), up to the
+// (the semaphore under a wait ratio above 0, the atomic flag polled otherwise), up to the
 // deadline. Not real-time safe for as long as it waits; the InferenceManager callers pass
 // the budget the host chose.
 Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& session,
@@ -1338,16 +1395,19 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
     // See the stalled-chain kick rationale in collect_completed().
     try_dispatch_stateful(session);
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    // InferenceThread::do_inference() releases the semaphore when blocking_ratio > 0 and
+    // InferenceThread::do_inference() releases the semaphore under a wait ratio above 0 and
     // stores the atomic otherwise, for the whole life of the session.
-    const bool use_semaphore = session->m_inference_config.m_blocking_ratio > 0.f;
+    const bool use_semaphore = session->uses_semaphore();
     const bool forever = wait_until == std::chrono::steady_clock::time_point::max();
     const bool try_once = wait_until.time_since_epoch().count() == 0;
     // The unbounded semaphore wait is cut into slices so the thread count is re-checked.
     constexpr auto k_forever_slice = std::chrono::milliseconds(10);
     // The atomic path's cadence, as in wait_for_completion().
     constexpr auto k_poll = std::chrono::milliseconds(1);
-    while (!session->m_time_stamps.empty()) {
+    while (true) {
+        // The silence of dropped hops owed ahead of the next chunk goes first.
+        if (!session->place_pending_fills()) { return WaitOutcome::Done; }
+        if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
         for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
             SessionElement::ThreadSafeStruct& next = *session->m_inference_queue[i];
@@ -1402,7 +1462,7 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
 }
 
 // Mirrors the completion signal InferenceThread::do_inference() uses for this
-// session (semaphore when blocking_ratio > 0.f, atomic otherwise) so both
+// session (the semaphore under a wait ratio above 0, the atomic otherwise) so both
 // new_data_request() overloads above wait correctly in non-real-time mode
 // regardless of which one is called.
 void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, size_t index) {
@@ -1411,7 +1471,7 @@ void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, s
     // task). No further submission may be coming to restart the chain, so kick
     // it before blocking.
     try_dispatch_stateful(session);
-    if (session->m_inference_config.m_blocking_ratio > 0.f) {
+    if (session->uses_semaphore()) {
         session->m_inference_queue[index]->m_done_semaphore.acquire();
     } else {
         while (!session->m_inference_queue[index]->m_done_atomic.exchange(
@@ -1427,7 +1487,7 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return {}; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return state.m_sessions;
 }
 
@@ -1440,32 +1500,27 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
-            // What a processor runner leaves on the chunk (a 2.x processor never writes it).
-            session->m_inference_queue[i]->m_processor_status = ANIRA_OK;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
+            session->m_inference_queue[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
-            // pre_process virtual, on this thread: a 3.x processor runner reads it there to
-            // tell the first chunk of a new stream, its reset boundary (capi/processor.h).
+            // chunk's pre_process, on this thread: the processor runner reads it there to tell
+            // the first chunk of a new stream, its reset boundary (capi/processor.h).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
-            // The chunk's descriptors follow its buffers' memory of the moment (a 2.x
-            // processor of this line may have swapped it on the struct's last use).
-            session->m_inference_queue[i]->rebind_tensors();
-            session->m_pp_processor.pre_process(session->m_send_buffer,
-                                                session->m_inference_queue[i]->m_tensor_input_data,
-                                                session->plan_backend(plan));
+            const anira_status formed =
+                session->m_processor.pre_process(*session->m_inference_queue[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
-            if (session->m_inference_queue[i]->m_processor_status != ANIRA_OK) {
+            if (formed != ANIRA_OK) {
                 // A processor's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct
                 // and timestamp and completes as zeros at its stream position without being
                 // enqueued, the path a full queue takes, so exactly one chunk was consumed and
                 // exactly one (silent) chunk will be produced.
                 session->complete_with_zeros(session->m_inference_queue[i]);
-            } else if (session->m_inference_config.m_session_exclusive_processor) {
+            } else if (session->exclusive()) {
                 // A session-exclusive processor carries its state across calls, so
                 // its tasks must execute strictly in order and never concurrently.
                 // Defer dispatch so at most one of this session's tasks is ever in
@@ -1492,7 +1547,7 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
 }
 
 void Core::try_dispatch_stateful(const std::shared_ptr<SessionElement>& session) {
-    if (!session->m_inference_config.m_session_exclusive_processor) { return; }
+    if (!session->exclusive()) { return; }
     if (auto next = session->try_acquire_next_dispatch()) {
         if (!enqueue_inference_or_drop(session, next)) {
             session->release_dispatch(next->m_dispatch_epoch);
@@ -1533,11 +1588,12 @@ bool Core::enqueue_inference_or_drop(
 void Core::post_process(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
-    // The plan the chunk was submitted under (Core::pre_process), not the session's
-    // current one: the chunk's pre_process, hooks, engine and post_process agree.
-    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data,
-                                         session->m_receive_buffer,
-                                         session->plan_backend(thread_safe_struct->m_plan));
+    // Every chunk reaches its post_process, whatever it returns: the processor runner records a
+    // failure and keeps the output rings aligned. The silence of the hops dropped behind it is
+    // owed next, ahead of every later chunk (SessionElement::owe_fills).
+    static_cast<void>(session->m_processor.post_process(*thread_safe_struct));
+    session->m_pending_fills += thread_safe_struct->m_fills_after;
+    thread_safe_struct->m_fills_after = 0;
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
@@ -1590,7 +1646,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                 // the drain) and end its turn on the stateful dispatch chain so
                 // the gate cannot stay wedged.
                 session->complete_with_zeros(inference_data.m_thread_safe_struct);
-                if (session->m_inference_config.m_session_exclusive_processor) {
+                if (session->exclusive()) {
                     session->release_dispatch(
                         inference_data.m_thread_safe_struct->m_dispatch_epoch);
                 }
@@ -1610,7 +1666,7 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                                         "Could not requeue inference data! Dropping the "
                                         "inference and zero-filling its output.");
                 other.m_session->complete_with_zeros(other.m_thread_safe_struct);
-                if (other.m_session->m_inference_config.m_session_exclusive_processor) {
+                if (other.m_session->exclusive()) {
                     other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
                 }
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
@@ -1634,7 +1690,7 @@ int Core::get_num_sessions() {
     void* existing = s_state.load(std::memory_order_acquire);
     if (existing == nullptr) { return 0; }
     State& state = *static_cast<State*>(existing);
-    const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+    const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
     return static_cast<int>(state.m_sessions.size());
 }
 
@@ -1652,7 +1708,7 @@ void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
 
     session->clear();
 
-    if (session->m_inference_config.m_session_exclusive_processor) {
+    if (session->exclusive()) {
         // Reconcile the stateful dispatch chain. Gate free: every pending entry
         // (all stale — this runs on the session's single driving thread, so
         // nothing fresh can have been prepared since the bump) is returned to
@@ -1679,7 +1735,7 @@ void Core::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session)
         // free, so this loop skips it. Until the signal arrives a struct is genuinely
         // in flight — leave it for a later call.
         bool done;
-        if (session->m_inference_config.m_blocking_ratio > 0.f) {
+        if (session->uses_semaphore()) {
             done = s->m_done_semaphore.try_acquire();
             if (done) {
                 while (s->m_done_semaphore.try_acquire()) {}  // drain any extra signals
@@ -1708,7 +1764,7 @@ std::unique_ptr<scheduler::InferenceThread> Core::make_inference_thread() {
     std::string worker_module;
 #endif
     {
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         wait = state.m_core_config.m_wait;
 #ifdef __EMSCRIPTEN__
         worker_module = state.m_core_config.m_em_worker_module;
@@ -1733,7 +1789,7 @@ bool Core::has_inference_threads() {
     bool pool_exists = false;
     if (void* existing = s_state.load(std::memory_order_acquire)) {
         State& state = *static_cast<State*>(existing);
-        const std::scoped_lock<std::mutex> lifecycle_lock(state.m_lifecycle_mutex);
+        const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
         pool_exists = !state.m_thread_pool.empty();
     }
     return pool_exists || scheduler::InferenceThread::get_num_active_threads() > 0;

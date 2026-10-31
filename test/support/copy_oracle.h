@@ -14,16 +14,15 @@
 // (format_value), so a golden transcript is a literal a reviewer can read, and a difference
 // names the call and the run it happened in.
 //
-// Determinism. The session's model is a gate (test/abi/handler_support.h: a GateBackend on the
-// 2.x session, a GateEngine added to the C handler's pipeline) that a scenario keeps closed
-// while it calls the library: an inference submitted by a call is held on its inference
-// thread, so no call ever sees a result of its own submissions, whatever
-// the machine load or the sanitizer. Between two calls settle() opens the gate, collects
-// until the session has no submitted inference left (the driver-thread list
-// SessionElement::m_time_stamps is empty) and closes the gate again: the next call finds
-// every earlier result in the receive rings, in submission order. A scenario that wants a
-// starved block leaves the settle out. Nothing is synchronised by a sleep of a chosen
-// length and nothing is measured against the wall clock; the one wait is a poll with a
+// Determinism. The session's model is a gate (test/abi/handler_support.h: a GateEngine added to
+// the C handler's pipeline) that a scenario keeps closed while it calls the library: an
+// inference submitted by a call is held on its inference thread, so no call ever sees a result
+// of its own submissions, whatever the machine load or the sanitizer. Between two calls
+// settle() opens the gate, collects until the session has no submitted inference left (the
+// driver-thread list SessionElement::m_time_stamps is empty) and closes the gate again: the
+// next call finds every earlier result in the receive rings, in submission order. A scenario
+// that wants a starved block leaves the settle out. Nothing is synchronised by a sleep of a
+// chosen length and nothing is measured against the wall clock; the one wait is a poll with a
 // failure timeout that a passing run never reaches.
 //
 // Two kinds of call wait inside the library and cannot run against a closed gate. The waiting
@@ -32,17 +31,28 @@
 // with ANIRA_WAIT_FOREVER, the gate open for the call. Either way the call returns with every
 // submitted inference collected, its own included: as much a pure function of the calls. A
 // finite budget or timeout makes the block a matter of the wall clock and is not recorded.
+//
+// The sessions. Every recording runs on a C handler (HandlerSession below) whose one model
+// entry is the custom row and whose engine is the gate. The C entries' rigs call the Hard
+// entries; the stems' rigs (test_CopyPathOracle, test_TensorStems, the referee of
+// test_HandlerCopyOracle) call the tensor stems of the handler's own session directly, below
+// the C entries and their block rule, so any count goes there, as it went on the 2.x session
+// the scheduler's transcripts were recorded on. The models are the 2.x configurations of the
+// recordings, figure for figure: hop 8 at 800 Hz, a budget of 1 ms, no warm-up, two instances
+// on two threads.
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/engine.h>
+#include <anira/abi/enums.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
 #include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <anira/anira.hpp>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
@@ -60,6 +70,7 @@
 #include <vector>
 
 #include "../abi/handler_support.h"
+#include "capi/port.h"
 
 namespace anira_test::oracle {
 
@@ -159,11 +170,23 @@ private:
     std::vector<float*> m_planes;
 };
 
-/// The input memory of one call, one block per input slot: a streamed slot continues its
-/// ramps from `positions` (the samples pushed so far, advanced here), a Static slot carries
-/// static_value(slot, call, index). Slot 0 is `slot0_length` floats long when that is more
-/// than its count: the memory an in-place call shares with output slot 0.
-inline std::vector<SlotBlock> make_inputs(const anira::InferenceConfig& config,
+/// The channels of one slot of a prepared C handler: a Streamed slot's stream port says (the
+/// channel count a host block of it carries), every other slot is one run of values.
+inline size_t channels_of(const anira::capi::Ports& ports, size_t slot) {
+    const anira::capi::StreamPort* stream = anira::capi::stream_port(ports, slot);
+    return stream != nullptr ? stream->m_channels : 1;
+}
+
+/// Whether a slot of a prepared C handler streams (it has a ring).
+inline bool is_streamed(const anira::capi::Ports& ports, size_t slot) {
+    return anira::capi::stream_port(ports, slot) != nullptr;
+}
+
+/// The input memory of one call, one block per input slot of the handler's ports: a streamed
+/// slot continues its ramps from `positions` (the samples pushed so far, advanced here), a
+/// Static slot carries static_value(slot, call, index). Slot 0 is `slot0_length` floats long
+/// when that is more than its count: the memory an in-place call shares with output slot 0.
+inline std::vector<SlotBlock> make_inputs(const anira::capi::Ports& input_ports,
                                           std::vector<size_t>& positions,
                                           const std::vector<size_t>& in_counts,
                                           size_t slot0_length,
@@ -172,8 +195,8 @@ inline std::vector<SlotBlock> make_inputs(const anira::InferenceConfig& config,
     inputs.reserve(in_counts.size());
     for (size_t slot = 0; slot < in_counts.size(); ++slot) {
         const size_t length = slot == 0 ? std::max(slot0_length, in_counts[0]) : in_counts[slot];
-        inputs.emplace_back(config.get_preprocess_input_channels()[slot], length);
-        const bool streamed = config.get_preprocess_input_size()[slot] > 0;
+        inputs.emplace_back(channels_of(input_ports, slot), length);
+        const bool streamed = is_streamed(input_ports, slot);
         for (size_t channel = 0; channel < inputs[slot].channels(); ++channel) {
             for (size_t i = 0; i < in_counts[slot]; ++i) {
                 inputs[slot].run(channel)[i] =
@@ -295,11 +318,10 @@ inline void expect_golden(const char* name, std::string_view golden, const Trans
     }
 }
 
-/// The clocked gate (see the file comment), a GateBackend or a GateEngine. collect() runs one
-/// non-waiting collection of the session, which is what get_available_samples does on both
-/// faces.
-template <typename Gate, typename Collect>
-void settle(Gate& gate, const anira::SessionElement& session, Collect&& collect) {
+/// The clocked gate (see the file comment). collect() runs one non-waiting collection of the
+/// session, which is what get_available_samples does on both faces.
+template <typename Collect>
+void settle(GateEngine& gate, const anira::SessionElement& session, Collect&& collect) {
     gate.m_open.store(true);
     const auto start = std::chrono::steady_clock::now();
     while (true) {
@@ -315,49 +337,30 @@ void settle(Gate& gate, const anira::SessionElement& session, Collect&& collect)
     gate.m_open.store(false);
 }
 
-/// A gate whose model spreads the one channel of input 0 over every channel of output 0:
-/// channel c of the output is the input plus 1000 * c, so a delivered block tells its
-/// channels apart although the input is mono. (BackendBase::process alone delivers zeros
-/// when the two channel counts differ.)
-class FanOutGate : public GateBackend {
+/// A gate engine whose model spreads the one channel of input 0 over every channel of output
+/// 0: channel c of the output is the input plus 1000 * c, so a delivered block tells its
+/// channels apart although the input is mono (the pass-through alone delivers zeros when the
+/// two element counts differ).
+class FanOutEngine : public GateEngine {
 public:
-    using GateBackend::GateBackend;
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        GateBackend::process(input, output, std::move(session));
-        const size_t samples = input[0].get_num_samples();
-        const size_t channels = output[0].get_num_samples() / samples;
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const anira_status status = passthrough(ctx);
+        if (status != ANIRA_OK) { return status; }
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const size_t samples = elements_of(ctx.inputs[0]);
+        const size_t channels = elements_of(ctx.outputs[0]) / samples;
         for (size_t channel = 0; channel < channels; ++channel) {
             for (size_t i = 0; i < samples; ++i) {
-                output[0].set_sample(
-                    0,
-                    (channel * samples) + i,
-                    input[0].get_sample(0, i) + static_cast<float>(1000 * channel));
+                out[(channel * samples) + i] = in[i] + static_cast<float>(1000 * channel);
             }
         }
+        return ANIRA_OK;
     }
 };
 
-/// A gate whose model is a generator: sample i of output 0 is Static value 0 of input 0
-/// plus i, on the one channel the output has.
-class ParamRampGate : public GateBackend {
-public:
-    using GateBackend::GateBackend;
-
-    void process(std::vector<anira::BufferF>& input,
-                 std::vector<anira::BufferF>& output,
-                 std::shared_ptr<anira::SessionElement> session) override {
-        GateBackend::process(input, output, std::move(session));
-        for (size_t i = 0; i < output[0].get_num_samples(); ++i) {
-            output[0].set_sample(0, i, input[0].get_sample(0, 0) + static_cast<float>(i));
-        }
-    }
-};
-
-/// The C twin of ParamRampGate for the C handler's rigs (FanOutGate has none: no C scenario
-/// fans out): a GateEngine whose run() is the pass-through, then sample i of output 0 is
+/// A gate engine whose model is a generator: the pass-through, then sample i of output 0 is
 /// element 0 of input 0 plus i.
 class ParamRampEngine : public GateEngine {
 public:
@@ -374,23 +377,207 @@ public:
     }
 };
 
+/// What the custom row's engine computes behind the gate.
+enum class Model { PassThrough, FanOut, ParamRamp };
+
+/// The gate engine of a Model.
+inline std::unique_ptr<GateEngine> make_gate(Model model) {
+    switch (model) {
+        case Model::FanOut: return std::make_unique<FanOutEngine>();
+        case Model::ParamRamp: return std::make_unique<ParamRampEngine>();
+        case Model::PassThrough: break;
+    }
+    return std::make_unique<GateEngine>();
+}
+
+// ---- the models and the contract ---------------------------------------------------------------
+
+/// The window of every streamed tensor, and the block of most scenarios.
+inline constexpr uint32_t k_hop = 8;
+/// A hop lasts 10 ms, the explicit budget is 1 ms: the latency is small, a transcript short.
+inline constexpr double k_rate = 800.0;
+
+/// A streamed [1, channels, k_hop] tensor whose window is the hop.
+inline anira::TensorSpec streamed_spec(std::string_view name, int64_t channels) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, channels)
+        .axis(2, ANIRA_AXIS_TIME, k_hop)
+        .window(k_hop, k_hop, 0);
+    return spec;
+}
+
+/// A Static [1, count] tensor.
+inline anira::TensorSpec static_spec(std::string_view name, int64_t count) {
+    anira::TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STATIC);
+    spec.axis(0, ANIRA_AXIS_ANY, 1).axis(1, ANIRA_AXIS_ANY, count);
+    return spec;
+}
+
+/// The custom row alone, which the gate engine runs, and two instances.
+inline anira::ModelConfig gate_model() {
+    return custom_model(2);
+}
+
+/// `channels` channels in, as many out: the gate passes the input through.
+inline anira::ModelConfig pass_through_model(size_t channels) {
+    anira::ModelConfig model = gate_model();
+    model.input(streamed_spec("in", static_cast<int64_t>(channels)));
+    model.output(streamed_spec("out", static_cast<int64_t>(channels)));
+    return model;
+}
+
+/// Two channels in, two channels out.
+inline anira::ModelConfig stereo_model() {
+    return pass_through_model(2);
+}
+
+/// A three-channel stream and three Static values on either side.
+inline anira::ModelConfig multi_model() {
+    anira::ModelConfig model = gate_model();
+    model.input(streamed_spec("in", 3));
+    model.input(static_spec("values_in", 3));
+    model.output(streamed_spec("out", 3));
+    model.output(static_spec("values_out", 3));
+    return model;
+}
+
+/// One channel in, two out (FanOutEngine): a BYPASS miss has one input channel for two output
+/// channels.
+inline anira::ModelConfig mono_to_stereo_model() {
+    anira::ModelConfig model = gate_model();
+    model.input(streamed_spec("in", 1));
+    model.output(streamed_spec("out", 2));
+    return model;
+}
+
+/// Four Static values in, one streamed channel out (ParamRampEngine): the anchor is the output,
+/// the session is driven by its pops.
+inline anira::ModelConfig generator_model() {
+    anira::ModelConfig model = gate_model();
+    model.input(static_spec("param", 4));
+    model.output(streamed_spec("out", 1));
+    return model;
+}
+
+/// The Hard contract of the recordings: blocks of 1 to `host_block_max` samples at k_rate (the twin
+/// of the 2.x HostConfig(host_block_max, k_rate, true)), an explicit budget of 1 ms, no warm-up,
+/// the miss policy and the wait ratio.
+inline anira::ContractHandle recording_contract(anira_miss_policy policy,
+                                                uint32_t host_block_max = k_hop,
+                                                double wait_ratio = 0.0) {
+    anira::ContractHandle contract =
+        explicit_contract(host_block_max, k_rate, policy, wait_ratio, /*budget_ms=*/1.0);
+    contract.hard_host_blocks(1, host_block_max, k_rate);
+    return contract;
+}
+
+// ---- the session -------------------------------------------------------------------------------
+
+/// A C handler prepared for a recording (see "The sessions" in the file comment): the context
+/// (two threads), the gate engine of the custom row, the handler over a pipeline of that row
+/// alone (and the processors of `processors`), prepared under `contract`, and the session it
+/// made. The stems' rigs drive manager() directly. The gate opens and the handler is destroyed
+/// (which drains the in-flight work) before the gate dies.
+class HandlerSession {
+public:
+    HandlerSession(const anira::ModelConfig& model,
+                   const anira::ContractHandle& contract,
+                   Model engine = Model::PassThrough,
+                   std::span<const anira_processor_desc> processors = {})
+        : m_gate(make_gate(engine))
+        , m_handler(m_context, model, m_candidates, processors, m_gate->engine()) {
+        const anira_status prepared = m_handler.prepare(contract);
+        EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
+        if (prepared != ANIRA_OK) { return; }
+        m_session = session_of(m_handler.m_handler);
+    }
+    ~HandlerSession() {
+        m_gate->m_open.store(true);
+        m_handler.destroy();
+    }
+    HandlerSession(const HandlerSession&) = delete;
+    HandlerSession& operator=(const HandlerSession&) = delete;
+    HandlerSession(HandlerSession&&) = delete;
+    HandlerSession& operator=(HandlerSession&&) = delete;
+
+    /// Prepared, and its session found.
+    bool ready() const { return m_session != nullptr; }
+    anira_handler* handler() const { return m_handler.m_handler; }
+    /// The copy path: the tensor stems of the handler's own session.
+    anira::InferenceManager& manager() const { return *m_handler.m_handler->m_manager; }
+    anira::SessionElement& session() const { return *m_session; }
+    GateEngine& gate() const { return *m_gate; }
+    anira::capi::Ports& input_ports() const { return m_handler.m_handler->m_input_ports; }
+    anira::capi::Ports& output_ports() const { return m_handler.m_handler->m_output_ports; }
+
+private:
+    Context m_context;
+    /// The custom rows only: the models name no engine.
+    std::vector<anira_backend_id> m_candidates{{.struct_size = sizeof(anira_backend_id),
+                                                .engine = ANIRA_ENGINE_CUSTOM,
+                                                .provider = ANIRA_PROVIDER_CPU,
+                                                .engine_id = k_custom}};
+    std::unique_ptr<GateEngine> m_gate;  ///< before the handler, which dies first
+    Handler m_handler;
+    std::shared_ptr<anira::SessionElement> m_session;
+};
+
+/// The rings of one side of the session, one per slot: a Streamed slot's, in its stream port; an
+/// empty ring (no channel, no capacity) for every other slot, which has none.
+inline std::vector<const anira::RingBuffer*> rings_of(const anira::SessionElement& session,
+                                                      bool inputs) {
+    static const anira::RingBuffer k_none;
+    const size_t slots = inputs ? session.num_inputs() : session.num_outputs();
+    std::vector<const anira::RingBuffer*> rings(slots, &k_none);
+    for (size_t slot = 0; slot < slots; ++slot) {
+        const size_t hop = inputs ? session.input_hop(slot) : session.output_hop(slot);
+        if (hop > 0) {
+            rings[slot] = inputs ? &session.send_ring(slot) : &session.receive_ring(slot);
+        }
+    }
+    return rings;
+}
+
 /// "send=[3/3] recv=[16/16,-]": the samples waiting per channel in every send and receive
 /// ring, "-" for a Static slot (it has no ring). Read from the rings, nothing is collected.
 inline std::string format_rings(const anira::SessionElement& session) {
-    const auto side = [](const std::vector<anira::RingBuffer>& rings) {
+    const auto side = [](const std::vector<const anira::RingBuffer*>& rings) {
         std::string text = "[";
         for (size_t slot = 0; slot < rings.size(); ++slot) {
             if (slot > 0) { text += ","; }
-            const size_t channels = rings[slot].get_num_channels();
+            const size_t channels = rings[slot]->get_num_channels();
             if (channels == 0) { text += "-"; }
             for (size_t channel = 0; channel < channels; ++channel) {
                 if (channel > 0) { text += "/"; }
-                text += std::to_string(rings[slot].get_available_samples(channel));
+                text += std::to_string(rings[slot]->get_available_samples(channel));
             }
         }
         return text + "]";
     };
-    return "send=" + side(session.m_send_buffer) + " recv=" + side(session.m_receive_buffer);
+    return "send=" + side(rings_of(session, true)) + " recv=" + side(rings_of(session, false));
+}
+
+/// The first line of every transcript: what prepare left (the latency per output, the capacity
+/// of every send and receive ring, the struct pool, the rings).
+inline std::string prepared_line(const std::vector<unsigned int>& latencies,
+                                 const anira::SessionElement& session) {
+    std::string line = "latency=[";
+    for (size_t i = 0; i < latencies.size(); ++i) {
+        line += (i > 0 ? "," : "") + std::to_string(latencies[i]);
+    }
+    line += "] send_capacity=[";
+    const std::vector<const anira::RingBuffer*> send = rings_of(session, true);
+    for (size_t i = 0; i < send.size(); ++i) {
+        line += (i > 0 ? "," : "") + std::to_string(send[i]->get_num_samples());
+    }
+    line += "] recv_capacity=[";
+    const std::vector<const anira::RingBuffer*> receive = rings_of(session, false);
+    for (size_t i = 0; i < receive.size(); ++i) {
+        line += (i > 0 ? "," : "") + std::to_string(receive[i]->get_num_samples());
+    }
+    return line + "] structs=" + std::to_string(session.m_num_structs) + " " +
+           format_rings(session);
 }
 
 }  // namespace anira_test::oracle

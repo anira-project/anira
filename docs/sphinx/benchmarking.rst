@@ -52,9 +52,9 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
     anira::ContractHandle my_contract = anira::ContractHandle::from_file("contract.json");
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-        // The host geometry: the buffer size at SAMPLE_RATE, on the contract
+        // The host blocks: the buffer size at SAMPLE_RATE, on the contract
         const auto block = static_cast<double>(get_buffer_size());
-        my_contract.hard_geometry(block, block, SAMPLE_RATE);
+        my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
         // Only report errors, so the log output of the engines does not pollute the
         // benchmark results (section 3.1 of the usage guide)
@@ -73,7 +73,7 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
         initialize_repetition(my_model_config, my_contract.hard(), plan, true);
 
 .. note::
-    The ``initialize_repetition`` method sets up the benchmark fixture over the prepared handler: it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32 tensor), tracks configuration changes, and optionally sleeps between repetitions for thermal stability. The first parameter is the model configuration, the second the Hard contract the handler was prepared with (its ``block_max`` and ``rate``), the third the plan of the report that is measured, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions. :cpp:func:`anira::PlanReport::find` returns the index of the report's first plan on an engine (a custom engine by its id), ``std::nullopt`` when the report has none; a pipeline with one candidate has one plan, plan 0.
+    The ``initialize_repetition`` method sets up the benchmark fixture over the prepared handler: it sizes the input buffer (the anchor input's channels times the buffer size, one planar float32 tensor), tracks configuration changes, and optionally sleeps between repetitions for thermal stability. The first parameter is the model configuration, the second the Hard contract the handler was prepared with (its ``host_block_max`` and ``rate``), the third the plan of the report that is measured, and the fourth controls whether to sleep after each repetition. The sleep duration is equal to the time taken to process all iterations, allowing for thermal cooldown between repetitions. :cpp:func:`anira::PlanReport::find` returns the index of the report's first plan on an engine (a custom engine by its id), ``std::nullopt`` when the report has none; a pipeline with one candidate has one plan, plan 0.
 
 2. Measure Process Method Runtime
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -258,9 +258,9 @@ Test different buffer sizes by passing arguments during registration:
     :caption: benchmark.cpp
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::State& state) {
-        // state.range(0) is the buffer size argument: the host geometry of this run
+        // state.range(0) is the buffer size argument: the host blocks of this run
         const auto block = static_cast<double>(get_buffer_size());
-        my_contract.hard_geometry(block, block, SAMPLE_RATE);
+        my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
         anira::Pipeline pipeline;
@@ -303,7 +303,11 @@ For complex configuration testing, define argument combinations using a custom f
     // builders of extras/models/cnn/CNNConfig.h and friends) and loads the model's contract
     // file (see examples/benchmark/advanced-benchmark)
     constexpr int num_models = 3;
-    anira::ModelConfig model_config_of(int model, int buffer_size, const char*& contract_json);
+    struct ModelAndContract {
+        anira::ModelConfig m_model_config;
+        anira::ContractHandle m_contract;
+    };
+    ModelAndContract model_and_contract(int model, int buffer_size);
 
     // Define argument combinations
     static void Arguments(::benchmark::internal::Benchmark* b) {
@@ -322,10 +326,8 @@ For complex configuration testing, define argument combinations using a custom f
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_CONFIGURATIONS)(::benchmark::State& state) {
         // Extract configuration from arguments
         const anira::BackendId backend = benchmark_backends()[state.range(2)];
-        const char* contract_json = nullptr;
-        const anira::ModelConfig model = model_config_of(state.range(1), get_buffer_size(), contract_json);
-        anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-        contract.hard_geometry(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
+        auto [model, contract] = model_and_contract(state.range(1), get_buffer_size());
+        contract.hard_host_blocks(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
 
         // Setup with selected configuration: the one backend as the single candidate
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});

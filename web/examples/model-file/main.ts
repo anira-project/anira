@@ -69,13 +69,13 @@ export async function createModelFileExample(
 
   // [configs]
   const model = await ModelConfig.fromUrl(anira, new URL('gain.model.json', modelsUrl))
-  // The contract file leaves the Hard geometry to the host: one render quantum per call, and
+  // The contract file leaves the Hard host blocks to the host: one render quantum per call, and
   // blocks up to the context's burst (a live context renders a device callback's worth of
   // quanta back to back), so the latency the handler reports covers it.
   const geometry = await measureRenderGeometry(audioContext)
   const contract = (
     await ContractHandle.fromUrl(anira, new URL('gain.contract.json', modelsUrl))
-  ).hardGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
+  ).hardHostBlocks(geometry.quantum, geometry.burst, audioContext.sampleRate)
   // [configs]
 
   // [handler]
@@ -129,7 +129,7 @@ export async function createModelFileExample(
   // callback's run, re-prepare the running node with the new geometry, pick the plan in the new
   // report and re-read the latency for the dry path.
   const applyGeometry = (g: RenderGeometry) => {
-    contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
+    contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
     // Holds the node off (silence) while the handler re-prepares, and returns the new report.
     selectPlan(audioNode.prepare(contract))
     applyLatency()

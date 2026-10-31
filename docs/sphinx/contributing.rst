@@ -157,8 +157,8 @@ The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep
 
 .. code-block:: bash
 
-    find src/engines/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
-         src/PrePostProcessor.cpp examples/benchmark/fixture/ test/engines/ test/scheduler/ test/utils/ \
+    find src/engines/ src/capi/ src/scheduler/ src/utils/ examples/benchmark/fixture/ \
+         test/engines/ test/scheduler/ test/utils/ \
          test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
          test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
         | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
@@ -189,17 +189,15 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 ``test/CMakeLists.txt``).
 
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
-  covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
-  only ``BackendBase.h``.
-- Root-level units (``InferenceConfig``, ``CoreConfig``, ``PrePostProcessor``) and the
-  ``anira.hpp`` handler (``test_InferenceHandler``) are covered by root-level ``test_*.cpp``
-  files, alongside the cross-unit integration suites (``test_OneSidedStreaming``). A test
-  file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions (the white-box suites that still drive the 2.x handler run
-  it as ``anira_test::V2Handler`` of ``test/support/v2_handler.h``): ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
-  compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
-  ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
+  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` covers
+  ``src/engines/`` (the engine adapters), which has no public header.
+- The ``anira.hpp`` handler (``test_InferenceHandler``) and the 2.x face
+  (``test_InferenceHandlerApi``) are covered by root-level ``test_*.cpp`` files, alongside the
+  cross-unit integration suites (``test_OneSidedStreaming``). A test file's binary follows the
+  API it targets, which the comment above the binaries in ``test/CMakeLists.txt`` partitions:
+  the struct-pool cases of ``test_OneSidedStreaming`` are
+  ``scheduler/test_OneSidedStreamingInternals.cpp``, in ``test_scheduler`` with the other
+  white-box suites.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
   than of any one unit: header isolation, engine linkage, the library-unload harness,
   the installed-package consumer.
@@ -425,9 +423,9 @@ reproduces what CI runs; the tiers differ only in which legs (configurations)
 build. Select a component with ``ctest -L test_scheduler`` (the label is the
 binary name).
 
-Do not re-test what tanh-lib already covers upstream: ``anira::Buffer``,
-``MemoryBlock`` and the threading primitives are thin aliases over ``thl::core``, which
-has its own suite, and ``anira::RingBuffer`` (``anira_ring``) holds one
+Do not re-test what tanh-lib already covers upstream: the threading primitives are thin
+aliases over ``thl::core``, which has its own suite, and ``anira::RingBuffer`` (``anira_ring``)
+holds one
 ``thl::core::RingBuffer<T>`` per ring dtype. anira keeps only tests of its own contract on
 top of them (the ring's dtype tag, its refusals and its window pop; not the storage);
 coverage that belongs to the underlying container goes to tanh-lib.

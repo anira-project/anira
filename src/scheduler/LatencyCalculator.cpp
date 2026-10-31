@@ -1,6 +1,4 @@
-#include <anira/InferenceConfig.h>
 #include <anira/scheduler/LatencyCalculator.h>
-#include <anira/utils/HostConfig.h>
 #include <anira/utils/Logger.h>
 
 #include <algorithm>
@@ -10,6 +8,9 @@
 #include <limits>
 #include <stdexcept>
 #include <vector>
+
+#include "../capi/handles.h"
+#include "../capi/validate.h"
 
 namespace anira {
 
@@ -240,25 +241,45 @@ void LatencyCalculator::smaller_buffers_worst_case(int64_t max_block,
     }
 }
 
-LatencyCalculator::LatencyCalculator(const InferenceConfig& inference_config,
-                                     const HostConfig& host_config)
-    : m_input_sizes(inference_config.get_preprocess_input_size())
-    , m_output_sizes(inference_config.get_postprocess_output_size())
-    , m_allow_smaller_buffers(host_config.m_allow_smaller_buffers) {
-    // Throws std::invalid_argument for an unresolvable reference stream.
-    auto const reference_size =
-        static_cast<double>(host_config.get_reference_size(inference_config));
-    if (!(host_config.m_buffer_size > 0.f) || !(host_config.m_sample_rate > 0.f)) {
+LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
+                                     const capi::HardContract& hard,
+                                     uint32_t num_instances)
+    : m_allow_smaller_buffers(hard.m_host_block_min < hard.m_host_block_max) {
+    // The hop of every tensor: its samples per inference, 0 for a tensor without a stream.
+    m_input_sizes.reserve(derived.m_inputs.size());
+    for (const capi::DerivedSpec& spec : derived.m_inputs) {
+        m_input_sizes.push_back(static_cast<size_t>(spec.m_hop));
+    }
+    m_output_sizes.reserve(derived.m_outputs.size());
+    for (const capi::DerivedSpec& spec : derived.m_outputs) {
+        m_output_sizes.push_back(static_cast<size_t>(spec.m_hop));
+    }
+    // The reference stream: the model config's anchor, as the validator resolved it.
+    const std::vector<capi::DerivedSpec>& anchor_side =
+        derived.m_anchor_is_input ? derived.m_inputs : derived.m_outputs;
+    auto const reference_size = derived.m_anchor_index < anchor_side.size()
+                                    ? static_cast<double>(anchor_side[derived.m_anchor_index].m_hop)
+                                    : 0.0;
+    if (!(reference_size > 0.0)) {
         throw std::invalid_argument(
-            "HostConfig: buffer size and sample rate must be positive to calculate a latency.");
+            "LatencyCalculator: the anchor has no stream; the reference stream needs a "
+            "Streamed tensor.");
+    }
+    if (!(hard.m_host_block_max > 0.0) || !(hard.m_host_rate > 0.0)) {
+        throw std::invalid_argument(
+            "contract: host_block_max and host_rate must be positive to calculate a latency.");
     }
 
     // History a receptive-field model peeks at: the input tensor beyond one hop.
-    const std::vector<size_t>& tensor_input_size = inference_config.get_tensor_input_size();
-    const std::vector<size_t>& input_channels = inference_config.get_preprocess_input_channels();
     m_input_history.reserve(m_input_sizes.size());
     for (size_t i = 0; i < m_input_sizes.size(); ++i) {
-        size_t const per_channel = tensor_input_size[i] / std::max<size_t>(input_channels[i], 1);
+        const capi::DerivedSpec& spec = derived.m_inputs[i];
+        size_t elements = 1;
+        for (const int64_t extent : spec.m_dims) {
+            elements *= extent > 0 ? static_cast<size_t>(extent) : 0U;
+        }
+        size_t const per_channel =
+            elements / std::max<size_t>(static_cast<size_t>(spec.m_channels), 1);
         m_input_history.push_back(per_channel > m_input_sizes[i] ? per_channel - m_input_sizes[i]
                                                                  : 0);
     }
@@ -270,23 +291,22 @@ LatencyCalculator::LatencyCalculator(const InferenceConfig& inference_config,
         m_max_hop = std::max(m_max_hop, static_cast<int64_t>(size));
     }
 
-    m_rho = rationalize(static_cast<double>(host_config.m_buffer_size) / reference_size);
+    m_rho = rationalize(hard.m_host_block_max / reference_size);
     if (m_rho.m_numerator <= 0) {
-        throw std::invalid_argument("HostConfig: the buffer size is too small to represent.");
+        throw std::invalid_argument("contract: host_block_max is too small to represent.");
     }
-    m_kappa = static_cast<double>(inference_config.m_max_inference_time) *
-              static_cast<double>(host_config.m_sample_rate) / (1000.0 * reference_size);
-    m_beta = std::max(static_cast<double>(inference_config.m_blocking_ratio), 0.0);
-    m_n = std::max<int64_t>(inference_config.m_num_parallel_processors, 1);
+    m_kappa = hard.m_budget_ms * hard.m_host_rate / (1000.0 * reference_size);
+    m_beta = std::max(hard.m_wait_ratio, 0.0);
+    m_n = std::max<int64_t>(num_instances, 1);
     m_feasible = m_kappa < static_cast<double>(m_n);
     if (!m_feasible) {
         ANIRA_LOG_WARNING(log_group::k_scheduler,
                           "The inference pool cannot keep up: every hop brings %.3f hop periods "
-                          "of inference work (max_inference_time %.3f ms) for %lld parallel "
-                          "processors. Latency and inference slots are sized for one host block "
-                          "on an idle pool; the stream will underrun.",
+                          "of inference work (budget %.3f ms) for %lld instances. Latency and "
+                          "inference slots are sized for one host block on an idle pool; the "
+                          "stream will underrun.",
                           m_kappa,
-                          static_cast<double>(inference_config.m_max_inference_time),
+                          hard.m_budget_ms,
                           static_cast<long long>(m_n));
     }
 
@@ -406,6 +426,11 @@ LatencyCalculator::Rational LatencyCalculator::get_block_hops() const {
 
 double LatencyCalculator::get_inference_hop_periods() const {
     return m_kappa;
+}
+
+size_t LatencyCalculator::block_samples(const Rational& block_hops, size_t stream_size) {
+    return static_cast<size_t>(ceil_div(block_hops.m_numerator * static_cast<int64_t>(stream_size),
+                                        block_hops.m_denominator));
 }
 
 }  // namespace anira

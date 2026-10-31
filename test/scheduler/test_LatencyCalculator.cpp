@@ -1,7 +1,5 @@
-#include <anira/InferenceConfig.h>
+#include <anira/abi/enums.h>
 #include <anira/scheduler/LatencyCalculator.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <algorithm>
 #include <cmath>
@@ -11,6 +9,8 @@
 #include <utility>
 #include <vector>
 
+#include "capi/handles.h"
+#include "capi/validate.h"
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -73,6 +73,55 @@ TEST(LatencyCalculatorArithmetic, LcmDividesBeforeMultiplying) {
     EXPECT_EQ(LatencyCalculator::greatest_common_divisor(0, 7), 7);
     EXPECT_EQ(LatencyCalculator::greatest_common_divisor(1'000'000'007, 1'000'000'009), 1);
 }
+
+TEST(LatencyCalculatorArithmetic, BlockSamplesIsTheCeilingOfTheBlockOnTheStream) {
+    const LatencyCalculator::Rational third{.m_numerator = 1, .m_denominator = 3};
+    EXPECT_EQ(LatencyCalculator::block_samples(third, 3), 1U);
+    EXPECT_EQ(LatencyCalculator::block_samples(third, 4), 2U);
+    EXPECT_EQ(LatencyCalculator::block_samples(third, 0), 0U);
+    const LatencyCalculator::Rational whole{.m_numerator = 75, .m_denominator = 32};
+    EXPECT_EQ(LatencyCalculator::block_samples(whole, 256), 600U);
+    EXPECT_EQ(LatencyCalculator::block_samples(whole, 3), 8U);
+}
+
+namespace {
+// What the validator derives for a model of Streamed tensors without context: one input per
+// entry of `inputs`, one output per entry of `outputs`, each of extents {1, max(hop, 1)} with
+// one channel and the entry as its hop; the anchor is the first input.
+capi::Derived streams(const std::vector<int64_t>& inputs, const std::vector<int64_t>& outputs) {
+    const auto spec = [](int64_t hop) {
+        capi::DerivedSpec derived;
+        derived.m_dims = {1, std::max<int64_t>(hop, 1)};
+        derived.m_window_used = hop;
+        derived.m_hop = hop;
+        derived.m_time_axis = 1;
+        return derived;
+    };
+    capi::Derived derived;
+    for (const int64_t hop : inputs) { derived.m_inputs.push_back(spec(hop)); }
+    for (const int64_t hop : outputs) { derived.m_outputs.push_back(spec(hop)); }
+    derived.m_anchor_is_input = true;
+    derived.m_anchor_index = 0;
+    return derived;
+}
+
+// The Hard half of a contract: blocks of `block` samples of the anchor's stream at `host_rate`
+// (host_block_min half of it when `smaller`), a budget in ms and a wait ratio.
+capi::HardContract hard_contract(double block,
+                                 double host_rate,
+                                 double budget_ms,
+                                 double wait_ratio,
+                                 bool smaller = false) {
+    capi::HardContract hard;
+    hard.m_host_block_max = block;
+    hard.m_host_block_min = smaller ? block / 2.0 : block;
+    hard.m_host_rate = host_rate;
+    hard.m_budget = ANIRA_BUDGET_EXPLICIT;
+    hard.m_budget_ms = budget_ms;
+    hard.m_wait_ratio = wait_ratio;
+    return hard;
+}
+}  // namespace
 
 TEST(LatencyCalculatorArithmetic, RationalizeRecoversSmallDenominators) {
     auto const tenth = LatencyCalculator::rationalize(static_cast<double>(0.1f));
@@ -159,33 +208,20 @@ OracleResult simulate(const OracleCase& c) {
     return result;
 }
 
-InferenceConfig make_config(const OracleCase& c) {
-    std::vector<size_t> const input_sizes{static_cast<size_t>(c.m_reference)};
-    std::vector<size_t> const input_channels{1};
-    std::vector<size_t> const output_channels(c.m_output_sizes.size(), 1);
-    std::vector<TensorShape> shapes;
-    std::vector<std::vector<int64_t>> outputs;
+capi::Derived make_derived(const OracleCase& c) {
+    std::vector<int64_t> outputs;
     outputs.reserve(c.m_output_sizes.size());
-    for (size_t const size : c.m_output_sizes) {
-        outputs.push_back({1, static_cast<int64_t>(std::max<size_t>(size, 1))});
-    }
-    shapes.emplace_back(std::vector<std::vector<int64_t>>{{1, c.m_reference}}, outputs);
-    return {std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-            shapes,
-            ProcessingSpec(input_channels, output_channels, input_sizes, c.m_output_sizes),
-            static_cast<float>(c.m_inference_samples) / 8.f,  // ms at 8000 Hz
-            0,
-            false,
-            static_cast<float>(c.m_beta_quarters) / 4.f,
-            c.m_n};
+    for (size_t const size : c.m_output_sizes) { outputs.push_back(static_cast<int64_t>(size)); }
+    return streams({c.m_reference}, outputs);
 }
 
-HostConfig make_host(const OracleCase& c, bool smaller = false) {
-    // p R / q reference samples per host block: exact in float for the cases below.
-    return {
-        static_cast<float>(static_cast<double>(c.m_p * c.m_reference) / static_cast<double>(c.m_q)),
-        8000.f,
-        smaller};
+capi::HardContract make_hard(const OracleCase& c, bool smaller = false) {
+    // p R / q reference samples per host block, the inference time in ms at 8000 Hz.
+    return hard_contract(static_cast<double>(c.m_p * c.m_reference) / static_cast<double>(c.m_q),
+                         8000.0,
+                         static_cast<double>(c.m_inference_samples) / 8.0,
+                         static_cast<double>(c.m_beta_quarters) / 4.0,
+                         smaller);
 }
 
 std::vector<OracleCase> oracle_cases() {
@@ -232,8 +268,8 @@ std::vector<OracleCase> oracle_cases() {
 TEST(LatencyCalculatorClosedForm, EqualsTheEventSimulationForFixedBlocks) {
     size_t checked = 0;
     for (OracleCase const& c : oracle_cases()) {
-        InferenceConfig const config = make_config(c);
-        LatencyCalculator const calculator(config, make_host(c));
+        capi::Derived const derived = make_derived(c);
+        LatencyCalculator const calculator(derived, make_hard(c), c.m_n);
         // kappa = inference_samples / R hop periods; the queue is unbounded from n on.
         if (!calculator.is_feasible()) {
             EXPECT_GE(
@@ -263,12 +299,12 @@ TEST(LatencyCalculatorClosedForm, InfeasibleConfigIsFlagged) {
                        .m_beta_quarters = 0,
                        .m_n = 2,
                        .m_output_sizes = {64}};
-    InferenceConfig const config = make_config(c);
-    EXPECT_FALSE(LatencyCalculator(config, make_host(c)).is_feasible());
+    capi::Derived const derived = make_derived(c);
+    EXPECT_FALSE(LatencyCalculator(derived, make_hard(c), c.m_n).is_feasible());
     OracleCase fine = c;
     fine.m_inference_samples = 127;
-    InferenceConfig const fine_config = make_config(fine);
-    EXPECT_TRUE(LatencyCalculator(fine_config, make_host(fine)).is_feasible());
+    capi::Derived const fine_derived = make_derived(fine);
+    EXPECT_TRUE(LatencyCalculator(fine_derived, make_hard(fine), fine.m_n).is_feasible());
 }
 
 TEST(LatencyCalculatorClosedForm, SmallerBuffersEqualTheMaximumOverEveryBlockSize) {
@@ -279,8 +315,8 @@ TEST(LatencyCalculatorClosedForm, SmallerBuffersEqualTheMaximumOverEveryBlockSiz
         // The brute force sweeps whole-sample blocks of the finest stream, so the largest
         // host block must itself be one of them.
         if ((c.m_p * 64) % c.m_q != 0) { continue; }
-        InferenceConfig const config = make_config(c);
-        LatencyCalculator const smaller(config, make_host(c, true));
+        capi::Derived const derived = make_derived(c);
+        LatencyCalculator const smaller(derived, make_hard(c, true), c.m_n);
         if (!smaller.is_feasible()) { continue; }
 
         auto const grid_hop = static_cast<int64_t>(std::max<size_t>(c.m_output_sizes[0], 64));
@@ -291,10 +327,12 @@ TEST(LatencyCalculatorClosedForm, SmallerBuffersEqualTheMaximumOverEveryBlockSiz
         int64_t best_inference = 0;
         size_t best_structs = 0;
         for (int64_t j = 1; j <= max_block; ++j) {
-            HostConfig const host(static_cast<float>(static_cast<double>(j * c.m_reference) /
-                                                     static_cast<double>(grid_hop)),
-                                  8000.f);
-            LatencyCalculator const fixed(config, host);
+            capi::HardContract const host = hard_contract(
+                static_cast<double>(j * c.m_reference) / static_cast<double>(grid_hop),
+                8000.0,
+                static_cast<double>(c.m_inference_samples) / 8.0,
+                static_cast<double>(c.m_beta_quarters) / 4.0);
+            LatencyCalculator const fixed(derived, host, c.m_n);
             auto const rho = fixed.get_block_hops();
             ASSERT_EQ(grid_hop % rho.m_denominator, 0);
             auto const numerator = static_cast<int64_t>(
@@ -327,17 +365,10 @@ TEST(LatencyCalculatorClosedForm, LargeSmallerBufferSweepIsImmediate) {
     // greatest relative block size down to 1 and stalled above 2^24. This block is 2^25
     // samples of a 1-sample control input; the closed form evaluates a handful of
     // breakpoints instead.
-    InferenceConfig const config(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1}}, {{1, 1}})},
-        ProcessingSpec({1}, {1}, {1}, {1}),
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-    HostConfig const host(static_cast<float>(int64_t{1} << 25), 8000.f, true);
-    LatencyCalculator const calculator(config, host);
+    capi::Derived const derived = streams({1}, {1});
+    capi::HardContract const host =
+        hard_contract(static_cast<double>(int64_t{1} << 25), 8000.0, 1.0, 0.0, true);
+    LatencyCalculator const calculator(derived, host, 2);
     EXPECT_EQ(calculator.get_block_hops().m_numerator, int64_t{1} << 25);
     EXPECT_EQ(calculator.get_block_hops().m_denominator, 1);
     EXPECT_TRUE(std::isfinite(calculator.get_latency_hops_smaller_buffers()));
@@ -346,16 +377,8 @@ TEST(LatencyCalculatorClosedForm, LargeSmallerBufferSweepIsImmediate) {
 
 TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
     // Two outputs of different hop: the float latency is P_i * Lambda for both.
-    InferenceConfig const config(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 256}}, {{1, 2048}, {1, 3}})},
-        ProcessingSpec({1}, {1, 1}, {256}, {2048, 3}),
-        7.f,
-        0,
-        false,
-        0.f,
-        2);
-    LatencyCalculator const calculator(config, HostConfig(600, 8000));
+    capi::Derived const derived = streams({256}, {2048, 3});
+    LatencyCalculator const calculator(derived, hard_contract(600.0, 8000.0, 7.0, 0.0), 2);
     std::vector<float> const latencies = calculator.get_output_latencies();
     ASSERT_EQ(latencies.size(), 2u);
     double const hops = calculator.get_latency_hops();
@@ -365,15 +388,16 @@ TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
     EXPECT_GE(hops, 31.0 / 32.0);
 }
 
-TEST(LatencyCalculatorClosedForm, RejectsAnEmptyHostConfig) {
-    InferenceConfig const config(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-        40.f,
-        0,
-        false,
-        0.f,
-        2);
-    EXPECT_THROW(LatencyCalculator(config, HostConfig()), std::invalid_argument);
-    EXPECT_THROW(LatencyCalculator(config, HostConfig(2048, 0)), std::invalid_argument);
+TEST(LatencyCalculatorClosedForm, RejectsEmptyHostBlocks) {
+    capi::Derived const derived = streams({2048}, {2048});
+    EXPECT_THROW(LatencyCalculator(derived, capi::HardContract{}, 2), std::invalid_argument);
+    EXPECT_THROW(LatencyCalculator(derived, hard_contract(2048.0, 0.0, 40.0, 0.0), 2),
+                 std::invalid_argument);
+}
+
+TEST(LatencyCalculatorClosedForm, RejectsAnAnchorWithoutAStream) {
+    capi::Derived derived = streams({2048}, {2048});
+    derived.m_inputs[0].m_hop = 0;  // the anchor as a Static tensor
+    EXPECT_THROW(LatencyCalculator(derived, hard_contract(2048.0, 48000.0, 40.0, 0.0), 2),
+                 std::invalid_argument);
 }

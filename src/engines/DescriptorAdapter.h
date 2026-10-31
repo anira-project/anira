@@ -135,7 +135,7 @@ public:
     void* engine_prepared() const noexcept { return m_prepared; }
 
 protected:
-    anira_status process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& call) noexcept override;
     void reset(const anira_engine_ctx& call) noexcept override;
 
 private:

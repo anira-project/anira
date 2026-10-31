@@ -46,7 +46,7 @@ await audioContext.resume() // the geometry is measured on a running context
 const geometry = await measureRenderGeometry(audioContext) // the render quantum, the burst
 const contract = (
   await ContractHandle.fromUrl(anira, '/models/gain.contract.json')
-).hardGeometry(geometry.quantum, geometry.burst, audioContext.sampleRate)
+).hardHostBlocks(geometry.quantum, geometry.burst, audioContext.sampleRate)
 const handler = InferenceHandler.create(context, Pipeline.create(anira).addInference(model))
 const report = handler.prepare(contract) // the plans, as anira::InferenceHandler::prepare
 console.log(`${report.numPlans()} plan(s), latency ${handler.getLatency()} samples`)
@@ -91,7 +91,7 @@ A JavaScript engine reads its model entry in each Worker (`load(model)`: the byt
 `org.anira.onnxruntime-web`. With Vite, also exclude `onnxruntime-web` from `optimizeDeps`.
 
 The classes and their members are the ones of `anira.hpp` (`InferenceHandler.getLatency` for
-`get_latency`, `ContractHandle.hardGeometry` for `hard_geometry`); each class's doc comment names
+`get_latency`, `ContractHandle.hardHostBlocks` for `hard_host_blocks`); each class's doc comment names
 where the web differs (the audio node, the worker module, `fromUrl`, `destroy()`).
 
 `web/examples/model-file/` in the repository is the quick example as a page, and

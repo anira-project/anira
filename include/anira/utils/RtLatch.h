@@ -29,8 +29,9 @@
 
 namespace anira {
 
-/// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY is
-/// back-pressure and never latches.
+/// The status kinds anira_handler_rt_error latches: one bit each. ANIRA_ERROR_CAPACITY as an
+/// entry's return is back-pressure and never latches; a hop the scheduler dropped for want of a
+/// free inference slot latches it under its own kind (RtLatch::record_drop).
 enum class RtKind : uint32_t {
     WrongContract = 1U << 0,
     NotPrepared = 1U << 1,
@@ -39,7 +40,8 @@ enum class RtKind : uint32_t {
     InvalidArgument = 1U << 4,
     Engine = 1U << 5,
     NotSupported = 1U << 6,
-    Other = 1U << 7,  ///< any other status, through record_any only (a processor callback's)
+    Other = 1U << 7,    ///< any other status, through record_any only (a processor callback's)
+    Dropped = 1U << 8,  ///< ANIRA_ERROR_CAPACITY: a hop dropped, through record_drop only
 };
 
 /// The kind bit of a status; 0 for a status that never latches.
@@ -99,6 +101,16 @@ struct RtLatch {
     }
 
     /**
+     * @brief Records a hop the scheduler dropped because no inference slot was free
+     * (Core::new_data_submitted): ANIRA_ERROR_CAPACITY under RtKind::Dropped. The operational
+     * site RtSite::NoFreeInferenceQueue logs it.
+     * @return True on the first drop since the last re-arm.
+     */
+    bool record_drop() noexcept ANIRA_NONBLOCKING {
+        return record_kind(ANIRA_ERROR_CAPACITY, static_cast<uint32_t>(RtKind::Dropped));
+    }
+
+    /**
      * @brief The per-site form: one kind.
      * @return True on the first occurrence since the last re-arm; later ones are counted.
      */
@@ -150,11 +162,7 @@ enum class RtSite : uint8_t {
     MissingSamples,            // S7  InferenceManager: a block missed
     PendingDispatchDropped,    // S8  SessionElement: the pending stateful dispatch queue is full
     NextDispatchDropped,       // S9  InferenceThread: the next dispatch could not be enqueued
-    NoModelForBackend,         // S10 InferenceThread: the selected plan's backend has no model
-                               //     (a 2.x table names every backend of the build), the
-                               //     default processor runs
-    BackendWithoutPlan,        // S11 InferenceManager: set_backend named a backend no plan runs
-    TensorDtypeMismatch,       // S12 InferenceManager: a host tensor's dtype is not its slot's
+    TensorDtypeMismatch,       // S10 InferenceManager: a host tensor's dtype is not its slot's
     InferenceThreadBodyThrew,  // the catch-all of the inference thread's loop body
     Count
 };
@@ -170,8 +178,6 @@ inline constexpr std::array<const char*, static_cast<size_t>(RtSite::Count)> k_r
     "missing samples",
     "stateful dispatch dropped (pending queue full)",
     "next dispatch dropped (core queue full)",
-    "no model for the selected backend",
-    "backend without a plan",
     "host tensor dtype mismatch",
     "inference thread body threw",
 };

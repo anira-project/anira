@@ -98,16 +98,11 @@ std::unique_ptr<Prepared> Loaded::prepare(const PrepareRequest& request) {
 
 anira_status Loaded::claim_and_run(Prepared& prepared,
                                    anira_engine_ctx& call,
-                                   ChunkBuffers* chunk,
                                    StopSignal stop) noexcept {
-    if (!claims_instances()) {
-        call.instance = 0;
-        return prepared.process(call, chunk);
-    }
     // A shared call on a model without a shared slot (loaded for exclusive sessions alone) is
     // anira's own bug: the chunk fails rather than running on nothing.
     if (m_num_instances == 0) { return ANIRA_ERROR_INVALID_STATE; }
-    // The claim loop of the 2.x processors: the first slot whose busy flag was clear runs this
+    // The claim loop: the first slot whose busy flag was clear runs this
     // call, and the flag is released on every path out of it. Between two passes over busy
     // slots the thread backs off like its loop waiting for work (it is an inference thread,
     // never the audio thread), and a thread told to stop gives up: the slots may be held by a
@@ -118,7 +113,7 @@ anira_status Loaded::claim_and_run(Prepared& prepared,
         if (try_claim(instance)) {
             const detail::ProcessingGuard guard(m_busy[instance]);
             call.instance = instance;
-            return prepared.process(call, chunk);
+            return prepared.process(call);
         }
         if (stop.stopping()) { return ANIRA_ERROR_INVALID_STATE; }
         backoff.pause();
@@ -144,7 +139,6 @@ void Loaded::release(uint32_t instance) noexcept {
 // ---- Prepared -------------------------------------------------------------------------------
 
 anira_status Prepared::run(const anira_engine_ctx& ctx,
-                           ChunkBuffers* chunk,
                            bool reset_first,
                            StopSignal stop) noexcept {
     if (!m_loaded->m_loaded) { return ANIRA_ERROR_INVALID_STATE; }
@@ -156,19 +150,17 @@ anira_status Prepared::run(const anira_engine_ctx& ctx,
         call.instance = 0;
         call.flags |= ANIRA_ENGINE_CALL_EXCLUSIVE;
         if (reset_first) { reset(call); }
-        return process(call, chunk);
+        return process(call);
     }
-    return m_loaded->claim_and_run(*this, call, chunk, stop);
+    return m_loaded->claim_and_run(*this, call, stop);
 }
 
-anira_status Prepared::run_claimed(const anira_engine_ctx& ctx,
-                                   ChunkBuffers* chunk,
-                                   uint32_t instance) noexcept {
+anira_status Prepared::run_claimed(const anira_engine_ctx& ctx, uint32_t instance) noexcept {
     if (!m_loaded->m_loaded) { return ANIRA_ERROR_INVALID_STATE; }
     anira_engine_ctx call = ctx;
     call.loaded = m_loaded->engine_loaded();
     call.instance = instance;
-    return process(call, chunk);
+    return process(call);
 }
 
 // ---- ExecutorLoaded -------------------------------------------------------------------------
@@ -213,10 +205,10 @@ std::unique_ptr<Prepared> ExecutorLoaded::do_prepare(const PrepareRequest& reque
     return std::make_unique<ExecutorPrepared>(*this, request.m_exclusive, std::move(own));
 }
 
-anira_status ExecutorPrepared::process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept {
-    if (m_own != nullptr) { return m_own->process(call, chunk); }
+anira_status ExecutorPrepared::process(const anira_engine_ctx& call) noexcept {
+    if (m_own != nullptr) { return m_own->process(call); }
     if (call.instance >= m_loaded->num_instances()) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    return m_loaded->executor(call.instance).process(call, chunk);
+    return m_loaded->executor(call.instance).process(call);
 }
 
 void ExecutorPrepared::reset(const anira_engine_ctx& call) noexcept {

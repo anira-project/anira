@@ -8,12 +8,18 @@ import type { Fetcher, WithAbi } from './ModelConfig'
  * required, the warm-up fixed or none; the rest keep the library's defaults.
  */
 export type HardContractOptions = {
-  /** The smallest block a process call passes, in samples. */
-  blockMin: number
-  /** The largest; default `blockMin` (a fixed block, the render quantum). */
-  blockMax?: number
-  /** The host's sample rate. */
-  rate: number
+  /**
+   * The smallest block a process call passes, in elements of the model's anchor tensor (samples
+   * for an audio anchor).
+   */
+  hostBlockMin: number
+  /** The largest; default `hostBlockMin` (a fixed block, the render quantum). */
+  hostBlockMax?: number
+  /**
+   * The anchor's elements per second the host runs at (the context's sample rate for an audio
+   * anchor).
+   */
+  hostRate: number
   /**
    * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`): how long an inference may
    * take before its block is late. Required in this pre-release, whose prepare refuses the
@@ -31,9 +37,9 @@ export type HardContractOptions = {
 /**
  * A contract (`anira_contract`), the web twin of `anira::ContractHandle`: the host's terms for a
  * handler's prepare, from the same `*.contract.json` a native host loads or built field by
- * field. A Hard contract file may leave the geometry to the host (the bundled `extras/models`
- * ones do): `hardGeometry` gives the block and the rate the audio context runs at. Where the
- * web differs: `fromUrl` fetches the file (`from_file` reads a path), and the handle is
+ * field. A Hard contract file may leave the host blocks to the host (the bundled `extras/models`
+ * ones do): `hardHostBlocks` gives the host blocks and the host rate the audio context runs at.
+ * Where the web differs: `fromUrl` fetches the file (`from_file` reads a path), and the handle is
  * destroyed with `destroy()` after the prepare that takes it (no RAII).
  */
 export class ContractHandle {
@@ -73,9 +79,9 @@ export class ContractHandle {
     const contract = new ContractHandle(
       abi,
       abi.anira_contract_create_hard(
-        options.blockMin,
-        options.blockMax ?? options.blockMin,
-        options.rate
+        options.hostBlockMin,
+        options.hostBlockMax ?? options.hostBlockMin,
+        options.hostRate
       )
     )
     try {
@@ -99,9 +105,19 @@ export class ContractHandle {
     return contract
   }
 
-  /** Patch a Hard contract's stream geometry (`anira_contract_hard_set_geometry`). */
-  hardGeometry(blockMin: number, blockMax: number, rate: number): this {
-    this.abi.anira_contract_hard_set_geometry(this.contract, blockMin, blockMax, rate)
+  /**
+   * Patch a Hard contract's host blocks (`anira_contract_hard_set_host_blocks`): the smallest and
+   * largest block in elements of the model's anchor tensor and the host rate, the anchor's
+   * elements per second (a block may be fractional). What the host provides carries the host
+   * prefix (`hostBlockMin`, `hostBlockMax`, `hostRate`).
+   */
+  hardHostBlocks(hostBlockMin: number, hostBlockMax: number, hostRate: number): this {
+    this.abi.anira_contract_hard_set_host_blocks(
+      this.contract,
+      hostBlockMin,
+      hostBlockMax,
+      hostRate
+    )
     return this
   }
 

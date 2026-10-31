@@ -3,7 +3,7 @@
 // host block is one anira_tensor per slot, of the logical shape [channels, samples], over
 // planar memory, one block read by strides (contiguous, interleaved) or one packed block.
 //
-// The tensor entries and the 2.x handler share one copy path, so a
+// The tensor entries of every layout share one copy path, so a
 // pass-through model cancels a symmetric stride bug and no single oracle would see it. The
 // cases are therefore named comparisons: absolute expectations per description (every channel
 // its own ramp, late by the reported latency), crossed descriptions on the two sides, in
@@ -16,9 +16,6 @@
 // inference is collected. A starved block is a call without the settle. No sleeps, no wall
 // clock.
 
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
@@ -28,9 +25,9 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <cmath>
@@ -46,9 +43,7 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/copy_oracle.h"
-#include "../support/inference_config_eq.h"
 #include "../support/log_record_collector.h"
-#include "../support/v2_handler.h"
 #include "float_face.h"
 #include "handler_support.h"
 
@@ -218,7 +213,7 @@ public:
         // Blocks of 1 to k_hop samples.
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
-        contract.hard_geometry(1, k_hop, k_rate);
+        contract.hard_host_blocks(1, k_hop, k_rate);
         contract.hard_miss_fn(miss_fn, miss_user_data);
         const anira_status prepared = m_handler.prepare(contract);
         EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
@@ -601,7 +596,7 @@ TEST(AbiHandlerTensor, AnEmptyTensorWithoutMemoryLeavesItsSlotOut) {
               ANIRA_OK);
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_EQ(delivered[1], 0U);
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK);
 
     // One carried slot beside an empty one.
@@ -883,9 +878,9 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
                   refusal.m_status);
         EXPECT_EQ(anira_handler_pop_data_wait(h, &bad.tensor(), 0, nullptr, 0.0), refusal.m_status);
 
-        EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U)
+        EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U)
             << "a refused call pushed samples";
-        EXPECT_EQ(rig.session().m_receive_buffer[0].get_available_samples(0), rig.latency())
+        EXPECT_EQ(rig.session().receive_ring(0).get_available_samples(0), rig.latency())
             << "a refused call popped samples";
         for (size_t i = 0; i < k_hop; ++i) {
             ASSERT_EQ(good.at(0, i), stream_value(0, i)) << "a refused call wrote host memory";
@@ -924,7 +919,7 @@ TEST(AbiHandlerTensor, APlanarTensorIsCheckedPlaneByPlane) {
     device.flags |= 0x100U;
     anira_handler_reset(h);
     EXPECT_EQ(anira_handler_push_data(h, &device, 0), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
 }
 
 TEST(AbiHandlerTensor, TheCheckOrderIsPinnedByTensorsWrongInTwoWays) {
@@ -1008,7 +1003,7 @@ TEST(AbiHandlerTensor, AZeroedTensorInOneSlotRefusesTheWholeMultiCall) {
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_EQ(delivered[1], 0U);
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 2), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U)
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U)
         << "slot 0 was pushed although slot 1 is malformed";
     for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(stream_out.at(0, i), k_untouched); }
     // A zeroed output slot: nothing is pushed either.
@@ -1016,7 +1011,7 @@ TEST(AbiHandlerTensor, AZeroedTensorInOneSlotRefusesTheWholeMultiCall) {
     const std::array<anira_tensor, 2> bad_outputs{stream_out.tensor(), anira_tensor{}};
     EXPECT_EQ(anira_handler_process_multi(h, good_inputs.data(), 2, bad_outputs.data(), 2, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
@@ -1076,7 +1071,7 @@ TEST(AbiHandlerTensor, TheArgumentsAreRefused) {
               ANIRA_ERROR_INVALID_ARGUMENT);
 
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
 }
 
 TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
@@ -1510,8 +1505,8 @@ TEST_F(AbiHandlerTensorMiss, ASlotTheCallDidNotCarryNamesNoMemoryOfAnEarlierCall
 }
 
 // A float host: channel pointers presented as planar float32 tensors through an
-// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the 2.x handler
-// (anira_test::V2Handler) presents its own. The miss function is handed the caller's arrays as they
+// anira::PlanarFloatAdapter (anira_test::FloatFace), the way the shim's 2.x handler presents
+// its own. The miss function is handed the caller's arrays as they
 // are, and a slot the missed call did not carry names no memory: the adapter nulls the planes of a
 // slot it leaves out, so the pointers of an earlier call never reach the function.
 TEST_F(AbiHandlerTensorMiss, AFloatHostsPlanarTensorsReachTheMissFunctionAsTheyAre) {
@@ -1632,7 +1627,7 @@ TEST(AbiHandlerTensor, TheCallbackPolicyNeedsItsFunctionAtPrepare) {
     // A parsed contract names the policy; a file cannot carry the function.
     anira::ContractHandle contract = anira::ContractHandle::from_json(
         R"({"hard": {"budget": {"ms": 1.0}, "warmup": {"fixed": 0}, "on_miss": "callback"}})");
-    contract.hard_geometry(1, k_hop, k_rate);
+    contract.hard_host_blocks(1, k_hop, k_rate);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(contract, &err), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(err.message).find("on_miss"), std::string::npos) << err.message;
@@ -1665,9 +1660,9 @@ TEST(AbiHandlerTensor, APushLandsEveryChannelInItsRing) {
             fill_input(block, 0);
             ASSERT_EQ(anira_handler_push_data(rig.get(), &block.tensor(), 0), ANIRA_OK);
             for (size_t channel = 0; channel < channels; ++channel) {
-                ASSERT_EQ(rig.session().m_send_buffer[0].get_available_samples(channel), k_count);
+                ASSERT_EQ(rig.session().send_ring(0).get_available_samples(channel), k_count);
                 std::array<float, k_count> ring{};
-                rig.session().m_send_buffer[0].pop_block(channel, ring.data(), k_count);
+                rig.session().send_ring(0).pop_block(channel, ring.data(), k_count);
                 for (size_t i = 0; i < k_count; ++i) {
                     EXPECT_EQ(ring.at(i), stream_value(channel, i))
                         << "channel " << channel << ", sample " << i;
@@ -1735,106 +1730,97 @@ TEST(AbiHandlerTensor, APlanarAndAnInterleavedBlockAgreeBitForBitAcrossMisses) {
     }
 }
 
-// The tensor entries against the 2.x handler (anira_test::V2Handler) in one binary
-// (test_Handler's oracle), on the bundled stereo gain model: every plan this build has an
-// engine for, and the engine-free custom row. The C side takes one interleaved block and the
-// Static gain as [1, 1] through anira_handler_process_multi; the 2.x side takes channel
-// pointers. Bit-equal per channel after de-interleaving. Through a real engine this covers two
-// channels only; 3 and 6 channels run through the engine-free pass-through above.
-TEST(AbiHandlerTensor, AnInterleavedBlockMatchesTheTwoPointXHandlerOnEveryPlan) {
+// The tensor entries' layouts against each other on the bundled stereo gain model, on every plan
+// this build has an engine for and on the engine-free custom row: one C handler takes an
+// interleaved block, a second handler of the same model planar channels, both with the Static
+// gain as [1] through anira_handler_process_multi. Bit-equal per channel after de-interleaving,
+// and equal to the closed form: at a gain of 1 every plan delivers each channel delayed by the
+// latency (anira_test::DelayLine). Through a real engine this covers two channels only; 3 and 6
+// channels run through the engine-free pass-through above.
+TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
     using anira_test::k_block;
     const anira_test::Context context;
     const std::vector<anira_backend_id> candidates = anira_test::custom_candidates();
     uint32_t num_plans = 1;
     for (uint32_t plan = 0; plan < num_plans; ++plan) {
         SCOPED_TRACE("plan " + std::to_string(plan));
-        anira_test::Handler c(context, anira_test::stereo_gain_with_custom(), candidates);
-        anira::InferenceConfig config_2x =
-            anira_test::config_2x_of(k_stereo_gain_model_json, k_stereo_gain_contract_json, true);
-        anira::PrePostProcessor pp(config_2x);
-        anira::CoreConfig core_config(2, anira::WaitStrategy::SpinBackoff, anira::LogLevel::Error);
-        core_config.m_log.m_drain = anira::LogDrain::Manual;
-        anira_test::V2Handler v2(pp, config_2x, core_config);
-        ASSERT_EQ(c.prepare(anira_test::file_contract(k_stereo_gain_contract_json, k_block)),
-                  ANIRA_OK)
-            << c.m_err.message;
-        anira_handler* h = c.m_handler;
-        v2.prepare(
-            anira::HostConfig(static_cast<float>(k_block), static_cast<float>(anira_test::k_rate)));
-        anira_test::expect_inference_config_eq(h->m_inference_config, config_2x);
+        anira_test::Handler interleaved(context, anira_test::stereo_gain_with_custom(), candidates);
+        anira_test::Handler planar(context, anira_test::stereo_gain_with_custom(), candidates);
+        const anira::ContractHandle contract =
+            anira_test::file_contract(k_stereo_gain_contract_json, k_block);
+        ASSERT_EQ(interleaved.prepare(contract), ANIRA_OK) << interleaved.m_err.message;
+        ASSERT_EQ(planar.prepare(contract), ANIRA_OK) << planar.m_err.message;
+        anira_handler* h = interleaved.m_handler;
+        anira_handler* p = planar.m_handler;
         num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
         ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
-        v2.set_inference_backend(h->m_plans.at(plan).m_backend);
-        ASSERT_EQ(anira_handler_get_latency(h, 0), v2.get_latency(0));
+        ASSERT_EQ(anira_handler_set_plan(p, plan), ANIRA_OK);
+        ASSERT_EQ(anira_handler_get_latency(h, 0), anira_handler_get_latency(p, 0));
+        // The closed form of the custom row's pass-through: each channel delayed by the latency.
+        anira_test::DelayLine left_line(anira_handler_get_latency(h, 0));
+        anira_test::DelayLine right_line(anira_handler_get_latency(h, 0));
 
         for (size_t k = 1; k <= 8; ++k) {
             const std::vector<float> left = anira_test::ramp(k);
             std::vector<float> right = anira_test::ramp(k);
             for (float& sample : right) { sample = -sample; }  // L != R
-            Block c_in(Layout::Interleaved, 2, k_block);
+            const auto run = [k, &left, &right](anira_handler* handler,
+                                                Layout layout,
+                                                const Block& out,
+                                                float& gain_out) {
+                Block in(layout, 2, k_block);
+                for (size_t i = 0; i < k_block; ++i) {
+                    in.at(0, i) = left.at(i);
+                    in.at(1, i) = right.at(i);
+                }
+                // The Static gain travels whole, in the spec's shape: [1].
+                const float gain_in = 1.0F;
+                const std::array<anira_tensor, 2> inputs{in.tensor(),
+                                                         anira_test::whole_f32(&gain_in, {1})};
+                const std::array<anira_tensor, 2> outputs{out.tensor(),
+                                                          anira_test::whole_f32(&gain_out, {1})};
+                std::array<size_t, 2> delivered{k_unset, k_unset};
+                const size_t prev = anira_test::available(handler);
+                ASSERT_EQ(anira_handler_process_multi(handler,
+                                                      inputs.data(),
+                                                      2,
+                                                      outputs.data(),
+                                                      2,
+                                                      delivered.data()),
+                          ANIRA_OK)
+                    << "block " << k;
+                EXPECT_EQ(delivered[0], k_block);
+                EXPECT_EQ(delivered[1], 1U);
+                anira_test::wait_for_block(handler, prev);
+            };
             const Block c_out(Layout::Interleaved, 2, k_block);
-            for (size_t i = 0; i < k_block; ++i) {
-                c_in.at(0, i) = left.at(i);
-                c_in.at(1, i) = right.at(i);
-            }
-            // The Static gain travels whole, in the spec's shape: [1].
-            const float gain_in = 1.0F;
-            float gain_out = k_untouched;
-            const std::array<anira_tensor, 2> inputs{c_in.tensor(),
-                                                     anira_test::whole_f32(&gain_in, {1})};
-            const std::array<anira_tensor, 2> outputs{c_out.tensor(),
-                                                      anira_test::whole_f32(&gain_out, {1})};
-            std::array<size_t, 2> delivered{k_unset, k_unset};
-            const size_t prev_c = anira_test::available(h);
-            ASSERT_EQ(anira_handler_process_multi(h,
-                                                  inputs.data(),
-                                                  2,
-                                                  outputs.data(),
-                                                  2,
-                                                  delivered.data()),
-                      ANIRA_OK)
-                << "block " << k;
-            EXPECT_EQ(delivered[0], k_block);
-            EXPECT_EQ(delivered[1], 1U);
-            anira_test::wait_for_block(h, prev_c);
-
-            std::vector<float> v_left(k_block, k_untouched);
-            std::vector<float> v_right(k_block, k_untouched);
-            const float v_gain_in = 1.0F;
-            float v_gain_out = k_untouched;
-            const std::array<const float*, 2> v_in_ch{left.data(), right.data()};
-            const std::array<const float*, 1> v_gain_ch{&v_gain_in};
-            const std::array<const float* const*, 2> v_in{v_in_ch.data(), v_gain_ch.data()};
-            std::array<size_t, 2> v_num_in{k_block, 1};
-            const std::array<float*, 2> v_out_ch{v_left.data(), v_right.data()};
-            const std::array<float*, 1> v_gout_ch{&v_gain_out};
-            const std::array<float* const*, 2> v_outs{v_out_ch.data(), v_gout_ch.data()};
-            std::array<size_t, 2> v_num_out{k_block, 1};
-            const size_t prev_v = v2.get_available_samples(0);
-            const size_t n_v =
-                v2.process(v_in.data(), v_num_in.data(), v_outs.data(), v_num_out.data())[0];
-            anira_test::wait_for_block(v2, prev_v);
-            ASSERT_EQ(n_v, k_block) << "block " << k;
+            const Block p_out(Layout::Planar, 2, k_block);
+            float c_gain_out = k_untouched;
+            float p_gain_out = k_untouched;
+            run(h, Layout::Interleaved, c_out, c_gain_out);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
+            run(p, Layout::Planar, p_out, p_gain_out);
+            ASSERT_FALSE(::testing::Test::HasFatalFailure());
             // The Static output is written on every delivered block, and that is all this case
-            // says about it. It is the latest completed value (PrePostProcessor stores it after
-            // the ring push of its inference), so whether a call already sees the result of the
-            // block it pushed is a race that each side runs on its own: compared with each other
-            // the two sides differed once in about 200 local runs, the C side holding the
-            // result of block 4 and the 2.x side that of block 3, with every sample of the
-            // stream bit-equal. What the value is differs per engine, too. The values of a
-            // Static output are compared exactly where the gate makes the order certain:
-            // ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
-            EXPECT_NE(gain_out, k_untouched) << "block " << k;
-            EXPECT_NE(v_gain_out, k_untouched) << "block " << k;
+            // says about it: it is the latest completed value, so whether a call already sees
+            // the result of the block it pushed is a race each handler runs on its own. The
+            // values of a Static output are compared exactly where the gate makes the order
+            // certain: ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
+            EXPECT_NE(c_gain_out, k_untouched) << "block " << k;
+            EXPECT_NE(p_gain_out, k_untouched) << "block " << k;
+            const std::vector<float> expected_left = left_line.next(left);
+            const std::vector<float> expected_right = right_line.next(right);
             for (size_t i = 0; i < k_block; ++i) {
-                ASSERT_EQ(c_out.at(0, i), v_left.at(i)) << "block " << k << ", left " << i;
-                ASSERT_EQ(c_out.at(1, i), v_right.at(i)) << "block " << k << ", right " << i;
+                ASSERT_EQ(c_out.at(0, i), p_out.at(0, i)) << "block " << k << ", left " << i;
+                ASSERT_EQ(c_out.at(1, i), p_out.at(1, i)) << "block " << k << ", right " << i;
+                ASSERT_EQ(p_out.at(0, i), expected_left.at(i)) << "block " << k << ", left " << i;
+                ASSERT_EQ(p_out.at(1, i), expected_right.at(i)) << "block " << k << ", right " << i;
             }
         }
     }
 }
 
-// ---- a fractional geometry ---------------------------------------------------------------------
+// ---- fractional host blocks --------------------------------------------------------------------
 
 /// The samples of a stream whose block is `block` that the host moves by its call k, the whole
 /// ones accumulated: floor(k b), the accounting LatencyCalculator sizes the latency and the
@@ -1843,7 +1829,7 @@ size_t moved_by_call(double block, size_t k) {
     return static_cast<size_t>(std::floor(static_cast<double>(k) * block + 1e-9));
 }
 
-/// A mono pass-through on a control-rate stream (hop 1) under the geometry 0.25, 0.25 at
+/// A mono pass-through on a control-rate stream (hop 1) under the host blocks 0.25, 0.25 at
 /// 100 Hz, on the pass-through engine of the pipeline (no gate: the calls settle by waiting).
 /// `flexible` gives both tensors the window [1, unbounded] over a dynamic Time extent instead
 /// of the fixed window 1.
@@ -1852,7 +1838,7 @@ struct FractionalRig {
         : m_context(2), m_handler(m_context, model(flexible), m_candidates) {
         anira::ContractHandle contract =
             anira_test::explicit_contract(1, k_control_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-        contract.hard_geometry(k_fraction, k_fraction, k_control_rate);
+        contract.hard_host_blocks(k_fraction, k_fraction, k_control_rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
     }
 
@@ -1957,12 +1943,15 @@ TEST(AbiHandlerTensor, AFlexibleWindowUnderAFractionalBlockRunsAtTheAnchorHop) {
 // 0.25, while its input moves by the rule -- is not refused (one sample is ceil of the block,
 // the most a call may carry, AHostBlockAboveTheDeclaredBlockIsRefused): a pop the settled ring
 // cannot cover starves and reports ANIRA_MISSED with a delivered count of 0 and the miss
-// policy's zeros in the block.
+// policy's zeros in the block. Every sample a missed pop stood in for is late when it arrives
+// and is discarded, never delivered (the catch-up): a host that stays ahead of the stream keeps
+// missing. `owed` follows that rule, the samples missed pops stood in for.
 TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
     const FractionalRig rig;
     ASSERT_NE(rig.get(), nullptr);
     size_t moved = 0;
     size_t missed = 0;
+    size_t owed = 0;
     for (size_t k = 1; k <= 16; ++k) {
         const size_t count = moved_by_call(FractionalRig::k_fraction, k) - moved;
         const size_t before = anira_test::available(rig.get());
@@ -1975,7 +1964,9 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
         // Settled: the pushed sample's inference is in the ring before the pop asks.
         anira_test::wait_for_available(rig.get(), before + count);
         ASSERT_FALSE(::testing::Test::HasFatalFailure()) << "call " << k;
-        const bool covered = before + count >= 1;
+        const size_t late = std::min(owed, before + count);
+        owed -= late;
+        const bool covered = before + count - late >= 1;
 
         std::array<float, 2> out{};
         out.fill(k_untouched);
@@ -1989,6 +1980,7 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
             EXPECT_EQ(delivered, 1U) << "call " << k;
         } else {
             ++missed;
+            ++owed;
             EXPECT_EQ(status, ANIRA_MISSED) << "call " << k;
             EXPECT_EQ(delivered, 0U) << "call " << k;
             EXPECT_EQ(out[0], 0.F) << "call " << k;
@@ -2001,18 +1993,19 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
 
 // ---- the block bound ---------------------------------------------------------------------------
 
-/// A mono pass-through on one stream of `hop` samples per hop under the geometry
-/// block_min..block_max at `rate`, at the debug level (the refusal's record is collected), on
-/// the pass-through engine of the pipeline. bound() is one host block of block_max on the
-/// stream, ceil(block_max / hop * hop): the most samples one call may carry.
+/// A mono pass-through on one stream of `hop` samples per hop under the host blocks
+/// host_block_min..host_block_max at `host_rate`, at the debug level (the refusal's record is
+/// collected), on the pass-through engine of the pipeline. bound() is one host block of
+/// host_block_max on the stream, ceil(host_block_max / hop * hop): the most samples one call may
+/// carry.
 struct BoundRig {
-    BoundRig(int64_t hop, double block_min, double block_max, double rate)
+    BoundRig(int64_t hop, double host_block_min, double host_block_max, double host_rate)
         : m_context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG)
         , m_handler(m_context, model(hop), m_candidates)
-        , m_bound(static_cast<size_t>(std::ceil(block_max))) {
+        , m_bound(static_cast<size_t>(std::ceil(host_block_max))) {
         anira::ContractHandle contract =
-            anira_test::explicit_contract(1, rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-        contract.hard_geometry(block_min, block_max, rate);
+            anira_test::explicit_contract(1, host_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+        contract.hard_host_blocks(host_block_min, host_block_max, host_rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(get());
     }
@@ -2041,8 +2034,8 @@ struct BoundRig {
     /// The samples waiting in the send ring and in the receive ring, read off the session:
     /// nothing collects.
     std::array<size_t, 2> levels() const {
-        return {m_session->m_send_buffer[0].get_available_samples(0),
-                m_session->m_receive_buffer[0].get_available_samples(0)};
+        return {m_session->send_ring(0).get_available_samples(0),
+                m_session->receive_ring(0).get_available_samples(0)};
     }
 
 private:
@@ -2185,48 +2178,48 @@ void expect_the_bound_passes(const BoundRig& rig, size_t& pushed, size_t& popped
     popped += bound;
 }
 
-// A call carries one host block of the declared block_max at most, ceil of the block on a
+// A call carries one host block of the declared host_block_max at most, ceil of the block on a
 // stream whose block is fractional: one sample more is ANIRA_ERROR_INVALID_ARGUMENT on every
 // Hard entry that moves a Streamed slot, on its push side and on its pop side, before anything
 // moves. The bound itself passes, the refusal is recorded in rt_error (last-wins) and logged
 // once, and the calls within the bound that follow it work: the stream goes on where it was.
-// Twice: under the integer geometry 1..8 on a hop of 8 (bound 8) and under the fractional
+// Twice: under the integer host blocks 1..8 on a hop of 8 (bound 8) and under the fractional
 // 0.25 on a hop of 1 (bound 1, ceil(0.25)).
 TEST(AbiHandlerTensor, AHostBlockAboveTheDeclaredBlockIsRefused) {
-    struct Geometry {
+    struct HostBlocks {
         int64_t m_hop;
-        double m_block_min;
-        double m_block_max;
-        double m_rate;
+        double m_host_block_min;
+        double m_host_block_max;
+        double m_host_rate;
         size_t m_bound;
     };
-    for (const Geometry geometry : {Geometry{.m_hop = 8,
-                                             .m_block_min = 1.0,
-                                             .m_block_max = 8.0,
-                                             .m_rate = 800.0,
-                                             .m_bound = 8},
-                                    Geometry{.m_hop = 1,
-                                             .m_block_min = 0.25,
-                                             .m_block_max = 0.25,
-                                             .m_rate = 100.0,
-                                             .m_bound = 1}}) {
-        SCOPED_TRACE("block_max " + std::to_string(geometry.m_block_max));
+    for (const HostBlocks blocks : {HostBlocks{.m_hop = 8,
+                                               .m_host_block_min = 1.0,
+                                               .m_host_block_max = 8.0,
+                                               .m_host_rate = 800.0,
+                                               .m_bound = 8},
+                                    HostBlocks{.m_hop = 1,
+                                               .m_host_block_min = 0.25,
+                                               .m_host_block_max = 0.25,
+                                               .m_host_rate = 100.0,
+                                               .m_bound = 1}}) {
+        SCOPED_TRACE("host_block_max " + std::to_string(blocks.m_host_block_max));
         anira_drain_log();
         RecordCollector collector;
-        const BoundRig rig(geometry.m_hop,
-                           geometry.m_block_min,
-                           geometry.m_block_max,
-                           geometry.m_rate);
+        const BoundRig rig(blocks.m_hop,
+                           blocks.m_host_block_min,
+                           blocks.m_host_block_max,
+                           blocks.m_host_rate);
         ASSERT_NE(rig.get(), nullptr);
-        ASSERT_EQ(rig.bound(), geometry.m_bound);
+        ASSERT_EQ(rig.bound(), blocks.m_bound);
         anira_handler* h = rig.get();
         size_t pushed = 0;
         size_t popped = 0;
         expect_the_bound_passes(rig, pushed, popped);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "the bound is not refused";
 
-        expect_every_entry_refuses(rig, geometry.m_bound + 1);
-        expect_every_entry_refuses(rig, 4 * geometry.m_bound);
+        expect_every_entry_refuses(rig, blocks.m_bound + 1);
+        expect_every_entry_refuses(rig, 4 * blocks.m_bound);
         anira_drain_log();
 #ifdef ENABLE_LOGGING
         EXPECT_EQ(anira_test::count_records(collector, "more than one host block", "rt"), 1U)

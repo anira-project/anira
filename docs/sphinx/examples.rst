@@ -17,7 +17,7 @@ Every bundled model ships its configuration as files next to its model directory
 section 1.5 of the :doc:`usage` guide describes: a *model file* (``<model>.model.json``: the
 model's exports per engine with paths relative to the file, the tensor specs, the state) and a
 *contract file* (``<model>.contract.json``: the per-inference budget and the warm-up; the host
-geometry is patched in at prepare). ``extras/models/model_files.h`` names them for the examples
+blocks are patched in at prepare). ``extras/models/model_files.h`` names them for the examples
 and the tests. Covered are the steerable-nafx CNN in three sizes (``cnn/``), GuitarLSTM
 (``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo
 and the stereo StatefulAccumulatorNetwork with its declared State pair (``model-pool/``; the
@@ -89,9 +89,25 @@ Key files:
     (``ModelConfig::from_json``) and each entry's source is swapped for the embedded file of the
     same name as its path (``set_model_bytes``, ``ANIRA_BYTES_BORROW``), one loop over the entries,
     so the description of the model stays in the file. Variant 7's decoder anchors on its audio output
-    (``rave_funk_drum_decoder.model.json``), so both handlers prepare with the host's block and
+    (``rave_funk_drum_decoder.model.json``), so both handlers prepare with the host's block range and
     rate; the latent frames pass from the encoder's ``pop_data`` to the decoder's ``push_data``
     as one planar tensor. A 2.x configuration file goes through the same loaders (:ref:`migration-json`).
+
+Both plugins declare the host's real block range on the Hard contract, since neither host promises
+a fixed block. JUCE's ``prepareToPlay(sampleRate, samplesPerBlock)`` names the largest block only,
+so the JUCE plugin prepares with ``hard_host_blocks(1, samplesPerBlock, sampleRate)``; CLAP's
+``activate(sampleRate, minFrameCount, maxFrameCount)`` names both ends, so the CLAP plugin prepares
+with ``hard_host_blocks(max(1, minFrameCount), maxFrameCount, sampleRate)``. Every
+``processBlock`` / ``process`` call carries its own block. The price is latency: anira sizes it for
+every block size of the range (at 48 kHz and a 512-sample maximum the CNN reports 4602 samples
+instead of 3584, SimpleGainNetwork 1024 instead of 512, GuitarLSTM 767 instead of 512), which the
+plugins report to the host (``setLatencySamples``, the CLAP latency extension) for compensation. A
+fixed contract under a host that changes its block size misses blocks instead. The figure covers
+every block size of the range held from call to call; a host that changes the size between calls
+can still miss a block, rarely: a full block right after a short one that completed a hop. At
+48 kHz, 480 calls of 1 to 512 samples paced in real time missed 1 block on SimpleGainNetwork and
+2 on GuitarLSTM under the range, 314 and 159 under the fixed contract
+(`issue #228 <https://github.com/anira-project/anira/issues/228>`_).
 
 CLAP Plugin Example
 ~~~~~~~~~~~~~~~~~~~

@@ -1,4 +1,3 @@
-#include <anira/CoreConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
@@ -57,8 +56,8 @@ void expect_axes(const anira_tensor_spec& spec,
 // test_abi binary runs its suites in registration order: the one-per-process warning.
 #if defined(ENABLE_LOGGING) && !defined(NDEBUG)
 TEST(AbiJsonUpgrade, WarnsOncePerProcess) {
-    const anira::LogLevel previous = anira::get_log_level();
-    anira::set_log_level(anira::LogLevel::Warning);
+    const anira_log_level previous = anira::get_log_level();
+    anira::set_log_level(ANIRA_LOG_WARNING);
     anira_test::RecordCollector collector;
     {
         const Upgraded first(anira_test::k_simple_gain_v2);
@@ -126,7 +125,7 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
     EXPECT_EQ(legacy->hard()->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(legacy->hard()->m_warmup_iterations, 1u);
     EXPECT_DOUBLE_EQ(legacy->hard()->m_wait_ratio, 0.0);
-    EXPECT_EQ(legacy->hard()->m_block_max, 0u) << "no geometry: the host patches it";
+    EXPECT_EQ(legacy->hard()->m_host_block_max, 0u) << "no host blocks: the host patches them";
     anira_contract_destroy(legacy);
     legacy = nullptr;
     EXPECT_EQ(anira_model_config_take_legacy_contract(m.m_config, &legacy), ANIRA_OK);

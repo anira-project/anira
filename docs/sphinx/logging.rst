@@ -148,8 +148,12 @@ An ``ANIRA_NONBLOCKING`` entry does at most three things when it refuses:
    ``ANIRA_LOG_RECORD_REALTIME | ANIRA_LOG_RECORD_CONTRACT_VIOLATION`` in the
    ``anira_log_record`` a sink receives.
 
-``ANIRA_ERROR_CAPACITY`` (no free ticket slot, a full ring) is back-pressure, not a violation:
-return value only, no ``rt_error``, no record.
+``ANIRA_ERROR_CAPACITY`` (no free ticket slot, a full ring) returned by an entry is
+back-pressure, not a violation: return value only, no ``rt_error``, no record. A hop the
+scheduler drops because every inference slot of the handler is busy is recorded, though: it
+sets ``rt_error`` to ``ANIRA_ERROR_CAPACITY`` (the hop is filled under the miss policy at its
+stream position), latched under its own kind, and the operational site "no free inference
+queue" logs it once per prepare.
 
 The record is **latched** per handler and per kind of status: the first occurrence after
 ``prepare`` or ``reset`` is logged, later ones increment a suppressed counter with one relaxed

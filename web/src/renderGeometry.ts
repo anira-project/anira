@@ -1,7 +1,7 @@
 // The render geometry of an audio context: the two numbers a Hard contract's block range needs
 // for a handler that streams through an audio node. `quantum`, the frames of one process() call
-// (block_min), and `burst`, the frames the context renders back to back with no time between
-// them (block_max): a live AudioContext renders each device callback as a run of quanta, so an
+// (host_block_min), and `burst`, the frames the context renders back to back with no time between
+// them (host_block_max): a live AudioContext renders each device callback as a run of quanta, so an
 // inference that starts in one run cannot finish before the next quantum of that run, and the
 // latency the handler reports must cover the run.
 //
@@ -414,7 +414,7 @@ const probeBurst = async (context: AudioContext, quantum: number) => {
 
 /**
  * The render geometry of `context`, what a Hard contract for a handler streaming through an
- * audio node on it declares: `contract.hardGeometry(g.quantum, g.burst, context.sampleRate)`.
+ * audio node on it declares: `contract.hardHostBlocks(g.quantum, g.burst, context.sampleRate)`.
  *
  * `quantum` is the context's `renderQuantumSize` (Web Audio API, Render Quantum Sizes: the size
  * of every process() call, fixed for the context's life, `setSinkId` included), else 128 where

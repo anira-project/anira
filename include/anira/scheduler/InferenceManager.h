@@ -8,12 +8,6 @@
 #include <cstddef>
 #include <vector>
 
-#include "../CoreConfig.h"
-#include "../InferenceConfig.h"
-#include "../PrePostProcessor.h"
-#include "../backends/BackendBase.h"
-#include "../utils/HostConfig.h"
-#include "../utils/InferenceBackend.h"
 #include "Core.h"
 #include "InferenceThread.h"
 
@@ -36,7 +30,7 @@ struct RtLatch;
  * Key responsibilities:
  * - Managing inference sessions and thread coordination
  * - Handling input/output data flow and buffering
- * - Coordinating with PrePostProcessor for data transformation
+ * - Running every chunk through the handler's processor runner
  * - Managing latency compensation and sample counting
  * - Providing thread-safe access to inference operations
  * - Supporting both real-time and non-real-time processing modes
@@ -57,9 +51,9 @@ struct RtLatch;
  *       as the primary interface for inference operations rather than directly
  *       accessing lower-level components.
  *
- * @see InferenceThread, PrePostProcessor, Core, HostConfig, InferenceConfig
+ * @see InferenceThread, Core, SessionElement
  */
-class ANIRA_API InferenceManager {
+class ANIRA_API InferenceManager : private DroppedHops {
 public:
     /**
      * @brief Default constructor is deleted to prevent uninitialized instances
@@ -67,49 +61,7 @@ public:
     InferenceManager() = delete;
 
     /**
-     * @brief The 2.x constructor: initializes the inference manager with all required
-     * components
-     *
-     * Creates an inference manager with the specified preprocessing/postprocessing pipeline,
-     * inference configuration, and optional custom backend. Maps the CoreConfig onto a
-     * context config (anira::capi::make_context_config) and delegates to the 3.x
-     * constructor, so the core reads one configuration type. Leaves with the 2.x classes.
-     *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
-     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
-     * backends)
-     * @param core_config Configuration for the inference core and thread management
-     */
-    InferenceManager(PrePostProcessor& pp_processor,
-                     InferenceConfig& inference_config,
-                     BackendBase* custom_processor,
-                     const CoreConfig& core_config);
-
-    /**
-     * @brief The 2.x constructor over a context config: the 2.x plan table, the context's
-     * config passed through unchanged
-     *
-     * Asks the core for the 2.x plan table (engine::legacy_plan_requests: one plan per
-     * configured model, then every other backend of the build, CUSTOM last, on
-     * `custom_processor` when one is given) and delegates to the constructor over requests.
-     *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
-     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
-     * backends)
-     * @param context_config The context's configuration (anira_context_config_*)
-     * @param rt_latch The handler's latch the session records its failures into; nullptr
-     * gives the session its own
-     */
-    InferenceManager(PrePostProcessor& pp_processor,
-                     InferenceConfig& inference_config,
-                     BackendBase* custom_processor,
-                     const anira_context_config& context_config,
-                     anira::RtLatch* rt_latch = nullptr);
-
-    /**
-     * @brief The 3.x constructor: the session over exactly the plans asked for
+     * @brief The session over exactly the plans asked for
      *
      * Creates the session through Core::create_session() with the plan requests (one plan
      * per entry, in dense-index order: a C-created handler's plans), the context config as
@@ -117,16 +69,22 @@ public:
      * against the configuration in effect) and the handler's real-time latch. The table is
      * the session's for its life: nothing replaces it.
      *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
+     * @param processor The handler's processor runner: the phases of every chunk, and the port
+     * vectors that hold the session's rings (it outlives the manager)
+     * @param model The handler's model config (its variant)
+     * @param derived What the validator derived for it under the contract
+     * @param hard The Hard half of the contract the handler is prepared under (the three
+     * outlive the manager: the session reads them by reference)
      * @param requests The plans, in dense-index order; never empty
      * @param context_config The context's configuration (anira_context_config_*)
      * @param rt_latch The handler's latch the session records its failures into; nullptr
      * gives the session its own
      * @throws std::invalid_argument for an empty request list
      */
-    InferenceManager(PrePostProcessor& pp_processor,
-                     InferenceConfig& inference_config,
+    InferenceManager(capi::ProcessorRunner& processor,
+                     const anira_model_config& model,
+                     const capi::Derived& derived,
+                     const capi::HardContract& hard,
                      std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,
                      anira::RtLatch* rt_latch = nullptr);
@@ -137,34 +95,21 @@ public:
      * Ensures proper shutdown of inference threads, cleanup of sessions,
      * and release of all managed resources.
      */
-    ~InferenceManager();
+    ~InferenceManager() override;
 
     /**
-     * @brief Prepares the inference manager for processing with new audio configuration
+     * @brief Prepares the session for the Hard contract it reads
      *
-     * Initializes the inference pipeline with the specified host configuration and
-     * optional custom latency settings. This method must be called before processing
-     * begins or when audio settings change.
+     * Sizes the session for the contract's host blocks, budget and wait ratio (Core::
+     * prepare_session()), with the caller's latencies and the element type of every send and
+     * receive ring named per slot, and readies the copy path. This method must be called
+     * before processing begins, and again whenever the contract changes.
      *
-     * @param config Host configuration containing sample rate, buffer size, and audio settings
-     * @param custom_latency Optional vector of custom latency values for each tensor (empty for
-     * automatic calculation)
-     */
-    void prepare(HostConfig config, std::vector<long> custom_latency = {});
-
-    /**
-     * @brief The prepare of the 3.x path: like prepare(HostConfig, std::vector<long>), with
-     * the caller's latencies and the element type of every send and receive ring named per
-     * slot.
-     *
-     * @param config Host configuration containing sample rate, buffer size, and audio settings
      * @param custom_latencies A caller's latency per output tensor (see CustomLatencies)
-     * @param ring_dtypes The ring dtype of every slot (see RingDtypes); the two-argument
-     * overload passes float32 for every slot
+     * @param ring_dtypes The ring dtype of every slot (see RingDtypes; float32 for every slot
+     * not named)
      */
-    void prepare(HostConfig config,
-                 const CustomLatencies& custom_latencies,
-                 const RingDtypes& ring_dtypes);
+    void prepare(const CustomLatencies& custom_latencies = {}, const RingDtypes& ring_dtypes = {});
 
     /**
      * @name The tensor stems
@@ -172,10 +117,10 @@ public:
      * The host<->ring copy path, and the only way into it: what an entry that takes host
      * tensors calls. A call hands over one anira_tensor per slot, in slot order and
      * covering every slot of that side: `inputs` has one tensor per input tensor of the
-     * InferenceConfig, `outputs` one per output tensor.
+     * model config, `outputs` one per output tensor.
      *
-     * The stems move the streamed slots. A non-streamable slot (no stream size in the
-     * InferenceConfig: a Static tensor of a 3.x model) has no ring and is not the copy path's:
+     * The stems move the streamed slots. A non-streamable slot (no hop: a Static or a State
+     * tensor) has no ring and is not the copy path's:
      * its tensor is never read, whatever it holds, its delivered count is always 0, and a miss
      * leaves its memory alone. Its values travel beside the stems: through the static ports of a
      * 3.x handler (whole tensors in the spec's shape, src/capi/port.h).
@@ -226,7 +171,7 @@ public:
      *
      * None of them allocates. process_nowait(), push_data() and pop_data() never wait and
      * are real-time safe; process_wait(), pop_data_wait() and the deadline form of pop_data()
-     * wait, and process() waits when the InferenceConfig has a blocking ratio.
+     * wait, and process() waits when the contract has a wait ratio.
      */
     ///@{
 
@@ -237,7 +182,7 @@ public:
      * results that have completed (Core::new_data_request() without a deadline) before
      * popping; a block that has not completed is delivered through the miss policy
      * (set_miss_policy()) and counted as missing. The 3.x path's process form; process() is
-     * this when InferenceConfig::m_blocking_ratio is 0.
+     * this when the contract's wait ratio is 0.
      *
      * @param inputs One tensor per input slot (see "The tensor stems")
      * @param outputs One tensor per output slot; the same tensor as the input for in place
@@ -252,7 +197,7 @@ public:
      *
      * Like process_nowait(), but waits for the submitted block's result on the session's
      * completion primitive (Core::new_data_request() with a deadline): the semaphore when
-     * InferenceConfig::m_blocking_ratio > 0, else the atomic flag polled every
+     * the contract's wait ratio is above 0, else the atomic flag polled every
      * millisecond. The deadline is read from the clock after the submit, exactly where the
      * 2.x process() read it. A budget of std::chrono::steady_clock::duration::max() waits
      * without limit, re-checking that an inference thread runs (Core::WaitOutcome::NoThread
@@ -322,10 +267,10 @@ public:
                                 Core::WaitOutcome& outcome);
 
     /**
-     * @brief The 2.x process call over host tensors: the dispatcher on
-     * InferenceConfig::m_blocking_ratio
+     * @brief The 2.x process call over host tensors: the dispatcher on the contract's wait
+     * ratio
      *
-     * With a blocking ratio above 0 this is process_wait() with the budget of
+     * With a wait ratio above 0 this is process_wait() with the budget of
      * contract_wait_budget() (the block's own duration times the ratio, waited for on the
      * semaphore) and the outcome dropped; without one it is process_nowait(). The tensors
      * pass through as they are.
@@ -334,7 +279,7 @@ public:
      * @param outputs One tensor per output slot; the same tensor as the input for in place
      * @return The delivered count per output slot (0 on a miss)
      *
-     * @note Real-time safe without a blocking ratio; with one it waits up to the budget.
+     * @note Real-time safe without a wait ratio; with one it waits up to the budget.
      */
     const size_t* process(const anira_tensor* inputs, const anira_tensor* outputs);
 
@@ -343,7 +288,7 @@ public:
      *
      * Registers the output demand (a generator is submitted here), then waits until
      * `wait_until` for the next result on the session's semaphore and pops. A session without
-     * a blocking ratio has no semaphore to wait on: nothing is waited for and nothing is
+     * a wait ratio has no semaphore to wait on: nothing is waited for and nothing is
      * collected, the call pops what the receive rings hold, and the site
      * RtSite::WaitWithoutSemaphore records it once. The 2.x
      * face's deadline pop; pop_data_wait() is the 3.x form, which waits on either completion
@@ -359,12 +304,12 @@ public:
                            std::chrono::steady_clock::time_point wait_until);
 
     /**
-     * @brief The 2.x blocking_ratio wait of one process call
+     * @brief The wait of one process call under the contract's wait ratio
      *
-     * InferenceConfig::m_blocking_ratio times the reference block's duration: `shape[1]` of the
-     * anchored tensor over the host sample rate, in the arithmetic of the 2.x process(), so
-     * the deadline the 2.x path waits for is unchanged. What a waiting entry computes before
-     * it calls process_wait(). The process forms only: a pop has no input block to measure.
+     * The contract's wait ratio times the reference block's duration: `shape[1]` of the
+     * anchored tensor over the contract's host_rate, truncated to whole microseconds. What a
+     * waiting entry computes before it calls process_wait(). The process forms only: a pop has no
+     * input block to measure.
      *
      * @param inputs One tensor per input slot
      * @param outputs One tensor per output slot
@@ -395,26 +340,6 @@ public:
 
     /// The plan selected last: one relaxed load of the value set_plan() stores.
     uint32_t get_plan() const noexcept;
-
-    /**
-     * @brief Sets the inference backend to use for neural network processing
-     *
-     * The 2.x selection by backend, over the plan table: set_plan() of the first plan that
-     * runs on the backend, with everything set_plan() says. A backend no plan of the session
-     * runs on leaves the selection unchanged and is logged once through the real-time queue
-     * (RtSite::BackendWithoutPlan); a 2.x session has a plan for every backend of the build.
-     *
-     * @param new_inference_backend The backend type to use (ONNX, LibTorch, TensorFlow Lite, or
-     * Custom)
-     */
-    void set_backend(InferenceBackend new_inference_backend);
-
-    /**
-     * @brief Gets the currently active inference backend
-     *
-     * @return The backend the selected plan runs on
-     */
-    InferenceBackend get_backend() const;
 
     /**
      * @brief Gets the processing latency for all tensors
@@ -503,6 +428,26 @@ public:
     }
 
     /**
+     * @brief Sets the hook of ANIRA_MISS_CALLBACK for a dropped hop
+     *
+     * Called once per hop the scheduler drops (no inference slot was free), at the drop, on
+     * the driver thread inside the entry whose call dropped it: `inputs` are one tensor per
+     * input slot, the dropped hop of every Streamed one ([channels, hop] of the ring dtype,
+     * packed, the manager's memory) and an empty tensor for every other; `outputs` one per
+     * output slot, a [channels, hop] tensor of the ring dtype for every Streamed one, which the
+     * hook fills and the manager places at the hop's stream position, and an empty tensor for
+     * every other. `false`, or no hook, places zeros. Set before prepare(); never on the driver
+     * thread.
+     *
+     * @param hook The hook, or nullptr
+     * @param ctx Handed to the hook as it is
+     */
+    void set_drop_hook(MissHook hook, void* ctx) noexcept {
+        m_drop_hook = hook;
+        m_drop_hook_ctx = ctx;
+    }
+
+    /**
      * @brief Whether the last process or pop form delivered a missed block
      *
      * True when the last process_output() took the starvation path: the miss policy filled
@@ -539,7 +484,7 @@ public:
      *
      * When enabled, Core::new_data_request() blocks the calling thread until
      * every pending inference for this session completes, instead of returning
-     * early (blocking_ratio == 0) or giving up at a deadline (blocking_ratio > 0).
+     * early (a wait ratio of 0) or giving up at a deadline (a wait ratio above 0).
      * This means process()/pop_data() always yield complete output -- never a
      * dropped/zero-filled chunk -- at the cost of an unbounded wait, so it is
      * intended for offline rendering (e.g. bounce-to-disk), not the live audio
@@ -692,6 +637,17 @@ private:
     /// The arithmetic of contract_wait_budget() for a reference block of `reference_samples`.
     std::chrono::steady_clock::duration wait_budget_of(size_t reference_samples) const noexcept;
 
+    /// DroppedHops: consumes the hop every Streamed send ring holds at its read
+    /// position and keeps its fill under the miss policy (ZEROS keeps none).
+    void drop() ANIRA_NONBLOCKING override;
+    /// DroppedHops: pushes the oldest fill not placed yet into every Streamed
+    /// receive ring.
+    void place() ANIRA_NONBLOCKING override;
+    /// The fill of the dropped hop in store position `hop`, under the miss policy.
+    void fill_dropped_hop(size_t hop) ANIRA_NONBLOCKING;
+    /// The first byte of channel `channel` of output `slot` in store position `hop`.
+    unsigned char* drop_store_at(size_t slot, size_t hop, size_t channel) noexcept;
+
     /**
      * @brief Registers the host's output demand on a generator session
      *
@@ -707,15 +663,12 @@ private:
      * @brief Collects finished inferences without waiting
      *
      * Uses the completion signal the session actually runs on: the semaphore
-     * (try_acquire) for blocking_ratio > 0, the atomic flag otherwise.
+     * (try_acquire) under a wait ratio above 0, the atomic flag otherwise.
      */
     void collect_nonblocking();
 
 private:
-    InferenceConfig& m_inference_config;  ///< Reference to the inference configuration containing
-                                          ///< model settings
     std::shared_ptr<SessionElement> m_session;  ///< Shared pointer to the current inference session
-    HostConfig m_host_config;                   ///< Current host audio configuration
 
     std::vector<size_t> m_missing_samples;  ///< Track missing samples for latency compensation and
                                             ///< buffering
@@ -741,6 +694,25 @@ private:
                                                ///< count; what the tensor stems return
     std::vector<anira_tensor> m_empty_inputs;  ///< One empty tensor per input slot: the inputs
                                                ///< of a pop
+
+    // The fills of the hops the scheduler drops (DroppedHops), under m_on_miss,
+    // in a ring of hops allocated by prepare(): a dropped hop's fill is made at the drop and
+    // placed behind every chunk claimed before it. ZEROS keeps none (its fill is placed as
+    // zeros). The ring holds the fills of the last m_drop_capacity dropped hops; a fill older
+    // than that cannot be on time any more (see prepare()), and its hop is placed as zeros.
+    MissHook m_drop_hook = nullptr;   ///< ANIRA_MISS_CALLBACK: fills a dropped hop
+    void* m_drop_hook_ctx = nullptr;  ///< The hook's first argument
+    size_t m_drop_capacity = 0;       ///< Hops the ring holds; 0 under ZEROS
+    size_t m_drop_head = 0;           ///< The oldest fill held
+    size_t m_drop_held = 0;           ///< Fills held
+    size_t m_drop_clipped = 0;        ///< Dropped hops ahead of the held fills whose fill went
+    std::vector<std::vector<unsigned char>> m_drop_store;   ///< Per output slot: capacity x
+                                                            ///< channels x hop elements of the
+                                                            ///< ring dtype, hop after hop
+    std::vector<std::vector<unsigned char>> m_drop_inputs;  ///< Per input slot: channels x hop
+                                                            ///< elements, the hop being dropped
+    std::vector<anira_tensor> m_drop_input_tensors;         ///< ANIRA_MISS_CALLBACK: per input slot
+    std::vector<anira_tensor> m_drop_output_tensors;  ///< ANIRA_MISS_CALLBACK: per output slot
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr

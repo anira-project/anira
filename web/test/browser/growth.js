@@ -106,8 +106,13 @@ const run = async () => {
       outputs: [streamed('out')],
     })
   )
-  const jsContract = (blockMax = QUANTUM) =>
-    ContractHandle.hard(anira, { blockMin: QUANTUM, blockMax, rate: RATE, budgetMs: 2 })
+  const jsContract = (hostBlockMax = QUANTUM) =>
+    ContractHandle.hard(anira, {
+      hostBlockMin: QUANTUM,
+      hostBlockMax,
+      hostRate: RATE,
+      budgetMs: 2,
+    })
   const jsHandler = (contract) => {
     const pipeline = Pipeline.create(anira)
       .addInference(jsModel)
@@ -157,7 +162,7 @@ const run = async () => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(QUANTUM, QUANTUM, RATE)
+  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
   const fillers = []
   const grow = (beyond) => {
     const target = bytes() + beyond

@@ -20,7 +20,6 @@
 // one number the host's entries, a processor, the engine, the latency vector and the plan report's
 // rows use. The role decides which entries take it: no Hard entry carries a State tensor.
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/engine.h>
@@ -277,11 +276,11 @@ private:
 // ---- the rig -----------------------------------------------------------------------------------
 
 anira::ContractHandle contract_of(anira_miss_policy policy,
-                                  uint32_t block_max = k_hop,
+                                  uint32_t host_block_max = k_hop,
                                   anira_miss_fn miss_fn = nullptr,
                                   void* miss_user_data = nullptr) {
     anira::ContractHandle contract = anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
-    contract.hard_geometry(1, block_max, k_rate);
+    contract.hard_host_blocks(1, host_block_max, k_rate);
     contract.hard_miss_fn(miss_fn, miss_user_data);
     return contract;
 }
@@ -312,7 +311,7 @@ public:
                  Positions positions = k_accumulator,
                  const std::vector<anira_processor_desc>& processors = {},
                  anira_miss_policy policy = ANIRA_MISS_ZEROS,
-                 uint32_t block_max = k_hop,
+                 uint32_t host_block_max = k_hop,
                  anira_miss_fn miss_fn = nullptr,
                  void* miss_user_data = nullptr,
                  anira_log_level level = ANIRA_LOG_ERROR)
@@ -320,7 +319,7 @@ public:
         , m_gate(positions)
         , m_positions(positions)
         , m_policy(policy)
-        , m_block_max(block_max)
+        , m_host_block_max(host_block_max)
         , m_miss_fn(miss_fn)
         , m_miss_user_data(miss_user_data) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
@@ -359,7 +358,7 @@ public:
     void prepare() {
         m_gate.m_open.store(true);
         const anira::ContractHandle contract =
-            contract_of(m_policy, m_block_max, m_miss_fn, m_miss_user_data);
+            contract_of(m_policy, m_host_block_max, m_miss_fn, m_miss_user_data);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
@@ -399,7 +398,7 @@ private:
                              ///< ~Rig
     Positions m_positions;
     anira_miss_policy m_policy;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     anira_miss_fn m_miss_fn;
     void* m_miss_user_data;
     anira_pipeline* m_pipeline = nullptr;
@@ -657,8 +656,8 @@ TEST(AbiState, OneSlotSpacePerSide) {
     ASSERT_NE(data, nullptr);
     ASSERT_NE(processed, nullptr);
     EXPECT_EQ(data->m_ring_dtype, static_cast<anira_dtype>(ANIRA_DTYPE_F32));
-    EXPECT_EQ(data->m_ring, &h->m_manager->session().m_send_buffer[2]);
-    EXPECT_EQ(processed->m_ring, &h->m_manager->session().m_receive_buffer[1]);
+    EXPECT_EQ(&data->m_ring, &h->m_manager->session().send_ring(2));
+    EXPECT_EQ(&processed->m_ring, &h->m_manager->session().receive_ring(1));
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 0), nullptr);
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 3), nullptr) << "beyond the side's count";
 
@@ -888,7 +887,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
     EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(stored_input(), (std::array<float, 3>{})) << "a refused call set nothing";
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U)
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U)
         << "a refused call pushed samples";
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
     // A zeroed record is rank 0: not the empty tensor.
@@ -916,7 +915,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 3, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U);
     EXPECT_EQ(state, (std::array<float, static_cast<size_t>(k_channels) * k_state_width>{}))
         << "the memory a State element names is never touched";
     anira_drain_log();
@@ -1217,7 +1216,7 @@ TEST(AbiState, StatePairForcesStateful) {
     model.max_instances(4);
     Rig rig(model, k_accumulator, {}, ANIRA_MISS_ZEROS, 4 * k_hop);
     ASSERT_TRUE(rig.ready());
-    EXPECT_TRUE(rig.get()->m_inference_config.m_session_exclusive_processor);
+    EXPECT_TRUE(rig.get()->m_derived.m_exclusive);
     rig.gate().m_sleep_us = 300;
 
     // Host blocks of four hops: four inferences per call, on a pool of four threads.
@@ -1987,8 +1986,8 @@ public:
     explicit RegisteredRig(const ModelConfig& model,
                            std::span<const Registration> registrations,
                            const std::vector<anira_processor_desc>& processors = {},
-                           uint32_t block_max = k_hop)
-        : m_context(4), m_block_max(block_max) {
+                           uint32_t host_block_max = k_hop)
+        : m_context(4), m_host_block_max(host_block_max) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         for (const Registration& registration : registrations) {
             const anira_engine_desc desc =
@@ -2030,7 +2029,7 @@ public:
     RegisteredRig& operator=(RegisteredRig&&) = delete;
 
     void prepare() {
-        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_block_max);
+        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_host_block_max);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
@@ -2061,7 +2060,7 @@ public:
 
 private:
     Context m_context;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     anira_pipeline* m_pipeline = nullptr;
     anira_handler* m_handler = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
@@ -2523,13 +2522,13 @@ uint32_t plan_engine(const anira_handler* handler) {
 }
 
 /// The bundled file on one engine of this build: the handler over the model file with that one
-/// candidate, prepared with the contract file at the host geometry (blocks of 1 to `block_max`
+/// candidate, prepared with the contract file at the host blocks (1 to `host_block_max`
 /// samples at 48 kHz), the two streams driven through the waiting two-slot single form (`data`
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
 public:
     explicit EngineRig(anira_engine engine,
-                       uint32_t block_max = k_file_hop,
+                       uint32_t host_block_max = k_file_hop,
                        std::vector<anira_processor_desc> processors = {})
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
@@ -2538,7 +2537,7 @@ public:
                                         .engine_id = nullptr}}
         , m_processors(std::move(processors))
         , m_handler(m_context, m_model, m_candidates, m_processors)
-        , m_block_max(block_max) {
+        , m_host_block_max(host_block_max) {
         prepare();
     }
     ~EngineRig() = default;
@@ -2550,7 +2549,7 @@ public:
     void prepare() {
         anira::ContractHandle contract =
             anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
-        contract.hard_geometry(1, m_block_max, k_file_rate);
+        contract.hard_host_blocks(1, m_host_block_max, k_file_rate);
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
         ASSERT_NE(m_session, nullptr);
@@ -2593,7 +2592,7 @@ private:
     std::array<anira_backend_id, 1> m_candidates;
     std::vector<anira_processor_desc> m_processors;
     anira_test::Handler m_handler;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 
@@ -2609,7 +2608,7 @@ TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
         ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(engine));
         const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
         // Rounds of 704 samples (eleven hops, in blocks of 8 to 128 samples), enough of them to
-        // run eight hops past the latency (ten hops at this geometry).
+        // run eight hops past the latency (ten hops at these host blocks).
         constexpr std::array<size_t, 12> k_round{64, 32, 96, 64, 16, 48, 128, 64, 8, 56, 64, 64};
         std::vector<size_t> sizes;
         for (size_t total = 0; total < latency + (size_t{8} * k_file_hop);) {
@@ -2651,7 +2650,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
         ASSERT_TRUE(rig.ready());
         anira_handler* h = rig.get();
         const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
-        // Enough hops to see four of them behind the latency's zeros (six at this geometry).
+        // Enough hops to see four of them behind the latency's zeros (six at these host blocks).
         const std::vector<size_t> sizes((latency / k_file_hop) + 4, k_file_hop);
         size_t position = 0;
         Streams first;
@@ -2681,7 +2680,10 @@ TEST(AbiState, TheWarmupDoesNotLeakIntoTheStateOnAnyEngine) {
         EngineRig rig(engine);
         ASSERT_TRUE(rig.ready());
         const anira_handler* h = rig.get();
-        EXPECT_EQ(h->m_inference_config.m_warm_up, 1U) << "the contract file's fixed warm-up";
+        const anira::capi::HardContract* hard = h->m_contract.hard();
+        ASSERT_NE(hard, nullptr);
+        EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED) << "the contract file's fixed warm-up";
+        EXPECT_EQ(hard->m_warmup_iterations, 1U) << "the contract file's fixed warm-up";
         const std::vector<float> fresh = state_values(h, EngineRig::state_slot());
         ASSERT_EQ(fresh.size(), static_cast<size_t>(k_channels) * k_state_width);
         for (const float value : fresh) { EXPECT_EQ(value, 0.0F); }
@@ -2778,7 +2780,7 @@ public:
     anira_status prepare() {
         anira::ContractHandle contract =
             anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
-        contract.hard_geometry(1, k_file_hop, k_file_rate);
+        contract.hard_host_blocks(1, k_file_hop, k_file_rate);
         return m_handler.prepare(contract);
     }
     anira_handler* get() const { return m_handler.m_handler; }

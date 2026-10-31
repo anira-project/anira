@@ -18,13 +18,13 @@ of section 1.5 are their file form.
    * - ``anira::ModelConfig``
      - The model: one entry per export (an engine, and a provider when pinned; a file or
        bytes), its input and output tensors, its state, the instance ceiling and the anchor
-       tensor the host geometry refers to. Travels with the model; its file form is the model
+       tensor the host blocks count in. Travels with the model; its file form is the model
        file.
    * - ``anira::TensorSpec``
      - One tensor of the model: data type, role, tagged axes, the window and overlap a
        streamed tensor is consumed with, the output latency.
    * - ``anira::ContractHandle`` (``anira::Hard`` / ``anira::Async``)
-     - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
+     - How the model runs: **Hard** for a real-time stream (host blocks and host rate, budget,
        warmup, miss policy) or **Async** for jobs (deadline and policy). Names the run; its
        file form is the contract file.
    * - ``anira::ContextConfig``
@@ -309,7 +309,8 @@ is part of the build is decided at prepare, not here, so one config serves every
   inside an engine and nothing more. A stateful model has none; each of its handlers runs on
   what its own prepare built (section 3.2).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
-  Hard contract's block range and rate are counted in its Time-axis elements, and every other
+  Hard contract's host blocks and host rate (``host_block_min``, ``host_block_max``,
+  ``host_rate``) are counted in its Time-axis elements, and every other
   streamed tensor's time ratio is stated against it. The default (an empty name) is the first
   streamed input, or the first streamed output of a model without one. Name one only when the
   host's stream is another tensor: a decoder that turns latent frames into audio anchors on
@@ -343,8 +344,8 @@ default.
 1.3. Contracts
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A contract names the run. A **Hard** contract is the real-time stream: the host geometry (the
-block range in samples of the anchor tensor and the rate in Hz), the per-inference budget, the
+A contract names the run. A **Hard** contract is the real-time stream: the host blocks (the
+host blocks in samples of the anchor tensor and the host rate in Hz), the per-inference budget, the
 warmup policy, what to deliver when an inference misses its deadline, and the wait ratio. It
 is written as an ``anira::Hard`` aggregate, whose defaults are the library's except the budget,
 which every aggregate names, and minted into an ``anira::ContractHandle``.
@@ -352,7 +353,8 @@ which every aggregate names, and minted into an ``anira::ContractHandle``.
 .. code-block:: cpp
 
     anira::Hard hard{
-        .block_min = 1, .block_max = 512, .rate = 48000.0,   // blocks of 1..512 samples
+        .host_block_min = 1, .host_block_max = 512,          // blocks of 1..512 samples
+        .host_rate = 48000.0,                                // of the anchor, per second
         .budget = std::chrono::microseconds(42660),          // per inference, required
         .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2,
         .on_miss = ANIRA_MISS_BYPASS,
@@ -366,16 +368,16 @@ ms reads back as 42660000 ns), so a contract file can be inspected, changed as a
 minted again. On an Async handle it throws ``anira::Error`` with
 ``ANIRA_ERROR_WRONG_CONTRACT``.
 
-- **Geometry.** ``block_min == block_max`` is a fixed-block host; ``block_min = 1`` allows every
+- **Host blocks.** ``host_block_min == host_block_max`` is a fixed-block host; ``host_block_min = 1`` allows every
   smaller block up to the maximum, which may raise the latency anira has to reserve. A
-  contract loaded from a file usually carries no geometry; a plugin patches it from the host
-  with ``contract.hard_geometry(block_min, block_max, rate)`` (an ``anira::Hard`` with the
-  geometry left at zero is valid for the same reason). The blocks are doubles: both 0 (unset)
-  or both finite and above 0 with ``block_min <= block_max``; anything else is
+  contract loaded from a file usually carries no host blocks; a plugin patches them from the host
+  with ``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)`` (an ``anira::Hard`` with the
+  host blocks left at zero is valid for the same reason). The blocks are doubles: both 0 (unset)
+  or both finite and above 0 with ``host_block_min <= host_block_max``; anything else is
   ``ANIRA_ERROR_INVALID_ARGUMENT`` with a message naming the value. A block may be fractional
-  (see *Fractional blocks* below). ``block_max`` is also the most one call may carry: declare
+  (see *Fractional blocks* below). ``host_block_max`` is also the most one call may carry: declare
   the largest block the host passes, since a Hard entry refuses a larger one.
-- **Flexible windows.** The geometry pins every flexible window (``window_min < window_max``)
+- **Flexible windows.** The host blocks pin every flexible window (``window_min < window_max``)
   at prepare. One inference consumes the same span of the stream on every tensor, so anira
   chooses one **anchor hop**, the anchor elements one inference consumes, for the whole
   model: the anchor, every streamed tensor with a declared time ratio and every flexible
@@ -383,9 +385,9 @@ minted again. On an Async handle it throws ``anira::Error`` with
   fixed window without a declared ratio keeps its own hop. A time ratio ``num/den`` makes the
   anchor hop a multiple of ``den`` (reduced), and each window bounds it. Of the hops that
   leave every such tensor a whole hop within its window, anira takes the largest at or below
-  ``block_max`` (rounded down; one inference per block when the block is one, several when it
+  ``host_block_max`` (rounded down; one inference per block when the block is one, several when it
   is above the hop), else the smallest above it (one inference every few blocks), and without
-  a geometry the smallest. A model whose audio input is flexible and whose latent output
+  host blocks the smallest. A model whose audio input is flexible and whose latent output
   runs at ``time_ratio(1, 2048)`` gets an anchor hop of 2048 under a block of 3000 (one or two
   inferences per call), of 4096 under a block of 4096, and of 2048 under a block of 512 (one
   inference every fourth call). A fixed anchor window is the anchor hop whatever the block,
@@ -403,7 +405,9 @@ minted again. On an Async handle it throws ``anira::Error`` with
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the
-  buffers hold, and the stream stays time-aligned). ``ANIRA_MISS_BYPASS`` (the default) copies
+  buffers hold, and the stream stays time-aligned). The samples a missed block stood in for are
+  discarded when they arrive, never delivered later: a delivered block is the stream at exactly
+  its latency, and a host that stays ahead of the stream keeps missing. ``ANIRA_MISS_BYPASS`` (the default) copies
   the block the same call pushed into the anchored input into the output (``process`` /
   ``process_multi`` with the anchored input's slot; a call on another slot,
   and a pop, which has no input block, deliver zeros), which needs an anchored input ring with
@@ -450,6 +454,28 @@ minted again. On an Async handle it throws ``anira::Error`` with
   ``ANIRA_ERROR_CONFIG`` at ``prepare``, naming ``on_miss``. A contract file can say
   ``"on_miss": "callback"`` but cannot carry a function: set the pair on the parsed contract
   before ``prepare``.
+
+  **The policy fills dropped hops too.** When every inference slot of the handler is still
+  busy (an inference ran far over its budget, the machine stalled), the hops a call completes
+  get no inference: each one is dropped and costs exactly one hop of the policy's fill at its
+  own stream position, behind the inferences submitted before it, and nothing else: the stream
+  stays on its hop grid and is back at its latency once the late inferences are collected.
+  ``ANIRA_MISS_ZEROS`` places zeros; ``ANIRA_MISS_BYPASS`` the dropped input hop of the anchored
+  input itself, the dry signal at its own position; ``ANIRA_MISS_HOLD_LAST`` the head of the
+  last block the output delivered; ``ANIRA_MISS_CALLBACK`` what the host's function makes of the
+  hop. The function is called once per dropped hop, at the drop, on the driver thread inside
+  the entry whose call dropped it, with hop-shaped arrays instead of the call's: every Streamed
+  input slot carries the dropped hop (``[channels, hop]`` of the slot's ring dtype, packed,
+  without ``ANIRA_TENSOR_PLANAR``, the handler's memory, valid for the call), every Streamed
+  output slot a ``[channels, hop]`` tensor of the handler's memory to fill, every other slot
+  an empty tensor; a status other than ``ANIRA_OK`` places zeros, and the entry's own return
+  is not touched (a function that needs to tell the two apart reads the flags: a block's
+  tensors are the caller's own). A fill can wait behind late inferences for at most the
+  latency: a fill held longer would only reach the host late, so the handler keeps the fills
+  of the last ``ceil(latency / hop) + 2`` dropped hops (allocated at ``prepare``) and places
+  an older one as zeros. ``rt_error`` reports a drop as ``ANIRA_ERROR_CAPACITY`` under every
+  policy (:doc:`logging`). A dropped hop never reaches the model: a stateful model's state
+  continues from the last hop it ran, as if the input had jumped by the dropped hops.
 - **Wait ratio.** ``wait_ratio`` is the fraction of the block period a ``_wait`` entry
   (``anira_handler_process_wait`` and its twins, section 3.2) may spend waiting for the
   block's inference when called with ``ANIRA_WAIT_CONTRACT``; ``0`` (the default) never
@@ -506,15 +532,19 @@ sample per host block (a control-rate model whose latent input and parameter out
 frame per 2048 audio samples, say), has an anchor whose block is a fraction of a sample. Anchor
 on a stream at the host rate whenever the model has one (the RAVE decoder of the JUCE example
 anchors on its audio output, ``"anchor": "audio_out"``, and passes the host's own block); the
-fractional geometry is for the model that has none. Its geometry is then the host block
-measured on the anchor, and the rate is in anchor samples per second as well:
+fractional block is for the model that has none. Its block is then the host block
+measured on the anchor, and the host rate is in anchor samples per second as well. A fractional
+block is a fixed one: the count below assumes the same block on every call, so the host
+behind it delivers one block size, and a plugin, whose host promises only a largest block (section
+4.1), anchors on a stream at the host rate and declares its range there, as the RAVE decoder of
+the JUCE example does.
 
 .. code-block:: cpp
 
-    // prepareToPlay(sample_rate, samples_per_block) of a control-rate model: one latent frame
-    // per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
-    const double block = samples_per_block / 2048.0;
-    contract.hard_geometry(block, block, sample_rate / 2048.0);
+    // A host with a fixed block of host_block samples at sample_rate, for a control-rate model:
+    // one latent frame per 2048 host samples, so a 512-sample host block is 0.25 of a frame.
+    const double block = host_block / 2048.0;
+    contract.hard_host_blocks(block, block, sample_rate / 2048.0);
 
 anira takes the block as the rational the latency calculation recovers from it (a relative
 tolerance of 1e-6, so 1/3 and 1/4 are exact), and assumes that the host moves a sample of a
@@ -533,7 +563,7 @@ fourth carries 1; the host keeps the running count itself:
 
 The latency is computed for the worst case, the sample arriving on the last call of its
 accumulation (the latency guide, :doc:`latency`). ``ceil(b)`` is the most one call may carry,
-on a whole block (``block_max`` scaled to the stream) as on a fractional one, and it is
+on a whole block (``host_block_max`` scaled to the stream) as on a fractional one, and it is
 enforced: a Hard entry handed more on any Streamed slot, pushed or popped, refuses the call
 with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves and records it in ``rt_error``,
 where the ring would only have kept the tail. A pop within the bound that the stream cannot
@@ -656,8 +686,9 @@ root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measure
 ``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``,
 ``on_miss`` as ``"bypass"``, ``"hold_last"``, ``"zeros"`` or ``"callback"`` (the policy only:
 the function is set in code), ``wait_ratio`` as a number, the
-geometry keys ``block_min`` / ``block_max`` / ``rate`` (optional, any number, a fractional
-block included; a plugin patches them from the host with ``hard_geometry``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
+host-block keys ``host_block_min`` / ``host_block_max`` / ``host_rate`` (optional, any number, a fractional
+block included; the blocks in elements of the model's anchor tensor and the host rate in anchor
+elements per second, as everywhere; a plugin patches them from the host with ``hard_host_blocks``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
 latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost`` and ``host_domains``
 (``{"audio_in": "host"}``, section 1.3), which stand beside either root.
@@ -1339,7 +1370,7 @@ entry. :doc:`custom_engines` is the full account, with the C++ face
 may then be destroyed by its creator; the handler keeps what it needs) and copies everything;
 ``anira_handler_prepare(h, contract, &err)`` is the blocking quiescence point, never from the
 driver thread and never overlapped by another handler entry: it validates the configuration
-against the Hard contract (the rules of section 1.1 and the contract's own: geometry, an
+against the Hard contract (the rules of section 1.1 and the contract's own: the host blocks, an
 explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes
 and the host domains by canonical name, the processor's real-time promise against its placement),
 loads the model of every candidate that has an entry (once per loaded model anira pools: a
@@ -1532,7 +1563,7 @@ writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a ra
 negative ``shape[1]``, and with samples: NULL memory, a plane count other than ``shape[0]``, a
 NULL plane, a negative stride, a stride of ``0`` on an axis longer than 1 unless every stride
 is ``0``, a channel that does not start on a multiple of the element size), and so is a
-``shape[1]`` above one host block of ``block_max`` on the slot's stream (``ceil`` of the block,
+``shape[1]`` above one host block of ``host_block_max`` on the slot's stream (``ceil`` of the block,
 *Fractional blocks* in section 1.3: a call carries one declared block at most, never cut to
 its tail), a flag bit this library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the
 checks run in the order rank, domain, flags, shape, dtype, memory and strides, then the count
@@ -1645,7 +1676,7 @@ timeout_ms)``, ``pop_data_wait(h, out, slot, &delivered, timeout_ms)`` and
 inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
-``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
+``process`` — and the contract's ``host_block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
 without limit (the 2.x ``set_non_realtime``); on the completion semaphore when the contract's
 ``wait_ratio`` is above ``0``, else by polling every millisecond. They are ``[any-thread,
 blocking]``, legal from the driver thread only where the host accepts a wait there (on
@@ -2027,44 +2058,50 @@ of any extent is legal, as on every non-Streamed spec.
 4. Get ready for Processing
 ---------------------------
 
-Before processing audio data, the handler is prepared with the contract: :cpp:func:`anira::InferenceHandler::prepare` (``anira_handler_prepare``) resolves the plans of the pipeline's candidates, loads the models, allocates all necessary memory in advance and returns the :cpp:class:`anira::PlanReport`, the plans that run here (section 3.2, *The plan report*). It is the blocking quiescence point of the handler, called from the main thread and never from the real-time thread; a host calls it again for a new geometry (a new block size or sample rate), which drains the in-flight work first. It throws ``anira::Error`` with the status and the reason and leaves the handler unprepared. The handler starts on the plan of the model configuration's default engine (``model.default_engine(...)``) when that engine has a plan, else on plan 0 (section 4.3).
+Before processing audio data, the handler is prepared with the contract: :cpp:func:`anira::InferenceHandler::prepare` (``anira_handler_prepare``) resolves the plans of the pipeline's candidates, loads the models, allocates all necessary memory in advance and returns the :cpp:class:`anira::PlanReport`, the plans that run here (section 3.2, *The plan report*). It is the blocking quiescence point of the handler, called from the main thread and never from the real-time thread; a host calls it again for new host blocks (a new block size or sample rate), which drains the in-flight work first. It throws ``anira::Error`` with the status and the reason and leaves the handler unprepared. The handler starts on the plan of the model configuration's default engine (``model.default_engine(...)``) when that engine has a plan, else on plan 0 (section 4.3).
 
-4.1. The host geometry
-~~~~~~~~~~~~~~~~~~~~~~
+4.1. The host blocks
+~~~~~~~~~~~~~~~~~~~~
 
-The host's buffer size and sample rate are the geometry of the Hard contract (section 1.3): ``block_min`` and ``block_max`` in samples of the *anchor tensor* and ``rate`` in anchor samples per second. A contract loaded from a file carries no geometry; the host patches it in once it knows its block and prepares with the contract:
+The host's buffer size and sample rate are the host blocks of the Hard contract (section 1.3): ``host_block_min`` and ``host_block_max`` in samples of the *anchor tensor* and ``host_rate`` in anchor samples per second. A contract loaded from a file carries no host blocks; the host patches them in once it knows its block and prepares with the contract:
 
 .. code-block:: cpp
 
-    contract.hard_geometry(2048, 2048, 44100.0);  // a fixed block of 2048 samples at 44.1 kHz
+    contract.hard_host_blocks(2048, 2048, 44100.0);  // a fixed block of 2048 samples at 44.1 kHz
     const anira::PlanReport report = inference_handler.prepare(contract);
 
-A contract written in code names the geometry on the aggregate, the budget beside it (section 1.3):
+A contract written in code names the host blocks on the aggregate, the budget beside it (section 1.3):
 
 .. code-block:: cpp
 
     using namespace std::chrono_literals;
-    inference_handler.prepare(anira::Hard{.block_min = 2048,
-                                          .block_max = 2048,
-                                          .rate = 44100.0,
+    inference_handler.prepare(anira::Hard{.host_block_min = 2048,
+                                          .host_block_max = 2048,
+                                          .host_rate = 44100.0,
                                           .budget = 10ms,
                                           .warmup = ANIRA_WARMUP_NONE});
 
-``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver. A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
+``host_block_min == host_block_max`` is a fixed-block host. A ``host_block_min`` below ``host_block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver, each held from call to call. A host that changes the size between calls can still miss a block in rare sequences (a full block right after a short one that completed a hop, `issue #228 <https://github.com/anira-project/anira/issues/228>`_). A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
 
 .. code-block:: cpp
 
-    contract.hard_geometry(1, 2048, 44100.0);  // blocks of 1 to 2048 samples
+    contract.hard_host_blocks(1, 2048, 44100.0);  // blocks of 1 to 2048 samples
+
+A plugin host promises a largest block, not a fixed one (JUCE's ``prepareToPlay`` names the maximum
+only, CLAP's ``activate`` both ends), so a plugin declares that range: the latency anira reports then
+covers the smallest block as well (up to the varying sequences above), and the plugin hands it to
+the host for compensation. A fixed block is for a host that never changes it, at the lower
+latency.
 
 The anchor is the streamed tensor whose samples are the unit of both values. By default it is resolved automatically: the first streamed input, or, for generator models with no streamed input, the first streamed output. For models with several streamed tensors, name it with ``model_config.anchor("audio_out")`` (section 1.2) or ``"anchor": "audio_out"`` in the model file; a name that is not a streamed tensor is refused at prepare with ``ANIRA_ERROR_CONFIG``.
 
 ..  note::
-    A fractional geometry prepares a handler that receives one anchor sample every few host buffer cycles: ``contract.hard_geometry(0.5, 0.5, 44100.0 / 2048.0)`` takes one anchor sample every second call, for a model whose anchor runs at a control rate of one sample per 2048 audio samples. The latency calculation accounts for this, assuming the sample is provided during the second host buffer cycle (the worst case). If your model produces output at twice the input rate, the handler can return one sample per host buffer cycle.
+    Fractional host blocks prepare a handler that receives one anchor sample every few host buffer cycles: ``contract.hard_host_blocks(0.5, 0.5, 44100.0 / 2048.0)`` takes one anchor sample every second call, for a model whose anchor runs at a control rate of one sample per 2048 audio samples. The latency calculation accounts for this, assuming the sample is provided during the second host buffer cycle (the worst case). If your model produces output at twice the input rate, the handler can return one sample per host buffer cycle.
 
 4.2. Prepare
 ~~~~~~~~~~~~
 
-:cpp:func:`anira::InferenceHandler::prepare` takes a :cpp:class:`anira::ContractHandle`, an ``anira::Hard`` aggregate or an ``anira::Contract`` (``std::variant<anira::Hard, anira::Async>``); an Async contract is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release. This method must be called before processing audio data. You can optionally declare the latency of the inference process on the contract, in samples of an output tensor, for one output or for several. If you do not declare one, anira calculates a minimal latency from the host geometry and the model configuration. This latency calculation is quite sophisticated and you can read more about it in the :doc:`latency` section. :cpp:func:`anira::InferenceHandler::get_latency` reads the figure of one output slot (slot 0 by default) and :cpp:func:`anira::InferenceHandler::get_latencies` the figures of every output, what a plugin reports to its host.
+:cpp:func:`anira::InferenceHandler::prepare` takes a :cpp:class:`anira::ContractHandle`, an ``anira::Hard`` aggregate or an ``anira::Contract`` (``std::variant<anira::Hard, anira::Async>``); an Async contract is refused with ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release. This method must be called before processing audio data. You can optionally declare the latency of the inference process on the contract, in samples of an output tensor, for one output or for several. If you do not declare one, anira calculates a minimal latency from the host blocks and the model configuration. This latency calculation is quite sophisticated and you can read more about it in the :doc:`latency` section. :cpp:func:`anira::InferenceHandler::get_latency` reads the figure of one output slot (slot 0 by default) and :cpp:func:`anira::InferenceHandler::get_latencies` the figures of every output, what a plugin reports to its host.
 
 **Preparing without a declared latency (automatic latency calculation):**
 
@@ -2123,7 +2160,7 @@ The handler starts on the plan of the default engine; to run another one, look i
 
 Now we are ready to process audio in the process callback of our real-time audio application. For streamable as well as non-streamable tensors, the :cpp:func:`anira::InferenceHandler::process` or the :cpp:func:`anira::InferenceHandler::push_data` and :cpp:func:`anira::InferenceHandler::pop_data` methods can be used to process audio data. All of them can be used in the real-time thread: they are ``noexcept`` and ``ANIRA_NONBLOCKING`` one-line forwarders onto the Hard entries of section 3.2, which never wait, allocate or throw. Each returns an ``anira_status``: ``ANIRA_OK``, ``ANIRA_MISSED`` for a block the miss policy filled (a success, section 1.3), or a failure whose reason :cpp:func:`anira::InferenceHandler::rt_error` keeps. Each has a form over one slot of each side and a form over every slot, and an optional ``delivered`` out parameter receives the samples written per output.
 
-The methods take :cpp:class:`anira::Tensor` descriptors, the ``anira_tensor`` of section 3.3. A host with channel pointers builds one planar tensor over its pointer array once per geometry, with its largest block as ``shape[1]``, and stores the channel pointers and the block's sample count before each call; nothing is copied but the samples:
+The methods take :cpp:class:`anira::Tensor` descriptors, the ``anira_tensor`` of section 3.3. A host with channel pointers builds one planar tensor over its pointer array once per prepare, with its largest block as ``shape[1]``, and stores the channel pointers and the block's sample count before each call; nothing is copied but the samples:
 
 .. code-block:: cpp
 
@@ -2326,7 +2363,7 @@ The call is wait-free and real-time safe for all handler configurations, includi
     :cpp:func:`anira::InferenceHandler::reset` does not wait for in-flight inferences to finish: an inference thread may still be executing a — discarded — inference after the call returns, including user code in a custom engine or a processor's ``before_inference`` / ``after_inference`` hooks. If you need the guarantee that no inference thread touches shared state anymore (e.g. before mutating parameters such code reads), call :cpp:func:`anira::InferenceHandler::prepare` — which drains all in-flight work — or synchronize within your own engine.
 
 ..  note::
-    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected chunks complete as silence at their correct stream positions; the stream stays time-aligned and recovers by itself.
+    Until in-flight work finishes (bounded by one inference duration), its internal structures stay captive. If fresh data submitted in that window exhausts the remaining structure pool — likely on exclusive (stateful) handlers, whose pools are small — the affected hops are dropped and filled under the miss policy at their own stream positions (section 1.3, *Miss policy*); the stream stays on its hop grid and recovers by itself.
 
 ..  note::
     What a reset re-initialises, beside the rings and the stream position: **declared state**, the pair of a model whose state is explicit (``ANIRA_ROLE_STATE``, section 1.1), zeroed on the inference thread at the first inference of the new stream, so an inference still in flight across the reset cannot seed the new stream (section 3.4); **the engine's own state** (a recurrent hidden state the model does not declare, a variable tensor), through the engine's ``reset`` slot, for an exclusive handler (``ANIRA_MODEL_STATEFUL`` or a declared pair), on the inference thread right before the first ``process`` of the new stream, on what that handler's prepare built (TensorFlow Lite resets the variable tensors of the handler's own interpreter there, a registered engine whatever its prepared handle keeps, :doc:`custom_engines`; a handler whose model is stateless runs on the shared call slots of the loaded model, which keep nothing between calls, and is never reset); and **the processor's own state** (a resampler, an overlap buffer, a filter's history), through the processor's ``reset`` slot, before the first ``pre_process`` of the new stream (section 2). The reset stays wait-free on the caller's side: each of the three is re-initialised at the first chunk of the new stream, keyed on the chunk's generation stamp.

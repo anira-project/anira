@@ -84,14 +84,14 @@ const run = async (): Promise<Result> => {
 
   // A new geometry on the node (as after a device change): the latency changes, and so does the
   // dry path's delay. Four quanta, doubled until past the latency: a Hard handler's latency
-  // covers block_max, so it changes (a block_max within it may leave it as it was).
-  let blockMax = 4 * QUANTUM
-  while (blockMax <= latency) blockMax *= 2
-  example.applyGeometry({ quantum: QUANTUM, burst: blockMax })
+  // covers host_block_max, so it changes (a host_block_max within it may leave it as it was).
+  let hostBlockMax = 4 * QUANTUM
+  while (hostBlockMax <= latency) hostBlockMax *= 2
+  example.applyGeometry({ quantum: QUANTUM, burst: hostBlockMax })
   const changed = example.getLatency()
   check(
     changed !== latency,
-    `the node re-prepared at block_max ${blockMax}: latency ${latency} -> ${changed}`
+    `the node re-prepared at host_block_max ${hostBlockMax}: latency ${latency} -> ${changed}`
   )
   check(
     Math.abs(example.dry.delayTime.value - changed / RATE) < 1e-7,
