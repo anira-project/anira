@@ -33,8 +33,7 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  nullptr,
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
-    , dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
-{
+    , dry_wet_mixer(k_max_dry_latency) {
     for (const juce::String& choice : PluginParameters::backendTypes) {
         backend_queries.push_back(backend_query(choice));
     }
@@ -152,6 +151,7 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 #endif
 
     setLatencySamples(new_latency);
+    jassert(new_latency <= k_max_dry_latency);  // the dry path's delay covers it
     dry_wet_mixer.setWetLatency((float)new_latency);
 
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {

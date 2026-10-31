@@ -168,6 +168,9 @@ bool AniraClapPluginExample::activate(double sampleRate,
         std::cerr << "anira: " << error.what() << std::endl;
         return false;
     }
+    // The handler starts on the model's default plan; the Backend choice the host shows (its
+    // default "Bypassed", or what it set before this activate) is applied over the new report.
+    apply_backend();
 
     m_audio = anira::Tensor::from_host_planar<float>(
         std::span<float* const>(m_channels),
@@ -233,13 +236,7 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) 
         *m_param_to_value[v->param_id] = v->value;
 
         if (m_param_to_value[v->param_id] == &m_param_backend) {
-            // The plan that runs the chosen backend; an engine this build or the model lacks
-            // has none, and the choice changes nothing.
-            const anira::PlanQuery& query =
-                k_backend_queries.at(static_cast<size_t>(m_param_backend));
-            if (const std::optional<uint32_t> plan = m_plan_report.find(query)) {
-                m_inference_handler.set_plan(*plan);
-            }
+            apply_backend();
         } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {
             auto new_mix = static_cast<float>(m_param_dry_wet / 100.0);
             m_dry_wet_mixer.set_mix(new_mix);
@@ -254,6 +251,14 @@ void AniraClapPluginExample::paramsFlush(const clap_input_events* in,
     for (auto e = 0U; e < sz; ++e) {
         auto nextEvent = in->get(in, e);
         handleInboundEvent(nextEvent);
+    }
+}
+
+void AniraClapPluginExample::apply_backend() noexcept {
+    const auto choice = static_cast<size_t>(m_param_backend);
+    if (choice >= k_backend_queries.size()) { return; }
+    if (const std::optional<uint32_t> plan = m_plan_report.find(k_backend_queries[choice])) {
+        m_inference_handler.set_plan(*plan);
     }
 }
 

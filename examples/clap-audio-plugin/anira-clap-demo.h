@@ -61,6 +61,11 @@ public:
     uint32_t latencyGet() const noexcept override;
 
 private:
+    /// Selects the plan of the report that runs the Backend choice (m_param_backend); an
+    /// engine this build or the model lacks has none, and the choice changes nothing. Called by
+    /// activate (the new report) and by every change of the parameter.
+    void apply_backend() noexcept;
+
     double m_param_dry_wet{100.0}, m_param_backend{3};
     std::unordered_map<clap_id, double*> m_param_to_value;
     uint32_t m_plugin_latency;

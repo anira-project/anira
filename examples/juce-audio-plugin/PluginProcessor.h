@@ -218,6 +218,10 @@ private:
     std::array<float*, 2> channels{};
     anira::Tensor audio{};
 
+    // The dry path is delayed by the reported latency through a delay line of this many samples
+    // (juce::dsp::DryWetMixer delays sample by sample, so a latency above the block is fine; it
+    // clamps one above its capacity).
+    static constexpr int k_max_dry_latency = 32768;
     juce::dsp::DryWetMixer<float> dry_wet_mixer;
 
     std::atomic<bool> non_realtime = false;
