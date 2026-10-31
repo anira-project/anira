@@ -510,7 +510,8 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(hard->hard()->m_warmup_iterations, 200u);
     EXPECT_EQ(hard->hard()->m_on_miss, ANIRA_MISS_ZEROS);
-    EXPECT_EQ(hard->hard()->m_block_max, 0u) << "geometry keys are optional; the host patches them";
+    EXPECT_EQ(hard->hard()->m_block_max, 0u)
+        << "the host-block keys are optional; the host patches them";
     anira_contract_destroy(hard);
 }
 
@@ -627,9 +628,9 @@ TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
     EXPECT_EQ(contract, nullptr);
 }
 
-// The geometry keys take any number: a fractional block reads back as the double the text
+// The host-block keys take any number: a fractional block reads back as the double the text
 // spells (the shortest round-trip form of 1/3 included), an integer as itself.
-TEST(AbiJsonContract, FractionalGeometry) {
+TEST(AbiJsonContract, FractionalHostBlocks) {
     static constexpr const char* k_text =
         R"({"hard": {"block_min": 0.3333333333333333, "block_max": 0.25, "rate": 93.75}})";
     anira_contract* contract = nullptr;
@@ -649,7 +650,7 @@ TEST(AbiJsonContract, FractionalGeometry) {
     double block_min = 0.0;
     double block_max = 0.0;
     double rate = 0.0;
-    ASSERT_EQ(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate), ANIRA_OK);
+    ASSERT_EQ(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate), ANIRA_OK);
     EXPECT_EQ(block_min, 0.25);
     EXPECT_EQ(block_max, 1.0 / 3.0);
     EXPECT_EQ(rate, 93.75);
@@ -659,7 +660,7 @@ TEST(AbiJsonContract, FractionalGeometry) {
     contract = nullptr;
     ASSERT_EQ(anira_contract_from_json(k_whole, std::strlen(k_whole), &contract, &err), ANIRA_OK)
         << err.message;
-    ASSERT_EQ(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate), ANIRA_OK);
+    ASSERT_EQ(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate), ANIRA_OK);
     EXPECT_EQ(block_min, 1.0);
     EXPECT_EQ(block_max, 512.0);
     anira_contract_destroy(contract);

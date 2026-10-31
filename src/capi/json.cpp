@@ -760,7 +760,7 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
     for (const auto& [key, value] : node.items()) {
         const std::string key_path = child(path, key.c_str());
         if (key == "block_min") {
-            // Any number: a fractional block is legal (geometry_refusal below).
+            // Any number: a fractional block is legal (host_blocks_refusal below).
             hard.m_block_min = require_number(value, key_path);
         } else if (key == "block_max") {
             hard.m_block_max = require_number(value, key_path);
@@ -830,7 +830,7 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
         }
     }
     const std::string refusal =
-        anira::capi::geometry_refusal(hard.m_block_min, hard.m_block_max, hard.m_rate);
+        anira::capi::host_blocks_refusal(hard.m_block_min, hard.m_block_max, hard.m_rate);
     if (!refusal.empty()) { fail_json(path, refusal); }
 }
 

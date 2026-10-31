@@ -37,7 +37,7 @@ const handlers = async (anira, context, model, count, geometry) => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(geometry.quantum, geometry.burst, RATE)
+  ).hardHostBlocks(geometry.quantum, geometry.burst, RATE)
   const out = []
   for (let i = 0; i < count; i++) {
     const pipeline = Pipeline.create(anira).addInference(model)

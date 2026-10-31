@@ -12,18 +12,18 @@
 #include "../support/session_cases.h"
 #include "gtest/gtest.h"
 
-using anira_test::SizingGeometry;
+using anira_test::SizingHostBlocks;
 using anira_test::SizingSession;
 using anira_test::SizingSlot;
 
 // The latency a prepared session reports per output (anira_handler_get_latencies, the
-// manager's vector), for the geometries and models below, with and without the contract's
+// manager's vector), for the host blocks and models below, with and without the contract's
 // own stream latencies; then the one-sided models. The cases are C handlers' over the custom
 // row (test/support/session_cases.h).
 
 namespace {
 struct InferenceManagerTestParams {
-    SizingGeometry m_geometry;
+    SizingHostBlocks m_host_blocks;
     std::vector<SizingSlot> m_inputs;
     std::vector<SizingSlot> m_outputs;
     double m_budget_ms = 0.0;
@@ -33,8 +33,9 @@ struct InferenceManagerTestParams {
 };
 
 std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
-    stream << "{ block = " << params.m_geometry.m_block << ", rate = " << params.m_geometry.m_rate
-           << ", budget = " << params.m_budget_ms << " ms }";
+    stream << "{ block = " << params.m_host_blocks.m_block
+           << ", rate = " << params.m_host_blocks.m_rate << ", budget = " << params.m_budget_ms
+           << " ms }";
     return stream;
 }
 
@@ -42,11 +43,13 @@ anira::ModelConfig model_of(const InferenceManagerTestParams& params) {
     return anira_test::sizing_model(params.m_inputs,
                                     params.m_outputs,
                                     params.m_instances,
-                                    params.m_geometry.m_anchor);
+                                    params.m_host_blocks.m_anchor);
 }
 
 anira::ContractHandle contract_of(const InferenceManagerTestParams& params) {
-    return anira_test::sizing_contract(params.m_geometry, params.m_budget_ms, params.m_wait_ratio);
+    return anira_test::sizing_contract(params.m_host_blocks,
+                                       params.m_budget_ms,
+                                       params.m_wait_ratio);
 }
 
 /// The latencies the prepared handler reports, one per output.
@@ -62,17 +65,18 @@ std::vector<unsigned int> latencies_of(const SizingSession& session, size_t num_
 // Named params shared by the full CalculateLatency sweep and the
 // custom-latency subset instantiation below — one source of truth.
 InferenceManagerTestParams single_tensor_param() {
-    return InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(2048, 48000, true),
-                                      .m_inputs = {{.m_elements = 2048}},
-                                      .m_outputs = {{.m_elements = 2048}},
-                                      .m_budget_ms = 1.0,
-                                      .m_expected_latency = {4095}};
+    return InferenceManagerTestParams{
+        .m_host_blocks = anira_test::sizing_host_blocks(2048, 48000, true),
+        .m_inputs = {{.m_elements = 2048}},
+        .m_outputs = {{.m_elements = 2048}},
+        .m_budget_ms = 1.0,
+        .m_expected_latency = {4095}};
 }
 
 InferenceManagerTestParams multi_tensor_param() {
     return InferenceManagerTestParams{
-        .m_geometry =
-            anira_test::sizing_geometry(1500, 44100. / 8., false, anira_test::input_anchor(1)),
+        .m_host_blocks =
+            anira_test::sizing_host_blocks(1500, 44100. / 8., false, anira_test::input_anchor(1)),
         .m_inputs = {{.m_elements = 4, .m_channels = 4}, {.m_elements = 256, .m_channels = 2}},
         .m_outputs = {{.m_elements = 512}, {.m_elements = 192}},
         .m_budget_ms = 50.0,
@@ -83,8 +87,8 @@ InferenceManagerTestParams multi_tensor_param() {
 
 InferenceManagerTestParams non_streamable_mix_param() {
     return InferenceManagerTestParams{
-        .m_geometry =
-            anira_test::sizing_geometry(256., 48000. / 8, false, anira_test::input_anchor(1)),
+        .m_host_blocks =
+            anira_test::sizing_host_blocks(256., 48000. / 8, false, anira_test::input_anchor(1)),
         .m_inputs = {{.m_elements = 4, .m_hop = 0},
                      {.m_elements = 512, .m_channels = 2, .m_hop = 256}},
         .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_hop = 0}},
@@ -99,7 +103,7 @@ InferenceManagerTestParams hop_160_param(double budget_ms,
                                          uint32_t instances,
                                          unsigned int latency) {
     return InferenceManagerTestParams{
-        .m_geometry = anira_test::sizing_geometry(2048, 48000, true),
+        .m_host_blocks = anira_test::sizing_host_blocks(2048, 48000, true),
         .m_inputs = {{.m_elements = 1024, .m_hop = 160}},
         .m_outputs = {{.m_elements = 360, .m_channels = 2, .m_hop = 1}},
         .m_budget_ms = budget_ms,
@@ -108,12 +112,12 @@ InferenceManagerTestParams hop_160_param(double budget_ms,
         .m_expected_latency = {latency}};
 }
 
-InferenceManagerTestParams mono_param(SizingGeometry geometry,
+InferenceManagerTestParams mono_param(SizingHostBlocks blocks,
                                       int64_t in,
                                       int64_t out,
                                       double budget_ms,
                                       unsigned int latency) {
-    return InferenceManagerTestParams{.m_geometry = geometry,
+    return InferenceManagerTestParams{.m_host_blocks = blocks,
                                       .m_inputs = {{.m_elements = in}},
                                       .m_outputs = {{.m_elements = out}},
                                       .m_budget_ms = budget_ms,
@@ -216,16 +220,16 @@ TEST(InferenceManagerCustomLatency, RefusesAFigureBelowTheInternalModelLatency) 
                                                               2,
                                                               std::nullopt,
                                                               {k_internal_latency});
-    const SizingGeometry geometry = anira_test::sizing_geometry(2048, 48000, true);
+    const SizingHostBlocks blocks = anira_test::sizing_host_blocks(2048, 48000, true);
     {
-        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        anira::ContractHandle contract = anira_test::sizing_contract(blocks, 1.0, 0.0);
         contract.hard_latency("out0", 10);
         const SizingSession session(model, contract);
         EXPECT_EQ(session.prepared(), ANIRA_ERROR_CONFIG)
             << "a custom latency below the internal model latency is refused";
     }
     {
-        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        anira::ContractHandle contract = anira_test::sizing_contract(blocks, 1.0, 0.0);
         contract.hard_latency("out0", static_cast<uint32_t>(k_internal_latency));
         const SizingSession session(model, contract);
         ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
@@ -234,7 +238,7 @@ TEST(InferenceManagerCustomLatency, RefusesAFigureBelowTheInternalModelLatency) 
             << "the internal model latency itself is a figure the contract may declare";
     }
     {
-        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        anira::ContractHandle contract = anira_test::sizing_contract(blocks, 1.0, 0.0);
         contract.hard_latency("out0", 500);
         const SizingSession session(model, contract);
         ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
@@ -254,74 +258,81 @@ INSTANTIATE_TEST_SUITE_P(
         // block on an idle pool
         hop_160_param(4.9, 0.5, 1, 14),
         hop_160_param(4.0, 0.0, 2, 13),
-        mono_param(anira_test::sizing_geometry(1, 48000.0 / 2048, true), 1, 2048, 40.0, 5885),
-        mono_param(anira_test::sizing_geometry(2048, 48000.0, true), 2048, 1, 40.0, 2),
-        mono_param(anira_test::sizing_geometry(2048, 48000.0, false), 2048, 1, 39.0, 1),
-        mono_param(anira_test::sizing_geometry(1, 48000.0 / 2048), 1, 2048, 50.0, 4096),
-        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(256, 48000.0, true),
-                                   .m_inputs = {{.m_elements = 2048}},
-                                   .m_outputs = {{.m_elements = 4, .m_channels = 4}},
-                                   .m_budget_ms = 20.0,
-                                   .m_expected_latency = {1}},
+        mono_param(anira_test::sizing_host_blocks(1, 48000.0 / 2048, true), 1, 2048, 40.0, 5885),
+        mono_param(anira_test::sizing_host_blocks(2048, 48000.0, true), 2048, 1, 40.0, 2),
+        mono_param(anira_test::sizing_host_blocks(2048, 48000.0, false), 2048, 1, 39.0, 1),
+        mono_param(anira_test::sizing_host_blocks(1, 48000.0 / 2048), 1, 2048, 50.0, 4096),
         InferenceManagerTestParams{
-            .m_geometry = anira_test::sizing_geometry(1. / 256., 48000. / 2048.),
+            .m_host_blocks = anira_test::sizing_host_blocks(256, 48000.0, true),
+            .m_inputs = {{.m_elements = 2048}},
+            .m_outputs = {{.m_elements = 4, .m_channels = 4}},
+            .m_budget_ms = 20.0,
+            .m_expected_latency = {1}},
+        InferenceManagerTestParams{
+            .m_host_blocks = anira_test::sizing_host_blocks(1. / 256., 48000. / 2048.),
             .m_inputs = {{.m_elements = 4, .m_channels = 4}},
             .m_outputs = {{.m_elements = 2048}},
             .m_budget_ms = 40.0,
             .m_expected_latency = {3960}},
-        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(1., 48000. / 2048.),
-                                   .m_inputs = {{.m_elements = 16, .m_channels = 16}},
-                                   .m_outputs = {{.m_elements = 2048}},
-                                   .m_budget_ms = 40.0,
-                                   .m_expected_latency = {2048}},
         InferenceManagerTestParams{
-            .m_geometry = anira_test::sizing_geometry(1., 48000. / 2048., true),
+            .m_host_blocks = anira_test::sizing_host_blocks(1., 48000. / 2048.),
+            .m_inputs = {{.m_elements = 16, .m_channels = 16}},
+            .m_outputs = {{.m_elements = 2048}},
+            .m_budget_ms = 40.0,
+            .m_expected_latency = {2048}},
+        InferenceManagerTestParams{
+            .m_host_blocks = anira_test::sizing_host_blocks(1., 48000. / 2048., true),
             .m_inputs = {{.m_elements = 16, .m_channels = 16}},
             .m_outputs = {{.m_elements = 2048}, {.m_elements = 512, .m_channels = 2}},
             .m_budget_ms = 40.0,
             .m_expected_latency = {6144, 768}},
         InferenceManagerTestParams{
-            .m_geometry =
-                anira_test::sizing_geometry(256., 48000. / 8, false, anira_test::input_anchor(1)),
+            .m_host_blocks = anira_test::sizing_host_blocks(256.,
+                                                            48000. / 8,
+                                                            false,
+                                                            anira_test::input_anchor(1)),
             .m_inputs = {{.m_elements = 16, .m_channels = 16},
                          {.m_elements = 512, .m_channels = 2}},
             .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
             .m_budget_ms = 40.0,
             .m_expected_latency = {2048, 128}},
         InferenceManagerTestParams{
-            .m_geometry =
-                anira_test::sizing_geometry(128., 48000. / 8, true, anira_test::input_anchor(1)),
+            .m_host_blocks =
+                anira_test::sizing_host_blocks(128., 48000. / 8, true, anira_test::input_anchor(1)),
             .m_inputs = {{.m_elements = 16, .m_channels = 16},
                          {.m_elements = 512, .m_channels = 2}},
             .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
             .m_budget_ms = 40.0,
             .m_expected_latency = {6144, 384}},
         InferenceManagerTestParams{
-            .m_geometry =
-                anira_test::sizing_geometry(128., 48000. / 8, true, anira_test::input_anchor(1)),
+            .m_host_blocks =
+                anira_test::sizing_host_blocks(128., 48000. / 8, true, anira_test::input_anchor(1)),
             .m_inputs = {{.m_elements = 16, .m_channels = 16},
                          {.m_elements = 512, .m_channels = 2}},
             .m_outputs = {{.m_elements = 4096, .m_channels = 2}},
             .m_budget_ms = 40.0,
             .m_expected_latency = {4924}},
         // Non-power-of-two buffer size tests
-        mono_param(anira_test::sizing_geometry(100, 48000), 2048, 2048, 13.0, 2744),
-        mono_param(anira_test::sizing_geometry(300, 44100), 1024, 1024, 40.0, 2820),
-        InferenceManagerTestParams{.m_geometry = anira_test::sizing_geometry(2.5, 48000. / 2048.),
-                                   .m_inputs = {{.m_elements = 8, .m_channels = 8}},
-                                   .m_outputs = {{.m_elements = 1024}},
-                                   .m_budget_ms = 12.0,
-                                   .m_expected_latency = {3072}},
+        mono_param(anira_test::sizing_host_blocks(100, 48000), 2048, 2048, 13.0, 2744),
+        mono_param(anira_test::sizing_host_blocks(300, 44100), 1024, 1024, 40.0, 2820),
         InferenceManagerTestParams{
-            .m_geometry = anira_test::sizing_geometry(2.5, 48000. / 2048., true),
+            .m_host_blocks = anira_test::sizing_host_blocks(2.5, 48000. / 2048.),
+            .m_inputs = {{.m_elements = 8, .m_channels = 8}},
+            .m_outputs = {{.m_elements = 1024}},
+            .m_budget_ms = 12.0,
+            .m_expected_latency = {3072}},
+        InferenceManagerTestParams{
+            .m_host_blocks = anira_test::sizing_host_blocks(2.5, 48000. / 2048., true),
             .m_inputs = {{.m_elements = 8, .m_channels = 8}},
             .m_outputs = {{.m_elements = 1024}},
             .m_budget_ms = 13.0,
             .m_expected_latency = {3583}},
         multi_tensor_param(),
         InferenceManagerTestParams{
-            .m_geometry =
-                anira_test::sizing_geometry(1500, 44100. / 8., true, anira_test::input_anchor(1)),
+            .m_host_blocks = anira_test::sizing_host_blocks(1500,
+                                                            44100. / 8.,
+                                                            true,
+                                                            anira_test::input_anchor(1)),
             .m_inputs = {{.m_elements = 4, .m_channels = 4},
                          {.m_elements = 256, .m_channels = 2},
                          {.m_elements = 2}},
@@ -344,8 +355,8 @@ INSTANTIATE_TEST_SUITE_P(CustomLatency,
 // =============================================================================
 
 TEST(InferenceManagerOneSided, GeneratorLatencyEqualsTwoSidedTwin) {
-    const SizingGeometry geometry = anira_test::sizing_geometry(512, 48000, true);
-    const anira::ContractHandle contract = anira_test::sizing_contract(geometry, 10.0, 0.0);
+    const SizingHostBlocks blocks = anira_test::sizing_host_blocks(512, 48000, true);
+    const anira::ContractHandle contract = anira_test::sizing_contract(blocks, 10.0, 0.0);
     const SizingSession generator(
         anira_test::sizing_model({{.m_elements = 4, .m_hop = 0}}, {{.m_elements = 2048}}, 2),
         contract);
@@ -363,7 +374,7 @@ TEST(InferenceManagerOneSided, AnalyserLatencyIsZero) {
         anira_test::sizing_model({{.m_elements = 2048}, {.m_elements = 1, .m_hop = 0}},
                                  {{.m_elements = 1, .m_hop = 0}},
                                  2),
-        anira_test::sizing_contract(anira_test::sizing_geometry(512, 48000, true), 10.0, 0.0));
+        anira_test::sizing_contract(anira_test::sizing_host_blocks(512, 48000, true), 10.0, 0.0));
     ASSERT_EQ(analyser.prepared(), ANIRA_OK) << analyser.message();
 
     EXPECT_EQ(latencies_of(analyser, 1), std::vector<unsigned int>{0});

@@ -414,7 +414,7 @@ const probeBurst = async (context: AudioContext, quantum: number) => {
 
 /**
  * The render geometry of `context`, what a Hard contract for a handler streaming through an
- * audio node on it declares: `contract.hardGeometry(g.quantum, g.burst, context.sampleRate)`.
+ * audio node on it declares: `contract.hardHostBlocks(g.quantum, g.burst, context.sampleRate)`.
  *
  * `quantum` is the context's `renderQuantumSize` (Web Audio API, Render Quantum Sizes: the size
  * of every process() call, fixed for the context's life, `setSinkId` included), else 128 where

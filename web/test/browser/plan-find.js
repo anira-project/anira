@@ -53,7 +53,7 @@ const run = async () => {
   })
   const contract = (
     await ContractHandle.fromUrl(anira, new URL('gain.contract.json', MODELS))
-  ).hardGeometry(QUANTUM, QUANTUM, RATE)
+  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
 
   const context = Context.create(anira, {
     threads: 1,

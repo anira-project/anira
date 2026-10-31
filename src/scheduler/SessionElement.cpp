@@ -400,8 +400,8 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     const std::vector<long>& custom_latency = custom_latencies.m_outputs;
     // Latency and inference-slot count in closed form (see LatencyCalculator): the
     // buffer-adaptation delay of Rath & Geier, the inference-queue term and, when the
-    // contract allows smaller blocks, the worst case over every smaller block size. A
-    // geometry that cannot size the session throws here, before any session state is touched.
+    // contract allows smaller blocks, the worst case over every smaller block size. Host
+    // blocks that cannot size the session throw here, before any session state is touched.
     LatencyCalculator const latency_calculator(m_derived, m_hard, m_num_instances);
     m_block_hops = latency_calculator.get_block_hops();
     m_input_driven = has_streamable_input();

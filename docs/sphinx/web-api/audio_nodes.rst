@@ -140,7 +140,7 @@ Device changes
    .. code-block:: ts
 
       const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-      contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
+      contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
       audioNode.prepare(contract)
 
    A node's rendering on the audio thread hides the callback's runs from the probe: in headless

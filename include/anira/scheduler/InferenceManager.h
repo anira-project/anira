@@ -100,7 +100,7 @@ public:
     /**
      * @brief Prepares the session for the Hard contract it reads
      *
-     * Sizes the session for the contract's geometry, budget and wait ratio (Core::
+     * Sizes the session for the contract's host blocks, budget and wait ratio (Core::
      * prepare_session()), with the caller's latencies and the element type of every send and
      * receive ring named per slot, and readies the copy path. This method must be called
      * before processing begins, and again whenever the contract changes.

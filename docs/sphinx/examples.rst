@@ -17,7 +17,7 @@ Every bundled model ships its configuration as files next to its model directory
 section 1.5 of the :doc:`usage` guide describes: a *model file* (``<model>.model.json``: the
 model's exports per engine with paths relative to the file, the tensor specs, the state) and a
 *contract file* (``<model>.contract.json``: the per-inference budget and the warm-up; the host
-geometry is patched in at prepare). ``extras/models/model_files.h`` names them for the examples
+blocks are patched in at prepare). ``extras/models/model_files.h`` names them for the examples
 and the tests. Covered are the steerable-nafx CNN in three sizes (``cnn/``), GuitarLSTM
 (``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo
 and the stereo StatefulAccumulatorNetwork with its declared State pair (``model-pool/``; the
@@ -95,9 +95,9 @@ Key files:
 
 Both plugins declare the host's real block range on the Hard contract, since neither host promises
 a fixed block. JUCE's ``prepareToPlay(sampleRate, samplesPerBlock)`` names the largest block only,
-so the JUCE plugin prepares with ``hard_geometry(1, samplesPerBlock, sampleRate)``; CLAP's
+so the JUCE plugin prepares with ``hard_host_blocks(1, samplesPerBlock, sampleRate)``; CLAP's
 ``activate(sampleRate, minFrameCount, maxFrameCount)`` names both ends, so the CLAP plugin prepares
-with ``hard_geometry(max(1, minFrameCount), maxFrameCount, sampleRate)``. Every
+with ``hard_host_blocks(max(1, minFrameCount), maxFrameCount, sampleRate)``. Every
 ``processBlock`` / ``process`` call carries its own block. The price is latency: anira sizes it for
 every block size of the range (at 48 kHz and a 512-sample maximum the CNN reports 4602 samples
 instead of 3584, SimpleGainNetwork 1024 instead of 512, GuitarLSTM 767 instead of 512), which the

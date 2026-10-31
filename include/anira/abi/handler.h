@@ -40,9 +40,9 @@
  * a pure out parameter written on every return: zeroed first, then on ANIRA_OK shape[1] of each
  * Streamed output; 0 on ANIRA_MISSED and on a failure. It is never read: the request is
  * shape[1] of the output tensor. The count of one call on a Streamed slot is what the Hard
- * contract's geometry sized the latency and the rings for: block_max samples of the anchor at
- * most, scaled by its hop to the hop of every other stream. A block b may be fractional on a
- * stream (a fractional geometry, or a time ratio): the host then moves a sample only once a
+ * contract's host blocks sized the latency and the rings for: block_max samples of the anchor
+ * at most, scaled by its hop to the hop of every other stream. A block b may be fractional on a
+ * stream (a fractional host block, or a time ratio): the host then moves a sample only once a
  * whole one has accumulated, floor(k * b) samples by its k-th call, so one call carries
  * floor(b) or ceil(b) of them (0 or 1 under 0.25, the 1 on every fourth call). ceil(b) is an
  * enforced upper bound: a Streamed tensor whose shape[1] is above it, on the push side or the
@@ -618,11 +618,11 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
 
 /**
  * @brief The blocking quiescence point, and the one call no other handler entry may overlap:
- * validates the variant against the contract (geometry, the explicit budget, the warm-up
- * mode, the miss policy against the anchor, the ring dtypes by canonical name, the
- * contract's extensions), checks every plan's provider against what its engine serves (a
- * built-in engine's runtime as the context reports it now, so a context probed again
- * since the create is seen; a custom engine's query as it answered at
+ * validates the variant against the contract (the host blocks, the explicit budget, the
+ * warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name,
+ * the contract's extensions), checks every plan's provider against what its engine
+ * serves (a built-in engine's runtime as the context reports it now, so a context probed
+ * again since the create is seen; a custom engine's query as it answered at
  * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at
  * anira_handler_create), runs the processor's init when it has not run yet (once per
  * registration, before any model loads), loads the model of every candidate with an
@@ -856,7 +856,7 @@ ANIRA_API uint32_t ANIRA_CALL anira_handler_get_plan(const anira_handler* handle
  * tensor is refused (a generator with Static input 0 calls
  * anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is
  * validated before anything is pushed, so a refusal pushes nothing. Each tensor carries
- * one host block of the geometry's block_max at most, ceil(b) samples of the block b on
+ * one host block of the contract's block_max at most, ceil(b) samples of the block b on
  * its slot's stream (the header doc): a larger shape[1] is refused, never cut to its
  * tail. A block whose inference has not completed is an on_miss event: the contract's
  * policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered

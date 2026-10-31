@@ -280,7 +280,7 @@ anira::ContractHandle contract_of(anira_miss_policy policy,
                                   anira_miss_fn miss_fn = nullptr,
                                   void* miss_user_data = nullptr) {
     anira::ContractHandle contract = anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
-    contract.hard_geometry(1, block_max, k_rate);
+    contract.hard_host_blocks(1, block_max, k_rate);
     contract.hard_miss_fn(miss_fn, miss_user_data);
     return contract;
 }
@@ -2522,7 +2522,7 @@ uint32_t plan_engine(const anira_handler* handler) {
 }
 
 /// The bundled file on one engine of this build: the handler over the model file with that one
-/// candidate, prepared with the contract file at the host geometry (blocks of 1 to `block_max`
+/// candidate, prepared with the contract file at the host blocks (1 to `block_max`
 /// samples at 48 kHz), the two streams driven through the waiting two-slot single form (`data`
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
@@ -2549,7 +2549,7 @@ public:
     void prepare() {
         anira::ContractHandle contract =
             anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
-        contract.hard_geometry(1, m_block_max, k_file_rate);
+        contract.hard_host_blocks(1, m_block_max, k_file_rate);
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
         ASSERT_NE(m_session, nullptr);
@@ -2608,7 +2608,7 @@ TEST(AbiState, TheBundledModelFollowsTheClosedFormOnEveryEngine) {
         ASSERT_EQ(plan_engine(h), static_cast<uint32_t>(engine));
         const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
         // Rounds of 704 samples (eleven hops, in blocks of 8 to 128 samples), enough of them to
-        // run eight hops past the latency (ten hops at this geometry).
+        // run eight hops past the latency (ten hops at these host blocks).
         constexpr std::array<size_t, 12> k_round{64, 32, 96, 64, 16, 48, 128, 64, 8, 56, 64, 64};
         std::vector<size_t> sizes;
         for (size_t total = 0; total < latency + (size_t{8} * k_file_hop);) {
@@ -2650,7 +2650,7 @@ TEST(AbiState, TheBundledModelResetsToZerosOnEveryEngine) {
         ASSERT_TRUE(rig.ready());
         anira_handler* h = rig.get();
         const size_t latency = anira_handler_get_latency(h, EngineRig::processed_slot());
-        // Enough hops to see four of them behind the latency's zeros (six at this geometry).
+        // Enough hops to see four of them behind the latency's zeros (six at these host blocks).
         const std::vector<size_t> sizes((latency / k_file_hop) + 4, k_file_hop);
         size_t position = 0;
         Streams first;
@@ -2780,7 +2780,7 @@ public:
     anira_status prepare() {
         anira::ContractHandle contract =
             anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
-        contract.hard_geometry(1, k_file_hop, k_file_rate);
+        contract.hard_host_blocks(1, k_file_hop, k_file_rate);
         return m_handler.prepare(contract);
     }
     anira_handler* get() const { return m_handler.m_handler; }

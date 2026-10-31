@@ -109,7 +109,7 @@ BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_ADVANCED)(::benchmark::State& state) 
     const anira::BackendId backend = benchmark_backends()[static_cast<size_t>(state.range(2))];
     auto [model_config, contract] = model_and_contract(model, get_buffer_size());
     const auto block = static_cast<double>(get_buffer_size());
-    contract.hard_geometry(block, block, SAMPLE_RATE);
+    contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.

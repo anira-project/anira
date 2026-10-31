@@ -140,7 +140,7 @@ export async function createGainExample(
   // the callback's run) and re-prepare the running node, then re-read the latency.
   const remeasure = async () => {
     const g = await measureRenderGeometry(audioContext, { hold: [audioNode] })
-    contract.hardGeometry(g.quantum, g.burst, audioContext.sampleRate)
+    contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
     audioNode.prepare(contract)
     applyLatency()
   }

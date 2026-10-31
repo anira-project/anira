@@ -157,7 +157,7 @@ const run = async () => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(QUANTUM, QUANTUM, RATE)
+  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
   const fillers = []
   const grow = (beyond) => {
     const target = bytes() + beyond

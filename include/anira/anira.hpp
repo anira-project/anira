@@ -29,14 +29,14 @@
  * ContextConfig::from_file, ContractHandle::from_file; anira::v2::JsonConfigLoader of
  * anira/compat/v2.hpp is the 2.x loader over them);
  * ModelConfig::take_legacy_contract returns std::optional<ContractHandle>: a handle without
- * geometry, patched with hard_geometry, which hard() reads back into a Hard;
+ * host blocks, patched with hard_host_blocks, which hard() reads back into a Hard;
  * ContextConfig::log_sink takes the raw (anira_log_fn, void*) pair; ModelConfig::anchor takes
  * the tensor's canonical name;
  * ContractHandle, JobOptionsHandle and the upgraded() queries are additions; set_model_bytes
  * chains (the document's returns void); add_model_bytes and set_model_bytes carry the
  * (release, ctx) pair of the C entry and have custom-engine twins; JobOptions has no
  * on_complete yet (it arrives with Ticket); a contract file loads into a ContractHandle,
- * patched with hard_geometry and the other setters, which hard() reads back into a Hard;
+ * patched with hard_host_blocks and the other setters, which hard() reads back into a Hard;
  * Tensor has data(DType) beside data_f32, and from_host_planar / plane<T> for planar host
  * memory (typed by the element, which the document does not have); from_metal, from_iosurface,
  * from_ahardwarebuffer and from_d3d12 are not declared and there is no anira_all.hpp (the draft
@@ -927,13 +927,17 @@ private:
     std::chrono::nanoseconds m_value;
 };
 
-/// The real-time stream: host geometry, budget, warmup, miss policy, wait ratio.
+/// The real-time stream: host blocks, budget, warmup, miss policy, wait ratio.
 struct Hard {
-    /// The block range in elements of the anchor tensor: both 0 (unset) or both finite and
-    /// > 0, a fractional block included (0.25: one element every fourth call; the rules of
-    /// anira_contract_create_hard). An integer converts: `.block_max = 512`.
+    /// The host blocks: the smallest and largest block the host passes per call, in elements of
+    /// the model's anchor tensor (ModelConfig::anchor), both 0 (unset) or both finite and > 0,
+    /// a fractional block included (0.25: one element every fourth call; the rules of
+    /// anira_contract_create_hard). An integer converts: `.block_max = 512`. The contract
+    /// file's keys of the same names.
     double block_min = 0;
     double block_max = 0;
+    /// The anchor's elements per second: the sample rate for an audio anchor, sample_rate /
+    /// 2048.0 for a control-rate one.
     double rate = 0;
     /// Required: the per-inference budget (no default; a duration is an explicit budget).
     Budget budget;
@@ -1113,12 +1117,14 @@ public:
 
     // -- the setters, for a contract that exists only as a handle (loaded, legacy) --
 
-    /// Patches a Hard contract's stream geometry, e.g. of one loaded from a file; a block may
-    /// be fractional (anira_contract_create_hard). @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
-    /// for a geometry the rules refuse, Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle.
-    ContractHandle& hard_geometry(double block_min, double block_max, double rate) {
-        detail::check(anira_contract_hard_set_geometry(m_contract, block_min, block_max, rate),
-                      "anira_contract_hard_set_geometry");
+    /// Patches a Hard contract's host blocks, e.g. of one loaded from a file: the smallest and
+    /// largest block in elements of the model's anchor tensor (ModelConfig::anchor) and the
+    /// anchor's rate in elements per second; a block may be fractional
+    /// (anira_contract_create_hard). @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
+    /// for host blocks the rules refuse, Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle.
+    ContractHandle& hard_host_blocks(double block_min, double block_max, double rate) {
+        detail::check(anira_contract_hard_set_host_blocks(m_contract, block_min, block_max, rate),
+                      "anira_contract_hard_set_host_blocks");
         return *this;
     }
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
@@ -1248,7 +1254,7 @@ public:
     /// Error{ANIRA_ERROR_INVALID_ARGUMENT} on an empty one.
     Hard hard() const {
         if (m_contract == nullptr) {
-            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_contract_hard_geometry");
+            throw Error(ANIRA_ERROR_INVALID_ARGUMENT, "anira_contract_hard_host_blocks");
         }
         anira_budget_kind budget_kind = ANIRA_BUDGET_MEASURED;
         double budget_ms = 0.0;
@@ -1259,8 +1265,8 @@ public:
                                      std::chrono::duration<double, std::milli>(budget_ms)))
                                : Budget::measured()};
         detail::check(
-            anira_contract_hard_geometry(m_contract, &out.block_min, &out.block_max, &out.rate),
-            "anira_contract_hard_geometry");
+            anira_contract_hard_host_blocks(m_contract, &out.block_min, &out.block_max, &out.rate),
+            "anira_contract_hard_host_blocks");
         detail::check(anira_contract_hard_warmup(m_contract, &out.warmup, &out.warmup_iterations),
                       "anira_contract_hard_warmup");
         detail::check(anira_contract_hard_on_miss(m_contract, &out.on_miss),
@@ -3711,7 +3717,7 @@ private:
  * The Hard entries are one-line forwarders onto the tensor entries of anira/abi/handler.h:
  * noexcept, ANIRA_NONBLOCKING, a status returned and never thrown (the reason of a failure is
  * rt_error()), nothing copied but the samples. They take anira::Tensor descriptors only, as the
- * C surface does; a float host builds its planar tensors once per geometry with
+ * C surface does; a float host builds its planar tensors once per prepare with
  * Tensor::from_host_planar and sets the block length (shape[1]) per call. The forms over one
  * slot take the slot's tensor; the forms over every slot (the _multi entries) take one tensor
  * per slot of the model's list: a Streamed slot's block, a Static slot's whole tensor, or an

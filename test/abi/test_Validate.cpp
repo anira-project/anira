@@ -87,7 +87,7 @@ Hard explicit_hard() {
 }
 
 /// explicit_hard() at a fixed host block, in anchor elements, at 48 kHz.
-Hard geometry(double block) {
+Hard host_blocks(double block) {
     Hard hard = explicit_hard();
     hard.block_min = block;
     hard.block_max = block;
@@ -408,7 +408,7 @@ TEST(AbiValidate, ADynamicTimeExtentResolvesToTheWindow) {
 
 // A flexible window covers one host block per inference when the anchor hop can be the block:
 // block_max scaled by the time ratio, plus the context, within [window_min, window_max].
-TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
+TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractsHostBlocks) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(TensorSpec("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED)
@@ -427,7 +427,7 @@ TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractGeometry) {
     EXPECT_EQ(hops(pinned.m_derived.m_inputs), (std::vector<size_t>{512}));
     EXPECT_EQ(dims(pinned.m_derived.m_outputs), (Shapes{{512}}));
 
-    // Without a geometry the smallest anchor hop is used: the input's smallest window, and the
+    // Without host blocks the smallest anchor hop is used: the input's smallest window, and the
     // output (time ratio 1/1, a flexible window's default) follows that hop of 192.
     const Outcome smallest = derive(model);
     ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
@@ -457,7 +457,7 @@ TEST(AbiValidate, ATimeRatioScalesTheAnchorHopIntoTheFlexibleWindow) {
     model.output(flexible("out", 1).time_ratio(1, 2048));
     for (const double block : {2048.0, 1024.0, 4096.0}) {
         SCOPED_TRACE(block);
-        const Outcome outcome = derive(model, geometry(block));
+        const Outcome outcome = derive(model, host_blocks(block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
         EXPECT_EQ(hops(outcome.m_derived.m_inputs), (std::vector<size_t>{2048}));
         EXPECT_EQ(hops(outcome.m_derived.m_outputs), (std::vector<size_t>{1}));
@@ -484,14 +484,14 @@ TEST(AbiValidate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
                          Case{.m_block = 512.0, .m_anchor_hop = 2048},
                          Case{.m_block = 0.25, .m_anchor_hop = 2048}}) {
         SCOPED_TRACE(c.m_block);
-        const Outcome outcome = derive(model, geometry(c.m_block));
+        const Outcome outcome = derive(model, host_blocks(c.m_block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
         EXPECT_EQ(dims(outcome.m_derived.m_inputs),
                   (Shapes{{static_cast<int64_t>(c.m_anchor_hop)}}));
         EXPECT_EQ(hops(outcome.m_derived.m_outputs), (std::vector<size_t>{c.m_anchor_hop / 2048}));
     }
 
-    // Without a geometry the smallest step.
+    // Without host blocks the smallest step.
     const Outcome smallest = derive(model);
     ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
     EXPECT_EQ(dims(smallest.m_derived.m_inputs), (Shapes{{2048}}));
@@ -501,7 +501,7 @@ TEST(AbiValidate, TheAnchorHopIsTheLargestStepAtOrBelowTheBlock) {
     capped.add_model_path(k_custom, "model.custom");
     capped.input(flexible("audio", 1, 5000));
     capped.output(flexible("latent", 1).time_ratio(1, 2048));
-    const Outcome clamped = derive(capped, geometry(8192.0));
+    const Outcome clamped = derive(capped, host_blocks(8192.0));
     ASSERT_EQ(clamped.m_status, ANIRA_OK) << clamped.m_message;
     EXPECT_EQ(dims(clamped.m_derived.m_inputs), (Shapes{{4096}}));
     EXPECT_EQ(hops(clamped.m_derived.m_outputs), (std::vector<size_t>{2}));
@@ -526,7 +526,7 @@ TEST(AbiValidate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
         model.add_model_path(k_custom, "model.custom");
         model.input(streamed("in", c.m_anchor));
         model.output(flexible("out", 1).time_ratio(c.m_num, c.m_den));
-        const Outcome outcome = derive(model, geometry(c.m_block));
+        const Outcome outcome = derive(model, host_blocks(c.m_block));
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
         EXPECT_EQ(dims(outcome.m_derived.m_outputs), (Shapes{{c.m_window}}));
     }
@@ -536,7 +536,7 @@ TEST(AbiValidate, AFixedAnchorSetsTheHopOfEveryFlexibleWindow) {
 // tensors before it allow.
 TEST(AbiValidate, NoAnchorHopFitsEveryTensor) {
     const auto refused = [](const ModelConfig& model, std::string_view expected) {
-        const Outcome outcome = derive(model, geometry(512.0));
+        const Outcome outcome = derive(model, host_blocks(512.0));
         EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
         expect_contains(outcome.m_message, expected);
     };
@@ -1191,7 +1191,7 @@ TEST(AbiValidate, ContractRules) {
 }
 
 // ============================================================================
-// The anchor and the geometry
+// The anchor and the host blocks
 // ============================================================================
 
 // The anchor is the first Streamed input, else the first Streamed output (a generator), unless
@@ -1234,10 +1234,10 @@ TEST(AbiValidate, TheAnchorIsTheFirstStreamedTensorUnlessNamed) {
     EXPECT_EQ(named.m_derived.m_anchor_index, 1U);
 }
 
-// A fractional Hard geometry reaches the latency calculation as the double the host stated, and
+// Fractional Hard host blocks reach the latency calculation as the double the host stated, and
 // the calculation recovers from it exactly the rational the host meant: 1/3 and 1/4 of an anchor
 // sample, and the same blocks on an anchor hop of 4 (1/12 and 1/16 of a hop).
-TEST(AbiValidate, AFractionalGeometryIsTheCalculatorsRational) {
+TEST(AbiValidate, AFractionalHostBlockIsTheCalculatorsRational) {
     struct Case {
         double m_block;
         int64_t m_hop;

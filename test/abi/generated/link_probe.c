@@ -119,8 +119,8 @@ int main(void) {
     entries[40].address = (uintptr_t)&anira_contract_get_kind;
     entries[41].name = "anira_contract_hard_budget";
     entries[41].address = (uintptr_t)&anira_contract_hard_budget;
-    entries[42].name = "anira_contract_hard_geometry";
-    entries[42].address = (uintptr_t)&anira_contract_hard_geometry;
+    entries[42].name = "anira_contract_hard_host_blocks";
+    entries[42].address = (uintptr_t)&anira_contract_hard_host_blocks;
     entries[43].name = "anira_contract_hard_latency";
     entries[43].address = (uintptr_t)&anira_contract_hard_latency;
     entries[44].name = "anira_contract_hard_miss_fn";
@@ -135,8 +135,8 @@ int main(void) {
     entries[48].address = (uintptr_t)&anira_contract_hard_ring_dtype;
     entries[49].name = "anira_contract_hard_set_budget";
     entries[49].address = (uintptr_t)&anira_contract_hard_set_budget;
-    entries[50].name = "anira_contract_hard_set_geometry";
-    entries[50].address = (uintptr_t)&anira_contract_hard_set_geometry;
+    entries[50].name = "anira_contract_hard_set_host_blocks";
+    entries[50].address = (uintptr_t)&anira_contract_hard_set_host_blocks;
     entries[51].name = "anira_contract_hard_set_latency";
     entries[51].address = (uintptr_t)&anira_contract_hard_set_latency;
     entries[52].name = "anira_contract_hard_set_miss_fn";

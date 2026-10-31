@@ -591,7 +591,7 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
     double block_max = 0;
     double rate = 0;
     static_cast<void>(
-        anira_contract_hard_geometry(&handler->m_contract, &block_min, &block_max, &rate));
+        anira_contract_hard_host_blocks(&handler->m_contract, &block_min, &block_max, &rate));
     ANIRA_CAPI_REQUIRE(quantum > 0 && block_min <= quantum && quantum <= block_max,
                        err,
                        ANIRA_ERROR_CONFIG,
@@ -839,7 +839,7 @@ anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
     double block_min = 0;
     double block_max = 0;
     double rate = 0;
-    static_cast<void>(anira_contract_hard_geometry(contract, &block_min, &block_max, &rate));
+    static_cast<void>(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate));
     const auto quantum = static_cast<double>(state.m_quantum);
     ANIRA_CAPI_REQUIRE(block_min <= quantum && quantum <= block_max,
                        err,

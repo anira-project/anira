@@ -267,7 +267,7 @@ bool both_slots(const anira_handler& handler,
 // ==== the host tensors ========================================================================
 
 // The count of a well-formed host block against its slot's stream port: one host block of the
-// geometry's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
+// contract's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
 // rings were sized for. A larger block is refused before anything moves, never cut to its
 // tail. A compare against prepare's figure: no allocation, no lock. Recorded and logged like
 // every other refusal, naming the slot and the bound.
@@ -281,7 +281,7 @@ anira_status block_count_status(anira_handler& handler,
     if (!handler.m_rt.record(ANIRA_ERROR_INVALID_ARGUMENT)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
                            "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
-                           "host block of the geometry's block_max (%zu on this stream); nothing "
+                           "host block of the contract's block_max (%zu on this stream); nothing "
                            "moved. Declare the largest block the host passes as block_max",
                            entry,
                            input ? "input" : "output",
@@ -772,16 +772,16 @@ void unprepare(anira_handler& handler) noexcept {
     handler.m_num_entries = 0;
 }
 
-// The geometry rule of prepare: the session is sized for the contract's block_max at its rate,
-// so both must be set. A contract without a geometry is legal at create and to the validator
+// The host-block rule of prepare: the session is sized for the contract's block_max at its rate,
+// so both must be set. A contract without host blocks is legal at create and to the validator
 // (a flexible window then takes the smallest anchor hop); prepare is where it is first needed.
-void check_geometry(const anira::capi::HardContract& hard) {
+void check_host_blocks(const anira::capi::HardContract& hard) {
     if (!(hard.m_block_max > 0.0) || !(hard.m_rate > 0.0)) {
-        throw StatusError(ANIRA_ERROR_CONFIG,
-                          "contract: Hard geometry missing (block_max " +
-                              std::to_string(hard.m_block_max) + ", rate " +
-                              std::to_string(hard.m_rate) +
-                              "); set it with anira_contract_hard_set_geometry before preparing");
+        throw StatusError(
+            ANIRA_ERROR_CONFIG,
+            "contract: Hard host blocks missing (block_max " + std::to_string(hard.m_block_max) +
+                ", rate " + std::to_string(hard.m_rate) +
+                "); set it with anira_contract_hard_set_host_blocks before preparing");
     }
 }
 
@@ -1629,7 +1629,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     check_buffer_specs(model);
     check_processor_flags(processor);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
-    check_geometry(hard);
+    check_host_blocks(hard);
     check_miss_policy(hard, model, derived, ring_dtypes);
     // The plans' providers against what their engines serve, as at create: a built-in
     // engine's runtime as the context reports it now (a context probed again since is seen

@@ -36,10 +36,10 @@ const anira::ModelConfig my_model_config = anira::ModelConfig::from_file(k_hybri
 anira::ContractHandle my_contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
 
 BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-    // The host geometry: the swept buffer size (state.range(0) of the google benchmark, read
+    // The host blocks: the swept buffer size (state.range(0) of the google benchmark, read
     // through get_buffer_size()) at SAMPLE_RATE, through the contract.
     const auto block = static_cast<double>(get_buffer_size());
-    my_contract.hard_geometry(block, block, SAMPLE_RATE);
+    my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
     // Only report errors, so the log output of the engines does not pollute the benchmark
     // results.

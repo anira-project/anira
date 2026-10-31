@@ -842,8 +842,8 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     ASSERT_EQ(anira_contract_create_async(&async_contract, &err), ANIRA_OK);
     EXPECT_EQ(anira_contract_get_kind(hard), ANIRA_CONTRACT_HARD);
     EXPECT_EQ(anira_contract_get_kind(async_contract), ANIRA_CONTRACT_ASYNC);
-    EXPECT_EQ(anira_contract_hard_set_geometry(hard, 1, 512, 48000.0), ANIRA_OK);
-    EXPECT_EQ(anira_contract_hard_set_geometry(hard, 512, 1, 48000.0),
+    EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 1, 512, 48000.0), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 512, 1, 48000.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_hard_set_budget(hard, ANIRA_BUDGET_EXPLICIT, 42.66), ANIRA_OK);
     EXPECT_EQ(anira_contract_hard_set_budget(hard, ANIRA_BUDGET_EXPLICIT, 0.0),
@@ -898,7 +898,7 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
               ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_hard_set_budget(async_contract, ANIRA_BUDGET_EXPLICIT, 1.0),
               ANIRA_ERROR_WRONG_CONTRACT);
-    EXPECT_EQ(anira_contract_hard_set_geometry(async_contract, 1, 1, 1.0),
+    EXPECT_EQ(anira_contract_hard_set_host_blocks(async_contract, 1, 1, 1.0),
               ANIRA_ERROR_WRONG_CONTRACT);
     EXPECT_EQ(anira_contract_async_set_deadline(async_contract, 10.0), ANIRA_OK);
     EXPECT_EQ(anira_contract_async_set_policy(async_contract,
@@ -926,11 +926,11 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     anira_contract_destroy(nullptr);
 }
 
-// The geometry is a double: a fractional block is stored as it is; a block that is NaN,
-// infinite or not above 0 (unless both are 0, the unset geometry), block_min above block_max and
+// The host blocks are doubles: a fractional block is stored as it is; a block that is NaN,
+// infinite or not above 0 (unless both are 0, the host blocks unset), block_min above block_max and
 // a negative rate are refused with a message naming the value, and a refused patch leaves the
-// geometry as it was.
-TEST(AbiContract, TheGeometryRules) {
+// host blocks as they were.
+TEST(AbiContract, TheHostBlockRules) {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double inf = std::numeric_limits<double>::infinity();
     anira_contract* hard = nullptr;
@@ -940,7 +940,7 @@ TEST(AbiContract, TheGeometryRules) {
     double block_min = 0.0;
     double block_max = 0.0;
     double rate = 0.0;
-    ASSERT_EQ(anira_contract_hard_geometry(hard, &block_min, &block_max, &rate), ANIRA_OK);
+    ASSERT_EQ(anira_contract_hard_host_blocks(hard, &block_min, &block_max, &rate), ANIRA_OK);
     EXPECT_EQ(block_min, 0.25);
     EXPECT_EQ(block_max, 1.0 / 3.0);
     EXPECT_EQ(rate, 93.75);
@@ -969,15 +969,15 @@ TEST(AbiContract, TheGeometryRules) {
                   ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(refused, nullptr);
         EXPECT_NE(std::strstr(err.message, r.m_message), nullptr) << err.message;
-        EXPECT_EQ(anira_contract_hard_set_geometry(hard, r.m_min, r.m_max, r.m_rate),
+        EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, r.m_min, r.m_max, r.m_rate),
                   ANIRA_ERROR_INVALID_ARGUMENT);
-        ASSERT_EQ(anira_contract_hard_geometry(hard, &block_min, &block_max, &rate), ANIRA_OK);
+        ASSERT_EQ(anira_contract_hard_host_blocks(hard, &block_min, &block_max, &rate), ANIRA_OK);
         EXPECT_EQ(block_min, 0.25) << "untouched";
         EXPECT_EQ(block_max, 1.0 / 3.0) << "untouched";
     }
-    // Both 0 is the unset geometry, whatever the rate.
-    EXPECT_EQ(anira_contract_hard_set_geometry(hard, 0.0, 0.0, 48000.0), ANIRA_OK);
-    EXPECT_EQ(anira_contract_hard_set_geometry(hard, 512, 512, 48000.0), ANIRA_OK)
+    // Both 0 leaves the host blocks unset, whatever the rate.
+    EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 0.0, 0.0, 48000.0), ANIRA_OK);
+    EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 512, 512, 48000.0), ANIRA_OK)
         << "integers convert";
     anira_contract_destroy(hard);
 }

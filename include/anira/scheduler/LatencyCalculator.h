@@ -113,7 +113,7 @@ public:
     /**
      * @brief Computes every quantity for one Hard contract
      *
-     * The geometry is the contract's own, in double precision: a fractional block_max reaches
+     * The host blocks are the contract's own, in double precision: a fractional block_max reaches
      * rationalize() as the host stated it.
      *
      * @param derived What the validator derived for the model config: the hop and channel

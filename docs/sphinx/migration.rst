@@ -86,7 +86,7 @@ One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one H
 3.x name is the 2.x name: it is the same role, the per-handler request that the shared *core*
 reconciles; the 2.x struct itself was ``anira::CoreConfig`` in the first alphas of the 3.x
 line, and what it configures is ``anira::Core``, the object the 2.x API called ``Context``); the
-``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
+``anira::HostConfig`` handed to ``prepare`` becomes the host blocks of the Hard contract and the anchor of
 the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
 ``spec``, ``contract`` and ``context`` are the handles) with the C entry of
 ``anira/abi/config.h`` beside it; section 1 of the :doc:`usage` guide describes both.
@@ -166,11 +166,11 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_context_config_set_log``).
    * - ``anira::HostConfig{buffer_size, sample_rate}``
      - ``hard.block_min``, ``block_max``, ``rate`` (``anira_contract_create_hard``) or
-       ``contract.hard_geometry(block_min, block_max, rate)``
-       (``anira_contract_hard_set_geometry``); ``allow_smaller_buffers`` is ``block_min = 1``
+       ``contract.hard_host_blocks(block_min, block_max, rate)``
+       (``anira_contract_hard_set_host_blocks``); ``allow_smaller_buffers`` is ``block_min = 1``
        against ``block_min == block_max``. The blocks are doubles, so a fractional
        ``buffer_size`` (the ``samplesPerBlock / 2048.f`` idiom of a control-rate model) is a
-       fractional geometry: ``contract.hard_geometry(samples_per_block / 2048.0, ...)``.
+       fractional block: ``contract.hard_host_blocks(samples_per_block / 2048.0, ...)``.
    * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
      - ``cfg.anchor(canonical)`` with the tensor's canonical name
        (``anira_model_config_set_anchor``); an empty name (``NULL`` in C) is the 2.x default
@@ -266,8 +266,8 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
        prepare refuses it with ``ANIRA_ERROR_CONFIG``, as it refuses a name that is no
        Streamed output; an output never named keeps the computed figure.
    * - ``prepare(host_config)``
-     - ``handler.prepare(contract)`` with the host geometry on the Hard contract
-       (``contract.hard_geometry(block_min, block_max, rate)``); it returns the
+     - ``handler.prepare(contract)`` with the host blocks on the Hard contract
+       (``contract.hard_host_blocks(block_min, block_max, rate)``); it returns the
        :cpp:class:`anira::PlanReport`.
    * - ``reset()``
      - ``handler.reset()`` (``anira_handler_reset``); it also re-initialises declared state.
@@ -501,7 +501,7 @@ rest of this page is the way forward, and the header lets that happen one class 
      - Present, wait-free, before ``prepare`` too; from any thread while audio runs, but not
        while ``prepare`` or the destructor runs on another thread.
    * - ``prepare(HostConfig)``
-     - Present; a fractional block size is the fractional Hard geometry, as in 2.x; a
+     - Present; a fractional block size is a fractional Hard host block, as in 2.x; a
        reference tensor that is not streamable is refused.
    * - ``prepare(HostConfig, custom_latency, tensor_index)``, ``prepare(HostConfig, vector)``
      - Present: the declared stream latency of the Hard contract
@@ -600,7 +600,7 @@ contract, and read the 2.x public fields and getters back from the handles.
 canonical one with that entry's axis layout applied (the channels-last TensorFlow rows read
 channels last, as the 2.x HybridNN processor expects). ``model_config()`` hands out the handle,
 ``model_config_copy()`` a fresh one of the same document, ``hard()`` the legacy contract
-without geometry. It is copyable (a copy loads its document again) and compares equal when
+without host blocks. It is copyable (a copy loads its document again) and compares equal when
 anira 3 holds the same configuration, whatever the spelling.
 ``anira::v2::JsonConfigLoader`` reads the document once and builds both objects, the
 ``ContextConfig`` read back from ``anira::ContextConfig::from_json``; ``get_context_config()``
@@ -687,7 +687,7 @@ What differs from 2.x:
 ``BackendBase``), build a context, a pipeline of a private copy of the configuration's model
 config (the custom engine, the inference stage under the default candidate set, a
 ``LegacyProcessor`` over the processor) and one ``anira_handler``; ``prepare`` mints the
-legacy contract with the host geometry, the ``process``, ``push_data`` and ``pop_data`` forms
+legacy contract with the host blocks, the ``process``, ``push_data`` and ``pop_data`` forms
 present the caller's channel pointers as planar float tensors and route the non-streamable
 values through the processor's atomics, and the rest forwards to the entry of the same name. A
 2.x host compiles unchanged:
@@ -713,11 +713,11 @@ What differs from 2.x:
   construction.
 - **Loading** happens at ``prepare``, not at construction: a model that does not load fails
   ``prepare`` (``ANIRA_ERROR_NO_SUCH_FILE``, ``ANIRA_ERROR_MODEL_LOAD``). A ``prepare`` with the
-  settings of the last one only resets the stream; another geometry prepares again and loads the
+  settings of the last one only resets the stream; other host blocks prepare again and load the
   models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
   the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size``
   works as in 2.x (``samplesPerBlock / 2048.f`` for a control-rate reference): it becomes the
-  Hard geometry as it is (``block_min`` is half of it when smaller blocks come and it is one
+  Hard host block as it is (``block_min`` is half of it when smaller blocks come and it is one
   sample or less); a block that is not finite and above 0 is ``ANIRA_ERROR_CONFIG``.
 - **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
   contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
@@ -789,7 +789,7 @@ drove the 2.x handler through the bridge hands the same objects to
    * - ``to_core_config(context_config)``
      - ``anira::Context context(context_config)``, which the handler is created on.
    * - ``to_host_config(hard, cfg)``, ``to_host_config(cfg, buffer_size, sample_rate)``
-     - The Hard contract's geometry (``contract.hard_geometry(block_min, block_max, rate)``,
+     - The Hard contract's host blocks (``contract.hard_host_blocks(block_min, block_max, rate)``,
        fractional where the host's numbers are) and ``handler.prepare(contract)``.
    * - ``enabled_engines()``
      - ``anira::enabled_engines()``.
@@ -809,8 +809,8 @@ drove the 2.x handler through the bridge hands the same objects to
     pipeline.add_inference(cfg);
     anira::InferenceHandler handler(context, pipeline);
 
-    // prepare, once the host geometry is known
-    contract.hard_geometry(samples_per_block, samples_per_block, sample_rate);
+    // prepare, once the host blocks are known
+    contract.hard_host_blocks(samples_per_block, samples_per_block, sample_rate);
     const anira::PlanReport report = handler.prepare(contract);
 
 What the bridge refused because the 2.x runtime could not run it runs on the 3.x handler: a
@@ -998,8 +998,8 @@ path is a Wasm Audio Worklet node whose render callback is C.
 - ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
   ``ContractHandle.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate, budgetMs })``
   with ``g = await measureRenderGeometry(context)``, or a contract file
-  (``ContractHandle.fromUrl``, then ``hardGeometry``): the render quantum is the smallest block,
-  the context's burst of quanta the largest. A running node changes its geometry through ``audioNode.prepare(contract)``.
+  (``ContractHandle.fromUrl``, then ``hardHostBlocks``): the render quantum is the smallest block,
+  the context's burst of quanta the largest. A running node changes its host blocks through ``audioNode.prepare(contract)``.
 - ``InferenceHandler(pp, config)``, ``setInferenceBackend`` and ``prepare`` become
   ``Pipeline.create(anira).addInference(model)``, ``InferenceHandler.create(context, pipeline)`` and
   ``handler.prepare(contract)``; a context (``Context.create(anira, { threads })``) is the core

@@ -432,7 +432,7 @@ ANIRA_API anira_status ANIRA_CALL anira_em_audio_node_set_static_input(uint32_t 
 
 /**
  * @brief Re-prepares the node's handler under contract while the node lives and its context
- * runs: the way to change the geometry of a running node (a new block_max after the
+ * runs: the way to change the host blocks of a running node (a new block_max after the
  * output device changed). The render callback is held off first: from its next quantum
  * it outputs silence and leaves the handler alone, and this call waits (at most 5000 ms,
  * on the main thread; the callback never waits) until the quantum in flight returned;

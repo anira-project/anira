@@ -79,7 +79,7 @@ struct HardContract;
  * The session's configuration is the C handler's, read by reference and never copied: the
  * model config of its variant, what the validator derived for it under the contract
  * (capi::Derived: every tensor's extents, hop and channel count, the anchor, the
- * exclusivity) and the contract's Hard half (capi::HardContract: the geometry, the budget, the
+ * exclusivity) and the contract's Hard half (capi::HardContract: the host blocks, the budget, the
  * wait ratio). The handler installs the three before it builds the session and keeps them
  * until the session is released.
  *
@@ -195,7 +195,7 @@ public:
      * @brief Prepares the session for the Hard contract it reads
      *
      * Calculates the latencies, sizes the ring of every Streamed slot in its stream port and
-     * builds the chunks, for the contract's geometry, budget and wait ratio. This method must
+     * builds the chunks, for the contract's host blocks, budget and wait ratio. This method must
      * be called before the session can process audio data. The host block in hops is stored
      * in m_block_hops and whether an input streams in m_input_driven, for the real-time path.
      *
@@ -205,7 +205,7 @@ public:
      * @param ring_dtypes The element type of every send and receive ring, per slot (see
      * RingDtypes; float32 for every slot the vectors do not name); the ring sizes are element
      * counts, so they do not depend on it
-     * @throws std::invalid_argument if the contract's geometry cannot size the session (see
+     * @throws std::invalid_argument if the contract's host blocks cannot size the session (see
      *         LatencyCalculator), or if a ring dtype is not one of the scalar dtypes the rings
      *         store
      */
@@ -287,7 +287,7 @@ public:
     size_t output_channels(size_t slot) const noexcept;
     /// The reference stream: the model config's anchor as the validator resolved it (the named
     /// Streamed tensor, else the first Streamed input, else the first Streamed output), the
-    /// stream the contract's geometry counts in.
+    /// stream the contract's host blocks count in.
     bool reference_is_input() const noexcept;
     size_t reference_slot() const noexcept;
     /// Whether every chunk's completion is signalled on its semaphore: the contract's wait

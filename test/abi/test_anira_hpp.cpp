@@ -403,13 +403,13 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_EQ(minted.latencies, hard.latencies);
     EXPECT_EQ(minted.edge_cost, ANIRA_EDGE_COST_STRICT);
 
-    handle.hard_geometry(1, 512, 48000.0);
+    handle.hard_host_blocks(1, 512, 48000.0);
     const anira::Hard patched = handle.hard();
     EXPECT_EQ(patched.block_min, 1u);
     EXPECT_EQ(patched.block_max, 512u);
     EXPECT_DOUBLE_EQ(patched.rate, 48000.0);
     EXPECT_EQ(patched.budget.value(), std::chrono::microseconds{42660})
-        << "the geometry patch leaves the rest";
+        << "the host-block patch leaves the rest";
     EXPECT_EQ(patched.ring_dtypes, hard.ring_dtypes);
 
     const ContractHandle defaults{anira::Hard{.budget = anira::Budget::measured()}};
@@ -461,10 +461,10 @@ TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
     EXPECT_DOUBLE_EQ(variant.native()->asynchronous()->m_deadline_ms, 33.3);
 
     const Thrown wrong =
-        thrown_by([&] { ContractHandle(anira::Async{}).hard_geometry(1, 1, 1.0); });
+        thrown_by([&] { ContractHandle(anira::Async{}).hard_host_blocks(1, 1, 1.0); });
     EXPECT_TRUE(wrong.m_thrown);
     EXPECT_EQ(wrong.m_status, ANIRA_ERROR_WRONG_CONTRACT);
-    EXPECT_NE(wrong.m_what.find("anira_contract_hard_set_geometry"), std::string::npos)
+    EXPECT_NE(wrong.m_what.find("anira_contract_hard_set_host_blocks"), std::string::npos)
         << wrong.m_what;
 }
 

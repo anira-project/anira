@@ -30,7 +30,7 @@ An extensive documentation of anira can be found at [https://anira-project.githu
 
 ## Usage
 
-anira takes its configuration from two JSON files that travel with the model: the *model file* names the model's exports per inference engine (paths relative to the file) and describes the tensors, the *contract file* holds the per-inference budget and the warm-up. The host geometry is patched in at prepare.
+anira takes its configuration from two JSON files that travel with the model: the *model file* names the model's exports per inference engine (paths relative to the file) and describes the tensors, the *contract file* holds the per-inference budget and the warm-up. The host blocks are patched in at prepare.
 
 ```json
 {
@@ -62,9 +62,9 @@ anira::Pipeline pipeline;
 pipeline.add_inference(model_config);
 anira::InferenceHandler inference_handler(context, pipeline);
 
-// Complete the contract with the host geometry and allocate memory for audio processing;
+// Complete the contract with the host blocks and allocate memory for audio processing;
 // prepare returns the plans, one per engine the model runs on here
-contract.hard_geometry(buffer_size, buffer_size, sample_rate);
+contract.hard_host_blocks(buffer_size, buffer_size, sample_rate);
 const anira::PlanReport report = inference_handler.prepare(contract);
 
 // Optionally select another plan (the first one runs by default) and get the latency

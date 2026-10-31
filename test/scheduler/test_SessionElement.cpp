@@ -29,20 +29,20 @@
 #include "gtest/gtest.h"
 
 using namespace anira;
-using anira_test::SizingGeometry;
+using anira_test::SizingHostBlocks;
 using anira_test::SizingResult;
 using anira_test::SizingSession;
 using anira_test::SizingSlot;
 
 // The sizing of a session at prepare, read off a C handler's session (test/support/
 // session_cases.h): the latency per output, the struct pool and the ring sizes, for the
-// geometries and models below, and the ring dtypes; then the one-sided models. Three cases
+// host blocks and models below, and the ring dtypes; then the one-sided models. Three cases
 // drive a SessionElement of their own, unregistered: clear() and prepare() on a thread that may
 // hang, and the reference rule of the 2.x HostConfig.
 
 namespace {
 struct SessionElementTestParams {
-    SizingGeometry m_geometry;
+    SizingHostBlocks m_host_blocks;
     std::vector<SizingSlot> m_inputs;
     std::vector<SizingSlot> m_outputs;
     double m_budget_ms = 0.0;
@@ -62,8 +62,9 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 }
 
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params) {
-    stream << "{ block = " << params.m_geometry.m_block << ", rate = " << params.m_geometry.m_rate
-           << ", smaller = " << params.m_geometry.m_allow_smaller
+    stream << "{ block = " << params.m_host_blocks.m_block
+           << ", rate = " << params.m_host_blocks.m_rate
+           << ", smaller = " << params.m_host_blocks.m_allow_smaller
            << ", budget = " << params.m_budget_ms << " ms, wait ratio = " << params.m_wait_ratio
            << ", expected latency = " << params.m_expected_latency
            << ", expected num_structs = " << params.m_expected_num_structs
@@ -77,11 +78,10 @@ class SessionElementTest : public ::testing::TestWithParam<SessionElementTestPar
 
 /// A case prepared and sized; a failed prepare fails the test.
 SizingResult prepare_and_measure(const anira::ModelConfig& model,
-                                 const SizingGeometry& geometry,
+                                 const SizingHostBlocks& blocks,
                                  double budget_ms = 10.0,
                                  double wait_ratio = 0.0) {
-    const SizingSession session(model,
-                                anira_test::sizing_contract(geometry, budget_ms, wait_ratio));
+    const SizingSession session(model, anira_test::sizing_contract(blocks, budget_ms, wait_ratio));
     EXPECT_EQ(session.prepared(), ANIRA_OK) << session.message();
     return session.measure();
 }
@@ -89,11 +89,14 @@ SizingResult prepare_and_measure(const anira::ModelConfig& model,
 
 TEST_P(SessionElementTest, LatencyStructAndRingbuffers) {
     const SessionElementTestParams& params = GetParam();
-    const SizingResult result = prepare_and_measure(
-        anira_test::sizing_model(params.m_inputs, params.m_outputs, 2, params.m_geometry.m_anchor),
-        params.m_geometry,
-        params.m_budget_ms,
-        params.m_wait_ratio);
+    const SizingResult result =
+        prepare_and_measure(anira_test::sizing_model(params.m_inputs,
+                                                     params.m_outputs,
+                                                     2,
+                                                     params.m_host_blocks.m_anchor),
+                            params.m_host_blocks,
+                            params.m_budget_ms,
+                            params.m_wait_ratio);
     ASSERT_EQ(result.m_latency.size(), params.m_expected_latency.size());
     for (size_t i = 0; i < params.m_expected_latency.size(); ++i) {
         ASSERT_EQ(result.m_latency[i], params.m_expected_latency[i])
@@ -202,7 +205,7 @@ std::vector<SizingSlot> mono(int64_t elements) {
     return {SizingSlot{.m_elements = elements}};
 }
 
-SessionElementTestParams row(SizingGeometry geometry,
+SessionElementTestParams row(SizingHostBlocks blocks,
                              std::vector<SizingSlot> inputs,
                              std::vector<SizingSlot> outputs,
                              double budget_ms,
@@ -211,7 +214,7 @@ SessionElementTestParams row(SizingGeometry geometry,
                              size_t num_structs,
                              std::vector<size_t> send,
                              std::vector<size_t> receive) {
-    return SessionElementTestParams{.m_geometry = geometry,
+    return SessionElementTestParams{.m_host_blocks = blocks,
                                     .m_inputs = std::move(inputs),
                                     .m_outputs = std::move(outputs),
                                     .m_budget_ms = budget_ms,
@@ -222,9 +225,9 @@ SessionElementTestParams row(SizingGeometry geometry,
                                     .m_expected_receive_buffer_sizes = std::move(receive)};
 }
 
-/// The anchor of a geometry: input `index`.
-SizingGeometry anchored(double block, double rate, bool smaller, size_t index) {
-    return SizingGeometry{
+/// Host blocks anchored on input `index`.
+SizingHostBlocks anchored(double block, double rate, bool smaller, size_t index) {
+    return SizingHostBlocks{
         .m_block = block,
         .m_rate = rate,
         .m_allow_smaller = smaller,
@@ -362,7 +365,7 @@ namespace {
 struct ClearDeadlockFixture {
     anira_test::SizingSession m_handler{
         anira_test::sizing_model({{.m_elements = 2048}}, {{.m_elements = 2048}}, 2),
-        anira_test::sizing_contract(anira_test::sizing_geometry(2048, 48000), 40.0, 0.5)};
+        anira_test::sizing_contract(anira_test::sizing_host_blocks(2048, 48000), 40.0, 0.5)};
     std::atomic<bool> m_cleared{false};
 };
 }  // namespace
@@ -443,8 +446,8 @@ anira::ModelConfig analyser_twin_model() {
                                     2);
 }
 
-SizingGeometry geometry(double block, double rate, bool smaller) {
-    return SizingGeometry{.m_block = block, .m_rate = rate, .m_allow_smaller = smaller};
+SizingHostBlocks host_blocks(double block, double rate, bool smaller) {
+    return SizingHostBlocks{.m_block = block, .m_rate = rate, .m_allow_smaller = smaller};
 }
 
 class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};
@@ -452,9 +455,10 @@ class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};
 
 TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
     bool const smaller = GetParam();
-    SizingResult const gen = prepare_and_measure(generator_model(), geometry(512, 48000, smaller));
+    SizingResult const gen =
+        prepare_and_measure(generator_model(), host_blocks(512, 48000, smaller));
     SizingResult const twin =
-        prepare_and_measure(generator_twin_model(), geometry(512, 48000, smaller));
+        prepare_and_measure(generator_twin_model(), host_blocks(512, 48000, smaller));
 
     EXPECT_EQ(gen.m_latency, twin.m_latency);
     EXPECT_EQ(gen.m_num_structs, twin.m_num_structs);
@@ -467,9 +471,10 @@ TEST_P(OneSidedStreamingPrepareTest, GeneratorEqualsTwoSidedTwin) {
 
 TEST_P(OneSidedStreamingPrepareTest, AnalyserHasNoStreamLatency) {
     bool const smaller = GetParam();
-    SizingResult const ana = prepare_and_measure(analyser_model(), geometry(512, 48000, smaller));
+    SizingResult const ana =
+        prepare_and_measure(analyser_model(), host_blocks(512, 48000, smaller));
     SizingResult const twin =
-        prepare_and_measure(analyser_twin_model(), geometry(512, 48000, smaller));
+        prepare_and_measure(analyser_twin_model(), host_blocks(512, 48000, smaller));
 
     ASSERT_EQ(ana.m_latency.size(), 1u);
     EXPECT_EQ(ana.m_latency[0], 0u) << "A non-streamable output carries no stream latency.";
@@ -491,7 +496,7 @@ TEST_P(OneSidedStreamingPrepareTest, NonStreamableOutputsKeepLatencyIndexAligned
     // 576 samples moving 512 per inference beside a [2, 1, 128] state.
     const std::vector<SizingSlot> inputs{{.m_elements = 576, .m_hop = 512},
                                          {.m_elements = 256, .m_hop = 0}};
-    SizingGeometry const host = geometry(512, 16000, smaller);
+    SizingHostBlocks const host = host_blocks(512, 16000, smaller);
 
     // Case 1: every output non-streamable.
     SizingResult const all_static = prepare_and_measure(
@@ -511,7 +516,7 @@ TEST_P(OneSidedStreamingPrepareTest, NonStreamableOutputsKeepLatencyIndexAligned
                                  {{.m_elements = 1, .m_hop = 1}, {.m_elements = 256, .m_hop = 0}},
                                  2);
     SizingResult const adjusted = prepare_and_measure(mixed, host);
-    SizingResult const plain = prepare_and_measure(mixed, geometry(512, 16000, false));
+    SizingResult const plain = prepare_and_measure(mixed, host_blocks(512, 16000, false));
     ASSERT_EQ(adjusted.m_latency.size(), 2u);
     ASSERT_EQ(plain.m_latency.size(), 2u);
     EXPECT_EQ(adjusted.m_latency[1], 0u) << "The state tensor keeps a latency of 0.";
@@ -545,8 +550,9 @@ TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
     auto fixture = std::make_unique<GeneratorPrepareFixture>();
     GeneratorPrepareFixture* const raw = fixture.get();
     std::thread([raw] {
-        raw->m_handler.emplace(generator_model(),
-                               anira_test::sizing_contract(geometry(512, 48000, true), 10.0, 0.0));
+        raw->m_handler.emplace(
+            generator_model(),
+            anira_test::sizing_contract(host_blocks(512, 48000, true), 10.0, 0.0));
         raw->m_prepared.store(true, std::memory_order_release);
     }).detach();
 
@@ -572,10 +578,10 @@ TEST(OneSidedStreamingPrepareStandalone, ExplicitOutputReferenceEqualsInputRefer
     // A two-sided model with equal input/output stream sizes: anchoring input 0 or output 0
     // gives the same ratios and hence the same result.
     SizingResult const by_input =
-        prepare_and_measure(generator_twin_model(), geometry(2048, 48000, true));
+        prepare_and_measure(generator_twin_model(), host_blocks(2048, 48000, true));
     SizingResult const by_output = prepare_and_measure(
         generator_twin_model(anira_test::SizingAnchor{.m_is_input = false, .m_index = 0}),
-        geometry(2048, 48000, true));
+        host_blocks(2048, 48000, true));
 
     EXPECT_EQ(by_input.m_latency, by_output.m_latency);
     EXPECT_EQ(by_input.m_num_structs, by_output.m_num_structs);

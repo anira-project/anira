@@ -112,7 +112,7 @@ const stream = async (anira, audio, geometry, { load = false } = {}) => {
       anira,
       new URL(`${MODELS}gain.contract.json`, import.meta.url)
     )
-  ).hardGeometry(geometry.quantum, geometry.burst, audio.sampleRate)
+  ).hardHostBlocks(geometry.quantum, geometry.burst, audio.sampleRate)
   anira.abi.anira_contract_hard_set_on_miss(
     contract.native(),
     anira_miss_policy.ANIRA_MISS_ZEROS
@@ -286,7 +286,7 @@ const run = async () => {
   // changes.
   let blockMax = 4 * geometry.burst
   while (blockMax <= latencyBefore) blockMax *= 2
-  small.contract.hardGeometry(geometry.quantum, blockMax, audio.sampleRate)
+  small.contract.hardHostBlocks(geometry.quantum, blockMax, audio.sampleRate)
   const held = performance.now()
   small.audioNode.prepare(small.contract)
   const heldMs = performance.now() - held

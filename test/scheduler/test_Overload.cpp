@@ -146,7 +146,7 @@ Recording record(const Case& c) {
         const anira_test::DestroyFirst guard(handler, &engine);
         anira::ContractHandle contract =
             anira_test::explicit_contract(c.m_block_max, 48000.0, c.m_policy, 0.0, 5.0);
-        contract.hard_geometry(c.m_block_min, c.m_block_max, 48000.0);
+        contract.hard_host_blocks(c.m_block_min, c.m_block_max, 48000.0);
         if (c.m_policy == ANIRA_MISS_CALLBACK) { contract.hard_miss_fn(&negate, nullptr); }
         EXPECT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         anira_handler* h = handler.m_handler;
@@ -281,7 +281,7 @@ size_t expect_the_overload_contract(const Case& c, const Recording& r) {
     return dropped;
 }
 
-std::vector<Case> geometries() {
+std::vector<Case> host_block_cases() {
     return {
         Case{.m_name = "block 1024 > hop 480",
              .m_block_min = 1024,
@@ -309,8 +309,8 @@ std::vector<Case> geometries() {
     };
 }
 
-void expect_every_geometry(anira_miss_policy policy, const char* word) {
-    for (Case c : geometries()) {
+void expect_every_host_block_case(anira_miss_policy policy, const char* word) {
+    for (Case c : host_block_cases()) {
         c.m_policy = policy;
         c.m_name += std::string(", ") + word;
         const Recording r = record(c);
@@ -326,20 +326,20 @@ void expect_every_geometry(anira_miss_policy policy, const char* word) {
 
 }  // namespace
 
-// One spike in every geometry the Hard contract allows: a block above the hop (several hops a
-// call), at the hop, below it (a hop every few calls) and the 1..block_max range, at its maximum
+// One spike in every host block range the Hard contract allows: a block above the hop (several hops
+// a call), at the hop, below it (a hop every few calls) and the 1..block_max range, at its maximum
 // and with varying blocks. Every one drops hops and misses blocks, and the output holds to the
 // promise above, under each miss policy.
 TEST(Overload, ASpikeCostsTheDroppedHopsUnderZeros) {
-    expect_every_geometry(ANIRA_MISS_ZEROS, "zeros");
+    expect_every_host_block_case(ANIRA_MISS_ZEROS, "zeros");
 }
 
 TEST(Overload, ASpikeCostsTheDroppedHopsUnderBypass) {
-    expect_every_geometry(ANIRA_MISS_BYPASS, "bypass");
+    expect_every_host_block_case(ANIRA_MISS_BYPASS, "bypass");
 }
 
 TEST(Overload, ASpikeCostsTheDroppedHopsUnderHoldLast) {
-    expect_every_geometry(ANIRA_MISS_HOLD_LAST, "hold_last");
+    expect_every_host_block_case(ANIRA_MISS_HOLD_LAST, "hold_last");
 }
 
 // The host's function fills a missed block (the host's planar tensors) and a dropped hop (the
@@ -347,7 +347,7 @@ TEST(Overload, ASpikeCostsTheDroppedHopsUnderHoldLast) {
 TEST(Overload, ASpikeCostsTheDroppedHopsUnderACallback) {
     g_block_calls.store(0);
     g_hop_calls.store(0);
-    expect_every_geometry(ANIRA_MISS_CALLBACK, "callback");
+    expect_every_host_block_case(ANIRA_MISS_CALLBACK, "callback");
     EXPECT_GT(g_block_calls.load(), 0) << "no missed block reached the function";
     EXPECT_GT(g_hop_calls.load(), 0) << "no dropped hop reached the function";
     EXPECT_EQ(g_hop_samples.load(), 480) << "a dropped hop is one hop of the output";
@@ -357,7 +357,7 @@ TEST(Overload, ASpikeCostsTheDroppedHopsUnderACallback) {
 // dropped hop never reaches the model, so its state continues from the last hop it ran, as if
 // the input had jumped by the dropped hops.
 TEST(Overload, AStatefulModelRunsItsWindowsInOrderAcrossADrop) {
-    Case c = geometries().front();
+    Case c = host_block_cases().front();
     c.m_name += ", stateful";
     c.m_stateful = true;
     const Recording r = record(c);

@@ -49,7 +49,7 @@ export interface AbiModule {
   _anira_tensor_spec_destroy(_0: number): void
   _anira_contract_create_hard(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_contract_create_async(_0: number, _1: number): number
-  _anira_contract_hard_set_geometry(_0: number, _1: number, _2: number, _3: number): number
+  _anira_contract_hard_set_host_blocks(_0: number, _1: number, _2: number, _3: number): number
   _anira_contract_hard_set_budget(_0: number, _1: number, _2: number): number
   _anira_contract_hard_set_warmup(_0: number, _1: number, _2: number): number
   _anira_contract_hard_set_on_miss(_0: number, _1: number): number
@@ -141,7 +141,7 @@ export interface AbiModule {
   _anira_model_config_tensor_name(_0: number, _1: number, _2: number): number
   _anira_model_config_tensor_layout(_0: number, _1: number, _2: number, _3: number, _4: number): number
   _anira_model_config_model_ext(_0: number, _1: number, _2: number): number
-  _anira_contract_hard_geometry(_0: number, _1: number, _2: number, _3: number): number
+  _anira_contract_hard_host_blocks(_0: number, _1: number, _2: number, _3: number): number
   _anira_contract_hard_budget(_0: number, _1: number, _2: number): number
   _anira_contract_hard_warmup(_0: number, _1: number, _2: number): number
   _anira_contract_hard_on_miss(_0: number, _1: number): number
@@ -1223,18 +1223,18 @@ export class AniraBindings {
   }
 
   /**
-   * Creates a Hard (real-time) contract with the stream geometry; the fixed-block host
-   * earns the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS
-   * on miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the geometry left
-   * unset, completed by hard_set_geometry or refused at prepare: 0, 0, 0 is legal here)
-   * or both finite and > 0 with block_min <= block_max; block_min < block_max allows
-   * every smaller block. A block need not be whole: a fractional block (for a model with
-   * no stream at the host rate, e.g. a control-rate decoder at samplesPerBlock / 2048.0)
-   * is taken as the rational the latency calculation recovers from it (1e-6 relative,
-   * denominator at most 2^20), and the host moves an element of a stream only once a
-   * whole one has accumulated: after its k-th call it has pushed and popped floor(k * b)
-   * elements of a stream whose block is b, so one call carries floor(b) or ceil(b) of
-   * them (0 or 1 for 0.25, the 1 on every fourth call).
+   * Creates a Hard (real-time) contract with the host blocks; the fixed-block host earns
+   * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on
+   * miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left
+   * unset, completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal
+   * here) or both finite and > 0 with block_min <= block_max; block_min < block_max
+   * allows every smaller block. A block need not be whole: a fractional block (for a
+   * model with no stream at the host rate, e.g. a control-rate decoder at samplesPerBlock
+   * / 2048.0) is taken as the rational the latency calculation recovers from it (1e-6
+   * relative, denominator at most 2^20), and the host moves an element of a stream only
+   * once a whole one has accumulated: after its k-th call it has pushed and popped
+   * floor(k * b) elements of a stream whose block is b, so one call carries floor(b) or
+   * ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
    *
    * @param block_min Smallest block the host callback delivers, in Time-axis elements of
    *   the anchor tensor; may be fractional (0.25: one element every fourth callback).
@@ -1290,8 +1290,8 @@ export class AniraBindings {
   }
 
   /**
-   * Patches the stream geometry, e.g. of a contract loaded from a file (section 8), under
-   * the rules of anira_contract_create_hard; a refusal leaves the geometry as it was.
+   * Patches the host blocks, e.g. of a contract loaded from a file (section 8), under the
+   * rules of anira_contract_create_hard; a refusal leaves the host blocks as they were.
    *
    * @param contract A Hard contract.
    * @param block_min See anira_contract_create_hard; may be fractional.
@@ -1303,7 +1303,7 @@ export class AniraBindings {
    *   failed status throws an AniraError.
    * Thread: [main-thread]
    */
-  anira_contract_hard_set_geometry(
+  anira_contract_hard_set_host_blocks(
     contract: number,
     block_min: number,
     block_max: number,
@@ -1312,8 +1312,8 @@ export class AniraBindings {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_contract_hard_set_geometry(contract, block_min, block_max, rate),
-      'anira_contract_hard_set_geometry'
+      m._anira_contract_hard_set_host_blocks(contract, block_min, block_max, rate),
+      'anira_contract_hard_set_host_blocks'
     )
   }
 
@@ -3157,7 +3157,7 @@ export class AniraBindings {
 
   /**
    * Hands out the Hard contract a version 2 upgrade held back (budget, warmup and wait
-   * ratio; no geometry). Non-NULL only once after an upgrade: a second call, or a v3
+   * ratio; no host blocks). Non-NULL only once after an upgrade: a second call, or a v3
    * document, yields NULL.
    *
    * @param config The config.
@@ -3714,15 +3714,15 @@ export class AniraBindings {
   }
 
   /**
-   * The geometry as anira_contract_create_hard or anira_contract_hard_set_geometry stored
-   * it; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
+   * The host blocks as anira_contract_create_hard or anira_contract_hard_set_host_blocks
+   * stored them; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
    *
    * @param contract A Hard contract.
    * @returns What the entry writes to block_min, block_max, rate. A failed status throws
    *   an AniraError.
    * Thread: [main-thread]
    */
-  anira_contract_hard_geometry(
+  anira_contract_hard_host_blocks(
     contract: number
   ): { block_min: number; block_max: number; rate: number } {
     const m = this.module
@@ -3733,8 +3733,8 @@ export class AniraBindings {
       const rate_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_contract_hard_geometry(contract, block_min_, block_max_, rate_),
-        'anira_contract_hard_geometry'
+        m._anira_contract_hard_host_blocks(contract, block_min_, block_max_, rate_),
+        'anira_contract_hard_host_blocks'
       )
       return {
         block_min: heap(m).HEAPF64[block_min_ >>> 3],
@@ -5531,7 +5531,7 @@ export class AniraBindings {
 
   /**
    * The blocking quiescence point, and the one call no other handler entry may overlap:
-   * validates the variant against the contract (geometry, the explicit budget, the
+   * validates the variant against the contract (the host blocks, the explicit budget, the
    * warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name,
    * the contract's extensions), checks every plan's provider against what its engine
    * serves (a built-in engine's runtime as the context reports it now, so a context
@@ -5822,7 +5822,7 @@ export class AniraBindings {
    * a State tensor is refused (a generator with Static input 0 calls
    * anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is
    * validated before anything is pushed, so a refusal pushes nothing. Each tensor carries
-   * one host block of the geometry's block_max at most, ceil(b) samples of the block b on
+   * one host block of the contract's block_max at most, ceil(b) samples of the block b on
    * its slot's stream (the header doc): a larger shape[1] is refused, never cut to its
    * tail. A block whose inference has not completed is an on_miss event: the contract's
    * policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered
@@ -6989,7 +6989,7 @@ export class AniraBindings {
 
   /**
    * Re-prepares the node's handler under contract while the node lives and its context
-   * runs: the way to change the geometry of a running node (a new block_max after the
+   * runs: the way to change the host blocks of a running node (a new block_max after the
    * output device changed). The render callback is held off first: from its next quantum
    * it outputs silence and leaves the handler alone, and this call waits (at most 5000
    * ms, on the main thread; the callback never waits) until the quantum in flight

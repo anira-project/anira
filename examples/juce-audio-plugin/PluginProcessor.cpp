@@ -119,13 +119,13 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     dry_wet_mixer.prepare(spec);
 
-    // The host geometry completes the contract: the host's real block range at sampleRate.
+    // The host blocks complete the contract: the host's real block range at sampleRate.
     // samplesPerBlock is the largest block JUCE promises, not a fixed one (a host may pass
     // smaller blocks, splitting at an automation point, say), and JUCE names no minimum, so the
     // range starts at one sample. The latency anira reports covers every block size of that
     // range, and setLatencySamples below hands it to the host, which compensates it. Each
     // processBlock carries its own block (the tensor's extent is set per call). The decoder of
-    // variant 7 anchors on its audio output, so it takes the same geometry.
+    // variant 7 anchors on its audio output, so it takes the same host blocks.
     const auto block_max = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
     model.prepare(block_max, sampleRate);

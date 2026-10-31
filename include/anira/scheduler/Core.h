@@ -376,7 +376,7 @@ public:
     /**
      * @brief Prepares a session for the Hard contract it reads
      *
-     * Configures the specified session for the geometry, budget and wait ratio of its
+     * Configures the specified session for the host blocks, budget and wait ratio of its
      * contract, with optional custom latency values. This method handles buffer allocation, latency
      * calculation, and session state updates, and starts the inference thread pool if it is
      * not running yet. Every prepare of every session also re-arms the process-wide latches

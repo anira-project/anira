@@ -60,7 +60,7 @@
 // of its calls.
 //
 // The scripts keep every call within the declared block. A Hard entry refuses a host block
-// larger than one block of the geometry's block_max on its stream (ANIRA_ERROR_INVALID_ARGUMENT,
+// larger than one block of the contract's block_max on its stream (ANIRA_ERROR_INVALID_ARGUMENT,
 // nothing moves), so the recorded calls that passed more (13, 20, 30, 40 samples on a block of
 // 8, where the ring kept the tail or the request missed) were rewritten within the block, and
 // their transcripts recorded again, once, with that change: every transcript of the golden file,

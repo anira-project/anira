@@ -385,7 +385,7 @@ struct ContextConfig {
  * stream, whether smaller blocks come, and which tensor is the reference stream
  * (k_first_streamable: the first Streamed input, else the first Streamed output). The
  * m_buffer_size may be fractional, as in 2.x (a control-rate model prepared with
- * samplesPerBlock / 2048.f): it becomes the Hard geometry as it is, and the host moves a
+ * samplesPerBlock / 2048.f): it becomes the Hard host block as it is, and the host moves a
  * sample of a stream only once a whole one has accumulated (anira_contract_create_hard). The
  * session's arithmetic of 2.x (resolve_reference, get_reference_size,
  * get_relative_buffer_size, get_relative_sample_rate) is not declared.
@@ -861,7 +861,7 @@ public:
         return copy;
     }
     /// The legacy Hard contract read back: the explicit budget (max_inference_time), the fixed
-    /// warm-up, the wait ratio (blocking_ratio), ANIRA_MISS_ZEROS; no geometry, which the
+    /// warm-up, the wait ratio (blocking_ratio), ANIRA_MISS_ZEROS; no host blocks, which the
     /// handler's prepare sets.
     /// @throws Error{ANIRA_ERROR_INVALID_STATE} on an empty configuration.
     anira::Hard hard() const {
@@ -1978,8 +1978,8 @@ struct Context {
  * them. The processor and the configuration are the caller's and outlive the handler, as in 2.x.
  *
  * What differs from 2.x: nothing loads at construction (a model that does not load fails
- * prepare); a prepare with the settings of the last one only resets the stream, one with another
- * geometry loads the models again, one with another reference tensor rebuilds the C handler; the
+ * prepare); a prepare with the settings of the last one only resets the stream, one with other
+ * host blocks loads the models again, one with another reference tensor rebuilds the C handler; the
  * single forms carry their one slot per side and nothing else (2.x resent what the last call
  * left in the other slots); a block above the HostConfig buffer size (ceil of it, scaled to each
  * stream) is refused, nothing moves and rt_error() reports ANIRA_ERROR_INVALID_ARGUMENT (2.x kept
@@ -2057,10 +2057,10 @@ public:
     }
 
     /// Prepares for the host's stream: the configuration's legacy contract with the host
-    /// geometry (block_max m_buffer_size, a fractional one included; block_min 1 when smaller
+    /// blocks (block_max m_buffer_size, a fractional one included; block_min 1 when smaller
     /// blocks come, half the block when it is one sample or less), the reference tensor as the
     /// model's anchor. The settings of the last successful prepare only reset the
-    /// stream (the models stay loaded); another geometry prepares again and loads the models
+    /// stream (the models stay loaded); other host blocks prepare again and load the models
     /// again; another reference tensor rebuilds the C handler. The selected backend is applied
     /// again. @throws Error: ANIRA_ERROR_CONFIG for a block size or rate that is not finite and
     /// above 0, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
@@ -2493,7 +2493,7 @@ private:
             m_anchor = wanted;
         }
         anira::Hard hard = m_config.hard();
-        // The float as it is: the geometry is a double, and the latency calculation recovers
+        // The float as it is: the host blocks are doubles, and the latency calculation recovers
         // the rational the host meant from either. The translation reads only whether
         // block_min is below block_max, so a block of one sample or less says that smaller
         // blocks come with half of itself.

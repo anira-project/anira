@@ -245,12 +245,12 @@ inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t m
     return model;
 }
 
-/// A bundled contract file with the host geometry patched in.
+/// A bundled contract file with the host blocks patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
                                            double rate = k_rate) {
     anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    contract.hard_geometry(block, block, rate);
+    contract.hard_host_blocks(block, block, rate);
     return contract;
 }
 

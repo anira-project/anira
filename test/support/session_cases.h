@@ -1,6 +1,6 @@
 // The session-sizing cases of the scheduler suites (test_SessionElement, test_InferenceManager):
 // a model described by the facts a session is sized from, per slot its element count, its
-// channels and the samples it moves per inference, a host geometry, the budget, the wait
+// channels and the samples it moves per inference, the host blocks, the budget, the wait
 // ratio and the instances, built into a C model config and contract and prepared on a C
 // handler over the custom row (its pass-through engine; no case runs an inference). What the
 // suites read back is the prepared session: the latencies, the struct pool and the ring sizes.
@@ -40,31 +40,31 @@ struct SizingSlot {
     int64_t m_hop = -1;
 };
 
-/// Which tensor anchors the geometry; none: the first Streamed input, else the first Streamed
+/// Which tensor anchors the host blocks; none: the first Streamed input, else the first Streamed
 /// output.
 struct SizingAnchor {
     bool m_is_input = true;
     size_t m_index = 0;
 };
 
-/// The host geometry of a case: blocks of `m_block` samples of the anchor at `m_rate`, smaller
+/// The host blocks of a case: blocks of `m_block` samples of the anchor at `m_rate`, smaller
 /// blocks admitted or not.
-struct SizingGeometry {
+struct SizingHostBlocks {
     double m_block = 0.0;
     double m_rate = 0.0;
     bool m_allow_smaller = false;
     std::optional<SizingAnchor> m_anchor;
 };
 
-/// A geometry: blocks of `block` samples of the anchor at `rate`.
-inline SizingGeometry sizing_geometry(double block,
-                                      double rate,
-                                      bool allow_smaller = false,
-                                      std::optional<SizingAnchor> anchor = std::nullopt) {
-    return SizingGeometry{.m_block = block,
-                          .m_rate = rate,
-                          .m_allow_smaller = allow_smaller,
-                          .m_anchor = anchor};
+/// Host blocks of `block` samples of the anchor at `rate`.
+inline SizingHostBlocks sizing_host_blocks(double block,
+                                           double rate,
+                                           bool allow_smaller = false,
+                                           std::optional<SizingAnchor> anchor = std::nullopt) {
+    return SizingHostBlocks{.m_block = block,
+                            .m_rate = rate,
+                            .m_allow_smaller = allow_smaller,
+                            .m_anchor = anchor};
 }
 
 /// The anchor at input `index`.
@@ -102,17 +102,16 @@ inline anira::ModelConfig sizing_model(const std::vector<SizingSlot>& inputs,
     return model;
 }
 
-/// The contract of a case: its geometry (block_min half the block when smaller blocks are
+/// The contract of a case: its host blocks (block_min half the block when smaller blocks are
 /// admitted, the block otherwise), an explicit budget, no warm-up, ZEROS on a miss (the 2.x
 /// manager's policy; BYPASS asks for channel counts the cases do not keep) and the wait ratio.
-inline anira::ContractHandle sizing_contract(const SizingGeometry& geometry,
+inline anira::ContractHandle sizing_contract(const SizingHostBlocks& blocks,
                                              double budget_ms,
                                              double wait_ratio) {
-    anira::Hard hard{
-        .block_min = geometry.m_allow_smaller ? geometry.m_block / 2 : geometry.m_block,
-        .block_max = geometry.m_block,
-        .rate = geometry.m_rate,
-        .budget = std::chrono::duration<double, std::milli>(budget_ms)};
+    anira::Hard hard{.block_min = blocks.m_allow_smaller ? blocks.m_block / 2 : blocks.m_block,
+                     .block_max = blocks.m_block,
+                     .rate = blocks.m_rate,
+                     .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = 0;
     hard.on_miss = ANIRA_MISS_ZEROS;

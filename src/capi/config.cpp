@@ -147,7 +147,7 @@ std::shared_ptr<anira::capi::BytesCarrier> make_carrier(const void* bytes,
 
 namespace anira::capi {
 
-std::string geometry_refusal(double block_min, double block_max, double rate) {
+std::string host_blocks_refusal(double block_min, double block_max, double rate) {
     // %g names NaN, inf and every fraction a host can have meant (0.25, 0.333333).
     const auto g = [](double value) {
         std::array<char, 32> text{};
@@ -158,11 +158,11 @@ std::string geometry_refusal(double block_min, double block_max, double rate) {
     if (!unset) {
         if (!(std::isfinite(block_min) && block_min > 0.0)) {
             return "block_min " + g(block_min) + " must be finite and > 0 (block_max " +
-                   g(block_max) + "; both 0 leave the geometry unset)";
+                   g(block_max) + "; both 0 leave the host blocks unset)";
         }
         if (!(std::isfinite(block_max) && block_max > 0.0)) {
             return "block_max " + g(block_max) + " must be finite and > 0 (block_min " +
-                   g(block_min) + "; both 0 leave the geometry unset)";
+                   g(block_min) + "; both 0 leave the host blocks unset)";
         }
         if (block_min > block_max) {
             return "block_min " + g(block_min) + " exceeds block_max " + g(block_max);
@@ -308,7 +308,7 @@ anira_status ANIRA_CALL anira_contract_create_hard(double block_min,
                                                    anira_contract** out,
                                                    anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(out != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "contract: NULL out");
-    const std::string refusal = anira::capi::geometry_refusal(block_min, block_max, rate);
+    const std::string refusal = anira::capi::host_blocks_refusal(block_min, block_max, rate);
     ANIRA_CAPI_REQUIRE(refusal.empty(),
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -333,15 +333,15 @@ anira_status ANIRA_CALL anira_contract_create_async(anira_contract** out,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_contract_hard_set_geometry(anira_contract* contract,
-                                                         double block_min,
-                                                         double block_max,
-                                                         double rate) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_contract_hard_set_host_blocks(anira_contract* contract,
+                                                            double block_min,
+                                                            double block_max,
+                                                            double rate) ANIRA_NOEXCEPT try {
     if (contract == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     anira::capi::HardContract* hard = contract->hard();
     if (hard == nullptr) { return ANIRA_ERROR_WRONG_CONTRACT; }
     // No anira_error to fill: the message reaches the boundary trace only.
-    const std::string refusal = anira::capi::geometry_refusal(block_min, block_max, rate);
+    const std::string refusal = anira::capi::host_blocks_refusal(block_min, block_max, rate);
     ANIRA_CAPI_REQUIRE(refusal.empty(),
                        nullptr,
                        ANIRA_ERROR_INVALID_ARGUMENT,
@@ -1357,10 +1357,10 @@ const anira_ext_header* ANIRA_CALL anira_model_config_model_ext(const anira_mode
 
 // ---- contract ----
 
-anira_status ANIRA_CALL anira_contract_hard_geometry(const anira_contract* contract,
-                                                     double* block_min,
-                                                     double* block_max,
-                                                     double* rate) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_contract_hard_host_blocks(const anira_contract* contract,
+                                                        double* block_min,
+                                                        double* block_max,
+                                                        double* rate) ANIRA_NOEXCEPT try {
     if (contract == nullptr || block_min == nullptr || block_max == nullptr || rate == nullptr) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }

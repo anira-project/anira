@@ -450,7 +450,7 @@ TEST(AbiCompatConfig, TheConstructorUpgradesLikeTheDocument) {
     EXPECT_EQ(actual.warmup_iterations, 1U);
     EXPECT_EQ(actual.on_miss, ANIRA_MISS_ZEROS);
     EXPECT_DOUBLE_EQ(actual.wait_ratio, expected.wait_ratio);
-    EXPECT_EQ(actual.block_max, 0U) << "no geometry: the handler's prepare sets it";
+    EXPECT_EQ(actual.block_max, 0U) << "no host blocks: the handler's prepare sets them";
     EXPECT_TRUE(actual.ring_dtypes.empty());
     EXPECT_TRUE(actual.latencies.empty());
 }
@@ -957,7 +957,7 @@ struct PipelineHandler {
     anira_error m_err = ANIRA_ERROR_INIT;
 };
 
-/// The legacy contract of a shim configuration with the host geometry of a block.
+/// The legacy contract of a shim configuration with fixed host blocks of `block` samples.
 anira::ContractHandle contract_of(const v2::InferenceConfig& config, uint32_t block) {
     anira::Hard hard = config.hard();
     hard.block_min = block;
@@ -2018,7 +2018,7 @@ TEST(AbiCompat, CustomLatencyReplacesTheComputedFigures) {
 }
 
 // Case 17: a block size of none and a rate of 0 are refused; a fractional block size is not
-// (2.x took it as a float, the shim passes it through to the double Hard geometry).
+// (2.x took it as a float, the shim passes it through to the double Hard host block).
 TEST(AbiCompat, ANonPositiveHostConfigIsRefused) {
     const Arguments args = gain_custom_arguments();
     v2::InferenceConfig config = make_shim(args);
@@ -2433,7 +2433,7 @@ TEST(AbiCompat, TheEngineOutlivesTheHandler) {
 }
 
 // Case 28: a prepare with the settings of the last one resets the stream and loads nothing;
-// another geometry loads again; another reference tensor rebuilds the handler and loads again.
+// other host blocks load again; another reference tensor rebuilds the handler and loads again.
 TEST(AbiCompat, AnUnchangedPrepareResetsWithoutReloading) {
     KernelEngine<GainKernel> engine;
     v2::InferenceConfig config = make_shim(gain_custom_arguments());
@@ -2456,7 +2456,7 @@ TEST(AbiCompat, AnUnchangedPrepareResetsWithoutReloading) {
     EXPECT_EQ(handler.get_available_samples(0), handler.get_latency(0)) << "the stream restarts";
 
     handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate)));
-    EXPECT_EQ(engine.m_loads.load(), 2) << "another geometry loads again";
+    EXPECT_EQ(engine.m_loads.load(), 2) << "other host blocks load again";
     EXPECT_EQ(handler.native(), native);
 
     handler.prepare(v2::HostConfig(256.F, static_cast<float>(anira_test::k_rate), false, 0, false));

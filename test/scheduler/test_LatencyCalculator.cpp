@@ -388,7 +388,7 @@ TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
     EXPECT_GE(hops, 31.0 / 32.0);
 }
 
-TEST(LatencyCalculatorClosedForm, RejectsAnEmptyGeometry) {
+TEST(LatencyCalculatorClosedForm, RejectsEmptyHostBlocks) {
     capi::Derived const derived = streams({2048}, {2048});
     EXPECT_THROW(LatencyCalculator(derived, capi::HardContract{}, 2), std::invalid_argument);
     EXPECT_THROW(LatencyCalculator(derived, hard_contract(2048.0, 0.0, 40.0, 0.0), 2),

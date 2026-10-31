@@ -213,7 +213,7 @@ public:
         // Blocks of 1 to k_hop samples.
         anira::ContractHandle contract =
             anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
-        contract.hard_geometry(1, k_hop, k_rate);
+        contract.hard_host_blocks(1, k_hop, k_rate);
         contract.hard_miss_fn(miss_fn, miss_user_data);
         const anira_status prepared = m_handler.prepare(contract);
         EXPECT_EQ(prepared, ANIRA_OK) << m_handler.m_err.message;
@@ -1627,7 +1627,7 @@ TEST(AbiHandlerTensor, TheCallbackPolicyNeedsItsFunctionAtPrepare) {
     // A parsed contract names the policy; a file cannot carry the function.
     anira::ContractHandle contract = anira::ContractHandle::from_json(
         R"({"hard": {"budget": {"ms": 1.0}, "warmup": {"fixed": 0}, "on_miss": "callback"}})");
-    contract.hard_geometry(1, k_hop, k_rate);
+    contract.hard_host_blocks(1, k_hop, k_rate);
     anira_error err = ANIRA_ERROR_INIT;
     EXPECT_EQ(handler.prepare(contract, &err), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(err.message).find("on_miss"), std::string::npos) << err.message;
@@ -1820,7 +1820,7 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
     }
 }
 
-// ---- a fractional geometry ---------------------------------------------------------------------
+// ---- fractional host blocks --------------------------------------------------------------------
 
 /// The samples of a stream whose block is `block` that the host moves by its call k, the whole
 /// ones accumulated: floor(k b), the accounting LatencyCalculator sizes the latency and the
@@ -1829,7 +1829,7 @@ size_t moved_by_call(double block, size_t k) {
     return static_cast<size_t>(std::floor(static_cast<double>(k) * block + 1e-9));
 }
 
-/// A mono pass-through on a control-rate stream (hop 1) under the geometry 0.25, 0.25 at
+/// A mono pass-through on a control-rate stream (hop 1) under the host blocks 0.25, 0.25 at
 /// 100 Hz, on the pass-through engine of the pipeline (no gate: the calls settle by waiting).
 /// `flexible` gives both tensors the window [1, unbounded] over a dynamic Time extent instead
 /// of the fixed window 1.
@@ -1838,7 +1838,7 @@ struct FractionalRig {
         : m_context(2), m_handler(m_context, model(flexible), m_candidates) {
         anira::ContractHandle contract =
             anira_test::explicit_contract(1, k_control_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-        contract.hard_geometry(k_fraction, k_fraction, k_control_rate);
+        contract.hard_host_blocks(k_fraction, k_fraction, k_control_rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
     }
 
@@ -1993,7 +1993,7 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
 
 // ---- the block bound ---------------------------------------------------------------------------
 
-/// A mono pass-through on one stream of `hop` samples per hop under the geometry
+/// A mono pass-through on one stream of `hop` samples per hop under the host blocks
 /// block_min..block_max at `rate`, at the debug level (the refusal's record is collected), on
 /// the pass-through engine of the pipeline. bound() is one host block of block_max on the
 /// stream, ceil(block_max / hop * hop): the most samples one call may carry.
@@ -2004,7 +2004,7 @@ struct BoundRig {
         , m_bound(static_cast<size_t>(std::ceil(block_max))) {
         anira::ContractHandle contract =
             anira_test::explicit_contract(1, rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-        contract.hard_geometry(block_min, block_max, rate);
+        contract.hard_host_blocks(block_min, block_max, rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(get());
     }
@@ -2182,43 +2182,40 @@ void expect_the_bound_passes(const BoundRig& rig, size_t& pushed, size_t& popped
 // Hard entry that moves a Streamed slot, on its push side and on its pop side, before anything
 // moves. The bound itself passes, the refusal is recorded in rt_error (last-wins) and logged
 // once, and the calls within the bound that follow it work: the stream goes on where it was.
-// Twice: under the integer geometry 1..8 on a hop of 8 (bound 8) and under the fractional
+// Twice: under the integer host blocks 1..8 on a hop of 8 (bound 8) and under the fractional
 // 0.25 on a hop of 1 (bound 1, ceil(0.25)).
 TEST(AbiHandlerTensor, AHostBlockAboveTheDeclaredBlockIsRefused) {
-    struct Geometry {
+    struct HostBlocks {
         int64_t m_hop;
         double m_block_min;
         double m_block_max;
         double m_rate;
         size_t m_bound;
     };
-    for (const Geometry geometry : {Geometry{.m_hop = 8,
-                                             .m_block_min = 1.0,
-                                             .m_block_max = 8.0,
-                                             .m_rate = 800.0,
-                                             .m_bound = 8},
-                                    Geometry{.m_hop = 1,
-                                             .m_block_min = 0.25,
-                                             .m_block_max = 0.25,
-                                             .m_rate = 100.0,
-                                             .m_bound = 1}}) {
-        SCOPED_TRACE("block_max " + std::to_string(geometry.m_block_max));
+    for (const HostBlocks blocks : {HostBlocks{.m_hop = 8,
+                                               .m_block_min = 1.0,
+                                               .m_block_max = 8.0,
+                                               .m_rate = 800.0,
+                                               .m_bound = 8},
+                                    HostBlocks{.m_hop = 1,
+                                               .m_block_min = 0.25,
+                                               .m_block_max = 0.25,
+                                               .m_rate = 100.0,
+                                               .m_bound = 1}}) {
+        SCOPED_TRACE("block_max " + std::to_string(blocks.m_block_max));
         anira_drain_log();
         RecordCollector collector;
-        const BoundRig rig(geometry.m_hop,
-                           geometry.m_block_min,
-                           geometry.m_block_max,
-                           geometry.m_rate);
+        const BoundRig rig(blocks.m_hop, blocks.m_block_min, blocks.m_block_max, blocks.m_rate);
         ASSERT_NE(rig.get(), nullptr);
-        ASSERT_EQ(rig.bound(), geometry.m_bound);
+        ASSERT_EQ(rig.bound(), blocks.m_bound);
         anira_handler* h = rig.get();
         size_t pushed = 0;
         size_t popped = 0;
         expect_the_bound_passes(rig, pushed, popped);
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK) << "the bound is not refused";
 
-        expect_every_entry_refuses(rig, geometry.m_bound + 1);
-        expect_every_entry_refuses(rig, 4 * geometry.m_bound);
+        expect_every_entry_refuses(rig, blocks.m_bound + 1);
+        expect_every_entry_refuses(rig, 4 * blocks.m_bound);
         anira_drain_log();
 #ifdef ENABLE_LOGGING
         EXPECT_EQ(anira_test::count_records(collector, "more than one host block", "rt"), 1U)

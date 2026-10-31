@@ -1,5 +1,5 @@
 // anira::InferenceHandler of anira/anira.hpp end to end on GuitarLSTM (extras/models/hybrid-nn):
-// the model file, its contract with the host geometry, a Pipeline of the inference stage (the
+// the model file, its contract with the host blocks, a Pipeline of the inference stage (the
 // engine of the instantiation, or the bypass engine of extras/models/BypassEngine.h) and the
 // model's windows (HybridNNProcessor), the handler's Hard entries over one planar float32 tensor.
 // The outputs are compared with the reference renders of the model directory, delayed by the
@@ -92,7 +92,7 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
 }
 
 /// One handler on GuitarLSTM: the model file plus the bypass engine's entry, the contract file
-/// with the instantiation's geometry, a Pipeline of the inference stage on the one engine of the
+/// with the instantiation's host blocks, a Pipeline of the inference stage on the one engine of the
 /// instantiation and HybridNNProcessor, prepared.
 struct HybridNnHandler {
     explicit HybridNnHandler(const InferenceTestParams& params,
@@ -100,7 +100,7 @@ struct HybridNnHandler {
                              const uint32_t* declared_latency = nullptr) {
         m_model.add_model(k_bypass_engine_id);
         m_model.state(state);
-        m_contract.hard_geometry(params.m_block, params.m_block, params.m_rate);
+        m_contract.hard_host_blocks(params.m_block, params.m_block, params.m_rate);
         if (declared_latency != nullptr) {
             m_contract.hard_latency("audio_out", *declared_latency);
         }
@@ -405,7 +405,7 @@ std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamTyp
     return sample_rate_str + "x" + buffer_size_str;
 }
 
-/// The two geometries of every instantiation, over one engine and one pair of wav files.
+/// The two host block ranges of every instantiation, over one engine and one pair of wav files.
 auto params_of(anira::EngineKind engine,
                const std::string& input,
                const std::string& reference,
@@ -531,7 +531,7 @@ TEST(InferenceHandlerDefaultPlan, StartsOnTheFirstEntryOfTheBuild) {
     anira::ModelConfig model = anira::ModelConfig::from_file(k_hybridnn_model_json);
     model.add_model(k_bypass_engine_id);
     anira::ContractHandle contract = anira::ContractHandle::from_file(k_hybridnn_contract_json);
-    contract.hard_geometry(256, 256, 44100);
+    contract.hard_host_blocks(256, 256, 44100);
     anira::Pipeline pipeline;
     pipeline.add_engine(std::make_shared<BypassEngine>());
     pipeline.add_inference(model);

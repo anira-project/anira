@@ -192,19 +192,19 @@ TEST(AbiPrepare, MeasuredBudgetAndUntilStableWarmupAreNotSupportedUntilTheEstima
     EXPECT_EQ(handler.prepare(ContractHandle(none), &err), ANIRA_OK) << err.message;
 }
 
-TEST(AbiPrepare, MissingGeometryIsConfig) {
+TEST(AbiPrepare, MissingHostBlocksAreConfig) {
     const Context context;
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
     Handler handler(context, model, candidates);
     anira_error err = ANIRA_ERROR_INIT;
 
-    Hard hard{.budget = std::chrono::milliseconds(5)};  // geometry 0/0/0: legal at create
+    Hard hard{.budget = std::chrono::milliseconds(5)};  // host blocks 0/0/0: legal at create
     hard.warmup = ANIRA_WARMUP_FIXED;
     ContractHandle contract(hard);
     EXPECT_EQ(handler.prepare(contract, &err), ANIRA_ERROR_CONFIG);
-    expect_contains(err.message, "contract: Hard geometry missing");
-    contract.hard_geometry(512, 512, 48000.0);
+    expect_contains(err.message, "contract: Hard host blocks missing");
+    contract.hard_host_blocks(512, 512, 48000.0);
     EXPECT_EQ(handler.prepare(contract, &err), ANIRA_OK) << err.message;
 }
 
@@ -824,14 +824,14 @@ TEST(AbiPrepare, TheLegacyContractCarriesZeros) {
         EXPECT_EQ(whole.native()->hard()->m_on_miss, ANIRA_MISS_BYPASS);
     }
     {
-        // The legacy contract prepares a C handler once patched with a geometry: its on_miss
+        // The legacy contract prepares a C handler once patched with host blocks: its on_miss
         // is ZEROS, so no BYPASS rule runs.
         const Context context;
         ModelConfig model = ModelConfig::from_json(anira_test::gain_v2_document());
         model.add_model_path(k_custom, "custom-processor");
         std::optional<ContractHandle> legacy = model.take_legacy_contract();
         if (!legacy.has_value()) { FAIL() << "a version 2 document carries a legacy contract"; }
-        legacy->hard_geometry(512, 512, 48000.0);
+        legacy->hard_host_blocks(512, 512, 48000.0);
         const std::vector<anira_backend_id> candidates = custom_candidates();
         Handler handler(context, model, candidates);
         anira_error err = ANIRA_ERROR_INIT;

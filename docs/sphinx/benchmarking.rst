@@ -52,9 +52,9 @@ Start by creating your benchmark using the ``BENCHMARK_DEFINE_F`` macro. The ben
     anira::ContractHandle my_contract = anira::ContractHandle::from_file("contract.json");
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_SIMPLE)(::benchmark::State& state) {
-        // The host geometry: the buffer size at SAMPLE_RATE, on the contract
+        // The host blocks: the buffer size at SAMPLE_RATE, on the contract
         const auto block = static_cast<double>(get_buffer_size());
-        my_contract.hard_geometry(block, block, SAMPLE_RATE);
+        my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
         // Only report errors, so the log output of the engines does not pollute the
         // benchmark results (section 3.1 of the usage guide)
@@ -258,9 +258,9 @@ Test different buffer sizes by passing arguments during registration:
     :caption: benchmark.cpp
 
     BENCHMARK_DEFINE_F(ProcessBlockFixture, BM_MULTIPLE_BUFFER_SIZES)(::benchmark::State& state) {
-        // state.range(0) is the buffer size argument: the host geometry of this run
+        // state.range(0) is the buffer size argument: the host blocks of this run
         const auto block = static_cast<double>(get_buffer_size());
-        my_contract.hard_geometry(block, block, SAMPLE_RATE);
+        my_contract.hard_host_blocks(block, block, SAMPLE_RATE);
 
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});
         anira::Pipeline pipeline;
@@ -327,7 +327,7 @@ For complex configuration testing, define argument combinations using a custom f
         // Extract configuration from arguments
         const anira::BackendId backend = benchmark_backends()[state.range(2)];
         auto [model, contract] = model_and_contract(state.range(1), get_buffer_size());
-        contract.hard_geometry(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
+        contract.hard_host_blocks(get_buffer_size(), get_buffer_size(), SAMPLE_RATE);
 
         // Setup with selected configuration: the one backend as the single candidate
         m_context = std::make_unique<anira::Context>(anira::ContextConfig{});

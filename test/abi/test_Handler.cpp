@@ -823,7 +823,7 @@ static_assert(!std::is_move_constructible_v<anira::capi::Ports> &&
 
 // And so they keep their addresses for the handler's life: every port, a stream port's ring and
 // a static port's value stay where create made them through two prepares of different
-// geometries (the rings are re-initialised in place).
+// host blocks (the rings are re-initialised in place).
 TEST(AbiHandler, ThePortsKeepTheirAddressesAcrossPrepares) {
     const Context context;
     Handler handler(context, gain_with_custom(), custom_candidates());
