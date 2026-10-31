@@ -331,7 +331,7 @@ public:
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing
     /// execute or a result of another shape than the record's.
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
     /// Copies every input descriptor into its staging tensor, executes and copies every result
@@ -525,7 +525,7 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     try {
         run(ctx);
         m_failures.succeeded();

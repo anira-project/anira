@@ -89,24 +89,22 @@ struct RtLatch;
  *
  * @par Configuration
  * The core reads the context config, the C struct behind anira_context_config_* (its body is
- * src/capi/handles.h): a 3.x context passes its own through register_context(), a 3.x
- * handler's session passes its context's through create_session(), and the 2.x
- * InferenceManager maps its CoreConfig onto one (anira::capi::make_context_config) before
- * delegating. Of the struct only the six scalars matter here — threads, wait strategy, log
- * level, drain, drain interval and queue capacity; the sink, the flags, the device blocks
- * and the extensions are the context's business. The first user's config (sanitized: see
- * sanitize_config()) is the one in effect; every later one is reconciled against it (log
- * level: the most verbose requested level wins; wait strategy, drain mode, queue capacity
- * and interval: the first wins, with a warning; thread count: the pool only shrinks, and
- * never to zero). Decision and mutation happen in one critical section, so no session can
- * observe a configuration other than the one its pool was built with.
+ * src/capi/handles.h): a 3.x context passes its own through register_context(), and a
+ * handler's session passes its context's through create_session(). Of the struct only the six
+ * scalars matter here — threads, wait strategy, log level, drain, drain interval and queue
+ * capacity; the sink, the flags, the device blocks and the extensions are the context's business.
+ * The first user's config (sanitized: see sanitize_config()) is the one in effect; every later one
+ * is reconciled against it (log level: the most verbose requested level wins; wait strategy, drain
+ * mode, queue capacity and interval: the first wins, with a warning; thread count: the pool only
+ * shrinks, and never to zero). Decision and mutation happen in one critical section, so no session
+ * can observe a configuration other than the one its pool was built with.
  *
  * @note One core per binary. A shared libanira is shared by everything that links it;
  *       a plugin that embeds anira statically has its own. (On GCC/Linux, two such plugins
  *       used to share one core by accident through unique-symbol binding; they no
  *       longer do.)
  *
- * @see SessionElement, InferenceThread, PrePostProcessor, BackendBase
+ * @see SessionElement, InferenceThread, PrePostProcessor
  */
 class ANIRA_API Core {
 public:
@@ -139,11 +137,9 @@ public:
      * @param pp_processor Reference to the preprocessing/postprocessing pipeline
      * @param inference_config Reference to the inference configuration
      * @param requests One plan per entry, in dense-index order: what the session's plan
-     * table holds (the 2.x constructors ask for engine::legacy_plan_requests, a 3.x
-     * handler for exactly its plans); never empty
-     * @param context_config Configuration of the core as requested by this session: a 3.x
-     * handler passes its context's config through unchanged, the 2.x InferenceManager maps
-     * its CoreConfig onto one
+     * table holds (the C handler asks for exactly its plans); never empty
+     * @param context_config Configuration of the core as requested by this session: the
+     * handler's context's config, passed through unchanged
      * @param rt_latch The real-time latch the session records its failures into: a 3.x
      * handler's own (so anira_handler_rt_error reads one word); nullptr gives the session
      * its own. Reaches the SessionElement constructor and is published by the same
@@ -917,26 +913,21 @@ private:
      * pool with a new InstanceWaitList, the jobs that wait for a free instance of it (shared
      * by every session on the entry, like the loaded model). Exclusivity is no part of the key: a
      * stateful model is loaded once for every session that runs it, with no shared slot (the record
-     * says so). A 2.x backend and the roundtrip get a fresh legacy loaded model per session, never
-     * pooled.
+     * says so).
      *
      * @param state The core's state
      * @param request The plan's request (its model's log level is the one in effect)
-     * @param inference_config The session's configuration: what the roundtrip and the 2.x
-     * processors of this line are built from
      * @param pool_size The size the inference-thread pool will have once this session's
      * configuration is applied (0: the caller brings its own threads), what the init record
      * of a registered engine names
      * @param slot The plan's slot: its m_loaded is set to the loaded model, its m_waiting to
-     * the pool entry's wait list (null for a 2.x backend and the roundtrip, which are never
-     * pooled and claim no instance); nothing is set on a throw
+     * the pool entry's wait list; nothing is set on a throw
      * @throws anira::StatusError what the engine's init and load throw (MODEL_LOAD,
      * NO_SUCH_FILE, ENGINE, CONFIG), NOT_SUPPORTED for an engine this build has no adapter
      * for
      */
     static void acquire_loaded_locked(State& state,
                                       const engine::PlanRequest& request,
-                                      InferenceConfig& inference_config,
                                       size_t pool_size,
                                       SessionElement::PlanSlot& slot);
 

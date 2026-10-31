@@ -158,7 +158,6 @@ target_include_directories(test_scheduler PRIVATE "${anira_SOURCE_DIR}/src")
 
 anira_add_test_binary(test_engines
 	engines/test_Adapter.cpp
-	engines/test_BackendBase.cpp
 	engines/test_ExecuTorchModelFunction.cpp
 	engines/test_AdapterExecuTorch.cpp
 	engines/test_AdapterLibTorch.cpp
@@ -212,8 +211,8 @@ add_subdirectory(abi)
 # Header-isolation check: anira's public headers must compile with anira's own include
 # directory (plus those of its public dependencies — the queue, JSON and tanh-lib
 # headers the public headers include) and no engine include directory at all. The
-# engine state lives behind the named pimpl of each backend processor (see
-# BackendBase.h); this is what lets anira link its backends PRIVATE and makes
+# engine state lives in each engine adapter's own translation unit under src/engines; this
+# is what lets anira link its backends PRIVATE and makes
 # "include an engine header -> link anira::<engine>" true at compile time. The object
 # is excluded from the default build and compiled by a CTest, so that a regression
 # shows up as a failed test with the compiler's error instead of a broken build.

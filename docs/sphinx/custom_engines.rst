@@ -993,7 +993,7 @@ private: compile that ``.cpp`` with hidden visibility (see :doc:`troubleshooting
 application ships its own engine runtime").
 
 .. note::
-    Subclassing :cpp:class:`anira::BackendBase` was the 2.x runtime's way of adding an
+    Subclassing ``anira::BackendBase`` was the 2.x runtime's way of adding an
     engine; :doc:`migration` maps each of its virtuals onto the descriptor above. A 2.x custom backend
     becomes an :cpp:class:`anira::Engine` constructed with ``anira::v2::k_custom_engine_id``
     (``"anira.v2.custom"``, the id a 2.x ``CUSTOM`` row names); ``anira::v2::PassthroughEngine``

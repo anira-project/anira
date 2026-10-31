@@ -294,10 +294,8 @@ target_sources(${PROJECT_NAME}
     PRIVATE
 
         # Backend
-        src/engines/BackendBase.cpp
         src/engines/Adapter.cpp
         src/engines/Adapters.cpp
-        src/engines/LegacyAdapter.cpp
         src/engines/DescriptorAdapter.cpp
         ${BACKEND_SOURCES}
 

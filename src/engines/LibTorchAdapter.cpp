@@ -154,7 +154,7 @@ public:
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
     /// descriptor this adapter cannot hand the engine, ANIRA_ERROR_ENGINE for a failing run or
     /// a result of another dtype or shape than the record's.
-    anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
     /// Binds every input descriptor and runs the method; throws StatusError for a descriptor
@@ -407,7 +407,7 @@ void Instance::warm_up(uint32_t iterations) {
     }
 }
 
-anira_status Instance::process(const anira_engine_ctx& ctx, ChunkBuffers* /*chunk*/) noexcept {
+anira_status Instance::process(const anira_engine_ctx& ctx) noexcept {
     try {
         deliver(execute(ctx), ctx);
         m_failures.succeeded();

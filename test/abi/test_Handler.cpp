@@ -538,7 +538,8 @@ TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
         const uint32_t selected = anira_handler_get_plan(h);
         ASSERT_LT(selected, 2U) << "round " << round;
         EXPECT_EQ(h->m_manager->get_plan(), selected) << "round " << round;
-        EXPECT_EQ(h->m_plans[selected].m_backend, h->m_manager->get_backend())
+        EXPECT_EQ(static_cast<uint32_t>(anira_test::session_of(h)->m_plans[selected].m_engine),
+                  h->m_plans[selected].m_info.engine)
             << "round " << round << ": get_plan names a plan whose engine is not the one running";
     }
 
@@ -546,7 +547,7 @@ TEST(AbiHandler, ConcurrentSetPlanLeavesOneSelection) {
     for (uint32_t i = 0; i < info.size(); ++i) {
         EXPECT_EQ(anira_handler_set_plan(h, i), ANIRA_OK);
         EXPECT_EQ(anira_handler_get_plan(h), i);
-        EXPECT_EQ(h->m_plans[i].m_backend, h->m_manager->get_backend());
+        EXPECT_EQ(h->m_manager->get_plan(), i);
     }
 }
 

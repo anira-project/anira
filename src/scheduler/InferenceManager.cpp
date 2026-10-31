@@ -1,15 +1,12 @@
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 
@@ -20,40 +17,13 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <utility>
 #include <vector>
 
-#include "../capi/v3_to_v2.h"
 #include "../engines/Adapters.h"
 #include "TensorRun.h"
 
 namespace anira {
-
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
-                                   InferenceConfig& inference_config,
-                                   BackendBase* custom_processor,
-                                   const CoreConfig& core_config)
-    // The temporary context config lives through the delegated constructor; the core
-    // keeps its own sanitized copy.
-    : InferenceManager(pp_processor,
-                       inference_config,
-                       custom_processor,
-                       anira::capi::make_context_config(core_config),
-                       nullptr) {}
-
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
-                                   InferenceConfig& inference_config,
-                                   BackendBase* custom_processor,
-                                   const anira_context_config& context_config,
-                                   anira::RtLatch* rt_latch)
-    // The 2.x plan table: one plan per configured model, then every other backend of the
-    // build, CUSTOM last, on the custom backend when one is given.
-    : InferenceManager(pp_processor,
-                       inference_config,
-                       engine::legacy_plan_requests(inference_config, custom_processor),
-                       context_config,
-                       rt_latch) {}
 
 InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
                                    InferenceConfig& inference_config,
@@ -77,26 +47,6 @@ bool InferenceManager::set_plan(uint32_t plan) noexcept {
 
 uint32_t InferenceManager::get_plan() const noexcept {
     return m_session->m_current_plan.load(std::memory_order_relaxed);
-}
-
-void InferenceManager::set_backend(InferenceBackend new_inference_backend) {
-    // The 2.x selection by backend, over the plan table: the first plan on that backend.
-    const std::optional<uint32_t> plan = m_session->plan_of_backend(new_inference_backend);
-    if (!plan.has_value()) {
-        // Never on a 2.x session, whose table names every backend of the build.
-        ANIRA_LOG_RT_ERROR_ONCE(RtSite::BackendWithoutPlan,
-                                log_group::k_scheduler,
-                                "set_backend: no plan of session %d runs on backend %d; the "
-                                "selection is unchanged",
-                                m_session->m_session_id,
-                                static_cast<int>(new_inference_backend));
-        return;
-    }
-    m_session->select_plan(*plan);
-}
-
-InferenceBackend InferenceManager::get_backend() const {
-    return m_session->plan_backend(get_plan());
 }
 
 void InferenceManager::prepare(HostConfig new_config, std::vector<long> custom_latency) {

@@ -2,7 +2,7 @@
 // (plus those of its public dependencies) and nothing else on the include path: no
 // engine include directory. It fails to compile as soon as a public header includes
 // an engine header again — the engine state belongs in each engine adapter's own
-// translation unit under src/engines (see the note on anira::BackendBase). Every public
+// translation unit under src/engines (src/engines/Adapter.h). Every public
 // header is covered: the C umbrella, the C++ face, the 2.x compat shim and the 2.x headers
 // still installed (the umbrella of 2.x is the C umbrella now, so they are listed one by one).
 // NOLINTBEGIN(misc-include-cleaner)
@@ -10,7 +10,6 @@
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/anira.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>

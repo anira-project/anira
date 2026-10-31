@@ -19,7 +19,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -65,13 +64,6 @@ bool SessionElement::select_plan(uint32_t plan) noexcept {
 
 InferenceBackend SessionElement::plan_backend(uint32_t plan) const noexcept {
     return plan < m_plans.size() ? m_plans[plan].m_legacy_backend : InferenceBackend::CUSTOM;
-}
-
-std::optional<uint32_t> SessionElement::plan_of_backend(InferenceBackend backend) const noexcept {
-    for (uint32_t i = 0; i < m_plans.size(); ++i) {
-        if (m_plans[i].m_legacy_backend == backend) { return i; }
-    }
-    return std::nullopt;
 }
 
 SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,

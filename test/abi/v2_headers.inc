@@ -5,7 +5,6 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
-#include <anira/backends/BackendBase.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/scheduler/InferenceThread.h>

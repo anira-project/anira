@@ -1285,7 +1285,6 @@ void build_plans(anira_handler& handler,
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::capi::Plan plan;
         plan.m_row = row_index;
-        plan.m_backend = backend_of_row(row, row_index);
         plan.m_info.variant = 0;
         plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
         plan.m_info.provider = static_cast<uint32_t>(key.m_provider);

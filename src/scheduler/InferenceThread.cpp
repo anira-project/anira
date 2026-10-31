@@ -695,15 +695,6 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
     // keeps a defect from reading past the table.
     if (plan >= session->m_plans.size()) { return ANIRA_ERROR_INTERNAL; }
     SessionElement::PlanSlot& slot = session->m_plans[plan];
-    if (slot.m_missing_model) {
-        ANIRA_LOG_RT_ERROR_ONCE(RtSite::NoModelForBackend,
-                                log_group::k_scheduler,
-                                "no model for backend %d of plan %u in session %d has been "
-                                "provided; the default processor runs",
-                                static_cast<int>(slot.m_legacy_backend),
-                                plan,
-                                session->m_session_id);
-    }
 
     // The engine context of the chunk, on this stack for the duration of the call: the
     // struct's descriptor arrays in slot order (State tensors included), the chunk's entry,
@@ -734,27 +725,24 @@ anira_status InferenceThread::inference(const std::shared_ptr<SessionElement>& s
         reset_first = true;
     }
 
-    // The struct's 2.x buffers, what a legacy adapter's 2.x virtual takes; an executor of the
-    // descriptor shape reads the context alone. A plan without a prepared handle (a registered
-    // engine's whose handler never prepared it) is anira's own bug: the chunk fails.
-    engine::ChunkBuffers buffers{.m_inputs = &chunk.m_tensor_input_data,
-                                 .m_outputs = &chunk.m_tensor_output_data};
+    // A plan without a prepared handle (a registered engine's whose handler never prepared it)
+    // is anira's own bug: the chunk fails.
     if (slot.m_prepared == nullptr) { return ANIRA_ERROR_INTERNAL; }
     // A waiting job this thread, told to stop, gave up: no engine call.
     if (instance == k_given_up) { return ANIRA_ERROR_INVALID_STATE; }
     // A shared call on the instance process_dequeued_inference claimed for the job.
-    if (instance != k_unclaimed) { return slot.m_prepared->run_claimed(ctx, &buffers, instance); }
-    // Everything else (an exclusive session's call, a 2.x backend's) through run, which
-    // claims nothing for them. A shared call reaches its claim loop only without a wait list,
-    // which a pooled model always has; the stop flag is for that loop: a thread told to stop
-    // gives up waiting for a free instance instead of holding up the join of its pool.
+    if (instance != k_unclaimed) { return slot.m_prepared->run_claimed(ctx, instance); }
+    // Everything else (an exclusive session's call) through run, which claims nothing for it. A
+    // shared call reaches its claim loop only without a wait list, which a pooled model always has;
+    // the stop flag is for that loop: a thread told to stop gives up waiting for a free instance
+    // instead of holding up the join of its pool.
     const engine::StopSignal stop{
         .m_stopping =
             [](const void* thread) noexcept {
                 return static_cast<const InferenceThread*>(thread)->should_exit();
             },
         .m_context = this};
-    return slot.m_prepared->run(ctx, &buffers, reset_first, stop);
+    return slot.m_prepared->run(ctx, reset_first, stop);
 }
 
 }  // namespace scheduler

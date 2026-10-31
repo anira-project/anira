@@ -35,7 +35,7 @@ Where the 2.x API stands in this pre-release
   :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
   and its 2.x ``float***`` functions are gone. A custom :cpp:class:`anira::PrePostProcessor`
   becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
-  custom :cpp:class:`anira::BackendBase` a *registered engine* (``anira_engine_desc``,
+  custom ``anira::BackendBase`` a *registered engine* (``anira_engine_desc``,
   :cpp:class:`anira::Engine`; :doc:`custom_engines`), which runs like a built-in one;
   :ref:`migration-runtime` maps both onto their 3.x forms. A 2.x host that keeps its code
   compiles against ``anira/compat/v2.hpp``, which runs it on the same C handler
@@ -359,7 +359,7 @@ processor (the C descriptor ``anira_processor_desc``, or :cpp:class:`anira::Proc
        (``anira_processor_ctx.entry``, ``anira_handler_num_entries``) in ``pre_process``
        (:doc:`custom_preprocessing`).
 
-What each virtual of a custom :cpp:class:`anira::BackendBase` becomes on the engine (the C
+What each virtual of a custom ``anira::BackendBase`` becomes on the engine (the C
 descriptor ``anira_engine_desc``, or :cpp:class:`anira::Engine` in C++; :doc:`custom_engines`):
 
 .. list-table::
@@ -750,9 +750,9 @@ When the 2.x classes go
 
 The 2.x handler is removed in this pre-release, the transitional bridge with it
 (:ref:`migration-bridge`), and ``<anira/anira.h>`` is the C umbrella. The remaining 2.x headers
-(the configuration classes, :cpp:class:`anira::PrePostProcessor`,
-:cpp:class:`anira::BackendBase`) stay installed, each included by its own path, until a later
-pre-release makes them private; the 2.x ``JsonConfigLoader`` is removed already. From then on
+(the configuration classes, :cpp:class:`anira::PrePostProcessor`) stay installed, each
+included by its own path, until a later pre-release makes them private; the 2.x
+``JsonConfigLoader`` and ``BackendBase`` are removed already. From then on
 ``anira/compat/v2.hpp`` is what 2.x code compiles against, and it is removed one minor release
 after 3.0.0. No ``[[deprecated]]`` attribute marks it through the alpha releases; every
 entity gains one before 3.0.0.

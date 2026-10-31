@@ -9,7 +9,6 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
-#include <optional>
 #include <string>
 #include <vector>
 
@@ -350,13 +349,9 @@ public:
         anira_provider m_provider = ANIRA_PROVIDER_CPU;
         std::string m_engine_id;
         std::string m_provider_id;
-        /// The 2.x backend the plan runs on: what set_backend selects by and get_backend
-        /// answers (InferenceManager); the value the 2.x pre- and post-processing virtuals
-        /// receive for the chunk.
+        /// The 2.x backend of the plan's row: the value the PrePostProcessor phases receive
+        /// for the chunk, until the processor runs on the chunk.
         InferenceBackend m_legacy_backend = InferenceBackend::CUSTOM;
-        /// A 2.x row for a backend of the build without a model: the roundtrip runs for the
-        /// plan, and the inference thread logs RtSite::NoModelForBackend once per prepare.
-        bool m_missing_model = false;
         /// The plan's engine keeps its own aliasing of a declared State pair
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
@@ -381,12 +376,10 @@ public:
     /**
      * @brief The plan table: dense plan index -> the plan.
      *
-     * Built by Core::create_session from the requests it is given (engine::PlanRequest): the
-     * 2.x constructors ask for one row per configured model, in m_model_data order, then every
-     * other backend of this build, so that every backend a 2.x caller can name has a row; a
-     * 3.x handler asks for exactly its plans. Several rows may name one backend. Never empty
-     * in a registered session, and never changed afterwards, so the driving thread and the
-     * inference threads read it without synchronization.
+     * Built by Core::create_session from the requests the C handler gives it
+     * (engine::PlanRequest): exactly its plans. Never empty in a registered session, and never
+     * changed afterwards, so the driving thread and the inference threads read it without
+     * synchronization.
      */
     std::vector<PlanSlot> m_plans;
 
@@ -395,9 +388,8 @@ public:
      *
      * The whole runtime selection is this one atomic (select_plan stores it, a chunk takes
      * it with one load in Core::pre_process), so concurrent callers have no pair to tear.
-     * Always below m_plans.size(). Initialized by Core::create_session to the first
-     * configured model whose engine has an adapter (the CUSTOM row when a custom backend
-     * was provided or nothing matches).
+     * Always below m_plans.size(). 0 when Core::create_session returns; the C handler
+     * selects its initial plan before the first prepare.
      */
     std::atomic<uint32_t> m_current_plan{0};
 
@@ -406,9 +398,6 @@ public:
 
     /// The 2.x backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
     InferenceBackend plan_backend(uint32_t plan) const noexcept;
-
-    /// The first plan that runs on a 2.x backend (the 2.x selection by backend), if any does.
-    std::optional<uint32_t> plan_of_backend(InferenceBackend backend) const noexcept;
 
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring

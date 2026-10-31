@@ -8,7 +8,6 @@
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
@@ -25,7 +24,6 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -39,7 +37,6 @@
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
-#include "../engines/LegacyAdapter.h"
 #include "../utils/StatusError.h"
 #include "InstanceWaitList.h"
 #include "LogDrainLoop.h"
@@ -801,20 +798,19 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     try {
         // The plan table: one plan per request, in order, each on its loaded model, with this
         // session's prepared handle over it. A registered engine's handle is the C handler's
-        // to make, once the plan report exists (the engine's prepare reads it); every other
-        // plan's is made here, with no record (a built-in engine and a 2.x backend read none).
-        bool has_custom_backend = false;
+        // to make, once the plan report exists (the engine's prepare reads it); a built-in
+        // engine's is made here, with no record (it reads none). The C handler selects the
+        // initial plan once the table exists.
         session->m_plans.reserve(requests.size());
         for (const engine::PlanRequest& request : requests) {
             SessionElement::PlanSlot slot;
-            acquire_loaded_locked(state, request, inference_config, pool_size, slot);
+            acquire_loaded_locked(state, request, pool_size, slot);
             slot.m_registered = request.m_source == engine::Source::Registered;
             slot.m_engine = request.m_model.m_engine;
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
             slot.m_provider_id = request.m_model.m_provider_id;
             slot.m_legacy_backend = request.m_legacy_backend;
-            slot.m_missing_model = request.m_missing_model;
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
@@ -826,31 +822,6 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
                 placed.m_prepared = placed.m_loaded->prepare(engine::PrepareRequest{
                     .m_exclusive = inference_config.m_session_exclusive_processor,
                     .m_info = nullptr});
-            }
-            has_custom_backend = has_custom_backend || request.m_source == engine::Source::Legacy;
-        }
-
-        // The initial selection: the CUSTOM row when the table has one (a 2.x table always
-        // has), else plan 0. A 3.x handler selects its own plan afterwards.
-        if (const std::optional<uint32_t> custom =
-                session->plan_of_backend(InferenceBackend::CUSTOM)) {
-            session->select_plan(*custom);
-        }
-
-        // Default the active plan to the first plan with a loaded model of an engine,
-        // instead of the CUSTOM roundtrip. Sessions used to start on CUSTOM until
-        // set_inference_backend() — forgetting that call silently passed audio through. A
-        // caller-provided custom backend keeps CUSTOM active: running it is why it was
-        // passed. A 2.x row without a model (a backend of the build the configuration names
-        // no model for) is the roundtrip and is skipped; when nothing matches, CUSTOM
-        // remains, as before.
-        if (!has_custom_backend) {
-            for (uint32_t plan = 0; plan < requests.size(); ++plan) {
-                const engine::Source source = requests[plan].m_source;
-                if (source == engine::Source::BuiltIn || source == engine::Source::Registered) {
-                    session->select_plan(plan);
-                    break;
-                }
             }
         }
 
@@ -890,33 +861,8 @@ std::shared_ptr<engine::BuiltinEngine> Core::find_or_make_builtin_engine(State& 
 
 void Core::acquire_loaded_locked(State& state,
                                  const engine::PlanRequest& request,
-                                 InferenceConfig& inference_config,
                                  size_t pool_size,
                                  SessionElement::PlanSlot& slot) {
-    switch (request.m_source) {
-        case engine::Source::Legacy: {
-            // A caller's 2.x backend: this session's alone, loaded through the adapter.
-            if (request.m_backend == nullptr) {
-                throw StatusError(ANIRA_ERROR_INTERNAL,
-                                  "Core::create_session: a Legacy plan request without a "
-                                  "backend");
-            }
-            auto loaded = std::make_shared<engine::LegacyLoaded>(*request.m_backend);
-            loaded->load(request.m_model);
-            slot.m_loaded = std::move(loaded);
-            return;
-        }
-        case engine::Source::Roundtrip: {
-            // The 2.x default processor over this session's configuration: its own.
-            auto loaded = std::make_shared<engine::LegacyLoaded>(inference_config);
-            loaded->load(request.m_model);
-            slot.m_loaded = std::move(loaded);
-            return;
-        }
-        case engine::Source::BuiltIn:
-        case engine::Source::Registered: break;
-    }
-
     // Shared: the entry whose record equals the request's on the same carrier.
     const void* const carrier = request.m_carrier.get();
     for (const State::PoolEntry& entry : state.m_loaded_models) {

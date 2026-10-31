@@ -12,7 +12,6 @@
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/InferenceManager.h>
 #include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RtLatch.h>
 
 #include <atomic>
@@ -46,8 +45,7 @@ anira_model_config clone_model_config(const anira_model_config& model);
 
 /// One plan of the table: the dense index is the position.
 struct Plan {
-    size_t m_row = 0;                                                     ///< the models[] index
-    anira::InferenceBackend m_backend = anira::InferenceBackend::CUSTOM;  ///< set_backend's arg
+    size_t m_row = 0;                               ///< the models[] index
     anira_plan_info m_info = ANIRA_PLAN_INFO_INIT;  ///< engine_id and provider_id point into
                                                     ///< the report's string store
 };

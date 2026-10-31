@@ -100,8 +100,8 @@ enum InferenceBackend {
      * @brief Custom user-defined inference backend
      *
      * Placeholder for custom inference implementations. This backend type allows
-     * users to implement their own inference engines by extending the BackendBase
-     * class. Always available regardless of compile-time flags.
+     * users to implement their own inference engines (an anira::Engine under
+     * anira.v2.custom). Always available regardless of compile-time flags.
      *
      * Model format: User-defined
      * Platform support: Depends on user implementation

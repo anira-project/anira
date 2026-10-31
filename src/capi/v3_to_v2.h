@@ -2,10 +2,9 @@
  * The translators from the 3.x configuration into the 2.x configuration objects the scheduler
  * still takes (InferenceManager, SessionElement, Core and the inference threads run on the 2.x
  * InferenceConfig and HostConfig), made from what the validator derived (validate.h). The C
- * handler prepares its sessions through make_inference_config and make_host_config; the 2.x
- * InferenceManager constructor maps its CoreConfig back through make_context_config. Everything
- * here goes when the core takes the 3.x types (PR 10b). Private to src/capi (the scheduler and
- * the white-box tests reach it through the src/ include directory).
+ * handler prepares its sessions through make_inference_config and make_host_config.
+ * Everything here goes when the core takes the 3.x types (PR 10b). Private to src/capi (the
+ * scheduler and the white-box tests reach it through the src/ include directory).
  *
  * Every function here throws anira::StatusError (the status the C boundary returns, with the
  * message the caller reads) or std::invalid_argument (the 2.x constructors' own cross-checks,
@@ -15,7 +14,6 @@
 #ifndef ANIRA_CAPI_V3_TO_V2_H
 #define ANIRA_CAPI_V3_TO_V2_H
 
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
@@ -56,13 +54,6 @@ ANIRA_API anira::HostConfig make_host_config(const anira_model_config& model,
                                              float buffer_size,
                                              float sample_rate,
                                              bool allow_smaller);
-
-/// The context config of a 2.x CoreConfig, field by field: threads, wait strategy, log
-/// level, drain, interval and queue capacity; no sink, no flags, no device block, no
-/// extensions. The log level is copied explicitly (CoreConfig defaults to Info/Error,
-/// anira_context_config to WARNING). The 2.x InferenceManager constructor is the only
-/// caller; it goes with the 2.x configuration types of the core (PR 10b).
-ANIRA_API anira_context_config make_context_config(const anira::CoreConfig& core_config);
 
 }  // namespace anira::capi
 

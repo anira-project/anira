@@ -8,12 +8,9 @@
 #include <cstddef>
 #include <vector>
 
-#include "../CoreConfig.h"
 #include "../InferenceConfig.h"
 #include "../PrePostProcessor.h"
-#include "../backends/BackendBase.h"
 #include "../utils/HostConfig.h"
-#include "../utils/InferenceBackend.h"
 #include "Core.h"
 #include "InferenceThread.h"
 
@@ -67,49 +64,7 @@ public:
     InferenceManager() = delete;
 
     /**
-     * @brief The 2.x constructor: initializes the inference manager with all required
-     * components
-     *
-     * Creates an inference manager with the specified preprocessing/postprocessing pipeline,
-     * inference configuration, and optional custom backend. Maps the CoreConfig onto a
-     * context config (anira::capi::make_context_config) and delegates to the 3.x
-     * constructor, so the core reads one configuration type. Leaves with the 2.x classes.
-     *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
-     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
-     * backends)
-     * @param core_config Configuration for the inference core and thread management
-     */
-    InferenceManager(PrePostProcessor& pp_processor,
-                     InferenceConfig& inference_config,
-                     BackendBase* custom_processor,
-                     const CoreConfig& core_config);
-
-    /**
-     * @brief The 2.x constructor over a context config: the 2.x plan table, the context's
-     * config passed through unchanged
-     *
-     * Asks the core for the 2.x plan table (engine::legacy_plan_requests: one plan per
-     * configured model, then every other backend of the build, CUSTOM last, on
-     * `custom_processor` when one is given) and delegates to the constructor over requests.
-     *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
-     * @param inference_config Reference to the inference configuration containing model settings
-     * @param custom_processor Pointer to a custom backend processor (can be nullptr for default
-     * backends)
-     * @param context_config The context's configuration (anira_context_config_*)
-     * @param rt_latch The handler's latch the session records its failures into; nullptr
-     * gives the session its own
-     */
-    InferenceManager(PrePostProcessor& pp_processor,
-                     InferenceConfig& inference_config,
-                     BackendBase* custom_processor,
-                     const anira_context_config& context_config,
-                     anira::RtLatch* rt_latch = nullptr);
-
-    /**
-     * @brief The 3.x constructor: the session over exactly the plans asked for
+     * @brief The session over exactly the plans asked for
      *
      * Creates the session through Core::create_session() with the plan requests (one plan
      * per entry, in dense-index order: a C-created handler's plans), the context config as
@@ -395,26 +350,6 @@ public:
 
     /// The plan selected last: one relaxed load of the value set_plan() stores.
     uint32_t get_plan() const noexcept;
-
-    /**
-     * @brief Sets the inference backend to use for neural network processing
-     *
-     * The 2.x selection by backend, over the plan table: set_plan() of the first plan that
-     * runs on the backend, with everything set_plan() says. A backend no plan of the session
-     * runs on leaves the selection unchanged and is logged once through the real-time queue
-     * (RtSite::BackendWithoutPlan); a 2.x session has a plan for every backend of the build.
-     *
-     * @param new_inference_backend The backend type to use (ONNX, LibTorch, TensorFlow Lite, or
-     * Custom)
-     */
-    void set_backend(InferenceBackend new_inference_backend);
-
-    /**
-     * @brief Gets the currently active inference backend
-     *
-     * @return The backend the selected plan runs on
-     */
-    InferenceBackend get_backend() const;
 
     /**
      * @brief Gets the processing latency for all tensors
