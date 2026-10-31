@@ -33,7 +33,6 @@ namespace {
 static_assert(!std::is_same_v<anira::InferenceConfig, anira::v2::InferenceConfig>);
 static_assert(!std::is_same_v<anira::HostConfig, anira::v2::HostConfig>);
 static_assert(!std::is_same_v<anira::ModelData, anira::v2::ModelData>);
-static_assert(!std::is_same_v<anira::LogConfig, anira::v2::LogConfig>);
 static_assert(!std::is_same_v<anira::ContextConfig, anira::v2::ContextConfig>);
 // The 3.x handler and the shim's 2.x handler.
 static_assert(!std::is_same_v<anira::InferenceHandler, anira::v2::InferenceHandler>);

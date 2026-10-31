@@ -679,10 +679,10 @@ struct InferenceData {
  *
  * On native builds this is a moodycamel::BlockingConcurrentQueue so that
  * inference threads can optionally block on the queue's semaphore instead of
- * polling (see WaitStrategy). The blocking queue is a strict superset of the
+ * polling (see anira_wait_strategy). The blocking queue is a strict superset of the
  * plain ConcurrentQueue API, and as long as no consumer ever blocks, its
- * enqueue never makes a syscall — so CoreConfigs using
- * WaitStrategy::SpinBackoff keep the exact lock-free behavior of the plain
+ * enqueue never makes a syscall — so context configs on
+ * ANIRA_WAIT_SPIN_BACKOFF keep the exact lock-free behavior of the plain
  * queue, at the cost of one extra atomic operation per enqueue/dequeue.
  *
  * On WebAssembly builds the plain ConcurrentQueue is used: the pool's threads

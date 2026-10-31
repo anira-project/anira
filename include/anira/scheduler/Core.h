@@ -365,6 +365,15 @@ public:
     static size_t prospective_thread_pool_size(const anira_context_config& context_config);
 
     /**
+     * @brief The thread count ANIRA_THREADS_AUTO stands for: half the hardware threads, at
+     * least one
+     *
+     * What sanitize_config() resolves the count of a configuration to, and what an engine's
+     * query reads for a context that leaves the count to anira.
+     */
+    static unsigned int default_num_threads() noexcept;
+
+    /**
      * @brief Prepares a session for the Hard contract it reads
      *
      * Configures the specified session for the geometry, budget and wait ratio of its
@@ -547,10 +556,9 @@ public:
      * on such a thread too, and aborts with a message when one is still running).
      *
      * This is purely additive: the auto-managed thread pool sized via the configuration's
-     * thread count (anira_context_config_set_threads, CoreConfig::m_num_threads on the 2.x
-     * path) continues to work unchanged. Users who want full control over threading
-     * typically configure 0 threads so that no auto-pool threads exist, then create and
-     * manage threads themselves via this factory.
+     * thread count (anira_context_config_set_threads) continues to work unchanged. Users who want
+     * full control over threading typically configure 0 threads so that no auto-pool threads exist,
+     * then create and manage threads themselves via this factory.
      *
      * The returned thread references the global inference queue, which lives in the
      * immortal core — so the thread remains valid even after all sessions have

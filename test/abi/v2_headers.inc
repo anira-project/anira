@@ -2,7 +2,6 @@
 // <anira/anira.h> became the C umbrella (the 2.x handler is gone). Included by the coexistence
 // gates (header_coexist.inc, header_cxx20_with_v2.inc, header_compat_with_v2.inc) where the 2.x
 // umbrella stood. Not a header: no include guard, the caller's NOLINT region around it.
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/scheduler/Core.h>

@@ -34,11 +34,12 @@ namespace {
 
 [[maybe_unused]] std::size_t ANIRA_COEXIST_PROBE() {
     const anira_error err = ANIRA_ERROR_INIT;
-    // A v2 type and a v3 record side by side; anira::LogLevel and anira_log_level coexist.
-    const anira::LogLevel v2_level = anira::LogLevel::Warning;
-    const anira_log_level v3_level = ANIRA_LOG_WARNING;
+    // A v2 type and a v3 record side by side; anira::InferenceBackend and anira_engine
+    // coexist.
+    const anira::InferenceBackend v2_backend = anira::InferenceBackend::CUSTOM;
+    const anira_engine v3_engine = ANIRA_ENGINE_CUSTOM;
     return sizeof(anira::InferenceConfig) + static_cast<std::size_t>(err.status) +
-           static_cast<std::size_t>(v2_level) + static_cast<std::size_t>(v3_level);
+           static_cast<std::size_t>(v2_backend) + static_cast<std::size_t>(v3_engine);
 }
 
 }  // namespace

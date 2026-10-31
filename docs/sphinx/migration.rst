@@ -19,10 +19,12 @@ Where the 2.x API stands in this pre-release
   ``<anira/anira.hpp>``.
 - **Configuration** is the 3.x API: the handles of section 1 of the :doc:`usage` guide and the
   JSON files of its section 1.5. The 2.x classes :cpp:struct:`anira::InferenceConfig`,
-  :cpp:struct:`anira::CoreConfig`, :cpp:struct:`anira::HostConfig`,
-  :cpp:struct:`anira::ModelData`, :cpp:struct:`anira::TensorShape` and
-  :cpp:struct:`anira::ProcessingSpec` remain public and exported through the alpha releases of
-  the 3.x line. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
+  :cpp:struct:`anira::HostConfig`, :cpp:struct:`anira::ModelData`,
+  :cpp:struct:`anira::TensorShape` and :cpp:struct:`anira::ProcessingSpec` remain public and
+  exported through the alpha releases of the 3.x line. ``anira::CoreConfig`` with its
+  ``LogConfig`` and the ``LogLevel`` / ``LogDrain`` / ``WaitStrategy`` enums
+  (``<anira/CoreConfig.h>``) is removed: ``anira::ContextConfig`` of ``anira/anira.hpp`` is
+  the 3.x configuration, ``anira::v2::ContextConfig`` the 2.x spelling. The 2.x ``anira::JsonConfigLoader`` (``<anira/utils/JsonConfigLoader.h>``) is
   removed: ``anira::ModelConfig::from_file`` and ``anira::ContextConfig::from_file`` read a 2.x
   document as it is, and ``anira::v2::JsonConfigLoader`` is the loader in the 2.x spelling
   (:ref:`migration-compat-config`).
@@ -74,8 +76,8 @@ Configuration in code
 One 2.x ``anira::InferenceConfig`` becomes one ``anira::ModelConfig`` plus one Hard
 ``anira::ContractHandle``; one 2.x ``ContextConfig`` becomes one ``anira::ContextConfig`` (the
 3.x name is the 2.x name: it is the same role, the per-handler request that the shared *core*
-reconciles; the 2.x struct itself is ``anira::CoreConfig`` on the 3.x line, and what it
-configures is ``anira::Core``, the object the 2.x API called ``Context``); the
+reconciles; the 2.x struct itself was ``anira::CoreConfig`` in the first alphas of the 3.x
+line, and what it configures is ``anira::Core``, the object the 2.x API called ``Context``); the
 ``anira::HostConfig`` handed to ``prepare`` becomes the geometry of the Hard contract and the anchor of
 the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` (``cfg``,
 ``spec``, ``contract`` and ``context`` are the handles) with the C entry of
@@ -564,7 +566,7 @@ The classes and what differs from 2.x
 ``namespace anira::v2`` under the names of the last 2.x release (v2.3.0):
 ``InferenceBackend`` with ``LIBTORCH``, ``ONNX``, ``TFLITE``, ``LITERT``, ``EXECUTORCH`` and
 ``CUSTOM``, ``ModelData``, ``TensorShape``, ``ProcessingSpec``, ``InferenceConfig``,
-``JsonConfigLoader``, ``ContextConfig`` (this pre-release's ``anira::CoreConfig``) with
+``JsonConfigLoader``, ``ContextConfig`` (``anira::CoreConfig`` in the first alphas) with
 ``LogConfig``, ``LogLevel``, ``LogDrain`` and ``WaitStrategy``, and ``HostConfig``. The header
 is header-only C++20 over ``anira/anira.hpp`` and the C entries, includes nothing of the 2.x
 tree, and compiles beside ``<anira/anira.h>``. A 2.x configuration compiles unchanged with a

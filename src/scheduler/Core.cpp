@@ -1,4 +1,3 @@
-#include <anira/CoreConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
@@ -116,8 +115,8 @@ struct Core::State {
      * The queue is initialized with minimum capacity and pre-allocation hints for
      * explicit and implicit producers (moodycamel signature: minCapacity,
      * maxExplicitProducers, maxImplicitProducers).
-     * See InferenceQueue for the type choice per platform and the WaitStrategy
-     * interaction.
+     * See InferenceQueue for the type choice per platform and the wait strategy
+     * (anira_wait_strategy) interaction.
      */
     InferenceQueue m_next_inference{k_min_capacity_inference_queue,
                                     k_max_num_instances,
@@ -360,7 +359,7 @@ struct UnloadGuard {
 #endif
 
 // The words of the mismatch warnings: the JSON vocabulary (json.cpp's k_waits / k_levels /
-// k_drains), the same words CoreConfig.h's to_string spells.
+// k_drains).
 const char* wait_word(anira_wait_strategy wait) {
     return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
 }
@@ -519,6 +518,11 @@ size_t Core::prospective_thread_pool_size(const anira_context_config& context_co
     return prospective_pool_size_locked(state, sanitize_config(context_config));
 }
 
+unsigned int Core::default_num_threads() noexcept {
+    const unsigned int hardware = std::thread::hardware_concurrency();
+    return hardware / 2 > 0 ? hardware / 2 : 1;
+}
+
 anira_context_config Core::sanitize_config(anira_context_config context_config) {
 #ifdef __EMSCRIPTEN__
     // The inference queue of WebAssembly has no semaphore to block on (InferenceQueue): an idle
@@ -557,7 +561,7 @@ void Core::apply_log_level_locked(State& state, const anira_context_config& cont
         has_users_locked(state)
             ? std::min<anira_log_level>(state.m_core_config.m_log_level, context_config.m_log_level)
             : context_config.m_log_level;
-    set_log_level(to_log_level(level));
+    set_log_level(level);
 }
 
 bool Core::has_users_locked(const State& state) {

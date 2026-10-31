@@ -6,7 +6,6 @@
 // header is covered: the C umbrella, the C++ face, the 2.x compat shim and the 2.x headers
 // still installed (the umbrella of 2.x is the C umbrella now, so they are listed one by one).
 // NOLINTBEGIN(misc-include-cleaner)
-#include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
 #include <anira/PrePostProcessor.h>
 #include <anira/anira.h>

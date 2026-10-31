@@ -8,7 +8,6 @@
 // anira::Pipeline, the shim's handler on every plan against the closed form of its streams
 // (anira_test::DelayLine), and the extras' 2.x processors, a 2.x user's program, against
 // their 3.x equivalents on C handlers.
-#include <anira/CoreConfig.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
@@ -346,16 +345,14 @@ void expect_getters_of(const Arguments& args, const v2::InferenceConfig& shim) {
 /// Raises the log level to Warning for a scope, so that the shim's warnings are delivered in
 /// every build type, and puts the previous level back.
 struct WarningLevel {
-    WarningLevel() : m_previous(anira::get_log_level()) {
-        anira::set_log_level(anira::LogLevel::Warning);
-    }
+    WarningLevel() : m_previous(anira::get_log_level()) { anira::set_log_level(ANIRA_LOG_WARNING); }
     ~WarningLevel() { anira::set_log_level(m_previous); }
     WarningLevel(const WarningLevel&) = delete;
     WarningLevel& operator=(const WarningLevel&) = delete;
     WarningLevel(WarningLevel&&) = delete;
     WarningLevel& operator=(WarningLevel&&) = delete;
 
-    anira::LogLevel m_previous;
+    anira_log_level m_previous;
 };
 
 /// The status of the anira::Error a call throws; ANIRA_OK when it throws none.

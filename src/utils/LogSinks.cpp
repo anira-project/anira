@@ -5,7 +5,6 @@
 // for the calls into it to return; a thread-local marks the entry whose callback is
 // running on the calling thread, which is how a remove from inside that sink is refused
 // instead of waiting for itself.
-#include <anira/CoreConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/utils/Logger.h>
@@ -118,14 +117,7 @@ LogSinkId add_log_sink(anira_log_fn callback, void* user_data, anira_log_level l
     auto entry = std::make_shared<SinkEntry>();
     entry->m_callback = callback;
     entry->m_user_data = user_data;
-    entry->m_max_level = static_cast<std::uint32_t>(to_thl_log_level([level] {
-        switch (level) {
-            case ANIRA_LOG_DEBUG: return LogLevel::Debug;
-            case ANIRA_LOG_INFO: return LogLevel::Info;
-            case ANIRA_LOG_WARNING: return LogLevel::Warning;
-            default: return LogLevel::Error;
-        }
-    }()));
+    entry->m_max_level = static_cast<std::uint32_t>(to_thl_log_level(level));
     Registry& r = registry();
     bool install = false;
     {

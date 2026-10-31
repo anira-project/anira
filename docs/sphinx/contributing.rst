@@ -191,12 +191,12 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
 - ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
   ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` covers
   ``src/engines/`` (the engine adapters), which has no public header.
-- Root-level units (``InferenceConfig``, ``CoreConfig``, ``PrePostProcessor``) and the
+- Root-level units (``InferenceConfig``, ``PrePostProcessor``) and the
   ``anira.hpp`` handler (``test_InferenceHandler``) are covered by root-level ``test_*.cpp``
   files, alongside the cross-unit integration suites (``test_OneSidedStreaming``). A test
   file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
-  compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
+  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` compiles into
+  ``test_utils`` with the other white-box suites, and the struct-pool cases of
   ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
   than of any one unit: header isolation, engine linkage, the library-unload harness,

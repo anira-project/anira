@@ -1,4 +1,3 @@
-#include <anira/CoreConfig.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
 #include <anira/scheduler/Core.h>
@@ -61,14 +60,19 @@ using anira_test::RecordCollector;
 }  // namespace
 
 TEST(Logger, LevelMapsOntoThlLogger) {
-    EXPECT_EQ(to_thl_log_level(LogLevel::Debug), thl::Logger::LogLevel::Debug);
-    EXPECT_EQ(to_thl_log_level(LogLevel::Info), thl::Logger::LogLevel::Info);
-    EXPECT_EQ(to_thl_log_level(LogLevel::Warning), thl::Logger::LogLevel::Warning);
-    EXPECT_EQ(to_thl_log_level(LogLevel::Error), thl::Logger::LogLevel::Error);
+    EXPECT_EQ(to_thl_log_level(ANIRA_LOG_DEBUG), thl::Logger::LogLevel::Debug);
+    EXPECT_EQ(to_thl_log_level(ANIRA_LOG_INFO), thl::Logger::LogLevel::Info);
+    EXPECT_EQ(to_thl_log_level(ANIRA_LOG_WARNING), thl::Logger::LogLevel::Warning);
+    EXPECT_EQ(to_thl_log_level(ANIRA_LOG_ERROR), thl::Logger::LogLevel::Error);
+#ifdef NDEBUG
+    EXPECT_EQ(default_log_level(), ANIRA_LOG_ERROR);
+#else
+    EXPECT_EQ(default_log_level(), ANIRA_LOG_INFO);
+#endif
 
-    const LogLevel previous = get_log_level();
-    set_log_level(LogLevel::Warning);
-    EXPECT_EQ(get_log_level(), LogLevel::Warning);
+    const anira_log_level previous = get_log_level();
+    set_log_level(ANIRA_LOG_WARNING);
+    EXPECT_EQ(get_log_level(), ANIRA_LOG_WARNING);
 #ifdef ENABLE_LOGGING  // with anira's logging compiled out, thl's global level is left alone
     EXPECT_EQ(thl::Logger::get_level(), thl::Logger::LogLevel::Warning);
     EXPECT_TRUE(thl::Logger::is_enabled(thl::Logger::LogLevel::Error));
