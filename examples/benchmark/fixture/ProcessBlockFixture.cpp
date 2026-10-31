@@ -88,7 +88,7 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
 
     // The buffer: the anchor input's channels (the first input) times one block.
     const size_t channels = model.input_count() > 0 ? channels_of(model.input_spec(0)) : 1;
-    const auto samples = static_cast<size_t>(hard.block_max);
+    const auto samples = static_cast<size_t>(hard.host_block_max);
     m_planes.assign(channels, std::vector<float>(samples, 0.F));
     m_plane_pointers.clear();
     for (std::vector<float>& plane : m_planes) { m_plane_pointers.push_back(plane.data()); }
@@ -99,8 +99,8 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
 
     const std::vector<anira_plan_info> plans = m_inference_handler->plan_report().plans();
     const anira_plan_info info = plan < plans.size() ? plans[plan] : anira_plan_info{};
-    const std::string key = model.to_json() + "|" + std::to_string(hard.block_max) + "|" +
-                            std::to_string(hard.rate) + "|" + std::to_string(plan);
+    const std::string key = model.to_json() + "|" + std::to_string(hard.host_block_max) + "|" +
+                            std::to_string(hard.host_rate) + "|" + std::to_string(plan);
     if (key != m_run_key) {
         m_run_key = key;
         m_repetition = 0;
@@ -110,14 +110,15 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
         m_num_iterations_total = 0;
         m_engine_name = engine_name(info);
         m_model_name = model_name(model, info);
-        m_sample_rate = hard.rate;
+        m_sample_rate = hard.host_rate;
         std::cout << "\n---------------------------------------------------------------------------"
                      "-------------------------------------------------------------"
                   << '\n';
         std::cout << "Model: " << m_model_name << " | Backend: " << m_engine_name
-                  << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << hard.rate
-                  << " Hz | Host Buffer Size: " << hard.block_max << " = " << std::fixed
-                  << std::setprecision(4) << hard.block_max * 1000.0 / hard.rate << " ms" << '\n';
+                  << " | Host Sample Rate: " << std::fixed << std::setprecision(0) << hard.host_rate
+                  << " Hz | Host Buffer Size: " << hard.host_block_max << " = " << std::fixed
+                  << std::setprecision(4) << hard.host_block_max * 1000.0 / hard.host_rate << " ms"
+                  << '\n';
         std::cout << "-----------------------------------------------------------------------------"
                      "-----------------------------------------------------------\n"
                   << '\n';

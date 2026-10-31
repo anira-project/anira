@@ -105,17 +105,17 @@ capi::Derived streams(const std::vector<int64_t>& inputs, const std::vector<int6
     return derived;
 }
 
-// The Hard half of a contract: blocks of `block` samples of the anchor's stream at `rate`
-// (block_min half of it when `smaller`), a budget in ms and a wait ratio.
+// The Hard half of a contract: blocks of `block` samples of the anchor's stream at `host_rate`
+// (host_block_min half of it when `smaller`), a budget in ms and a wait ratio.
 capi::HardContract hard_contract(double block,
-                                 double rate,
+                                 double host_rate,
                                  double budget_ms,
                                  double wait_ratio,
                                  bool smaller = false) {
     capi::HardContract hard;
-    hard.m_block_max = block;
-    hard.m_block_min = smaller ? block / 2.0 : block;
-    hard.m_rate = rate;
+    hard.m_host_block_max = block;
+    hard.m_host_block_min = smaller ? block / 2.0 : block;
+    hard.m_host_rate = host_rate;
     hard.m_budget = ANIRA_BUDGET_EXPLICIT;
     hard.m_budget_ms = budget_ms;
     hard.m_wait_ratio = wait_ratio;

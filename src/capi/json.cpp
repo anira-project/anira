@@ -759,14 +759,20 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
     require_object(node, path);
     for (const auto& [key, value] : node.items()) {
         const std::string key_path = child(path, key.c_str());
-        if (key == "block_min") {
+        // One spelling per fact: the 3.0 alpha keys name the new ones.
+        if (key == "block_min" || key == "block_max" || key == "rate") {
+            std::string renamed = "\"";
+            renamed.append(key).append("\" is now \"host_").append(key).append("\"");
+            fail_json(key_path, renamed);
+        }
+        if (key == "host_block_min") {
             // Any number: a fractional block is legal (host_blocks_refusal below).
-            hard.m_block_min = require_number(value, key_path);
-        } else if (key == "block_max") {
-            hard.m_block_max = require_number(value, key_path);
-        } else if (key == "rate") {
-            hard.m_rate = require_number(value, key_path);
-            if (hard.m_rate < 0.0) { fail_json(key_path, "must not be negative"); }
+            hard.m_host_block_min = require_number(value, key_path);
+        } else if (key == "host_block_max") {
+            hard.m_host_block_max = require_number(value, key_path);
+        } else if (key == "host_rate") {
+            hard.m_host_rate = require_number(value, key_path);
+            if (hard.m_host_rate < 0.0) { fail_json(key_path, "must not be negative"); }
         } else if (key == "budget") {
             if (value.is_string()) {
                 if (value.get<std::string>() != "measured") {
@@ -829,8 +835,9 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             fail_json(key_path, "unknown hard contract key");
         }
     }
-    const std::string refusal =
-        anira::capi::host_blocks_refusal(hard.m_block_min, hard.m_block_max, hard.m_rate);
+    const std::string refusal = anira::capi::host_blocks_refusal(hard.m_host_block_min,
+                                                                 hard.m_host_block_max,
+                                                                 hard.m_host_rate);
     if (!refusal.empty()) { fail_json(path, refusal); }
 }
 

@@ -1227,25 +1227,30 @@ export class AniraBindings {
    * the tight latency. The defaults: MEASURED budget, UNTIL_STABLE warmup, BYPASS on
    * miss, wait_ratio 0, PERMISSIVE edge cost. The blocks are both 0 (the host blocks left
    * unset, completed by hard_set_host_blocks or refused at prepare: 0, 0, 0 is legal
-   * here) or both finite and > 0 with block_min <= block_max; block_min < block_max
-   * allows every smaller block. A block need not be whole: a fractional block (for a
-   * model with no stream at the host rate, e.g. a control-rate decoder at samplesPerBlock
-   * / 2048.0) is taken as the rational the latency calculation recovers from it (1e-6
-   * relative, denominator at most 2^20), and the host moves an element of a stream only
-   * once a whole one has accumulated: after its k-th call it has pushed and popped
-   * floor(k * b) elements of a stream whose block is b, so one call carries floor(b) or
-   * ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
+   * here) or both finite and > 0 with host_block_min <= host_block_max; host_block_min <
+   * host_block_max allows every smaller block. A block need not be whole: a fractional
+   * block (for a model with no stream at the host rate, e.g. a control-rate decoder at
+   * samplesPerBlock / 2048.0) is taken as the rational the latency calculation recovers
+   * from it (1e-6 relative, denominator at most 2^20), and the host moves an element of a
+   * stream only once a whole one has accumulated: after its k-th call it has pushed and
+   * popped floor(k * b) elements of a stream whose block is b, so one call carries
+   * floor(b) or ceil(b) of them (0 or 1 for 0.25, the 1 on every fourth call).
    *
-   * @param block_min Smallest block the host callback delivers, in Time-axis elements of
-   *   the anchor tensor; may be fractional (0.25: one element every fourth callback).
-   * @param block_max Largest; block_min == block_max is the fixed-block host. May be
-   *   fractional like block_min.
-   * @param rate Anchor elements per second (48000 for audio).
+   * @param host_block_min Smallest block the host callback delivers, in Time-axis
+   *   elements of the anchor tensor; may be fractional (0.25: one element every fourth
+   *   callback).
+   * @param host_block_max Largest; host_block_min == host_block_max is the fixed-block
+   *   host. May be fractional like host_block_min.
+   * @param host_rate Anchor elements per second the host runs at (48000 for audio).
    * @returns What the entry writes to out. A failed status throws an AniraError with the
    *   entry's message.
    * Thread: [main-thread]
    */
-  anira_contract_create_hard(block_min: number, block_max: number, rate: number): number {
+  anira_contract_create_hard(
+    host_block_min: number,
+    host_block_max: number,
+    host_rate: number
+  ): number {
     const m = this.module
     const sp = m.stackSave()
     try {
@@ -1253,7 +1258,13 @@ export class AniraBindings {
       const err = stackError(m)
       checkStatus(
         m,
-        m._anira_contract_create_hard(block_min, block_max, rate, out_, err),
+        m._anira_contract_create_hard(
+          host_block_min,
+          host_block_max,
+          host_rate,
+          out_,
+          err
+        ),
         'anira_contract_create_hard',
         err
       )
@@ -1294,25 +1305,30 @@ export class AniraBindings {
    * rules of anira_contract_create_hard; a refusal leaves the host blocks as they were.
    *
    * @param contract A Hard contract.
-   * @param block_min See anira_contract_create_hard; may be fractional.
-   * @param block_max See anira_contract_create_hard; may be fractional.
-   * @param rate See anira_contract_create_hard.
+   * @param host_block_min See anira_contract_create_hard; may be fractional.
+   * @param host_block_max See anira_contract_create_hard; may be fractional.
+   * @param host_rate See anira_contract_create_hard.
    * @returns ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
    *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a block that is NaN, infinite or
-   *   negative, one block 0 and the other not, block_min > block_max, or a negative rate. A
-   *   failed status throws an AniraError.
+   *   negative, one block 0 and the other not, host_block_min > host_block_max, or a
+   *   negative host_rate. A failed status throws an AniraError.
    * Thread: [main-thread]
    */
   anira_contract_hard_set_host_blocks(
     contract: number,
-    block_min: number,
-    block_max: number,
-    rate: number
+    host_block_min: number,
+    host_block_max: number,
+    host_rate: number
   ): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_contract_hard_set_host_blocks(contract, block_min, block_max, rate),
+      m._anira_contract_hard_set_host_blocks(
+        contract,
+        host_block_min,
+        host_block_max,
+        host_rate
+      ),
       'anira_contract_hard_set_host_blocks'
     )
   }
@@ -2797,11 +2813,12 @@ export class AniraBindings {
 
   /**
    * The anchor: the streamed tensor whose Time axis is the model's clock. A Hard
-   * contract's block range and rate are counted in its elements, and every other streamed
-   * tensor's time ratio is stated against it (v2's HostConfig reference stream). Default:
-   * the first streamed input, or, for a model without one (a generator), the first
-   * streamed output. Resolved at prepare, where a name that is not a streamed tensor of
-   * this config fails with ANIRA_ERROR_CONFIG.
+   * contract's host blocks and host rate (host_block_min, host_block_max, host_rate) are
+   * counted in its elements, and every other streamed tensor's time ratio is stated
+   * against it (v2's HostConfig reference stream). Default: the first streamed input, or,
+   * for a model without one (a generator), the first streamed output. Resolved at
+   * prepare, where a name that is not a streamed tensor of this config fails with
+   * ANIRA_ERROR_CONFIG.
    *
    * @param config The config.
    * @param canonical Your canonical name of a streamed tensor, copied; NULL or empty
@@ -3718,28 +3735,33 @@ export class AniraBindings {
    * stored them; 0, 0, 0 on the legacy contract of a version 2 upgrade until set.
    *
    * @param contract A Hard contract.
-   * @returns What the entry writes to block_min, block_max, rate. A failed status throws
-   *   an AniraError.
+   * @returns What the entry writes to host_block_min, host_block_max, host_rate. A failed
+   *   status throws an AniraError.
    * Thread: [main-thread]
    */
   anira_contract_hard_host_blocks(
     contract: number
-  ): { block_min: number; block_max: number; rate: number } {
+  ): { host_block_min: number; host_block_max: number; host_rate: number } {
     const m = this.module
     const sp = m.stackSave()
     try {
-      const block_min_ = stackSlot(m)
-      const block_max_ = stackSlot(m)
-      const rate_ = stackSlot(m)
+      const host_block_min_ = stackSlot(m)
+      const host_block_max_ = stackSlot(m)
+      const host_rate_ = stackSlot(m)
       checkStatus(
         m,
-        m._anira_contract_hard_host_blocks(contract, block_min_, block_max_, rate_),
+        m._anira_contract_hard_host_blocks(
+          contract,
+          host_block_min_,
+          host_block_max_,
+          host_rate_
+        ),
         'anira_contract_hard_host_blocks'
       )
       return {
-        block_min: heap(m).HEAPF64[block_min_ >>> 3],
-        block_max: heap(m).HEAPF64[block_max_ >>> 3],
-        rate: heap(m).HEAPF64[rate_ >>> 3],
+        host_block_min: heap(m).HEAPF64[host_block_min_ >>> 3],
+        host_block_max: heap(m).HEAPF64[host_block_max_ >>> 3],
+        host_rate: heap(m).HEAPF64[host_rate_ >>> 3],
       }
     } finally {
       m.stackRestore(sp)
@@ -5822,15 +5844,15 @@ export class AniraBindings {
    * a State tensor is refused (a generator with Static input 0 calls
    * anira_handler_set_static_input(0) and anira_handler_pop_data(0)). Every tensor is
    * validated before anything is pushed, so a refusal pushes nothing. Each tensor carries
-   * one host block of the contract's block_max at most, ceil(b) samples of the block b on
-   * its slot's stream (the header doc): a larger shape[1] is refused, never cut to its
-   * tail. A block whose inference has not completed is an on_miss event: the contract's
-   * policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last delivered
-   * block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per channel of
-   * the input block when in_slot is the anchored input's slot and zeros past it; any
-   * other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn writes) and
-   * the call returns ANIRA_MISSED, a success: the memory is valid and the stream stays
-   * time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in
+   * one host block of the contract's host_block_max at most, ceil(b) samples of the block
+   * b on its slot's stream (the header doc): a larger shape[1] is refused, never cut to
+   * its tail. A block whose inference has not completed is an on_miss event: the
+   * contract's policy fills out (ANIRA_MISS_ZEROS zeros, ANIRA_MISS_HOLD_LAST the last
+   * delivered block, ANIRA_MISS_BYPASS min(shape[1] of in, shape[1] of out) samples per
+   * channel of the input block when in_slot is the anchored input's slot and zeros past
+   * it; any other slot zeros, ANIRA_MISS_CALLBACK what the contract's anira_miss_fn
+   * writes) and the call returns ANIRA_MISSED, a success: the memory is valid and the
+   * stream stays time-aligned. A refusal is a failure status (ANIRA_FAILED), recorded in
    * anira_handler_rt_error; a miss is not recorded. One tensor handed over as in and out
    * is in place, and ANIRA_MISS_BYPASS leaves it where it is; input and output memory
    * that overlap under two different descriptions (an interleaved input over planar views
@@ -6391,7 +6413,7 @@ export class AniraBindings {
    * @param slot The slot: the tensor's position in the model config's output list.
    * @param timeout_ms How long to wait for the block's inference: 0 or more milliseconds
    *   (a value at or above 1e12 is without limit); ANIRA_WAIT_CONTRACT for wait_ratio times
-   *   the contract's block_max duration (a pop has no input block to measure);
+   *   the contract's host_block_max duration (a pop has no input block to measure);
    *   ANIRA_WAIT_FOREVER, or any other negative value, without limit.
    * @returns What the entry writes to delivered. A failed status throws an AniraError.
    * Thread: [any-thread, blocking]
@@ -6989,10 +7011,10 @@ export class AniraBindings {
 
   /**
    * Re-prepares the node's handler under contract while the node lives and its context
-   * runs: the way to change the host blocks of a running node (a new block_max after the
-   * output device changed). The render callback is held off first: from its next quantum
-   * it outputs silence and leaves the handler alone, and this call waits (at most 5000
-   * ms, on the main thread; the callback never waits) until the quantum in flight
+   * runs: the way to change the host blocks of a running node (a new host_block_max after
+   * the output device changed). The render callback is held off first: from its next
+   * quantum it outputs silence and leaves the handler alone, and this call waits (at most
+   * 5000 ms, on the main thread; the callback never waits) until the quantum in flight
    * returned; then anira_handler_prepare's work runs, the node's state that depends on
    * the prepare is rebuilt off the audio thread (the handler's empty tensors; its Static
    * inputs are pushed again at the next quantum), and the callback resumes. The quanta in

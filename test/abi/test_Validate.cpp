@@ -89,9 +89,9 @@ Hard explicit_hard() {
 /// explicit_hard() at a fixed host block, in anchor elements, at 48 kHz.
 Hard host_blocks(double block) {
     Hard hard = explicit_hard();
-    hard.block_min = block;
-    hard.block_max = block;
-    hard.rate = 48000;
+    hard.host_block_min = block;
+    hard.host_block_max = block;
+    hard.host_rate = 48000;
     return hard;
 }
 
@@ -407,7 +407,7 @@ TEST(AbiValidate, ADynamicTimeExtentResolvesToTheWindow) {
 }
 
 // A flexible window covers one host block per inference when the anchor hop can be the block:
-// block_max scaled by the time ratio, plus the context, within [window_min, window_max].
+// host_block_max scaled by the time ratio, plus the context, within [window_min, window_max].
 TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractsHostBlocks) {
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
@@ -418,9 +418,9 @@ TEST(AbiValidate, AFlexibleWindowIsPinnedFromTheContractsHostBlocks) {
                      .axis(0, ANIRA_AXIS_TIME, ANIRA_DYNAMIC)
                      .window(1, ANIRA_UNBOUNDED, 0));
     Hard hard = explicit_hard();
-    hard.block_min = 512;
-    hard.block_max = 512;
-    hard.rate = 48000;
+    hard.host_block_min = 512;
+    hard.host_block_max = 512;
+    hard.host_rate = 48000;
     const Outcome pinned = derive(model, hard);
     ASSERT_EQ(pinned.m_status, ANIRA_OK) << pinned.m_message;
     EXPECT_EQ(dims(pinned.m_derived.m_inputs), (Shapes{{576}}));
@@ -1260,11 +1260,11 @@ TEST(AbiValidate, AFractionalHostBlockIsTheCalculatorsRational) {
         model.input(streamed("latent", c.m_hop));
         model.output(streamed("out", c.m_hop));
         Hard hard = explicit_hard();
-        hard.block_min = c.m_block;
-        hard.block_max = c.m_block;
-        hard.rate = 100.0;
+        hard.host_block_min = c.m_block;
+        hard.host_block_max = c.m_block;
+        hard.host_rate = 100.0;
         const ContractHandle contract(hard);
-        EXPECT_EQ(contract.hard().block_max, c.m_block) << "the double is stored as it is";
+        EXPECT_EQ(contract.hard().host_block_max, c.m_block) << "the double is stored as it is";
         const Outcome outcome = derive(model, contract);
         ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
         const anira::LatencyCalculator::Rational hops =
@@ -1275,7 +1275,7 @@ TEST(AbiValidate, AFractionalHostBlockIsTheCalculatorsRational) {
     }
 }
 
-// A flexible window under a fractional block_max: the block scaled by the time ratio (half an
+// A flexible window under a fractional host_block_max: the block scaled by the time ratio (half an
 // element of the output per call) is no window, so the window follows the anchor hop instead,
 // the anchor's fixed window of 1. The output at time ratio 2/1 gets a window of 2, one inference
 // every fourth call, which the latency calculation counts as a quarter of a hop per block.
@@ -1285,9 +1285,9 @@ TEST(AbiValidate, AFractionalBlockPinsTheFlexibleWindowFromTheAnchorHop) {
     model.input(streamed("latent", 1));
     model.output(flexible("out", 1).time_ratio(2, 1));
     Hard hard = explicit_hard();
-    hard.block_min = 0.25;
-    hard.block_max = 0.25;
-    hard.rate = 100.0;
+    hard.host_block_min = 0.25;
+    hard.host_block_max = 0.25;
+    hard.host_rate = 100.0;
     const ContractHandle contract(hard);
     const Outcome outcome = derive(model, contract);
     ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;

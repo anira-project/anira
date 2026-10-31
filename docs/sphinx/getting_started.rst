@@ -126,9 +126,9 @@ configuration is built with the C++ builders of ``anira/anira.hpp``, and the mod
     anira::InferenceHandler inference_handler(context, pipeline);
 
     // Prepared with a Hard contract: the host's block size and sample rate, a 10 ms budget
-    inference_handler.prepare(anira::Hard{.block_min = static_cast<double>(buffer_size),
-                                          .block_max = static_cast<double>(buffer_size),
-                                          .rate = sample_rate,
+    inference_handler.prepare(anira::Hard{.host_block_min = static_cast<double>(buffer_size),
+                                          .host_block_max = static_cast<double>(buffer_size),
+                                          .host_rate = sample_rate,
                                           .budget = 10ms,
                                           .warmup = ANIRA_WARMUP_FIXED,
                                           .warmup_iterations = 2});

@@ -113,10 +113,10 @@ struct AniraModel {
           ) {
     }
 
-    /// The host blocks complete the contract, blocks of 1 to block_max samples; prepare
+    /// The host blocks complete the contract, blocks of 1 to host_block_max samples; prepare
     /// returns the plan report.
-    void prepare(double block_max, double sample_rate) {
-        contract.hard_host_blocks(1, block_max, sample_rate);
+    void prepare(double host_block_max, double sample_rate) {
+        contract.hard_host_blocks(1, host_block_max, sample_rate);
         plan_report = handler.prepare(contract);
     }
     /// The plan of the report that runs the query's backend; none: the selection stays.

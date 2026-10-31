@@ -1994,17 +1994,18 @@ TEST(AbiHandlerTensor, AHostAheadOfTheFractionalBlockStarves) {
 // ---- the block bound ---------------------------------------------------------------------------
 
 /// A mono pass-through on one stream of `hop` samples per hop under the host blocks
-/// block_min..block_max at `rate`, at the debug level (the refusal's record is collected), on
-/// the pass-through engine of the pipeline. bound() is one host block of block_max on the
-/// stream, ceil(block_max / hop * hop): the most samples one call may carry.
+/// host_block_min..host_block_max at `host_rate`, at the debug level (the refusal's record is
+/// collected), on the pass-through engine of the pipeline. bound() is one host block of
+/// host_block_max on the stream, ceil(host_block_max / hop * hop): the most samples one call may
+/// carry.
 struct BoundRig {
-    BoundRig(int64_t hop, double block_min, double block_max, double rate)
+    BoundRig(int64_t hop, double host_block_min, double host_block_max, double host_rate)
         : m_context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_DEBUG)
         , m_handler(m_context, model(hop), m_candidates)
-        , m_bound(static_cast<size_t>(std::ceil(block_max))) {
+        , m_bound(static_cast<size_t>(std::ceil(host_block_max))) {
         anira::ContractHandle contract =
-            anira_test::explicit_contract(1, rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
-        contract.hard_host_blocks(block_min, block_max, rate);
+            anira_test::explicit_contract(1, host_rate, ANIRA_MISS_ZEROS, 0.0, 1.0);
+        contract.hard_host_blocks(host_block_min, host_block_max, host_rate);
         EXPECT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(get());
     }
@@ -2177,7 +2178,7 @@ void expect_the_bound_passes(const BoundRig& rig, size_t& pushed, size_t& popped
     popped += bound;
 }
 
-// A call carries one host block of the declared block_max at most, ceil of the block on a
+// A call carries one host block of the declared host_block_max at most, ceil of the block on a
 // stream whose block is fractional: one sample more is ANIRA_ERROR_INVALID_ARGUMENT on every
 // Hard entry that moves a Streamed slot, on its push side and on its pop side, before anything
 // moves. The bound itself passes, the refusal is recorded in rt_error (last-wins) and logged
@@ -2187,25 +2188,28 @@ void expect_the_bound_passes(const BoundRig& rig, size_t& pushed, size_t& popped
 TEST(AbiHandlerTensor, AHostBlockAboveTheDeclaredBlockIsRefused) {
     struct HostBlocks {
         int64_t m_hop;
-        double m_block_min;
-        double m_block_max;
-        double m_rate;
+        double m_host_block_min;
+        double m_host_block_max;
+        double m_host_rate;
         size_t m_bound;
     };
     for (const HostBlocks blocks : {HostBlocks{.m_hop = 8,
-                                               .m_block_min = 1.0,
-                                               .m_block_max = 8.0,
-                                               .m_rate = 800.0,
+                                               .m_host_block_min = 1.0,
+                                               .m_host_block_max = 8.0,
+                                               .m_host_rate = 800.0,
                                                .m_bound = 8},
                                     HostBlocks{.m_hop = 1,
-                                               .m_block_min = 0.25,
-                                               .m_block_max = 0.25,
-                                               .m_rate = 100.0,
+                                               .m_host_block_min = 0.25,
+                                               .m_host_block_max = 0.25,
+                                               .m_host_rate = 100.0,
                                                .m_bound = 1}}) {
-        SCOPED_TRACE("block_max " + std::to_string(blocks.m_block_max));
+        SCOPED_TRACE("host_block_max " + std::to_string(blocks.m_host_block_max));
         anira_drain_log();
         RecordCollector collector;
-        const BoundRig rig(blocks.m_hop, blocks.m_block_min, blocks.m_block_max, blocks.m_rate);
+        const BoundRig rig(blocks.m_hop,
+                           blocks.m_host_block_min,
+                           blocks.m_host_block_max,
+                           blocks.m_host_rate);
         ASSERT_NE(rig.get(), nullptr);
         ASSERT_EQ(rig.bound(), blocks.m_bound);
         anira_handler* h = rig.get();

@@ -587,19 +587,21 @@ anira_status ANIRA_CALL anira_em_audio_node_create(anira_handler* handler,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "audio node: tensor slots without their list");
     const int quantum = emscripten_audio_context_quantum_size(static_cast<int>(audio_context));
-    double block_min = 0;
-    double block_max = 0;
-    double rate = 0;
-    static_cast<void>(
-        anira_contract_hard_host_blocks(&handler->m_contract, &block_min, &block_max, &rate));
-    ANIRA_CAPI_REQUIRE(quantum > 0 && block_min <= quantum && quantum <= block_max,
+    double host_block_min = 0;
+    double host_block_max = 0;
+    double host_rate = 0;
+    static_cast<void>(anira_contract_hard_host_blocks(&handler->m_contract,
+                                                      &host_block_min,
+                                                      &host_block_max,
+                                                      &host_rate));
+    ANIRA_CAPI_REQUIRE(quantum > 0 && host_block_min <= quantum && quantum <= host_block_max,
                        err,
                        ANIRA_ERROR_CONFIG,
                        "audio node: the context renders quanta of %d frames, the handler is "
                        "prepared for blocks of %.0f to %.0f",
                        quantum,
-                       block_min,
-                       block_max);
+                       host_block_min,
+                       host_block_max);
 
     auto state = std::make_unique<NodeState>();
     state->m_handler = handler;
@@ -836,19 +838,20 @@ anira_status ANIRA_CALL anira_em_audio_node_prepare(uint32_t node,
                        err,
                        ANIRA_ERROR_CONFIG,
                        "audio node: the contract is not Hard");
-    double block_min = 0;
-    double block_max = 0;
-    double rate = 0;
-    static_cast<void>(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate));
+    double host_block_min = 0;
+    double host_block_max = 0;
+    double host_rate = 0;
+    static_cast<void>(
+        anira_contract_hard_host_blocks(contract, &host_block_min, &host_block_max, &host_rate));
     const auto quantum = static_cast<double>(state.m_quantum);
-    ANIRA_CAPI_REQUIRE(block_min <= quantum && quantum <= block_max,
+    ANIRA_CAPI_REQUIRE(host_block_min <= quantum && quantum <= host_block_max,
                        err,
                        ANIRA_ERROR_CONFIG,
                        "audio node: the context renders quanta of %.0f frames, the contract "
                        "declares blocks of %.0f to %.0f",
                        quantum,
-                       block_min,
-                       block_max);
+                       host_block_min,
+                       host_block_max);
     // Hold the callback off: from its next quantum it outputs silence; wait until the one in
     // flight returns. Then nothing on the audio thread touches the handler or this state.
     slot.m_held.fetch_or(k_held_prepare, std::memory_order::seq_cst);

@@ -44,8 +44,8 @@ const prepared = (anira, context, model) => {
     .addInference(model)
     .addEngine(ENGINE, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
   const contract = ContractHandle.hard(anira, {
-    blockMin: QUANTUM,
-    rate: 48000,
+    hostBlockMin: QUANTUM,
+    hostRate: 48000,
     budgetMs: 2,
   })
   const handler = InferenceHandler.create(context, pipeline)

@@ -12,7 +12,7 @@
 // One face over the copy path (InferenceManager's tensor stems): the Hard entries take host
 // tensors, one per slot. They validate every descriptor (anira::tensor_run::check_host_tensor,
 // src/scheduler/TensorRun.h) and its count against the declared block (one host block of
-// block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
+// host_block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
 // cut to its tail), hand the arrays to the stems as they are and report the counts the stems
 // return. A host that holds float channel pointers presents them itself, as one planar tensor
 // over its pointer array (anira_tensor_init_host_planar).
@@ -267,10 +267,10 @@ bool both_slots(const anira_handler& handler,
 // ==== the host tensors ========================================================================
 
 // The count of a well-formed host block against its slot's stream port: one host block of the
-// contract's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
-// rings were sized for. A larger block is refused before anything moves, never cut to its
-// tail. A compare against prepare's figure: no allocation, no lock. Recorded and logged like
-// every other refusal, naming the slot and the bound.
+// contract's host_block_max at most (StreamPort::m_max_samples, prepare's), what the latency and
+// the rings were sized for. A larger block is refused before anything moves, never cut to its tail.
+// A compare against prepare's figure: no allocation, no lock. Recorded and logged like every other
+// refusal, naming the slot and the bound.
 anira_status block_count_status(anira_handler& handler,
                                 const anira::capi::StreamPort& port,
                                 const anira_tensor& tensor,
@@ -279,16 +279,17 @@ anira_status block_count_status(anira_handler& handler,
                                 [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
     if (std::cmp_less_equal(tensor.shape[1], port.m_max_samples)) { return ANIRA_OK; }
     if (!handler.m_rt.record(ANIRA_ERROR_INVALID_ARGUMENT)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                           "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
-                           "host block of the contract's block_max (%zu on this stream); nothing "
-                           "moved. Declare the largest block the host passes as block_max",
-                           entry,
-                           input ? "input" : "output",
-                           slot,
-                           slot_name(handler, input, slot),
-                           static_cast<long long>(tensor.shape[1]),
-                           port.m_max_samples);
+    ANIRA_LOG_RT_VIOLATION(
+        anira::log_group::k_capi,
+        "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
+        "host block of the contract's host_block_max (%zu on this stream); nothing "
+        "moved. Declare the largest block the host passes as host_block_max",
+        entry,
+        input ? "input" : "output",
+        slot,
+        slot_name(handler, input, slot),
+        static_cast<long long>(tensor.shape[1]),
+        port.m_max_samples);
     return ANIRA_ERROR_INVALID_ARGUMENT;
 }
 
@@ -772,15 +773,17 @@ void unprepare(anira_handler& handler) noexcept {
     handler.m_num_entries = 0;
 }
 
-// The host-block rule of prepare: the session is sized for the contract's block_max at its rate,
-// so both must be set. A contract without host blocks is legal at create and to the validator
-// (a flexible window then takes the smallest anchor hop); prepare is where it is first needed.
+// The host-block rule of prepare: the session is sized for the contract's host_block_max at its
+// host_rate, so both must be set. A contract without host blocks is legal at create and to the
+// validator (a flexible window then takes the smallest anchor hop); prepare is where it is first
+// needed.
 void check_host_blocks(const anira::capi::HardContract& hard) {
-    if (!(hard.m_block_max > 0.0) || !(hard.m_rate > 0.0)) {
+    if (!(hard.m_host_block_max > 0.0) || !(hard.m_host_rate > 0.0)) {
         throw StatusError(
             ANIRA_ERROR_CONFIG,
-            "contract: Hard host blocks missing (block_max " + std::to_string(hard.m_block_max) +
-                ", rate " + std::to_string(hard.m_rate) +
+            "contract: Hard host blocks missing (host_block_max " +
+                std::to_string(hard.m_host_block_max) + ", host_rate " +
+                std::to_string(hard.m_host_rate) +
                 "); set it with anira_contract_hard_set_host_blocks before preparing");
     }
 }
@@ -1723,7 +1726,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
 
     // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
     // block must carry (the resolved ring dtype), the channel count of a host block and the
-    // most samples it may carry (one host block of block_max on the slot's stream, from the
+    // most samples it may carry (one host block of host_block_max on the slot's stream, from the
     // block in hops the session's prepare computed); then the
     // empty tensors of the single-tensor forms. A Static slot has no ring and no host block:
     // its entry of either array stays the empty tensor, and its tensors are checked against the
@@ -1750,10 +1753,11 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
     handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
-    // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
-    // has no input to measure by.
+    // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x host_block_max / host_rate, the block a
+    // pop has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
-        prepared_hard.m_block_max / prepared_hard.m_rate * 1e6 * prepared_hard.m_wait_ratio));
+        prepared_hard.m_host_block_max / prepared_hard.m_host_rate * 1e6 *
+        prepared_hard.m_wait_ratio));
 
     // The declared host-end domain per slot (validate refused a name that is no tensor's and,
     // in this pre-release, any domain but host memory): what the slot rows report, and the

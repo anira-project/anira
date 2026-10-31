@@ -920,16 +920,16 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     EXPECT_EQ(anira_contract_set_edge_cost(hard, bad_enum<anira_edge_cost>(2)),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_create_hard(2, 1, 48000.0, &hard, &err), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_NE(std::strstr(err.message, "block_min"), nullptr);
+    EXPECT_NE(std::strstr(err.message, "host_block_min"), nullptr);
     anira_contract_destroy(hard);
     anira_contract_destroy(async_contract);
     anira_contract_destroy(nullptr);
 }
 
 // The host blocks are doubles: a fractional block is stored as it is; a block that is NaN,
-// infinite or not above 0 (unless both are 0, the host blocks unset), block_min above block_max and
-// a negative rate are refused with a message naming the value, and a refused patch leaves the
-// host blocks as they were.
+// infinite or not above 0 (unless both are 0, the host blocks unset), host_block_min above
+// host_block_max and a negative host_rate are refused with a message naming the value, and a
+// refused patch leaves the host blocks as they were.
 TEST(AbiContract, TheHostBlockRules) {
     const double nan = std::numeric_limits<double>::quiet_NaN();
     const double inf = std::numeric_limits<double>::infinity();
@@ -937,45 +937,49 @@ TEST(AbiContract, TheHostBlockRules) {
     anira_error err = ANIRA_ERROR_INIT;
     ASSERT_EQ(anira_contract_create_hard(0.25, 1.0 / 3.0, 93.75, &hard, &err), ANIRA_OK)
         << err.message;
-    double block_min = 0.0;
-    double block_max = 0.0;
-    double rate = 0.0;
-    ASSERT_EQ(anira_contract_hard_host_blocks(hard, &block_min, &block_max, &rate), ANIRA_OK);
-    EXPECT_EQ(block_min, 0.25);
-    EXPECT_EQ(block_max, 1.0 / 3.0);
-    EXPECT_EQ(rate, 93.75);
+    double host_block_min = 0.0;
+    double host_block_max = 0.0;
+    double host_rate = 0.0;
+    ASSERT_EQ(anira_contract_hard_host_blocks(hard, &host_block_min, &host_block_max, &host_rate),
+              ANIRA_OK);
+    EXPECT_EQ(host_block_min, 0.25);
+    EXPECT_EQ(host_block_max, 1.0 / 3.0);
+    EXPECT_EQ(host_rate, 93.75);
 
     struct Refusal {
         double m_min;
         double m_max;
-        double m_rate;
+        double m_host_rate;
         const char* m_message;
     };
-    const auto refusal = [](double min, double max, double rate, const char* message) {
-        return Refusal{.m_min = min, .m_max = max, .m_rate = rate, .m_message = message};
+    const auto refusal = [](double min, double max, double host_rate, const char* message) {
+        return Refusal{.m_min = min, .m_max = max, .m_host_rate = host_rate, .m_message = message};
     };
-    for (const Refusal& r : {refusal(nan, 1.0, 1.0, "block_min nan must be finite and > 0"),
-                             refusal(1.0, inf, 1.0, "block_max inf must be finite and > 0"),
-                             refusal(-0.5, 1.0, 1.0, "block_min -0.5 must be finite and > 0"),
-                             refusal(0.0, 512.0, 1.0, "block_min 0 must be finite and > 0"),
-                             refusal(0.5, 0.0, 1.0, "block_max 0 must be finite and > 0"),
-                             refusal(0.5, 0.25, 1.0, "block_min 0.5 exceeds block_max 0.25"),
-                             refusal(1.0, 1.0, -1.0, "rate -1 must not be negative"),
-                             refusal(0.0, 0.0, nan, "rate nan must not be negative")}) {
+    for (const Refusal& r :
+         {refusal(nan, 1.0, 1.0, "host_block_min nan must be finite and > 0"),
+          refusal(1.0, inf, 1.0, "host_block_max inf must be finite and > 0"),
+          refusal(-0.5, 1.0, 1.0, "host_block_min -0.5 must be finite and > 0"),
+          refusal(0.0, 512.0, 1.0, "host_block_min 0 must be finite and > 0"),
+          refusal(0.5, 0.0, 1.0, "host_block_max 0 must be finite and > 0"),
+          refusal(0.5, 0.25, 1.0, "host_block_min 0.5 exceeds host_block_max 0.25"),
+          refusal(1.0, 1.0, -1.0, "host_rate -1 must not be negative"),
+          refusal(0.0, 0.0, nan, "host_rate nan must not be negative")}) {
         SCOPED_TRACE(r.m_message);
         anira_contract* refused = nullptr;
         err = ANIRA_ERROR_INIT;
-        EXPECT_EQ(anira_contract_create_hard(r.m_min, r.m_max, r.m_rate, &refused, &err),
+        EXPECT_EQ(anira_contract_create_hard(r.m_min, r.m_max, r.m_host_rate, &refused, &err),
                   ANIRA_ERROR_INVALID_ARGUMENT);
         EXPECT_EQ(refused, nullptr);
         EXPECT_NE(std::strstr(err.message, r.m_message), nullptr) << err.message;
-        EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, r.m_min, r.m_max, r.m_rate),
+        EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, r.m_min, r.m_max, r.m_host_rate),
                   ANIRA_ERROR_INVALID_ARGUMENT);
-        ASSERT_EQ(anira_contract_hard_host_blocks(hard, &block_min, &block_max, &rate), ANIRA_OK);
-        EXPECT_EQ(block_min, 0.25) << "untouched";
-        EXPECT_EQ(block_max, 1.0 / 3.0) << "untouched";
+        ASSERT_EQ(
+            anira_contract_hard_host_blocks(hard, &host_block_min, &host_block_max, &host_rate),
+            ANIRA_OK);
+        EXPECT_EQ(host_block_min, 0.25) << "untouched";
+        EXPECT_EQ(host_block_max, 1.0 / 3.0) << "untouched";
     }
-    // Both 0 leaves the host blocks unset, whatever the rate.
+    // Both 0 leaves the host blocks unset, whatever the host_rate.
     EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 0.0, 0.0, 48000.0), ANIRA_OK);
     EXPECT_EQ(anira_contract_hard_set_host_blocks(hard, 512, 512, 48000.0), ANIRA_OK)
         << "integers convert";

@@ -307,7 +307,7 @@ public:
      * @brief The wait of one process call under the contract's wait ratio
      *
      * The contract's wait ratio times the reference block's duration: `shape[1]` of the
-     * anchored tensor over the contract's rate, truncated to whole microseconds. What a
+     * anchored tensor over the contract's host_rate, truncated to whole microseconds. What a
      * waiting entry computes before it calls process_wait(). The process forms only: a pop has no
      * input block to measure.
      *

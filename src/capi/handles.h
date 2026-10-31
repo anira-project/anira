@@ -105,9 +105,9 @@ struct ModelEntry {
 struct HardContract {
     /// The host blocks, in elements of the anchor tensor: both 0 (unset) or both finite and > 0,
     /// fractional ones included (host_blocks_refusal).
-    double m_block_min = 0.0;
-    double m_block_max = 0.0;
-    double m_rate = 0.0;
+    double m_host_block_min = 0.0;
+    double m_host_block_max = 0.0;
+    double m_host_rate = 0.0;
     anira_budget_kind m_budget = ANIRA_BUDGET_MEASURED;
     double m_budget_ms = 0.0;
     anira_warmup_mode m_warmup = ANIRA_WARMUP_UNTIL_STABLE;
@@ -135,9 +135,10 @@ struct HardContract {
 
 /// The host-block rules of anira_contract_create_hard, shared by the two C setters, the JSON
 /// loader and the validator: the blocks both 0 (the host blocks unset) or both finite and > 0,
-/// block_min <= block_max, a rate of 0 or more. The first broken rule as a message naming the
-/// value (without a "contract: " prefix), or the empty string when the host blocks are legal.
-std::string host_blocks_refusal(double block_min, double block_max, double rate);
+/// host_block_min <= host_block_max, a host_rate of 0 or more. The first broken rule as a message
+/// naming the value (without a "contract: " prefix), or the empty string when the host blocks are
+/// legal.
+std::string host_blocks_refusal(double host_block_min, double host_block_max, double host_rate);
 
 /// The Async half of a contract.
 struct AsyncContract {

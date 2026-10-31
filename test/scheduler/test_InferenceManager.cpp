@@ -34,8 +34,8 @@ struct InferenceManagerTestParams {
 
 std::ostream& operator<<(std::ostream& stream, const InferenceManagerTestParams& params) {
     stream << "{ block = " << params.m_host_blocks.m_block
-           << ", rate = " << params.m_host_blocks.m_rate << ", budget = " << params.m_budget_ms
-           << " ms }";
+           << ", host_rate = " << params.m_host_blocks.m_host_rate
+           << ", budget = " << params.m_budget_ms << " ms }";
     return stream;
 }
 

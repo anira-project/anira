@@ -90,7 +90,7 @@ Worker (``load(model)``, :doc:`custom_inference_backends`; the ONNX Runtime Web 
 each model file is fetched once. Serve the model files beside the config the way its paths say. A contract
 file may leave the Hard host blocks to the host: :js:func:`~renderGeometry.measureRenderGeometry` gives them, blocks
 from the render quantum up to the context's burst at the context's rate. A live context renders
-a device callback's worth of quanta back to back, so ``block_max`` must cover that burst for the
+a device callback's worth of quanta back to back, so ``host_block_max`` must cover that burst for the
 inferences to keep up; the latency the handler reports then covers it too, and a live context
 must run when it is measured (:doc:`audio_nodes`).
 :js:meth:`ModelConfig.fromJson` and :js:meth:`ContractHandle.hard` build the same in code.

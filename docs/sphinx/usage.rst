@@ -24,7 +24,7 @@ of section 1.5 are their file form.
      - One tensor of the model: data type, role, tagged axes, the window and overlap a
        streamed tensor is consumed with, the output latency.
    * - ``anira::ContractHandle`` (``anira::Hard`` / ``anira::Async``)
-     - How the model runs: **Hard** for a real-time stream (block range and rate, budget,
+     - How the model runs: **Hard** for a real-time stream (host blocks and host rate, budget,
        warmup, miss policy) or **Async** for jobs (deadline and policy). Names the run; its
        file form is the contract file.
    * - ``anira::ContextConfig``
@@ -309,7 +309,8 @@ is part of the build is decided at prepare, not here, so one config serves every
   inside an engine and nothing more. A stateful model has none; each of its handlers runs on
   what its own prepare built (section 3.2).
 - **Anchor.** ``anchor(canonical)`` names the streamed tensor that is the model's clock: the
-  Hard contract's block range and rate are counted in its Time-axis elements, and every other
+  Hard contract's host blocks and host rate (``host_block_min``, ``host_block_max``,
+  ``host_rate``) are counted in its Time-axis elements, and every other
   streamed tensor's time ratio is stated against it. The default (an empty name) is the first
   streamed input, or the first streamed output of a model without one. Name one only when the
   host's stream is another tensor: a decoder that turns latent frames into audio anchors on
@@ -344,7 +345,7 @@ default.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A contract names the run. A **Hard** contract is the real-time stream: the host blocks (the
-block range in samples of the anchor tensor and the rate in Hz), the per-inference budget, the
+host blocks in samples of the anchor tensor and the host rate in Hz), the per-inference budget, the
 warmup policy, what to deliver when an inference misses its deadline, and the wait ratio. It
 is written as an ``anira::Hard`` aggregate, whose defaults are the library's except the budget,
 which every aggregate names, and minted into an ``anira::ContractHandle``.
@@ -352,7 +353,8 @@ which every aggregate names, and minted into an ``anira::ContractHandle``.
 .. code-block:: cpp
 
     anira::Hard hard{
-        .block_min = 1, .block_max = 512, .rate = 48000.0,   // blocks of 1..512 samples
+        .host_block_min = 1, .host_block_max = 512,          // blocks of 1..512 samples
+        .host_rate = 48000.0,                                // of the anchor, per second
         .budget = std::chrono::microseconds(42660),          // per inference, required
         .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2,
         .on_miss = ANIRA_MISS_BYPASS,
@@ -366,14 +368,14 @@ ms reads back as 42660000 ns), so a contract file can be inspected, changed as a
 minted again. On an Async handle it throws ``anira::Error`` with
 ``ANIRA_ERROR_WRONG_CONTRACT``.
 
-- **Host blocks.** ``block_min == block_max`` is a fixed-block host; ``block_min = 1`` allows every
+- **Host blocks.** ``host_block_min == host_block_max`` is a fixed-block host; ``host_block_min = 1`` allows every
   smaller block up to the maximum, which may raise the latency anira has to reserve. A
   contract loaded from a file usually carries no host blocks; a plugin patches them from the host
-  with ``contract.hard_host_blocks(block_min, block_max, rate)`` (an ``anira::Hard`` with the
+  with ``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)`` (an ``anira::Hard`` with the
   host blocks left at zero is valid for the same reason). The blocks are doubles: both 0 (unset)
-  or both finite and above 0 with ``block_min <= block_max``; anything else is
+  or both finite and above 0 with ``host_block_min <= host_block_max``; anything else is
   ``ANIRA_ERROR_INVALID_ARGUMENT`` with a message naming the value. A block may be fractional
-  (see *Fractional blocks* below). ``block_max`` is also the most one call may carry: declare
+  (see *Fractional blocks* below). ``host_block_max`` is also the most one call may carry: declare
   the largest block the host passes, since a Hard entry refuses a larger one.
 - **Flexible windows.** The host blocks pin every flexible window (``window_min < window_max``)
   at prepare. One inference consumes the same span of the stream on every tensor, so anira
@@ -383,7 +385,7 @@ minted again. On an Async handle it throws ``anira::Error`` with
   fixed window without a declared ratio keeps its own hop. A time ratio ``num/den`` makes the
   anchor hop a multiple of ``den`` (reduced), and each window bounds it. Of the hops that
   leave every such tensor a whole hop within its window, anira takes the largest at or below
-  ``block_max`` (rounded down; one inference per block when the block is one, several when it
+  ``host_block_max`` (rounded down; one inference per block when the block is one, several when it
   is above the hop), else the smallest above it (one inference every few blocks), and without
   host blocks the smallest. A model whose audio input is flexible and whose latent output
   runs at ``time_ratio(1, 2048)`` gets an anchor hop of 2048 under a block of 3000 (one or two
@@ -531,7 +533,7 @@ frame per 2048 audio samples, say), has an anchor whose block is a fraction of a
 on a stream at the host rate whenever the model has one (the RAVE decoder of the JUCE example
 anchors on its audio output, ``"anchor": "audio_out"``, and passes the host's own block); the
 fractional block is for the model that has none. Its block is then the host block
-measured on the anchor, and the rate is in anchor samples per second as well. A fractional
+measured on the anchor, and the host rate is in anchor samples per second as well. A fractional
 block is a fixed one: the count below assumes the same block on every call, so the host
 behind it delivers one block size, and a plugin, whose host promises only a largest block (section
 4.1), anchors on a stream at the host rate and declares its range there, as the RAVE decoder of
@@ -561,7 +563,7 @@ fourth carries 1; the host keeps the running count itself:
 
 The latency is computed for the worst case, the sample arriving on the last call of its
 accumulation (the latency guide, :doc:`latency`). ``ceil(b)`` is the most one call may carry,
-on a whole block (``block_max`` scaled to the stream) as on a fractional one, and it is
+on a whole block (``host_block_max`` scaled to the stream) as on a fractional one, and it is
 enforced: a Hard entry handed more on any Streamed slot, pushed or popped, refuses the call
 with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves and records it in ``rt_error``,
 where the ring would only have kept the tail. A pop within the bound that the stream cannot
@@ -684,8 +686,8 @@ root, ``{"hard": {...}}`` or ``{"async": {...}}``, with ``budget`` as ``"measure
 ``{"ms": 1.8}``, ``warmup`` as ``"until_stable"``, ``"none"`` or ``{"fixed": 200}``,
 ``on_miss`` as ``"bypass"``, ``"hold_last"``, ``"zeros"`` or ``"callback"`` (the policy only:
 the function is set in code), ``wait_ratio`` as a number, the
-host-block keys ``block_min`` / ``block_max`` / ``rate`` (optional, any number, a fractional
-block included; the blocks in elements of the model's anchor tensor and the rate in anchor
+host-block keys ``host_block_min`` / ``host_block_max`` / ``host_rate`` (optional, any number, a fractional
+block included; the blocks in elements of the model's anchor tensor and the host rate in anchor
 elements per second, as everywhere; a plugin patches them from the host with ``hard_host_blocks``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
 latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost`` and ``host_domains``
@@ -1561,7 +1563,7 @@ writes no ring: a malformed descriptor is ``ANIRA_ERROR_INVALID_ARGUMENT`` (a ra
 negative ``shape[1]``, and with samples: NULL memory, a plane count other than ``shape[0]``, a
 NULL plane, a negative stride, a stride of ``0`` on an axis longer than 1 unless every stride
 is ``0``, a channel that does not start on a multiple of the element size), and so is a
-``shape[1]`` above one host block of ``block_max`` on the slot's stream (``ceil`` of the block,
+``shape[1]`` above one host block of ``host_block_max`` on the slot's stream (``ceil`` of the block,
 *Fractional blocks* in section 1.3: a call carries one declared block at most, never cut to
 its tail), a flag bit this library does not know is ``ANIRA_ERROR_NOT_SUPPORTED``, and the
 checks run in the order rank, domain, flags, shape, dtype, memory and strides, then the count
@@ -1674,7 +1676,7 @@ timeout_ms)``, ``pop_data_wait(h, out, slot, &delivered, timeout_ms)`` and
 inference:
 ``timeout_ms >= 0`` explicitly, ``ANIRA_WAIT_CONTRACT`` for ``wait_ratio`` times the block
 duration (the call's block on the process forms — the 2.x ``blocking_ratio`` wait inside
-``process`` — and the contract's ``block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
+``process`` — and the contract's ``host_block_max`` on the pop forms), ``ANIRA_WAIT_FOREVER``
 without limit (the 2.x ``set_non_realtime``); on the completion semaphore when the contract's
 ``wait_ratio`` is above ``0``, else by polling every millisecond. They are ``[any-thread,
 blocking]``, legal from the driver thread only where the host accepts a wait there (on
@@ -2061,7 +2063,7 @@ Before processing audio data, the handler is prepared with the contract: :cpp:fu
 4.1. The host blocks
 ~~~~~~~~~~~~~~~~~~~~
 
-The host's buffer size and sample rate are the host blocks of the Hard contract (section 1.3): ``block_min`` and ``block_max`` in samples of the *anchor tensor* and ``rate`` in anchor samples per second. A contract loaded from a file carries no host blocks; the host patches them in once it knows its block and prepares with the contract:
+The host's buffer size and sample rate are the host blocks of the Hard contract (section 1.3): ``host_block_min`` and ``host_block_max`` in samples of the *anchor tensor* and ``host_rate`` in anchor samples per second. A contract loaded from a file carries no host blocks; the host patches them in once it knows its block and prepares with the contract:
 
 .. code-block:: cpp
 
@@ -2073,13 +2075,13 @@ A contract written in code names the host blocks on the aggregate, the budget be
 .. code-block:: cpp
 
     using namespace std::chrono_literals;
-    inference_handler.prepare(anira::Hard{.block_min = 2048,
-                                          .block_max = 2048,
-                                          .rate = 44100.0,
+    inference_handler.prepare(anira::Hard{.host_block_min = 2048,
+                                          .host_block_max = 2048,
+                                          .host_rate = 44100.0,
                                           .budget = 10ms,
                                           .warmup = ANIRA_WARMUP_NONE});
 
-``block_min == block_max`` is a fixed-block host. A ``block_min`` below ``block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver, each held from call to call. A host that changes the size between calls can still miss a block in rare sequences (a full block right after a short one that completed a hop, `issue #228 <https://github.com/anira-project/anira/issues/228>`_). A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
+``host_block_min == host_block_max`` is a fixed-block host. A ``host_block_min`` below ``host_block_max`` tells anira that the host may deliver smaller blocks up to the maximum, which is useful for real-time applications with dynamic buffer sizes; anira then reserves latency for every size the host may deliver, each held from call to call. A host that changes the size between calls can still miss a block in rare sequences (a full block right after a short one that completed a hop, `issue #228 <https://github.com/anira-project/anira/issues/228>`_). A block may be fractional, for a model with no stream at the host rate (section 1.3, *Fractional blocks*).
 
 .. code-block:: cpp
 

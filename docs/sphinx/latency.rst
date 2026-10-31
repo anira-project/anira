@@ -17,7 +17,7 @@ The model behind the formulas is the scheduler's actual worst case:
 Quantities
 ----------
 
-For a session with reference stream size :math:`R` (the hop of the model's anchor, see the usage guide, section 4.1), host block :math:`B` (the contract's ``block_max``) and rate :math:`f_s` (the contract's ``rate``), both stated in samples of the reference stream, the calculator derives:
+For a session with reference stream size :math:`R` (the hop of the model's anchor, see the usage guide, section 4.1), host block :math:`B` (the contract's ``host_block_max``) and host rate :math:`f_s` (the contract's ``host_rate``), both stated in samples of the reference stream, the calculator derives:
 
 .. list-table::
    :header-rows: 1
@@ -43,7 +43,7 @@ For a session with reference stream size :math:`R` (the hop of the model's ancho
      - the parallelism of the session: ``max_instances``, by default the inference pool's thread count, and 1 for an exclusive (stateful) session
    * - :math:`H`
      - largest streamable hop
-     - the stream on which the host block is finest; the unit of the smaller-block grid (``block_min`` below ``block_max``)
+     - the stream on which the host block is finest; the unit of the smaller-block grid (``host_block_min`` below ``host_block_max``)
    * - :math:`d_m`
      - :math:`\max(0, \lceil (m+1)\tau - \beta \rceil)`
      - callbacks after submission at which the :math:`(m+1)`-th batch of :math:`n` inferences submitted together is collected
@@ -57,7 +57,7 @@ Repackaging a stream from host blocks of :math:`b` samples into model blocks of 
 
    \Delta = P - \gcd(b, P),
 
-which replaces the PortAudio-style loop over every multiple of :math:`b` below :math:`\mathrm{lcm}(b, P)` that anira used before. In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``block_min`` below ``block_max``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
+which replaces the PortAudio-style loop over every multiple of :math:`b` below :math:`\mathrm{lcm}(b, P)` that anira used before. In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``host_block_min`` below ``host_block_max``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
 
 Inference-caused latency
 ------------------------
@@ -85,7 +85,7 @@ The first term is the buffer adaptation, the second the inference queue. The max
 The latency of output tensor :math:`i` in its own samples is :math:`P_i \Lambda`. It is the same number of hops for every output, and it is rounded down because the host pops whole samples only (:cpp:func:`anira::LatencyCalculator::get_output_latencies` returns the unrounded value).
 
 .. note::
-    The Hard contract's host blocks may be fractional (``block_min`` and ``block_max`` are doubles, e.g. ``contract.hard_host_blocks(samples_per_block / 2048.0, samples_per_block / 2048.0, sample_rate / 2048.0)`` for a model whose anchor stream runs at one sample per 2048 host samples; the rate is in anchor samples per second as well). The host and that stream then exchange samples at a non-integer ratio, and anira assumes the worst case: after its :math:`k`-th call the host has moved (pushed, or popped) :math:`\lfloor k b \rfloor` samples of every stream whose block is :math:`b`, so one call carries :math:`\lfloor b \rfloor` or :math:`\lceil b \rceil` of them. For example, with a block of 0.25 samples of a control-rate stream, the handler receives one sample every four host calls, and the latency is calculated as if the sample is delivered during the fourth call. If your system always sends the sample at the first call, a lower latency is possible; declare it with ``anira_contract_hard_set_latency`` (the ``latencies`` of ``anira::Hard``). :math:`B` is the contract's ``block_max``, and :math:`\rho` the rational :cpp:func:`anira::LatencyCalculator::rationalize` recovers from it (a relative tolerance of :math:`10^{-6}` and a denominator of at most :math:`2^{20}`: 1/3 and 1/4 exactly). :math:`\lceil b \rceil` is also the most one call may carry: a Hard entry handed more on a stream, pushed or popped, is refused with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves, and a pop within it that the stream cannot cover is a miss (``ANIRA_MISSED``).
+    The Hard contract's host blocks may be fractional (``host_block_min`` and ``host_block_max`` are doubles, e.g. ``contract.hard_host_blocks(samples_per_block / 2048.0, samples_per_block / 2048.0, sample_rate / 2048.0)`` for a model whose anchor stream runs at one sample per 2048 host samples; the rate is in anchor samples per second as well). The host and that stream then exchange samples at a non-integer ratio, and anira assumes the worst case: after its :math:`k`-th call the host has moved (pushed, or popped) :math:`\lfloor k b \rfloor` samples of every stream whose block is :math:`b`, so one call carries :math:`\lfloor b \rfloor` or :math:`\lceil b \rceil` of them. For example, with a block of 0.25 samples of a control-rate stream, the handler receives one sample every four host calls, and the latency is calculated as if the sample is delivered during the fourth call. If your system always sends the sample at the first call, a lower latency is possible; declare it with ``anira_contract_hard_set_latency`` (the ``latencies`` of ``anira::Hard``). :math:`B` is the contract's ``host_block_max``, and :math:`\rho` the rational :cpp:func:`anira::LatencyCalculator::rationalize` recovers from it (a relative tolerance of :math:`10^{-6}` and a denominator of at most :math:`2^{20}`: 1/3 and 1/4 exactly). :math:`\lceil b \rceil` is also the most one call may carry: a Hard entry handed more on a stream, pushed or popped, is refused with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves, and a pop within it that the stream cannot cover is a miss (``ANIRA_MISSED``).
 
 Inference slots
 ---------------
@@ -113,7 +113,7 @@ Every hop of input therefore yields exactly one hop of output, in order: the mod
 Adaptive buffer handling
 ------------------------
 
-For hosts that may use smaller blocks than the contract's maximum (``block_min`` below ``block_max``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated; the former countdown over every block size, which stalled for blocks above :math:`2^{24}` samples, is gone.
+For hosts that may use smaller blocks than the contract's maximum (``host_block_min`` below ``host_block_max``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated; the former countdown over every block size, which stalled for blocks above :math:`2^{24}` samples, is gone.
 
 Note that a smaller host block can require *more* latency and more slots than the maximum block: a block slightly shorter than one inference time means that results arrive two callbacks after their submission instead of one.
 

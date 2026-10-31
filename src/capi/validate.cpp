@@ -258,7 +258,7 @@ void check_contract(const anira_contract& contract,
             "the 3.x runtime");
     }
     const std::string refusal =
-        host_blocks_refusal(hard->m_block_min, hard->m_block_max, hard->m_rate);
+        host_blocks_refusal(hard->m_host_block_min, hard->m_host_block_max, hard->m_host_rate);
     if (!refusal.empty()) { config_error("contract: " + refusal); }
     if (hard->m_budget == ANIRA_BUDGET_EXPLICIT && !(hard->m_budget_ms > 0.0)) {
         config_error("contract: an explicit budget must be positive (got " +
@@ -534,8 +534,8 @@ struct HopNeed {
 // keeps its own hop, its ratio derived from it. Of the hops every such tensor allows, the largest
 // at or below the host block (one inference per block when the block is one, several per block
 // when it is above the hop) or else the smallest (one inference every few blocks: a block below
-// the step, a fractional block); without host blocks the smallest. A fractional block_max counts
-// as the rational the latency calculation recovers from it.
+// the step, a fractional block); without host blocks the smallest. A fractional host_block_max
+// counts as the rational the latency calculation recovers from it.
 void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, Derived& out) {
     const auto spec_of = [&](bool is_input, size_t index) -> const anira_tensor_spec& {
         return is_input ? model.m_inputs[index] : model.m_outputs[index];
@@ -619,9 +619,9 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
     fold_side(false);
 
     int64_t block = 0;
-    if (hard != nullptr && hard->m_block_max > 0.0) {
+    if (hard != nullptr && hard->m_host_block_max > 0.0) {
         const anira::LatencyCalculator::Rational rational =
-            anira::LatencyCalculator::rationalize(hard->m_block_max);
+            anira::LatencyCalculator::rationalize(hard->m_host_block_max);
         block = rational.m_numerator / rational.m_denominator;
     }
     const int64_t below = std::min(block, range.m_high) / range.m_step * range.m_step;

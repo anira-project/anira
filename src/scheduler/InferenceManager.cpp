@@ -105,7 +105,7 @@ void InferenceManager::prepare(const CustomLatencies& custom_latencies,
     if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
         for (size_t i = 0; i < num_outputs; ++i) {
             if (!m_output_slots[i].m_streamed) { continue; }
-            // One host block of block_max on the output's stream.
+            // One host block of host_block_max on the output's stream.
             const size_t capacity =
                 LatencyCalculator::block_samples(m_session->m_block_hops, m_session->output_hop(i));
             m_hold_capacity[i] = capacity;
@@ -414,8 +414,9 @@ std::chrono::steady_clock::duration InferenceManager::contract_wait_budget(
 std::chrono::steady_clock::duration InferenceManager::wait_budget_of(
     size_t reference_samples) const noexcept {
     // The host block is measured in samples of the reference stream (input or output), at
-    // the contract's rate; the wait is truncated to whole microseconds.
-    const double block_seconds = static_cast<double>(reference_samples) / m_session->m_hard.m_rate;
+    // the contract's host_rate; the wait is truncated to whole microseconds.
+    const double block_seconds =
+        static_cast<double>(reference_samples) / m_session->m_hard.m_host_rate;
     return std::chrono::microseconds(
         static_cast<long>(block_seconds * 1e6 * m_session->m_hard.m_wait_ratio));
 }

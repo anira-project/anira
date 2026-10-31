@@ -1,7 +1,7 @@
 // The render geometry of an audio context: the two numbers a Hard contract's block range needs
 // for a handler that streams through an audio node. `quantum`, the frames of one process() call
-// (block_min), and `burst`, the frames the context renders back to back with no time between
-// them (block_max): a live AudioContext renders each device callback as a run of quanta, so an
+// (host_block_min), and `burst`, the frames the context renders back to back with no time between
+// them (host_block_max): a live AudioContext renders each device callback as a run of quanta, so an
 // inference that starts in one run cannot finish before the next quantum of that run, and the
 // latency the handler reports must cover the run.
 //

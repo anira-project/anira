@@ -450,7 +450,7 @@ TEST(AbiCompatConfig, TheConstructorUpgradesLikeTheDocument) {
     EXPECT_EQ(actual.warmup_iterations, 1U);
     EXPECT_EQ(actual.on_miss, ANIRA_MISS_ZEROS);
     EXPECT_DOUBLE_EQ(actual.wait_ratio, expected.wait_ratio);
-    EXPECT_EQ(actual.block_max, 0U) << "no host blocks: the handler's prepare sets them";
+    EXPECT_EQ(actual.host_block_max, 0U) << "no host blocks: the handler's prepare sets them";
     EXPECT_TRUE(actual.ring_dtypes.empty());
     EXPECT_TRUE(actual.latencies.empty());
 }
@@ -960,9 +960,9 @@ struct PipelineHandler {
 /// The legacy contract of a shim configuration with fixed host blocks of `block` samples.
 anira::ContractHandle contract_of(const v2::InferenceConfig& config, uint32_t block) {
     anira::Hard hard = config.hard();
-    hard.block_min = block;
-    hard.block_max = block;
-    hard.rate = anira_test::k_rate;
+    hard.host_block_min = block;
+    hard.host_block_max = block;
+    hard.host_rate = anira_test::k_rate;
     return anira::ContractHandle(hard);
 }
 

@@ -460,15 +460,15 @@ inline anira::ModelConfig generator_model() {
     return model;
 }
 
-/// The Hard contract of the recordings: blocks of 1 to `block_max` samples at k_rate (the twin
-/// of the 2.x HostConfig(block_max, k_rate, true)), an explicit budget of 1 ms, no warm-up, the
-/// miss policy and the wait ratio.
+/// The Hard contract of the recordings: blocks of 1 to `host_block_max` samples at k_rate (the twin
+/// of the 2.x HostConfig(host_block_max, k_rate, true)), an explicit budget of 1 ms, no warm-up,
+/// the miss policy and the wait ratio.
 inline anira::ContractHandle recording_contract(anira_miss_policy policy,
-                                                uint32_t block_max = k_hop,
+                                                uint32_t host_block_max = k_hop,
                                                 double wait_ratio = 0.0) {
     anira::ContractHandle contract =
-        explicit_contract(block_max, k_rate, policy, wait_ratio, /*budget_ms=*/1.0);
-    contract.hard_host_blocks(1, block_max, k_rate);
+        explicit_contract(host_block_max, k_rate, policy, wait_ratio, /*budget_ms=*/1.0);
+    contract.hard_host_blocks(1, host_block_max, k_rate);
     return contract;
 }
 

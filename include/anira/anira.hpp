@@ -896,8 +896,8 @@ private:
 
 /**
  * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
- * aggregate always names it (`Hard{.block_max = 512, .rate = 48000, .budget = 5ms}`), as the
- * web package's budgetMs. A std::chrono duration converts to an explicit budget
+ * aggregate always names it (`Hard{.host_block_max = 512, .host_rate = 48000, .budget = 5ms}`), as
+ * the web package's budgetMs. A std::chrono duration converts to an explicit budget
  * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); Budget::measured()
  * is the budget the warm-up measures (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses
  * with ANIRA_ERROR_NOT_SUPPORTED in this pre-release.
@@ -932,13 +932,13 @@ struct Hard {
     /// The host blocks: the smallest and largest block the host passes per call, in elements of
     /// the model's anchor tensor (ModelConfig::anchor), both 0 (unset) or both finite and > 0,
     /// a fractional block included (0.25: one element every fourth call; the rules of
-    /// anira_contract_create_hard). An integer converts: `.block_max = 512`. The contract
-    /// file's keys of the same names.
-    double block_min = 0;
-    double block_max = 0;
-    /// The anchor's elements per second: the sample rate for an audio anchor, sample_rate /
-    /// 2048.0 for a control-rate one.
-    double rate = 0;
+    /// anira_contract_create_hard). An integer converts: `.host_block_max = 512`. The contract
+    /// file's keys of the same names. What the host must provide carries the host_ prefix.
+    double host_block_min = 0;
+    double host_block_max = 0;
+    /// The anchor's elements per second the host runs at: the sample rate for an audio anchor,
+    /// sample_rate / 2048.0 for a control-rate one. The contract file's "host_rate".
+    double host_rate = 0;
     /// Required: the per-inference budget (no default; a duration is an explicit budget).
     Budget budget;
     anira_warmup_mode warmup = ANIRA_WARMUP_UNTIL_STABLE;
@@ -994,7 +994,11 @@ double milliseconds_of(const Duration& value) {
 inline anira_contract* mint(const Hard& hard) {
     anira_error err{};
     anira_contract* contract = nullptr;
-    check(anira_contract_create_hard(hard.block_min, hard.block_max, hard.rate, &contract, &err),
+    check(anira_contract_create_hard(hard.host_block_min,
+                                     hard.host_block_max,
+                                     hard.host_rate,
+                                     &contract,
+                                     &err),
           err);
     try {
         check(anira_contract_hard_set_budget(contract,
@@ -1119,11 +1123,16 @@ public:
 
     /// Patches a Hard contract's host blocks, e.g. of one loaded from a file: the smallest and
     /// largest block in elements of the model's anchor tensor (ModelConfig::anchor) and the
-    /// anchor's rate in elements per second; a block may be fractional
+    /// host rate, the anchor's elements per second; a block may be fractional
     /// (anira_contract_create_hard). @throws Error{ANIRA_ERROR_INVALID_ARGUMENT}
     /// for host blocks the rules refuse, Error{ANIRA_ERROR_WRONG_CONTRACT} on an Async handle.
-    ContractHandle& hard_host_blocks(double block_min, double block_max, double rate) {
-        detail::check(anira_contract_hard_set_host_blocks(m_contract, block_min, block_max, rate),
+    ContractHandle& hard_host_blocks(double host_block_min,
+                                     double host_block_max,
+                                     double host_rate) {
+        detail::check(anira_contract_hard_set_host_blocks(m_contract,
+                                                          host_block_min,
+                                                          host_block_max,
+                                                          host_rate),
                       "anira_contract_hard_set_host_blocks");
         return *this;
     }
@@ -1264,9 +1273,11 @@ public:
                                ? Budget(std::chrono::round<std::chrono::nanoseconds>(
                                      std::chrono::duration<double, std::milli>(budget_ms)))
                                : Budget::measured()};
-        detail::check(
-            anira_contract_hard_host_blocks(m_contract, &out.block_min, &out.block_max, &out.rate),
-            "anira_contract_hard_host_blocks");
+        detail::check(anira_contract_hard_host_blocks(m_contract,
+                                                      &out.host_block_min,
+                                                      &out.host_block_max,
+                                                      &out.host_rate),
+                      "anira_contract_hard_host_blocks");
         detail::check(anira_contract_hard_warmup(m_contract, &out.warmup, &out.warmup_iterations),
                       "anira_contract_hard_warmup");
         detail::check(anira_contract_hard_on_miss(m_contract, &out.on_miss),

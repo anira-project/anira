@@ -480,8 +480,8 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
               ANIRA_OK)
         << err.message;
     EXPECT_EQ(anira_contract_get_kind(hard), ANIRA_CONTRACT_HARD);
-    EXPECT_EQ(hard->hard()->m_block_max, 512u);
-    EXPECT_EQ(hard->hard()->m_rate, 48000.0);
+    EXPECT_EQ(hard->hard()->m_host_block_max, 512u);
+    EXPECT_EQ(hard->hard()->m_host_rate, 48000.0);
     EXPECT_EQ(hard->hard()->m_budget, ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
     EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
@@ -510,7 +510,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(hard->hard()->m_warmup_iterations, 200u);
     EXPECT_EQ(hard->hard()->m_on_miss, ANIRA_MISS_ZEROS);
-    EXPECT_EQ(hard->hard()->m_block_max, 0u)
+    EXPECT_EQ(hard->hard()->m_host_block_max, 0u)
         << "the host-block keys are optional; the host patches them";
     anira_contract_destroy(hard);
 }
@@ -536,7 +536,7 @@ TEST(AbiJsonContract, OnMissCallbackNamesThePolicyOnly) {
 
 TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
     static constexpr const char* k_text = R"({ "hard": {
-        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},
+        "host_block_min": 512, "host_block_max": 512, "host_rate": 48000, "budget": {"ms": 5},
         "ring_dtypes": {"audio_in": "int16", "audio_out": "float32"}
     } })";
     anira_contract* hard = nullptr;
@@ -561,7 +561,7 @@ TEST(AbiJsonContract, RingDtypesAreReadByTensorName) {
 // output is prepare's question.
 TEST(AbiJsonContract, LatenciesAreReadByTensorName) {
     static constexpr const char* k_text = R"({ "hard": {
-        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5},
+        "host_block_min": 512, "host_block_max": 512, "host_rate": 48000, "budget": {"ms": 5},
         "latencies": {"audio_out": 1024, "aux_out": 0}
     } })";
     anira_contract* hard = nullptr;
@@ -595,7 +595,7 @@ TEST(AbiJsonContract, LatenciesAreReadByTensorName) {
 // edge_cost, the words the lower-case suffixes of anira_domain.
 TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
     static constexpr const char* k_hard = R"({ "hard": {
-        "block_min": 512, "block_max": 512, "rate": 48000, "budget": {"ms": 5}
+        "host_block_min": 512, "host_block_max": 512, "host_rate": 48000, "budget": {"ms": 5}
     }, "host_domains": {"audio_in": "host", "gain": "host_pinned"} })";
     anira_contract* contract = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
@@ -628,41 +628,65 @@ TEST(AbiJsonContract, HostDomainsAreReadByTensorName) {
     EXPECT_EQ(contract, nullptr);
 }
 
+// What the host provides carries the host_ prefix, one spelling per fact: a contract file with a
+// key of the 3.0 alphas ("block_min", "block_max", "rate") is refused, naming the key it is now.
+TEST(AbiJsonContract, TheHostKeysOfTheAlphasAreRefusedWithTheirNewName) {
+    for (const auto& [old_key, new_key] : {std::pair{"block_min", "host_block_min"},
+                                           std::pair{"block_max", "host_block_max"},
+                                           std::pair{"rate", "host_rate"}}) {
+        SCOPED_TRACE(old_key);
+        const std::string text = std::string(R"({"hard": {")") + old_key + R"(": 512}})";
+        anira_contract* contract = nullptr;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_contract_from_json(text.c_str(), text.size(), &contract, &err),
+                  ANIRA_ERROR_JSON);
+        EXPECT_EQ(contract, nullptr);
+        const std::string expected = std::string("\"") + old_key + "\" is now \"" + new_key + "\"";
+        EXPECT_NE(std::strstr(err.message, expected.c_str()), nullptr) << err.message;
+    }
+}
+
 // The host-block keys take any number: a fractional block reads back as the double the text
 // spells (the shortest round-trip form of 1/3 included), an integer as itself.
 TEST(AbiJsonContract, FractionalHostBlocks) {
     static constexpr const char* k_text =
-        R"({"hard": {"block_min": 0.3333333333333333, "block_max": 0.25, "rate": 93.75}})";
+        R"({"hard": {"host_block_min": 0.3333333333333333, "host_block_max": 0.25, "host_rate": 93.75}})";
     anira_contract* contract = nullptr;
     anira_error err = ANIRA_ERROR_INIT;
-    // block_min above block_max: refused, naming both values.
+    // host_block_min above host_block_max: refused, naming both values.
     EXPECT_EQ(anira_contract_from_json(k_text, std::strlen(k_text), &contract, &err),
               ANIRA_ERROR_JSON);
-    EXPECT_NE(std::strstr(err.message, "block_min 0.333333 exceeds block_max 0.25"), nullptr)
+    EXPECT_NE(std::strstr(err.message, "host_block_min 0.333333 exceeds host_block_max 0.25"),
+              nullptr)
         << err.message;
     EXPECT_EQ(contract, nullptr);
 
     static constexpr const char* k_fractional =
-        R"({"hard": {"block_min": 0.25, "block_max": 0.3333333333333333, "rate": 93.75}})";
+        R"({"hard": {"host_block_min": 0.25, "host_block_max": 0.3333333333333333, "host_rate": 93.75}})";
     ASSERT_EQ(anira_contract_from_json(k_fractional, std::strlen(k_fractional), &contract, &err),
               ANIRA_OK)
         << err.message;
-    double block_min = 0.0;
-    double block_max = 0.0;
-    double rate = 0.0;
-    ASSERT_EQ(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate), ANIRA_OK);
-    EXPECT_EQ(block_min, 0.25);
-    EXPECT_EQ(block_max, 1.0 / 3.0);
-    EXPECT_EQ(rate, 93.75);
+    double host_block_min = 0.0;
+    double host_block_max = 0.0;
+    double host_rate = 0.0;
+    ASSERT_EQ(
+        anira_contract_hard_host_blocks(contract, &host_block_min, &host_block_max, &host_rate),
+        ANIRA_OK);
+    EXPECT_EQ(host_block_min, 0.25);
+    EXPECT_EQ(host_block_max, 1.0 / 3.0);
+    EXPECT_EQ(host_rate, 93.75);
     anira_contract_destroy(contract);
 
-    static constexpr const char* k_whole = R"({"hard": {"block_min": 1, "block_max": 512}})";
+    static constexpr const char* k_whole =
+        R"({"hard": {"host_block_min": 1, "host_block_max": 512}})";
     contract = nullptr;
     ASSERT_EQ(anira_contract_from_json(k_whole, std::strlen(k_whole), &contract, &err), ANIRA_OK)
         << err.message;
-    ASSERT_EQ(anira_contract_hard_host_blocks(contract, &block_min, &block_max, &rate), ANIRA_OK);
-    EXPECT_EQ(block_min, 1.0);
-    EXPECT_EQ(block_max, 512.0);
+    ASSERT_EQ(
+        anira_contract_hard_host_blocks(contract, &host_block_min, &host_block_max, &host_rate),
+        ANIRA_OK);
+    EXPECT_EQ(host_block_min, 1.0);
+    EXPECT_EQ(host_block_max, 512.0);
     anira_contract_destroy(contract);
 }
 
@@ -672,12 +696,14 @@ TEST(AbiJsonContract, Rejections) {
         {R"({"edge_cost": "strict"})", "exactly one root"},
         {R"({"hard": {"budget": "guess"}})", "hard.budget"},
         {R"({"hard": {"warmup": {"fixed": -1}}})", "hard.warmup.fixed"},
-        {R"({"hard": {"block_min": 9, "block_max": 1}})", "block_min 9 exceeds block_max 1"},
-        {R"({"hard": {"block_min": 0.5, "block_max": 0.25}})",
-         "block_min 0.5 exceeds block_max 0.25"},
-        {R"({"hard": {"block_min": -1, "block_max": 1}})", "block_min -1 must be finite and > 0"},
-        {R"({"hard": {"block_max": 0.25}})", "block_min 0 must be finite and > 0"},
-        {R"({"hard": {"block_min": "1/4", "block_max": 1}})", "hard.block_min"},
+        {R"({"hard": {"host_block_min": 9, "host_block_max": 1}})",
+         "host_block_min 9 exceeds host_block_max 1"},
+        {R"({"hard": {"host_block_min": 0.5, "host_block_max": 0.25}})",
+         "host_block_min 0.5 exceeds host_block_max 0.25"},
+        {R"({"hard": {"host_block_min": -1, "host_block_max": 1}})",
+         "host_block_min -1 must be finite and > 0"},
+        {R"({"hard": {"host_block_max": 0.25}})", "host_block_min 0 must be finite and > 0"},
+        {R"({"hard": {"host_block_min": "1/4", "host_block_max": 1}})", "hard.host_block_min"},
         {R"({"async": {"lanes": "two"}})", "async.lanes"},
         {R"({"async": {"deadline_ms": 1, "colour": 2}})", "async.colour"},
     };

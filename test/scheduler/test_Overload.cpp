@@ -100,8 +100,8 @@ anira_status ANIRA_CALL negate(anira_handler* /*handler*/,
 
 struct Case {
     std::string m_name;
-    double m_block_min;
-    uint32_t m_block_max;
+    double m_host_block_min;
+    uint32_t m_host_block_max;
     std::vector<uint32_t> m_blocks;  ///< the host's blocks, cycled
     int64_t m_hop = 480;
     size_t m_spike_start = 20;
@@ -145,15 +145,15 @@ Recording record(const Case& c) {
         anira_test::Handler handler(context, model, {}, {}, engine.engine());
         const anira_test::DestroyFirst guard(handler, &engine);
         anira::ContractHandle contract =
-            anira_test::explicit_contract(c.m_block_max, 48000.0, c.m_policy, 0.0, 5.0);
-        contract.hard_host_blocks(c.m_block_min, c.m_block_max, 48000.0);
+            anira_test::explicit_contract(c.m_host_block_max, 48000.0, c.m_policy, 0.0, 5.0);
+        contract.hard_host_blocks(c.m_host_block_min, c.m_host_block_max, 48000.0);
         if (c.m_policy == ANIRA_MISS_CALLBACK) { contract.hard_miss_fn(&negate, nullptr); }
         EXPECT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
         anira_handler* h = handler.m_handler;
         result.m_latency = static_cast<int64_t>(anira_handler_get_latency(h, 0));
         const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
         if (session == nullptr) { return result; }
-        std::vector<float> buffer(c.m_block_max);
+        std::vector<float> buffer(c.m_host_block_max);
         int64_t pushed = 0;
         for (size_t k = 0; k < c.m_calls; ++k) {
             const uint32_t block = c.m_blocks[k % c.m_blocks.size()];
@@ -284,25 +284,25 @@ size_t expect_the_overload_contract(const Case& c, const Recording& r) {
 std::vector<Case> host_block_cases() {
     return {
         Case{.m_name = "block 1024 > hop 480",
-             .m_block_min = 1024,
-             .m_block_max = 1024,
+             .m_host_block_min = 1024,
+             .m_host_block_max = 1024,
              .m_blocks = {1024}},
         Case{.m_name = "block 480 = hop 480",
-             .m_block_min = 480,
-             .m_block_max = 480,
+             .m_host_block_min = 480,
+             .m_host_block_max = 480,
              .m_blocks = {480}},
         Case{.m_name = "block 256 < hop 480",
-             .m_block_min = 256,
-             .m_block_max = 256,
+             .m_host_block_min = 256,
+             .m_host_block_max = 256,
              .m_blocks = {256},
              .m_calls = 80},
         Case{.m_name = "range 1..1024, blocks of 1024",
-             .m_block_min = 1,
-             .m_block_max = 1024,
+             .m_host_block_min = 1,
+             .m_host_block_max = 1024,
              .m_blocks = {1024}},
         Case{.m_name = "range 1..1024, varying blocks",
-             .m_block_min = 1,
-             .m_block_max = 1024,
+             .m_host_block_min = 1,
+             .m_host_block_max = 1024,
              .m_blocks = {1024, 37, 1, 1024, 512, 1, 1, 1023, 64, 32, 1024, 3},
              .m_spike_calls = 24,
              .m_calls = 90},
@@ -327,9 +327,9 @@ void expect_every_host_block_case(anira_miss_policy policy, const char* word) {
 }  // namespace
 
 // One spike in every host block range the Hard contract allows: a block above the hop (several hops
-// a call), at the hop, below it (a hop every few calls) and the 1..block_max range, at its maximum
-// and with varying blocks. Every one drops hops and misses blocks, and the output holds to the
-// promise above, under each miss policy.
+// a call), at the hop, below it (a hop every few calls) and the 1..host_block_max range, at its
+// maximum and with varying blocks. Every one drops hops and misses blocks, and the output holds to
+// the promise above, under each miss policy.
 TEST(Overload, ASpikeCostsTheDroppedHopsUnderZeros) {
     expect_every_host_block_case(ANIRA_MISS_ZEROS, "zeros");
 }

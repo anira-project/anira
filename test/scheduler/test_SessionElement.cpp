@@ -63,7 +63,7 @@ std::ostream& operator<<(std::ostream& os, const std::vector<T>& vec) {
 
 std::ostream& operator<<(std::ostream& stream, const SessionElementTestParams& params) {
     stream << "{ block = " << params.m_host_blocks.m_block
-           << ", rate = " << params.m_host_blocks.m_rate
+           << ", host_rate = " << params.m_host_blocks.m_host_rate
            << ", smaller = " << params.m_host_blocks.m_allow_smaller
            << ", budget = " << params.m_budget_ms << " ms, wait ratio = " << params.m_wait_ratio
            << ", expected latency = " << params.m_expected_latency
@@ -226,10 +226,10 @@ SessionElementTestParams row(SizingHostBlocks blocks,
 }
 
 /// Host blocks anchored on input `index`.
-SizingHostBlocks anchored(double block, double rate, bool smaller, size_t index) {
+SizingHostBlocks anchored(double block, double host_rate, bool smaller, size_t index) {
     return SizingHostBlocks{
         .m_block = block,
-        .m_rate = rate,
+        .m_host_rate = host_rate,
         .m_allow_smaller = smaller,
         .m_anchor = anira_test::SizingAnchor{.m_is_input = true, .m_index = index}};
 }
@@ -446,8 +446,8 @@ anira::ModelConfig analyser_twin_model() {
                                     2);
 }
 
-SizingHostBlocks host_blocks(double block, double rate, bool smaller) {
-    return SizingHostBlocks{.m_block = block, .m_rate = rate, .m_allow_smaller = smaller};
+SizingHostBlocks host_blocks(double block, double host_rate, bool smaller) {
+    return SizingHostBlocks{.m_block = block, .m_host_rate = host_rate, .m_allow_smaller = smaller};
 }
 
 class OneSidedStreamingPrepareTest : public ::testing::TestWithParam<bool> {};

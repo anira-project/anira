@@ -26,12 +26,12 @@ struct HardContract;
  * count:
  *
  * - @f$\rho = B / R@f$, the host block measured in hops: @f$B@f$ is the host buffer size
- *   in samples of the reference stream (the contract's block_max) and @f$R@f$ that
+ *   in samples of the reference stream (the contract's host_block_max) and @f$R@f$ that
  *   stream's samples per inference (the hop of the model config's anchor, which the
  *   validator resolves). @f$\rho@f$ is stored as a reduced fraction
  *   @f$p / q@f$ (see rationalize()).
  * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the contract's budget @f$T@f$ (ms)
- *   measured in hop periods (@f$f_s@f$ is the contract's rate, in samples of the reference
+ *   measured in hop periods (@f$f_s@f$ is the contract's host_rate, in samples of the reference
  *   stream per second).
  * - @f$\beta@f$, the contract's wait ratio: the driving thread waits @f$\beta@f$ host block
  *   periods for results inside every callback.
@@ -53,7 +53,7 @@ struct HardContract;
  * (their corollary 3.8, replacing the PortAudio-style LCM loop). In hop units this is
  * @f$1 - 1/q@f$ for every stream at once, because @f$\gcd(\rho P, P) = P / q@f$
  * whenever @f$\rho P@f$ is an integer. When the host block may vary
- * (the contract's block_min below its block_max) or is fractional on a stream, the worst
+ * (the contract's host_block_min below its host_block_max) or is fractional on a stream, the worst
  * case is
  * @f$P - 1@f$ samples (their section 5).
  *
@@ -86,7 +86,7 @@ struct HardContract;
  * in their slots until the workers finish, never starves the fresh schedule.
  *
  * @par Smaller host blocks
- * With the contract's block_min below its block_max the host may use any block of @f$j@f$
+ * With the contract's host_block_min below its host_block_max the host may use any block of @f$j@f$
  * samples of the finest stream,
  * @f$1 \le j \le \lfloor \rho H \rfloor@f$, i.e. @f$\rho' = j / H@f$ hops, with
  * @f$\tau' = \kappa / \rho'@f$. The worst case over that grid uses the flexible-host
@@ -113,16 +113,16 @@ public:
     /**
      * @brief Computes every quantity for one Hard contract
      *
-     * The host blocks are the contract's own, in double precision: a fractional block_max reaches
-     * rationalize() as the host stated it.
+     * The host blocks are the contract's own, in double precision: a fractional host_block_max
+     * reaches rationalize() as the host stated it.
      *
      * @param derived What the validator derived for the model config: the hop and channel
      * count of every tensor, its extents (the history an input peeks at), the anchor
-     * @param hard The contract's Hard half: block_max and rate (samples of the anchor's
-     * stream), block_min (below block_max: the smaller-block grid applies), the budget in ms
-     * and the wait ratio
+     * @param hard The contract's Hard half: host_block_max and host_rate (samples of the anchor's
+     * stream), host_block_min (below host_block_max: the smaller-block grid applies), the budget in
+     * ms and the wait ratio
      * @param num_instances The session's instance count, @f$n@f$ (at least 1 is used)
-     * @throws std::invalid_argument if the anchor has no stream, or if block_max or the rate
+     * @throws std::invalid_argument if the anchor has no stream, or if host_block_max or host_rate
      * is not positive or the block too small to represent
      */
     LatencyCalculator(const capi::Derived& derived,
@@ -139,7 +139,7 @@ public:
     /**
      * @brief The worst-case latency in hops over the smaller-block grid
      *
-     * Equal to get_latency_hops() unless the contract's block_min is below its block_max.
+     * Equal to get_latency_hops() unless the contract's host_block_min is below its host_block_max.
      *
      * @return Latency in hops, as a floating-point number
      */

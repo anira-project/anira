@@ -15,7 +15,7 @@
 //     anira::Pipeline pipeline;
 //     pipeline.add_inference(model);
 //     anira::InferenceHandler handler(context, pipeline);
-//     handler.prepare(contract.hard_host_blocks(block, block, rate));
+//     handler.prepare(contract.hard_host_blocks(block, block, host_rate));
 //
 // (or anira_model_config_from_json_file / anira_contract_from_json from C). The files set no
 // instance ceiling, so the count is the inference pool's (ANIRA_INSTANCES_AUTO); a config that

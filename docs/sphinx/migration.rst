@@ -165,10 +165,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        ``set_log_queue_capacity``), or all at once with ``context.log(desc)``
        (``anira_context_config_set_log``).
    * - ``anira::HostConfig{buffer_size, sample_rate}``
-     - ``hard.block_min``, ``block_max``, ``rate`` (``anira_contract_create_hard``) or
-       ``contract.hard_host_blocks(block_min, block_max, rate)``
-       (``anira_contract_hard_set_host_blocks``); ``allow_smaller_buffers`` is ``block_min = 1``
-       against ``block_min == block_max``. The blocks are doubles, so a fractional
+     - ``hard.host_block_min``, ``host_block_max``, ``host_rate`` (``anira_contract_create_hard``) or
+       ``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``
+       (``anira_contract_hard_set_host_blocks``); ``allow_smaller_buffers`` is ``host_block_min = 1``
+       against ``host_block_min == host_block_max``. The blocks are doubles, so a fractional
        ``buffer_size`` (the ``samplesPerBlock / 2048.f`` idiom of a control-rate model) is a
        fractional block: ``contract.hard_host_blocks(samples_per_block / 2048.0, ...)``.
    * - ``anira::HostConfig{tensor_index, tensor_is_input}`` (the reference stream)
@@ -267,7 +267,7 @@ block is an :cpp:class:`anira::Tensor`, the ``anira_tensor`` of :doc:`usage` sec
        Streamed output; an output never named keeps the computed figure.
    * - ``prepare(host_config)``
      - ``handler.prepare(contract)`` with the host blocks on the Hard contract
-       (``contract.hard_host_blocks(block_min, block_max, rate)``); it returns the
+       (``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``); it returns the
        :cpp:class:`anira::PlanReport`.
    * - ``reset()``
      - ``handler.reset()`` (``anira_handler_reset``); it also re-initialises declared state.
@@ -717,7 +717,7 @@ What differs from 2.x:
   models again; another reference tensor (``m_tensor_index``, ``m_tensor_is_input``) rebuilds
   the C handler, whose ``native()`` changes, and loads again. A fractional ``m_buffer_size``
   works as in 2.x (``samplesPerBlock / 2048.f`` for a control-rate reference): it becomes the
-  Hard host block as it is (``block_min`` is half of it when smaller blocks come and it is one
+  Hard host block as it is (``host_block_min`` is half of it when smaller blocks come and it is one
   sample or less); a block that is not finite and above 0 is ``ANIRA_ERROR_CONFIG``.
 - **Custom latencies:** the two ``prepare`` forms declare the stream latency of an output on the
   contract (``anira_contract_hard_set_latency``), raised to the model's internal latency with a
@@ -789,7 +789,7 @@ drove the 2.x handler through the bridge hands the same objects to
    * - ``to_core_config(context_config)``
      - ``anira::Context context(context_config)``, which the handler is created on.
    * - ``to_host_config(hard, cfg)``, ``to_host_config(cfg, buffer_size, sample_rate)``
-     - The Hard contract's host blocks (``contract.hard_host_blocks(block_min, block_max, rate)``,
+     - The Hard contract's host blocks (``contract.hard_host_blocks(host_block_min, host_block_max, host_rate)``,
        fractional where the host's numbers are) and ``handler.prepare(contract)``.
    * - ``enabled_engines()``
      - ``anira::enabled_engines()``.
@@ -996,7 +996,7 @@ path is a Wasm Audio Worklet node whose render callback is C.
   config: ``await ModelConfig.fromUrl(anira, url)`` reads the 3.x model file a native host reads
   (a 2.x JSON document is read too, :ref:`migration-json`) and fetches its model files.
 - ``HostConfig(bufferSize, sampleRate)`` becomes the Hard contract:
-  ``ContractHandle.hard(anira, { blockMin: g.quantum, blockMax: g.burst, rate, budgetMs })``
+  ``ContractHandle.hard(anira, { hostBlockMin: g.quantum, hostBlockMax: g.burst, hostRate: context.sampleRate, budgetMs })``
   with ``g = await measureRenderGeometry(context)``, or a contract file
   (``ContractHandle.fromUrl``, then ``hardHostBlocks``): the render quantum is the smallest block,
   the context's burst of quanta the largest. A running node changes its host blocks through ``audioNode.prepare(contract)``.

@@ -62,8 +62,12 @@ struct Model {
 
 struct Contract {
     // A Hard contract with host blocks, an Async one, or one loaded from JSON text.
-    Contract(double block_min, double block_max, double rate) {
-        EXPECT_EQ(anira_contract_create_hard(block_min, block_max, rate, &m_contract, &m_err),
+    Contract(double host_block_min, double host_block_max, double host_rate) {
+        EXPECT_EQ(anira_contract_create_hard(host_block_min,
+                                             host_block_max,
+                                             host_rate,
+                                             &m_contract,
+                                             &m_err),
                   ANIRA_OK);
     }
     Contract() { EXPECT_EQ(anira_contract_create_async(&m_contract, &m_err), ANIRA_OK); }
@@ -540,14 +544,17 @@ TEST(AbiReadBack, ALoadedModelFileAnswersTheSame) {
 
 TEST(AbiReadBack, HardContractAnswersEverySetter) {
     const Contract hard(64, 512, 48000.0);
-    double block_min = 0.0;
-    double block_max = 0.0;
-    double rate = 0.0;
-    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract, &block_min, &block_max, &rate),
+    double host_block_min = 0.0;
+    double host_block_max = 0.0;
+    double host_rate = 0.0;
+    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract,
+                                              &host_block_min,
+                                              &host_block_max,
+                                              &host_rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 64.0);
-    EXPECT_EQ(block_max, 512.0);
-    EXPECT_EQ(rate, 48000.0);
+    EXPECT_EQ(host_block_min, 64.0);
+    EXPECT_EQ(host_block_max, 512.0);
+    EXPECT_EQ(host_rate, 48000.0);
     // The defaults of a fresh Hard contract.
     anira_budget_kind budget = ANIRA_BUDGET_EXPLICIT;
     double budget_ms = -1.0;
@@ -583,11 +590,14 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     ASSERT_EQ(anira_contract_hard_set_miss_fn(hard.m_contract, &decline_miss, &user), ANIRA_OK);
     ASSERT_EQ(anira_contract_hard_set_wait_ratio(hard.m_contract, 0.5), ANIRA_OK);
     ASSERT_EQ(anira_contract_set_edge_cost(hard.m_contract, ANIRA_EDGE_COST_STRICT), ANIRA_OK);
-    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract, &block_min, &block_max, &rate),
+    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract,
+                                              &host_block_min,
+                                              &host_block_max,
+                                              &host_rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 128.0);
-    EXPECT_EQ(block_max, 1024.0);
-    EXPECT_EQ(rate, 44100.0);
+    EXPECT_EQ(host_block_min, 128.0);
+    EXPECT_EQ(host_block_max, 1024.0);
+    EXPECT_EQ(host_rate, 44100.0);
     EXPECT_EQ(anira_contract_hard_budget(hard.m_contract, &budget, &budget_ms), ANIRA_OK);
     EXPECT_EQ(budget, ANIRA_BUDGET_EXPLICIT);
     EXPECT_EQ(budget_ms, 42.66);
@@ -697,7 +707,7 @@ TEST(AbiReadBack, DeclaredLatenciesAreEnumeratedInBytewiseOrder) {
 
     // A contract file carries them under "latencies".
     static constexpr const char* k_file = R"({ "hard": {
-        "block_min": 512, "block_max": 512, "rate": 48000, "latencies": {"audio_out": 1536}
+        "host_block_min": 512, "host_block_max": 512, "host_rate": 48000, "latencies": {"audio_out": 1536}
     } })";
     const Contract loaded(k_file);
     ASSERT_EQ(loaded.m_status, ANIRA_OK) << loaded.m_err.message;
@@ -798,14 +808,17 @@ TEST(AbiReadBack, TheNullAnswersOfTheContract) {
 TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
     const Contract hard(anira_test::k_contract_hard_v3);
     ASSERT_EQ(hard.m_status, ANIRA_OK) << hard.m_err.message;
-    double block_min = 0.0;
-    double block_max = 0.0;
-    double rate = 0.0;
-    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract, &block_min, &block_max, &rate),
+    double host_block_min = 0.0;
+    double host_block_max = 0.0;
+    double host_rate = 0.0;
+    EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract,
+                                              &host_block_min,
+                                              &host_block_max,
+                                              &host_rate),
               ANIRA_OK);
-    EXPECT_EQ(block_min, 512.0);
-    EXPECT_EQ(block_max, 512.0);
-    EXPECT_EQ(rate, 48000.0);
+    EXPECT_EQ(host_block_min, 512.0);
+    EXPECT_EQ(host_block_max, 512.0);
+    EXPECT_EQ(host_rate, 48000.0);
     anira_budget_kind budget = ANIRA_BUDGET_EXPLICIT;
     double budget_ms = -1.0;
     EXPECT_EQ(anira_contract_hard_budget(hard.m_contract, &budget, &budget_ms), ANIRA_OK);
@@ -816,7 +829,7 @@ TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
     EXPECT_EQ(anira_contract_hard_num_ring_dtypes(hard.m_contract), 0u);
 
     static constexpr const char* k_typed = R"({ "hard": {
-        "block_min": 256, "block_max": 1024, "rate": 44100,
+        "host_block_min": 256, "host_block_max": 1024, "host_rate": 44100,
         "budget": {"ms": 2.5}, "warmup": {"fixed": 3}, "on_miss": "zeros", "wait_ratio": 0.25,
         "ring_dtypes": {"audio_in": "int16"}
     }, "edge_cost": "strict" })";
@@ -1092,9 +1105,9 @@ TEST(AbiReadBackCxx, ModelConfigGettersOverALoadedConfig) {
 TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
     int user = 0;
     const anira::Hard hard{
-        .block_min = 64,
-        .block_max = 2048,
-        .rate = 44100.0,
+        .host_block_min = 64,
+        .host_block_max = 2048,
+        .host_rate = 44100.0,
         .budget = std::chrono::microseconds{2500},
         .warmup = ANIRA_WARMUP_FIXED,
         .warmup_iterations = 7,
@@ -1107,9 +1120,9 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
         .edge_cost = ANIRA_EDGE_COST_STRICT,
     };
     const anira::Hard back = anira::ContractHandle(hard).hard();
-    EXPECT_EQ(back.block_min, hard.block_min);
-    EXPECT_EQ(back.block_max, hard.block_max);
-    EXPECT_EQ(back.rate, hard.rate);
+    EXPECT_EQ(back.host_block_min, hard.host_block_min);
+    EXPECT_EQ(back.host_block_max, hard.host_block_max);
+    EXPECT_EQ(back.host_rate, hard.host_rate);
     EXPECT_EQ(back.budget, hard.budget);
     EXPECT_EQ(back.warmup, hard.warmup);
     EXPECT_EQ(back.warmup_iterations, hard.warmup_iterations);
@@ -1125,8 +1138,8 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
     anira::ContractHandle loaded = anira::ContractHandle::from_json(anira_test::k_contract_hard_v3);
     loaded.hard_ring_dtype("audio_in", ANIRA_DTYPE_I16).hard_latency("mask_out", 1024);
     const anira::Hard patched = loaded.hard();
-    EXPECT_EQ(patched.block_min, 512u);
-    EXPECT_EQ(patched.rate, 48000.0);
+    EXPECT_EQ(patched.host_block_min, 512u);
+    EXPECT_EQ(patched.host_rate, 48000.0);
     EXPECT_EQ(patched.budget.kind(), ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(patched.ring_dtypes,
               (std::map<std::string, anira::DType>{{"audio_in", ANIRA_DTYPE_I16}}));
@@ -1164,13 +1177,13 @@ TEST(AbiReadBackCxx, TheBudgetRoundTripsToTheNanosecond) {
 
 TEST(AbiReadBackCxx, HardOfAFileAsyncAndEmptyHandle) {
     static constexpr const char* k_typed = R"({ "hard": {
-        "block_min": 256, "block_max": 1024, "rate": 44100,
+        "host_block_min": 256, "host_block_max": 1024, "host_rate": 44100,
         "budget": {"ms": 42.66}, "warmup": {"fixed": 3}, "on_miss": "zeros",
         "ring_dtypes": {"audio_in": "int16"}, "latencies": {"audio_out": 2048}
     } })";
     const anira::Hard typed = anira::ContractHandle::from_json(k_typed).hard();
-    EXPECT_EQ(typed.block_min, 256u);
-    EXPECT_EQ(typed.block_max, 1024u);
+    EXPECT_EQ(typed.host_block_min, 256u);
+    EXPECT_EQ(typed.host_block_max, 1024u);
     EXPECT_EQ(typed.budget.value(), std::chrono::microseconds{42660}) << "42.66 ms, rounded";
     EXPECT_EQ(typed.warmup_iterations, 3u);
     EXPECT_EQ(typed.on_miss, ANIRA_MISS_ZEROS);

@@ -126,12 +126,12 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
     // range, and setLatencySamples below hands it to the host, which compensates it. Each
     // processBlock carries its own block (the tensor's extent is set per call). The decoder of
     // variant 7 anchors on its audio output, so it takes the same host blocks.
-    const auto block_max = static_cast<double>(samplesPerBlock);
+    const auto host_block_max = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
-    model.prepare(block_max, sampleRate);
+    model.prepare(host_block_max, sampleRate);
 #else
-    encoder.prepare(block_max, sampleRate);
-    decoder.prepare(block_max, sampleRate);
+    encoder.prepare(host_block_max, sampleRate);
+    decoder.prepare(host_block_max, sampleRate);
     // A new stream on both handlers: the count of input samples towards the next latent frame
     // starts over with it, so the frames are popped in step with the encoder's new stream.
     m_count_input_samples = 0;

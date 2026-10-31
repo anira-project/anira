@@ -149,7 +149,7 @@ export class InferenceHandler {
   /**
    * A Wasm Audio Worklet node that streams through this handler (`createAudioNode`). Prepare the
    * handler with the geometry `measureRenderGeometry` measures on the context first: a handler
-   * whose `block_max` is below the context's burst misses quanta live.
+   * whose `host_block_max` is below the context's burst misses quanta live.
    */
   createAudioNode(
     audioContext: BaseAudioContext,

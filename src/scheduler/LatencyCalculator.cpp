@@ -244,7 +244,7 @@ void LatencyCalculator::smaller_buffers_worst_case(int64_t max_block,
 LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
                                      const capi::HardContract& hard,
                                      uint32_t num_instances)
-    : m_allow_smaller_buffers(hard.m_block_min < hard.m_block_max) {
+    : m_allow_smaller_buffers(hard.m_host_block_min < hard.m_host_block_max) {
     // The hop of every tensor: its samples per inference, 0 for a tensor without a stream.
     m_input_sizes.reserve(derived.m_inputs.size());
     for (const capi::DerivedSpec& spec : derived.m_inputs) {
@@ -265,9 +265,9 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
             "LatencyCalculator: the anchor has no stream; the reference stream needs a "
             "Streamed tensor.");
     }
-    if (!(hard.m_block_max > 0.0) || !(hard.m_rate > 0.0)) {
+    if (!(hard.m_host_block_max > 0.0) || !(hard.m_host_rate > 0.0)) {
         throw std::invalid_argument(
-            "contract: block_max and rate must be positive to calculate a latency.");
+            "contract: host_block_max and host_rate must be positive to calculate a latency.");
     }
 
     // History a receptive-field model peeks at: the input tensor beyond one hop.
@@ -291,11 +291,11 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
         m_max_hop = std::max(m_max_hop, static_cast<int64_t>(size));
     }
 
-    m_rho = rationalize(hard.m_block_max / reference_size);
+    m_rho = rationalize(hard.m_host_block_max / reference_size);
     if (m_rho.m_numerator <= 0) {
-        throw std::invalid_argument("contract: block_max is too small to represent.");
+        throw std::invalid_argument("contract: host_block_max is too small to represent.");
     }
-    m_kappa = hard.m_budget_ms * hard.m_rate / (1000.0 * reference_size);
+    m_kappa = hard.m_budget_ms * hard.m_host_rate / (1000.0 * reference_size);
     m_beta = std::max(hard.m_wait_ratio, 0.0);
     m_n = std::max<int64_t>(num_instances, 1);
     m_feasible = m_kappa < static_cast<double>(m_n);

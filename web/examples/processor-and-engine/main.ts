@@ -102,9 +102,9 @@ export async function createGainExample(
   //    back to back; the latency the handler reports covers it).
   const geometry = await measureRenderGeometry(audioContext)
   const contract = ContractHandle.hard(anira, {
-    blockMin: geometry.quantum,
-    blockMax: geometry.burst,
-    rate: audioContext.sampleRate,
+    hostBlockMin: geometry.quantum,
+    hostBlockMax: geometry.burst,
+    hostRate: audioContext.sampleRate,
     budgetMs: 2,
   })
   const handler = InferenceHandler.create(context, pipeline)

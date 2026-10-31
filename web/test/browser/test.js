@@ -145,8 +145,8 @@ const run = async () => {
     .addEngine(ENGINE_ID, { flags: ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL })
     .addProcessor(PROCESSOR, { phases: ANIRA_EM_PROCESSOR_HOOK_PRE })
   const contract = ContractHandle.hard(anira, {
-    blockMin: QUANTUM,
-    rate: RATE,
+    hostBlockMin: QUANTUM,
+    hostRate: RATE,
     budgetMs: 2,
   })
   const handler = InferenceHandler.create(context, pipeline)

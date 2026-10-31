@@ -190,14 +190,14 @@ inline anira::ModelConfig mismatched_channels_model() {
 /// A Hard contract with an explicit budget and a fixed warm-up (5 ms is gain.contract.json's
 /// figure; the generator tests pass 10 ms, test_OneSidedStreaming's max_inference_time).
 inline anira::ContractHandle explicit_contract(uint32_t block = k_block,
-                                               double rate = k_rate,
+                                               double host_rate = k_rate,
                                                anira_miss_policy on_miss = ANIRA_MISS_BYPASS,
                                                double wait_ratio = 0.0,
                                                double budget_ms = 5.0,
                                                uint32_t warmup_iterations = 0) {
-    anira::Hard hard{.block_min = static_cast<double>(block),
-                     .block_max = static_cast<double>(block),
-                     .rate = rate,
+    anira::Hard hard{.host_block_min = static_cast<double>(block),
+                     .host_block_max = static_cast<double>(block),
+                     .host_rate = host_rate,
                      .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = warmup_iterations;
@@ -248,9 +248,9 @@ inline anira::ModelConfig mono_stream_model(int64_t window = k_block, uint32_t m
 /// A bundled contract file with the host blocks patched in.
 inline anira::ContractHandle file_contract(const char* contract_json,
                                            uint32_t block,
-                                           double rate = k_rate) {
+                                           double host_rate = k_rate) {
     anira::ContractHandle contract = anira::ContractHandle::from_file(contract_json);
-    contract.hard_host_blocks(block, block, rate);
+    contract.hard_host_blocks(block, block, host_rate);
     return contract;
 }
 

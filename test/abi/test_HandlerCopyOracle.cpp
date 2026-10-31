@@ -60,17 +60,17 @@
 // of its calls.
 //
 // The scripts keep every call within the declared block. A Hard entry refuses a host block
-// larger than one block of the contract's block_max on its stream (ANIRA_ERROR_INVALID_ARGUMENT,
-// nothing moves), so the recorded calls that passed more (13, 20, 30, 40 samples on a block of
-// 8, where the ring kept the tail or the request missed) were rewritten within the block, and
-// their transcripts recorded again, once, with that change: every transcript of the golden file,
-// each up to its first rewritten call byte for byte the earlier recording (the block-size
-// scenario declares two hops, so its transcripts differ from the first line). The copy path
-// below the C entries (the tensor stems of the handler's own anira::InferenceManager, through
-// the 2.x float face: the PlanarFloatAdapter and the NonStreamableRouter) takes any count and
-// is untouched by the block rule, so it is the referee of the rewritten transcripts:
-// ManagerTwin below drives every script call for call through that face, and
-// AbiHandlerCopyOracle.MatchesTheManagerCopyPath compares what both observed (see "The manager
+// larger than one block of the contract's host_block_max on its stream
+// (ANIRA_ERROR_INVALID_ARGUMENT, nothing moves), so the recorded calls that passed more (13, 20,
+// 30, 40 samples on a block of 8, where the ring kept the tail or the request missed) were
+// rewritten within the block, and their transcripts recorded again, once, with that change: every
+// transcript of the golden file, each up to its first rewritten call byte for byte the earlier
+// recording (the block-size scenario declares two hops, so its transcripts differ from the first
+// line). The copy path below the C entries (the tensor stems of the handler's own
+// anira::InferenceManager, through the 2.x float face: the PlanarFloatAdapter and the
+// NonStreamableRouter) takes any count and is untouched by the block rule, so it is the referee of
+// the rewritten transcripts: ManagerTwin below drives every script call for call through that face,
+// and AbiHandlerCopyOracle.MatchesTheManagerCopyPath compares what both observed (see "The manager
 // twin").
 
 #include <anira/abi/enums.h>
@@ -185,12 +185,12 @@ const char* policy_name(anira_miss_policy policy) {
 
 class HandlerRig {
 public:
-    /// Blocks of 1 to `block_max` samples (oracle::recording_contract).
+    /// Blocks of 1 to `host_block_max` samples (oracle::recording_contract).
     HandlerRig(const ModelConfig& model,
                anira_miss_policy policy,
                Model engine = Model::PassThrough,
-               uint32_t block_max = k_hop)
-        : m_handler(model, oracle::recording_contract(policy, block_max), engine) {
+               uint32_t host_block_max = k_hop)
+        : m_handler(model, oracle::recording_contract(policy, host_block_max), engine) {
         if (!m_handler.ready()) { return; }
         anira_handler* handler = m_handler.handler();
         m_face = std::make_unique<anira_test::FloatFace>(handler);
@@ -703,8 +703,8 @@ public:
     ManagerTwin(const ModelConfig& model,
                 anira_miss_policy policy,
                 Model engine = Model::PassThrough,
-                uint32_t block_max = k_hop)
-        : m_handler(model, oracle::recording_contract(policy, block_max), engine) {
+                uint32_t host_block_max = k_hop)
+        : m_handler(model, oracle::recording_contract(policy, host_block_max), engine) {
         if (!m_handler.ready()) { return; }
         m_manager = &m_handler.manager();
         m_session = &m_handler.session();
@@ -1272,17 +1272,17 @@ void expect_twins(const char* name,
                   const ModelConfig& model,
                   anira_miss_policy policy,
                   Model engine,
-                  uint32_t block_max,
+                  uint32_t host_block_max,
                   Script script) {
     oracle::Transcript handler;
     {
-        HandlerRig rig(model, policy, engine, block_max);
+        HandlerRig rig(model, policy, engine, host_block_max);
         script(rig);
         handler = rig.neutral();
     }
     oracle::Transcript twin;
     {
-        ManagerTwin rig(model, policy, engine, block_max);
+        ManagerTwin rig(model, policy, engine, host_block_max);
         script(rig);
         twin = rig.neutral();
     }

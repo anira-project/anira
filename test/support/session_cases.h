@@ -47,22 +47,22 @@ struct SizingAnchor {
     size_t m_index = 0;
 };
 
-/// The host blocks of a case: blocks of `m_block` samples of the anchor at `m_rate`, smaller
+/// The host blocks of a case: blocks of `m_block` samples of the anchor at `m_host_rate`, smaller
 /// blocks admitted or not.
 struct SizingHostBlocks {
     double m_block = 0.0;
-    double m_rate = 0.0;
+    double m_host_rate = 0.0;
     bool m_allow_smaller = false;
     std::optional<SizingAnchor> m_anchor;
 };
 
-/// Host blocks of `block` samples of the anchor at `rate`.
+/// Host blocks of `block` samples of the anchor at `host_rate`.
 inline SizingHostBlocks sizing_host_blocks(double block,
-                                           double rate,
+                                           double host_rate,
                                            bool allow_smaller = false,
                                            std::optional<SizingAnchor> anchor = std::nullopt) {
     return SizingHostBlocks{.m_block = block,
-                            .m_rate = rate,
+                            .m_host_rate = host_rate,
                             .m_allow_smaller = allow_smaller,
                             .m_anchor = anchor};
 }
@@ -102,15 +102,15 @@ inline anira::ModelConfig sizing_model(const std::vector<SizingSlot>& inputs,
     return model;
 }
 
-/// The contract of a case: its host blocks (block_min half the block when smaller blocks are
+/// The contract of a case: its host blocks (host_block_min half the block when smaller blocks are
 /// admitted, the block otherwise), an explicit budget, no warm-up, ZEROS on a miss (the 2.x
 /// manager's policy; BYPASS asks for channel counts the cases do not keep) and the wait ratio.
 inline anira::ContractHandle sizing_contract(const SizingHostBlocks& blocks,
                                              double budget_ms,
                                              double wait_ratio) {
-    anira::Hard hard{.block_min = blocks.m_allow_smaller ? blocks.m_block / 2 : blocks.m_block,
-                     .block_max = blocks.m_block,
-                     .rate = blocks.m_rate,
+    anira::Hard hard{.host_block_min = blocks.m_allow_smaller ? blocks.m_block / 2 : blocks.m_block,
+                     .host_block_max = blocks.m_block,
+                     .host_rate = blocks.m_host_rate,
                      .budget = std::chrono::duration<double, std::milli>(budget_ms)};
     hard.warmup = ANIRA_WARMUP_FIXED;
     hard.warmup_iterations = 0;

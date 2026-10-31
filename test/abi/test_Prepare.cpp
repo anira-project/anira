@@ -174,9 +174,9 @@ TEST(AbiPrepare, MeasuredBudgetAndUntilStableWarmupAreNotSupportedUntilTheEstima
     anira_error err = ANIRA_ERROR_INIT;
 
     // The create-time defaults: MEASURED, UNTIL_STABLE.
-    const Hard defaults{.block_min = 512,
-                        .block_max = 512,
-                        .rate = 48000.0,
+    const Hard defaults{.host_block_min = 512,
+                        .host_block_max = 512,
+                        .host_rate = 48000.0,
                         .budget = anira::Budget::measured()};
     EXPECT_EQ(handler.prepare(ContractHandle(defaults), &err), ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(err.message, "contract: a MEASURED budget");

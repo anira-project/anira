@@ -125,7 +125,7 @@ TEST(AbiJsonUpgrade, SimpleGainUpgrades) {
     EXPECT_EQ(legacy->hard()->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(legacy->hard()->m_warmup_iterations, 1u);
     EXPECT_DOUBLE_EQ(legacy->hard()->m_wait_ratio, 0.0);
-    EXPECT_EQ(legacy->hard()->m_block_max, 0u) << "no host blocks: the host patches them";
+    EXPECT_EQ(legacy->hard()->m_host_block_max, 0u) << "no host blocks: the host patches them";
     anira_contract_destroy(legacy);
     legacy = nullptr;
     EXPECT_EQ(anira_model_config_take_legacy_contract(m.m_config, &legacy), ANIRA_OK);

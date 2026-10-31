@@ -65,7 +65,7 @@ std::vector<float> load_mono_wav(const std::string& path) {
 struct InferenceTestParams {
     anira::EngineKind m_engine;  ///< ANIRA_ENGINE_CUSTOM: the bypass engine
     double m_block;
-    double m_rate;
+    double m_host_rate;
     std::string m_input_data_path;
     std::string m_reference_data_path;
     size_t m_reference_data_offset;
@@ -87,7 +87,7 @@ std::ostream& operator<<(std::ostream& stream, const InferenceTestParams& params
         default: engine = "unknown"; break;
     }
     stream << "{ engine = " << engine << ", block = " << params.m_block
-           << ", rate = " << params.m_rate << " }";
+           << ", host_rate = " << params.m_host_rate << " }";
     return stream;
 }
 
@@ -100,7 +100,7 @@ struct HybridNnHandler {
                              const uint32_t* declared_latency = nullptr) {
         m_model.add_model(k_bypass_engine_id);
         m_model.state(state);
-        m_contract.hard_host_blocks(params.m_block, params.m_block, params.m_rate);
+        m_contract.hard_host_blocks(params.m_block, params.m_block, params.m_host_rate);
         if (declared_latency != nullptr) {
             m_contract.hard_latency("audio_out", *declared_latency);
         }
@@ -392,7 +392,7 @@ std::string build_test_name(const testing::TestParamInfo<InferenceTest::ParamTyp
     std::stringstream ss_buffer_size;
 
     // Set precision to 4 decimal places for cleaner names
-    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_rate;
+    ss_sample_rate << std::fixed << std::setprecision(4) << info.param.m_host_rate;
     ss_buffer_size << std::fixed << std::setprecision(4) << info.param.m_block;
 
     std::string sample_rate_str = ss_sample_rate.str();
@@ -415,7 +415,7 @@ auto params_of(anira::EngineKind engine,
     const auto at = [&](double block) {
         return InferenceTestParams{.m_engine = engine,
                                    .m_block = block,
-                                   .m_rate = 44100,
+                                   .m_host_rate = 44100,
                                    .m_input_data_path = input,
                                    .m_reference_data_path = reference,
                                    .m_reference_data_offset = offset,

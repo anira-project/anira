@@ -624,9 +624,9 @@ static_assert(std::is_aggregate_v<anira::Hard>);
 int anira_header_cxx20_probe();  // NOLINT(misc-use-internal-linkage)
 int anira_header_cxx20_probe() {
     // The aggregates as a consumer spells them; the defaults stand for what is not named.
-    const anira::Hard hard{.block_min = 64,
-                           .block_max = 2048,
-                           .rate = 48000.0,
+    const anira::Hard hard{.host_block_min = 64,
+                           .host_block_max = 2048,
+                           .host_rate = 48000.0,
                            .budget = std::chrono::milliseconds(5)};
     // The two maps in their place between wait_ratio and edge_cost.
     const anira::Hard typed{.budget = anira::Budget::measured(),

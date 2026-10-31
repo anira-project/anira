@@ -678,7 +678,7 @@ public:
     std::vector<unsigned int> m_latency;  ///< Calculated latency values for each output tensor in
                                           ///< samples, index-aligned with the output tensor list;
                                           ///< 0 for non-streamable outputs
-    LatencyCalculator::Rational m_block_hops;  ///< The host block in hops, rho = block_max / R
+    LatencyCalculator::Rational m_block_hops;  ///< The host block in hops, rho = host_block_max / R
                                                ///< (LatencyCalculator::get_block_hops), set by
                                                ///< prepare(): what a host block may carry on a
                                                ///< Streamed slot (LatencyCalculator::

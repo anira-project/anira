@@ -276,11 +276,11 @@ private:
 // ---- the rig -----------------------------------------------------------------------------------
 
 anira::ContractHandle contract_of(anira_miss_policy policy,
-                                  uint32_t block_max = k_hop,
+                                  uint32_t host_block_max = k_hop,
                                   anira_miss_fn miss_fn = nullptr,
                                   void* miss_user_data = nullptr) {
     anira::ContractHandle contract = anira_test::explicit_contract(k_hop, k_rate, policy, 0.0, 1.0);
-    contract.hard_host_blocks(1, block_max, k_rate);
+    contract.hard_host_blocks(1, host_block_max, k_rate);
     contract.hard_miss_fn(miss_fn, miss_user_data);
     return contract;
 }
@@ -311,7 +311,7 @@ public:
                  Positions positions = k_accumulator,
                  const std::vector<anira_processor_desc>& processors = {},
                  anira_miss_policy policy = ANIRA_MISS_ZEROS,
-                 uint32_t block_max = k_hop,
+                 uint32_t host_block_max = k_hop,
                  anira_miss_fn miss_fn = nullptr,
                  void* miss_user_data = nullptr,
                  anira_log_level level = ANIRA_LOG_ERROR)
@@ -319,7 +319,7 @@ public:
         , m_gate(positions)
         , m_positions(positions)
         , m_policy(policy)
-        , m_block_max(block_max)
+        , m_host_block_max(host_block_max)
         , m_miss_fn(miss_fn)
         , m_miss_user_data(miss_user_data) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
@@ -358,7 +358,7 @@ public:
     void prepare() {
         m_gate.m_open.store(true);
         const anira::ContractHandle contract =
-            contract_of(m_policy, m_block_max, m_miss_fn, m_miss_user_data);
+            contract_of(m_policy, m_host_block_max, m_miss_fn, m_miss_user_data);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
@@ -398,7 +398,7 @@ private:
                              ///< ~Rig
     Positions m_positions;
     anira_miss_policy m_policy;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     anira_miss_fn m_miss_fn;
     void* m_miss_user_data;
     anira_pipeline* m_pipeline = nullptr;
@@ -1986,8 +1986,8 @@ public:
     explicit RegisteredRig(const ModelConfig& model,
                            std::span<const Registration> registrations,
                            const std::vector<anira_processor_desc>& processors = {},
-                           uint32_t block_max = k_hop)
-        : m_context(4), m_block_max(block_max) {
+                           uint32_t host_block_max = k_hop)
+        : m_context(4), m_host_block_max(host_block_max) {
         EXPECT_EQ(anira_pipeline_create(&m_pipeline, &m_err), ANIRA_OK) << m_err.message;
         for (const Registration& registration : registrations) {
             const anira_engine_desc desc =
@@ -2029,7 +2029,7 @@ public:
     RegisteredRig& operator=(RegisteredRig&&) = delete;
 
     void prepare() {
-        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_block_max);
+        const anira::ContractHandle contract = contract_of(ANIRA_MISS_ZEROS, m_host_block_max);
         m_err = ANIRA_ERROR_INIT;
         ASSERT_EQ(anira_handler_prepare(m_handler, contract.native(), &m_err), ANIRA_OK)
             << m_err.message;
@@ -2060,7 +2060,7 @@ public:
 
 private:
     Context m_context;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     anira_pipeline* m_pipeline = nullptr;
     anira_handler* m_handler = nullptr;
     anira_error m_err = ANIRA_ERROR_INIT;
@@ -2522,13 +2522,13 @@ uint32_t plan_engine(const anira_handler* handler) {
 }
 
 /// The bundled file on one engine of this build: the handler over the model file with that one
-/// candidate, prepared with the contract file at the host blocks (1 to `block_max`
+/// candidate, prepared with the contract file at the host blocks (1 to `host_block_max`
 /// samples at 48 kHz), the two streams driven through the waiting two-slot single form (`data`
 /// is input slot 1 and `processed_data` output slot 0: the file's order).
 class EngineRig {
 public:
     explicit EngineRig(anira_engine engine,
-                       uint32_t block_max = k_file_hop,
+                       uint32_t host_block_max = k_file_hop,
                        std::vector<anira_processor_desc> processors = {})
         : m_model(ModelConfig::from_file(k_stateful_accumulator_model_json))
         , m_candidates{anira_backend_id{.struct_size = sizeof(anira_backend_id),
@@ -2537,7 +2537,7 @@ public:
                                         .engine_id = nullptr}}
         , m_processors(std::move(processors))
         , m_handler(m_context, m_model, m_candidates, m_processors)
-        , m_block_max(block_max) {
+        , m_host_block_max(host_block_max) {
         prepare();
     }
     ~EngineRig() = default;
@@ -2549,7 +2549,7 @@ public:
     void prepare() {
         anira::ContractHandle contract =
             anira::ContractHandle::from_file(k_stateful_accumulator_contract_json);
-        contract.hard_host_blocks(1, m_block_max, k_file_rate);
+        contract.hard_host_blocks(1, m_host_block_max, k_file_rate);
         ASSERT_EQ(m_handler.prepare(contract), ANIRA_OK) << m_handler.m_err.message;
         m_session = anira_test::session_of(m_handler.m_handler);
         ASSERT_NE(m_session, nullptr);
@@ -2592,7 +2592,7 @@ private:
     std::array<anira_backend_id, 1> m_candidates;
     std::vector<anira_processor_desc> m_processors;
     anira_test::Handler m_handler;
-    uint32_t m_block_max;
+    uint32_t m_host_block_max;
     std::shared_ptr<anira::SessionElement> m_session;
 };
 

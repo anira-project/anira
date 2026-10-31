@@ -141,8 +141,8 @@ struct anira_handler {
                                                              ///< unprepared (declared after m_pp:
                                                              ///< destroyed first)
     std::chrono::steady_clock::duration m_contract_wait{0};  ///< ANIRA_WAIT_CONTRACT of the pop
-                                                             ///< twins: wait_ratio x block_max
-                                                             ///< / rate
+                                                             ///< twins: wait_ratio x host_block_max
+                                                             ///< / host_rate
     /// dense index -> row/backend; rebuilt at prepare only, and handed to the session as its
     /// plan table (the InferenceManager's constructor). The selected plan has no storage
     /// here: it is the session's one atomic, the dense index itself (SessionElement::

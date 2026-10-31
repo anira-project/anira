@@ -2057,15 +2057,15 @@ public:
     }
 
     /// Prepares for the host's stream: the configuration's legacy contract with the host
-    /// blocks (block_max m_buffer_size, a fractional one included; block_min 1 when smaller
-    /// blocks come, half the block when it is one sample or less), the reference tensor as the
-    /// model's anchor. The settings of the last successful prepare only reset the
-    /// stream (the models stay loaded); other host blocks prepare again and load the models
-    /// again; another reference tensor rebuilds the C handler. The selected backend is applied
-    /// again. @throws Error: ANIRA_ERROR_CONFIG for a block size or rate that is not finite and
-    /// above 0, ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable,
-    /// else the status of anira_handler_prepare (a model that does not load, a rule of the
-    /// configuration); the handler is then unprepared.
+    /// blocks (host_block_max m_buffer_size, a fractional one included; host_block_min 1 when
+    /// smaller blocks come, half the block when it is one sample or less), the reference tensor as
+    /// the model's anchor. The settings of the last successful prepare only reset the stream (the
+    /// models stay loaded); other host blocks prepare again and load the models again; another
+    /// reference tensor rebuilds the C handler. The selected backend is applied again. @throws
+    /// Error: ANIRA_ERROR_CONFIG for a block size or rate that is not finite and above 0,
+    /// ANIRA_ERROR_INVALID_ARGUMENT for a reference tensor out of range or not streamable, else the
+    /// status of anira_handler_prepare (a model that does not load, a rule of the configuration);
+    /// the handler is then unprepared.
     void prepare(HostConfig new_audio_config) { prepare_with(new_audio_config, {}); }
     /// prepare() with the stream latency of one output declared (the 2.x custom latency): what
     /// get_latency reports for it and what its receive ring is primed with, in place of the
@@ -2495,16 +2495,16 @@ private:
         anira::Hard hard = m_config.hard();
         // The float as it is: the host blocks are doubles, and the latency calculation recovers
         // the rational the host meant from either. The translation reads only whether
-        // block_min is below block_max, so a block of one sample or less says that smaller
-        // blocks come with half of itself.
+        // host_block_min is below host_block_max, so a block of one sample or less says that
+        // smaller blocks come with half of itself.
         const auto frames = static_cast<double>(block);
         if (host.m_allow_smaller_buffers) {
-            hard.block_min = frames > 1.0 ? 1.0 : frames / 2.0;
+            hard.host_block_min = frames > 1.0 ? 1.0 : frames / 2.0;
         } else {
-            hard.block_min = frames;
+            hard.host_block_min = frames;
         }
-        hard.block_max = frames;
-        hard.rate = host.m_sample_rate;
+        hard.host_block_max = frames;
+        hard.host_rate = host.m_sample_rate;
         hard.latencies = latencies;
         const anira::ContractHandle contract(hard);
         m_prepared.store(false, std::memory_order_release);
