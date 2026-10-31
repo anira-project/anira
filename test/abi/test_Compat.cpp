@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <span>
@@ -42,6 +43,7 @@
 #include <vector>
 
 #include "../../extras/models/hybrid-nn/HybridNNProcessor.h"
+#include "../support/engine_oracle.h"
 #include "../support/log_record_collector.h"
 #include "../support/rtsan_disabled.h"
 #include "../support/v2_documents.h"
@@ -2633,14 +2635,20 @@ anira::Pipeline pipeline_of(const v2::InferenceConfig& config,
     return pipeline;
 }
 
+/// The windows the model of a referee takes for inference j of a signal: what the oracle runs.
+using Windows = std::function<std::vector<float>(std::span<const float> signal, size_t j)>;
+
 /// A shim handler running a 2.x user's processor, and its referee: a C handler over the same
-/// model config and contract running the 3.x equivalent.
+/// model config and contract running the 3.x equivalent. Both are checked against the oracle of
+/// the model run directly on its windows (anira_test::EngineOracle), one inference per block.
 template <class UserProcessor>
 struct Referee {
     Referee(const Arguments& args,
             uint32_t block,
+            Windows windows,
             const std::shared_ptr<anira::Processor>& processor = nullptr)
-        : m_config(make_shim(args))
+        : m_windows(std::move(windows))
+        , m_config(make_shim(args))
         , m_pp(m_config)
         , m_handler(m_pp, m_config, shim_context_config())
         , m_native(m_context, pipeline_of(m_config, processor)) {
@@ -2653,11 +2661,17 @@ struct Referee {
     }
 
     /// Every plan the shim has a row for, `blocks` blocks each in place on both handlers, the
-    /// referee on the plan of the same engine: bit for bit.
+    /// referee on the plan of the same engine: bit for bit. Then the referee's whole stream
+    /// against the oracle: the latency priming, then per block the model of the block's plan run
+    /// directly on the block's windows of the input signal.
     void expect_every_plan_matches(size_t block, size_t blocks) {
         const std::vector<anira_plan_info> plans = plans_of(m_native.m_handler);
         bool ran = false;
         size_t k = 1;
+        const size_t priming = anira_test::available(m_native.m_handler);
+        std::vector<float> signal;
+        std::vector<float> stream;
+        std::vector<uint32_t> plan_of_block;
         for (const v2::InferenceBackend backend : k_backends) {
             if (backend == v2::CUSTOM || !v2::is_available(backend) ||
                 m_config.get_model_data(backend) == nullptr) {
@@ -2678,6 +2692,8 @@ struct Referee {
                 const size_t n_c = run_in_place(m_handler, k, block, c);
                 ASSERT_FALSE(::testing::Test::HasFatalFailure());
                 std::vector<float> n = anira_test::ramp(k, block);
+                signal.insert(signal.end(), n.begin(), n.end());
+                plan_of_block.push_back(static_cast<uint32_t>(plan - plans.begin()));
                 const std::array<float*, 1> io{n.data()};
                 size_t n_n = 0;
                 const size_t prev = anira_test::available(m_native.m_handler);
@@ -2685,14 +2701,51 @@ struct Referee {
                 anira_test::wait_for_block(m_native.m_handler, prev);
                 ASSERT_FALSE(::testing::Test::HasFatalFailure());
                 EXPECT_EQ(n_c, n_n) << "block " << k;
+                EXPECT_EQ(n_n, block) << "block " << k << " missed";
                 anira_test::expect_same_block(c, n, k);
+                stream.insert(stream.end(), n.begin(), n.end());
             }
         }
         EXPECT_TRUE(ran) << "no engine of this build runs the model";
+        expect_the_oracles_stream(priming, signal, stream, plan_of_block);
         EXPECT_EQ(m_handler.rt_error(), ANIRA_OK);
         EXPECT_EQ(anira_handler_rt_error(m_native.m_handler), ANIRA_OK);
     }
 
+    /// The stream against the oracle: `priming` zeros, then the output of every block's
+    /// inference, from the model of its plan on its windows.
+    void expect_the_oracles_stream(size_t priming,
+                                   const std::vector<float>& signal,
+                                   const std::vector<float>& stream,
+                                   const std::vector<uint32_t>& plan_of_block) {
+        std::map<uint32_t, std::unique_ptr<anira_test::EngineOracle>> oracles;
+        std::vector<float> expected(priming, 0.0F);
+        for (size_t j = 0; j < plan_of_block.size() && expected.size() < stream.size(); ++j) {
+            std::unique_ptr<anira_test::EngineOracle>& oracle = oracles[plan_of_block[j]];
+            if (oracle == nullptr) {
+                oracle = std::make_unique<anira_test::EngineOracle>(m_native.m_handler,
+                                                                    plan_of_block[j]);
+            }
+            ASSERT_TRUE(oracle->ready()) << "plan " << plan_of_block[j];
+            const std::vector<std::vector<float>> out = oracle->run({m_windows(signal, j)});
+            ASSERT_FALSE(out.empty()) << "the oracle's inference " << j << " failed";
+            expected.insert(expected.end(), out[0].begin(), out[0].end());
+        }
+        ASSERT_GE(expected.size(), stream.size());
+        size_t wrong = 0;
+        for (size_t n = 0; n < stream.size(); ++n) {
+            if (std::abs(stream[n] - expected[n]) > 1e-5F) {
+                if (wrong == 0) {
+                    ADD_FAILURE() << "sample " << n << ": " << stream[n] << ", the oracle "
+                                  << expected[n];
+                }
+                ++wrong;
+            }
+        }
+        EXPECT_EQ(wrong, 0U) << "of " << stream.size() << " samples";
+    }
+
+    Windows m_windows;
     const anira_test::Context m_context;
     v2::InferenceConfig m_config;
     UserProcessor m_pp;
@@ -2705,26 +2758,37 @@ struct Referee {
 
 // Case 3: the steerable-nafx CNN through the 2.x user's processor (a window of 15380 samples,
 // 2048 of them new) on every engine of the oracle, in place: the samples of a C handler with no
-// processor, whose default fill is the same window.
+// processor, whose default fill is the same window, and of the CNN itself on the windows built
+// by hand (anira_test::receptive_window), run directly in the engine room.
 TEST(AbiCompat, CnnMatchesThroughTheUsersProcessor) {
     if (anira_test::oracle_engines().empty()) {
         GTEST_SKIP() << "no built-in engine in this build";
     }
-    Referee<user_v2::CNNPrePostProcessor> referee(without_litert(cnn_arguments()), 2048);
+    Referee<user_v2::CNNPrePostProcessor> referee(
+        without_litert(cnn_arguments()),
+        2048,
+        [](std::span<const float> signal, size_t j) {
+            return anira_test::receptive_window(signal, j, 2048, 15380);
+        });
     referee.expect_every_plan_matches(2048, 4);
 }
 
 // Case 4: GuitarLSTM through the 2.x user's processor, which reads the backend-qualified shape
 // (the channels-last TensorFlow rows read [256, 150, 1] through the entry's layout, decision
 // 8.1) and pops 256 windows of 150 samples per inference: the samples of a C handler running
-// the extras' 3.x HybridNNProcessor.
+// the extras' 3.x HybridNNProcessor, and of GuitarLSTM itself on the windows built by hand
+// (anira_test::batched_windows), run directly in the engine room.
 TEST(AbiCompat, HybridNnMatchesThroughTheUsersProcessor) {
     if (anira_test::oracle_engines().empty()) {
         GTEST_SKIP() << "no built-in engine in this build";
     }
-    Referee<user_v2::HybridNNPrePostProcessor> referee(without_litert(hybridnn_arguments()),
-                                                       256,
-                                                       std::make_shared<HybridNNProcessor>());
+    Referee<user_v2::HybridNNPrePostProcessor> referee(
+        without_litert(hybridnn_arguments()),
+        256,
+        [](std::span<const float> signal, size_t j) {
+            return anira_test::batched_windows(signal, j, 256, 150);
+        },
+        std::make_shared<HybridNNProcessor>());
     referee.expect_every_plan_matches(256, 6);
 }
 

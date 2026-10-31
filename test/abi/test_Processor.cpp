@@ -11,6 +11,7 @@
 // deterministic whatever the pool does.
 #include <anira/abi/build_info.h>
 #include <anira/abi/context.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -1824,8 +1825,108 @@ TEST(AbiProcessor, ContextAccessorsAnswerAndRefuse) {
 // The default bodies over a hand-built context
 // ============================================================================================
 
-// test_PrePostProcessor's HistoryFillsTheWindowHead over anira_processor_default_pre_process: a
-// window of 8 with a hop of 4 is the previous hop followed by the new one.
+namespace {
+
+/// An engine whose every output sample is the sum of the two halves of its window: out[n] =
+/// in[n] + in[n + hop], so the output says which samples the window held.
+class WindowSumEngine : public anira_test::GateEngine {
+public:
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const size_t hop = anira_test::elements_of(ctx.outputs[0]);
+        for (size_t n = 0; n < hop; ++n) { out[n] = in[n] + in[n + hop]; }
+        return ANIRA_OK;
+    }
+};
+
+}  // namespace
+
+// A C handler with no processor on a window of two hops: anira's default fill hands inference j
+// the previous hop and the new one, so the stream is the latency priming, then
+// out_j[n] = x[(j - 1) hop + n] + x[j hop + n], silence before the first sample. Hand-computed,
+// block by block (this replaces the 2.x default processor and the extras' 2.x CNN processor as
+// the references, which were the same fill).
+TEST(AbiProcessor, NoProcessorRunsTheWindowFillEndToEnd) {
+    const Context context;
+    const ModelConfig model =
+        stream_model(static_cast<int64_t>(2 * k_hop), static_cast<int64_t>(k_hop));
+    WindowSumEngine engine;
+    Handler handler(context, model, {}, {}, engine.engine());
+    const anira_test::DestroyFirst guard(handler, &engine);
+    ASSERT_EQ(handler.prepare(zeros_contract()), ANIRA_OK) << handler.m_err.message;
+
+    anira_test::FloatFace face(handler.m_handler);
+    const size_t priming = anira_test::available(handler.m_handler);
+    std::vector<float> signal;
+    std::vector<float> stream;
+    for (size_t k = 1; k <= 12; ++k) {
+        std::vector<float> block = anira_test::ramp(k, k_hop);
+        signal.insert(signal.end(), block.begin(), block.end());
+        const size_t prev = anira_test::available(handler.m_handler);
+        const std::array<float*, 1> channels{block.data()};
+        size_t delivered = 0;
+        ASSERT_EQ(face.process_inplace(channels.data(), k_hop, 0, &delivered), ANIRA_OK);
+        ASSERT_EQ(delivered, k_hop) << "block " << k;
+        anira_test::wait_for_block(handler.m_handler, prev);
+        stream.insert(stream.end(), block.begin(), block.end());
+    }
+    const auto x = [&signal](long n) { return n >= 0 ? signal.at(static_cast<size_t>(n)) : 0.0F; };
+    for (size_t n = 0; n < stream.size(); ++n) {
+        float expected = 0.0F;
+        if (n >= priming) {
+            const size_t j = (n - priming) / k_hop;
+            const size_t i = (n - priming) % k_hop;
+            expected =
+                x((static_cast<long>(j) - 1) * static_cast<long>(k_hop) + static_cast<long>(i)) +
+                x(static_cast<long>((j * k_hop) + i));
+        }
+        ASSERT_EQ(stream[n], expected) << "sample " << n;
+    }
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+}
+
+// anira_ring_pop_windows lays out batches of windows, each its history then its new run, one new
+// run further than the last, after an offset left alone: four windows of two old and three new
+// samples over a ring with the history 1, 2 and the unread run 3..14, hand-computed.
+TEST(AbiProcessor, PopWindowsLaysOutEveryWindowWithItsHistory) {
+    constexpr size_t k_new = 3;
+    constexpr size_t k_old = 2;
+    constexpr size_t k_offset = 1;
+    constexpr size_t k_batches = 4;
+    constexpr size_t k_total = k_offset + (k_batches * (k_new + k_old));
+    anira::RingBuffer ring;
+    ring.initialize_with_positions(1, 64);
+    for (int n = 0; n < 2 + static_cast<int>(k_batches * k_new); ++n) {
+        ring.push_sample(0, static_cast<float>(n + 1));
+    }
+    (void)ring.pop_sample(0);  // 1 and 2 become history
+    (void)ring.pop_sample(0);
+
+    std::array<float, k_total> windows{};
+    EXPECT_EQ(anira_ring_pop_windows(&ring,
+                                     0,
+                                     windows.data(),
+                                     ANIRA_DTYPE_F32,
+                                     k_new,
+                                     k_old,
+                                     k_offset,
+                                     static_cast<uint32_t>(k_batches)),
+              k_batches * (k_new + k_old));
+    const std::array<float, k_total> expected{0,               // the offset, left alone
+                                              1, 2, 3, 4,  5,  // history 1, 2; new 3..5
+                                              4, 5, 6, 7,  8,  // history 4, 5; new 6..8
+                                              7, 8, 9, 10, 11, 10, 11, 12, 13, 14};
+    for (size_t n = 0; n < k_total; ++n) {
+        EXPECT_EQ(windows.at(n), expected.at(n)) << "element " << n;
+    }
+    EXPECT_EQ(anira_ring_available(&ring, 0), 0U) << "every new run was consumed";
+}
+
+// anira_processor_default_pre_process on a window longer than its hop (a receptive-field model):
+// a window of 8 with a hop of 4 is the previous hop followed by the new one, silence before the
+// first.
 TEST(AbiProcessor, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     constexpr size_t k_window = 8;
     constexpr size_t k_step = 4;
@@ -1855,8 +1956,8 @@ TEST(AbiProcessor, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     EXPECT_EQ(anira_processor_default_post_process(nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
-// test_PrePostProcessor's MultichannelTensorIsNotAWindow: a [1, 4, 1] tensor holds more
-// elements than its hop, but per channel exactly the hop, so no history is mixed in.
+// A [1, 4, 1] tensor holds more elements than its hop, but per channel exactly the hop, so the
+// default fill mixes no history in (a latent frame of four channels).
 TEST(AbiProcessor, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     anira::RingBuffer seed;
     seed.initialize_with_positions(4, 8);

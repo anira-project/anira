@@ -1732,9 +1732,10 @@ TEST(AbiHandlerTensor, APlanarAndAnInterleavedBlockAgreeBitForBitAcrossMisses) {
 // The tensor entries' layouts against each other on the bundled stereo gain model, on every plan
 // this build has an engine for and on the engine-free custom row: one C handler takes an
 // interleaved block, a second handler of the same model planar channels, both with the Static
-// gain as [1] through anira_handler_process_multi. Bit-equal per channel after de-interleaving.
-// Through a real engine this covers two channels only; 3 and 6 channels run through the
-// engine-free pass-through above.
+// gain as [1] through anira_handler_process_multi. Bit-equal per channel after de-interleaving,
+// and equal to the closed form: at a gain of 1 every plan delivers each channel delayed by the
+// latency (anira_test::DelayLine). Through a real engine this covers two channels only; 3 and 6
+// channels run through the engine-free pass-through above.
 TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
     using anira_test::k_block;
     const anira_test::Context context;
@@ -1754,6 +1755,9 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
         ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
         ASSERT_EQ(anira_handler_set_plan(p, plan), ANIRA_OK);
         ASSERT_EQ(anira_handler_get_latency(h, 0), anira_handler_get_latency(p, 0));
+        // The closed form of the custom row's pass-through: each channel delayed by the latency.
+        anira_test::DelayLine left_line(anira_handler_get_latency(h, 0));
+        anira_test::DelayLine right_line(anira_handler_get_latency(h, 0));
 
         for (size_t k = 1; k <= 8; ++k) {
             const std::vector<float> left = anira_test::ramp(k);
@@ -1803,9 +1807,13 @@ TEST(AbiHandlerTensor, AnInterleavedBlockMatchesAPlanarBlockOnEveryPlan) {
             // certain: ProcessMultiCarriesStaticSlotsAsWholeTensors, and test_HandlerStatic.cpp.
             EXPECT_NE(c_gain_out, k_untouched) << "block " << k;
             EXPECT_NE(p_gain_out, k_untouched) << "block " << k;
+            const std::vector<float> expected_left = left_line.next(left);
+            const std::vector<float> expected_right = right_line.next(right);
             for (size_t i = 0; i < k_block; ++i) {
                 ASSERT_EQ(c_out.at(0, i), p_out.at(0, i)) << "block " << k << ", left " << i;
                 ASSERT_EQ(c_out.at(1, i), p_out.at(1, i)) << "block " << k << ", right " << i;
+                ASSERT_EQ(p_out.at(0, i), expected_left.at(i)) << "block " << k << ", left " << i;
+                ASSERT_EQ(p_out.at(1, i), expected_right.at(i)) << "block " << k << ", right " << i;
             }
         }
     }

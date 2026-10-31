@@ -15,10 +15,12 @@
 #include <anira/scheduler/InferenceThread.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -31,6 +33,7 @@
 #include <vector>
 
 #include "../../extras/models/model_files.h"
+#include "../support/engine_oracle.h"
 #include "../support/log_record_collector.h"
 #include "capi/port.h"
 #include "capi/words.h"
@@ -700,6 +703,79 @@ TEST(AbiHandler, SetPlanOutOfRangeIsAConfigNoOp) {
         1U)
         << "a second refusal of the same kind adds no record";
 #endif
+}
+
+// ============================================================================================
+// A neural model's stream
+// ============================================================================================
+
+// The steerable-nafx CNN through a C handler with no processor, on every plan of the build's
+// engines, a fresh stream per plan: the latency priming, then per 2048-sample block the CNN's own
+// output on the window anira's default fill builds (the 15380 samples ending with the block, the
+// receptive field ahead of the hop), the model run directly in the engine room on windows built
+// by hand (anira_test::EngineOracle, anira_test::receptive_window). The CNN has no closed form;
+// the oracle shares nothing with the handler but the plan's record.
+TEST(AbiHandler, TheCnnStreamIsTheModelOnItsWindows) {
+    constexpr size_t k_cnn_block = 2048;
+    constexpr size_t k_cnn_window = 15380;
+    constexpr size_t k_blocks = 6;
+    const std::vector<anira_backend_id> candidates = anira_test::engine_candidates();
+    if (candidates.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const Context context;
+    uint32_t num_plans = 1;
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        SCOPED_TRACE("plan " + std::to_string(plan));
+        Handler handler(context, anira_test::cnn_model(), candidates);
+        ASSERT_EQ(handler.prepare(file_contract(k_cnn_contract_json, k_cnn_block)), ANIRA_OK)
+            << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        num_plans = anira_plan_report_num_plans(anira_handler_plan_report(h));
+        ASSERT_EQ(anira_handler_set_plan(h, plan), ANIRA_OK);
+        anira_test::EngineOracle oracle(h, plan);
+        ASSERT_TRUE(oracle.ready());
+
+        const size_t priming = anira_test::available(h);
+        std::vector<float> signal;
+        std::vector<float> stream;
+        for (size_t k = 0; k < k_blocks; ++k) {
+            std::vector<float> block(k_cnn_block);
+            for (size_t i = 0; i < k_cnn_block; ++i) {
+                block[i] = 0.5F * std::sin(static_cast<float>(signal.size() + i) * 0.003F);
+            }
+            signal.insert(signal.end(), block.begin(), block.end());
+            const std::array<float*, 1> ptrs{block.data()};
+            const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_cnn_block);
+            const size_t prev = anira_test::available(h);
+            size_t delivered = 0;
+            ASSERT_EQ(anira_handler_process(h, &io, 0, &io, 0, &delivered), ANIRA_OK);
+            ASSERT_EQ(delivered, k_cnn_block) << "block " << k << " missed";
+            wait_for_block(h, prev);
+            stream.insert(stream.end(), block.begin(), block.end());
+        }
+
+        std::vector<float> expected(priming, 0.0F);
+        for (size_t j = 0; expected.size() < stream.size(); ++j) {
+            const std::vector<std::vector<float>> out =
+                oracle.run({anira_test::receptive_window(signal, j, k_cnn_block, k_cnn_window)});
+            ASSERT_FALSE(out.empty()) << "the oracle's inference " << j << " failed";
+            expected.insert(expected.end(), out[0].begin(), out[0].end());
+        }
+        size_t wrong = 0;
+        for (size_t n = 0; n < stream.size(); ++n) {
+            if (std::abs(stream[n] - expected[n]) > 1e-5F) {
+                if (wrong == 0) {
+                    ADD_FAILURE() << "sample " << n << ": " << stream[n] << ", the CNN on its "
+                                  << "window " << expected[n];
+                }
+                ++wrong;
+            }
+        }
+        EXPECT_EQ(wrong, 0U) << "of " << stream.size() << " samples";
+        EXPECT_GT(*std::max_element(expected.begin() + static_cast<std::ptrdiff_t>(priming),
+                                    expected.end()),
+                  0.0F)
+            << "the oracle's output is not silence";
+    }
 }
 
 // ============================================================================================
