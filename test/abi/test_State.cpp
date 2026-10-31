@@ -657,8 +657,8 @@ TEST(AbiState, OneSlotSpacePerSide) {
     ASSERT_NE(data, nullptr);
     ASSERT_NE(processed, nullptr);
     EXPECT_EQ(data->m_ring_dtype, static_cast<anira_dtype>(ANIRA_DTYPE_F32));
-    EXPECT_EQ(data->m_ring, &h->m_manager->session().m_send_buffer[2]);
-    EXPECT_EQ(processed->m_ring, &h->m_manager->session().m_receive_buffer[1]);
+    EXPECT_EQ(&data->m_ring, &h->m_manager->session().send_ring(2));
+    EXPECT_EQ(&processed->m_ring, &h->m_manager->session().receive_ring(1));
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 0), nullptr);
     EXPECT_EQ(anira::capi::stream_port(h->m_input_ports, 3), nullptr) << "beyond the side's count";
 
@@ -888,7 +888,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
     EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(stored_input(), (std::array<float, 3>{})) << "a refused call set nothing";
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U)
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U)
         << "a refused call pushed samples";
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
     // A zeroed record is rank 0: not the empty tensor.
@@ -916,7 +916,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 3, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().m_send_buffer[2].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U);
     EXPECT_EQ(state, (std::array<float, static_cast<size_t>(k_channels) * k_state_width>{}))
         << "the memory a State element names is never touched";
     anira_drain_log();

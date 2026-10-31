@@ -2,9 +2,9 @@
 #define ANIRA_CAPI_PROCESSOR_H
 /*
  * The processor behind anira/abi/processor.h: the refcounted carrier of the one
- * anira_processor_desc a pipeline holds and the one PrePostProcessor a C-created handler's session
- * sees. Private to src/capi (and the tests through the src/ include directory): nothing here enters
- * the ABI.
+ * anira_processor_desc a pipeline holds and the processor runner a C-created handler's session
+ * runs every chunk on. Private to src/capi (and the tests through the src/ include directory):
+ * nothing here enters the ABI.
  *
  * The phases of one chunk, in the order they run, with the library's own steps between them:
  *
@@ -33,7 +33,6 @@
  * the library, whoever fills the phase.
  */
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/export.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/processor.h>
@@ -41,8 +40,6 @@
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/system/Exports.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/RtLatch.h>
 
@@ -123,19 +120,16 @@ struct ProcessorFrame {
     anira::RtLatch* m_rt = nullptr;
 };
 
-/// The one PrePostProcessor the session of a C-created handler sees: it fills an
-/// anira_processor_ctx and the ProcessorFrame it names on the stack per call and runs the
-/// processor's filled slot of the phase, or the default body when the slot is NULL (pre_process,
-/// post_process) or the pipeline has no processor.
+/// The processor the session of a C-created handler runs every chunk on: per phase it fills an
+/// anira_processor_ctx and the ProcessorFrame it names on the stack and runs the processor's
+/// filled slot of the phase, or the default body when the slot is NULL (pre_process,
+/// post_process) or the pipeline has no processor, and returns the phase's status.
 ///
-/// The 2.x virtuals receive the buffers of a ThreadSafeStruct and never the struct, so bind()
-/// builds a table of the session's structs, looked up by the address of a struct's input or
-/// output vector (the structs are rebuilt by every session prepare). The position in that
-/// table is the chunk's entry (anira_processor_ctx::entry, anira_handler_num_entries). The struct
-/// carries what the ctx needs: the plan the chunk was stamped with (the session's plan table
-/// names its engine and provider), the descriptors of its tensors (what a tensor accessor
-/// hands out, a copy of the struct's), and the status slot the scheduler reads after a
-/// failed phase.
+/// The scheduler hands every phase the chunk itself (the session's ThreadSafeStruct), whose
+/// position in the session's pool is its entry (anira_processor_ctx::entry,
+/// anira_handler_num_entries). The struct carries what the ctx needs: the plan the chunk was
+/// stamped with (the session's plan table names its engine and provider) and the descriptors
+/// of its tensors (what a tensor accessor hands out, a copy of the struct's).
 ///
 /// The processor reads the handler's two port vectors (port.h), indexed by slot: the role of
 /// a slot is its port's arm and the ring of a slot its stream port's, both plain reads. The
@@ -152,8 +146,7 @@ struct ProcessorFrame {
 /// zero-copy where it binds caller memory; and as the last step of after_inference, behind the
 /// processor's hook, every pair flips, so the produced state is the next inference's input, unless
 /// the chunk failed: the read buffer keeps the last good state. The struct's own buffer of a
-/// State slot stays unused. The float atomics this class inherits from the 2.x processor are
-/// not used.
+/// State slot has no buffer.
 ///
 /// The registration is shared by every handler of the pipeline, the prepared pointer is this
 /// handler's: what the processor's prepare handed back (set_prepared, after it returned) reaches
@@ -163,7 +156,7 @@ struct ProcessorFrame {
 /// anira_handler_reset), and the processor's reset slot runs for it, with the chunk's context in
 /// ANIRA_PHASE_RESET, before its pre_process. The chunk's stamp, never the session's atomic,
 /// as on the inference thread.
-class ANIRA_API ProcessorRunner final : public anira::PrePostProcessor {
+class ANIRA_API ProcessorRunner final {
 public:
     /// `config`, `processor` (NULL for a pipeline without one) and the two port vectors must
     /// outlive the processor (the handler owns all four). The ports and the model's tensors
@@ -175,10 +168,10 @@ public:
                     std::vector<Port>& input_ports,
                     std::vector<Port>& output_ports);
 
-    /// Control thread, after the session's prepare and before its first chunk: the struct
-    /// table, the ring of every stream port (the session's, at the port's slot) and the count
-    /// check's scratch. The session's plan table is what a ctx reports the engine and the
-    /// provider of a chunk's plan from.
+    /// Control thread, after the session's prepare and before its first chunk: the session (its
+    /// plan table is what a ctx reports the engine and the provider of a chunk's plan from, its
+    /// pool what the entries count) and the count check's scratch, sized by the stream ports'
+    /// rings the prepare sized.
     void bind(anira::SessionElement& session);
 
     /// Control thread, after the processor's prepare returned: what it handed back for this
@@ -186,45 +179,45 @@ public:
     /// for a processor without a prepare.
     void set_prepared(void* prepared) noexcept { m_prepared = prepared; }
 
-    /// The entries of the bound session: the size of the struct table, what
-    /// anira_handler_num_entries answers. 0 before bind().
-    uint32_t num_entries() const noexcept { return static_cast<uint32_t>(m_chunks.size()); }
+    /// The entries of the bound session: the size of its pool, what anira_handler_num_entries
+    /// answers. 0 before bind().
+    uint32_t num_entries() const noexcept {
+        return m_session != nullptr ? static_cast<uint32_t>(m_session->m_inference_queue.size())
+                                    : 0U;
+    }
 
-    void pre_process(std::vector<anira::RingBuffer>& input,
-                     std::vector<anira::BufferF>& output,
-                     anira::InferenceBackend current_inference_backend) override;
-    void post_process(std::vector<anira::BufferF>& input,
-                      std::vector<anira::RingBuffer>& output,
-                      anira::InferenceBackend current_inference_backend) override;
-    void before_inference(std::vector<anira::BufferF>& input,
-                          anira::InferenceBackend current_inference_backend) override;
-    void after_inference(std::vector<anira::BufferF>& output,
-                         anira::InferenceBackend current_inference_backend) override;
+    /// The handler's ports, indexed by slot; the session reads the rings of its Streamed slots
+    /// through them (SessionElement::send_ring / receive_ring).
+    std::vector<Port>& input_ports() noexcept { return m_input_ports; }
+    std::vector<Port>& output_ports() noexcept { return m_output_ports; }
 
-private:
     using Chunk = anira::SessionElement::ThreadSafeStruct;
 
-    /// "No entry": what entry_of_inputs / entry_of_outputs answer for a vector that is no
-    /// struct's of the bound session.
-    static constexpr size_t k_no_entry = static_cast<size_t>(-1);
+    /// The four phases of a chunk, each returning its status (ANIRA_OK, or the status of the
+    /// callback or the default body that failed, recorded): pre_process on the driving thread,
+    /// whose failure completes the chunk as zeros without enqueueing it (Core::pre_process);
+    /// before_inference and after_inference on the inference thread, whose failure skips the
+    /// rest and zeroes the outputs (InferenceThread::do_inference); post_process on the driving
+    /// thread, which every chunk reaches (the rings stay aligned whatever it returns).
+    anira_status pre_process(Chunk& chunk) noexcept;
+    anira_status before_inference(Chunk& chunk) noexcept;
+    anira_status after_inference(Chunk& chunk) noexcept;
+    anira_status post_process(Chunk& chunk) noexcept;
+
+private:
     /// No chunk carries this dispatch stamp: the first pre_process after construction (every
     /// prepare rebuilds the processor) finds a new stream.
     static constexpr uint64_t k_no_generation = UINT64_MAX;
 
-    /// The entry of the bound session's struct that owns the vector, or k_no_entry.
-    size_t entry_of_inputs(const std::vector<anira::BufferF>& inputs) const noexcept
-        ANIRA_NONBLOCKING;
-    size_t entry_of_outputs(const std::vector<anira::BufferF>& outputs) const noexcept
-        ANIRA_NONBLOCKING;
     /// The frame of one phase call: the ports and the latch, and the chunk's descriptors of
     /// the side the phase exposes (the two _with_ forms).
     ProcessorFrame make_frame() const noexcept ANIRA_NONBLOCKING;
     ProcessorFrame make_frame_with_inputs(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
     ProcessorFrame make_frame_with_outputs(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING;
-    /// The eight scalars of a ctx for the chunk at `entry`, and `frame` as its frame; the
-    /// reserved slots stay NULL.
+    /// The eight scalars of a ctx for `chunk`, and `frame` as its frame; the reserved slots
+    /// stay NULL.
     anira_processor_ctx make_ctx(anira_phase phase,
-                                 size_t entry,
+                                 const Chunk& chunk,
                                  const ProcessorFrame& frame) const noexcept ANIRA_NONBLOCKING;
     /// Runs the processor's slot of one phase (the caller checked that it is filled) with the
     /// prepared pointer; a status that is not ANIRA_OK is recorded and returned.
@@ -234,7 +227,7 @@ private:
     /// anira_handler_reset), so the processor's reset slot runs for it, when filled, with the
     /// chunk's context in ANIRA_PHASE_RESET over a frame without buffers (the accessors answer
     /// the role alone). The stamp is adopted either way.
-    void reset_if_new_stream(const Chunk& chunk, size_t entry) noexcept ANIRA_NONBLOCKING;
+    void reset_if_new_stream(const Chunk& chunk) noexcept ANIRA_NONBLOCKING;
     /// Records a failed phase: last-wins into rt_error, one record per kind naming the phase
     /// and `who` ran it (k_the_processor, k_the_default).
     void fail(const char* who, uint32_t phase, anira_status status) noexcept ANIRA_NONBLOCKING;
@@ -273,9 +266,10 @@ private:
     static constexpr const char* k_the_processor = "the processor";
     static constexpr const char* k_the_default = "the default body";
 
-    const ProcessorCarrier* m_processor;  ///< NULL: the defaults everywhere
-    /// The handler's ports. bind() sets the stream ports' rings; pre_process reads the static
-    /// input ports, post_process writes the static output ports.
+    anira::InferenceConfig& m_inference_config;  ///< the handler's, what the sizes are read from
+    const ProcessorCarrier* m_processor;         ///< NULL: the defaults everywhere
+    /// The handler's ports. The stream ports hold the rings; pre_process reads the static input
+    /// ports, post_process writes the static output ports.
     std::vector<Port>& m_input_ports;
     std::vector<Port>& m_output_ports;
     bool m_fills_pre = false;     ///< the processor fills pre_process; else the default body runs
@@ -292,7 +286,6 @@ private:
     uint64_t m_pre_generation = k_no_generation;
     std::vector<std::vector<int64_t>> m_input_shapes;   ///< the spec's extents per tensor
     std::vector<std::vector<int64_t>> m_output_shapes;  ///< the spec's extents per tensor
-    std::vector<Chunk*> m_chunks;  ///< the structs of the bound session, by entry
     /// The count check's scratch: available() of every channel of every ring of one side,
     /// read ahead of the phase (one entry per channel, in slot order). Driving thread only.
     std::vector<size_t> m_before;

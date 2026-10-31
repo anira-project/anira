@@ -7,19 +7,18 @@
 #endif
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
 #include "../InferenceConfig.h"
-#include "../PrePostProcessor.h"
 #include "../abi/enums.h"
 #include "../abi/status.h"
 #include "../abi/tensor.h"
-#include "../utils/Buffer.h"
 #include "../utils/HostConfig.h"
-#include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -40,6 +39,14 @@ class Prepared;
 /// InstanceWaitList.h, private to the scheduler): held through a smart pointer like the two
 /// engine-room types above.
 class InstanceWaitList;
+
+namespace capi {
+/// The processor of a C-created handler's session (src/capi/processor.h, private): what the
+/// session runs every phase of a chunk on, and what holds the handler's two port vectors, the
+/// rings of the session's Streamed slots among them. Held by reference; the session's .cpp
+/// files include the private header.
+class ProcessorRunner;
+}  // namespace capi
 
 /**
  * @brief Session management class for individual inference instances
@@ -97,12 +104,13 @@ public:
     /**
      * @brief Constructor that initializes a session with specified components
      *
-     * Creates a new session element with a unique ID and associates it with
-     * the provided preprocessing/postprocessing pipeline and inference configuration.
-     * The session is not fully initialized until prepare() is called.
+     * Creates a new session element with a unique ID and associates it with the C handler's
+     * processor runner and the inference configuration. The session is not fully initialized
+     * until prepare() is called.
      *
      * @param new_session_id Unique identifier for this session
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param processor The handler's processor runner: every phase of a chunk runs on it, and
+     * its port vectors hold the session's rings (it outlives the session)
      * @param inference_config Reference to the inference configuration containing model settings
      * @param producer_token Producer token bound to the global inference queue, moved into the
      * session (see m_producer_token)
@@ -111,7 +119,7 @@ public:
      * gives the session its own latch (m_rt_own)
      */
     SessionElement(int new_session_id,
-                   PrePostProcessor& pp_processor,
+                   capi::ProcessorRunner& processor,
                    InferenceConfig& inference_config,
                    moodycamel::ProducerToken&& producer_token,
                    anira::RtLatch* rt_latch = nullptr);
@@ -119,7 +127,7 @@ public:
     /**
      * @brief Wait-free clear of the session's audio-thread-owned state.
      *
-     * Resets the audio-thread-owned state (send/receive ring buffers, timestamp
+     * Resets the audio-thread-owned state (the rings of the Streamed slots, timestamp
      * bookkeeping, latency re-seed) and any ThreadSafeStruct that is currently
      * free, but never touches a struct that a worker still holds in flight
      * (m_free == false). It therefore does NOT require Core::drain_inference_queue()
@@ -139,9 +147,9 @@ public:
     /**
      * @brief Prepares the session for processing with specified audio configuration
      *
-     * Initializes all buffers, calculates latencies, and configures the session
-     * for processing with the provided host audio configuration. This method
-     * must be called before the session can process audio data.
+     * Calculates the latencies, sizes the ring of every Streamed slot in its stream port and
+     * builds the chunks, for the provided host audio configuration. This method must be called
+     * before the session can process audio data.
      *
      * The host configuration's reference stream (HostConfig::resolve_reference) is
      * resolved here, once, and stored in m_reference / m_input_driven for the
@@ -174,9 +182,18 @@ public:
      */
     bool receive_rings_have_room();
 
-    std::vector<RingBuffer> m_send_buffer;  ///< Ring buffers for input data streaming to inference
-    std::vector<RingBuffer> m_receive_buffer;  ///< Ring buffers for output data streaming from
-                                               ///< inference
+    /**
+     * @brief The ring of a Streamed input or output slot
+     *
+     * The ring lives in the slot's stream port, in the handler's port vector the processor
+     * runner holds (one container, one index space); the session's prepare sizes it in place.
+     * Only a Streamed slot has one: the caller checks that the slot streams (its hop is above 0)
+     * before it asks.
+     *
+     * @param slot The slot, the tensor's position in its side of the model config
+     */
+    RingBuffer& send_ring(size_t slot) const noexcept;
+    RingBuffer& receive_ring(size_t slot) const noexcept;
 
     /**
      * @brief Thread-safe data structure for concurrent inference processing
@@ -193,41 +210,40 @@ public:
      */
     struct ThreadSafeStruct {
         /**
-         * @brief Constructor that initializes thread-safe structure with tensor dimensions
+         * @brief The chunk's storage and its descriptors, built once by the session's prepare
          *
-         * Creates buffers for input and output tensors with the specified sizes
-         * and initializes synchronization primitives.
-         *
-         * @param tensor_input_size Vector of input tensor sizes
-         * @param tensor_output_size Vector of output tensor sizes
-         */
-        ThreadSafeStruct(const std::vector<size_t>& tensor_input_size,
-                         const std::vector<size_t>& tensor_output_size);
-
-        /**
-         * @brief Builds the descriptor of every tensor of the chunk over its buffer
-         *
-         * Control thread, once per prepare, after the buffers exist: one anira_tensor per
-         * slot of either side, over the buffer's memory, with the spec's rank and extents
-         * (the universal TensorShape rows) and the storage's dtype, float32, all-zero
-         * strides. What the engine call hands its adapter (anira_engine_ctx::inputs /
-         * outputs) and what a processor context copies for a slot.
+         * One allocation holds the buffer of every slot of either side but a State slot, each
+         * buffer starting on a 64-byte boundary, in the storage's dtype (float32 in this
+         * pre-release) with the spec's extents, zeroed. Every slot gets one descriptor over its
+         * buffer, with the spec's rank and extents and all-zero strides: what the engine call
+         * hands its adapter (anira_engine_ctx::inputs / outputs) and what a processor context
+         * copies for a slot. A State slot has no buffer: its descriptor is the processor
+         * runner's to bind over the pair's port ahead of every inference.
          *
          * @param input_shapes The spec's extents per input tensor
          * @param output_shapes The spec's extents per output tensor
+         * @param input_state Per input tensor: whether it is a State slot
+         * @param output_state Per output tensor: whether it is a State slot
          */
-        void bind_tensors(const TensorShapeList& input_shapes,
-                          const TensorShapeList& output_shapes);
+        ThreadSafeStruct(const TensorShapeList& input_shapes,
+                         const TensorShapeList& output_shapes,
+                         const std::vector<bool>& input_state,
+                         const std::vector<bool>& output_state);
+        ~ThreadSafeStruct() = default;
+        // The descriptors name the block: one struct, one place.
+        ThreadSafeStruct(const ThreadSafeStruct&) = delete;
+        ThreadSafeStruct& operator=(const ThreadSafeStruct&) = delete;
+        ThreadSafeStruct(ThreadSafeStruct&&) = delete;
+        ThreadSafeStruct& operator=(ThreadSafeStruct&&) = delete;
 
-        /**
-         * @brief Re-points every descriptor at its buffer's memory of the moment
-         *
-         * A field fill on the driving thread at every claim of the struct
-         * (Core::pre_process). No adapter swaps a buffer's memory any more, so the fill
-         * re-points every descriptor at the memory it already names; it stays until the
-         * queue's storage is anira's own and described once (PR 10).
-         */
-        void rebind_tensors() noexcept;
+        /// Zeroes the buffers of the chunk's inputs, State slots excepted (they have none).
+        void zero_inputs() noexcept;
+        /// Zeroes the buffers of the chunk's outputs: what a chunk that completes as zeros
+        /// delivers. A State slot has no buffer; its pair keeps its own value.
+        void zero_outputs() noexcept;
+
+        /// The alignment of every slot's buffer, in bytes.
+        static constexpr size_t k_alignment = 64;
 
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
@@ -265,18 +281,10 @@ public:
         // Plain field: written on the driving thread at dispatch, stable for the dispatch's
         // lifetime, synced by the queue handoffs like the two stamps above.
         uint32_t m_plan{0};
-        // What a processor left on the chunk (a 3.x handler's ProcessorRunner; a 2.x
-        // processor never writes it): ANIRA_OK, or the status of the phase callback that
-        // failed. Core::pre_process resets it, then completes the chunk as zeros without
-        // enqueueing it when pre_process failed; InferenceThread::do_inference reads it around
-        // the hooks and skips the engine call, or zeroes the outputs, on a failure. Plain
-        // field: written by the thread that holds the struct, synced by the queue handoffs
-        // like the stamps above.
-        anira_status m_processor_status{ANIRA_OK};
         // Whether the chunk completed as zeros: dropped (SessionElement::complete_with_zeros:
         // a full queue, a failed pre_process, a stale or unclaimable task) or failed on the
         // inference thread (a throw, a failed before_inference or after_inference), its output
-        // buffers cleared. Core::pre_process resets it. A 3.x processor runner reads it in
+        // buffers zeroed. Core::pre_process resets it. The processor runner reads it in
         // post_process: such a chunk does not overwrite the handler's Static output store.
         // Plain field, synced by the queue handoffs like the stamps above (written before the
         // done signal, read after it).
@@ -284,12 +292,11 @@ public:
         // The struct's position in SessionElement::m_inference_queue: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
-        std::vector<BufferF> m_tensor_input_data;   ///< Input tensor data buffers
-        std::vector<BufferF> m_tensor_output_data;  ///< Output tensor data buffers
-        // One descriptor per slot of either side over the buffers above (bind_tensors,
-        // rebind_tensors): the engine call's anira_engine_ctx names these arrays, a processor
-        // context copies one for a slot. Written on the driving thread at the claim, read on
-        // the inference thread; synced by the queue handoffs like the fields above.
+        // One descriptor per slot of either side over the chunk's storage (built by the
+        // constructor; a State slot's bound by the processor runner per inference): the engine
+        // call's anira_engine_ctx names these arrays, a processor context copies one for a
+        // slot. Written by the thread that holds the struct, synced by the queue handoffs like
+        // the fields above.
         std::vector<anira_tensor> m_input_tensors;
         std::vector<anira_tensor> m_output_tensors;
         // The chunk's links while its job waits for a free instance of its plan's loaded model
@@ -299,6 +306,14 @@ public:
         // under its lock; empty and null otherwise.
         std::shared_ptr<SessionElement> m_waiting_session;
         ThreadSafeStruct* m_waiting_next = nullptr;
+
+    private:
+        /// The one allocation of the chunk's buffers, over-allocated by k_alignment so that the
+        /// first buffer starts on a boundary whatever the allocator handed out.
+        std::vector<std::byte> m_block;
+        /// Per slot of either side, its buffer in m_block; empty for a State slot.
+        std::vector<std::span<std::byte>> m_input_bytes;
+        std::vector<std::span<std::byte>> m_output_bytes;
     };
 
     std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
@@ -349,9 +364,6 @@ public:
         anira_provider m_provider = ANIRA_PROVIDER_CPU;
         std::string m_engine_id;
         std::string m_provider_id;
-        /// The 2.x backend of the plan's row: the value the PrePostProcessor phases receive
-        /// for the chunk, until the processor runs on the chunk.
-        InferenceBackend m_legacy_backend = InferenceBackend::CUSTOM;
         /// The plan's engine keeps its own aliasing of a declared State pair
         /// (ANIRA_ENGINE_FLAG_STATE_ALIAS in its flags): the processor runner binds one stable
         /// buffer as both halves of every pair for a chunk of this plan and never flips it.
@@ -395,9 +407,6 @@ public:
 
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
-
-    /// The 2.x backend a plan runs on. CUSTOM for an index out of range, which a stamp never is.
-    InferenceBackend plan_backend(uint32_t plan) const noexcept;
 
     unsigned long m_current_queue = 0;         ///< Current position in the inference queue
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
@@ -515,7 +524,8 @@ public:
      * yields (silent) output at its correct stream position and the struct is freed normally. */
     void complete_with_zeros(const std::shared_ptr<ThreadSafeStruct>& thread_safe_struct);
 
-    PrePostProcessor& m_pp_processor;  ///< Reference to the preprocessing/postprocessing pipeline
+    capi::ProcessorRunner& m_processor;   ///< The handler's processor runner: the four phases of
+                                          ///< every chunk, and the port vectors of the rings
     InferenceConfig& m_inference_config;  ///< Reference to the inference configuration
 
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
@@ -555,8 +565,8 @@ public:
                                ///< that the inferences a wait-free reset() strands until their
                                ///< workers finish never starve the fresh schedule (for testing
                                ///< access)
-    std::vector<size_t> m_send_buffer_size;  ///< Calculated send buffer sizes (for testing access)
-    std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive buffer sizes (for testing
+    std::vector<size_t> m_send_buffer_size;     ///< Calculated send ring sizes (for testing access)
+    std::vector<size_t> m_receive_buffer_size;  ///< Calculated receive ring sizes (for testing
                                                 ///< access)
 
 private:
@@ -572,7 +582,6 @@ private:
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
     ThreadSafeStruct* __doxygen_force_0;  ///< Placeholder for Doxygen documentation
-    RingBuffer* __doxygen_force_1;        ///< Placeholder for Doxygen documentation
 #endif
 };
 

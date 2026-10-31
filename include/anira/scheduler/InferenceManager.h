@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "../InferenceConfig.h"
-#include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
 #include "Core.h"
 #include "InferenceThread.h"
@@ -33,7 +32,7 @@ struct RtLatch;
  * Key responsibilities:
  * - Managing inference sessions and thread coordination
  * - Handling input/output data flow and buffering
- * - Coordinating with PrePostProcessor for data transformation
+ * - Running every chunk through the handler's processor runner
  * - Managing latency compensation and sample counting
  * - Providing thread-safe access to inference operations
  * - Supporting both real-time and non-real-time processing modes
@@ -54,7 +53,7 @@ struct RtLatch;
  *       as the primary interface for inference operations rather than directly
  *       accessing lower-level components.
  *
- * @see InferenceThread, PrePostProcessor, Core, HostConfig, InferenceConfig
+ * @see InferenceThread, Core, HostConfig, InferenceConfig
  */
 class ANIRA_API InferenceManager {
 public:
@@ -72,7 +71,8 @@ public:
      * against the configuration in effect) and the handler's real-time latch. The table is
      * the session's for its life: nothing replaces it.
      *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param processor The handler's processor runner: the phases of every chunk, and the port
+     * vectors that hold the session's rings (it outlives the manager)
      * @param inference_config Reference to the inference configuration containing model settings
      * @param requests The plans, in dense-index order; never empty
      * @param context_config The context's configuration (anira_context_config_*)
@@ -80,7 +80,7 @@ public:
      * gives the session its own
      * @throws std::invalid_argument for an empty request list
      */
-    InferenceManager(PrePostProcessor& pp_processor,
+    InferenceManager(capi::ProcessorRunner& processor,
                      InferenceConfig& inference_config,
                      std::vector<engine::PlanRequest> requests,
                      const anira_context_config& context_config,

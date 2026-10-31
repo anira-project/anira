@@ -6,7 +6,6 @@
  * layouts never enter the ABI.
  */
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/context.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/tensor.h>
@@ -124,9 +123,10 @@ struct anira_handler {
     /// writes them: destroyed after.
     std::vector<anira::capi::Port> m_input_ports;
     std::vector<anira::capi::Port> m_output_ports;
-    std::unique_ptr<anira::PrePostProcessor> m_pp;  ///< the ProcessorRunner over
-                                                    ///< m_pipeline.m_processor, rebuilt by every
-                                                    ///< prepare (needs m_inference_config)
+    std::unique_ptr<anira::capi::ProcessorRunner> m_pp;  ///< the processor runner over
+                                                         ///< m_pipeline.m_processor, rebuilt by
+                                                         ///< every prepare (needs
+                                                         ///< m_inference_config)
     std::unique_ptr<anira::InferenceManager> m_manager;  ///< the session; null while
                                                          ///< unprepared (declared after m_pp:
                                                          ///< destroyed first)

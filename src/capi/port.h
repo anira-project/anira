@@ -57,6 +57,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
+#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
 #include <array>
@@ -309,7 +310,7 @@ private:
 };
 
 /// A Streamed tensor. The fields are prepare's (the contract resolves the ring dtype, the
-/// InferenceConfig the channel count, the session owns the ring); create leaves the defaults.
+/// InferenceConfig the channel count, the session sizes the ring); create leaves the defaults.
 struct StreamPort {
     uint32_t m_channels = 1;                     ///< shape[0] a host block of the slot must have
     anira_dtype m_ring_dtype = ANIRA_DTYPE_F32;  ///< the dtype a host block of the slot must carry
@@ -318,9 +319,12 @@ struct StreamPort {
     /// P the slot's samples per hop (LatencyCalculator), what the latency and the rings were
     /// sized for. 0 before prepare.
     size_t m_max_samples = 0;
-    /// The session's ring (SessionElement::m_send_buffer / m_receive_buffer at the slot), set
-    /// by ProcessorRunner::bind and valid while that session lives; NULL before.
-    anira_ring* m_ring = nullptr;
+    /// The slot's ring: the port's for the handler's life, sized and re-initialised in place by
+    /// every session prepare (SessionElement::prepare), so its address never changes; empty
+    /// (no channel) before the first prepare. Mutable: the stream moves through it while the
+    /// port itself (its arm, its fields) stays what prepare made it, so a const view of the
+    /// ports (a processor frame's) still hands out the ring.
+    mutable anira_ring m_ring;
 };
 
 /// A Static tensor: the typed whole-tensor value with its sequence counter. Constructed in

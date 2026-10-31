@@ -11,7 +11,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/system/Exports.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <cstdint>
 #include <memory>
@@ -55,9 +54,6 @@ struct PlanRequest {
     /// Registered only: the context of the handler asking, what the engine's init record names
     /// (anira_init_info.context) when the object is initialised by this request.
     const anira_context* m_context = nullptr;
-    /// The 2.x backend of the plan's row: what the session's PrePostProcessor phases are told
-    /// (SessionElement::plan_backend), until the processor runs on the chunk.
-    anira::InferenceBackend m_legacy_backend = anira::InferenceBackend::CUSTOM;
 };
 
 /// The engine object of a built-in engine of this build (BuiltinEngine, uninitialised): what

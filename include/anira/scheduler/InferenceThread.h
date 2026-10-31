@@ -265,7 +265,7 @@ private:
      * chunk as completed as zeros, records ANIRA_ERROR_ENGINE on the session's latch
      * (SessionElement::m_rt) with one log line naming the status on the first occurrence
      * since the latch's re-arm, and skips after_inference, the same rule as a failed hook. A
-     * hook or a 2.x processor that throws does not unwind the thread either: the failed
+     * hook or an engine that throws does not unwind the thread either: the failed
      * inference delivers zeros, the done signal is published exactly as on success, and the
      * failure is ENGINE on the latch.
      *

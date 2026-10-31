@@ -1,6 +1,6 @@
 // anira/abi/processor.h: the ring accessors, the context accessors, the two default bodies, and the
-// processor runner behind them (the carrier of the one descriptor a pipeline holds and the one
-// PrePostProcessor a C-created handler's session sees; the phase order is in processor.h).
+// processor runner behind them (the carrier of the one descriptor a pipeline holds and the
+// runner a C-created handler's session runs every chunk on; the phase order is in processor.h).
 //
 // Everything a phase callback can reach is ANIRA_NONBLOCKING: the ring accessors are thin
 // dtype-checked calls onto anira_ring (anira/utils/RingBuffer.h), a refusal records into the
@@ -15,7 +15,6 @@
 #include "processor.h"
 
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/lifecycle.h>
@@ -23,8 +22,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Buffer.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RingBuffer.h>
 #include <anira/utils/RtLatch.h>
@@ -33,7 +30,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory>
 #include <mutex>
 #include <string>
 #include <variant>
@@ -144,7 +140,7 @@ bool frame_record(const ProcessorFrame& frame, anira_status status) noexcept ANI
 // read, never a refusal.
 anira_ring* slot_ring(const std::vector<Port>& ports, size_t slot) noexcept ANIRA_NONBLOCKING {
     const anira::capi::StreamPort* stream = anira::capi::stream_port(ports, slot);
-    return stream != nullptr ? stream->m_ring : nullptr;
+    return stream != nullptr ? &stream->m_ring : nullptr;
 }
 
 // The slot check of every context accessor: the port of the slot on one side, or NULL. A slot
@@ -241,7 +237,7 @@ anira_status ctx_ring(const anira_processor_ctx* ctx,
     const auto ring_phase =
         static_cast<uint32_t>(input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS);
     const auto* stream = std::get_if<anira::capi::StreamPort>(port);
-    anira_ring* ring = ctx->phase == ring_phase && stream != nullptr ? stream->m_ring : nullptr;
+    anira_ring* ring = ctx->phase == ring_phase && stream != nullptr ? &stream->m_ring : nullptr;
     if (ring == nullptr) { return no_such(ctx, slot, "ring", entry); }
     *out = ring;
     return ANIRA_OK;
@@ -592,7 +588,7 @@ ProcessorRunner::ProcessorRunner(anira::InferenceConfig& config,
                                  const ProcessorCarrier* processor,
                                  std::vector<Port>& input_ports,
                                  std::vector<Port>& output_ports)
-    : anira::PrePostProcessor(config)
+    : m_inference_config(config)
     , m_processor(processor)
     , m_input_ports(input_ports)
     , m_output_ports(output_ports)
@@ -611,50 +607,18 @@ ProcessorRunner::ProcessorRunner(anira::InferenceConfig& config,
 
 void ProcessorRunner::bind(anira::SessionElement& session) {
     m_session = &session;
-    // The struct table, by entry: the position of a struct in the session's pool is what a
-    // ctx reports as the chunk's entry.
-    m_chunks.clear();
-    m_chunks.reserve(session.m_inference_queue.size());
-    for (const auto& thread_safe_struct : session.m_inference_queue) {
-        m_chunks.push_back(thread_safe_struct.get());
-    }
-    // A ring exists for a Streamed tensor only: its stream port names the session's ring from
-    // here on, which is what the ring accessors of a ctx hand out.
-    size_t input_channels = 0;
-    for (size_t i = 0; i < m_input_ports.size() && i < session.m_send_buffer.size(); ++i) {
-        auto* stream = std::get_if<StreamPort>(&m_input_ports[i]);
-        if (stream == nullptr || m_inference_config.get_preprocess_input_size()[i] == 0) {
-            continue;
+    // The count check's scratch: one entry per channel of the larger side's rings, which the
+    // session's prepare sized in their stream ports (a Streamed slot only has one).
+    const auto channels_of = [](const std::vector<Port>& ports) {
+        size_t channels = 0;
+        for (const Port& port : ports) {
+            if (const auto* stream = std::get_if<StreamPort>(&port)) {
+                channels += stream->m_ring.num_channels();
+            }
         }
-        stream->m_ring = &session.m_send_buffer[i];
-        input_channels += stream->m_ring->num_channels();
-    }
-    size_t output_channels = 0;
-    for (size_t i = 0; i < m_output_ports.size() && i < session.m_receive_buffer.size(); ++i) {
-        auto* stream = std::get_if<StreamPort>(&m_output_ports[i]);
-        if (stream == nullptr || m_inference_config.get_postprocess_output_size()[i] == 0) {
-            continue;
-        }
-        stream->m_ring = &session.m_receive_buffer[i];
-        output_channels += stream->m_ring->num_channels();
-    }
-    m_before.assign(std::max(input_channels, output_channels), 0);
-}
-
-size_t ProcessorRunner::entry_of_inputs(const std::vector<anira::BufferF>& inputs) const noexcept
-    ANIRA_NONBLOCKING {
-    for (size_t entry = 0; entry < m_chunks.size(); ++entry) {
-        if (&m_chunks[entry]->m_tensor_input_data == &inputs) { return entry; }
-    }
-    return k_no_entry;
-}
-
-size_t ProcessorRunner::entry_of_outputs(const std::vector<anira::BufferF>& outputs) const noexcept
-    ANIRA_NONBLOCKING {
-    for (size_t entry = 0; entry < m_chunks.size(); ++entry) {
-        if (&m_chunks[entry]->m_tensor_output_data == &outputs) { return entry; }
-    }
-    return k_no_entry;
+        return channels;
+    };
+    m_before.assign(std::max(channels_of(m_input_ports), channels_of(m_output_ports)), 0);
 }
 
 ProcessorFrame ProcessorRunner::make_frame() const noexcept ANIRA_NONBLOCKING {
@@ -680,13 +644,13 @@ ProcessorFrame ProcessorRunner::make_frame_with_outputs(const Chunk& chunk) cons
 }
 
 anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
-                                              size_t entry,
+                                              const Chunk& chunk,
                                               const ProcessorFrame& frame) const noexcept
     ANIRA_NONBLOCKING {
     // The plan the chunk was stamped with (Core::pre_process), never the session's atomic: all
     // four phases of a chunk report one plan, and one entry. The session's table names the
     // plan's engine and provider; a stamp is always in range.
-    const uint32_t plan = m_chunks[entry]->m_plan;
+    const uint32_t plan = chunk.m_plan;
     const std::vector<anira::SessionElement::PlanSlot>& plans = m_session->m_plans;
     anira_processor_ctx ctx{};  // every slot NULL, the high halves of the pointer slots zero
     ctx.phase = static_cast<uint32_t>(phase);
@@ -706,7 +670,7 @@ anira_processor_ctx ProcessorRunner::make_ctx(anira_phase phase,
     ctx.num_inputs = static_cast<uint32_t>(m_input_shapes.size());
     ctx.num_outputs = static_cast<uint32_t>(m_output_shapes.size());
     ctx.ticket = ANIRA_TICKET_INVALID;
-    ctx.entry = static_cast<uint32_t>(entry);
+    ctx.entry = chunk.m_entry;
     ctx.frame = &frame;
     return ctx;
 }
@@ -730,8 +694,7 @@ anira_status ProcessorRunner::run_phase(const anira_processor_ctx& ctx) noexcept
     return status;
 }
 
-void ProcessorRunner::reset_if_new_stream(const Chunk& chunk,
-                                          size_t entry) noexcept ANIRA_NONBLOCKING {
+void ProcessorRunner::reset_if_new_stream(const Chunk& chunk) noexcept ANIRA_NONBLOCKING {
     if (chunk.m_dispatch_generation == m_pre_generation) { return; }
     // The first chunk of a new stream. The stamp is adopted whether the processor resets or not,
     // so that the next chunk of this stream is no first one; the chunk's stamp, never the
@@ -742,7 +705,7 @@ void ProcessorRunner::reset_if_new_stream(const Chunk& chunk,
     // The chunk's context in ANIRA_PHASE_RESET over a frame without buffers: the roles answer,
     // a ring or a model tensor is refused and recorded, the processor's bug.
     const ProcessorFrame frame = make_frame();
-    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_RESET, entry, frame);
+    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_RESET, chunk, frame);
     m_processor->desc().reset(&ctx, m_prepared, m_processor->desc().user_data);
 }
 
@@ -750,11 +713,11 @@ void ProcessorRunner::snapshot(const std::vector<Port>& ports) noexcept ANIRA_NO
     size_t entry = 0;
     for (const Port& port : ports) {
         const auto* stream = std::get_if<StreamPort>(&port);
-        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
-        const anira_ring* ring = stream->m_ring;
-        const size_t channels = ring->num_channels();
+        if (stream == nullptr) { continue; }
+        const anira_ring& ring = stream->m_ring;
+        const size_t channels = ring.num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
-            m_before[entry++] = ring->available(channel);
+            m_before[entry++] = ring.available(channel);
         }
     }
 }
@@ -792,9 +755,9 @@ void ProcessorRunner::report_hop([[maybe_unused]] uint32_t phase,
 void ProcessorRunner::check_input_hops(bool report) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
     for (size_t tensor = 0; tensor < m_input_ports.size(); ++tensor) {
-        const auto* stream = std::get_if<StreamPort>(&m_input_ports[tensor]);
-        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
-        anira_ring* ring = stream->m_ring;
+        auto* stream = std::get_if<StreamPort>(&m_input_ports[tensor]);
+        if (stream == nullptr) { continue; }
+        anira_ring* ring = &stream->m_ring;
         const size_t channels = ring->num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
             const size_t before = m_before[entry++];
@@ -815,9 +778,9 @@ void ProcessorRunner::check_input_hops(bool report) noexcept ANIRA_NONBLOCKING {
 void ProcessorRunner::check_output_hops(bool report) noexcept ANIRA_NONBLOCKING {
     size_t entry = 0;
     for (size_t tensor = 0; tensor < m_output_ports.size(); ++tensor) {
-        const auto* stream = std::get_if<StreamPort>(&m_output_ports[tensor]);
-        if (stream == nullptr || stream->m_ring == nullptr) { continue; }
-        anira_ring* ring = stream->m_ring;
+        auto* stream = std::get_if<StreamPort>(&m_output_ports[tensor]);
+        if (stream == nullptr) { continue; }
+        anira_ring* ring = &stream->m_ring;
         const size_t channels = ring->num_channels();
         for (size_t channel = 0; channel < channels; ++channel) {
             const size_t before = m_before[entry++];
@@ -835,32 +798,24 @@ void ProcessorRunner::check_output_hops(bool report) noexcept ANIRA_NONBLOCKING 
     }
 }
 
-void ProcessorRunner::pre_process(std::vector<anira::RingBuffer>& input,
-                                  std::vector<anira::BufferF>& output,
-                                  anira::InferenceBackend current_inference_backend) {
-    const size_t entry = entry_of_inputs(output);
-    if (entry == k_no_entry) {
-        // Not a struct of the bound session: the 2.x default, which needs no ctx.
-        anira::PrePostProcessor::pre_process(input, output, current_inference_backend);
-        return;
-    }
-    Chunk& chunk = *m_chunks[entry];
+anira_status ProcessorRunner::pre_process(Chunk& chunk) noexcept {
     // The processor's reset boundary: the first chunk of a new stream resets the processor's own
     // state before anything of the chunk is formed.
-    reset_if_new_stream(chunk, entry);
+    reset_if_new_stream(chunk);
     // Every Static tensor is materialised ahead of the processor: the whole tensor out of its
-    // static port, under the slot's latch, into the struct's packed buffer. A State tensor has
+    // static port, under the slot's latch, into the chunk's buffer of the slot. A State tensor has
     // no ring and is not fed here: before_inference feeds it on the inference thread, and
     // nothing on this thread touches it.
-    for (size_t tensor = 0; tensor < output.size() && tensor < m_input_ports.size(); ++tensor) {
+    for (size_t tensor = 0; tensor < chunk.m_input_tensors.size() && tensor < m_input_ports.size();
+         ++tensor) {
         const auto* fixed = std::get_if<StaticPort>(&m_input_ports[tensor]);
         if (fixed == nullptr) { continue; }
         fixed->m_value.read_packed(
-            output[tensor].get_write_pointer(0),
+            chunk.m_input_tensors[tensor].handle.host.ptr,
             m_inference_config.get_tensor_input_size()[tensor] * sizeof(float));
     }
     const ProcessorFrame frame = make_frame_with_inputs(chunk);
-    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, entry, frame);
+    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, chunk, frame);
 
     snapshot(m_input_ports);
     anira_status status = ANIRA_OK;
@@ -875,21 +830,12 @@ void ProcessorRunner::pre_process(std::vector<anira::RingBuffer>& input,
     // shortfall is discarded so that the stream stays aligned. A failed phase is already
     // recorded, so its repair is silent.
     check_input_hops(/*report=*/status == ANIRA_OK);
-    // Core::pre_process reads it: a failed chunk completes as zeros and is not enqueued.
-    chunk.m_processor_status = status;
+    return status;
 }
 
-void ProcessorRunner::post_process(std::vector<anira::BufferF>& input,
-                                   std::vector<anira::RingBuffer>& output,
-                                   anira::InferenceBackend current_inference_backend) {
-    const size_t entry = entry_of_outputs(input);
-    if (entry == k_no_entry) {
-        anira::PrePostProcessor::post_process(input, output, current_inference_backend);
-        return;
-    }
-    const Chunk& chunk = *m_chunks[entry];
+anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
     const ProcessorFrame frame = make_frame_with_outputs(chunk);
-    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_POST_PROCESS, entry, frame);
+    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_POST_PROCESS, chunk, frame);
 
     snapshot(m_output_ports);
     anira_status status = ANIRA_OK;
@@ -907,14 +853,17 @@ void ProcessorRunner::post_process(std::vector<anira::BufferF>& input,
     // under the slot's latch (a State tensor was captured in after_inference, on the inference
     // thread). Not from a chunk that completed as zeros (dropped, failed in a processor or in the
     // engine) and not behind a failed post_process: the port holds what the model produced.
-    if (status != ANIRA_OK || chunk.m_completed_as_zeros) { return; }
-    for (size_t tensor = 0; tensor < input.size() && tensor < m_output_ports.size(); ++tensor) {
+    if (status != ANIRA_OK || chunk.m_completed_as_zeros) { return status; }
+    for (size_t tensor = 0;
+         tensor < chunk.m_output_tensors.size() && tensor < m_output_ports.size();
+         ++tensor) {
         auto* fixed = std::get_if<StaticPort>(&m_output_ports[tensor]);
         if (fixed == nullptr) { continue; }
         fixed->m_value.write_packed(
-            input[tensor].get_read_pointer(0),
+            chunk.m_output_tensors[tensor].handle.host.ptr,
             m_inference_config.get_tensor_output_size()[tensor] * sizeof(float));
     }
+    return status;
 }
 
 bool ProcessorRunner::aliases_state(const Chunk& chunk) const noexcept ANIRA_NONBLOCKING {
@@ -979,44 +928,36 @@ void ProcessorRunner::promote_state(const Chunk& chunk) noexcept ANIRA_NONBLOCKI
     }
 }
 
-void ProcessorRunner::before_inference(
-    std::vector<anira::BufferF>& input,
-    [[maybe_unused]] anira::InferenceBackend current_inference_backend) {
-    if (!m_fills_before && !m_has_state) { return; }
-    const size_t entry = entry_of_inputs(input);
-    if (entry == k_no_entry) { return; }
-    Chunk& chunk = *m_chunks[entry];
+anira_status ProcessorRunner::before_inference(Chunk& chunk) noexcept {
+    if (!m_fills_before && !m_has_state) { return ANIRA_OK; }
     // The declared state, the library's first step: every pair is bound ahead of the processor's
     // hook, which sees the read buffer as the fed state and may read or alter it (the class
     // comment).
     bind_state(chunk);
-    if (!m_fills_before) { return; }
+    if (!m_fills_before) { return ANIRA_OK; }
     const ProcessorFrame frame = make_frame_with_inputs(chunk);
-    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_BEFORE_INFERENCE, entry, frame);
-    // InferenceThread::do_inference reads it: a failure skips the engine call and
-    // after_inference, and the chunk delivers zeros.
-    chunk.m_processor_status = run_phase(ctx);
+    const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_BEFORE_INFERENCE, chunk, frame);
+    // A failure skips the engine call and after_inference, and the chunk delivers zeros
+    // (InferenceThread::do_inference).
+    return run_phase(ctx);
 }
 
-void ProcessorRunner::after_inference(
-    std::vector<anira::BufferF>& output,
-    [[maybe_unused]] anira::InferenceBackend current_inference_backend) {
-    if (!m_fills_after && !m_has_state) { return; }
-    const size_t entry = entry_of_outputs(output);
-    if (entry == k_no_entry) { return; }
-    Chunk& chunk = *m_chunks[entry];
+anira_status ProcessorRunner::after_inference(Chunk& chunk) noexcept {
+    if (!m_fills_after && !m_has_state) { return ANIRA_OK; }
+    anira_status status = ANIRA_OK;
     if (m_fills_after) {
         const ProcessorFrame frame = make_frame_with_outputs(chunk);
-        const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_AFTER_INFERENCE, entry, frame);
+        const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_AFTER_INFERENCE, chunk, frame);
         // do_inference zeroes the outputs of a chunk whose after_inference failed.
-        chunk.m_processor_status = run_phase(ctx);
+        status = run_phase(ctx);
     }
     // The declared state, the library's last step: every pair is promoted behind the processor's
     // hook, which saw the write buffer as the produced state. Not behind a failed hook (the
     // chunk delivers zeros; a failed before_inference and a failed engine never come here) and
     // not for a chunk that completed as zeros: the read buffer keeps the last good state.
-    if (chunk.m_processor_status != ANIRA_OK || chunk.m_completed_as_zeros) { return; }
+    if (status != ANIRA_OK || chunk.m_completed_as_zeros) { return status; }
     promote_state(chunk);
+    return status;
 }
 
 }  // namespace anira::capi

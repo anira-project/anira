@@ -250,10 +250,10 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     unsigned int const latency = anira_handler_get_latency(handler.m_handler, 0);
     auto const sessions = Core::get_sessions();
     ASSERT_EQ(sessions.size(), 1u);
-    SessionElement& session = *sessions[0];
+    const SessionElement& session = *sessions[0];
     size_t const num_structs = session.m_num_structs;
     ASSERT_EQ(session.m_inference_queue.size(), num_structs);
-    RingBuffer& ring = session.m_receive_buffer[0];
+    RingBuffer& ring = session.receive_ring(0);
     size_t const ring_capacity = ring.get_num_samples();
     ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
         << "The receive ring holds the latency pre-fill plus one hop per struct.";

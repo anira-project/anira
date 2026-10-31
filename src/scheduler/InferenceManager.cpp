@@ -1,5 +1,4 @@
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -25,13 +24,13 @@
 
 namespace anira {
 
-InferenceManager::InferenceManager(PrePostProcessor& pp_processor,
+InferenceManager::InferenceManager(capi::ProcessorRunner& processor,
                                    InferenceConfig& inference_config,
                                    std::vector<engine::PlanRequest> requests,
                                    const anira_context_config& context_config,
                                    anira::RtLatch* rt_latch)
     : m_inference_config(inference_config)
-    , m_session(Core::create_session(pp_processor,
+    , m_session(Core::create_session(processor,
                                      inference_config,
                                      std::move(requests),
                                      context_config,
@@ -74,16 +73,16 @@ void InferenceManager::prepare(HostConfig new_config,
         if (m_inference_config.get_preprocess_input_size()[i] == 0) { continue; }
         m_input_slots[i].m_streamed = true;
         m_input_slots[i].m_channels = m_inference_config.get_preprocess_input_channels()[i];
-        m_input_slots[i].m_dtype = m_session->m_send_buffer[i].dtype();
-        m_input_slots[i].m_element_size = m_session->m_send_buffer[i].element_size();
+        m_input_slots[i].m_dtype = m_session->send_ring(i).dtype();
+        m_input_slots[i].m_element_size = m_session->send_ring(i).element_size();
     }
     m_output_slots.assign(num_outputs, SlotCopy{});
     for (size_t i = 0; i < num_outputs; ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] == 0) { continue; }
         m_output_slots[i].m_streamed = true;
         m_output_slots[i].m_channels = m_inference_config.get_postprocess_output_channels()[i];
-        m_output_slots[i].m_dtype = m_session->m_receive_buffer[i].dtype();
-        m_output_slots[i].m_element_size = m_session->m_receive_buffer[i].element_size();
+        m_output_slots[i].m_dtype = m_session->receive_ring(i).dtype();
+        m_output_slots[i].m_element_size = m_session->receive_ring(i).element_size();
     }
     m_input_counts.assign(num_inputs, 0);
     m_output_counts.assign(num_outputs, 0);
@@ -313,11 +312,12 @@ void InferenceManager::process_input(const anira_tensor* inputs, size_t* num_sam
         for (size_t channel = 0; channel < slot.m_channels; ++channel) {
             const tensor_run::Run run =
                 tensor_run::channel_run(input, channel, slot.m_element_size);
-            m_session->m_send_buffer[tensor_index].push_block(channel,
-                                                              run.m_data,
-                                                              slot.m_dtype,
-                                                              num_samples[tensor_index],
-                                                              static_cast<size_t>(run.m_step));
+            m_session->send_ring(tensor_index)
+                .push_block(channel,
+                            run.m_data,
+                            slot.m_dtype,
+                            num_samples[tensor_index],
+                            static_cast<size_t>(run.m_step));
         }
     }
 }
@@ -347,14 +347,14 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
             if (m_missing_samples[i] > 0) {
                 // Catch up in one go: drop as many missing samples as can be spared while
                 // still leaving num_samples[i] for this block.
-                size_t const available = m_session->m_receive_buffer[i].get_available_samples(0);
+                size_t const available = m_session->receive_ring(i).get_available_samples(0);
                 if (available > num_samples[i]) {
                     size_t const to_drop =
                         std::min(m_missing_samples[i], available - num_samples[i]);
                     for (size_t channel = 0;
                          channel < m_inference_config.get_postprocess_output_channels()[i];
                          ++channel) {
-                        m_session->m_receive_buffer[i].discard(channel, to_drop);
+                        m_session->receive_ring(i).discard(channel, to_drop);
                     }
                     m_missing_samples[i] -= to_drop;
                 }
@@ -373,7 +373,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     bool enough_samples = true;
     for (size_t i = 0; i < num_outputs; ++i) {
         if (m_inference_config.get_postprocess_output_size()[i] > 0) {
-            if (m_session->m_receive_buffer[i].get_available_samples(0) < num_samples[i]) {
+            if (m_session->receive_ring(i).get_available_samples(0) < num_samples[i]) {
                 enough_samples = false;
                 break;
             }
@@ -389,12 +389,12 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
             for (size_t channel = 0; channel < slot.m_channels; ++channel) {
                 const tensor_run::Run run =
                     tensor_run::channel_run(output, channel, slot.m_element_size);
-                m_session->m_receive_buffer[tensor_index].pop_block(
-                    channel,
-                    run.m_data,
-                    slot.m_dtype,
-                    num_samples[tensor_index],
-                    static_cast<size_t>(run.m_step));
+                m_session->receive_ring(tensor_index)
+                    .pop_block(channel,
+                               run.m_data,
+                               slot.m_dtype,
+                               num_samples[tensor_index],
+                               static_cast<size_t>(run.m_step));
                 if (m_on_miss == ANIRA_MISS_HOLD_LAST) {
                     // Keep the latest delivered block of every channel for a later miss: its
                     // head, read back from the host memory it was delivered into.
@@ -545,7 +545,7 @@ size_t InferenceManager::get_available_samples(size_t tensor_index, size_t chann
     // overload polled m_done_atomic, which a blocking_ratio > 0 session never sets.
     Core::collect_completed(m_session);
     if (m_inference_config.get_postprocess_output_size()[tensor_index] > 0) {
-        return m_session->m_receive_buffer[tensor_index].get_available_samples(channel);
+        return m_session->receive_ring(tensor_index).get_available_samples(channel);
     } else {
         return 0;
     }

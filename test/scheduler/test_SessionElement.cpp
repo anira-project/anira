@@ -1,5 +1,4 @@
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
@@ -8,7 +7,6 @@
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
 #include <anira/utils/InferenceBackend.h>
-#include <concurrentqueue.h>
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
 #include <sanitizer/lsan_interface.h>
@@ -21,6 +19,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <ostream>
 #include <string>
@@ -167,32 +166,29 @@ struct RingDtypeSession {
 TEST(SessionElementRingDtypes, ASlotsRingHoldsItsRingDtype) {
     const RingDtypeSession floats(ANIRA_DTYPE_F32, ANIRA_DTYPE_F32);
     ASSERT_EQ(floats.m_status, ANIRA_OK) << floats.m_handler.m_err.message;
-    ASSERT_EQ(floats.session().m_send_buffer[0].dtype(), ANIRA_DTYPE_F32);
-    ASSERT_EQ(floats.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32);
+    ASSERT_EQ(floats.session().send_ring(0).dtype(), ANIRA_DTYPE_F32);
+    ASSERT_EQ(floats.session().receive_ring(0).dtype(), ANIRA_DTYPE_F32);
 
     const RingDtypeSession int16_in(ANIRA_DTYPE_I16, ANIRA_DTYPE_F32);
     ASSERT_EQ(int16_in.m_status, ANIRA_OK) << int16_in.m_handler.m_err.message;
-    EXPECT_EQ(int16_in.session().m_send_buffer[0].dtype(), ANIRA_DTYPE_I16);
-    EXPECT_EQ(int16_in.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_F32)
-        << "not named: float32";
+    EXPECT_EQ(int16_in.session().send_ring(0).dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_in.session().receive_ring(0).dtype(), ANIRA_DTYPE_F32) << "not named: float32";
     EXPECT_EQ(int16_in.session().m_send_buffer_size, floats.session().m_send_buffer_size);
     EXPECT_EQ(int16_in.session().m_receive_buffer_size, floats.session().m_receive_buffer_size);
-    EXPECT_EQ(int16_in.session().m_send_buffer[0].capacity(),
-              floats.session().m_send_buffer[0].capacity());
-    EXPECT_EQ(int16_in.session().m_send_buffer[0].num_channels(),
-              floats.session().m_send_buffer[0].num_channels());
+    EXPECT_EQ(int16_in.session().send_ring(0).capacity(), floats.session().send_ring(0).capacity());
+    EXPECT_EQ(int16_in.session().send_ring(0).num_channels(),
+              floats.session().send_ring(0).num_channels());
 
     const RingDtypeSession int16_out(ANIRA_DTYPE_F32, ANIRA_DTYPE_I16);
     ASSERT_EQ(int16_out.m_status, ANIRA_OK) << int16_out.m_handler.m_err.message;
-    EXPECT_EQ(int16_out.session().m_receive_buffer[0].dtype(), ANIRA_DTYPE_I16);
-    EXPECT_EQ(int16_out.session().m_receive_buffer[0].capacity(),
-              floats.session().m_receive_buffer[0].capacity());
-    EXPECT_EQ(int16_out.session().m_receive_buffer[0].available(0),
-              floats.session().m_receive_buffer[0].available(0))
+    EXPECT_EQ(int16_out.session().receive_ring(0).dtype(), ANIRA_DTYPE_I16);
+    EXPECT_EQ(int16_out.session().receive_ring(0).capacity(),
+              floats.session().receive_ring(0).capacity());
+    EXPECT_EQ(int16_out.session().receive_ring(0).available(0),
+              floats.session().receive_ring(0).available(0))
         << "the latency priming is the same element count, typed";
     int16_t primed = 7;
-    ASSERT_EQ(int16_out.session().m_receive_buffer[0].pop_block(0, &primed, ANIRA_DTYPE_I16, 1),
-              1U);
+    ASSERT_EQ(int16_out.session().receive_ring(0).pop_block(0, &primed, ANIRA_DTYPE_I16, 1), 1U);
     EXPECT_EQ(primed, 0);
 
     const RingDtypeSession lanes(ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_DTYPE_F32);
@@ -361,44 +357,36 @@ T* leak_intentionally(T* p) {
 // =============================================================================
 
 namespace {
-// Everything the detached worker thread touches lives here, heap-allocated and
-// intentionally leaked by the test: if clear() deadlocks (the bug under test),
-// the thread stays blocked inside it forever and must not reference destroyed
-// stack objects while the remaining tests run. Process teardown reclaims it.
+// Everything the detached worker thread touches lives here, heap-allocated: if clear()
+// deadlocks (the bug under test), the thread stays blocked inside it forever and must not
+// reference destroyed objects while the remaining tests run, so a failing test leaks the
+// fixture (process teardown reclaims it); a passing one destroys it. A C handler over a
+// 2048-sample stream with a wait ratio, so that clear() takes the semaphore branch.
 struct ClearDeadlockFixture {
-    InferenceConfig m_inference_config{
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 2048}}, {{1, 1, 2048}})},
-        40.f,
-        0,
-        false,
-        0.5f,  // blocking_ratio > 0: clear() takes the semaphore branch
-        2};
-    PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceQueue m_inference_queue;
-    SessionElement m_session{0,
-                             m_pp_processor,
-                             m_inference_config,
-                             moodycamel::ProducerToken(m_inference_queue)};
+    anira_test::SizingSession m_handler{
+        anira_test::sizing_model({{.m_elements = 2048}}, {{.m_elements = 2048}}, 2),
+        anira_test::sizing_contract(anira_test::sizing_geometry(2048, 48000), 40.0, 0.5)};
     std::atomic<bool> m_cleared{false};
 };
 }  // namespace
 
 TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
-    // leaked deliberately, see above
-    auto* fixture = leak_intentionally(new ClearDeadlockFixture());
-    fixture->m_session.prepare(HostConfig(2048, 48000));
+    auto fixture = std::make_unique<ClearDeadlockFixture>();
+    ASSERT_EQ(fixture->m_handler.prepared(), ANIRA_OK) << fixture->m_handler.message();
+    SessionElement* const session = anira_test::session_of(fixture->m_handler.handler()).get();
+    ASSERT_NE(session, nullptr);
 
     // Mixed signal state: one struct carries a stale unconsumed completion
     // signal, the others none. clear() must consume what is there and never
     // wait — a blind acquire() on a count-0 semaphore blocks forever, since
     // the callers' drain_inference_queue() guarantees no inference thread will
     // signal this session again.
-    fixture->m_session.m_inference_queue[0]->m_done_semaphore.release();
+    session->m_inference_queue[0]->m_done_semaphore.release();
 
-    std::thread([fixture] {
-        fixture->m_session.clear();
-        fixture->m_cleared.store(true, std::memory_order_release);
+    ClearDeadlockFixture* const raw = fixture.get();
+    std::thread([raw, session] {
+        session->clear();
+        raw->m_cleared.store(true, std::memory_order_release);
     }).detach();
 
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -407,9 +395,11 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    ASSERT_TRUE(fixture->m_cleared.load(std::memory_order_acquire))
-        << "SessionElement::clear() deadlocked draining the done-semaphores "
-           "(blind acquire on a semaphore with count 0).";
+    if (!fixture->m_cleared.load(std::memory_order_acquire)) {
+        leak_intentionally(fixture.release());  // the thread may still be inside clear()
+        FAIL() << "SessionElement::clear() deadlocked draining the done-semaphores "
+                  "(blind acquire on a semaphore with count 0).";
+    }
 }
 
 // =============================================================================
@@ -543,51 +533,24 @@ INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                              return info.param ? "allow_smaller_buffers" : "static_buffer";
                          });
 
-namespace {
-// The 2.x configurations of the cases below, which drive a SessionElement of their own.
-InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
-        std::move(shapes),
-        std::move(spec),
-        10.f,   // max_inference_time
-        0,      // warm_up
-        false,  // session_exclusive_processor
-        0.f,    // blocking_ratio
-        2);     // num_parallel_processors
-}
-
-// Generator: 4 control parameters in, a 2048-sample audio stream out.
-InferenceConfig generator_config() {
-    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
-                       ProcessingSpec({1}, {1}, {0}, {2048}));
-}
-}  // namespace
-
 // The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
-// never terminated. Run prepare() on a detached thread against a deadline. The
-// fixture is leaked deliberately -- if prepare() ever hangs again the detached
-// thread must not touch a destroyed fixture (same pattern as SessionElementClearTest).
+// never terminated. Run the prepare on a detached thread against a deadline. A failing test
+// leaks the fixture -- if prepare ever hangs again the detached thread must not touch a
+// destroyed fixture (same pattern as SessionElementClearTest); a passing one destroys it.
 namespace {
 struct GeneratorPrepareFixture {
-    InferenceConfig m_inference_config = generator_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceQueue m_inference_queue;
-    SessionElement m_session{0,
-                             m_pp_processor,
-                             m_inference_config,
-                             moodycamel::ProducerToken(m_inference_queue)};
+    std::optional<anira_test::SizingSession> m_handler;
     std::atomic<bool> m_prepared{false};
 };
 }  // namespace
 
 TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
-    // leaked deliberately, see above
-    auto* fixture = leak_intentionally(new GeneratorPrepareFixture());
-
-    std::thread([fixture] {
-        fixture->m_session.prepare(HostConfig(512, 48000, true));
-        fixture->m_prepared.store(true, std::memory_order_release);
+    auto fixture = std::make_unique<GeneratorPrepareFixture>();
+    GeneratorPrepareFixture* const raw = fixture.get();
+    std::thread([raw] {
+        raw->m_handler.emplace(generator_model(),
+                               anira_test::sizing_contract(geometry(512, 48000, true), 10.0, 0.0));
+        raw->m_prepared.store(true, std::memory_order_release);
     }).detach();
 
     auto const deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
@@ -596,9 +559,16 @@ TEST(OneSidedStreamingPrepareStandalone, GeneratorPrepareTerminates) {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    ASSERT_TRUE(fixture->m_prepared.load(std::memory_order_acquire))
-        << "prepare() did not terminate for a generator config with allow_smaller_buffers "
-           "(the buffer-ratio countdown divided by the non-streamable reference input's size 0).";
+    if (!fixture->m_prepared.load(std::memory_order_acquire)) {
+        leak_intentionally(fixture.release());  // the thread may still be inside prepare
+        FAIL() << "prepare did not terminate for a generator with smaller blocks allowed (the "
+                  "buffer-ratio countdown divided by the non-streamable reference input's size "
+                  "0).";
+    }
+    ASSERT_TRUE(fixture->m_handler.has_value());
+    if (fixture->m_handler.has_value()) {
+        EXPECT_EQ(fixture->m_handler->prepared(), ANIRA_OK) << fixture->m_handler->message();
+    }
 }
 
 TEST(OneSidedStreamingPrepareStandalone, ExplicitOutputReferenceEqualsInputReference) {
@@ -662,6 +632,27 @@ TEST(OneSidedStreamingPrepareStandalone, InvalidReferenceIsRefused) {
 // =============================================================================
 // HostConfig::resolve_reference() unit tests, independent of prepare().
 // =============================================================================
+
+namespace {
+// The 2.x configurations the reference rule reads.
+InferenceConfig make_config(std::vector<TensorShape> shapes, ProcessingSpec spec) {
+    return InferenceConfig(
+        std::vector<ModelData>{ModelData("placeholder", anira::InferenceBackend::CUSTOM)},
+        std::move(shapes),
+        std::move(spec),
+        10.f,   // max_inference_time
+        0,      // warm_up
+        false,  // session_exclusive_processor
+        0.f,    // blocking_ratio
+        2);     // num_parallel_processors
+}
+
+// Generator: 4 control parameters in, a 2048-sample audio stream out.
+InferenceConfig generator_config() {
+    return make_config(std::vector<TensorShape>{TensorShape({{1, 4}}, {{1, 2048}})},
+                       ProcessingSpec({1}, {1}, {0}, {2048}));
+}
+}  // namespace
 
 TEST(HostConfigReference, AutoPicksFirstStreamableInput) {
     InferenceConfig const config =

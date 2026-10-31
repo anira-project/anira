@@ -527,23 +527,42 @@ private:
     std::shared_ptr<anira::SessionElement> m_session;
 };
 
+/// The rings of one side of the session, one per slot: a Streamed slot's, in its stream port; an
+/// empty ring (no channel, no capacity) for every other slot, which has none.
+inline std::vector<const anira::RingBuffer*> rings_of(const anira::SessionElement& session,
+                                                      bool inputs) {
+    static const anira::RingBuffer k_none;
+    const anira::InferenceConfig& config = session.m_inference_config;
+    const size_t slots =
+        inputs ? config.get_tensor_input_shape().size() : config.get_tensor_output_shape().size();
+    std::vector<const anira::RingBuffer*> rings(slots, &k_none);
+    for (size_t slot = 0; slot < slots; ++slot) {
+        const size_t hop = inputs ? config.get_preprocess_input_size()[slot]
+                                  : config.get_postprocess_output_size()[slot];
+        if (hop > 0) {
+            rings[slot] = inputs ? &session.send_ring(slot) : &session.receive_ring(slot);
+        }
+    }
+    return rings;
+}
+
 /// "send=[3/3] recv=[16/16,-]": the samples waiting per channel in every send and receive
 /// ring, "-" for a Static slot (it has no ring). Read from the rings, nothing is collected.
 inline std::string format_rings(const anira::SessionElement& session) {
-    const auto side = [](const std::vector<anira::RingBuffer>& rings) {
+    const auto side = [](const std::vector<const anira::RingBuffer*>& rings) {
         std::string text = "[";
         for (size_t slot = 0; slot < rings.size(); ++slot) {
             if (slot > 0) { text += ","; }
-            const size_t channels = rings[slot].get_num_channels();
+            const size_t channels = rings[slot]->get_num_channels();
             if (channels == 0) { text += "-"; }
             for (size_t channel = 0; channel < channels; ++channel) {
                 if (channel > 0) { text += "/"; }
-                text += std::to_string(rings[slot].get_available_samples(channel));
+                text += std::to_string(rings[slot]->get_available_samples(channel));
             }
         }
         return text + "]";
     };
-    return "send=" + side(session.m_send_buffer) + " recv=" + side(session.m_receive_buffer);
+    return "send=" + side(rings_of(session, true)) + " recv=" + side(rings_of(session, false));
 }
 
 /// The first line of every transcript: what prepare left (the latency per output, the capacity
@@ -555,12 +574,14 @@ inline std::string prepared_line(const std::vector<unsigned int>& latencies,
         line += (i > 0 ? "," : "") + std::to_string(latencies[i]);
     }
     line += "] send_capacity=[";
-    for (size_t i = 0; i < session.m_send_buffer.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(session.m_send_buffer[i].get_num_samples());
+    const std::vector<const anira::RingBuffer*> send = rings_of(session, true);
+    for (size_t i = 0; i < send.size(); ++i) {
+        line += (i > 0 ? "," : "") + std::to_string(send[i]->get_num_samples());
     }
     line += "] recv_capacity=[";
-    for (size_t i = 0; i < session.m_receive_buffer.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(session.m_receive_buffer[i].get_num_samples());
+    const std::vector<const anira::RingBuffer*> receive = rings_of(session, false);
+    for (size_t i = 0; i < receive.size(); ++i) {
+        line += (i > 0 ? "," : "") + std::to_string(receive[i]->get_num_samples());
     }
     return line + "] structs=" + std::to_string(session.m_num_structs) + " " +
            format_rings(session);

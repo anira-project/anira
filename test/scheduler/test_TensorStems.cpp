@@ -1054,9 +1054,9 @@ TEST(TensorStems, APushLandsEveryChannelInItsRingUnderEveryDescription) {
             const anira_tensor input = block.tensor(k_count, ANIRA_DTYPE_F32, true);
             rig.manager().push_data(&input);
             for (size_t channel = 0; channel < channels; ++channel) {
-                ASSERT_EQ(rig.session().m_send_buffer[0].get_available_samples(channel), k_count);
+                ASSERT_EQ(rig.session().send_ring(0).get_available_samples(channel), k_count);
                 std::array<float, k_count> ring{};
-                rig.session().m_send_buffer[0].pop_block(channel, ring.data(), k_count);
+                rig.session().send_ring(0).pop_block(channel, ring.data(), k_count);
                 for (size_t i = 0; i < k_count; ++i) {
                     EXPECT_EQ(ring[i], oracle::stream_value(0, channel, i))
                         << channels << " channels, " << name_of(layout) << ", channel " << channel
@@ -1216,7 +1216,7 @@ TEST(TensorStems, EmptyAndZeroedTensorsAreNotTouched) {
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_EQ(delivered[1], 0U);
     EXPECT_FALSE(rig.manager().last_block_missed());
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
 
     // The stream slot carried, the Static slot zeroed on both sides.
     HostBlock<float> in = ramp_block(Layout::Interleaved, 3, 5, 0);
@@ -1228,7 +1228,7 @@ TEST(TensorStems, EmptyAndZeroedTensorsAreNotTouched) {
     EXPECT_EQ(delivered[0], 5U);  // the latency's zeros
     EXPECT_EQ(delivered[1], 0U);
     for (size_t channel = 0; channel < 3; ++channel) {
-        EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(channel), 5U);
+        EXPECT_EQ(rig.session().send_ring(0).get_available_samples(channel), 5U);
         for (size_t i = 0; i < 5; ++i) { EXPECT_EQ(out.at(channel, i), 0.F); }
     }
     EXPECT_TRUE(out.slack_untouched());
@@ -1242,7 +1242,7 @@ TEST(TensorStems, AnOversizedInterleavedPushKeepsTheTail) {
     constexpr size_t k_count = 3 * k_hop;
     Rig rig(oracle::pass_through_model(k_channels), ANIRA_MISS_ZEROS, Face::Tensor);
     ASSERT_TRUE(rig.ready());
-    const size_t capacity = rig.session().m_send_buffer[0].get_num_samples();
+    const size_t capacity = rig.session().send_ring(0).get_num_samples();
     ASSERT_LT(capacity, k_count);
     ASSERT_GT(capacity, k_hop);
     HostBlock<float> block = ramp_block(Layout::Interleaved, k_channels, k_count, 0);
@@ -1250,9 +1250,9 @@ TEST(TensorStems, AnOversizedInterleavedPushKeepsTheTail) {
     rig.manager().push_data(&input);
     const size_t left = capacity - k_hop;
     for (size_t channel = 0; channel < k_channels; ++channel) {
-        ASSERT_EQ(rig.session().m_send_buffer[0].get_available_samples(channel), left);
+        ASSERT_EQ(rig.session().send_ring(0).get_available_samples(channel), left);
         std::vector<float> ring(left, 0.F);
-        rig.session().m_send_buffer[0].pop_block(channel, ring.data(), left);
+        rig.session().send_ring(0).pop_block(channel, ring.data(), left);
         for (size_t i = 0; i < left; ++i) {
             EXPECT_EQ(ring[i], oracle::stream_value(0, channel, k_count - left + i))
                 << "channel " << channel << ", sample " << i;
@@ -1280,8 +1280,8 @@ TEST(TensorStems, Int16TensorsCopyIntoAndOutOfInt16Rings) {
                 0.0,
                 ANIRA_DTYPE_I16);
         ASSERT_TRUE(rig.ready());
-        RingBuffer& send = rig.session().m_send_buffer[0];
-        RingBuffer& receive = rig.session().m_receive_buffer[0];
+        RingBuffer& send = rig.session().send_ring(0);
+        RingBuffer& receive = rig.session().receive_ring(0);
         ASSERT_EQ(send.dtype(), ANIRA_DTYPE_I16);
         ASSERT_EQ(receive.dtype(), ANIRA_DTYPE_I16);
 
@@ -1395,12 +1395,12 @@ TEST(TensorStems, ATensorOfAnotherDtypeIsNotCopied) {
     HostBlock<int16_t> out(Layout::Interleaved, 2, k_hop, k_untouched_i16);
     const anira_tensor input = in.tensor(k_hop, ANIRA_DTYPE_I16, true);
     const anira_tensor output = out.tensor(k_hop, ANIRA_DTYPE_I16, false);
-    const size_t available = rig.session().m_receive_buffer[0].get_available_samples(0);
+    const size_t available = rig.session().receive_ring(0).get_available_samples(0);
     const size_t* delivered = rig.manager().process_nowait(&input, &output);
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_FALSE(rig.manager().last_block_missed());
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
-    EXPECT_EQ(rig.session().m_receive_buffer[0].get_available_samples(0), available);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().receive_ring(0).get_available_samples(0), available);
     for (size_t channel = 0; channel < 2; ++channel) {
         for (size_t i = 0; i < k_hop; ++i) { EXPECT_EQ(out.at(channel, i), 0); }
         for (size_t i = k_hop; i < out.run_length(); ++i) {
@@ -1432,7 +1432,7 @@ TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     const std::array<float* const*, 1> out_planes{out.planes()};
     const std::array<size_t, 1> num_in{k_hop};
     std::array<size_t, 1> num_out{k_hop};
-    const size_t available = rig.session().m_receive_buffer[0].get_available_samples(0);
+    const size_t available = rig.session().receive_ring(0).get_available_samples(0);
     const anira_tensor* inputs = rig.adapter().present_inputs(in_planes.data(), num_in.data());
     const anira_tensor* outputs = rig.adapter().present_outputs(out_planes.data(), num_out.data());
     const size_t* delivered =
@@ -1440,8 +1440,8 @@ TEST(TensorStems, TheFloatAdapterOnAnInt16RingCopiesNothing) {
     EXPECT_EQ(delivered, num_out.data());
     EXPECT_EQ(num_out[0], 0U);
     EXPECT_EQ(inputs[0].shape[1], static_cast<int64_t>(k_hop)) << "a descriptor is never written";
-    EXPECT_EQ(rig.session().m_send_buffer[0].get_available_samples(0), 0U);
-    EXPECT_EQ(rig.session().m_receive_buffer[0].get_available_samples(0), available);
+    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().receive_ring(0).get_available_samples(0), available);
     for (size_t channel = 0; channel < 2; ++channel) {
         for (size_t i = 0; i < k_hop; ++i) { EXPECT_EQ(out.at(channel, i), 0.F); }
     }

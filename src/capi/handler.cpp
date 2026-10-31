@@ -52,7 +52,6 @@
 #include <anira/scheduler/LatencyCalculator.h>
 #include <anira/scheduler/SessionElement.h>
 #include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 
@@ -743,7 +742,7 @@ void clear_report(anira_plan_report& report) noexcept {
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
 // with the last session), then the processor, the processor's unprepare, the report and the plan
 // table; the InferenceConfig stays until the next prepare replaces it or destroy frees it. The
-// rings die with the session: no stream port names one while the handler is unprepared.
+// rings stay in their stream ports, which the next prepare re-sizes.
 void unprepare(anira_handler& handler) noexcept {
     handler.m_runnable.store(false, std::memory_order_release);
     handler.m_prepared.store(false, std::memory_order_release);
@@ -758,13 +757,6 @@ void unprepare(anira_handler& handler) noexcept {
             processor->desc().unprepare(handler.m_processor_prepared, processor->desc().user_data);
         }
         handler.m_processor_prepared = nullptr;
-    }
-    for (auto* ports : {&handler.m_input_ports, &handler.m_output_ports}) {
-        for (anira::capi::Port& port : *ports) {
-            if (auto* stream = std::get_if<anira::capi::StreamPort>(&port)) {
-                stream->m_ring = nullptr;
-            }
-        }
     }
     clear_report(handler.m_report);
     handler.m_plans.clear();
@@ -944,18 +936,6 @@ void warn_default_fallback([[maybe_unused]] const anira_model_config& model,
                       asked.c_str(),
                       static_cast<unsigned int>(initial),
                       starts.c_str());
-}
-
-// The 2.x backend of a surviving row. validate kept the rows this build has an adapter for; a
-// row without one here is a defect of that check, not of the configuration.
-anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_t row_index) {
-    const std::optional<anira::InferenceBackend> backend = anira::capi::backend_of(row);
-    if (!backend.has_value()) {
-        throw StatusError(ANIRA_ERROR_INTERNAL,
-                          "handler: model entry " + std::to_string(row_index) +
-                              " passed validate without a 2.x adapter");
-    }
-    return *backend;
 }
 
 // The engine of the pipeline a custom row names by its id, or null for a built-in row
@@ -1218,7 +1198,6 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::engine::PlanRequest request;
-        request.m_legacy_backend = backend_of_row(row, row_index);
         request.m_model = model_of_row(model, row, derived, config);
         // The provider is the plan's, part of the pool key: two providers of one row are two
         // loaded models, and so are two option sets of the context for one backend (the
@@ -1679,19 +1658,18 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
     // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
     // which the firewall classifies. The session records into the handler's latch from its
-    // construction. The one processor the session sees is the processor runner, whether the
-    // pipeline has a processor or not: without one it runs the default bodies, which are the 2.x
-    // default processor's. The plan table is the session's from its construction: one plan
-    // per surviving row, in entry order, what build_plans reports under the same indices.
+    // construction. The one processor the session runs every chunk on is the processor runner,
+    // whether the pipeline has a processor or not: without one it runs the default bodies, which
+    // are the 2.x default processor's. The plan table is the session's from its construction: one
+    // plan per surviving row, in entry order, what build_plans reports under the same indices.
     handler.m_inference_config = std::move(config);
     std::vector<anira::engine::PlanRequest> requests =
         plan_requests(handler, derived, handler.m_inference_config);
-    auto runner = std::make_unique<anira::capi::ProcessorRunner>(handler.m_inference_config,
-                                                                 processor,
-                                                                 handler.m_input_ports,
-                                                                 handler.m_output_ports);
-    anira::capi::ProcessorRunner* const processor_runner = runner.get();
-    handler.m_pp = std::move(runner);
+    handler.m_pp = std::make_unique<anira::capi::ProcessorRunner>(handler.m_inference_config,
+                                                                  processor,
+                                                                  handler.m_input_ports,
+                                                                  handler.m_output_ports);
+    anira::capi::ProcessorRunner* const processor_runner = handler.m_pp.get();
     handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
                                                                   handler.m_inference_config,
                                                                   std::move(requests),
@@ -1705,9 +1683,9 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The report's plan rows and the initial selection, on the session before it is prepared.
     build_plans(handler, model, derived, hard);
     handler.m_manager->prepare(host, anira::capi::latencies_of(snapshot, model), ring_dtypes);
-    // The session's structs and rings exist now, and no chunk does: the processor binds to
-    // them (the plan table included: what a ctx reports for a chunk is the engine and the
-    // provider of the plan it was stamped with), and every stream port gets its ring.
+    // The session's structs exist now, and its rings are sized in their stream ports, and no
+    // chunk exists: the processor binds to the session (the plan table included: what a ctx
+    // reports for a chunk is the engine and the provider of the plan it was stamped with).
     processor_runner->bind(handler.m_manager->session());
     // The entries of the session, what anira_processor_ctx.entry indexes and
     // anira_handler_num_entries answers: the processor's prepare (below) sizes its scratch by it.

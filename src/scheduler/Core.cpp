@@ -1,6 +1,5 @@
 #include <anira/CoreConfig.h>
 #include <anira/InferenceConfig.h>
-#include <anira/PrePostProcessor.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
@@ -35,6 +34,7 @@
 #endif
 
 #include "../capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
+#include "../capi/processor.h"
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../utils/StatusError.h"
@@ -728,7 +728,7 @@ void Core::unregister_session_locked(State& state, const std::shared_ptr<Session
     if (state.m_sessions.empty()) { stop_and_join(state.m_thread_pool); }
 }
 
-std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_processor,
+std::shared_ptr<SessionElement> Core::create_session(capi::ProcessorRunner& processor,
                                                      InferenceConfig& inference_config,
                                                      std::vector<engine::PlanRequest> requests,
                                                      const anira_context_config& context_config,
@@ -785,7 +785,7 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
     // before register_session_locked() publishes the session under this lock.
     std::shared_ptr<SessionElement> const session =
         std::make_shared<SessionElement>(session_id,
-                                         pp_processor,
+                                         processor,
                                          inference_config,
                                          moodycamel::ProducerToken(state.m_next_inference),
                                          rt_latch);
@@ -810,7 +810,6 @@ std::shared_ptr<SessionElement> Core::create_session(PrePostProcessor& pp_proces
             slot.m_provider = request.m_model.m_provider;
             slot.m_engine_id = request.m_model.m_engine_id;
             slot.m_provider_id = request.m_model.m_provider_id;
-            slot.m_legacy_backend = request.m_legacy_backend;
             slot.m_state_alias = (slot.m_loaded->flags() &
                                   static_cast<uint32_t>(ANIRA_ENGINE_FLAG_STATE_ALIAS)) != 0;
             // Into the table before the prepare: a prepare that throws (an exclusive session's
@@ -1152,7 +1151,7 @@ bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
                  channel <
                  session->m_inference_config.get_preprocess_input_channels()[tensor_index];
                  channel++) {
-                if (session->m_send_buffer[tensor_index].get_available_samples(channel) <
+                if (session->send_ring(tensor_index).get_available_samples(channel) <
                     session->m_inference_config.get_preprocess_input_size()[tensor_index]) {
                     return false;
                 }
@@ -1184,31 +1183,33 @@ void Core::new_data_submitted(const std::shared_ptr<SessionElement>& session) {
         bool const success = pre_process(session);
 
         if (!success) {
+            // One hop of every Streamed input is consumed and one hop of zeros (of the ring's
+            // own element type) produced on every Streamed output; a non-streamable slot has no
+            // ring.
             for (size_t tensor_index = 0;
                  tensor_index < session->m_inference_config.get_tensor_input_shape().size();
                  tensor_index++) {
+                const size_t hop =
+                    session->m_inference_config.get_preprocess_input_size()[tensor_index];
+                if (hop == 0) { continue; }
                 for (size_t channel = 0;
                      channel <
                      session->m_inference_config.get_preprocess_input_channels()[tensor_index];
                      channel++) {
-                    // Non-streamable parameters have no input size
-                    session->m_send_buffer[tensor_index].discard(
-                        channel,
-                        session->m_inference_config.get_preprocess_input_size()[tensor_index]);
+                    session->send_ring(tensor_index).discard(channel, hop);
                 }
             }
             for (size_t tensor_index = 0;
                  tensor_index < session->m_inference_config.get_tensor_output_shape().size();
                  tensor_index++) {
+                const size_t hop =
+                    session->m_inference_config.get_postprocess_output_size()[tensor_index];
+                if (hop == 0) { continue; }
                 for (size_t channel = 0;
                      channel <
                      session->m_inference_config.get_postprocess_output_channels()[tensor_index];
                      channel++) {
-                    // Non-streamable parameters have no output size; the zeros are of the
-                    // ring's own element type
-                    session->m_receive_buffer[tensor_index].push_zeros(
-                        channel,
-                        session->m_inference_config.get_postprocess_output_size()[tensor_index]);
+                    session->receive_ring(tensor_index).push_zeros(channel, hop);
                 }
             }
             ANIRA_LOG_RT_WARNING_ONCE(RtSite::NoFreeInferenceQueue,
@@ -1386,25 +1387,19 @@ bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
             session->m_inference_queue[i]->m_plan = plan;
-            // What a processor runner leaves on the chunk (a 2.x processor never writes it).
-            session->m_inference_queue[i]->m_processor_status = ANIRA_OK;
             session->m_inference_queue[i]->m_completed_as_zeros = false;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
-            // pre_process virtual, on this thread: a 3.x processor runner reads it there to
-            // tell the first chunk of a new stream, its reset boundary (capi/processor.h).
+            // chunk's pre_process, on this thread: the processor runner reads it there to tell
+            // the first chunk of a new stream, its reset boundary (capi/processor.h).
             session->m_inference_queue[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
-            // The chunk's descriptors follow its buffers' memory of the moment (a 2.x
-            // processor of this line may have swapped it on the struct's last use).
-            session->m_inference_queue[i]->rebind_tensors();
-            session->m_pp_processor.pre_process(session->m_send_buffer,
-                                                session->m_inference_queue[i]->m_tensor_input_data,
-                                                session->plan_backend(plan));
+            const anira_status formed =
+                session->m_processor.pre_process(*session->m_inference_queue[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
             session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
-            if (session->m_inference_queue[i]->m_processor_status != ANIRA_OK) {
+            if (formed != ANIRA_OK) {
                 // A processor's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct
                 // and timestamp and completes as zeros at its stream position without being
@@ -1479,11 +1474,9 @@ bool Core::enqueue_inference_or_drop(
 void Core::post_process(
     const std::shared_ptr<SessionElement>& session,
     const std::shared_ptr<SessionElement::ThreadSafeStruct>& thread_safe_struct) {
-    // The plan the chunk was submitted under (Core::pre_process), not the session's
-    // current one: the chunk's pre_process, hooks, engine and post_process agree.
-    session->m_pp_processor.post_process(thread_safe_struct->m_tensor_output_data,
-                                         session->m_receive_buffer,
-                                         session->plan_backend(thread_safe_struct->m_plan));
+    // Every chunk reaches its post_process, whatever it returns: the processor runner records a
+    // failure and keeps the output rings aligned.
+    static_cast<void>(session->m_processor.post_process(*thread_safe_struct));
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 

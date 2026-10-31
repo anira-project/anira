@@ -10,9 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "../PrePostProcessor.h"
 #include "../utils/HostConfig.h"
-#include "../utils/InferenceBackend.h"
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
@@ -104,7 +102,7 @@ struct RtLatch;
  *       used to share one core by accident through unique-symbol binding; they no
  *       longer do.)
  *
- * @see SessionElement, InferenceThread, PrePostProcessor
+ * @see SessionElement, InferenceThread
  */
 class ANIRA_API Core {
 public:
@@ -134,7 +132,8 @@ public:
      * left exactly as they were and every loaded model this session acquired is released
      * again. Nothing leaks.
      *
-     * @param pp_processor Reference to the preprocessing/postprocessing pipeline
+     * @param processor The handler's processor runner: the phases of every chunk, and the port
+     * vectors that hold the session's rings
      * @param inference_config Reference to the inference configuration
      * @param requests One plan per entry, in dense-index order: what the session's plan
      * table holds (the C handler asks for exactly its plans); never empty
@@ -151,7 +150,7 @@ public:
      *       concurrently with other sessions' lifecycle calls.
      */
     static std::shared_ptr<SessionElement> create_session(
-        PrePostProcessor& pp_processor,
+        capi::ProcessorRunner& processor,
         InferenceConfig& inference_config,
         std::vector<engine::PlanRequest> requests,
         const anira_context_config& context_config,

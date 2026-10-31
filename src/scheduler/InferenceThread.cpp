@@ -3,7 +3,6 @@
 #include <anira/abi/status.h>
 #include <anira/scheduler/InferenceThread.h>
 #include <anira/scheduler/SessionElement.h>
-#include <anira/utils/InferenceBackend.h>
 #include <anira/utils/Logger.h>
 #include <anira/utils/RtLatch.h>
 #include <tanh/core/threading/Thread.h>
@@ -16,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "../capi/processor.h"
 #include "../capi/words.h"
 #include "../engines/Adapter.h"
 #include "../utils/Backoff.h"
@@ -597,33 +597,29 @@ void InferenceThread::do_inference(
     // the session's atomic: the hooks and the engine call below agree with each other and
     // with the chunk's pre_process and post_process, whatever select_plan() does meanwhile.
     const uint32_t plan = thread_safe_struct->m_plan;
-    InferenceBackend const backend = session->plan_backend(plan);
-    // A 2.x processor or a before/after hook that throws must not unwind the pool thread:
-    // the failed inference delivers zeros, the done signal is published below exactly as on
-    // success, and the failure is ENGINE on the session's latch (a 3.x handler's word),
-    // logged on its first occurrence since the latch's re-arm.
+    // A before or after hook, or an engine, that throws must not unwind the pool thread: the
+    // failed inference delivers zeros, the done signal is published below exactly as on
+    // success, and the failure is ENGINE on the session's latch, logged on its first occurrence
+    // since the latch's re-arm.
     try {
-        // A 3.x processor runner feeds the declared state inside before_inference, ahead of the
-        // processor's own hook, and captures it inside after_inference, behind the processor's hook
-        // (capi/processor.h): the session knows nothing of it.
-        session->m_pp_processor.before_inference(thread_safe_struct->m_tensor_input_data, backend);
-        // A processor runner leaves the status of a failed before_inference or after_inference on
-        // the chunk (it records the failure itself; a 2.x processor never writes the field):
-        // the rest is skipped and the chunk delivers zeros.
-        if (thread_safe_struct->m_processor_status == ANIRA_OK) {
-            const anira_status status = inference(session, plan, *thread_safe_struct, instance);
-            if (status == ANIRA_OK) {
-                session->m_pp_processor.after_inference(thread_safe_struct->m_tensor_output_data,
-                                                        backend);
+        // The processor runner feeds the declared state inside before_inference, ahead of the
+        // processor's own hook, and captures it inside after_inference, behind the processor's
+        // hook (capi/processor.h): the session knows nothing of it. A failed hook (it recorded
+        // itself) skips the rest, and the chunk delivers zeros.
+        anira_status status = session->m_processor.before_inference(*thread_safe_struct);
+        if (status == ANIRA_OK) {
+            const anira_status engine = inference(session, plan, *thread_safe_struct, instance);
+            if (engine == ANIRA_OK) {
+                status = session->m_processor.after_inference(*thread_safe_struct);
             } else {
                 // The engine failed the chunk: zeros at its stream position, no
                 // after_inference (the rule of a failed hook), ENGINE on the latch with the
                 // status the adapter returned. A waiting job a thread told to stop gave up fails
                 // the same way (ANIRA_ERROR_INVALID_STATE, no engine call); the log says so,
                 // since no engine ran.
-                for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+                thread_safe_struct->zero_outputs();
                 thread_safe_struct->m_completed_as_zeros = true;
-                if (status == ANIRA_ERROR_INVALID_STATE && should_exit()) {
+                if (engine == ANIRA_ERROR_INVALID_STATE && should_exit()) {
                     if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
                         ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
                                            "%s failed in session %d: the inference thread was "
@@ -640,17 +636,17 @@ void InferenceThread::do_inference(
                                        capi::phase_word(ANIRA_PHASE_INFERENCE),
                                        session->m_session_id,
                                        plan,
-                                       static_cast<int>(status),
-                                       anira_status_string(status));
+                                       static_cast<int>(engine),
+                                       anira_status_string(engine));
                 }
             }
         }
-        if (thread_safe_struct->m_processor_status != ANIRA_OK) {
-            for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        if (status != ANIRA_OK) {
+            thread_safe_struct->zero_outputs();
             thread_safe_struct->m_completed_as_zeros = true;
         }
     } catch (const std::exception& e) {
-        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->zero_outputs();
         thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
@@ -659,7 +655,7 @@ void InferenceThread::do_inference(
                                e.what());
         }
     } catch (...) {
-        for (auto& buffer : thread_safe_struct->m_tensor_output_data) { buffer.clear(); }
+        thread_safe_struct->zero_outputs();
         thread_safe_struct->m_completed_as_zeros = true;
         if (session->m_rt->record(ANIRA_ERROR_ENGINE)) {
             ANIRA_LOG_RT_ERROR(log_group::k_scheduler,
