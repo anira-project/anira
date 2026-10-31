@@ -63,7 +63,7 @@ function(anira_add_test_binary TARGET)
     # support/CoreReclaim.cpp releases the context core after the binary's last test,
     # so the immortal-by-design core is not reported as a leak under LeakSanitizer.
     add_executable(${TARGET} ${ARGN} "${CMAKE_CURRENT_SOURCE_DIR}/support/CoreReclaim.cpp")
-    target_link_libraries(${TARGET} anira::anira)
+    target_link_libraries(${TARGET} anira::anira gtest_main)
 
     if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
         # On mobile the test binary runs on a device/emulator/simulator, reached over a

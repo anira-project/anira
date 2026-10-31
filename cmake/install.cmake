@@ -29,10 +29,6 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64")
     set(_anira_apple_rpaths EXTRA_APPLE_PATHS "/opt/intel/oneapi/mkl/latest/lib")
 endif()
 tanh_set_install_rpath(${PROJECT_NAME} ${_anira_apple_rpaths})
-if(ANIRA_WITH_BENCHMARK)
-    # gtest_main must find gtest at runtime from the install tree.
-    tanh_set_install_rpath(gtest_main)
-endif()
 unset(_anira_apple_rpaths)
 
 # the variant with PUBLIC_HEADER property unfortunately does not preserve the folder structure therefore we use the simple install directory command

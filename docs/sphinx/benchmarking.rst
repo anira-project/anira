@@ -211,13 +211,13 @@ Integrate the benchmark with Google Test for easy execution:
 Integrate via CMake
 ~~~~~~~~~~~~~~~~~~~
 
-Set up your CMake project to include the benchmark and find the test (``GTest::gtest_main`` from your project's Google Test, which this repository's build links into anira for its tests and benchmarks):
+Set up your CMake project to include the benchmark and find the test. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; this repository's fixture target links it for its own benchmarks, and anira itself links no test library):
 
 .. code-block:: cmake
 
     # Create benchmark executable
     add_executable(benchmark_target benchmark.cpp test.cpp)
-    target_link_libraries(benchmark_target anira::anira anira_benchmark_fixture)
+    target_link_libraries(benchmark_target anira::anira anira_benchmark_fixture GTest::gtest_main)
 
     # Add Google Test support
     enable_testing()

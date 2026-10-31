@@ -34,8 +34,7 @@ set_target_properties(anira_unload_test PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON)
 # Deliberately not linked against anira. gtest comes straight from the FetchContent
-# targets (cmake/test-deps.cmake links gtest_main into anira only as a convenience for
-# the in-process test binary).
+# targets, as for every test binary (cmake/test-deps.cmake).
 target_link_libraries(anira_unload_test PRIVATE gtest gtest_main ${CMAKE_DL_LIBS})
 # The harness deliberately does not link anira (it drives the module via
 # dlopen), so it inherits no sanitizer flags — but the module it loads is
