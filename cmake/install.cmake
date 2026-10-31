@@ -6,11 +6,9 @@
 include(GNUInstallDirs)
 
 # include the public headers of the anira library for the install target
-# TODO: File PR so that the concurrentqueue library does not have to be included that way
 target_include_directories(${PROJECT_NAME}
     PUBLIC
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
-    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/concurrentqueue/moodycamel>
 )
 
 # define the dircetory where the library will be installed CMAKE_INSTALL_PREFIX
@@ -57,12 +55,13 @@ install(FILES "${ANIRA_GENERATED_INCLUDE_DIR}/anira/abi/build_info.h"
     COMPONENT dev
 )
 
-# install the target and create export-set
+# install the target and create export-set: libanira alone (tanh-lib, the queue and the JSON
+# library are inside it or header-only, and private).
 # GNUInstallDirs layout: shared libraries into the libdir; on Windows the DLL is a
 # RUNTIME artifact and goes to the bindir next to the executables (where the loader
-# looks), the import library into the libdir. tanh_core.dll and the engine DLLs
-# (below) follow the same rule, so one directory — bin/ — holds every DLL.
-install(TARGETS ${PROJECT_NAME} concurrentqueue nlohmann_json
+# looks), the import library into the libdir. The engine DLLs (below) follow the same
+# rule, so one directory — bin/ — holds every DLL.
+install(TARGETS ${PROJECT_NAME}
     EXPORT "aniraTargets"
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR} # .dll files
     COMPONENT runtime
@@ -90,7 +89,7 @@ set(_anira_engine_incdir "${CMAKE_INSTALL_INCLUDEDIR}/anira-engines")
 # ------------------------------------------------------------------------------
 # _anira_install_engine_libs(<rootdir> [EXCLUDE_CMAKE]) — an engine's lib/ tree into
 # the libdir. On Windows the DLLs go to the bindir instead — import libraries and
-# static archives stay in lib/ — like anira.dll and tanh_core.dll, so that the
+# static archives stay in lib/ — like anira's own DLL, so that the
 # loader finds every DLL next to the executables and a consumer needs one
 # directory on PATH, not two. (A few archives keep their DLLs in a bin/ of their
 # own; those go to the bindir as well.) EXCLUDE_CMAKE leaves out a lib/cmake

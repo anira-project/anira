@@ -201,7 +201,8 @@ Integrate the benchmark with Google Test for easy execution:
     #include <tanh/core/threading/Thread.h>
 
     TEST(Benchmark, Simple) {
-        // Elevate this thread's priority for more consistent timing
+        // Elevate this thread's priority for more consistent timing (tanh-lib's thread API: the
+        // benchmark links tanh-lib itself, since anira's copy is private to libanira)
         thl::core::Thread::set_current_priority(thl::core::ThreadPriority::RealTime);
 
         // Execute the benchmark

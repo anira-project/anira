@@ -166,20 +166,28 @@ endif()
 
 include(FetchContent)
 
+# Private and header-only (docs/anira-v3-architecture.md, section 6b): fetched without running its
+# own CMake, whose install rules would put it into anira's package, and wrapped in a build-only
+# interface target that the objects link.
 FetchContent_Declare(
     concurrentqueue
     GIT_REPOSITORY https://github.com/cameron314/concurrentqueue.git
     GIT_TAG v1.0.5
+    SOURCE_SUBDIR anira-uses-the-headers-only
 )
 
 FetchContent_MakeAvailable(concurrentqueue)
+add_library(anira_concurrentqueue INTERFACE)
+target_include_directories(anira_concurrentqueue SYSTEM INTERFACE "${concurrentqueue_SOURCE_DIR}")
 
 # ==============================================================================
 # Fetch tanh-lib (Apache-2.0 core component only)
 # ==============================================================================
 
 # Only the Apache-2.0 core component (tanh::Core) is fetched — never the AGPL
-# ones. Installs re-resolve it via find_dependency(tanh COMPONENTS Core).
+# ones. It is private (docs/anira-v3-architecture.md, section 6b): built by its own CMake as a
+# hidden static archive (TANH_STATIC, an empty TANH_API), its objects absorbed into libanira
+# below, nothing of it installed and nothing of it in anira's package or export table.
 # Plain (non-cache) variables: they shadow tanh-lib's option() defaults under
 # CMP0077 NEW without clobbering a parent that fetches tanh-lib itself.
 set(TANH_BUILD_CORE ON)
@@ -198,7 +206,7 @@ set(TANH_WITH_ASAN ${ANIRA_WITH_ASAN})
 set(TANH_WITH_USAN ${ANIRA_WITH_UBSAN})
 set(TANH_WITH_TSAN ${ANIRA_WITH_TSAN})
 set(TANH_WITH_LSAN ${ANIRA_WITH_LSAN})
-set(TANH_WITH_INSTALL ${ANIRA_WITH_INSTALL})
+set(TANH_WITH_INSTALL OFF)
 # Every log level is compiled into anira's private logger in every build type, so that the
 # runtime level of the context config is the only filter and a warning the call survives
 # exists in a shipped build (docs/anira-v3-error-and-log-strategy.md, rule 4). tanh-lib's
@@ -218,7 +226,13 @@ FetchContent_Declare(
     # option (#38). tanh-tooling v0.3.0, the same tooling tag this tree pins.
     GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966
 )
+# Scoped: tanh_core is a static archive whatever anira is, and BUILD_SHARED_LIBS is anira's again
+# after the fetch.
+set(_anira_build_shared_libs ${BUILD_SHARED_LIBS})
+set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(tanh-lib)
+set(BUILD_SHARED_LIBS ${_anira_build_shared_libs})
+unset(_anira_build_shared_libs)
 
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
@@ -230,14 +244,8 @@ FetchContent_Declare(
     URL_HASH SHA256=42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa
     SYSTEM
 )
-# When installing anira, also install nlohmann_json's headers + CMake config so the
-# installed aniraConfig.cmake can resolve find_package(nlohmann_json). As a subproject
-# nlohmann_json defaults JSON_Install=OFF (unlike concurrentqueue, which installs by
-# default), which previously left the installed package referencing a config that was
-# never shipped.
-if(ANIRA_WITH_INSTALL)
-    set(JSON_Install ON)
-endif()
+# Private and header-only, like the queue: as a subproject nlohmann_json installs nothing
+# (JSON_Install defaults to OFF there), and only the objects link it.
 FetchContent_MakeAvailable(nlohmann_json)
 
 # ==============================================================================
@@ -283,23 +291,16 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(anira_objects OBJECT)
 tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 
-add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects>)
+# tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira, shared or
+# static: compiled hidden with an empty TANH_API, they can neither be exported nor be bound to a
+# tanh-lib of the host's (section 6b of docs/anira-v3-architecture.md).
+add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
 set_target_properties(${PROJECT_NAME} PROPERTIES VERSION ${PROJECT_VERSION} SOVERSION ${PROJECT_VERSION_MAJOR})
 tanh_apply_symbol_policy(${PROJECT_NAME} EXPORT_PREFIX ANIRA)
 # The exported surface is the C ABI alone: the entry points anira_* (extern "C"). No C++ symbol
 # of anira crosses the library boundary; anira.hpp and compat/v2.hpp are header-only over the C
 # entries, and the white-box tests link the objects (anira_objects) instead.
 tanh_set_export_allowlist(${PROJECT_NAME} SYMBOL "anira_*")
-# tanh-lib's components are compiled hidden with an empty TANH_API when static, so the
-# objects of libtanh_core.a are already hidden inside a plugin that embeds a static
-# anira. Localizing the archive on the consumer's link on top of that is
-# defense-in-depth against a tanh-lib built without that policy and against the
-# default-visibility libstdc++ instantiations its objects carry; ELF only (Mach-O
-# consumers own their export list), INTERFACE only (a shared libanira links
-# libtanh_core.so, a runtime dependency, not something to hide).
-if(NOT BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "ELF")
-    target_link_options(${PROJECT_NAME} INTERFACE "LINKER:--exclude-libs,libtanh_core.a")
-endif()
 # add an alias so that the project can be used with add_subdirectory
 add_library(${PROJECT_NAME}::${PROJECT_NAME} ALIAS ${PROJECT_NAME})
 
@@ -394,13 +395,15 @@ if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     set_property(GLOBAL APPEND PROPERTY JOB_POOLS anira_wasm_link=2)
 endif()
 
-# The objects are compiled with them, and anira passes them on to its consumers; the header
-# gates of test/abi take the same list.
+# The objects are compiled with them. They are build-time switches, never a consumer's: anira's
+# install interface carries none of them (what a build compiled in is anira_enabled_engines).
+# In this build tree anira passes them on to the bundled consumers, whose sources still select
+# their engine configurations at compile time (the extras, the examples, test_InferenceHandler).
 set(ANIRA_COMPILE_DEFINITIONS
     # Backend-specific definitions
     $<$<BOOL:${ANIRA_WITH_LIBTORCH}>:USE_LIBTORCH>
     $<$<BOOL:${ANIRA_WITH_ONNXRUNTIME}>:USE_ONNXRUNTIME>
-    $<$<BOOL:${EMSDK_VERSION}>:USE_ANIRA_WEB>
+    $<$<STREQUAL:${TANH_OPERATING_SYSTEM},Emscripten>:USE_ANIRA_WEB>
     $<$<BOOL:${ANIRA_WITH_TFLITE}>:USE_TFLITE>
     $<$<BOOL:${ANIRA_WITH_LITERT}>:USE_LITERT>
     $<$<BOOL:${ANIRA_WITH_EXECUTORCH}>:USE_EXECUTORCH>
@@ -409,12 +412,11 @@ set(ANIRA_COMPILE_DEFINITIONS
     -DANIRA_VERSION="${PROJECT_VERSION_FULL}"
 )
 
-foreach(_anira_target anira_objects ${PROJECT_NAME})
-    target_compile_definitions(${_anira_target}
-        PUBLIC
-        ${ANIRA_COMPILE_DEFINITIONS}
-    )
+target_compile_definitions(anira_objects PUBLIC ${ANIRA_COMPILE_DEFINITIONS})
+foreach(_anira_definition IN LISTS ANIRA_COMPILE_DEFINITIONS)
+    target_compile_definitions(${PROJECT_NAME} PUBLIC $<BUILD_INTERFACE:${_anira_definition}>)
 endforeach()
+unset(_anira_definition)
 
 # The internal chain behind the ANIRA_NONBLOCKING entries is annotated post-3.0; until
 # then clang's function-effects analysis is silenced for the library alone (consumer-shaped
@@ -444,8 +446,6 @@ foreach(_anira_target anira_objects ${PROJECT_NAME})
         tanh_add_sanitizer(${_anira_target} lsan DEFINE ANIRA_WITH_LSAN)
     endif()
 
-    target_link_libraries(${_anira_target} PUBLIC concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
-
     # Backends link PRIVATE through their anira::<engine> targets (details per
     # engine in cmake/engines/<engine>.cmake; how each is linked in
     # cmake/aniraEngineHelpers.cmake): the library for its own link and, when static, its
@@ -458,6 +458,24 @@ foreach(_anira_target anira_objects ${PROJECT_NAME})
     endif()
 endforeach()
 unset(_anira_target)
+
+# tanh-lib, the queue and the JSON library: the objects' build-time requirements (include
+# directories, TANH_STATIC and the THL_* definitions), which reach the white-box binaries that
+# link the objects and nothing else; libanira carries tanh's objects (above) and links none of
+# the three. The one system library tanh_core links, repeated for the absorbed objects.
+target_link_libraries(anira_objects PUBLIC anira_concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
+if(TANH_OPERATING_SYSTEM STREQUAL "Android")
+    target_link_libraries(${PROJECT_NAME} PRIVATE log)
+endif()
+
+# LibTorch's libstdc++ ABI switch (TORCH_CXX_FLAGS, -D_GLIBCXX_USE_CXX11_ABI) is a requirement of
+# every translation unit that shares C++ types with LibTorch: the objects and the white-box
+# binaries that link them. No C++ type crosses libanira's boundary, so its consumers do not get it.
+if(ANIRA_WITH_LIBTORCH AND TORCH_CXX_FLAGS)
+    separate_arguments(_anira_torch_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
+    target_compile_options(anira_objects PUBLIC ${_anira_torch_cxx_flags})
+    unset(_anira_torch_cxx_flags)
+endif()
 
 if(ANIRA_WITH_BENCHMARK OR ANIRA_WITH_TESTS)
     include(cmake/test-deps.cmake)

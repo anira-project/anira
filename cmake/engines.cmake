@@ -740,11 +740,4 @@ function(anira_link_backends target)
             target_link_libraries(${target} PRIVATE anira::${_engine})
         endif()
     endforeach()
-    if(ANIRA_WITH_LIBTORCH AND TORCH_CXX_FLAGS)
-        # LibTorch's libstdc++ ABI switch decides the std::string ABI of anira's
-        # own public API — a PUBLIC requirement of anira, not only of
-        # anira::libtorch.
-        separate_arguments(_torch_cxx_flags NATIVE_COMMAND "${TORCH_CXX_FLAGS}")
-        target_compile_options(${target} PUBLIC ${_torch_cxx_flags})
-    endif()
 endfunction()

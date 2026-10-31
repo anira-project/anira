@@ -1,7 +1,7 @@
 # Consumers of an installed anira package. Built against a fresh install prefix by
 # the build_install CI workflow and by the InstallConsumer CTest
 # (run-install-test.cmake), so a header, exported target or dependency
-# (tanh::Core, the backends) missing from the install tree fails here rather than
+# (the backends) missing from the install tree fails here rather than
 # in a downstream project.
 cmake_minimum_required(VERSION 3.25)
 project(anira_install_consumer CXX)
@@ -65,7 +65,7 @@ endif()
 # ONNX Runtime with only <prefix>/bin on PATH binds to the wrong runtime and dies on
 # the first API call (the very "host ships its own backend runtime" failure anira's
 # symbol policy guards plugins against). $<TARGET_RUNTIME_DLLS> lists the DLLs of the
-# imported SHARED targets in the link closure — anira.dll, tanh_core.dll and, for the
+# imported SHARED targets in the link closure — anira's DLL and, for the
 # engine consumers, onnxruntime.dll through anira::onnxruntime.
 if(WIN32)
     foreach(_consumer consumer consumer_compat consumer_engine consumer_engine_module)

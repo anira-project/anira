@@ -67,7 +67,7 @@ endfunction()
 
 # Make the installed anira + backend libraries resolvable at runtime (lib64 is
 # GNUInstallDirs' libdir on Fedora-style hosts; on Windows every DLL — anira's, the
-# engines' and tanh_core.dll — installs to bin/, and only bin/ goes on PATH so that
+# engines' — installs to bin/, and only bin/ goes on PATH so that
 # the test also proves that).
 set(_libdir "${_prefix}/lib")
 if(APPLE)

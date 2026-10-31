@@ -29,7 +29,7 @@ if (MSVC AND ANIRA_SHARED_LIBS_WIN)
         COMMENT "Copying the runtime DLLs next to the test binaries"
         VERBATIM)
     # The list names files the build makes, not only prebuilt ones: anira.dll by its path and
-    # tanh-lib's and gtest's DLLs as $<TARGET_FILE:...>. The copy waits for every target that
+    # gtest's DLLs as $<TARGET_FILE:...>. The copy waits for every target that
     # builds one (the per-binary copy ran after its binary's own link dependencies).
     if (BUILD_SHARED_LIBS)
         add_dependencies(anira_test_runtime_dlls anira)
@@ -127,8 +127,9 @@ endfunction()
 #       test_InferenceConfig, test_PrePostProcessor, test_Buffer, test_HelperFunctions, and the
 #       2.x configuration comparison of test_Translate, which is test_Validate now (what the
 #       validator derives, which the session reads).
-#   (e) API-free: test_EngineLinkage (gtest and preprocessor flags only; re-pointed from USE_*
-#       onto the enabled-engines entry in PR 12).
+#   (e) test_EngineLinkage: the configure-time linkage rule at run time, over the C entry
+#       anira_enabled_engines and the ANIRA_STATIC a static anira gives its consumers (PR 12;
+#       the USE_* switches no longer reach a consumer).
 # No suite drives a 2.x session any more (PR 10b): the 2.x handler and the 2.x objects of the
 # white-box suites left the tests, the arms of test_abi check the 3.x side against closed
 # forms, and the session runs on the 3.x configuration.
@@ -181,6 +182,9 @@ anira_add_test_binary(test_handler
 	test_InferenceHandlerApi.cpp
 	test_OneSidedStreaming.cpp
 )
+# test_InferenceHandler reads its reference WAV files with tanh-lib's WavReader: the binary links
+# tanh-lib itself, as a host using it does (anira's own copy is private to libanira).
+target_link_libraries(test_handler tanh::Core)
 
 # The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the
 # exception firewall and the log entries. test/abi/ also holds the ABI gates.
@@ -234,7 +238,6 @@ if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
         "${anira_SOURCE_DIR}/include"
         "${ANIRA_GENERATED_INCLUDE_DIR}")
     target_compile_definitions(anira_header_isolation PRIVATE
-        ${ANIRA_COMPILE_DEFINITIONS}
         $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
     add_test(NAME anira_header_isolation
         COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
