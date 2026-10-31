@@ -8,13 +8,17 @@
 // log level in effect) the outcome too.
 
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
+#include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
+#include <atomic>
 #include <cstdint>
 
 #include "../abi/handler_support.h"
 #include "../support/log_record_collector.h"
+#include "capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "gtest/gtest.h"
 
 using namespace anira;
@@ -74,6 +78,49 @@ void expect_diagnostic(RecordCollector& collector,
 }
 
 }  // namespace
+
+// The core's log queue holds 64 to 65536 records. The C setters clamp a capacity already
+// (test_ReadBack, test_Handles); a configuration that reaches the core with one outside the
+// range (the struct written directly) is clamped where the queue is created, with a warning
+// that names both figures. One fresh core per figure (release_core_if_idle), since the queue
+// is created once per core.
+TEST_F(ContextConfigMismatchTest, TheCoreClampsAQueueCapacityOutsideItsRange) {
+    struct Case {
+        uint32_t m_requested;
+        uint32_t m_used;
+        const char* m_message;
+    };
+    for (const Case& c :
+         {Case{.m_requested = 10,
+               .m_used = 64,
+               .m_message = "log queue capacity 10 is outside [64, 65536]; using 64."},
+          Case{.m_requested = 100000,
+               .m_used = 65536,
+               .m_message = "log queue capacity 100000 is outside [64, 65536]; using 65536."},
+          Case{.m_requested = 64, .m_used = 64, .m_message = nullptr}}) {
+        SCOPED_TRACE(c.m_requested);
+        ASSERT_TRUE(Core::release_core_if_idle() || !Core::has_core()) << "the core is in use";
+        RecordCollector collector;
+        anira_context_config config;
+        config.m_num_threads = 0;
+        config.m_log_level = ANIRA_LOG_DEBUG;
+        config.m_log_drain = ANIRA_LOG_DRAIN_MANUAL;
+        config.m_queue_capacity = c.m_requested;
+        Core::register_context(config);
+        const thl::Logger::rt::Queue* queue =
+            anira::detail::rt_log_queue_slot().load(std::memory_order_acquire);
+        ASSERT_NE(queue, nullptr);
+        EXPECT_EQ(queue->capacity(), c.m_used);
+        if (c.m_message != nullptr) {
+            expect_diagnostic(collector, c.m_message, thl::Logger::LogLevel::Warning);
+        } else {
+            EXPECT_FALSE(collector.has("is outside [64, 65536]", "native"))
+                << "a capacity inside the range is not reported";
+        }
+        Core::unregister_context();
+    }
+    EXPECT_TRUE(Core::release_core_if_idle());
+}
 
 // The queue is created once per core and never replaced, and the core outlives
 // the sessions — so even the first session of a *later* generation is told it

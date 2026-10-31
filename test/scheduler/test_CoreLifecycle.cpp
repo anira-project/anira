@@ -1,13 +1,16 @@
 #include <anira/abi/enums.h>
+#include <anira/abi/status.h>
 #include <anira/scheduler/Core.h>
 #include <anira/scheduler/InferenceThread.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <thread>
 #include <vector>
 
 #include "../abi/handler_support.h"
+#include "capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "engines/Adapter.h"
 #include "gtest/gtest.h"
 
@@ -40,6 +43,27 @@ bool wait_for_num_inference_threads(unsigned int expected) {
 }
 
 }  // namespace
+
+// ANIRA_THREADS_AUTO, the default thread count of a context config, is half the hardware
+// threads and at least one (Core::default_num_threads), whatever this machine has: the size
+// the first registration of a generation reports for its pool before it exists, and the size
+// of the pool its first session builds.
+TEST(CoreLifecycleTest, AutoThreadsAreHalfTheHardwareThreadsAtLeastOne) {
+    ASSERT_EQ(Core::get_num_sessions(), 0);
+    const unsigned int hardware = std::thread::hardware_concurrency();
+    const unsigned int expected = std::max(hardware / 2, 1U);
+    EXPECT_EQ(Core::default_num_threads(), expected) << hardware << " hardware threads";
+
+    const anira_context_config config;
+    ASSERT_EQ(config.m_num_threads, ANIRA_THREADS_AUTO) << "the config's default";
+    EXPECT_EQ(Core::prospective_thread_pool_size(config), expected);
+    {
+        const Instance instance(ANIRA_THREADS_AUTO);
+        EXPECT_EQ(Core::get_thread_pool_size(), expected);
+        EXPECT_TRUE(wait_for_num_inference_threads(expected));
+    }
+    EXPECT_EQ(Core::get_num_inference_threads(), 0U);
+}
 
 // No polling: the threads are joined before the last handler's destructor returns.
 TEST(CoreLifecycleTest, LastReleaseJoinsPoolSynchronously) {

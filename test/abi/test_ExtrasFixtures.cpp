@@ -8,6 +8,8 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/scheduler/Core.h>
+#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -16,6 +18,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -29,6 +32,7 @@
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "capi/validate.h"
+#include "handler_support.h"
 
 namespace {
 
@@ -196,9 +200,9 @@ void expect_matches(const Facts& facts, const Oracle& oracle) {
     EXPECT_FLOAT_EQ(static_cast<float>(facts.m_max_ms), oracle.m_max_ms);
     EXPECT_EQ(facts.m_warm_up, oracle.m_warm_up);
     EXPECT_EQ(facts.m_stateful, oracle.m_stateful);
-    // The files set no instance ceiling: the pool's thread count, resolved by the core. A
-    // stateful model runs on one instance whatever the count says (the session's exclusive
-    // dispatch, test_StatefulOrdering), so the ceiling is not where that shows.
+    // The files set no instance ceiling: the pool's thread count, resolved by the core at
+    // prepare, and 1 for a stateful model whatever the count says (the session's exclusive
+    // dispatch). ThePrepareResolvesTheFilesInstanceCount pins both resolutions.
     EXPECT_EQ(facts.m_instances, ANIRA_INSTANCES_AUTO);
 }
 
@@ -300,6 +304,33 @@ TEST(ExtrasFixtures, StatefulRnn) {
                        .m_warm_up = 2,
                        .m_stateful = true,
                        .m_engines = k_every_engine});
+}
+
+// The instance count the files leave to anira (ANIRA_INSTANCES_AUTO, expect_matches), as a
+// prepare resolves it on a pool of three threads: the stateful RNN's session is exclusive, one
+// inference at a time on one instance; the stateless gain model's session runs as many
+// instances as the pool has threads.
+TEST(ExtrasFixtures, ThePrepareResolvesTheFilesInstanceCount) {
+    if (usable(k_every_engine).empty()) { GTEST_SKIP() << "no engine of this build"; }
+    ASSERT_EQ(anira::Core::get_num_sessions(), 0) << "a previous test left a session";
+    static constexpr uint32_t k_threads = 3;
+    const anira_test::Context context(k_threads);
+    const auto resolved =
+        [&context](const char* model_json, const char* contract_json, uint32_t block) {
+            anira_test::Handler handler(context, anira::ModelConfig::from_file(model_json));
+            EXPECT_EQ(handler.prepare(anira_test::file_contract(contract_json, block)), ANIRA_OK)
+                << handler.m_err.message;
+            const std::shared_ptr<anira::SessionElement> session =
+                anira_test::session_of(handler.m_handler);
+            EXPECT_NE(session, nullptr) << model_json;
+            EXPECT_EQ(anira::Core::get_thread_pool_size(), k_threads);
+            return session == nullptr ? std::pair{false, 0U}
+                                      : std::pair{session->exclusive(), session->m_num_instances};
+        };
+    EXPECT_EQ(resolved(k_rnn_model_json, k_rnn_contract_json, 2048), std::pair(true, 1U))
+        << "the stateful RNN: exclusive, one instance";
+    EXPECT_EQ(resolved(k_gain_model_json, k_gain_contract_json, 512), std::pair(false, k_threads))
+        << "the gain model: one instance per pool thread";
 }
 
 TEST(ExtrasFixtures, Gain) {

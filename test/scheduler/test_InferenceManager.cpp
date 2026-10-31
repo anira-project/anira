@@ -205,11 +205,11 @@ std::string build_test_name(const testing::TestParamInfo<InferenceManagerTest::P
 }
 }  // namespace
 
-// A custom latency replaces the calculated one wholesale, so it must not drop below the
-// model's internal latency: the receive buffer is primed with
-// (latency - internal_model_latency) zeros. A contract that asks for less is refused at
-// prepare (ANIRA_ERROR_CONFIG); a figure above the internal latency is kept.
-TEST(InferenceManagerCustomLatency, ClampsToInternalModelLatency) {
+// A declared latency replaces the calculated one wholesale, so it must not drop below the
+// model's internal latency: the receive ring is primed with (latency - internal latency)
+// zeros. A contract that asks for less is refused at prepare (ANIRA_ERROR_CONFIG; the 2.x
+// manager clamped it); the internal latency itself and a figure above it are kept.
+TEST(InferenceManagerCustomLatency, RefusesAFigureBelowTheInternalModelLatency) {
     constexpr int64_t k_internal_latency = 100;
     const anira::ModelConfig model = anira_test::sizing_model({{.m_elements = 2048}},
                                                               {{.m_elements = 2048}},
@@ -223,6 +223,15 @@ TEST(InferenceManagerCustomLatency, ClampsToInternalModelLatency) {
         const SizingSession session(model, contract);
         EXPECT_EQ(session.prepared(), ANIRA_ERROR_CONFIG)
             << "a custom latency below the internal model latency is refused";
+    }
+    {
+        anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
+        contract.hard_latency("out0", static_cast<uint32_t>(k_internal_latency));
+        const SizingSession session(model, contract);
+        ASSERT_EQ(session.prepared(), ANIRA_OK) << session.message();
+        EXPECT_EQ(anira_handler_get_latency(session.handler(), 0),
+                  static_cast<uint32_t>(k_internal_latency))
+            << "the internal model latency itself is a figure the contract may declare";
     }
     {
         anira::ContractHandle contract = anira_test::sizing_contract(geometry, 1.0, 0.0);
