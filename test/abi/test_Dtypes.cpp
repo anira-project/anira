@@ -478,3 +478,191 @@ TEST(AbiDtypes, AFloatHostOnAnotherModelDtypeConvertsInItsProcessor) {
         anira_handler_destroy(h);
     }
 }
+
+// ============================================================================================
+// The built-in engines: the typed fixtures through the Hard entries
+// ============================================================================================
+
+namespace {
+
+/// The built-in engines of this build whose adapters bind typed tensors.
+std::vector<anira_engine> typed_engines() {
+    std::vector<anira_engine> engines;
+#ifdef USE_ONNXRUNTIME
+    engines.push_back(ANIRA_ENGINE_ONNXRUNTIME);
+#endif
+    return engines;
+}
+
+/// One candidate: the engine, on the CPU path.
+std::vector<anira_backend_id> one_engine(anira_engine engine) {
+    return {anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                             .engine = static_cast<uint32_t>(engine),
+                             .provider = ANIRA_PROVIDER_CPU,
+                             .engine_id = nullptr}};
+}
+
+/// A small integer as an element of `dtype` (exact in every dtype anira names; bool: nonzero).
+void store_value(std::byte* at, anira_dtype dtype, float value) {
+    const auto store = [at](const auto element) { std::memcpy(at, &element, sizeof(element)); };
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: store(value); break;
+        case ANIRA_DTYPE_F64: store(static_cast<double>(value)); break;
+        case ANIRA_DTYPE_F16: store(to_half(value)); break;
+        case ANIRA_DTYPE_BF16: {
+            uint32_t bits = 0;
+            std::memcpy(&bits, &value, sizeof(bits));
+            store(static_cast<uint16_t>(bits >> 16));
+        } break;
+        case ANIRA_DTYPE_I8: store(static_cast<int8_t>(value)); break;
+        case ANIRA_DTYPE_U8: store(static_cast<uint8_t>(value)); break;
+        case ANIRA_DTYPE_I16: store(static_cast<int16_t>(value)); break;
+        case ANIRA_DTYPE_I32: store(static_cast<int32_t>(value)); break;
+        case ANIRA_DTYPE_I64: store(static_cast<int64_t>(value)); break;
+        case ANIRA_DTYPE_BOOL8: store(static_cast<uint8_t>(value != 0.0F ? 1 : 0)); break;
+        default: FAIL() << "no store for dtype " << dtype;
+    }
+}
+
+float load_value(const std::byte* at, anira_dtype dtype) {
+    const auto load = [at](auto element) {
+        std::memcpy(&element, at, sizeof(element));
+        return element;
+    };
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: return load(0.0F);
+        case ANIRA_DTYPE_F64: return static_cast<float>(load(0.0));
+        case ANIRA_DTYPE_F16: return from_half(load(uint16_t{0}));
+        case ANIRA_DTYPE_BF16: {
+            const uint32_t bits = static_cast<uint32_t>(load(uint16_t{0})) << 16;
+            float value = 0;
+            std::memcpy(&value, &bits, sizeof(value));
+            return value;
+        }
+        case ANIRA_DTYPE_I8: return load(int8_t{0});
+        case ANIRA_DTYPE_U8: return load(uint8_t{0});
+        case ANIRA_DTYPE_I16: return load(int16_t{0});
+        case ANIRA_DTYPE_I32: return static_cast<float>(load(int32_t{0}));
+        case ANIRA_DTYPE_I64: return static_cast<float>(load(int64_t{0}));
+        case ANIRA_DTYPE_BOOL8: return load(uint8_t{0}) != 0 ? 1.0F : 0.0F;
+        default: ADD_FAILURE() << "no load for dtype " << dtype; return 0.0F;
+    }
+}
+
+/// Streams `k_blocks` blocks of `values(k, n)` (a small integer per sample) in `dtype` through a
+/// prepared handler, each waited for, and returns the output stream as floats.
+template <class Values>
+std::vector<float> run_values(anira_handler* h, anira_dtype dtype, const Values& values) {
+    const size_t element = size_of(dtype);
+    const std::array<int64_t, 2> extents{1, static_cast<int64_t>(k_block)};
+    std::vector<float> out_stream;
+    for (size_t k = 0; k < k_blocks; ++k) {
+        std::vector<std::byte> in(k_block * element);
+        std::vector<std::byte> out(k_block * element, std::byte{0x5a});
+        for (size_t n = 0; n < k_block; ++n) { store_value(&in[n * element], dtype, values(k, n)); }
+        const Tensor source = Tensor::from_host(in.data(), dtype, extents);
+        const Tensor sink = Tensor::from_host(out.data(), dtype, extents);
+        const size_t prev = anira_test::available(h);
+        EXPECT_EQ(anira_handler_process(h, &source, 0, &sink, 0, nullptr), ANIRA_OK);
+        anira_test::wait_for_block(h, prev);
+        for (size_t n = 0; n < k_block; ++n) {
+            out_stream.push_back(load_value(&out[n * element], dtype));
+        }
+    }
+    return out_stream;
+}
+
+/// The typed gain stream: block k, sample n, a small integer in [-8, 8] (every block holds both
+/// ends, so every block's peak is 8).
+float gain_sample(size_t k, size_t n) {
+    return static_cast<float>(static_cast<int>(((k * k_block) + n) % 17) - 8);
+}
+
+}  // namespace
+
+// The bundled TypedGainNetwork at int16, int8 and float16 on every built-in engine that binds
+// typed tensors: no ring setting (the rings stream the spec's dtype), the Static gain of 2 in
+// the file's dtype, every block waited for. The stream comes out as the input times 2 delayed by
+// the latency, exactly, and the Static peak is the doubled largest magnitude, 16.
+TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
+    const anira_test::Context context(2);
+    const std::array<std::pair<const char*, anira_dtype>, 3> sets{{
+        {k_typed_gain_int16_model_json, ANIRA_DTYPE_I16},
+        {k_typed_gain_int8_model_json, ANIRA_DTYPE_I8},
+        {k_typed_gain_float16_model_json, ANIRA_DTYPE_F16},
+    }};
+    for (const anira_engine engine : typed_engines()) {
+        for (const auto& [model_json, dtype] : sets) {
+            SCOPED_TRACE(std::string(anira::capi::engine_word(engine)) + " " +
+                         anira::capi::dtype_word(dtype));
+            const ModelConfig model = ModelConfig::from_file(model_json);
+            const std::vector<anira_backend_id> candidates = one_engine(engine);
+            anira_test::Handler handler(context, model, candidates);
+            ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_block)),
+                      ANIRA_OK)
+                << handler.m_err.message;
+            anira_handler* h = handler.m_handler;
+            const std::array<int64_t, 1> scalar{1};
+            std::array<std::byte, 8> gain{};
+            store_value(gain.data(), dtype, 2.0F);
+            const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
+            ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
+
+            const std::vector<float> out = run_values(h, dtype, gain_sample);
+            const size_t latency = anira_handler_get_latency(h, 0);
+            for (size_t n = 0; n < out.size(); ++n) {
+                const float want = n < latency ? 0.0F
+                                               : 2.0F * gain_sample((n - latency) / k_block,
+                                                                    (n - latency) % k_block);
+                ASSERT_EQ(out[n], want) << "sample " << n;
+            }
+            std::array<std::byte, 8> peak{};
+            const Tensor peak_out = Tensor::from_host(peak.data(), dtype, scalar);
+            ASSERT_EQ(anira_handler_get_static_output(h, 1, &peak_out), ANIRA_OK);
+            EXPECT_EQ(load_value(peak.data(), dtype), 16.0F);
+            EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        }
+    }
+}
+
+#ifdef USE_ONNXRUNTIME
+// The ONNX dtype matrix: for each of the ten dtypes anira names, a model whose one input and
+// one output are of that dtype (Cast to float32, times 2, Cast back) through the ONNX Runtime
+// engine and the Hard entries, with no ring setting. The output is the input doubled (a bool
+// comes back as it went in), delayed by the latency, exactly.
+TEST(AbiDtypes, TheOnnxDtypeMatrixRunsThroughOnnxRuntime) {
+    const anira_test::Context context(2);
+    const std::vector<anira_backend_id> candidates = one_engine(ANIRA_ENGINE_ONNXRUNTIME);
+    for (const auto& [word, dtype] : anira::capi::k_dtype_words) {
+        SCOPED_TRACE(word);
+        const auto spec = [dtype](std::string_view name) {
+            TensorSpec tensor(name, dtype, ANIRA_ROLE_STREAMED);
+            tensor.axis(0, ANIRA_AXIS_BATCH, 1)
+                .axis(1, ANIRA_AXIS_CHANNEL, 1)
+                .axis(2, ANIRA_AXIS_TIME, static_cast<int64_t>(k_block))
+                .window(static_cast<int64_t>(k_block), static_cast<int64_t>(k_block), 0);
+            return tensor;
+        };
+        ModelConfig model;
+        model.add_model_path(ANIRA_ENGINE_ONNXRUNTIME,
+                             std::string(k_dtype_matrix_onnx_prefix) + word + ".onnx");
+        model.input(spec("data"));
+        model.output(spec("processed_data"));
+        anira_test::Handler handler(context, model, candidates);
+        ASSERT_EQ(handler.prepare(anira_test::explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS)),
+                  ANIRA_OK)
+            << handler.m_err.message;
+        const bool boolean = dtype == ANIRA_DTYPE_BOOL8;
+        const auto values = [boolean](size_t k, size_t n) {
+            return static_cast<float>(((k * k_block) + n) % (boolean ? 2 : 8));
+        };
+        const std::vector<float> out = run_values(handler.m_handler, dtype, values);
+        const size_t latency = anira_handler_get_latency(handler.m_handler, 0);
+        for (size_t n = 0; n < out.size(); ++n) {
+            const float in =
+                n < latency ? 0.0F : values((n - latency) / k_block, (n - latency) % k_block);
+            ASSERT_EQ(out[n], boolean ? in : 2.0F * in) << "sample " << n;
+        }
+    }
+}
+#endif  // USE_ONNXRUNTIME

@@ -495,45 +495,57 @@ TEST(Adapter, TheClaimLoopGivesUpWhenItsThreadIsToldToStop) {
 // The float32 helpers of the built-in adapters
 // ============================================================================================
 
-TEST(Adapter, HostF32PackedAcceptsPackedAndAllZeroStrides) {
+TEST(Adapter, HostPackedAcceptsPackedAndAllZeroStrides) {
     std::array<float, 8> data{};
     const std::array<int64_t, 3> shape{1, 2, 4};
     anira_tensor tensor;
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "all-zero strides";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "all-zero strides";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 4;
     tensor.strides[2] = 1;
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "row-major strides";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "row-major strides";
 
     tensor.strides[0] = 999;  // an axis of extent 1 is never stepped
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data());
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data());
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.byte_offset = sizeof(float);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data() + 1) << "the offset";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data() + 1)
+        << "the offset";
 
     anira_tensor_init_pinned(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "page-locked host";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "page-locked host";
+
+    // Any dtype: the element count is the shape's, whatever the element's size.
+    std::array<int16_t, 8> words{};
+    anira_tensor_init_host(&tensor, words.data(), ANIRA_DTYPE_I16, 3, shape.data());
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_I16, 8), words.data());
+    EXPECT_TRUE(anira::engine::aligned_to(words.data(), alignof(int16_t)));
 }
 
-TEST(Adapter, HostF32PackedRefusals) {
+TEST(Adapter, HostPackedRefusals) {
     std::array<float, 8> data{};
     const std::array<int64_t, 3> shape{1, 2, 4};
     anira_tensor tensor;
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_I16, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "dtype";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "dtype";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_I16, 8), data.data())
+        << "a tensor of the dtype asked for";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 7), nullptr) << "wrong count";
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 9), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 7), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 9), nullptr) << "wrong count";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 1;
     tensor.strides[2] = 2;
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "strided";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "strided";
 
     const std::array<const float*, 1> planes{data.data()};
     const std::array<int64_t, 2> planar_shape{1, 8};
@@ -544,17 +556,18 @@ TEST(Adapter, HostF32PackedRefusals) {
                                   2,
                                   planar_shape.data());
     ASSERT_EQ(tensor.dtype, ANIRA_DTYPE_F32);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "planar";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "planar";
 
     anira_tensor_init_host(&tensor, nullptr, ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "no memory";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "no memory";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.domain = static_cast<uint32_t>(ANIRA_DOMAIN_CUDA);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "a device domain";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "a device domain";
 
     const anira_tensor zero{};
-    EXPECT_EQ(anira::engine::host_f32_packed(zero, 0), nullptr) << "a refused factory's record";
+    EXPECT_EQ(anira::engine::host_packed(zero, ANIRA_DTYPE_F32, 0), nullptr)
+        << "a refused factory's record";
 }
 
 TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
@@ -1202,15 +1215,17 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE);
     }
-    // An int16 record: NOT_SUPPORTED naming the engine and the tensor, before the file is
-    // opened (the adapter binds float32 alone until its typed binding).
+    // An int16 record over the float32 file: ONNX Runtime carries int16, so the file is opened
+    // and the binding check refuses its float32 tensor, CONFIG naming the engine, the tensor
+    // and both types.
     {
         Model model = onnx_gain_model();
-        model.m_path = "this/model/does/not/exist.onnx";
         model.m_inputs[0].m_dtype = ANIRA_DTYPE_I16;
         const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
-        EXPECT_EQ(error.status(), ANIRA_ERROR_NOT_SUPPORTED);
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("the spec's dtype int16"), std::string::npos)
+            << error.what();
         EXPECT_NE(std::string(error.what()).find("onnxruntime: input tensor 'audio_in'"),
                   std::string::npos)
             << error.what();
@@ -1236,7 +1251,7 @@ TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
     inputs[0] = descriptor_over(audio_in, {1, 1, k_block});
     inputs[0].dtype = ANIRA_DTYPE_I16;
     EXPECT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_ERROR_INVALID_ARGUMENT)
-        << "not float32";
+        << "not the record's float32";
     inputs[0].dtype = ANIRA_DTYPE_F32;
     anira_engine_ctx short_ctx = context_of(inputs, outputs);
     short_ctx.num_inputs = 1;

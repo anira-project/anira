@@ -215,12 +215,12 @@ void ExecutorPrepared::reset(const anira_engine_ctx& call) noexcept {
     if (m_own != nullptr) { m_own->reset(call); }
 }
 
-float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept {
+void* host_packed(const anira_tensor& tensor, anira_dtype dtype, size_t expected) noexcept {
     if (tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST) &&
         tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST_PINNED)) {
         return nullptr;
     }
-    if (tensor.dtype != ANIRA_DTYPE_F32) { return nullptr; }
+    if (tensor.dtype != dtype) { return nullptr; }
     if ((tensor.flags & static_cast<uint32_t>(ANIRA_TENSOR_PLANAR)) != 0U) { return nullptr; }
     if (tensor.ndim > ANIRA_MAX_RANK) { return nullptr; }
     size_t elements = 1;
@@ -243,28 +243,28 @@ float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept {
         }
     }
     if (tensor.handle.host.ptr == nullptr) { return nullptr; }
-    auto* base = static_cast<unsigned char*>(tensor.handle.host.ptr);
-    return reinterpret_cast<float*>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-        base + static_cast<size_t>(tensor.byte_offset));
+    return static_cast<unsigned char*>(tensor.handle.host.ptr) +
+           static_cast<size_t>(tensor.byte_offset);
 }
 
-void require_f32(const Model& model, const char* engine) {
-    const auto check = [engine](const std::vector<TensorInfo>& tensors, const char* side) {
+void require_dtypes(const Model& model, const char* engine, bool (*carries)(anira_dtype) noexcept) {
+    const auto check = [engine, carries](const std::vector<TensorInfo>& tensors, const char* side) {
         for (const TensorInfo& tensor : tensors) {
-            if (tensor.m_dtype == ANIRA_DTYPE_F32) { continue; }
-            std::array<char, 16> code{};
-            static_cast<void>(std::snprintf(code.data(),
-                                            code.size(),
-                                            "0x%x",
-                                            static_cast<unsigned int>(tensor.m_dtype)));
+            if (carries(tensor.m_dtype)) { continue; }
             throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                               std::string(engine) + ": " + side + " tensor '" + tensor.m_name +
-                                  "' has dtype " + code.data() + "; the " + engine +
-                                  " adapter binds float32 tensors alone in this pre-release");
+                                  "' is " + capi::dtype_label(tensor.m_dtype) + ", which the " +
+                                  engine + " engine does not carry");
         }
     };
     check(model.m_inputs, "input");
     check(model.m_outputs, "output");
+}
+
+void require_f32(const Model& model, const char* engine) {
+    require_dtypes(model, engine, [](anira_dtype dtype) noexcept {
+        return dtype == ANIRA_DTYPE_F32;
+    });
 }
 
 namespace {
@@ -291,13 +291,6 @@ std::string shape_text(const std::vector<int64_t>& dims) {
         text += std::to_string(dims[i]);
     }
     return text + "]";
-}
-
-std::string hex_dtype(anira_dtype dtype) {
-    std::array<char, 16> code{};
-    static_cast<void>(
-        std::snprintf(code.data(), code.size(), "0x%x", static_cast<unsigned int>(dtype)));
-    return code.data();
 }
 
 // "onnxruntime: input slot 0 'audio_in': ".
@@ -385,7 +378,7 @@ void check_engine_tensor(const TensorInfo& slot,
     if (engine_tensor.m_dtype != slot.m_dtype) {
         throw StatusError(ANIRA_ERROR_CONFIG,
                           where + "the model's element type is " + engine_tensor.m_type_word +
-                              ", the spec's dtype " + hex_dtype(slot.m_dtype));
+                              ", the spec's dtype " + capi::dtype_label(slot.m_dtype));
     }
     const std::string shapes = "the model's tensor is " + shape_text(engine_tensor.m_dims) +
                                ", the spec's engine dims are " + shape_text(slot.m_dims);

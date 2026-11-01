@@ -570,7 +570,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
     // In: every input block from its descriptor's memory, read on this call, into the managed
     // buffer of the signature tensor its slot binds.
     for (size_t slot = 0; slot < m_buffer_of_input_slot.size(); ++slot) {
-        const float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+        const float* data = static_cast<float*>(
+            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": input slot " + std::to_string(slot) +
@@ -595,7 +596,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
 
     // Out: every output buffer into its slot's descriptor memory.
     for (size_t slot = 0; slot < m_buffer_of_output_slot.size(); ++slot) {
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
+        float* data = static_cast<float*>(
+            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +

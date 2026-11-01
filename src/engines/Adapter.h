@@ -628,16 +628,27 @@ std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
 Bindings bindings_of(const std::vector<SlotBinding>& inputs,
                      const std::vector<SlotBinding>& outputs);
 
-/// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
-/// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`
-/// elements, and packed row-major strides (all zero, or the row-major strides themselves; the
-/// stride of an axis of extent 1 is never stepped and may be anything), at byte_offset from
-/// the base. NULL for anything else, a NULL base included.
-float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
+/// The memory of a descriptor a built-in adapter can hand its engine as one packed block:
+/// host memory (pageable or page-locked), of `dtype`, not planar, `expected` elements, and
+/// packed row-major strides (all zero, or the row-major strides themselves; the stride of an
+/// axis of extent 1 is never stepped and may be anything), at byte_offset from the base. NULL
+/// for anything else, a NULL base included.
+void* host_packed(const anira_tensor& tensor, anira_dtype dtype, size_t expected) noexcept;
 
-/// The float32 rule of the built-in adapters: throws anira::StatusError(ANIRA_ERROR_CONFIG)
-/// naming `engine` and the first tensor of the record (inputs, then outputs) whose dtype is
-/// not float32.
+/// Whether `data` starts on an `alignment` boundary (a power of two): what an engine that binds
+/// memory in place checks per call, since no tensor is assumed to be anira's own buffer.
+inline bool aligned_to(const void* data, size_t alignment) noexcept {
+    return (reinterpret_cast<uintptr_t>(
+                data) &  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+            (alignment - 1)) == 0;
+}
+
+/// The dtype rule of a built-in adapter at load: throws anira::StatusError
+/// (ANIRA_ERROR_NOT_SUPPORTED) naming `engine` and the first tensor of the record (inputs,
+/// then outputs) whose dtype `carries` refuses, an engine's limit and no configuration error.
+void require_dtypes(const Model& model, const char* engine, bool (*carries)(anira_dtype) noexcept);
+
+/// The float32 rule of an adapter that binds float32 alone: require_dtypes over float32.
 void require_f32(const Model& model, const char* engine);
 
 }  // namespace anira::engine

@@ -409,7 +409,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
                 std::to_string(m_inputs.size()) + " and " + std::to_string(m_outputs.size()));
     }
     for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
-        const float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+        const float* data = static_cast<float*>(
+            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": input slot " + std::to_string(slot) +
@@ -423,7 +424,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
     }
     tflite_check(invoke(), "TfLiteInterpreterInvoke");
     for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
+        float* data = static_cast<float*>(
+            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +

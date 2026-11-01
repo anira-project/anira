@@ -476,7 +476,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
     // Staging in: the program's inputs are the runtime's own tensors, so every input block is
     // copied from its descriptor's memory, read on this call.
     for (size_t slot = 0; slot < m_input_elements.size(); ++slot) {
-        const float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+        const float* data = static_cast<float*>(
+            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": input slot " + std::to_string(slot) +
@@ -514,7 +515,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
                                   " for the spec's " + std::to_string(m_output_elements[slot]) +
                                   " float32 elements");
         }
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
+        float* data = static_cast<float*>(
+            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +

@@ -284,7 +284,8 @@ c10::IValue Instance::execute(const anira_engine_ctx& ctx) {
     // Every argument a view over its descriptor's memory, read on this call: nothing is
     // copied in, nothing is owned, and the pointers are read anew every time.
     for (size_t slot = 0; slot < m_argument_of_slot.size(); ++slot) {
-        float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+        float* data = static_cast<float*>(
+            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": input slot " + std::to_string(slot) +
@@ -332,7 +333,8 @@ void Instance::deliver(const c10::IValue& result, const anira_engine_ctx& ctx) c
                                   sizes_text(tensor.sizes()) + " for the spec's engine dims " +
                                   sizes_text(c10::IntArrayRef(m_output_dims[slot])));
         }
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
+        float* data = static_cast<float*>(
+            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +
