@@ -220,7 +220,7 @@ TEST(SessionElementChunk, ASlotHoldsItsSpecsDtype) {
         DerivedSpec{.m_dims = {1, 1, 512}, .m_dtype = ANIRA_DTYPE_F16},
         DerivedSpec{.m_dims = {1}, .m_dtype = ANIRA_DTYPE_I64},
     };
-    const SessionElement::ThreadSafeStruct chunk(inputs, outputs, {}, {});
+    const SessionElement::ThreadSafeStruct chunk(inputs, outputs, {}, {}, host_chunk_storage(), 64);
     ASSERT_EQ(chunk.m_input_tensors.size(), 3U);
     ASSERT_EQ(chunk.m_output_tensors.size(), 2U);
     const std::array<anira_dtype, 3> in_dtypes{ANIRA_DTYPE_I16, ANIRA_DTYPE_F32, ANIRA_DTYPE_I8};
@@ -248,7 +248,12 @@ TEST(SessionElementChunk, ASlotHoldsItsSpecsDtype) {
         DerivedSpec{.m_dims = {1, 1, 512}},
         DerivedSpec{.m_dims = {1}},
     };
-    const SessionElement::ThreadSafeStruct float_chunk(floats, floats, {}, {});
+    const SessionElement::ThreadSafeStruct float_chunk(floats,
+                                                       floats,
+                                                       {},
+                                                       {},
+                                                       host_chunk_storage(),
+                                                       64);
     EXPECT_EQ(float_chunk.m_input_tensors[0].dtype, ANIRA_DTYPE_F32);
     EXPECT_EQ(
         address_of(float_chunk.m_input_tensors[1]) - address_of(float_chunk.m_input_tensors[0]),
@@ -256,6 +261,25 @@ TEST(SessionElementChunk, ASlotHoldsItsSpecsDtype) {
     EXPECT_EQ(
         address_of(float_chunk.m_output_tensors[0]) - address_of(float_chunk.m_input_tensors[1]),
         64U);
+
+    // An engine that binds memory on a coarser grain asks for a larger alignment (a page): every
+    // buffer then starts on that boundary and is padded to it, and the block comes from the
+    // storage on it.
+    const SessionElement::ThreadSafeStruct paged(floats,
+                                                 floats,
+                                                 {},
+                                                 {},
+                                                 host_chunk_storage(),
+                                                 4096);
+    EXPECT_EQ(paged.alignment(), 4096U);
+    for (const anira_tensor& tensor : paged.m_input_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    for (const anira_tensor& tensor : paged.m_output_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    EXPECT_EQ(address_of(paged.m_input_tensors[1]) - address_of(paged.m_input_tensors[0]), 4096U);
+    EXPECT_EQ(paged.m_input_tensors[0].domain, ANIRA_DOMAIN_HOST) << "the host storage's domain";
 }
 
 namespace {

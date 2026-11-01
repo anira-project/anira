@@ -321,6 +321,15 @@ public:
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
 
+    /// The boundary, in bytes (a power of two), a chunk's slot buffer must start on for the
+    /// engine to bind it in place: every session sizes its chunks to the largest any of its
+    /// plans' engines asks for. 64 by default, what LiteRT and TFLite ask of the host memory
+    /// they bind and more than the other runtimes need; an engine whose runtime maps memory on a
+    /// coarser grain (a page, for a GPU that maps host memory) says so.
+    virtual size_t buffer_alignment() const noexcept { return k_default_buffer_alignment; }
+    /// The alignment every engine gets unless it asks for more.
+    static constexpr size_t k_default_buffer_alignment = 64;
+
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
     /// engine's load decides). load refuses a record on a provider the adapter does not serve

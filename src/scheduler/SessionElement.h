@@ -23,6 +23,7 @@
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
 #include "../utils/Semaphore.h"
+#include "ChunkStorage.h"
 #include "LatencyCalculator.h"
 
 namespace anira {
@@ -317,10 +318,11 @@ public:
         /**
          * @brief The chunk's storage and its descriptors, built once by the session's prepare
          *
-         * One allocation holds the buffer of every slot of either side but a State slot, each
-         * buffer starting on a 64-byte boundary, in the spec's dtype with the spec's extents,
-         * zeroed. Every slot gets one descriptor over its buffer, with the spec's rank, extents
-         * and dtype and all-zero strides: what the engine call
+         * One block of `storage` holds the buffer of every slot of either side but a State
+         * slot, each buffer starting on an `alignment` boundary, in the spec's dtype with the
+         * spec's extents, zeroed. Every slot gets one descriptor over its buffer, with the
+         * spec's rank, extents and dtype, the storage's domain and all-zero strides: what the
+         * engine call
          * hands its adapter (anira_engine_ctx::inputs / outputs) and what a processor context
          * copies for a slot. A State slot has no buffer: its descriptor is the processor
          * runner's to bind over the pair's port ahead of every inference.
@@ -330,11 +332,16 @@ public:
          * @param outputs The same per output tensor
          * @param input_state Per input tensor: whether it is a State slot
          * @param output_state Per output tensor: whether it is a State slot
+         * @param storage Where the block lives (host_chunk_storage() in this pre-release)
+         * @param alignment The boundary every slot's buffer starts on, in bytes, a power of two
+         * (the largest any of the session's plans' engines needs, buffer_alignment)
          */
         ThreadSafeStruct(const std::vector<capi::DerivedSpec>& inputs,
                          const std::vector<capi::DerivedSpec>& outputs,
                          const std::vector<bool>& input_state,
-                         const std::vector<bool>& output_state);
+                         const std::vector<bool>& output_state,
+                         ChunkStorage& storage,
+                         size_t alignment);
         ~ThreadSafeStruct() = default;
         // The descriptors name the block: one struct, one place.
         ThreadSafeStruct(const ThreadSafeStruct&) = delete;
@@ -348,8 +355,8 @@ public:
         /// delivers. A State slot has no buffer; its pair keeps its own value.
         void zero_outputs() noexcept;
 
-        /// The alignment of every slot's buffer, in bytes.
-        static constexpr size_t k_alignment = 64;
+        /// The boundary every slot's buffer of this chunk starts on, in bytes.
+        size_t alignment() const noexcept { return m_block.alignment(); }
 
         std::atomic<bool> m_free{true};  ///< Atomic flag indicating if this structure is available
                                          ///< for use
@@ -419,9 +426,8 @@ public:
         ThreadSafeStruct* m_waiting_next = nullptr;
 
     private:
-        /// The one allocation of the chunk's buffers, over-allocated by k_alignment so that the
-        /// first buffer starts on a boundary whatever the allocator handed out.
-        std::vector<std::byte> m_block;
+        /// The one block of the chunk's buffers, from its storage, on the chunk's alignment.
+        ChunkBlock m_block;
         /// Per slot of either side, its buffer in m_block; empty for a State slot.
         std::vector<std::span<std::byte>> m_input_bytes;
         std::vector<std::span<std::byte>> m_output_bytes;
