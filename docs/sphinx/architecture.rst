@@ -91,10 +91,11 @@ What a handler runs: the inference stage, the model configuration (:cpp:class:`a
 * Input and output tensor specs: roles, axes, windows, latencies
 * The processor's phases convert host blocks to model tensors and back where anira's default fill does not fit (:doc:`custom_preprocessing`)
 
-:cpp:class:`anira::InferenceManager`
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``anira::InferenceManager``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Coordinates the rings and the inference scheduling of one handler (internal).
+Coordinates the rings and the inference scheduling of one handler (internal: a private class
+under ``src/scheduler/``, not part of the installed headers).
 
 * Moves the host's blocks into the rings and the chunks out of them
 * Schedules inference tasks on the context's thread pool

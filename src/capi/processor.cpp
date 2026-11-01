@@ -20,10 +20,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -34,6 +30,10 @@
 #include <variant>
 #include <vector>
 
+#include "../scheduler/SessionElement.h"
+#include "../utils/Logger.h"
+#include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
 #include "ext_registry.h"
 #include "port.h"
 #include "validate.h"

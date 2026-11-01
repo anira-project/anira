@@ -23,6 +23,67 @@ Installation
    :start-after: ## Installation
    :end-before: ## Examples
 
+The installed package
+~~~~~~~~~~~~~~~~~~~~~
+
+An installed anira (``cmake --install``, or a release zip) carries the library and its public
+headers, and nothing of its private dependencies:
+
+.. code-block:: text
+
+    include/anira/anira.h            the C umbrella (every header of anira/abi/)
+    include/anira/anira_all.h        the C umbrella plus the platform companions
+    include/anira/anira_em.h         the WebAssembly companion (empty on every other target)
+    include/anira/anira.hpp          the C++20 face, header-only over the C entries
+    include/anira/compat/v2.hpp      the 2.x source-compatible face, header-only
+    include/anira/abi/*.h            the C ABI, one header per area; abi/draft/ the draft entries
+    lib/libanira.so.0 (libanira.0.dylib, bin/anira-0.dll + lib/anira-0.lib; static: lib/libanira.a, lib/anira.lib)
+    include/anira-engines/<engine>/  and the engine libraries, for code that calls an engine itself
+    lib/cmake/anira/                 the CMake package: find_package(anira) → anira::anira
+
+The shared library is named after the ABI major (``0`` through the 3.0.0 pre-releases, ``3`` from
+v3.0.0 on), exports the ``anira_*`` C entries and nothing else, and carries tanh-lib's core
+inside it; the queue and the JSON library are header-only and private. No C++ header of anira's
+core is installed. The engines the build was made with are installed beside it: their libraries
+(the shared ones anira loads at run time, the static ones a static anira's consumers link) and
+their headers, under ``include/anira-engines/<engine>/``, which only the ``anira::<engine>``
+target carries, for code that calls an engine itself; ``anira::anira`` reaches none of them.
+``find_package(anira)`` looks up nothing but ``Threads`` and those engines.
+
+Linking anira from C
+~~~~~~~~~~~~~~~~~~~~
+
+The C ABI is C11. A C project links ``anira::anira`` like a C++ one; with a static anira, which
+is C++ inside, the executable links through the C++ driver:
+
+.. code-block:: cmake
+
+    project(my_host LANGUAGES C CXX)
+    find_package(anira REQUIRED)
+    add_executable(my_host main.c)
+    target_link_libraries(my_host PRIVATE anira::anira)
+    set_target_properties(my_host PROPERTIES LINKER_LANGUAGE CXX)  # static anira only
+
+.. code-block:: c
+
+    #include <anira/anira.h>
+
+    int main(void) {
+        anira_error err = ANIRA_ERROR_INIT;
+        if (ANIRA_FAILED(anira_check_abi(ANIRA_ABI_VERSION))) { return 1; }  /* header == library */
+        anira_context_config* config = NULL;
+        anira_context* context = NULL;
+        anira_context_config_create(&config, &err);
+        if (ANIRA_FAILED(anira_context_create(config, &context, &err))) { return 1; }
+        /* ... a model config, a pipeline, a handler, prepared with a Hard contract ... */
+        anira_context_destroy(context);
+        anira_context_config_destroy(config);
+        return ANIRA_FAILED(anira_shutdown()) ? 1 : 0;
+    }
+
+``test/contracts/install/main_c.c`` is a complete one: a registered engine, a handler prepared
+under a Hard contract and one block through ``anira_handler_process``.
+
 Basic Usage Example
 -------------------
 

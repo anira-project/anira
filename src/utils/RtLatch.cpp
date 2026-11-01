@@ -1,5 +1,5 @@
 // The process-wide site latches of include/anira/utils/RtLatch.h and the summary interval.
-#include <anira/utils/RtLatch.h>
+#include "RtLatch.h"
 
 #include <array>
 #include <atomic>

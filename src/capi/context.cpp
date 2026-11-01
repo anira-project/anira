@@ -7,8 +7,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 
 #include <algorithm>
 #include <atomic>
@@ -24,6 +22,8 @@
 #include <vector>
 
 #include "../engines/Adapter.h"
+#include "../scheduler/Core.h"
+#include "../utils/Logger.h"
 #include "capi_internal.h"
 #include "enumerate.h"
 #include "ext_registry.h"

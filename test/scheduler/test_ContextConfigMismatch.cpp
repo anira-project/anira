@@ -9,8 +9,6 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
 #include <atomic>
@@ -20,6 +18,8 @@
 #include "../support/log_record_collector.h"
 #include "capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "utils/Logger.h"
 
 using namespace anira;
 

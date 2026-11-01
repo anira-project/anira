@@ -1,7 +1,5 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
 
 #include <algorithm>
 #include <chrono>
@@ -13,6 +11,8 @@
 #include "capi/handles.h"  // IWYU pragma: keep - the body of anira_context_config
 #include "engines/Adapter.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceThread.h"
 
 using namespace anira;
 

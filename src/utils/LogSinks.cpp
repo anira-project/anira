@@ -7,7 +7,6 @@
 // instead of waiting for itself.
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/utils/Logger.h>
 #include <tanh/core/Logger.h>
 
 #include <atomic>
@@ -17,6 +16,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+
+#include "Logger.h"
 
 #ifdef __EMSCRIPTEN__
 #include "../platform/emscripten/em_console.h"

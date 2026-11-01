@@ -12,11 +12,6 @@
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RingBuffer.h>
 
 #include <anira/anira.hpp>
 #include <array>
@@ -33,7 +28,12 @@
 #include "../abi/float_face.h"
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
 #include "tanh/core/Logger.h"
+#include "utils/Logger.h"
+#include "utils/RingBuffer.h"
 
 using namespace anira;
 
@@ -254,7 +254,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     size_t const num_structs = session.m_num_structs;
     ASSERT_EQ(session.m_inference_queue.size(), num_structs);
     RingBuffer& ring = session.receive_ring(0);
-    size_t const ring_capacity = ring.get_num_samples();
+    size_t const ring_capacity = ring.capacity();
     ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
         << "The receive ring holds the latency pre-fill plus one hop per struct.";
 
@@ -291,7 +291,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     }
     ASSERT_TRUE(wait_for([&] {
         push_collect_only();
-        return ring.get_available_samples(0) == ring_capacity;
+        return ring.available(0) == ring_capacity;
     })) << "push_data must collect finished inferences while the receive ring has room.";
     for (const auto& ts_struct : session.m_inference_queue) {
         EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
@@ -312,7 +312,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     // drain see a completed-but-unpublished result as "not ready".
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     push_collect_only();
-    EXPECT_EQ(ring.get_available_samples(0), ring_capacity)
+    EXPECT_EQ(ring.available(0), ring_capacity)
         << "The gate must hold results in their structs instead of overwriting unread "
            "output.";
     for (const auto& ts_struct : session.m_inference_queue) {

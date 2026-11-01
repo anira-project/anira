@@ -38,10 +38,6 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <chrono>
@@ -50,7 +46,11 @@
 #include <vector>
 
 #include "capi/port.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceManager.h"
 #include "scheduler/TensorRun.h"
+#include "utils/Logger.h"
+#include "utils/RtLatch.h"
 
 namespace anira {
 

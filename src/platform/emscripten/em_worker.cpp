@@ -2,7 +2,6 @@
 #include "em_worker.h"
 
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <emscripten/emscripten.h>
 #include <emscripten/eventloop.h>
@@ -16,6 +15,7 @@
 #include <string>
 #include <vector>
 
+#include "../../utils/Logger.h"
 #include "../../utils/StatusError.h"
 
 namespace {

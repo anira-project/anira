@@ -145,10 +145,9 @@ struct Api {
     DestroyFn m_destroy = nullptr;
     IntFn m_create_throwing = nullptr;
     UIntFn m_num_inference_threads = nullptr;
-    IntFn m_has_inference_threads = nullptr;
-    IntFn m_num_sessions = nullptr;
     IntFn m_has_core = nullptr;
-    VoidFn m_shutdown = nullptr;
+    IntFn m_release_core_if_idle = nullptr;
+    IntFn m_shutdown = nullptr;
     VoidFn m_leak_thread = nullptr;
     VoidFn m_hold_until_exit = nullptr;
 };
@@ -181,9 +180,8 @@ public:
                resolve(m_api.m_destroy, "unloadtest_destroy") &&
                resolve(m_api.m_create_throwing, "unloadtest_create_throwing") &&
                resolve(m_api.m_num_inference_threads, "unloadtest_num_inference_threads") &&
-               resolve(m_api.m_has_inference_threads, "unloadtest_has_inference_threads") &&
-               resolve(m_api.m_num_sessions, "unloadtest_num_sessions") &&
                resolve(m_api.m_has_core, "unloadtest_has_core") &&
+               resolve(m_api.m_release_core_if_idle, "unloadtest_release_core_if_idle") &&
                resolve(m_api.m_shutdown, "unloadtest_shutdown") &&
                resolve(m_api.m_leak_thread, "unloadtest_leak_thread") &&
                resolve(m_api.m_hold_until_exit, "unloadtest_hold_until_exit");
@@ -344,13 +342,10 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
     api.m_prepare(instance);
     api.m_process(instance, 50);
     EXPECT_TRUE(wait_for_num_inference_threads(api, 2));
-    EXPECT_EQ(api.m_num_sessions(), 1);
 
     api.m_destroy(instance);
     // Joined synchronously by the last release — no waiting, no polling.
     EXPECT_EQ(api.m_num_inference_threads(), 0u);
-    EXPECT_EQ(api.m_has_inference_threads(), 0);
-    EXPECT_EQ(api.m_num_sessions(), 0);
     // The core outlives the sessions while the library is loaded (immortal) …
     EXPECT_EQ(api.m_has_core(), 1);
 
@@ -362,7 +357,7 @@ TEST_F(LibraryUnload, DefaultPolicyLeavesNoThreadBehind) {
 
 // A host that unloads while an instance is still alive: the library-unload hook joins
 // the pool (POSIX). On Windows there is no hook that may join; the plugin's module-exit
-// entry point calls shutdown() instead, which is mirrored here.
+// entry point destroys its instance and calls anira_shutdown instead, which is mirrored here.
 //
 // The premise: the pool is idle. The session stays alive and registered and the pool threads
 // live, but every block is completed before the unload, so no inference is in flight when the
@@ -392,11 +387,14 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
 
 #if defined(_WIN32)
-    api.m_shutdown();
+    // Windows has no hook that may join, and the C ABI no forcing shutdown: the module exit
+    // destroys what it created, then calls anira_shutdown, which joins the pool.
+    api.m_destroy(instance);
+    EXPECT_EQ(api.m_shutdown(), 0);
     EXPECT_EQ(api.m_num_inference_threads(), 0u);
 #endif
 
-    // No destroy: the instance (and its session) is leaked, as a careless host would.
+    // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
     module.unload();
     expect_unmapped();
     grace_period();
@@ -410,9 +408,10 @@ TEST_F(LibraryUnload, FailedCreateLeavesNoState) {
     const Api& api = module.api();
 
     EXPECT_EQ(api.m_create_throwing(), 1);
-    EXPECT_EQ(api.m_num_sessions(), 0);
     EXPECT_EQ(api.m_num_inference_threads(), 0u);
-    EXPECT_EQ(api.m_has_inference_threads(), 0);
+    // Nothing of the failed construction lives: no context, no handler, no session, so the core
+    // is idle and anira_release_core_if_idle frees it.
+    EXPECT_EQ(api.m_release_core_if_idle(), 1);
 
     module.unload();
     expect_unmapped();

@@ -12,16 +12,9 @@ endif()
 # anira.dll only exists for a shared build; a static anira (.lib) is baked into the
 # consumer, so there is nothing to copy.
 if(BUILD_SHARED_LIBS)
-    if(CMAKE_GENERATOR MATCHES "Visual Studio")
-        set(ANIRA_DLL "${anira_BINARY_DIR}/${CMAKE_BUILD_TYPE}/anira.dll")
-    else()
-        set(ANIRA_DLL "${anira_BINARY_DIR}/anira.dll")
-    endif()
+    # anira-<ABI major>.dll (CMakeLists.txt), wherever the generator puts it.
+    set(ANIRA_DLL "$<TARGET_FILE:anira>")
     list(APPEND ANIRA_SHARED_LIBS_WIN ${ANIRA_DLL})
-    # tanh-lib's core component is a DLL in a shared build. anira calls into it
-    # (thl::Logger), so every executable linking anira needs it beside it — the
-    # generator expression resolves to the right per-generator/config path.
-    list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:tanh::Core>")
 endif()
 
 # Add all necessary DLLs to a list for later copying. Only shared engines ship a
@@ -54,7 +47,7 @@ endif()
 if(ANIRA_WITH_BENCHMARK AND BUILD_SHARED_LIBS)
     list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:benchmark::benchmark>")
     if(NOT ANIRA_WITH_TESTS)
-        # gtest_main is linked into anira for the benchmark executables as well.
+        # The benchmark executables are gtest binaries too (gtest_main through their fixture).
         list(APPEND ANIRA_SHARED_LIBS_WIN "$<TARGET_FILE:gtest>" "$<TARGET_FILE:gtest_main>")
     endif()
 endif()

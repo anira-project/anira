@@ -24,7 +24,6 @@
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -46,6 +45,7 @@
 #include "../support/log_record_collector.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/SessionElement.h"
 
 namespace {
 
@@ -596,7 +596,7 @@ TEST(AbiHandlerTensor, AnEmptyTensorWithoutMemoryLeavesItsSlotOut) {
               ANIRA_OK);
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_EQ(delivered[1], 0U);
-    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).available(0), 0U);
     EXPECT_EQ(anira_handler_rt_error(rig.get()), ANIRA_OK);
 
     // One carried slot beside an empty one.
@@ -878,9 +878,8 @@ TEST(AbiHandlerTensor, EveryMalformedTensorIsRefusedBeforeAnythingIsPushed) {
                   refusal.m_status);
         EXPECT_EQ(anira_handler_pop_data_wait(h, &bad.tensor(), 0, nullptr, 0.0), refusal.m_status);
 
-        EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U)
-            << "a refused call pushed samples";
-        EXPECT_EQ(rig.session().receive_ring(0).get_available_samples(0), rig.latency())
+        EXPECT_EQ(rig.session().send_ring(0).available(0), 0U) << "a refused call pushed samples";
+        EXPECT_EQ(rig.session().receive_ring(0).available(0), rig.latency())
             << "a refused call popped samples";
         for (size_t i = 0; i < k_hop; ++i) {
             ASSERT_EQ(good.at(0, i), stream_value(0, i)) << "a refused call wrote host memory";
@@ -919,7 +918,7 @@ TEST(AbiHandlerTensor, APlanarTensorIsCheckedPlaneByPlane) {
     device.flags |= 0x100U;
     anira_handler_reset(h);
     EXPECT_EQ(anira_handler_push_data(h, &device, 0), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).available(0), 0U);
 }
 
 TEST(AbiHandlerTensor, TheCheckOrderIsPinnedByTensorsWrongInTwoWays) {
@@ -1003,7 +1002,7 @@ TEST(AbiHandlerTensor, AZeroedTensorInOneSlotRefusesTheWholeMultiCall) {
     EXPECT_EQ(delivered[0], 0U);
     EXPECT_EQ(delivered[1], 0U);
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 2), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U)
+    EXPECT_EQ(rig.session().send_ring(0).available(0), 0U)
         << "slot 0 was pushed although slot 1 is malformed";
     for (size_t i = 0; i < k_hop; ++i) { ASSERT_EQ(stream_out.at(0, i), k_untouched); }
     // A zeroed output slot: nothing is pushed either.
@@ -1011,7 +1010,7 @@ TEST(AbiHandlerTensor, AZeroedTensorInOneSlotRefusesTheWholeMultiCall) {
     const std::array<anira_tensor, 2> bad_outputs{stream_out.tensor(), anira_tensor{}};
     EXPECT_EQ(anira_handler_process_multi(h, good_inputs.data(), 2, bad_outputs.data(), 2, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).available(0), 0U);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
 }
 
@@ -1071,7 +1070,7 @@ TEST(AbiHandlerTensor, TheArgumentsAreRefused) {
               ANIRA_ERROR_INVALID_ARGUMENT);
 
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().send_ring(0).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(0).available(0), 0U);
 }
 
 TEST(AbiHandlerTensor, ARefusalIsLoggedOncePerKindAndNamesTheSlot) {
@@ -1660,9 +1659,12 @@ TEST(AbiHandlerTensor, APushLandsEveryChannelInItsRing) {
             fill_input(block, 0);
             ASSERT_EQ(anira_handler_push_data(rig.get(), &block.tensor(), 0), ANIRA_OK);
             for (size_t channel = 0; channel < channels; ++channel) {
-                ASSERT_EQ(rig.session().send_ring(0).get_available_samples(channel), k_count);
+                ASSERT_EQ(rig.session().send_ring(0).available(channel), k_count);
                 std::array<float, k_count> ring{};
-                rig.session().send_ring(0).pop_block(channel, ring.data(), k_count);
+                rig.session().send_ring(0).pop_block(channel,
+                                                     ring.data(),
+                                                     ANIRA_DTYPE_F32,
+                                                     k_count);
                 for (size_t i = 0; i < k_count; ++i) {
                     EXPECT_EQ(ring.at(i), stream_value(channel, i))
                         << "channel " << channel << ", sample " << i;
@@ -2034,8 +2036,7 @@ struct BoundRig {
     /// The samples waiting in the send ring and in the receive ring, read off the session:
     /// nothing collects.
     std::array<size_t, 2> levels() const {
-        return {m_session->send_ring(0).get_available_samples(0),
-                m_session->receive_ring(0).get_available_samples(0)};
+        return {m_session->send_ring(0).available(0), m_session->receive_ring(0).available(0)};
     }
 
 private:

@@ -45,13 +45,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <array>
@@ -74,7 +67,14 @@
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../engines/DescriptorAdapter.h"
+#include "../scheduler/Core.h"
+#include "../scheduler/InferenceManager.h"
+#include "../scheduler/InferenceThread.h"
+#include "../scheduler/LatencyCalculator.h"
+#include "../scheduler/SessionElement.h"
 #include "../scheduler/TensorRun.h"
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
 #include "capi_internal.h"
 #include "context.h"
 #include "engine.h"

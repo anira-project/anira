@@ -53,7 +53,7 @@ struct RtLatch;
  *
  * @see InferenceThread, Core, SessionElement
  */
-class ANIRA_API InferenceManager : private DroppedHops {
+class InferenceManager : private DroppedHops {
 public:
     /**
      * @brief Default constructor is deleted to prevent uninitialized instances

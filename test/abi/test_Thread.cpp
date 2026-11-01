@@ -7,8 +7,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
 #include <gtest/gtest.h>
 
 #include <array>
@@ -21,6 +19,8 @@
 
 #include "../../extras/models/model_files.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceThread.h"
 
 using namespace anira;
 

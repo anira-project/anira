@@ -1,5 +1,4 @@
 #include <anira/abi/status.h>
-#include <anira/utils/Logger.h>
 #include <gtest/gtest.h>
 
 #include <cstring>
@@ -8,6 +7,7 @@
 
 #include "capi/capi_internal.h"
 #include "handler_support.h"
+#include "utils/Logger.h"
 
 using anira::capi::firewall_probe;
 

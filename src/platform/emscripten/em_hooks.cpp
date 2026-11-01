@@ -13,8 +13,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/anira_em.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <emscripten/em_macros.h>
 
@@ -26,6 +24,8 @@
 
 #include "../../capi/capi_internal.h"
 #include "../../capi/handles.h"
+#include "../../scheduler/InferenceThread.h"
+#include "../../utils/Logger.h"
 
 using anira::capi::translate_exception;
 

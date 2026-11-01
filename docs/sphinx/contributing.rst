@@ -184,13 +184,16 @@ Testing
 Test layout
 ~~~~~~~~~~~
 
-``test/`` mirrors ``include/anira/``: a test file lives in the directory of the unit
-it covers, and the directory decides which ``test_*`` binary compiles it (see
-``test/CMakeLists.txt``).
+``test/`` mirrors ``src/``: a test file lives in the directory of the unit it covers, and the
+directory decides which ``test_*`` binary compiles it (see ``test/CMakeLists.txt``).
 
-- ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` covers
-  ``src/engines/`` (the engine adapters), which has no public header.
+- ``test/<dir>/test_<Unit>.cpp`` covers ``src/<dir>/<Unit>.h`` — so ``scheduler/``, ``utils/``
+  and ``engines/`` (the engine adapters) each map one to one, and ``test/abi/`` covers the C ABI
+  (``include/anira/abi/``, implemented under ``src/capi/``). The core's C++ headers are private:
+  they live next to their sources under ``src/`` and are never installed; what anira installs
+  is the public header set of ``cmake/public-headers.cmake`` (the C umbrellas, ``anira/abi/``,
+  ``anira.hpp`` and ``compat/v2.hpp``), and a header under ``include/anira`` that is not listed
+  there fails the configure.
 - The ``anira.hpp`` handler (``test_InferenceHandler``) and the 2.x face
   (``test_InferenceHandlerApi``) are covered by root-level ``test_*.cpp`` files, alongside the
   cross-unit integration suites (``test_OneSidedStreaming``). A test file's binary follows the
@@ -199,8 +202,15 @@ it covers, and the directory decides which ``test_*`` binary compiles it (see
   ``scheduler/test_OneSidedStreamingInternals.cpp``, in ``test_scheduler`` with the other
   white-box suites.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: header isolation, engine linkage, the library-unload harness,
-  the installed-package consumer.
+  than of any one unit: engine linkage, the library-unload harness, the installed-package
+  consumers. The header gates, header isolation among them, live with the other ABI gates in
+  ``test/abi/``.
+- A binary is white-box or black-box (``anira_add_test_binary(<target> [WHITE_BOX] ...)``).
+  The white-box binaries (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``)
+  read anira's private classes, so they link the library's objects (``anira_objects``) with
+  ``src/`` on their include path and ``ANIRA_STATIC`` defined; everything else (``test_handler``,
+  the ABI gates, the unload harness, the install consumers, the examples) links ``anira::anira``
+  and sees only what a consumer sees.
 - ``test/support/`` is shared test infrastructure, not tests.
 
 CI tiers
@@ -374,7 +384,9 @@ handles and byte sizes at their wire width; the rationale is that nothing which 
 handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
 C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
 ``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
-``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``:
+``anira_header_compat_with_hpp`` (the C umbrella, ``anira.hpp`` and the shim in one TU, both
+orders), the internal ``anira_header_scheduler_coexist`` (the private scheduler classes beside
+``anira.hpp``) and ``anira_abi_rt_contract``:
 nonblocking C functions calling every ``[callback-safe]`` tensor entry and the nonblocking
 Hard entries over host tensors, and a backup function of ``ANIRA_MISS_CALLBACK`` handed to
 its setter, compiled with ``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
@@ -414,6 +426,61 @@ the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the nam
 ``abi/symbols-0.txt``, ``abi/symbols-draft.txt`` and ``abi/symbols-emscripten.txt`` (plus
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
+
+The ABI gates
+~~~~~~~~~~~~~
+
+Six gates own the C ABI's contract (``docs/anira-v3-architecture.md``, section 6a); five run
+today, the sixth (an ``abidiff`` against the last tag) comes with the freeze.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 24 70
+
+   * - gate
+     - target
+     - what it proves
+   * - 1
+     - ``anira_symbol_baseline``
+     - The shared library's real export table (``nm`` or ``dumpbin``) is exactly
+       ``abi/symbols-0.txt`` ∪ ``abi/symbols-draft.txt``: a promised or draft name that is missing
+       fails, and so does any other exported name (a C++ symbol, an internal function, a
+       third-party one); only what the linker defines itself and, on PE, the exports the engine
+       archives force are tolerated. ``anira_abi_link`` is the presence check of the static legs,
+       the ``-sEXPORTED_FUNCTIONS`` link of AniraWeb that of WebAssembly. ``anira_exports``
+       (``test/contracts/unload``) forbids every engine runtime and every private dependency
+       (``thl``, ``moodycamel``, ``nlohmann``) in the library's and a plugin-shaped module's table.
+   * - 3
+     - ``anira_abi_layout``
+     - Every Tier-1 ``sizeof`` / ``offsetof`` and enum width, natively and under node, against
+       ``abi/layout-0.txt``.
+   * - 4
+     - ``anira_header_c11``, ``anira_header_cxx17``, ``anira_header_cxx20``,
+       ``anira_header_compat``, ``anira_header_compat_with_hpp``, ``anira_header_isolation``
+     - Every public header alone and the umbrellas together, as C11 and C++17 with no anira define
+       under the strict flags, ``anira.hpp`` and the shim as C++20; ``anira_header_isolation``
+       compiles every public header with exactly the usage requirements of ``anira::anira`` and
+       fails when anything private resolves through them (``src/``, an engine, tanh-lib, the
+       queue, the JSON library, gtest, benchmark). On every preset: a build-driving CTest on
+       desktop, a member of ALL on Android, iOS and WebAssembly.
+   * - 5
+     - ``InstallConsumer`` (``test/contracts/install``), ``build_install``
+     - The installed package, shared and static: ``consumer`` (``anira.hpp``), ``consumer_c`` (pure
+       C11, the raw-C sequence of section 9 over a registered engine, plus gate 4's probes on the
+       installed include directories), ``consumer_compat`` (the 2.x shim), ``consumer_engine``
+       (an engine called through ``anira::onnxruntime``, and the negative check that its header
+       needs that target), ``consumer_tanh_first`` (ELF and Mach-O: a host's own shared tanh-lib
+       linked before anira, whose logger never sees anira's records; a shared libanira names no
+       ``thl`` symbol) and the plugin-shaped module that exports no engine symbol and no
+       ``anira_*`` entry.
+   * - 6
+     - the RTSan leg, ``anira_abi_rt_contract``
+     - At run time the whole suite under RealtimeSanitizer (``desktop-tests-rtsan``; the unload
+       harness alone is left out, since an uninstrumented host cannot load an instrumented
+       module); at compile time ``-Werror=function-effects`` on the consumer-shaped C targets
+       (``anira_abi_rt_contract``, ``anira_header_c11``, ``anira_abi_link``, ``consumer_c``) and
+       on ``anira_header_cxx20`` / ``anira_header_compat``, where the compiler has the analysis
+       (upstream clang 20 or later).
 
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~

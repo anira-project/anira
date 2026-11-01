@@ -76,12 +76,16 @@ ANIRA_TEST_EXPORT void unloadtest_destroy(void* instance);
 /// exist); returns 1 if create or prepare failed (as one must), 0 if both succeeded.
 ANIRA_TEST_EXPORT int unloadtest_create_throwing(void);
 
+/// The module observes libanira through the C entries alone, as a plugin does: libanira exports
+/// nothing else.
 ANIRA_TEST_EXPORT unsigned int unloadtest_num_inference_threads(void);
-ANIRA_TEST_EXPORT int unloadtest_has_inference_threads(void);
-ANIRA_TEST_EXPORT int unloadtest_num_sessions(void);
 ANIRA_TEST_EXPORT int unloadtest_has_core(void);
-/// anira::Core::shutdown() — what a plugin calls from its module-exit entry point.
-ANIRA_TEST_EXPORT void unloadtest_shutdown(void);
+/// anira_release_core_if_idle: 1 when the core was idle (no context, no handler, no session) and
+/// is freed now, 0 when something of anira still lives.
+ANIRA_TEST_EXPORT int unloadtest_release_core_if_idle(void);
+/// anira_shutdown — what a plugin calls from its module-exit entry point once it destroyed
+/// what it created; the status (it refuses while a context or a handler lives).
+ANIRA_TEST_EXPORT int unloadtest_shutdown(void);
 /// Leaks a context and starts a user-managed inference thread on it that is never
 /// stopped. The negative control: a thread that is still alive when the module is
 /// unloaded must crash the process.

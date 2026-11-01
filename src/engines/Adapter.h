@@ -39,7 +39,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/system/Exports.h>
 
 #include <atomic>
 #include <cstddef>
@@ -80,7 +79,7 @@ struct TensorInfo {
 /// the core reconciles one level for the process). Whether a session runs the model exclusively
 /// is the session's property (PrepareRequest), not the record's: a stateful model is loaded once
 /// for every session that runs it, with no shared slot.
-struct ANIRA_API Model {
+struct Model {
     /// The built-in engine; ANIRA_ENGINE_CUSTOM with m_engine_id for a registered one (the
     /// shim's anira.v2.custom included), under the pair rule.
     anira_engine m_engine = ANIRA_ENGINE_NONE;
@@ -173,7 +172,7 @@ private:
     std::atomic<bool> m_failed{false};
 };
 
-class ANIRA_API Executor {
+class Executor {
 public:
     Executor() = default;
     virtual ~Executor() = default;
@@ -223,7 +222,7 @@ struct ProviderInfo {
 /// which holds it: the object lives while a loaded model of its engine (or a probe) holds it,
 /// the last holder frees it on its own thread, and the next load makes a new one whose init
 /// runs again.
-class ANIRA_API BuiltinEngine {
+class BuiltinEngine {
 public:
     explicit BuiltinEngine(anira_engine engine) noexcept : m_engine(engine) {}
     virtual ~BuiltinEngine() = default;
@@ -277,7 +276,7 @@ class Prepared;
 /// thread under the core's lifecycle lock (the core pools loaded models by record and carrier),
 /// prepare once per session that runs the model (the Prepared the session's plan slot holds),
 /// the destructor frees what load loaded, when the pool lets the model go.
-class ANIRA_API Loaded {
+class Loaded {
 public:
     Loaded() = default;
     virtual ~Loaded() = default;
@@ -411,7 +410,7 @@ private:
 /// Made by Loaded::prepare on the control thread, run per inference on an inference thread, the
 /// destructor gives back what the session kept (before the loaded model is released: the
 /// session's plan slot holds the two in that order).
-class ANIRA_API Prepared {
+class Prepared {
 public:
     virtual ~Prepared() = default;
     Prepared(const Prepared&) = delete;
@@ -474,7 +473,7 @@ private:
 /// no shared slot, and warms every one of them up; make_executor makes one more for an
 /// exclusive session at its prepare. The Prepared of such a model (ExecutorPrepared) runs a
 /// shared call on the executor of the claimed slot and an exclusive call on the session's own.
-class ANIRA_API ExecutorLoaded : public Loaded {
+class ExecutorLoaded : public Loaded {
 public:
     /// Over the engine object of the engine (the core's one per built-in engine,
     /// Core::builtin_engine), which the loaded model holds for its life: what load builds runs
@@ -518,7 +517,7 @@ private:
 
 /// The Prepared of an ExecutorLoaded: an exclusive session's own executor, or the routing of a
 /// shared session's calls to the executor of the claimed slot.
-class ANIRA_API ExecutorPrepared final : public Prepared {
+class ExecutorPrepared final : public Prepared {
 public:
     ExecutorPrepared(ExecutorLoaded& loaded, bool exclusive, std::unique_ptr<Executor> own) noexcept
         : Prepared(loaded, exclusive), m_loaded(&loaded), m_own(std::move(own)) {}
@@ -554,11 +553,11 @@ struct SlotBinding {
 /// with a default value). Throws anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the
 /// side, the slot and the engine's names for a record name the engine lacks, a slot whose
 /// position the engine has no tensor at, a duplicate or an unbound engine tensor. Logs nothing.
-ANIRA_API std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
-                                              const std::vector<std::string>& export_names,
-                                              size_t required,
-                                              const char* engine,
-                                              const char* side);
+std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
+                                    const std::vector<std::string>& export_names,
+                                    size_t required,
+                                    const char* engine,
+                                    const char* side);
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an
@@ -583,40 +582,40 @@ enum class ExtentRule : uint8_t {
 /// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
 /// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
 /// tensor, with both shapes.
-ANIRA_API void check_engine_tensor(const TensorInfo& slot,
-                                   const EngineTensor& engine_tensor,
-                                   ExtentRule rule,
-                                   const char* engine,
-                                   const char* side);
+void check_engine_tensor(const TensorInfo& slot,
+                         const EngineTensor& engine_tensor,
+                         ExtentRule rule,
+                         const char* engine,
+                         const char* side);
 
 /// The names of `engine_tensors`, in their order: what bind_slots takes.
-ANIRA_API std::vector<std::string> names_of(const std::vector<EngineTensor>& engine_tensors);
+std::vector<std::string> names_of(const std::vector<EngineTensor>& engine_tensors);
 
 /// One side at load, as every built-in adapter does it: bind_slots over the names of
 /// `engine_tensors`, then check_engine_tensor for every slot against the engine tensor it
 /// bound. Throws what they throw.
-ANIRA_API std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
-                                             const std::vector<EngineTensor>& engine_tensors,
-                                             size_t required,
-                                             ExtentRule rule,
-                                             const char* engine,
-                                             const char* side);
+std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
+                                   const std::vector<EngineTensor>& engine_tensors,
+                                   size_t required,
+                                   ExtentRule rule,
+                                   const char* engine,
+                                   const char* side);
 
 /// The report of two bound sides: what set_bindings takes.
-ANIRA_API Bindings bindings_of(const std::vector<SlotBinding>& inputs,
-                               const std::vector<SlotBinding>& outputs);
+Bindings bindings_of(const std::vector<SlotBinding>& inputs,
+                     const std::vector<SlotBinding>& outputs);
 
 /// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
 /// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`
 /// elements, and packed row-major strides (all zero, or the row-major strides themselves; the
 /// stride of an axis of extent 1 is never stepped and may be anything), at byte_offset from
 /// the base. NULL for anything else, a NULL base included.
-ANIRA_API float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
+float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
 
 /// The float32 rule of the built-in adapters: throws anira::StatusError(ANIRA_ERROR_CONFIG)
 /// naming `engine` and the first tensor of the record (inputs, then outputs) whose dtype is
 /// not float32.
-ANIRA_API void require_f32(const Model& model, const char* engine);
+void require_f32(const Model& model, const char* engine);
 
 }  // namespace anira::engine
 

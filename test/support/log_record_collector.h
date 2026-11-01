@@ -9,7 +9,6 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/utils/Logger.h>
 
 #include <atomic>
 #include <chrono>
@@ -19,6 +18,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "utils/Logger.h"
 
 namespace anira_test {
 

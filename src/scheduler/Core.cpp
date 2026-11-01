@@ -1,11 +1,8 @@
+#include "Core.h"
+
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 #include <tanh/core/Logger.h>
 
@@ -25,6 +22,11 @@
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
+#include "InferenceThread.h"
+#include "SessionElement.h"
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <unistd.h>
@@ -1262,7 +1264,7 @@ bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
     for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
         if (session->input_hop(tensor_index) > 0) {
             for (size_t channel = 0; channel < session->input_channels(tensor_index); channel++) {
-                if (session->send_ring(tensor_index).get_available_samples(channel) <
+                if (session->send_ring(tensor_index).available(channel) <
                     session->input_hop(tensor_index)) {
                     return false;
                 }

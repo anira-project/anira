@@ -46,9 +46,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -71,6 +68,9 @@
 
 #include "../abi/handler_support.h"
 #include "capi/port.h"
+#include "scheduler/InferenceManager.h"
+#include "scheduler/SessionElement.h"
+#include "utils/RingBuffer.h"
 
 namespace anira_test::oracle {
 
@@ -546,11 +546,11 @@ inline std::string format_rings(const anira::SessionElement& session) {
         std::string text = "[";
         for (size_t slot = 0; slot < rings.size(); ++slot) {
             if (slot > 0) { text += ","; }
-            const size_t channels = rings[slot]->get_num_channels();
+            const size_t channels = rings[slot]->num_channels();
             if (channels == 0) { text += "-"; }
             for (size_t channel = 0; channel < channels; ++channel) {
                 if (channel > 0) { text += "/"; }
-                text += std::to_string(rings[slot]->get_available_samples(channel));
+                text += std::to_string(rings[slot]->available(channel));
             }
         }
         return text + "]";
@@ -569,12 +569,12 @@ inline std::string prepared_line(const std::vector<unsigned int>& latencies,
     line += "] send_capacity=[";
     const std::vector<const anira::RingBuffer*> send = rings_of(session, true);
     for (size_t i = 0; i < send.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(send[i]->get_num_samples());
+        line += (i > 0 ? "," : "") + std::to_string(send[i]->capacity());
     }
     line += "] recv_capacity=[";
     const std::vector<const anira::RingBuffer*> receive = rings_of(session, false);
     for (size_t i = 0; i < receive.size(); ++i) {
-        line += (i > 0 ? "," : "") + std::to_string(receive[i]->get_num_samples());
+        line += (i > 0 ? "," : "") + std::to_string(receive[i]->capacity());
     }
     return line + "] structs=" + std::to_string(session.m_num_structs) + " " +
            format_rings(session);

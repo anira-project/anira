@@ -8,8 +8,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/SessionElement.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -33,6 +31,8 @@
 #include "capi/handles.h"
 #include "capi/validate.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
+#include "scheduler/SessionElement.h"
 
 namespace {
 

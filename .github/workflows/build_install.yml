@@ -84,15 +84,18 @@ jobs:
           echo "::group::install tree"
           find prefix -type f | sort
           echo "::endgroup::"
-      # test/contracts/install builds two consumers — anira alone, and one that calls ONNX
-      # Runtime itself through anira::onnxruntime — and asserts at configure
-      # time that the engine header is unreachable without that target.
+      # test/contracts/install builds the consumers — anira alone from C++ and from C
+      # (consumer_c, gate 5), a host with its own tanh-lib linked before anira
+      # (consumer_tanh_first, gate 5: Linux shared and static, macOS shared), and one that calls ONNX
+      # Runtime itself through
+      # anira::onnxruntime — and asserts at configure time that the engine header is
+      # unreachable without that target.
       - name: build and run the consumers against the prefix
         uses: tanh-lab/ci-actions/install-consume-check@v0.3.16
         with:
           PREFIX: ${{ env.ANIRA_PREFIX }}
           CONSUMER_DIR: test/contracts/install
-          BINARIES: "consumer consumer_engine"
+          BINARIES: ${{ runner.os == 'Linux' && 'consumer consumer_c consumer_tanh_first consumer_engine' || 'consumer consumer_c consumer_engine' }}
           GENERATOR: ${{ runner.os != 'Windows' && 'Ninja' || '' }}
       # The plugin-shaped engine consumer must export no engine symbol (the
       # InstallConsumer CTest runs the same check).
@@ -100,8 +103,8 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          if nm -D --defined-only build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
-            echo "consumer_engine_module exports engine symbols"; exit 1
+          if nm -D --defined-only build-consumer/consumer_engine_module.so | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase| _?anira_"; then
+            echo "consumer_engine_module exports engine symbols or anira entries"; exit 1
           fi
 
   # One macOS runner does shared and static sequentially (raw cmake over the
@@ -135,9 +138,11 @@ jobs:
             cmake -S test/contracts/install -B "build-consumer-$cfg" -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$PREFIX"
             cmake --build "build-consumer-$cfg" --parallel
             "./build-consumer-$cfg/consumer"
+            "./build-consumer-$cfg/consumer_c"
+            if [ "$cfg" = "shared" ]; then "./build-consumer-$cfg/consumer_tanh_first"; fi
             "./build-consumer-$cfg/consumer_engine"
-            if nm -gU "build-consumer-$cfg/consumer_engine_module.so" | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase"; then
-              echo "consumer_engine_module exports engine symbols"; exit 1
+            if nm -gU "build-consumer-$cfg/consumer_engine_module.so" | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase| _?anira_"; then
+              echo "consumer_engine_module exports engine symbols or anira entries"; exit 1
             fi
           done
 

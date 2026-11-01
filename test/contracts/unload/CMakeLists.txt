@@ -34,8 +34,7 @@ set_target_properties(anira_unload_test PROPERTIES
     CXX_STANDARD 20
     CXX_STANDARD_REQUIRED ON)
 # Deliberately not linked against anira. gtest comes straight from the FetchContent
-# targets (cmake/test-deps.cmake links gtest_main into anira only as a convenience for
-# the in-process test binary).
+# targets, as for every test binary (cmake/test-deps.cmake).
 target_link_libraries(anira_unload_test PRIVATE gtest gtest_main ${CMAKE_DL_LIBS})
 # The harness deliberately does not link anira (it drives the module via
 # dlopen), so it inherits no sanitizer flags — but the module it loads is
@@ -104,9 +103,10 @@ gtest_discover_tests(anira_unload_test
     PROPERTIES TIMEOUT 120)
 
 # Export-table check (cmake/tanh/check-exports.cmake): the shared libanira exports
-# exactly the ANIRA_API surface (namespace anira, nothing else — no std::, backend or
-# STB_GNU_UNIQUE symbol), and the plugin-shaped module exports no backend-runtime
-# symbol and, with a static anira, nothing of namespace anira either. See the
+# nothing but the C entry points (no std::, backend, third-party or STB_GNU_UNIQUE symbol;
+# the C++ classes of namespace anira are not exported at all, which anira_symbol_baseline
+# proves name by name), and the plugin-shaped module exports no backend-runtime symbol and,
+# with a static anira, nothing of namespace anira either. See the
 # symbol-policy notes in the top-level CMakeLists.txt. On PE, which cannot interpose,
 # the dllexports LibTorch's headers and the LiteRT/TFLite archives force are tolerated.
 # ALLOW_REGEX admits the C entry points of the 3.x line (anira_*, extern "C") on the
@@ -116,11 +116,11 @@ tanh_add_export_check(NAME anira_exports
     LIBRARY anira MODULE anira_unload_module
     NAMESPACES anira
     ALLOW_REGEX "^_?anira_[a-z0-9_]+$"
-    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl
+    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl moodycamel nlohmann
     FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
     TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
 
-# Windows: the module, anira.dll and every runtime DLL are searched relative to the
+# Windows: the module, anira's DLL and every runtime DLL are searched relative to the
 # application, so copy them next to the executable (the module is built into the same
 # directory already). Same pattern as test/CMakeLists.txt.
 if(MSVC AND ANIRA_SHARED_LIBS_WIN)

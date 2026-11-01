@@ -64,7 +64,7 @@ namespace scheduler {
  * models are not held up behind a busy one; the thread that holds an instance runs the model's
  * waiting jobs, oldest first, before it gives the instance back.
  */
-class ANIRA_API InferenceThread {
+class InferenceThread {
 public:
     /**
      * @brief Constructor that initializes the inference thread with a task queue

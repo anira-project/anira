@@ -3,11 +3,11 @@
 #
 # The registry (abi/anira.yml) promises the entry points of abi/symbols-<major>.txt and
 # drafts those of abi/symbols-draft.txt; the shared libanira must export every one of
-# them. This file registers a CTest that reads the library's real export table (nm on
-# ELF and Mach-O, dumpbin on PE) and reports each promised or draft name that is
-# missing. Presence mode only: what else the library exports is the business of the
-# tanh export check (anira_exports); the "nothing but the ABI" half of this baseline
-# switches on with the export cut of the 3.x line.
+# them, and nothing else. This file registers a CTest that reads the library's real export
+# table (nm on ELF and Mach-O, dumpbin on PE) and reports each promised or draft name that is
+# missing and each exported name that is in neither list (a C++ symbol, an internal C
+# function, a third-party one), apart from the symbols a linker defines on its own and, on PE,
+# the exports the engine archives force (anira_exports tolerates the same ones).
 #
 #   include(cmake/abi-symbols.cmake)
 #   anira_add_symbol_baseline(NAME <test> LIBRARY <target> SYMBOLS <file>...)
@@ -130,14 +130,19 @@ endif()
 set(_names "")
 foreach(_export IN LISTS _exports)
     string(REGEX REPLACE "^_" "" _plain "${_export}")
-    # An ELF version script suffixes nothing; a versioned symbol would read name@VERSION.
-    string(REGEX REPLACE "@.*$" "" _plain "${_plain}")
+    # An ELF version script suffixes nothing; a versioned symbol would read name@VERSION. On PE
+    # an @ is part of a C++ name's MSVC decoration (??0Future@ivalue@c10@@QEAA@XZ), which the
+    # tolerance below matches whole; Mach-O has no symbol versions.
+    if(FORMAT STREQUAL "ELF")
+        string(REGEX REPLACE "@.*$" "" _plain "${_plain}")
+    endif()
     list(APPEND _names "${_plain}")
 endforeach()
 list(REMOVE_DUPLICATES _names)
 
 set(_missing "")
 set(_expected 0)
+set(_wanted_all "")
 foreach(_file IN LISTS SYMBOLS)
     if(NOT EXISTS "${_file}")
         message(FATAL_ERROR "abi-symbols: symbol file '${_file}' does not exist")
@@ -149,6 +154,7 @@ foreach(_file IN LISTS SYMBOLS)
             continue()
         endif()
         math(EXPR _expected "${_expected} + 1")
+        list(APPEND _wanted_all "${_name}")
         if(NOT "${_name}" IN_LIST _names)
             list(APPEND _missing "${_name}")
         endif()
@@ -160,4 +166,28 @@ if(_missing)
     string(REPLACE ";" "\n  " _report "${_missing}")
     message(FATAL_ERROR "abi-symbols: ${_count} of ${_expected} promised or draft entry points are not exported by ${LIBRARY}:\n  ${_report}")
 endif()
-message(STATUS "abi-symbols: every one of the ${_expected} promised and draft entry points is exported by ${LIBRARY}")
+
+# Nothing but the lists: every other exported name fails, except what the linker defines
+# itself (the ELF section bounds, the Mach-O header and dyld's marker) and, on PE, the exports
+# that the engine archives force with __declspec(dllexport) (LibTorch's c10/torch templates,
+# the TFLite and LiteRT C APIs), which anira_exports tolerates as well.
+set(_extra "")
+foreach(_name IN LISTS _names)
+    if(_name IN_LIST _wanted_all)
+        continue()
+    endif()
+    if(_name MATCHES "^(_init|_fini|_edata|_end|__bss_start|_DYNAMIC|_GLOBAL_OFFSET_TABLE_|_mh_dylib_header|radr://[0-9]+)$")
+        continue()
+    endif()
+    if(FORMAT STREQUAL "PE" AND _name MATCHES "(@(torch|c10|caffe2)@@|^(TfLite|LiteRt))")
+        continue()
+    endif()
+    list(APPEND _extra "${_name}")
+endforeach()
+if(_extra)
+    list(LENGTH _extra _count)
+    list(SUBLIST _extra 0 40 _shown)
+    string(REPLACE ";" "\n  " _report "${_shown}")
+    message(FATAL_ERROR "abi-symbols: ${LIBRARY} exports ${_count} name(s) outside the promised and draft lists (the first 40):\n  ${_report}")
+endif()
+message(STATUS "abi-symbols: ${LIBRARY} exports exactly the ${_expected} promised and draft entry points")

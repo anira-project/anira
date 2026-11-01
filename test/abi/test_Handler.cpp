@@ -11,9 +11,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/RingBuffer.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -44,6 +41,9 @@
 #include "capi/words.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
+#include "scheduler/InferenceThread.h"
+#include "utils/RingBuffer.h"
 
 namespace {
 

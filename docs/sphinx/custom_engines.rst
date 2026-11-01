@@ -906,10 +906,12 @@ ONNX Runtime execution provider or session option anira's own ONNX Runtime adapt
 (``src/engines/OnnxRuntimeAdapter.cpp``, internal) does not expose. Two rules keep that
 safe, and they are the same rules anira's own adapters follow.
 
-**Link the engine target.** ``anira::anira`` carries anira's headers and the ``USE_<ENGINE>``
-definitions, but no engine header: anira links its engines privately. The engine's include
-directory and library live on the matching engine target, which exists both in anira's build
-tree and in the installed package:
+**Link the engine target.** ``anira::anira`` carries anira's headers but no engine header: anira
+links its engines privately. The ``USE_<ENGINE>`` definitions reach only the consumers inside
+anira's build tree, not the installed ``anira::anira``; which engines a build compiled in is
+``anira_enabled_engines`` (``anira::enabled_engines()``). The engine's include directory and
+library live on the matching engine target, which exists both in anira's build tree and in the
+installed package:
 
 .. code-block:: cmake
 

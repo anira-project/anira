@@ -37,10 +37,6 @@
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/system/Exports.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -49,6 +45,9 @@
 #include <string>
 #include <vector>
 
+#include "../scheduler/SessionElement.h"
+#include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
 #include "port.h"
 #include "validate.h"
 
@@ -59,7 +58,7 @@ namespace anira::capi {
 /// carrier (anira_handler_create copies the pipeline); release fires once, when the last of
 /// them dies. The processor has no name: a pipeline holds one, so every record about it says "the
 /// processor" and its consumer rows read k_processor_consumer.
-class ANIRA_API ProcessorCarrier {
+class ProcessorCarrier {
 public:
     /// What the plan report's anira_plan_ext rows name as the consumer of the kinds the processor
     /// declares.
@@ -96,7 +95,7 @@ private:
 /// What a pipeline's processor means to the validator: which ring-moving phases it fills, and the
 /// extension kinds it declares, as the consumer ProcessorCarrier::k_processor_consumer. NULL is a
 /// pipeline without a processor: the defaults everywhere.
-ANIRA_API ProcessorFacts processor_facts(const ProcessorCarrier* processor);
+ProcessorFacts processor_facts(const ProcessorCarrier* processor);
 
 /// What anira_processor_ctx::frame names: what the six context accessors of anira/abi/processor.h
 /// (anira_processor_input_role to anira_processor_output_tensor) read to answer for a slot, and
@@ -155,7 +154,7 @@ struct ProcessorFrame {
 /// anira_handler_reset), and the processor's reset slot runs for it, with the chunk's context in
 /// ANIRA_PHASE_RESET, before its pre_process. The chunk's stamp, never the session's atomic,
 /// as on the inference thread.
-class ANIRA_API ProcessorRunner final {
+class ProcessorRunner final {
 public:
     /// `processor` (NULL for a pipeline without one) and the two port vectors must outlive the
     /// processor (the handler owns all three). The ports and the model's tensors are indexed

@@ -13,23 +13,12 @@ set(ANIRA_WITH_TFLITE @ANIRA_WITH_TFLITE@)
 set(ANIRA_WITH_LITERT @ANIRA_WITH_LITERT@)
 set(ANIRA_WITH_EXECUTORCH @ANIRA_WITH_EXECUTORCH@)
 set(ANIRA_BACKEND_LINKAGE "@ANIRA_BACKEND_LINKAGE@")
-set(ANIRA_WITH_BENCHMARK @ANIRA_WITH_BENCHMARK@)
-set(ANIRA_WITH_TESTS @ANIRA_WITH_TESTS@)
 set(ANIRA_VERSION @PROJECT_VERSION_FULL@)
 
-find_package(concurrentqueue REQUIRED)
-find_package(nlohmann_json REQUIRED)
 # Statically linked backends put Threads::Threads on their target's link interface.
+# anira's own dependencies (tanh-lib's core, the queue, the JSON library) are private: tanh's
+# objects are inside libanira and the other two are header-only, so nothing is looked up for them.
 find_dependency(Threads)
-
-# anira's ring storage (anira::RingBuffer over thl::core::RingBuffer), its logger and
-# its inference threads (thl::core::Thread) come from tanh-lib's Apache-2.0 core
-# component, installed alongside anira into the same prefix.
-find_dependency(tanh COMPONENTS Core)
-
-if (ANIRA_WITH_TESTS OR ANIRA_WITH_BENCHMARK)
-    find_package(GTest REQUIRED)
-endif()
 
 # The engine targets anira::<engine> — the same files anira links, with the engine's
 # include directories and definitions — defined from this prefix. anira links them

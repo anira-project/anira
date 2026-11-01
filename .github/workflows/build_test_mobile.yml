@@ -182,6 +182,22 @@ jobs:
           PRESET: android-emulator-tests
           CMAKE_BUILD_ARGS: "-DBUILD_SHARED_LIBS=${{ matrix.shared }} ${{ matrix.backends }}"
 
+      # A static libanira on ELF is one prelinked object in which only anira_* is global
+      # (cmake/prelink-archive.cmake). Without readelf or objcopy in the NDK toolchain the build
+      # falls back to the plain archive, which passes every test and leaves a host's own tanh-lib
+      # bindable to anira's copy: the static legs check both trees' archive instead of trusting it.
+      - name: the static libanira is prelinked
+        if: matrix.shared == 'OFF'
+        shell: bash
+        run: |
+          set -e
+          for tree in build/ci/android-arm64 build/ci/android-emulator; do
+            members=$(ar t "$tree/libanira.a")
+            echo "$tree/libanira.a: $members"
+            echo "$members" | grep -qx 'anira_prelinked.o' || {
+              echo "::error::$tree/libanira.a is a plain archive, not the prelinked object"; exit 1; }
+          done
+
       # What lands on the device is anira policy: whatever .so the build emitted
       # (libanira.so + libgtest*.so for a shared build, none for static), the
       # enabled backend libs for this ABI, the NDK C++ runtime (needed even for

@@ -21,7 +21,6 @@
 
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
-#include <anira/system/Exports.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -126,17 +125,17 @@ struct EngineFacts {
 /// The consumers a pipeline declares, in one vector: the processor's, then one per registered
 /// engine that declares kinds (either may be NULL). What the extension walk of validate and
 /// the plan report's consumer column read.
-ANIRA_API std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
-                                                      const EngineFacts* engines);
+std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
+                                            const EngineFacts* engines);
 
 /// Whether a candidate names an engine: a built-in engine by its value, a custom engine by its
 /// id (ANIRA_ENGINE_CUSTOM with an engine_id keeps the custom rows of that name); NULL keeps
 /// everything (the bridge's rule). The engine rule alone, what the extension walk keys a
 /// consumer by; the provider is not read.
-ANIRA_API bool engine_is_candidate(anira_engine engine,
-                                   const std::string& engine_id,
-                                   const anira_backend_id* candidates,
-                                   uint32_t num_candidates) noexcept;
+bool engine_is_candidate(anira_engine engine,
+                         const std::string& engine_id,
+                         const anira_backend_id* candidates,
+                         uint32_t num_candidates) noexcept;
 
 /// The plans of one model entry under the candidates (PlanKey): one per candidate naming its
 /// engine whose provider the entry accepts, in candidate order, an equal provider once; with
@@ -146,44 +145,42 @@ ANIRA_API bool engine_is_candidate(anira_engine engine,
 /// its pin or on its engine's home provider (home_provider: the CPU path for a built-in
 /// engine and for a custom engine that serves it, else the custom engine's first listed
 /// provider), whatever else the list names. Empty for an entry no candidate runs.
-ANIRA_API std::vector<PlanKey> matching_plans(size_t row_index,
-                                              const ModelEntry& row,
-                                              const anira_backend_id* candidates,
-                                              uint32_t num_candidates,
-                                              bool default_set = false,
-                                              const EngineFacts* engines = nullptr);
+std::vector<PlanKey> matching_plans(size_t row_index,
+                                    const ModelEntry& row,
+                                    const anira_backend_id* candidates,
+                                    uint32_t num_candidates,
+                                    bool default_set = false,
+                                    const EngineFacts* engines = nullptr);
 
 /// Where a neutral entry runs under the default set: ANIRA_PROVIDER_CPU for a built-in engine
 /// and for a custom engine that serves it (no providers list, or "cpu" in it), else the
 /// custom engine's first listed provider. `engines` NULL, or an id it lacks: the CPU path.
-ANIRA_API PlanKey home_provider(size_t row_index,
-                                const ModelEntry& row,
-                                const EngineFacts* engines);
+PlanKey home_provider(size_t row_index, const ModelEntry& row, const EngineFacts* engines);
 
 /// Whether a model entry is a plan of the candidates (matching_plans is not empty): what the
 /// extension walk keys an entry by.
-ANIRA_API bool row_is_candidate(const ModelEntry& row,
-                                const anira_backend_id* candidates,
-                                uint32_t num_candidates);
+bool row_is_candidate(const ModelEntry& row,
+                      const anira_backend_id* candidates,
+                      uint32_t num_candidates);
 
 /// Whether this build carries an adapter for a built-in engine (enabled_engines() names it);
 /// false for ANIRA_ENGINE_CUSTOM, whose rows are served by the pipeline's registered engines.
-ANIRA_API bool engine_enabled(anira_engine engine);
+bool engine_enabled(anira_engine engine);
 
 /// The engine's extents of one slot under one row: the spec's derived extents (its dynamic
 /// Time extent resolved) reordered by the row's layout for the slot (layout.h engine_dims), or
 /// those extents themselves for a row without a layout for it. What the row's engine is handed
 /// for the slot.
-ANIRA_API std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
-                                              const DerivedSpec& derived,
-                                              const std::vector<uint32_t>& layout);
+std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
+                                    const DerivedSpec& derived,
+                                    const std::vector<uint32_t>& layout);
 
 /// The lower-case engine name of the JSON vocabulary, or the custom id.
 /// The row's engine in a message (words.h engine_label over its two fields).
-ANIRA_API std::string engine_label(const ModelEntry& row);
+std::string engine_label(const ModelEntry& row);
 
 /// The engines this build carries an adapter for, in anira_engine order.
-ANIRA_API std::vector<anira_engine> enabled_engines();
+std::vector<anira_engine> enabled_engines();
 
 /// Runs every section-2 rule the 2.x runtime can honour, in order, and derives the
 /// per-tensor quantities; contract may be NULL (no contract rule runs, flexible windows
@@ -203,22 +200,21 @@ ANIRA_API std::vector<anira_engine> enabled_engines();
 /// walk; a custom row naming no registered id is ANIRA_ERROR_NOT_SUPPORTED, anira.v2.custom
 /// included (without engines, the bridge, that id alone is served). A registered row's path is
 /// never opened here: the engine's prepare decides.
-ANIRA_API void validate(const anira_model_config& model,
-                        const anira_contract* contract,
-                        const anira_backend_id* candidates,
-                        uint32_t num_candidates,
-                        Derived& out,
-                        const ProcessorFacts* processors = nullptr,
-                        const EngineFacts* engines = nullptr,
-                        bool default_set = false);
+void validate(const anira_model_config& model,
+              const anira_contract* contract,
+              const anira_backend_id* candidates,
+              uint32_t num_candidates,
+              Derived& out,
+              const ProcessorFacts* processors = nullptr,
+              const EngineFacts* engines = nullptr,
+              bool default_set = false);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
 /// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
 /// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
 /// a processor fills the phase that moves that ring.
-ANIRA_API anira::RingDtypes ring_dtypes_of(const anira_contract& contract,
-                                           const anira_model_config& model);
+anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_model_config& model);
 
 /// The declared stream latency of every output slot (anira_contract_hard_set_latency), what the
 /// C prepare hands the scheduler: one entry per tensor of the model's output list, -1 (the
@@ -226,8 +222,8 @@ ANIRA_API anira::RingDtypes ring_dtypes_of(const anira_contract& contract,
 /// tensor name into its slot; exact on every platform, since a figure is at most INT32_MAX.
 /// Run validate first: it refuses a name that matches no tensor, an input, a non-Streamed
 /// output and a figure below the spec's latency.
-ANIRA_API anira::CustomLatencies latencies_of(const anira_contract& contract,
-                                              const anira_model_config& model);
+anira::CustomLatencies latencies_of(const anira_contract& contract,
+                                    const anira_model_config& model);
 
 /// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
 /// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
@@ -239,8 +235,7 @@ struct HostDomains {
     std::vector<anira_domain> m_inputs;
     std::vector<anira_domain> m_outputs;
 };
-ANIRA_API HostDomains host_domains_of(const anira_contract& contract,
-                                      const anira_model_config& model);
+HostDomains host_domains_of(const anira_contract& contract, const anira_model_config& model);
 
 /// One declared state pair (ANIRA_ROLE_STATE) as slots: the State input and the State output
 /// it is fed from, each the tensor's position in the model config's list of its side.
@@ -254,12 +249,12 @@ struct StateLink {
 /// Empty for a model without State specs. Run validate first: it refuses a State input without
 /// a source, a source that names no State output, a State output named by no input or by two,
 /// and two halves of unequal dtype or shape.
-ANIRA_API std::vector<StateLink> state_links(const anira_model_config& model);
+std::vector<StateLink> state_links(const anira_model_config& model);
 
 /// The consumed-or-fail walk over a context config's extension bag alone (the model,
 /// contract and spec bags are walked at anira_handler_create and prepare). Throws
 /// StatusError with ANIRA_ERROR_EXTENSION_UNKNOWN / _UNCONSUMED naming the kind.
-ANIRA_API void check_context_extensions(const anira_context_config& config);
+void check_context_extensions(const anira_context_config& config);
 
 }  // namespace anira::capi
 

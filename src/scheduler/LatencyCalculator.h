@@ -5,8 +5,6 @@
 #include <cstdint>
 #include <vector>
 
-#include "../system/Exports.h"
-
 namespace anira {
 
 namespace capi {
@@ -100,7 +98,7 @@ struct HardContract;
  * All of this is computed once, in the constructor; the getters are trivial. The class
  * is public so that the formulas can be unit-tested against a brute-force simulation.
  */
-class ANIRA_API LatencyCalculator {
+class LatencyCalculator {
 public:
     /**
      * @brief A non-negative rational number

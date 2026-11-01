@@ -103,7 +103,7 @@ struct RtLatch;
  *
  * @see SessionElement, InferenceThread
  */
-class ANIRA_API Core {
+class Core {
 public:
     // Never instantiated: every member is static over the one State of this copy of anira.
     Core() = delete;

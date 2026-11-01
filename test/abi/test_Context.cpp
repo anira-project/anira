@@ -7,7 +7,6 @@
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
 #include <gtest/gtest.h>
 #include <tanh/core/Logger.h>
 
@@ -26,6 +25,7 @@
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
 #include "handler_support.h"
+#include "scheduler/Core.h"
 
 using namespace anira;
 using anira_test::Instance;

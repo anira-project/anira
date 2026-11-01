@@ -3,7 +3,6 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/Core.h>
 
 #include <array>
 #include <chrono>
@@ -15,6 +14,7 @@
 #include "../../extras/models/model_files.h"
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
 
 // Generous hang-guard, not a performance bound: the loop below exits as soon as the
 // block is processed, so a large timeout only affects the (failing) hang case. 2s was

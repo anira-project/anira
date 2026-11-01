@@ -3,7 +3,6 @@
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
 
 #include <anira/anira.hpp>
 #include <chrono>
@@ -15,6 +14,7 @@
 
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
 
 using namespace anira;
 

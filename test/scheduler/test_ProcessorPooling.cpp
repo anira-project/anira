@@ -3,7 +3,6 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
 
 #include <anira/anira.hpp>
 #include <array>
@@ -16,6 +15,7 @@
 #include "../abi/handler_support.h"
 #include "engines/Adapter.h"
 #include "gtest/gtest.h"
+#include "scheduler/SessionElement.h"
 
 using namespace anira;
 

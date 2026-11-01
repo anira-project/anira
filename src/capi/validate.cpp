@@ -3,8 +3,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -18,6 +16,8 @@
 #include <utility>
 #include <vector>
 
+#include "../scheduler/LatencyCalculator.h"
+#include "../scheduler/SessionElement.h"
 #include "../utils/StatusError.h"
 #include "ext_registry.h"
 #include "handles.h"

@@ -19,7 +19,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/system/Exports.h>
 
 #include <cstdint>
 #include <memory>
@@ -49,7 +48,7 @@ namespace anira::engine {
 /// are the descriptor's promises. The carrier is shared with the engine's handle, the pipelines
 /// it was added to and their handlers, and this loaded model holds it too, so the descriptor
 /// and its release outlive every loaded model of the engine.
-class ANIRA_API DescriptorLoaded final : public Loaded {
+class DescriptorLoaded final : public Loaded {
 public:
     /// `carrier` is the engine the row names (its id is what the messages say); `row` the
     /// entry's index in `model`, the variant (anira's own copy, kept alive here: the load
@@ -119,7 +118,7 @@ private:
 /// reset when the slot is filled, both over the engine's view of the call (engine_view: the
 /// chunk's descriptors with the engine-side extents of the load record's templates, over the
 /// same memory), and the destructor calls unprepare once for a successful prepare.
-class ANIRA_API DescriptorPrepared final : public Prepared {
+class DescriptorPrepared final : public Prepared {
 public:
     DescriptorPrepared(DescriptorLoaded& loaded, const PrepareRequest& request);
     /// Calls the descriptor's unprepare with the prepared pointer, once, when a prepare

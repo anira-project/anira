@@ -11,7 +11,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
 
 #include <array>
 #include <atomic>
@@ -468,21 +467,16 @@ unsigned int unloadtest_num_inference_threads(void) {
     return anira_num_inference_threads();
 }
 
-int unloadtest_has_inference_threads(void) {
-    return anira::Core::has_inference_threads() ? 1 : 0;
-}
-
-int unloadtest_num_sessions(void) {
-    return anira::Core::get_num_sessions();
-}
-
 int unloadtest_has_core(void) {
     return anira_has_core() ? 1 : 0;
 }
 
-void unloadtest_shutdown(void) {
-    // The forcing one: anira_shutdown refuses while a context or a handler lives.
-    anira::Core::shutdown();
+int unloadtest_release_core_if_idle(void) {
+    return anira_release_core_if_idle() ? 1 : 0;
+}
+
+int unloadtest_shutdown(void) {
+    return static_cast<int>(anira_shutdown());
 }
 
 void unloadtest_leak_thread(void) {

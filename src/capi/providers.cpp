@@ -6,8 +6,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/Logger.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +17,8 @@
 
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
+#include "../scheduler/Core.h"
+#include "../utils/Logger.h"
 #include "../utils/StatusError.h"
 #include "engine.h"
 #include "handles.h"

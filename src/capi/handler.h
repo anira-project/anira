@@ -8,9 +8,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/system/Exports.h>
-#include <anira/utils/RtLatch.h>
 
 #include <atomic>
 #include <chrono>
@@ -21,6 +18,8 @@
 #include <string>
 #include <vector>
 
+#include "../scheduler/InferenceManager.h"
+#include "../utils/RtLatch.h"
 #include "engine.h"
 #include "handles.h"
 #include "port.h"
@@ -211,9 +210,7 @@ namespace anira::capi {
 /// anira_handler_prepare refuse a derivation it names (ANIRA_ERROR_INTERNAL; an assertion in a
 /// debug build): validate gives a hop to a Streamed tensor alone and create gives every one a
 /// stream port, so neither ever does.
-ANIRA_API std::string stream_port_refusal(const Derived& derived,
-                                          const Ports& inputs,
-                                          const Ports& outputs);
+std::string stream_port_refusal(const Derived& derived, const Ports& inputs, const Ports& outputs);
 
 }  // namespace anira::capi
 

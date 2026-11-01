@@ -57,7 +57,6 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/utils/RingBuffer.h>
 
 #include <algorithm>
 #include <array>
@@ -71,6 +70,7 @@
 #include <vector>
 
 #include "../scheduler/TensorRun.h"
+#include "../utils/RingBuffer.h"
 
 namespace anira::capi {
 

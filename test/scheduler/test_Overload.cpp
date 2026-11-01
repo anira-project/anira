@@ -4,7 +4,6 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/SessionElement.h>
 
 #include <algorithm>
 #include <anira/anira.hpp>
@@ -24,6 +23,7 @@
 #include "../abi/float_face.h"
 #include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/SessionElement.h"
 
 // An overload, made deterministic: an engine behind a gate that holds every inference for a
 // span of calls (a spike: every slot of the session ends up busy), a sample-index ramp in, and

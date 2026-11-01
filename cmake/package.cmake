@@ -6,9 +6,6 @@
 include(${CMAKE_CURRENT_LIST_DIR}/tanh/package.cmake)
 
 set(_anira_deps_components deps-engines Devel Unspecified)
-if(ANIRA_WITH_BENCHMARK)
-    list(APPEND _anira_deps_components gtest gmock)
-endif()
 tanh_cpack_debian(
     VENDOR "anira-project"
     CONTACT "fares.schulz@tu-berlin.de"

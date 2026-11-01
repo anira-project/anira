@@ -346,7 +346,9 @@ Android tag and the Apple subsystem and category are ``anira``, and every line r
 ``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
 ``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
 ``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``). A host that also
-uses tanh-lib has a second logger under ``thl``, which anira never touches.
+uses tanh-lib has a second logger under ``thl``, which anira never touches, beside a shared anira
+or the prelinked static anira of Linux and Android (a static anira on macOS, iOS or Windows
+shares one logger with it: :ref:`host-tanh-lib`).
 
 - Android: ``adb logcat -s anira:W`` for anira's warnings and errors, ``adb logcat -s anira``
   for everything at the runtime level; add the engines' own tags for a combined view,

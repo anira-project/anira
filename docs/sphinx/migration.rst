@@ -42,7 +42,7 @@ Where the 2.x API stands in this pre-release
   2.x class of that name, its ``float***`` forms and the transitional bridge
   ``<anira/compat/v3_to_v2.h>`` that fed it the 2.x configuration classes are removed
   (:ref:`migration-runtime`, :ref:`migration-bridge`). The class behind the C handler,
-  :cpp:class:`anira::InferenceManager`, is not part of that surface: it takes host tensors only,
+  ``anira::InferenceManager``, is private (``src/scheduler/``) and not part of that surface: it takes host tensors only,
   and its 2.x ``float***`` functions are gone. A custom 2.x ``PrePostProcessor``
   becomes the *processor* of the pipeline (:doc:`usage` section 2, :doc:`custom_preprocessing`), a
   custom ``anira::BackendBase`` a *registered engine* (``anira_engine_desc``,

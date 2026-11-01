@@ -1,11 +1,8 @@
+#include "SessionElement.h"
+
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RingBuffer.h>
-#include <anira/utils/RtLatch.h>
 #include <concurrentqueue.h>
 
 #include <algorithm>
@@ -31,7 +28,11 @@
 #include "../capi/processor.h"
 #include "../capi/validate.h"
 #include "../engines/Adapter.h"  // IWYU pragma: keep (the complete Loaded and Prepared)
-#include "InstanceWaitList.h"    // IWYU pragma: keep (the complete wait list of PlanSlot)
+#include "../utils/Logger.h"
+#include "../utils/RingBuffer.h"
+#include "../utils/RtLatch.h"
+#include "InstanceWaitList.h"  // IWYU pragma: keep (the complete wait list of PlanSlot)
+#include "LatencyCalculator.h"
 
 namespace anira {
 
@@ -599,7 +600,7 @@ bool SessionElement::receive_rings_have_room() {
         size_t const hop = output_hop(i);
         if (hop == 0) { continue; }  // Non-streamable outputs have no ring
         const RingBuffer& ring = receive_ring(i);
-        if (ring.get_num_samples() - ring.get_available_samples(0) < hop) { return false; }
+        if (ring.capacity() - ring.available(0) < hop) { return false; }
     }
     return true;
 }
