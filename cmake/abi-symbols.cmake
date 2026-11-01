@@ -130,8 +130,12 @@ endif()
 set(_names "")
 foreach(_export IN LISTS _exports)
     string(REGEX REPLACE "^_" "" _plain "${_export}")
-    # An ELF version script suffixes nothing; a versioned symbol would read name@VERSION.
-    string(REGEX REPLACE "@.*$" "" _plain "${_plain}")
+    # An ELF version script suffixes nothing; a versioned symbol would read name@VERSION. On PE
+    # an @ is part of a C++ name's MSVC decoration (??0Future@ivalue@c10@@QEAA@XZ), which the
+    # tolerance below matches whole; Mach-O has no symbol versions.
+    if(FORMAT STREQUAL "ELF")
+        string(REGEX REPLACE "@.*$" "" _plain "${_plain}")
+    endif()
     list(APPEND _names "${_plain}")
 endforeach()
 list(REMOVE_DUPLICATES _names)
