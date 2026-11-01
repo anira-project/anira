@@ -1223,8 +1223,7 @@ TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
                 EXPECT_EQ(row.dtype, ANIRA_DTYPE_F32);
                 EXPECT_EQ(row.ring_dtype, slot == 0 ? ANIRA_DTYPE_F32 : 0U)
                     << "a Static slot has no ring";
-                const bool copies = info.engine == ANIRA_ENGINE_LITERT ||
-                                    info.engine == ANIRA_ENGINE_TFLITE ||
+                const bool copies = info.engine == ANIRA_ENGINE_TFLITE ||
                                     info.engine == ANIRA_ENGINE_EXECUTORCH ||
                                     (info.engine == ANIRA_ENGINE_LIBTORCH && !is_input);
                 EXPECT_EQ(row.edge_class, copies ? ANIRA_EDGE_HOST_COPY : ANIRA_EDGE_ZERO_COPY);

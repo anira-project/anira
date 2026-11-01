@@ -34,6 +34,7 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
@@ -182,15 +183,39 @@ anira_dtype dtype_of(LiteRtElementType type) {
         case kLiteRtElementTypeInt16: return ANIRA_DTYPE_I16;
         case kLiteRtElementTypeInt32: return ANIRA_DTYPE_I32;
         case kLiteRtElementTypeInt64: return ANIRA_DTYPE_I64;
+        case kLiteRtElementTypeBool: return ANIRA_DTYPE_BOOL8;
         default: return 0;
     }
 }
 
-// A ranked float32 tensor type of the record's engine dims: what a managed buffer is created
-// with (the signature's dynamic extents resolved to the pinned window's).
-LiteRtRankedTensorType float32_type_of(const std::vector<int64_t>& dims) {
+// The LiteRT element type of an anira dtype: every dtype anira names has one; None for any
+// other, which the validator refuses before a record reaches the adapter.
+LiteRtElementType litert_type_of(anira_dtype dtype) noexcept {
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: return kLiteRtElementTypeFloat32;
+        case ANIRA_DTYPE_F64: return kLiteRtElementTypeFloat64;
+        case ANIRA_DTYPE_F16: return kLiteRtElementTypeFloat16;
+        case ANIRA_DTYPE_BF16: return kLiteRtElementTypeBFloat16;
+        case ANIRA_DTYPE_I8: return kLiteRtElementTypeInt8;
+        case ANIRA_DTYPE_U8: return kLiteRtElementTypeUInt8;
+        case ANIRA_DTYPE_I16: return kLiteRtElementTypeInt16;
+        case ANIRA_DTYPE_I32: return kLiteRtElementTypeInt32;
+        case ANIRA_DTYPE_I64: return kLiteRtElementTypeInt64;
+        case ANIRA_DTYPE_BOOL8: return kLiteRtElementTypeBool;
+        default: return kLiteRtElementTypeNone;
+    }
+}
+
+bool carries(anira_dtype dtype) noexcept {
+    return litert_type_of(dtype) != kLiteRtElementTypeNone;
+}
+
+// A ranked tensor type of the record's engine dims and dtype: what a buffer over a slot's
+// memory, or a managed one, is created with (the signature's dynamic extents resolved to the
+// pinned window's).
+LiteRtRankedTensorType ranked_type_of(const std::vector<int64_t>& dims, anira_dtype dtype) {
     LiteRtRankedTensorType type{};
-    type.element_type = kLiteRtElementTypeFloat32;
+    type.element_type = litert_type_of(dtype);
     const size_t rank = dims.size() < LITERT_TENSOR_MAX_RANK ? dims.size() : LITERT_TENSOR_MAX_RANK;
     type.layout.rank = static_cast<unsigned int>(rank);
     type.layout.has_strides = false;
@@ -226,6 +251,11 @@ EngineTensor engine_tensor_of(LiteRtSignature signature, const char* name, bool 
     tensor.m_dtype = dtype_of(type.element_type);
     tensor.m_type_word =
         "LiteRT element type " + std::to_string(static_cast<int>(type.element_type));
+    LiteRtQuantizationTypeId quantisation = kLiteRtQuantizationNone;
+    litert_check(LiteRtGetQuantizationTypeId(handle, &quantisation),
+                 "LiteRtGetQuantizationTypeId",
+                 ANIRA_ERROR_MODEL_LOAD);
+    tensor.m_quantised = quantisation != kLiteRtQuantizationNone;
     return tensor;
 }
 
@@ -409,8 +439,10 @@ public:
     std::vector<EngineTensor> outputs() { return side_of(false); }
 
     /// Creates one managed host buffer per signature tensor, in the signature's index order,
-    /// typed with the record's engine dims of the slot bound to it; keeps per slot the buffer
-    /// it fills or reads.
+    /// typed with the record's engine dims and dtype of the slot bound to it: the warm-up's
+    /// buffers and the fallback of a call whose descriptor cannot be bound in place. Keeps per
+    /// slot the buffer it fills or reads and the ranked type a call's buffer over the slot's
+    /// memory is created with.
     void bind(const Model& model,
               const std::vector<SlotBinding>& inputs,
               const std::vector<SlotBinding>& outputs);
@@ -425,21 +457,63 @@ public:
 
 private:
     std::vector<EngineTensor> side_of(bool inputs);
-    /// Copies every input descriptor into its buffer, runs, copies every output buffer into
-    /// its descriptor; throws StatusError.
+    /// Binds every descriptor in place (a tensor buffer over its memory) or, where it cannot,
+    /// copies through the slot's managed buffer; runs. Throws StatusError.
     void run(const anira_engine_ctx& ctx);
+    /// The buffer of one slot for this call: on the CPU path, one over the descriptor's memory
+    /// where it is a packed host block of the record's dtype on LiteRT's boundary
+    /// (LITERT_HOST_MEMORY_BUFFER_ALIGNMENT), kept for that memory's next call; else the
+    /// managed one (an input copied into it here). Throws StatusError for a descriptor neither
+    /// can take.
+    LiteRtTensorBuffer buffer_for(const anira_tensor& tensor, size_t slot, bool is_input);
+    /// Destroys every kept buffer over a slot's memory (no-op on empty entries).
+    void drop_kept() noexcept;
     /// Destroys every LiteRT handle this executor owns (no-op on nulls).
     void release() noexcept;
+
+    /// A tensor buffer over one slot's memory, kept for the memory's next call: a chunk's buffer
+    /// comes back every few calls, and LiteRT runs over a buffer it has seen faster than over a
+    /// new one (P2, LiteRT 2.1.5 on CPU at 512 samples: 384 ns per run over kept buffers, 474 ns
+    /// over the managed ones with a copy each way, 621 ns over buffers made per call). A buffer
+    /// over host memory owns none, so one over memory no later call passes is never touched
+    /// again; it is destroyed when its entry is reused.
+    struct KeptBuffer {
+        const void* m_data = nullptr;
+        LiteRtTensorBuffer m_buffer = nullptr;
+    };
+    /// Per slot: the kept buffers, the oldest replaced on a miss. More memories than entries
+    /// (more chunks, shared executors over many sessions) make one buffer per call, the cost of
+    /// the per-call path and still no copy.
+    static constexpr size_t k_kept_buffers = 16;
+    struct KeptTable {
+        std::array<KeptBuffer, k_kept_buffers> m_entries{};
+        size_t m_next = 0;
+    };
 
     std::shared_ptr<const SharedModel> m_shared;  ///< the environment, the model, the options
     LiteRtCompiledModel m_compiled_model = nullptr;
 
-    std::vector<LiteRtTensorBuffer> m_input_buffers;   ///< in the signature's index order
-    std::vector<LiteRtTensorBuffer> m_output_buffers;  ///< likewise
-    std::vector<size_t> m_buffer_of_input_slot;        ///< per input slot: its buffer's index
-    std::vector<size_t> m_buffer_of_output_slot;       ///< per output slot
-    std::vector<size_t> m_input_elements;              ///< per input slot
-    std::vector<size_t> m_output_elements;             ///< per output slot
+    std::vector<LiteRtTensorBuffer> m_input_buffers;     ///< in the signature's index order
+    std::vector<LiteRtTensorBuffer> m_output_buffers;    ///< likewise
+    std::vector<size_t> m_buffer_of_input_slot;          ///< per input slot: its buffer's index
+    std::vector<size_t> m_buffer_of_output_slot;         ///< per output slot
+    std::vector<size_t> m_input_elements;                ///< per input slot
+    std::vector<size_t> m_output_elements;               ///< per output slot
+    std::vector<anira_dtype> m_input_dtypes;             ///< per input slot: the record's dtype
+    std::vector<anira_dtype> m_output_dtypes;            ///< per output slot
+    std::vector<LiteRtRankedTensorType> m_input_types;   ///< per input slot: dims and dtype
+    std::vector<LiteRtRankedTensorType> m_output_types;  ///< per output slot
+    /// Whether the slots are bound in place: on the CPU path, where P2 measured it; an
+    /// accelerator copies through the managed buffers as before.
+    bool m_in_place = false;
+    std::vector<KeptTable> m_kept_inputs;   ///< per input slot
+    std::vector<KeptTable> m_kept_outputs;  ///< per output slot
+    /// The buffers of one call, in the signature's index order (a kept one over the slot's
+    /// memory, or the managed one).
+    std::vector<LiteRtTensorBuffer> m_call_inputs;
+    std::vector<LiteRtTensorBuffer> m_call_outputs;
+    /// Per output slot, whether this call's buffer is the managed one (copied out after it).
+    std::vector<bool> m_output_copied;
 };
 
 Instance::Instance(std::shared_ptr<const SharedModel> shared) : m_shared(std::move(shared)) {
@@ -454,7 +528,20 @@ Instance::~Instance() {
     release();
 }
 
+void Instance::drop_kept() noexcept {
+    for (std::vector<KeptTable>* tables : {&m_kept_inputs, &m_kept_outputs}) {
+        for (KeptTable& table : *tables) {
+            for (KeptBuffer& kept : table.m_entries) {
+                if (kept.m_buffer) { LiteRtDestroyTensorBuffer(kept.m_buffer); }
+                kept = KeptBuffer{};
+            }
+            table.m_next = 0;
+        }
+    }
+}
+
 void Instance::release() noexcept {
+    drop_kept();
     for (auto& buffer : m_input_buffers) {
         if (buffer) { LiteRtDestroyTensorBuffer(buffer); }
     }
@@ -509,30 +596,94 @@ void Instance::bind(const Model& model,
     m_buffer_of_output_slot.clear();
     m_input_elements.clear();
     m_output_elements.clear();
+    m_input_dtypes.clear();
+    m_output_dtypes.clear();
+    m_input_types.clear();
+    m_output_types.clear();
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
         const TensorInfo& tensor = model.m_inputs[slot];
-        const LiteRtRankedTensorType type = float32_type_of(tensor.m_dims);
-        litert_check(LiteRtCreateManagedTensorBuffer(m_shared->m_env,
-                                                     kLiteRtTensorBufferTypeHostMemory,
-                                                     &type,
-                                                     tensor.m_num_elements * sizeof(float),
-                                                     &m_input_buffers[inputs[slot].m_index]),
+        const LiteRtRankedTensorType type = ranked_type_of(tensor.m_dims, tensor.m_dtype);
+        litert_check(LiteRtCreateManagedTensorBuffer(
+                         m_shared->m_env,
+                         kLiteRtTensorBufferTypeHostMemory,
+                         &type,
+                         tensor.m_num_elements * tensor_run::dtype_size(tensor.m_dtype),
+                         &m_input_buffers[inputs[slot].m_index]),
                      "LiteRtCreateManagedTensorBuffer (input)");
         m_buffer_of_input_slot.push_back(inputs[slot].m_index);
         m_input_elements.push_back(tensor.m_num_elements);
+        m_input_dtypes.push_back(tensor.m_dtype);
+        m_input_types.push_back(type);
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
         const TensorInfo& tensor = model.m_outputs[slot];
-        const LiteRtRankedTensorType type = float32_type_of(tensor.m_dims);
-        litert_check(LiteRtCreateManagedTensorBuffer(m_shared->m_env,
-                                                     kLiteRtTensorBufferTypeHostMemory,
-                                                     &type,
-                                                     tensor.m_num_elements * sizeof(float),
-                                                     &m_output_buffers[outputs[slot].m_index]),
+        const LiteRtRankedTensorType type = ranked_type_of(tensor.m_dims, tensor.m_dtype);
+        litert_check(LiteRtCreateManagedTensorBuffer(
+                         m_shared->m_env,
+                         kLiteRtTensorBufferTypeHostMemory,
+                         &type,
+                         tensor.m_num_elements * tensor_run::dtype_size(tensor.m_dtype),
+                         &m_output_buffers[outputs[slot].m_index]),
                      "LiteRtCreateManagedTensorBuffer (output)");
         m_buffer_of_output_slot.push_back(outputs[slot].m_index);
         m_output_elements.push_back(tensor.m_num_elements);
+        m_output_dtypes.push_back(tensor.m_dtype);
+        m_output_types.push_back(type);
     }
+    m_call_inputs.assign(m_input_buffers.size(), nullptr);
+    m_call_outputs.assign(m_output_buffers.size(), nullptr);
+    m_output_copied.assign(outputs.size(), false);
+    m_in_place = model.m_provider_id.empty();
+    drop_kept();
+    m_kept_inputs.assign(inputs.size(), KeptTable{});
+    m_kept_outputs.assign(outputs.size(), KeptTable{});
+}
+
+LiteRtTensorBuffer Instance::buffer_for(const anira_tensor& tensor, size_t slot, bool is_input) {
+    const anira_dtype dtype = is_input ? m_input_dtypes[slot] : m_output_dtypes[slot];
+    const size_t elements = is_input ? m_input_elements[slot] : m_output_elements[slot];
+    const size_t bytes = elements * tensor_run::dtype_size(dtype);
+    void* data = host_packed(tensor, dtype, elements);
+    if (data == nullptr) {
+        throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                          std::string(k_engine) + ": " + (is_input ? "input" : "output") +
+                              " slot " + std::to_string(slot) + " is not a packed " +
+                              capi::dtype_word(dtype) + " host block of " +
+                              std::to_string(elements) + " elements");
+    }
+    // In place: a tensor buffer over the descriptor's memory, the caller's (no deallocator),
+    // where it starts on LiteRT's boundary, as a chunk's buffer always does; the one kept for
+    // the memory, or a new one in the table's oldest entry.
+    if (m_in_place && aligned_to(data, LITERT_HOST_MEMORY_BUFFER_ALIGNMENT)) {
+        if (!is_input) { m_output_copied[slot] = false; }
+        KeptTable& table = is_input ? m_kept_inputs[slot] : m_kept_outputs[slot];
+        for (const KeptBuffer& kept : table.m_entries) {
+            if (kept.m_data == data) { return kept.m_buffer; }
+        }
+        LiteRtTensorBuffer made = nullptr;
+        const LiteRtRankedTensorType& type = is_input ? m_input_types[slot] : m_output_types[slot];
+        litert_check(LiteRtCreateTensorBufferFromHostMemory(&type, data, bytes, nullptr, &made),
+                     "LiteRtCreateTensorBufferFromHostMemory");
+        KeptBuffer& entry = table.m_entries[table.m_next];
+        table.m_next = (table.m_next + 1) % k_kept_buffers;
+        if (entry.m_buffer) { LiteRtDestroyTensorBuffer(entry.m_buffer); }
+        entry = KeptBuffer{.m_data = data, .m_buffer = made};
+        return made;
+    }
+    // Else through the slot's managed buffer: an input copied in now, an output after the run.
+    LiteRtTensorBuffer managed = is_input ? m_input_buffers[m_buffer_of_input_slot[slot]]
+                                          : m_output_buffers[m_buffer_of_output_slot[slot]];
+    if (is_input) {
+        void* host = nullptr;
+        litert_check(LiteRtLockTensorBuffer(managed, &host, kLiteRtTensorBufferLockModeWrite),
+                     "LiteRtLockTensorBuffer (input)");
+        std::memcpy(host, data, bytes);
+        litert_check(LiteRtUnlockTensorBuffer(managed), "LiteRtUnlockTensorBuffer (input)");
+        count_copy_in();
+    } else {
+        m_output_copied[slot] = true;
+    }
+    return managed;
 }
 
 void Instance::warm_up(uint32_t iterations) {
@@ -542,7 +693,7 @@ void Instance::warm_up(uint32_t iterations) {
         LiteRtTensorBuffer buffer = m_input_buffers[m_buffer_of_input_slot[slot]];
         litert_check(LiteRtLockTensorBuffer(buffer, &host, kLiteRtTensorBufferLockModeWrite),
                      "LiteRtLockTensorBuffer (warm-up)");
-        std::memset(host, 0, m_input_elements[slot] * sizeof(float));
+        std::memset(host, 0, m_input_elements[slot] * tensor_run::dtype_size(m_input_dtypes[slot]));
         litert_check(LiteRtUnlockTensorBuffer(buffer), "LiteRtUnlockTensorBuffer (warm-up)");
     }
     for (uint32_t i = 0; i < iterations; ++i) {
@@ -567,49 +718,34 @@ void Instance::run(const anira_engine_ctx& ctx) {
                               std::to_string(m_buffer_of_input_slot.size()) + " and " +
                               std::to_string(m_buffer_of_output_slot.size()));
     }
-    // In: every input block from its descriptor's memory, read on this call, into the managed
-    // buffer of the signature tensor its slot binds.
     for (size_t slot = 0; slot < m_buffer_of_input_slot.size(); ++slot) {
-        const float* data = static_cast<float*>(
-            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": input slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_input_elements[slot]) + " elements");
-        }
-        LiteRtTensorBuffer buffer = m_input_buffers[m_buffer_of_input_slot[slot]];
-        void* host = nullptr;
-        litert_check(LiteRtLockTensorBuffer(buffer, &host, kLiteRtTensorBufferLockModeWrite),
-                     "LiteRtLockTensorBuffer (input)");
-        std::memcpy(host, data, m_input_elements[slot] * sizeof(float));
-        litert_check(LiteRtUnlockTensorBuffer(buffer), "LiteRtUnlockTensorBuffer (input)");
+        m_call_inputs[m_buffer_of_input_slot[slot]] = buffer_for(ctx.inputs[slot], slot, true);
+    }
+    for (size_t slot = 0; slot < m_buffer_of_output_slot.size(); ++slot) {
+        m_call_outputs[m_buffer_of_output_slot[slot]] = buffer_for(ctx.outputs[slot], slot, false);
     }
 
     litert_check(LiteRtRunCompiledModel(m_compiled_model,
                                         /*signature_index=*/0,
-                                        m_input_buffers.size(),
-                                        m_input_buffers.data(),
-                                        m_output_buffers.size(),
-                                        m_output_buffers.data()),
+                                        m_call_inputs.size(),
+                                        m_call_inputs.data(),
+                                        m_call_outputs.size(),
+                                        m_call_outputs.data()),
                  "LiteRtRunCompiledModel");
 
-    // Out: every output buffer into its slot's descriptor memory.
+    // Out of a managed buffer, where the slot's memory could not be bound.
     for (size_t slot = 0; slot < m_buffer_of_output_slot.size(); ++slot) {
-        float* data = static_cast<float*>(
-            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": output slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_output_elements[slot]) + " elements");
-        }
+        if (!m_output_copied[slot]) { continue; }
+        void* data = host_packed(ctx.outputs[slot], m_output_dtypes[slot], m_output_elements[slot]);
         LiteRtTensorBuffer buffer = m_output_buffers[m_buffer_of_output_slot[slot]];
         void* host = nullptr;
         litert_check(LiteRtLockTensorBuffer(buffer, &host, kLiteRtTensorBufferLockModeRead),
                      "LiteRtLockTensorBuffer (output)");
-        std::memcpy(data, host, m_output_elements[slot] * sizeof(float));
+        std::memcpy(data,
+                    host,
+                    m_output_elements[slot] * tensor_run::dtype_size(m_output_dtypes[slot]));
         litert_check(LiteRtUnlockTensorBuffer(buffer), "LiteRtUnlockTensorBuffer (output)");
+        count_copy_out();
     }
 }
 
@@ -670,10 +806,19 @@ public:
     explicit LiteRtLoaded(std::shared_ptr<LiteRtEngine> engine)
         : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
 
-    /// Every slot is copied through a managed tensor buffer of the compiled model's own.
+    /// On the CPU path every slot is bound in place (a tensor buffer over the slot's memory,
+    /// kept per memory: Instance::buffer_for), the zero-copy edge; an accelerator copies
+    /// through the managed buffers.
     SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
+        if (model().m_provider_id.empty()) { return SlotEdge{}; }
         return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
-                        .m_reason = "litert: copied through a tensor buffer of its own"};
+                        .m_reason =
+                            "litert: an accelerator's slots are copied through tensor "
+                            "buffers of its own (bound in place on the CPU path alone)"};
+    }
+    /// LiteRT's boundary for a buffer over host memory, which every chunk's buffer meets.
+    size_t buffer_alignment() const noexcept override {
+        return LITERT_HOST_MEMORY_BUFFER_ALIGNMENT;
     }
 
     /// The CPU path (the CPU accelerator), or an accelerator by its hardware's name
@@ -702,7 +847,7 @@ public:
 
 protected:
     void do_load(const Model& model) override {
-        require_f32(model, k_engine);
+        require_dtypes(model, k_engine, carries);
         m_shared = std::make_shared<const SharedModel>(m_engine, model);
         auto probe = std::make_unique<Instance>(m_shared);
         const std::vector<EngineTensor> inputs = probe->inputs();

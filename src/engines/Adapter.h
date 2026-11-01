@@ -598,12 +598,15 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an
-/// anira_dtype (0 for one anira has no code for) and the engine's own word for that type.
+/// anira_dtype (0 for one anira has no code for), the engine's own word for that type, and
+/// whether its values are quantised (they mean scale * (q - zero point): TFLite and LiteRT
+/// quantisation parameters, a quantised torch or ExecuTorch scalar type).
 struct EngineTensor {
     std::string m_name;
     std::vector<int64_t> m_dims;
     anira_dtype m_dtype = 0;
     std::string m_type_word;
+    bool m_quantised = false;
 };
 
 /// How check_engine_tensor reads the engine's extents.
@@ -618,7 +621,8 @@ enum class ExtentRule : uint8_t {
 /// The check of the binding rule, whichever way a slot was bound: the engine tensor's element
 /// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
 /// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
-/// tensor, with both shapes.
+/// tensor, with both shapes. A quantised engine tensor comes first: quantised I/O is not
+/// supported (ANIRA_ERROR_NOT_SUPPORTED), refused rather than handed on as plain integers.
 void check_engine_tensor(const TensorInfo& slot,
                          const EngineTensor& engine_tensor,
                          ExtentRule rule,

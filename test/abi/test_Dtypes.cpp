@@ -494,6 +494,18 @@ std::vector<anira_engine> typed_engines() {
 #ifdef USE_LIBTORCH
     engines.push_back(ANIRA_ENGINE_LIBTORCH);
 #endif
+#ifdef USE_LITERT
+    engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
+    return engines;
+}
+
+/// The built-in engines of this build that read a model tensor's quantisation parameters.
+std::vector<anira_engine> quantised_engines() {
+    std::vector<anira_engine> engines;
+#ifdef USE_LITERT
+    engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
     return engines;
 }
 
@@ -625,6 +637,36 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
             EXPECT_EQ(load_value(peak.data(), dtype), 16.0F);
             EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
         }
+    }
+}
+
+// The fully integer TFLite model: its int8 input and output carry a scale and a zero point
+// (quantised I/O, which anira does not support), so the load refuses it with NOT_SUPPORTED
+// saying so, rather than handing the engine's integers on as plain int8 samples.
+TEST(AbiDtypes, AQuantisedModelIsRefusedAtLoad) {
+    const anira_test::Context context(2);
+    const auto spec = [](std::string_view name) {
+        TensorSpec tensor(name, ANIRA_DTYPE_I8, ANIRA_ROLE_STREAMED);
+        tensor.axis(0, ANIRA_AXIS_BATCH, 1)
+            .axis(1, ANIRA_AXIS_CHANNEL, 1)
+            .axis(2, ANIRA_AXIS_TIME, 64)
+            .window(64, 64, 0);
+        return tensor;
+    };
+    for (const anira_engine engine : quantised_engines()) {
+        SCOPED_TRACE(anira::capi::engine_word(engine));
+        ModelConfig model;
+        model.add_model_path(engine, k_quantized_gain_int8_tflite);
+        model.input(spec("x"));
+        model.output(spec("output_0"));
+        const std::vector<anira_backend_id> candidates = one_engine(engine);
+        anira_test::Handler handler(context, model, candidates);
+        EXPECT_EQ(handler.prepare(anira_test::explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS)),
+                  ANIRA_ERROR_NOT_SUPPORTED)
+            << handler.m_err.message;
+        EXPECT_NE(std::string_view(handler.m_err.message).find("quantised I/O is not supported"),
+                  std::string_view::npos)
+            << handler.m_err.message;
     }
 }
 

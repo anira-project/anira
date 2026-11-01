@@ -439,21 +439,12 @@ void Instance::warm_up(uint32_t iterations) {
             // record, at load.
             for (size_t slot = 0; slot < m_result_of_slot.size(); ++slot) {
                 const at::Tensor tensor = result_of(result, slot);
-                // Quantised I/O (a tensor whose values mean scale * (q - zero point)) is not
-                // supported: refused, never handed on as plain integers.
-                if (tensor.is_quantized()) {
-                    throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
-                                      std::string(k_engine) + ": output tensor '" +
-                                          model.m_outputs[slot].m_name + "' is quantised (" +
-                                          c10::toString(tensor.scalar_type()) +
-                                          ", scale and zero point); quantised I/O is not "
-                                          "supported");
-                }
                 const std::vector<int64_t> sizes(tensor.sizes().begin(), tensor.sizes().end());
                 EngineTensor engine_tensor;
                 engine_tensor.m_dims = sizes;
                 engine_tensor.m_dtype = dtype_of(tensor.scalar_type());
                 engine_tensor.m_type_word = c10::toString(tensor.scalar_type());
+                engine_tensor.m_quantised = tensor.is_quantized();
                 check_engine_tensor(model.m_outputs[slot],
                                     engine_tensor,
                                     ExtentRule::Exact,

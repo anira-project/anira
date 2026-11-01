@@ -375,6 +375,11 @@ void check_engine_tensor(const TensorInfo& slot,
                               (engine_tensor.m_name.empty() ? std::string("unnamed ") + side
                                                             : "'" + engine_tensor.m_name + "'") +
                               ": ";
+    if (engine_tensor.m_quantised) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          where + "the model's tensor is quantised (" + engine_tensor.m_type_word +
+                              " with a scale and a zero point); quantised I/O is not supported");
+    }
     if (engine_tensor.m_dtype != slot.m_dtype) {
         throw StatusError(ANIRA_ERROR_CONFIG,
                           where + "the model's element type is " + engine_tensor.m_type_word +
