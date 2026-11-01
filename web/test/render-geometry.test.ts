@@ -157,8 +157,8 @@ const clocked = (
   return times
 }
 
-// The burst in frames the probe reports from a window of `times`: the longest run, or the quanta
-// a callback needs, whichever is more.
+// The burst in frames the probe reports from a window of `times`: the quanta a callback needs,
+// or the longest run while that is not settled (`burstQuanta`).
 const burstOf = (times: number[], quantum: number) => {
   const quantumMs = (quantum / RATE) * 1000
   const callback = framesPerCallback(runStarts(times, quantumMs), RATE)
@@ -277,4 +277,72 @@ test('the nodes held while measuring are released whatever happens', async () =>
     /no module/
   )
   assert.deepEqual(calls, ['a true', 'b true', 'a false', 'b false'])
+})
+
+test('a renderer late once catches up in one run: the device burst, not the run', () => {
+  // A 128-frame device, one quantum per callback; the renderer stalls 14 ms and renders the six
+  // quanta it owes back to back (Chromium, a 12 ms spike on the audio thread), then the grid goes
+  // on. The run is six quanta; the device's burst stays one.
+  const times = clocked([1], 128, 400)
+  const stall = times[200] + 14
+  for (let k = 0; k < 6; k++) times[200 + k] = stall + k * 0.02
+  const quantumMs = (128 / RATE) * 1000
+  for (let i = 1; i < times.length; i++) assert.ok(times[i] > times[i - 1])
+  assert.ok(longestRun(times, quantumMs) >= 6)
+  const result = burstOf(times, 128)
+  assert.ok(Math.abs((result.frames ?? 0) - 128) < 0.5, `${result.frames} frames`)
+  assert.deepEqual([result.burst, result.settled], [128, true])
+  // Whatever the run, an estimate decides.
+  assert.equal(
+    burstQuanta(6, framesPerCallback(runStarts(times, quantumMs), RATE), 128).quanta,
+    1
+  )
+})
+
+test('callbacks that resume on a shifted grid after a stall do not tilt the estimate', () => {
+  // Firefox on macOS: 256-frame callbacks of two quanta; a stall merges two callbacks and the
+  // callbacks after it come 0.7 ms later than the old grid. One line over both tilted to more
+  // than 256.5 frames, a burst of 384.
+  const times = clocked([2], 256, 150, 0.02)
+  const at = times.findIndex((t) => t > times[0] + 75 * ((256 / RATE) * 1000))
+  times.splice(at, 2)
+  for (let i = at; i < times.length; i++) times[i] += 0.7
+  const result = burstOf(times, 128)
+  assert.ok(Math.abs((result.frames ?? 0) - 256) < 0.3, `${result.frames} frames`)
+  assert.equal(result.burst, 256)
+})
+
+test('a quantum longer than the callback: the grid is the callback, not the longer gap', () => {
+  // A quantum of 480 over 256-frame callbacks (renderSizeHint 480 on Chromium's "interactive"):
+  // a callback renders a quantum when the frames left over do not cover it, so the runs begin one
+  // or two callbacks apart, mostly two. Placed on the median gap the fit said 512 frames, a burst
+  // of 960; the device renders one quantum per callback at most.
+  const counts: number[] = []
+  let left = 0
+  for (let k = 0; k < 15; k++) {
+    let rendered = 0
+    while (left < 256) {
+      left += 480
+      rendered++
+    }
+    left -= 256
+    counts.push(rendered)
+  }
+  const result = burstOf(clocked(counts, 256, 300, 0.05), 480)
+  assert.ok(Math.abs((result.frames ?? 0) - 256) < 0.5, `${result.frames} frames`)
+  assert.equal(result.burst, 480)
+})
+
+test('callbacks on a millisecond timer: the mean period, not the more frequent gap', () => {
+  // Headless Chromium's fake device on a 2048-frame buffer: the callbacks come on whole
+  // milliseconds, gaps of 42, 43 and 43 ms for 42.67. The median gap said 43 ms, 2064 frames, a
+  // burst of 2176.
+  const times: number[] = []
+  for (let k = 0; k < 20; k++) {
+    const start = Math.floor(1000 + k * ((2048 / RATE) * 1000))
+    for (let c = 0; c < 16; c++) times.push(start + c * 0.02)
+  }
+  const result = burstOf(times, 128)
+  assert.ok(Math.abs((result.frames ?? 0) - 2048) < 0.5, `${result.frames} frames`)
+  assert.equal(result.burst, 2048)
 })

@@ -149,21 +149,80 @@ export type CallbackFrames = { frames: number; error: number; starts: number }
 // callback of 2048 in headless Chromium).
 const SETTLE_STARTS = 16
 
+const median = (xs: readonly number[]): number => {
+  const sorted = [...xs].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
+}
+
+// The share of the gaps a period must show in (`gridPeriod`), and the share it must divide.
+const GRID_SEEN = 0.05
+const GRID_DIVIDES = 0.75
+
+/**
+ * The period (ms) of the grid the run starts lie on, from the gaps between them.
+ *
+ * Usually every callback starts a run and the gaps are one period. But a quantum longer than
+ * the callback (480 frames over callbacks of 256) is rendered only every one or two callbacks,
+ * so most gaps are two periods, and the median gap gave 512 frames, a burst of 960. A multiple
+ * of the period never divides more gaps than the period itself, so the grid is the shortest
+ * recurring gap (in a twentieth of the gaps or more) that divides about as many gaps as any
+ * (within a tenth of a period, and three in four at least); else the mean of the gaps near the
+ * median. Then refined to the mean of each gap over its whole number of periods: a device on a
+ * millisecond timer (gaps of 42, 43 and 43 ms for 42.67) is not snapped to its frequent gap.
+ */
+const gridPeriod = (gaps: readonly number[]): number => {
+  const sorted = [...gaps].sort((a, b) => a - b)
+  const middle = median(sorted)
+  const ordinary = sorted.filter((g) => g > 0.5 * middle && g < 1.5 * middle)
+  let period = ordinary.reduce((sum, g) => sum + g, 0) / ordinary.length
+  const candidates: { p: number; divided: number }[] = []
+  let tried = 0
+  for (const p of sorted) {
+    if (!(p > 0.2) || p < tried * 1.1) continue
+    tried = p
+    const near = sorted.filter((g) => Math.abs(g - p) < 0.1 * p).length
+    if (near < GRID_SEEN * gaps.length) continue
+    const divided = sorted.filter((g) => {
+      const n = Math.round(g / p)
+      return n >= 1 && Math.abs(g - n * p) < 0.1 * p
+    }).length
+    candidates.push({ p, divided })
+  }
+  const most = Math.max(0, ...candidates.map((c) => c.divided))
+  const slack = Math.max(1, Math.floor(0.02 * gaps.length))
+  const grid = candidates.find(
+    (c) => c.divided >= most - slack && c.divided >= GRID_DIVIDES * gaps.length
+  )
+  if (grid) period = grid.p
+  for (let k = 0; k < 2; k++) {
+    const ratios: number[] = []
+    for (const g of gaps) {
+      const n = Math.round(g / period)
+      if (n >= 1 && Math.abs(g - n * period) < 0.2 * period) ratios.push(g / n)
+    }
+    if (ratios.length > 0) period = ratios.reduce((sum, r) => sum + r, 0) / ratios.length
+  }
+  return period
+}
+
 /**
  * The frames of one device callback from the times (ms, a microsecond clock) at which runs of
  * calls begin, and the standard error of the estimate; null with fewer than four runs.
  *
  * The callbacks come at a fixed period, the callback's frames over the rate, give or take the
  * system's jitter. Each run begins with a callback, so its start is on that grid; a callback the
- * runs merged over leaves a hole. The first start is left out (the window may begin inside a
- * run). The period is the slope of a least-squares fit of the starts against their places on
- * the grid (each start's place: its distance from the first in periods of the median gap,
- * rounded, so a hole skips a place), fitted again without the starts more than four median
- * residuals off (at least 50 µs: a start a stall delayed), and its standard error falls with the
- * window's length (headless Chromium: about 0.2 frames after 1 s, 0.07 after 2 s). Where every
- * callback renders no quanta or one (a quantum larger than the callback renders every few
- * callbacks), the runs begin every few callbacks and the estimate is the frames between them:
- * a whole quantum, a burst of one.
+ * runs merged over leaves a hole. Each start's place on the grid (`gridPeriod`) is the gap
+ * before it in whole periods, so a hole skips a place. The period is the slope of a
+ * least-squares fit of the starts against their places, fitted again without the starts more
+ * than four median residuals off (at least 50 µs); its standard error falls with the window's
+ * length (headless Chromium: about 0.2 frames after 1 s, 0.07 after 2 s).
+ *
+ * A start off the grid by more than the gaps' jitter begins a new segment, with its own offset
+ * and the same slope: after a stall, Firefox's callbacks resume about 0.7 ms off the old grid
+ * (macOS), and one line over both tilted by a frame or more (258 frames, a burst of 384).
+ *
+ * Where a quantum larger than the callback renders every few callbacks, the period is still the
+ * callback's and the burst one quantum.
  */
 export const framesPerCallback = (
   startsMs: ArrayLike<number>,
@@ -174,43 +233,60 @@ export const framesPerCallback = (
   if (starts.length < 4) return null
   const gaps: number[] = []
   for (let i = 1; i < starts.length; i++) gaps.push(starts[i] - starts[i - 1])
-  gaps.sort((a, b) => a - b)
-  const median = gaps[Math.floor(gaps.length / 2)]
-  if (!(median > 0)) return null
-  const places = starts.map((t) => Math.round((t - starts[0]) / median))
+  if (!(median(gaps) > 0)) return null
+  const period = gridPeriod(gaps)
+  if (!(period > 0)) return null
+  const jitter = median(
+    gaps.map((g) => Math.abs(g - Math.max(1, Math.round(g / period)) * period))
+  )
+  const offGrid = Math.min(Math.max(5 * jitter, 0.08), Math.max(0.2 * period, 0.3))
+  // Each start's segment and place in it.
+  const segments = [0]
+  const places = [0]
+  for (let i = 1; i < starts.length; i++) {
+    const n = Math.round(gaps[i - 1] / period)
+    const shifted = n < 1 || Math.abs(gaps[i - 1] - n * period) > offGrid
+    segments.push(segments[i - 1] + (shifted ? 1 : 0))
+    places.push(shifted ? 0 : places[i - 1] + n)
+  }
   const fit = (keep: (i: number) => boolean) => {
-    let n = 0
-    let mx = 0
-    let my = 0
-    starts.forEach((t, i) => {
-      if (!keep(i)) return
-      n++
-      mx += places[i]
-      my += t
+    const members = new Map<number, number[]>()
+    starts.forEach((_, i) => {
+      if (keep(i)) members.set(segments[i], [...(members.get(segments[i]) ?? []), i])
     })
-    mx /= n
-    my /= n
+    const means = new Map<number, { x: number; t: number }>()
+    let n = 0
     let sxx = 0
     let sxy = 0
-    starts.forEach((t, i) => {
-      if (!keep(i)) return
-      sxx += (places[i] - mx) ** 2
-      sxy += (places[i] - mx) * (t - my)
-    })
+    for (const [segment, indices] of members) {
+      if (indices.length < 2) continue
+      const x = indices.reduce((sum, i) => sum + places[i], 0) / indices.length
+      const t = indices.reduce((sum, i) => sum + starts[i], 0) / indices.length
+      means.set(segment, { x, t })
+      for (const i of indices) {
+        sxx += (places[i] - x) ** 2
+        sxy += (places[i] - x) * (starts[i] - t)
+        n++
+      }
+    }
     const slope = sxy / sxx
-    const residuals = starts.map((t, i) => t - my - slope * (places[i] - mx))
+    const residuals = starts.map((t, i) => {
+      const mean = means.get(segments[i])
+      return mean ? t - mean.t - slope * (places[i] - mean.x) : NaN
+    })
     let squares = 0
     starts.forEach((_, i) => {
-      if (keep(i)) squares += residuals[i] ** 2
+      if (keep(i) && !Number.isNaN(residuals[i])) squares += residuals[i] ** 2
     })
-    return { n, sxx, slope, residuals, se: Math.sqrt(squares / (n - 2) / sxx) }
+    const freedom = n - means.size - 1
+    return { n, sxx, slope, residuals, se: Math.sqrt(squares / freedom / sxx) }
   }
   const all = fit(() => true)
-  if (!(all.sxx > 0)) return null
+  if (!(all.sxx > 0) || all.n < 4) return null
   // A start a stall delayed is no start on the grid: left out past four times the median
   // residual (at least 50 µs), then the fit again.
-  const spread = [...all.residuals].map(Math.abs).sort((a, b) => a - b)
-  const bound = Math.max(4 * spread[Math.floor(spread.length / 2)], 0.05)
+  const spread = all.residuals.filter((r) => !Number.isNaN(r)).map(Math.abs)
+  const bound = Math.max(4 * median(spread), 0.05)
   const kept = fit((i) => Math.abs(all.residuals[i]) <= bound)
   const result = kept.n >= 4 && kept.sxx > 0 ? kept : all
   return {
@@ -221,8 +297,10 @@ export const framesPerCallback = (
 }
 
 /**
- * The burst in quanta: the longest run seen, or the quanta a callback of `callback` frames needs
- * (its frames over the quantum, rounded up), whichever is more, and whether that is settled.
+ * The burst in quanta: the quanta a callback of `callback` frames needs (its frames over the
+ * quantum, rounded up), and whether that is settled. The longest run seen counts only without an
+ * estimate, or with one not settled (more, if the run was), so an unsure estimate never reports
+ * less than the probe saw.
  *
  * A callback whose frames are no multiple of the quantum renders a varying number of quanta,
  * and the largest is the burst. It can be rarer than any window: a callback of 481 frames at a
@@ -232,6 +310,9 @@ export const framesPerCallback = (
  * frames at a quantum of 480, a "hardware" quantum) is one quantum: half a frame is taken off the
  * estimate before rounding up. Settled once the estimate within two standard errors rounds up to
  * one number of quanta; until then the probe watches on.
+ *
+ * A settled estimate leaves the runs out: a renderer that wakes late renders the quanta it owes
+ * back to back (#226: a 128-frame device read as 768), a run the device never asks for.
  */
 export const burstQuanta = (
   longest: number,
@@ -244,7 +325,8 @@ export const burstQuanta = (
   const settled =
     callback.starts >= SETTLE_STARTS &&
     quanta(callback.frames - margin) === quanta(callback.frames + margin)
-  return { quanta: Math.max(longest, quanta(callback.frames)), settled }
+  const estimate = quanta(callback.frames)
+  return { quanta: settled ? estimate : Math.max(longest, estimate), settled }
 }
 
 // The probe's processor: it records the time of every process() call (Date.now: for the runs)
@@ -312,11 +394,11 @@ const probeModules = new WeakMap<BaseAudioContext, Promise<void>>()
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 /**
- * The probe on a running context: the burst in frames. The worklet's calls give the runs
- * (`longestRun`); the clock Worker's microsecond times give the frames per callback
- * (`runStarts`, `framesPerCallback`), and the burst is `burstQuanta` of both. It watches 300 ms
- * after a 100 ms lead-in, and on until the burst is settled, at most 2 s. Without a Worker (a
- * page whose policy refuses one) the runs alone.
+ * The probe on a running context: the burst in frames. The clock Worker's microsecond times give
+ * the frames per callback (`runStarts`, `framesPerCallback`), and the burst is `burstQuanta` of
+ * them and the worklet's runs (`longestRun`). It watches 300 ms after a 100 ms lead-in, and on
+ * until the burst is settled, at most 2 s. Without a Worker (a page whose policy refuses one) the
+ * runs alone.
  */
 const probeBurst = async (context: AudioContext, quantum: number) => {
   let loaded = probeModules.get(context)
@@ -422,10 +504,11 @@ const probeBurst = async (context: AudioContext, quantum: number) => {
  * reports 0 until it runs: refused then.
  *
  * `burst` is measured, the worst case. An OfflineAudioContext renders quantum by quantum: one
- * quantum. On a running AudioContext a probe AudioWorklet watches process() calls: the longest
- * run of back-to-back calls (`longestRun`), and the frames per device callback, timed by a
- * Worker with a microsecond clock (`framesPerCallback`), whose quanta rounded up count where the
- * largest run is rarer than the window (481 frames at a quantum of 480: 960; `burstQuanta`). A
+ * quantum. On a running AudioContext a probe AudioWorklet watches process() calls: the frames
+ * per device callback, timed by a Worker with a microsecond clock (`framesPerCallback`), in
+ * quanta rounded up, which also covers a largest run rarer than the window (481 frames at a
+ * quantum of 480: 960; `burstQuanta`). A longer run (a renderer catching up after a stall)
+ * counts only while that estimate is not settled, or without a Worker (`longestRun`). A
  * callback whose size is no multiple of the quantum renders a varying number of quanta, and the
  * largest counts (441 frames: 3 or 4 quanta of 128, a burst of 4); a quantum at least the
  * callback's size is one call per callback or fewer, a burst of one quantum. It watches 300 ms
