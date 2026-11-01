@@ -20,6 +20,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -30,6 +31,7 @@
 #include "capi/ext_registry.h"
 #include "capi/handles.h"
 #include "capi/validate.h"
+#include "capi/words.h"
 #include "handler_support.h"
 #include "scheduler/Core.h"
 #include "scheduler/SessionElement.h"
@@ -414,6 +416,92 @@ TEST(ExtrasFixtures, StatefulAccumulator) {
     EXPECT_EQ(hard->m_budget_ms, 5.0);
     EXPECT_EQ(hard->m_warmup, ANIRA_WARMUP_FIXED);
     EXPECT_EQ(hard->m_warmup_iterations, 1U);
+}
+
+// The bundled TypedGainNetwork files: the gain fixture's tensors at int16, int8 and float16,
+// checked field by field (a 3.x-only file, no 2.x oracle). A row for every engine over the
+// typed export of that format, the TFLite gain's layout and the LiteRT output keys as the gain
+// fixture's, every row's file in the fetched tree, every tensor of the file's dtype; the
+// _unplanned files one ExecuTorch row each; the ONNX dtype matrix (one file per dtype anira
+// names) and the quantised TFLite model in the fetched tree.
+TEST(ExtrasFixtures, TypedGain) {
+    const auto check_tensors = [](const anira_model_config& cfg, anira_dtype dtype) {
+        ASSERT_EQ(cfg.m_inputs.size(), 2U);
+        ASSERT_EQ(cfg.m_outputs.size(), 2U);
+        const std::array<const anira_tensor_spec*, 4> specs{&cfg.m_inputs[0],
+                                                            &cfg.m_inputs[1],
+                                                            &cfg.m_outputs[0],
+                                                            &cfg.m_outputs[1]};
+        const std::array<const char*, 4> names{"audio_in", "gain", "audio_out", "gain_out"};
+        for (size_t i = 0; i < specs.size(); ++i) {
+            const anira_tensor_spec& spec = *specs.at(i);
+            EXPECT_EQ(spec.m_name, names.at(i));
+            EXPECT_EQ(spec.m_dtype, dtype) << spec.m_name;
+            const bool streamed = i % 2 == 0;
+            EXPECT_EQ(spec.m_role, streamed ? ANIRA_ROLE_STREAMED : ANIRA_ROLE_STATIC);
+            if (streamed) {
+                ASSERT_EQ(spec.m_ndim, 3U);
+                EXPECT_EQ(spec.m_axes[2].m_tag, ANIRA_AXIS_TIME);
+                EXPECT_EQ(spec.m_axes[2].m_extent, 512);
+                EXPECT_EQ(spec.m_window_min, 512);
+            } else {
+                ASSERT_EQ(spec.m_ndim, 1U);
+                EXPECT_EQ(spec.m_axes[0].m_extent, 1);
+            }
+        }
+    };
+    const std::array<std::tuple<const char*, const char*, const char*, anira_dtype>, 3> sets{{
+        {"int16",
+         k_typed_gain_int16_model_json,
+         k_typed_gain_int16_unplanned_model_json,
+         ANIRA_DTYPE_I16},
+        {"int8",
+         k_typed_gain_int8_model_json,
+         k_typed_gain_int8_unplanned_model_json,
+         ANIRA_DTYPE_I8},
+        {"float16",
+         k_typed_gain_float16_model_json,
+         k_typed_gain_float16_unplanned_model_json,
+         ANIRA_DTYPE_F16},
+    }};
+    for (const auto& [word, model_json, unplanned_json, dtype] : sets) {
+        SCOPED_TRACE(word);
+        const anira::ModelConfig loaded = anira::ModelConfig::from_file(model_json);
+        EXPECT_FALSE(loaded.upgraded()) << "a 3.x document";
+        const anira_model_config& cfg = *loaded.native();
+        ASSERT_EQ(cfg.m_models.size(), 5U);
+        EXPECT_EQ(cfg.m_models[0].m_engine, ANIRA_ENGINE_LIBTORCH);
+        EXPECT_EQ(cfg.m_models[1].m_engine, ANIRA_ENGINE_ONNXRUNTIME);
+        EXPECT_EQ(cfg.m_models[2].m_engine, ANIRA_ENGINE_TFLITE);
+        EXPECT_EQ(cfg.m_models[3].m_engine, ANIRA_ENGINE_LITERT);
+        EXPECT_EQ(cfg.m_models[4].m_engine, ANIRA_ENGINE_EXECUTORCH);
+        ASSERT_EQ(cfg.m_models[3].m_tensors.size(), 3U);
+        EXPECT_EQ(cfg.m_models[3].m_tensors.at("audio_out").m_name, "output_0");
+        EXPECT_EQ(cfg.m_models[3].m_tensors.at("gain_out").m_name, "output_1");
+        const std::string stem =
+            std::string("TypedGainNetwork/models/typed_gain_network_") + word + ".";
+        for (const anira::capi::ModelEntry& row : cfg.m_models) {
+            EXPECT_NE(row.m_path.find(stem), std::string::npos) << row.m_path;
+            EXPECT_TRUE(std::filesystem::exists(row.m_path)) << row.m_path;
+        }
+        check_tensors(cfg, dtype);
+
+        const anira::ModelConfig unplanned = anira::ModelConfig::from_file(unplanned_json);
+        const anira_model_config& one = *unplanned.native();
+        ASSERT_EQ(one.m_models.size(), 1U);
+        EXPECT_EQ(one.m_models[0].m_engine, ANIRA_ENGINE_EXECUTORCH);
+        EXPECT_NE(one.m_models[0].m_path.find(std::string("typed_gain_network_") + word +
+                                              "_unplanned.pte"),
+                  std::string::npos);
+        EXPECT_TRUE(std::filesystem::exists(one.m_models[0].m_path)) << one.m_models[0].m_path;
+        check_tensors(one, dtype);
+    }
+    for (const auto& [word, value] : anira::capi::k_dtype_words) {
+        const std::string matrix = std::string(k_dtype_matrix_onnx_prefix) + word + ".onnx";
+        EXPECT_TRUE(std::filesystem::exists(matrix)) << matrix;
+    }
+    EXPECT_TRUE(std::filesystem::exists(k_quantized_gain_int8_tflite))
+        << k_quantized_gain_int8_tflite;
 }
 
 TEST(ExtrasFixtures, RaveFunkDrum) {
