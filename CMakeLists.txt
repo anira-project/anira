@@ -213,18 +213,12 @@ set(TANH_WITH_INSTALL OFF)
 # own default would compile everything below Error out of Release builds.
 set(TANH_LOG_COMPILED_MAX_LEVEL 4)
 
+# The commit, and why it is the one, in cmake/tanh-lib-pin.cmake (the install consumers read it too).
+include(cmake/tanh-lib-pin.cmake)
 FetchContent_Declare(
     tanh-lib
-    GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-    # anira and the fetched tanh-lib must pin the same tanh-tooling tag
-    # (modules-version.cmake warns otherwise).
-    # v0.4.0 plus tanh-tooling v0.3.0 (tanh-lab/tanh-lib#73; nothing in the core changed
-    # since v0.4.0). Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50:
-    # push_block / pop_block / peek_past_block with a stride) that anira_ring forwards to.
-    # Needed since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37: platform identity,
-    # per-record flags, the drop count on the record) and the TANH_LOG_COMPILED_MAX_LEVEL
-    # option (#38). tanh-tooling v0.3.0, the same tooling tag this tree pins.
-    GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966
+    GIT_REPOSITORY ${ANIRA_TANH_LIB_REPOSITORY}
+    GIT_TAG ${ANIRA_TANH_LIB_COMMIT}
 )
 # Scoped: tanh_core is a static archive whatever anira is, and BUILD_SHARED_LIBS is anira's again
 # after the fetch.

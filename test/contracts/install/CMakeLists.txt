@@ -84,10 +84,10 @@ endif()
 #    the link order puts first (with tanh::Core first, anira binds to the host's;
 #    docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself"). Not on PE: a static
 #    archive behaves as on Mach-O, and the shared DLL exports the anira_* entries alone, which
-#    gate 1 checks. Any tanh-lib would do for the out-of-line code; the commit anira pins keeps
-#    the header-only code (merged by the static link) and the two tanh-tooling versions equal.
-#    run-install-test.cmake points FetchContent at the anira build tree's tanh-lib source, CI
-#    fetches it.
+#    gate 1 checks. Any tanh-lib would do for the out-of-line code; the commit anira pins
+#    (cmake/tanh-lib-pin.cmake, the one file both read) keeps the header-only code (merged by the
+#    static link) and the two tanh-tooling versions equal. run-install-test.cmake points
+#    FetchContent at the anira build tree's tanh-lib source, CI fetches it.
 if(TANH_BINARY_FORMAT STREQUAL "ELF"
         OR (TANH_BINARY_FORMAT STREQUAL "Mach-O" AND _anira_type STREQUAL "SHARED_LIBRARY"))
     include(FetchContent)
@@ -101,9 +101,10 @@ if(TANH_BINARY_FORMAT STREQUAL "ELF"
     set(TANH_WITH_EXAMPLES OFF)
     set(TANH_WITH_DOCS OFF)
     set(TANH_WITH_INSTALL OFF)
+    include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/tanh-lib-pin.cmake")
     FetchContent_Declare(tanh-lib
-        GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-        GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966)
+        GIT_REPOSITORY ${ANIRA_TANH_LIB_REPOSITORY}
+        GIT_TAG ${ANIRA_TANH_LIB_COMMIT})
     FetchContent_MakeAvailable(tanh-lib)
     add_executable(consumer_tanh_first main_tanh_first.cpp)
     # tanh::Core first, anira::anira second: the order in which anira's references to thl bind
