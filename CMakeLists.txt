@@ -463,8 +463,8 @@ target_include_directories(${PROJECT_NAME}
 
 # The C ABI (include/anira/abi/, generated from abi/anira.yml by tools/abi/gen.py) and
 # its implementation: every entry body sits behind the exception firewall of
-# src/capi/capi_internal.h; the generated proc table makes a promised name without a
-# definition a link error.
+# src/capi/capi_internal.h; the generated link probe (test/abi/generated/link_probe.c,
+# anira_abi_link) makes a promised name without a definition a link error.
 target_sources(anira_objects PRIVATE
     src/capi/config.cpp
     src/capi/error.cpp
@@ -484,8 +484,9 @@ target_sources(anira_objects PRIVATE
     src/capi/tensor.cpp
 )
 # anira/anira_em.h, the Emscripten companion (registry `platform: emscripten`): the trampolines
-# into the JavaScript hook object, the JS log sink and the per-instance stacks. The header is
-# empty on every other binary format, so the TU exists on Wasm alone.
+# into the JavaScript hook object, the JS log sink, the inference Workers and the Wasm Audio
+# Worklet node. The header is empty on every other binary format, so the TUs exist on Wasm
+# alone.
 if(TANH_BINARY_FORMAT STREQUAL "Wasm")
     target_sources(anira_objects PRIVATE
         src/platform/emscripten/em_audio.cpp

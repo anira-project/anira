@@ -379,8 +379,9 @@ Exceptions
 - ``anira/anira.hpp`` throws ``anira::Error`` and nothing else for a failed call (an
   allocation failure is ``std::bad_alloc``, as everywhere). Constructors throw, so that a handle
   is never half-built; destructors, moves and ``native()`` are ``noexcept``; nothing is caught
-  or logged in the wrapper. The exception-free mode returns ``anira::Result<T>`` instead
-  (``v3.0.0-alpha.2``).
+  or logged in the wrapper. An exception-free mode that returns ``anira::Result<T>`` instead
+  (``ANIRA_CXX_NO_EXCEPTIONS``) comes with a later pre-release; ``anira.hpp`` refuses the macro
+  until then.
 - The C entries never let an exception out: every control-path entry is a function-try-block
   whose handler is the firewall, which turns ``std::bad_alloc`` into
   ``ANIRA_ERROR_OUT_OF_MEMORY``, anira's own status-carrying exception into its status, an

@@ -301,12 +301,13 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_create(anira_pipeline** out,
  * entry is ANIRA_ERROR_CONFIG at anira_handler_create. The structure of the variant
  * (axes, roles, windows, layouts, the engines of the named candidates against this
  * build, the extensions on the model and its specs) is checked at anira_handler_create;
- * the contract rules at prepare. A custom engine is part of this processor and never a
- * processor of its own: it is one more implementation a candidate's engine_id resolves
- * to, added to the pipeline with anira_pipeline_add_engine (before or after this call),
- * and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an entry whose id
- * no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create:
- * every custom id, anira.v2.custom included, needs an engine on the pipeline.
+ * the contract rules at prepare. A custom engine is part of this inference stage and
+ * never a processor of its own: it is one more implementation a candidate's engine_id
+ * resolves to, added to the pipeline with anira_pipeline_add_engine (before or after
+ * this call), and its call runs in ANIRA_PHASE_INFERENCE like a built-in engine's; an
+ * entry whose id no engine of the pipeline serves is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create: every custom id, anira.v2.custom included, needs an engine on
+ * the pipeline.
  * @param pipeline The pipeline.
  * @param variants The model configurations the processor may run, copied; exactly one in this
  *        pre-release.
@@ -403,7 +404,7 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* p
  * when the last reference dies (the handle, the pipelines, their handlers, the loaded
  * models), after every unload. A refused call creates nothing and never calls release.
  * @param engine_id The engine's id, copied: the reverse-URI name model entries name the engine
- *        by (anira_model_config_add_model_path_engine_id), which
+ *        by (anira_model_config_add_model_path with ANIRA_ENGINE_CUSTOM), which
  *        anira_backend_id.engine_id, the plan report and every message about the
  *        engine carry; it must contain a '.', and the prefix "anira." is anira's own,
  *        with one exception: "anira.v2.custom", the id anira/compat/v2.hpp creates a

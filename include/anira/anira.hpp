@@ -250,7 +250,7 @@ struct Error : std::runtime_error {
 
 /**
  * @brief The value-or-error return the exception-free mode will use
- * (ANIRA_CXX_NO_EXCEPTIONS, v3.0.0-alpha.2); declared now so that signatures can name it.
+ * (ANIRA_CXX_NO_EXCEPTIONS, a later pre-release); declared now so that signatures can name it.
  */
 template <class T>
 struct Result {
