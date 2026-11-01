@@ -1,5 +1,6 @@
 #include "ProcessBlockFixture.h"
 
+#include <anira/abi/config.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/status.h>
@@ -37,8 +38,16 @@ std::string engine_name(const anira_plan_info& plan) {
     }
 }
 
+/// The backend a plan runs on, as one string: the engine's name, the provider and a custom
+/// provider's name.
+std::string backend_key(const anira_plan_info& plan) {
+    return engine_name(plan) + "|" + std::to_string(plan.provider) + "|" +
+           (plan.provider_id != nullptr ? plan.provider_id : "");
+}
+
 /// The file name of the model entry a plan runs: the first entry of the plan's engine, the
-/// engine's id when the entry has no source (a custom engine that needs no model).
+/// engine's name when the entry has no path (a bytes entry, or a custom engine that needs no
+/// model).
 std::string model_name(const anira::ModelConfig& model, const anira_plan_info& plan) {
     for (uint32_t i = 0; i < model.model_count(); ++i) {
         const anira::EngineRef engine = model.model_engine(i);
@@ -47,10 +56,12 @@ std::string model_name(const anira::ModelConfig& model, const anira_plan_info& p
             (plan.engine_id == nullptr || engine.id != plan.engine_id)) {
             continue;
         }
-        const std::string path(model.model_path(i));
-        if (path.empty()) { return engine_name(plan); }
+        // NULL for an entry without a path, where ModelConfig::model_path throws
+        const char* path = anira_model_config_model_path(model.native(), i);
+        if (path == nullptr) { return engine_name(plan); }
         // the part after the last / or \ (a path of any platform)
-        return path.substr(path.find_last_of("/\\") + 1);
+        const std::string file(path);
+        return file.substr(file.find_last_of("/\\") + 1);
     }
     return "unknown_model_path";
 }
@@ -99,8 +110,11 @@ void ProcessBlockFixture::initialize_repetition(const anira::ModelConfig& model,
 
     const std::vector<anira_plan_info> plans = m_inference_handler->plan_report().plans();
     const anira_plan_info info = plan < plans.size() ? plans[plan] : anira_plan_info{};
+    // A run is one model, buffer and backend. The plan index alone does not tell the backends
+    // apart: a benchmark that builds one pipeline per backend measures plan 0 of each.
     const std::string key = model.to_json() + "|" + std::to_string(hard.host_block_max) + "|" +
-                            std::to_string(hard.host_rate) + "|" + std::to_string(plan);
+                            std::to_string(hard.host_rate) + "|" + std::to_string(plan) + "|" +
+                            backend_key(info);
     if (key != m_run_key) {
         m_run_key = key;
         m_repetition = 0;
