@@ -100,7 +100,7 @@
  * filled pre_process, post_process or reset runs on the driving thread and requires
  * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST (else ANIRA_ERROR_CONFIG naming the flag); under an
  * Async contract no bit is required. anira's own side is real-time whatever the flags say: the
- * ring accessors, the six context accessors and the two default bodies are ANIRA_NONBLOCKING,
+ * ring accessors, the eight context accessors and the two default bodies are ANIRA_NONBLOCKING,
  * so a real-time processor body is composed of nonblocking calls, and an author who wants the
  * compiler's check declares the callback [[clang::nonblocking]] (ANIRA_NONBLOCKING) themselves.
  * In this pre-release the contract is Hard, so ticket is ANIRA_TICKET_INVALID, and variant is

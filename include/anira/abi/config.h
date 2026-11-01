@@ -367,22 +367,26 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
 /**
  * @brief Declared state passing: pairs a state input with the state output it is fed from on
  * the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on
- * the input (JSON: "state_source" on the input spec). anira keeps one value per pair in
- * the handler, on the port of the state input, in the spec's shape and dtype (zeroed at
- * create and at prepare), copies it into the input tensor as the first step before the
- * engine call, ahead of the processor's before_inference, and copies the output tensor
- * into it as the last step after the engine call, behind the processor's
- * after_inference; a failed inference (an engine failure, a non-OK processor) skips the
- * capture, so the state keeps its last good value. anira_handler_reset re-initialises
- * the state at the first inference of the new stream; the state survives
+ * the input (JSON: "state_source" on the input spec). anira holds the pair in the
+ * handler, two buffers on the port of the state input in the spec's shape and dtype
+ * (zeroed at create and at prepare), and copies nothing: as the first step of every
+ * inference, ahead of the processor's before_inference, the model's state input is bound
+ * to the read buffer (the last state) and the state output to the write buffer, and as
+ * the last step, behind the processor's after_inference, the two flip; under a plan
+ * whose engine sets ANIRA_ENGINE_FLAG_STATE_ALIAS both halves are bound to the read
+ * buffer and nothing flips. A failed inference (an engine failure, a non-OK processor)
+ * does not flip, so the state keeps its last good value. anira_handler_reset
+ * re-initialises the state at the first inference of the new stream; the state survives
  * anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its
  * state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at
  * prepare): every state input names exactly one state output and every state output is
  * named by exactly one state input; the two halves have equal dtype and shape; a state
  * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
- * anchor may name it. ANIRA_ERROR_NOT_SUPPORTED: a state tensor of another dtype than
- * float32 (as every model tensor of this pre-release; the value takes the spec's dtype),
- * or with a transposed layout. A second call replaces the name.
+ * anchor may name it. A state pair may have any dtype, unlike every other model tensor
+ * of this pre-release, which is float32: its buffers take the spec's dtype and a custom
+ * engine binds what its load accepts, while a built-in engine refuses a non-float32
+ * tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a
+ * transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
@@ -1291,11 +1295,13 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
 /**
  * @brief Records what this entry's file calls the tensor you named canonical, and switches that
  * tensor of this entry from positional binding (input slot i to the file's input i, the
- * slot order being the add_input/add_output order; ONNX Runtime's session order, the
- * primary subgraph's order on TFLite and LiteRT) to binding by that name. An entry
- * without a record for a tensor binds it positionally. A name the engine cannot resolve,
- * or an engine that binds only positionally on that side, fails prepare with
- * ANIRA_ERROR_CONFIG naming what the file has. Together with
+ * slot order being the add_input/add_output order; ONNX Runtime's session order, on
+ * TFLite and LiteRT the key order of the model's first signature, its names sorted, and
+ * on TFLite the interpreter's order for a file without signatures) to binding by that
+ * name. An entry without a record for a tensor binds it positionally. A name the engine
+ * cannot resolve fails prepare with ANIRA_ERROR_CONFIG naming what the file has; a name
+ * on a side the engine binds only by position is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create and at prepare (drop the name, keep the layout). Together with
  * anira_model_config_set_tensor_layout this is the per-entry tensor record, the JSON
  * file's models[].tensors.
  * @param config The config.

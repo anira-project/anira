@@ -9,8 +9,9 @@
 # and shipped next to this file), so that both trees expose the same names with the
 # same usage requirements.
 #
-# anira links these targets PRIVATE: what links anira::anira gets anira's headers
-# and USE_* definitions, but no engine header and no engine on its link line beyond
+# anira links these targets PRIVATE: what links anira::anira gets anira's headers (and,
+# inside anira's build tree only, the USE_* definitions), but no engine header and no engine
+# on its link line beyond
 # what a static anira has to carry as $<LINK_ONLY:...>. A consumer whose own code
 # calls an engine links anira::<engine> explicitly and gets the very file anira
 # uses — one copy of the engine per process, never two.

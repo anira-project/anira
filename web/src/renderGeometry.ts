@@ -230,8 +230,8 @@ export const framesPerCallback = (
  * (when the frame left over each time adds up to a quantum), so the runs alone say 480 and the
  * burst is 960. From the frames per callback it is ceil(481 / 480) = 2 quanta. An exact fit (480
  * frames at a quantum of 480, a "hardware" quantum) is one quantum: half a frame is taken off the
- * estimate before rounding up. Settled once the estimate within two standard errors rounds up to
- * one number of quanta; until then the probe watches on.
+ * estimate before rounding up. Settled once the estimate within three standard errors (plus a
+ * tenth of a frame) rounds up to one number of quanta; until then the probe watches on.
  */
 export const burstQuanta = (
   longest: number,

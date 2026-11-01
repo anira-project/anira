@@ -20,7 +20,8 @@
  * Context) and the InferenceHandler over the C handler of anira/abi/handler.h.
  *
  * Deprecated from the start: every entity of namespace anira::v2 is removed one minor release
- * after 3.0.0; there is no [[deprecated]] attribute until then.
+ * after 3.0.0; it carries no [[deprecated]] attribute through the alpha releases, and every
+ * entity gets one before 3.0.0.
  *
  * Every entry is [main-thread] and may allocate, as anira.hpp's are, except what a phase of the
  * processor reaches: RingBuffer and BufferF, the processor's atomics (set_input, get_output and

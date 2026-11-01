@@ -1870,8 +1870,8 @@ later; the factories are outside the ABI promise, their names are listed in
 ``abi/symbols-draft.txt`` instead of ``abi/symbols-<major>.txt``, and a signature may change
 until the platform's column is measured. Promotion then moves the name into the promised list
 and the declaration into ``anira/abi/tensor.h``, and never renames it, so a host that calls a
-draft factory today recompiles and changes nothing. No umbrella header includes the draft
-folder: include the header by its own path. The four are field fills like the device factories,
+draft factory today recompiles and changes nothing. ``anira/anira.h`` does not include the draft
+folder; ``anira/anira_all.h`` does, or include the header by its own path. The four are field fills like the device factories,
 present on every platform.
 
 **Compiling the headers.** Every pointer of the three records sits in an ``ANIRA_PTR(T, name)``

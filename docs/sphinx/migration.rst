@@ -1011,7 +1011,7 @@ path is a Wasm Audio Worklet node whose render callback is C.
   classes have no successor: tensors are heap memory described by ``anira_tensor`` records.
 - ``JSPrePostProcessor`` and ``registerPrePostProcessor`` become ``defineProcessor(name, factory)``
   in every scope that runs one of the processor's phases (the page, the worklet's module) and
-  ``pipeline.addProcessor(name, { hooks, flags })``: the method names stay (``preProcess``,
+  ``pipeline.addProcessor(name, { phases, flags })``: the method names stay (``preProcess``,
   ``postProcess``, ``beforeInference``, ``afterInference``), they receive the
   ``anira_processor_ctx`` pointer instead of buffer vectors.
 - ``JSBackendBase`` and ``registerProcessor(backend, className)`` become
@@ -1024,7 +1024,8 @@ path is a Wasm Audio Worklet node whose render callback is C.
 - ``spinUpInferenceWorker()`` goes: the context's ``threads`` (and ``workerModule``) start the
   Workers, and ``await context.ready()`` waits until they run.
 
-3.0.0-alpha.2 pages (``AniraWeb``, ``spinUpInferenceWorker(context, url)``, ``registerJSEngine``,
+The pre-release pages of the web runtime between v3.0.0-alpha.1 and this one, which no tag shipped
+(``AniraWeb``, ``spinUpInferenceWorker(context, url)``, ``registerJSEngine``,
 ``addJSStage``, ``configureAudioWorklet``, ``AniraAudioWorkletBase``, ``setupInferenceWorker``)
 move the same way: the worker file's ``setupInferenceWorker({ MyEngine })`` becomes
 ``defineEngine`` calls in the context's worker module, the worklet subclass with its

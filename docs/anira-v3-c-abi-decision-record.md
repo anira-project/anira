@@ -4,6 +4,14 @@ Authoritative synthesis for the section writers of the v3 design document. Base 
 
 Paths are relative to `/home/faressc/.claude/jobs/2cde6077/tmp/src/<tree>` (`anira` unless prefixed `tanh-lib/`, `tanh-tooling/`, `clap/`); `plan:N` is a line of `plan-original.md`. Dates: M0 30.08.2026 (other developer), M1–M3 07.09.2026, M4–M6 25.09.2026 (owner). Roadmap revised 2026-10-29 (owner; section 11 of `docs/anira-v3-architecture.md` is the authority): M2 exits with `alpha.2`; a new M2b (PR 4 measured/until-stable budgets, PR 4b inline execution, PR 7b State initial values, the variant axis) exits with `alpha.3`; M3 with `alpha.4`; M4 with `beta.1`, the emsdk 6.x move at its end; M5 is folded into M2b and M6, which opens with `beta.2`. The milestone assignments below that name M5 or M3's tag are annotated; the decisions themselves are unchanged.
 
+> **As built at v3.0.0-alpha.2 (2026-11-01).** This record is revision 2 of the design synthesis and stays as written; what M2 built differs from it in names and shapes, and the authority for the built surface is `include/anira/abi/*.h` (generated from `abi/anira.yml`) and `docs/anira-v3-architecture.md` (amended for alpha.2). The differences a reader of this record meets first:
+> - *Machine* is the *context*: `anira_context`, `anira_context_config`, `anira_context_create` (the handle created first and passed to everything else).
+> - The custom stage is the *processor* (`anira/abi/processor.h`: `anira_processor_desc`, the 64-byte `anira_processor_ctx` read through accessors, `anira_phase`), at most one per pipeline, added with `anira_pipeline_add_processor`; there is no `stage` namespace, and the C++ pipeline is `anira::Pipeline().add_inference(...).add_processor(...).add_engine(...)`.
+> - A custom backend is an engine object: `anira_custom_engine_create(engine_id, &desc, &engine, err)` and `anira_pipeline_add_engine(pipeline, engine, err)` over `anira_engine_desc` (`anira/abi/engine.h`); the id belongs to the engine, and the engine value of a custom one is `ANIRA_ENGINE_CUSTOM` beside it.
+> - The plan report is searched with `anira_plan_report_find` over `anira_plan_query` (`ANIRA_ERROR_NOT_FOUND` when no plan matches); `anira_plan_report_to_json` and `anira_get_proc_address` (with `ANIRA_CXX_MANUAL_INIT` / `ANIRA_NO_PROTOTYPES`) are cut.
+> - The Hard entries take one `const anira_tensor*` per slot and return a status (no float, `_separate`, `_typed` or `_f32` entries); the Static pair moves whole tensors; the Hard "geometry" is the host blocks (`host_block_min`, `host_block_max`, `host_rate`, `anira_contract_hard_set_host_blocks`, the JSON keys likewise); under overload every ready hop is dropped and filled under `on_miss` at its stream position, `rt_error` recording `ANIRA_ERROR_CAPACITY` (#227).
+> - The core's C++ is private and libanira exports the `anira_*` entries alone; tanh-lib, concurrentqueue and nlohmann_json are absorbed and never installed; the soname is the ABI major (`libanira.so.0` through the pre-releases); a static ELF libanira is one prelinked object; the committed tables are `abi/layout-0.txt` and `abi/symbols-0.txt` until the freeze.
+
 ---
 
 ## 1. Principles
@@ -381,6 +389,8 @@ Deliberately not borrowed: string-keyed `get_extension` near the driver thread (
 ---
 
 ## 3. The header sketch
+
+> **As built (2026-11-01):** the sketch below is revision 2's and is kept as the record of what was decided then. The headers as built at v3.0.0-alpha.2 are `include/anira/abi/*.h`; the note under this record's title lists where they differ.
 
 Conventions used below: every declaration is `ANIRA_API <ret> ANIRA_CALL name(...)`; the `ANIRA_API`/`ANIRA_CALL` pair is elided for readability and must be present in the real header. `[tag]` is the thread tag (§4); `[cs]` = `[callback-safe]` (additive). `NB` = `ANIRA_NONBLOCKING` after the declarator. Ownership notes are the comments. `_Static_assert`s are in `test/abi/test_layout.c`, not here.
 

@@ -201,9 +201,13 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
 /**
  * @brief Fills an engine descriptor whose process (always), reset and query (per bit) are
  * trampolines into the scope registry's engine, and whose release frees the record
- * behind user_data without crossing into JavaScript. The init, load, unload, prepare and
- * unprepare slots stay NULL: a JavaScript engine is ready when its Worker's registry
- * booted (its init resolved), before the Worker enters its loop. flags is engine_flags;
+ * behind user_data without crossing into JavaScript. The init slot stays NULL: a
+ * JavaScript engine is ready when its Worker's registry booted (its init resolved),
+ * before the Worker enters its loop. load, unload, prepare and unprepare are C
+ * trampolines that never cross into JavaScript: load reads the entry's model record once
+ * on the control thread (its row, its path copied, its bytes borrowed), unload frees it,
+ * prepare hands it to every process and reset call as their prepared pointer (what the
+ * package's engineModel reads), and unprepare does nothing. flags is engine_flags;
  * providers stay empty (the CPU path alone), for a C caller to fill before
  * anira_custom_engine_create. A descriptor that is never created keeps its record.
  * @param desc The caller's descriptor, overwritten from ANIRA_ENGINE_DESC_INIT.

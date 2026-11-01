@@ -42,7 +42,7 @@ struct Axis {
 
 /// Model bytes with their ownership: COPY holds a private copy, BORROW points at the
 /// caller's memory and fires the release callback exactly once, when the last carrier
-/// (config, and later handler and pooled processor) dies.
+/// (the config, and every handler's copy of it) dies.
 class BytesCarrier {
 public:
     BytesCarrier(const void* bytes,

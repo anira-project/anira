@@ -250,7 +250,7 @@ struct Error : std::runtime_error {
 
 /**
  * @brief The value-or-error return the exception-free mode will use
- * (ANIRA_CXX_NO_EXCEPTIONS, v3.0.0-alpha.2); declared now so that signatures can name it.
+ * (ANIRA_CXX_NO_EXCEPTIONS, a later pre-release); declared now so that signatures can name it.
  */
 template <class T>
 struct Result {
@@ -897,11 +897,13 @@ private:
 
 /**
  * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
- * aggregate always names it (`Hard{.host_block_max = 512, .host_rate = 48000, .budget = 5ms}`), as
- * the web package's budgetMs. A std::chrono duration converts to an explicit budget
- * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); Budget::measured()
- * is the budget the warm-up measures (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses
- * with ANIRA_ERROR_NOT_SUPPORTED in this pre-release.
+ * aggregate always names it (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate =
+ * 48000, .budget = 5ms, .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}`; the default
+ * UNTIL_STABLE warm-up is refused like the measured budget), as the web package's budgetMs. A
+ * std::chrono duration converts to an explicit budget (ANIRA_BUDGET_EXPLICIT with that figure,
+ * anira_contract_hard_set_budget); Budget::measured() is the budget the warm-up measures
+ * (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses with ANIRA_ERROR_NOT_SUPPORTED in
+ * this pre-release.
  */
 class Budget {
 public:
