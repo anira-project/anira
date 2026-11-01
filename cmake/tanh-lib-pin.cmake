@@ -18,8 +18,7 @@ set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
 # the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record flags, the drop count
 # on the record) and the TANH_LOG_COMPILED_MAX_LEVEL option (#38). tanh-tooling v0.3.0, the same
 # tooling tag this tree pins.
-# TODO(tanh-abi, before push): re-pin to the merged tanh-lib PR (tanh_add_core_library in
-# cmake/core-library.cmake and the inline ABI namespace); CMakeLists.txt needs it, and 7ae7c69
-# has neither. Until then this branch builds only with FETCHCONTENT_SOURCE_DIR_ANIRA_TANH_LIB
-# pointing at a tanh-lib checkout of feat/abi-namespace.
-set(ANIRA_TANH_LIB_COMMIT 7ae7c690d57806acc56dd4b5ffbba50551913966)
+# temporary: tanh-lab/tanh-lib#84 head (branch feat/abi-namespace: tanh_add_core_library in
+# cmake/core-library.cmake and the inline ABI namespace, which CMakeLists.txt needs); re-pinned
+# to v0.5.0 before merge.
+set(ANIRA_TANH_LIB_COMMIT 0b94443a9e4ce0bf05160984a6673b299e073828)
