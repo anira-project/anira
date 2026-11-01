@@ -44,8 +44,11 @@ headers, and nothing of its private dependencies:
 The shared library is named after the ABI major (``0`` through the 3.0.0 pre-releases, ``3`` from
 v3.0.0 on), exports the ``anira_*`` C entries and nothing else, and carries tanh-lib's core
 inside it; the queue and the JSON library are header-only and private. No C++ header of anira's
-core is installed. ``find_package(anira)`` looks up nothing but ``Threads`` and the engines the
-build was made with.
+core is installed. The engines the build was made with are installed beside it: their libraries
+(the shared ones anira loads at run time, the static ones a static anira's consumers link) and
+their headers, under ``include/anira-engines/<engine>/``, which only the ``anira::<engine>``
+target carries, for code that calls an engine itself; ``anira::anira`` reaches none of them.
+``find_package(anira)`` looks up nothing but ``Threads`` and those engines.
 
 Linking anira from C
 ~~~~~~~~~~~~~~~~~~~~

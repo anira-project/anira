@@ -5,8 +5,10 @@
  * pipeline over the engine, a handler prepared under a Hard contract (an explicit budget and a
  * fixed warm-up), one block through the Hard entry, the teardown and anira_shutdown. It also
  * proves, from the installed include directories, that nothing private is reachable (gate 4's
- * probes): the package installs anira's public headers and nothing of tanh-lib, the queue, the
- * JSON library or an engine. Exit code 0 on success; every failed check prints one line.
+ * probes): the package installs anira's public headers and nothing of tanh-lib, the queue or the
+ * JSON library, and an engine's headers (include/anira-engines/<engine>/) are reachable through
+ * anira::<engine> alone, never through anira::anira. Exit code 0 on success; every failed check
+ * prints one line.
  */
 #include <anira/anira.h>
 #include <stddef.h>
