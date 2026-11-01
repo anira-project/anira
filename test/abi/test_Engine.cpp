@@ -32,6 +32,7 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -270,6 +271,10 @@ struct GainEngine {
     std::atomic<int> m_inside_prepare{0};
     std::atomic<int> m_max_inside_prepare{0};
     int m_prepare_delay_ms = 0;
+    /// The lifecycle callbacks of different loaded models may run at once, each on its handler's
+    /// thread (anira_engine_prepare_fn), so the bookkeeping below is shared across them and
+    /// taken under this lock; prepare's overlap watch stays outside it.
+    std::mutex m_book;
     std::vector<void*> m_loaded_out;         ///< every loaded pointer load handed back
     std::vector<void*> m_loaded_back;        ///< every loaded pointer unload received
     std::vector<void*> m_handed_out;         ///< every prepared pointer prepare handed back
@@ -395,6 +400,7 @@ anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
                                   void* user_data,
                                   void** out_loaded) {
     auto* engine = static_cast<GainEngine*>(user_data);
+    const std::scoped_lock lock(engine->m_book);
     ++engine->m_loaded;
     if (engine->m_refuse_load != ANIRA_OK) { return engine->m_refuse_load; }
     if (info == nullptr || info->struct_size != sizeof(anira_engine_load_info) ||
@@ -437,6 +443,7 @@ anira_status ANIRA_CALL gain_load(const anira_engine_load_info* info,
 
 void ANIRA_CALL gain_unload(void* loaded, void* user_data) {
     auto* engine = static_cast<GainEngine*>(user_data);
+    const std::scoped_lock lock(engine->m_book);
     ++engine->m_unloaded;
     engine->m_loaded_back.push_back(loaded);
     auto* kept = static_cast<GainLoaded*>(loaded);
@@ -450,6 +457,7 @@ anira_status ANIRA_CALL gain_prepare(const anira_prepare_info* info,
                                      void** out_prepared) {
     auto* engine = static_cast<GainEngine*>(user_data);
     const PrepareWatch watch(*engine);
+    const std::scoped_lock lock(engine->m_book);  // released before the watch's delay
     ++engine->m_prepared;
     if (engine->m_refuse_prepare != ANIRA_OK) { return engine->m_refuse_prepare; }
     // The record is the processor's (the handler, its report), the loaded pointer one load handed
@@ -551,6 +559,7 @@ void ANIRA_CALL gain_reset(const anira_engine_ctx* ctx, void* prepared, void* us
 
 void ANIRA_CALL gain_unprepare(void* prepared, void* user_data) {
     auto* engine = static_cast<GainEngine*>(user_data);
+    const std::scoped_lock lock(engine->m_book);
     ++engine->m_unprepared;
     engine->m_handed_back.push_back(prepared);
     const std::unique_ptr<GainPrepared> handle(static_cast<GainPrepared*>(prepared));
