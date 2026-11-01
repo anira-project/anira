@@ -228,11 +228,43 @@ FetchContent_Declare(
 )
 # Scoped: tanh_core is a static archive whatever anira is, and BUILD_SHARED_LIBS is anira's again
 # after the fetch.
+set(_anira_tanh_from_parent FALSE)
+if(TARGET tanh_core)
+    set(_anira_tanh_from_parent TRUE)
+endif()
 set(_anira_build_shared_libs ${BUILD_SHARED_LIBS})
 set(BUILD_SHARED_LIBS OFF)
 FetchContent_MakeAvailable(tanh-lib)
 set(BUILD_SHARED_LIBS ${_anira_build_shared_libs})
 unset(_anira_build_shared_libs)
+# A project that fetched tanh-lib before anira made the call above a no-op: its tanh_core is the
+# one anira absorbs, whatever the variables above say. It must be the hidden static archive (a
+# shared tanh_core would export thl beside anira and bind to a host's copy, and the static
+# libanira's prelink would keep its default-visibility symbols global), and its compiled log
+# ceiling decides which of anira's records exist in a Release build.
+get_target_property(_anira_tanh_type tanh_core TYPE)
+get_target_property(_anira_tanh_definitions tanh_core INTERFACE_COMPILE_DEFINITIONS)
+if(NOT _anira_tanh_definitions)
+    set(_anira_tanh_definitions "")
+endif()
+if(NOT _anira_tanh_type STREQUAL "STATIC_LIBRARY" OR NOT "TANH_STATIC" IN_LIST _anira_tanh_definitions)
+    message(FATAL_ERROR
+        "anira: tanh-lib's tanh_core is a ${_anira_tanh_type} without TANH_STATIC; anira absorbs "
+        "tanh-lib's core as a hidden static archive (TANH_STATIC, docs/anira-v3-architecture.md, "
+        "section 6b). The project fetched tanh-lib before anira and built it shared: add anira "
+        "before tanh-lib, so that anira's fetch builds it, or build tanh-lib static "
+        "(set(BUILD_SHARED_LIBS OFF) around its FetchContent_MakeAvailable).")
+endif()
+if(_anira_tanh_from_parent AND NOT "THL_LOG_COMPILED_MAX_LEVEL=4" IN_LIST _anira_tanh_definitions)
+    message(WARNING
+        "anira: the project fetched tanh-lib before anira with a compiled log ceiling below 4 "
+        "(TANH_LOG_COMPILED_MAX_LEVEL is not 4), so anira's records below that level are compiled "
+        "out of a Release build and the context config's log level cannot bring them back. Set "
+        "TANH_LOG_COMPILED_MAX_LEVEL 4 before fetching tanh-lib.")
+endif()
+unset(_anira_tanh_from_parent)
+unset(_anira_tanh_type)
+unset(_anira_tanh_definitions)
 
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
