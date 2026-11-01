@@ -450,6 +450,10 @@ today, the sixth (an ``abidiff`` against the last tag) comes with the freeze.
        the ``-sEXPORTED_FUNCTIONS`` link of AniraWeb that of WebAssembly. ``anira_exports``
        (``test/contracts/unload``) forbids every engine runtime and every private dependency
        (``thl``, ``moodycamel``, ``nlohmann``) in the library's and a plugin-shaped module's table.
+       ``anira_abi_namespaces`` (``cmake/abi-namespaces.cmake``) reads every symbol of the library,
+       the local ones included (a static archive's members, a shared library's full table, a
+       DLL's objects), and fails on any ``thl`` symbol outside ``thl::anira`` and on any
+       ``moodycamel`` one (anira's copies are ``thl::anira`` and ``anira_moodycamel``).
    * - 3
      - ``anira_abi_layout``
      - Every Tier-1 ``sizeof`` / ``offsetof`` and enum width, natively and under node, against
@@ -469,9 +473,9 @@ today, the sixth (an ``abidiff`` against the last tag) comes with the freeze.
        C11, the raw-C sequence of section 9 over a registered engine, plus gate 4's probes on the
        installed include directories), ``consumer_compat`` (the 2.x shim), ``consumer_engine``
        (an engine called through ``anira::onnxruntime``, and the negative check that its header
-       needs that target), ``consumer_tanh_first`` (ELF and Mach-O: a host's own shared tanh-lib
-       linked before anira, whose logger never sees anira's records; a shared libanira names no
-       ``thl`` symbol) and the plugin-shaped module that exports no engine symbol and no
+       needs that target), ``consumer_tanh_first`` (every leg, shared and static: a host's own shared
+       tanh-lib, in its default namespace, linked before anira, whose logger never sees anira's
+       records; a shared libanira names no ``thl`` symbol) and the plugin-shaped module that exports no engine symbol and no
        ``anira_*`` entry.
    * - 6
      - the RTSan leg, ``anira_abi_rt_contract``

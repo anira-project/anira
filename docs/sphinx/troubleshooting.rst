@@ -223,33 +223,29 @@ A host that uses tanh-lib itself
 **Issue**: The host, or a plugin embedding anira, links tanh-lib itself (its logger, its
 threads, its state).
 
-**Answer**: anira's tanh-lib is private: its objects are inside ``libanira``, compiled hidden,
-and nothing of it is installed. Whether the host's copy and anira's can meet depends on the
-shape of ``libanira``:
+**Answer**: nothing to do: the two copies never meet, on every platform and with a shared or a
+static anira. anira's tanh-lib is private: anira builds tanh-lib's core itself, from the commit it
+pins (``cmake/tanh-lib-pin.cmake``), under a FetchContent name of its own (``anira_tanh_lib``),
+compiles it hidden into ``libanira`` and installs nothing of it. And it builds it in an inline ABI
+namespace of its own, ``thl::anira``, where your tanh-lib is in tanh-lib's default namespace
+(``thl::v<major>_<minor>``) or one you chose. Code spells both ``thl::...``, but no symbol of the
+two copies shares a mangled name (``_ZN3thl5anira...`` against ``_ZN3thl4v0_4...``), header-only
+templates and inline functions included, so no link can bind one copy's references to the other:
 
-- **Shared** (``libanira.so.0``, ``libanira.0.dylib``, ``anira-0.dll``): the two copies cannot
-  meet. ``libanira`` exports the ``anira_*`` C entries alone and names no ``thl`` symbol in its
-  dynamic table, defined or undefined, so the host's tanh-lib keeps a logger, a level and threads
-  of its own and anira keeps its own. The install consumer ``consumer_tanh_first`` proves it on
-  ELF and Mach-O; on Windows gate 1 checks the DLL's export table.
-- **Static, Linux and Android** (a single-configuration generator: Ninja, Unix Makefiles): the
-  static ``libanira.a`` is one prelinked object in which tanh-lib's symbols, like anira's own C++
-  internals, are local (``cmake/prelink-archive.cmake``), and ``consumer_tanh_first`` proves the
-  separation there too. It is exact for tanh-lib's compiled code. tanh-lib's header-only code
-  (templates such as ``thl::core::RingBuffer<T>``, inline functions) stays in weak COMDAT groups,
-  which the final link merges with the host's instantiations of the same signature, so for that
-  code the separation assumes the host uses the tanh-lib version anira pins.
-- **Static, everywhere else** (macOS and iOS, Windows' ``lib/anira.lib``, a multi-config
-  generator, a toolchain without ``readelf`` and ``objcopy``; the configure log says
-  ``anira: static libanira is a plain archive (<reason>)``): the archive keeps its objects, and
-  anira's own references to ``thl`` are ordinary undefined references. One copy serves both, and
-  the link order picks which: with the host's tanh-lib first on the link line anira binds to the
-  host's copy (with a different tanh-lib version an ABI mismatch, not only a shared logger); with
-  ``anira::anira`` first the host binds to anira's. Either way there is one logger, whose callback
-  both install (the second installation replaces the first). A host that uses tanh-lib itself
-  links the shared anira on these platforms. A static anira works there only when the host uses
-  the tanh-lib version anira pins and lists ``tanh::Core`` after ``anira::anira``, and the two
-  then share that one logger.
+- your tanh-lib keeps a logger, a level, a callback and threads of its own, and anira keeps its
+  own; neither sees the other's records;
+- your project may fetch tanh-lib before or after adding anira, shared or static, at any version:
+  anira always builds its pin, and the two core libraries (your ``tanh_core``, anira's
+  ``anira_tanh_core``) coexist in one build;
+- the link order of ``tanh::Core`` and ``anira::anira`` does not matter.
+
+The queue anira uses internally is renamed the same way (``anira_moodycamel`` instead of
+concurrentqueue's ``moodycamel``), so a host that uses concurrentqueue itself does not share
+anira's template instantiations either. anira proves both in CTest: ``anira_abi_namespaces`` reads
+every symbol of the built library and fails on any ``thl`` symbol outside ``thl::anira`` and on any
+``moodycamel`` one, and the install consumer ``consumer_tanh_first`` links a shared tanh-lib of its
+own before ``anira::anira`` and checks that the two loggers stay apart, against a shared and a
+static anira on Linux, macOS and Windows.
 
 .. _plugin-library-unload:
 
