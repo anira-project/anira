@@ -225,14 +225,16 @@ threads, its state).
 and nothing of it is installed. With a shared ``libanira`` (``libanira.so.0``,
 ``libanira.0.dylib``) the two copies cannot meet: ``libanira`` names no ``thl`` symbol in its
 dynamic table, so the host's tanh-lib keeps a logger, a level and threads of its own and anira
-keeps its own (the install consumer ``consumer_tanh_first`` proves it on ELF and Mach-O). With a
-static ``libanira.a`` the host's objects and the archive's are linked into one image, and the
-static linker binds a host reference to a ``thl`` symbol to the hidden copy inside the archive
-as to any object's definition: host and anira then share that one copy, anira's version, with
-one logger whose callback both install, and the second installation replaces the first. Until
-the static archive is prelinked with its private symbols localized, a host that uses tanh-lib
-itself links the shared anira. On Windows no visibility applies to either shape: list
-``anira::anira`` before ``tanh::Core``.
+keeps its own (the install consumer ``consumer_tanh_first`` proves it on ELF and Mach-O). A static
+``libanira.a`` is linked into the host's image, where the static linker would bind a host
+reference to a ``thl`` symbol to a hidden copy inside the archive as to any object's definition;
+on Linux and Android the static ``libanira.a`` is therefore one prelinked object in which
+tanh-lib's symbols, like anira's own C++ internals, are local (``cmake/prelink-archive.cmake``),
+and ``consumer_tanh_first`` proves the separation there too. A static anira on macOS or iOS
+keeps its objects in the archive, so there host and anira would share one copy, anira's
+version, with one logger whose callback both install (the second installation replaces the
+first): a host that uses tanh-lib itself links the shared anira on Apple platforms. On Windows no
+visibility applies to either shape: list ``anira::anira`` before ``tanh::Core``.
 
 .. _plugin-library-unload:
 

@@ -85,8 +85,9 @@ jobs:
           find prefix -type f | sort
           echo "::endgroup::"
       # test/contracts/install builds the consumers — anira alone from C++ and from C
-      # (consumer_c, gate 5), a host with its own tanh-lib linked before a shared anira
-      # (consumer_tanh_first, gate 5, not on Windows), and one that calls ONNX Runtime itself through
+      # (consumer_c, gate 5), a host with its own tanh-lib linked before anira
+      # (consumer_tanh_first, gate 5: Linux shared and static, macOS shared), and one that calls ONNX
+      # Runtime itself through
       # anira::onnxruntime — and asserts at configure time that the engine header is
       # unreachable without that target.
       - name: build and run the consumers against the prefix
@@ -94,7 +95,7 @@ jobs:
         with:
           PREFIX: ${{ env.ANIRA_PREFIX }}
           CONSUMER_DIR: test/contracts/install
-          BINARIES: ${{ (runner.os != 'Windows' && matrix.preset == 'ci-install-shared') && 'consumer consumer_c consumer_tanh_first consumer_engine' || 'consumer consumer_c consumer_engine' }}
+          BINARIES: ${{ runner.os == 'Linux' && 'consumer consumer_c consumer_tanh_first consumer_engine' || 'consumer consumer_c consumer_engine' }}
           GENERATOR: ${{ runner.os != 'Windows' && 'Ninja' || '' }}
       # The plugin-shaped engine consumer must export no engine symbol (the
       # InstallConsumer CTest runs the same check).

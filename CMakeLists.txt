@@ -292,9 +292,41 @@ add_library(anira_objects OBJECT)
 tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 
 # tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira, shared or
-# static: compiled hidden with an empty TANH_API, they can neither be exported nor be bound to a
-# tanh-lib of the host's (section 6b of docs/anira-v3-architecture.md).
-add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
+# static, compiled hidden with an empty TANH_API (section 6b of docs/anira-v3-architecture.md). A
+# shared libanira exports none of them, so a host's own tanh-lib and anira's never meet. A static
+# archive is linked into the consumer's image, where a consumer's reference binds to a hidden
+# definition of the archive like to any object's; on ELF the static libanira is therefore one
+# prelinked object in which every hidden symbol but the anira_* entries is local
+# (cmake/prelink-archive.cmake). Mach-O and PE archives keep the objects as they are (the
+# remaining limitation, docs/sphinx/troubleshooting.rst), and so does a toolchain without readelf
+# and objcopy.
+if(NOT BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "ELF" AND CMAKE_READELF AND CMAKE_OBJCOPY)
+    set(_anira_prelinked "${CMAKE_CURRENT_BINARY_DIR}/anira_prelinked.o")
+    set(_anira_cxx_target "")
+    if(CMAKE_CXX_COMPILER_TARGET)
+        set(_anira_cxx_target "-DCXX_TARGET=${CMAKE_CXX_COMPILER_TARGET}")
+    endif()
+    add_custom_command(OUTPUT "${_anira_prelinked}"
+        COMMAND ${CMAKE_COMMAND} "-DCXX=${CMAKE_CXX_COMPILER}" ${_anira_cxx_target}
+            "-DREADELF=${CMAKE_READELF}" "-DOBJCOPY=${CMAKE_OBJCOPY}" "-DOUTPUT=${_anira_prelinked}"
+            "-DINPUTS=$<TARGET_OBJECTS:anira_objects>;$<TARGET_OBJECTS:tanh_core>"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prelink-archive.cmake"
+        DEPENDS anira_objects tanh_core $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>
+            "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prelink-archive.cmake"
+        COMMENT "Prelinking the static libanira (one object, only anira_* global)"
+        VERBATIM)
+    # An object alone names no language. The archive is C++ inside, and CMake links a static
+    # library's consumers with the runtimes of its source languages (its link interface languages),
+    # so an empty C++ source names it, as the objects did.
+    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/anira_link_language.cpp"
+        "// The link language of the prelinked static libanira (CMakeLists.txt): C++.\n")
+    add_library(${PROJECT_NAME} STATIC "${_anira_prelinked}"
+        "${CMAKE_CURRENT_BINARY_DIR}/anira_link_language.cpp")
+    unset(_anira_prelinked)
+    unset(_anira_cxx_target)
+else()
+    add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
+endif()
 # The shared object is named after the ABI pair (cmake/build-info.cmake), not after the release:
 # the soname is the ABI major (libanira.so.0, libanira.0.dylib and anira-0.dll through the 3.0.0
 # pre-releases; 3 from v3.0.0 on) and the file version is the pair. On Mach-O the current and the

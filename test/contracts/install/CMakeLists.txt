@@ -76,16 +76,17 @@ if(ANIRA_WITH_ONNXRUNTIME)
     message(STATUS "anira install consumer: engine header unreachable without anira::onnxruntime — OK")
 endif()
 
-# 5. Gate 5: a host that links its own tanh-lib, shared, before a shared anira::anira (ELF and
-#    Mach-O). libanira carries its tanh-lib inside, hidden, and names no thl symbol in its dynamic
-#    table, so the two copies cannot bind to each other. Not on a static anira: there the host's
-#    objects and libanira.a's are linked into one image, and a host reference to thl binds to the
-#    hidden copy inside the archive like to any object's definition (docs/sphinx/troubleshooting.rst,
-#    "A host that uses tanh-lib itself"); not on PE, where a DLL has no hidden references and the
-#    link-order rule is documented instead. Any tanh-lib would do; the commit anira pins keeps the
-#    two tanh-tooling versions equal. run-install-test.cmake points FetchContent at the anira build
-#    tree's tanh-lib source, CI fetches it.
-if(TANH_BINARY_FORMAT MATCHES "^(ELF|Mach-O)$" AND _anira_type STREQUAL "SHARED_LIBRARY")
+# 5. Gate 5: a host that links its own tanh-lib, shared, before anira::anira. A shared libanira
+#    carries its tanh-lib inside, hidden, and names no thl symbol in its dynamic table (ELF and
+#    Mach-O); a static ELF libanira is one prelinked object in which tanh-lib's symbols are local
+#    (cmake/prelink-archive.cmake). Either way the two copies cannot bind to each other. Not on a
+#    static Mach-O anira, whose archive keeps its objects (a host reference to thl binds to the
+#    hidden copy inside it: docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself"),
+#    and not on PE, where the link-order rule is documented instead. Any tanh-lib would do; the
+#    commit anira pins keeps the two tanh-tooling versions equal. run-install-test.cmake points
+#    FetchContent at the anira build tree's tanh-lib source, CI fetches it.
+if(TANH_BINARY_FORMAT STREQUAL "ELF"
+        OR (TANH_BINARY_FORMAT STREQUAL "Mach-O" AND _anira_type STREQUAL "SHARED_LIBRARY"))
     include(FetchContent)
     set(BUILD_SHARED_LIBS ON)
     set(TANH_BUILD_CORE ON)
