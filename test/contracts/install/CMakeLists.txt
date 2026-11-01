@@ -4,11 +4,28 @@
 # (the backends) missing from the install tree fails here rather than
 # in a downstream project.
 cmake_minimum_required(VERSION 3.25)
-project(anira_install_consumer CXX)
+project(anira_install_consumer LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 find_package(anira REQUIRED)
+get_target_property(_anira_type anira::anira TYPE)
+
+# 0. Gate 5: a pure-C consumer (C11), the raw-C sequence of the architecture document's section 9
+#    over a registered engine; its include probes are gate 4 on the installed side. A static anira
+#    is C++ inside, so the C executable links through the C++ driver there. The function-effects
+#    analysis as an error where the compiler has it (gate 6; upstream clang 20 or later).
+add_executable(consumer_c main_c.c)
+target_link_libraries(consumer_c PRIVATE anira::anira)
+set_target_properties(consumer_c PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED ON C_EXTENSIONS OFF)
+if(_anira_type STREQUAL "STATIC_LIBRARY")
+    set_target_properties(consumer_c PROPERTIES LINKER_LANGUAGE CXX)
+endif()
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
+        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+    target_compile_options(consumer_c PRIVATE -Werror=function-effects)
+endif()
 
 # 1. A consumer of anira alone: anira's headers, anira::anira, nothing of any engine.
 add_executable(consumer main.cpp)
@@ -59,6 +76,37 @@ if(ANIRA_WITH_ONNXRUNTIME)
     message(STATUS "anira install consumer: engine header unreachable without anira::onnxruntime — OK")
 endif()
 
+# 5. Gate 5: a host that links its own tanh-lib, shared, before a shared anira::anira (ELF and
+#    Mach-O). libanira carries its tanh-lib inside, hidden, and names no thl symbol in its dynamic
+#    table, so the two copies cannot bind to each other. Not on a static anira: there the host's
+#    objects and libanira.a's are linked into one image, and a host reference to thl binds to the
+#    hidden copy inside the archive like to any object's definition (docs/sphinx/troubleshooting.rst,
+#    "A host that uses tanh-lib itself"); not on PE, where a DLL has no hidden references and the
+#    link-order rule is documented instead. Any tanh-lib would do; the commit anira pins keeps the
+#    two tanh-tooling versions equal. run-install-test.cmake points FetchContent at the anira build
+#    tree's tanh-lib source, CI fetches it.
+if(TANH_BINARY_FORMAT MATCHES "^(ELF|Mach-O)$" AND _anira_type STREQUAL "SHARED_LIBRARY")
+    include(FetchContent)
+    set(BUILD_SHARED_LIBS ON)
+    set(TANH_BUILD_CORE ON)
+    set(TANH_BUILD_STATE OFF)
+    set(TANH_BUILD_DSP OFF)
+    set(TANH_BUILD_MODULATION OFF)
+    set(TANH_BUILD_AUDIO_IO OFF)
+    set(TANH_WITH_TESTS OFF)
+    set(TANH_WITH_EXAMPLES OFF)
+    set(TANH_WITH_DOCS OFF)
+    set(TANH_WITH_INSTALL OFF)
+    FetchContent_Declare(tanh-lib
+        GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
+        GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966)
+    FetchContent_MakeAvailable(tanh-lib)
+    add_executable(consumer_tanh_first main_tanh_first.cpp)
+    # tanh::Core first, anira::anira second: the order in which anira's references to thl would
+    # bind to the host's copy if libanira exported or imported a thl symbol.
+    target_link_libraries(consumer_tanh_first PRIVATE tanh::Core anira::anira)
+endif()
+
 # Windows: an application ships its DLLs next to its executable. The loader searches
 # the application directory first and System32 before PATH — and Windows itself ships
 # an onnxruntime.dll (Windows ML, ORT 1.17) in System32, so an executable that calls
@@ -68,7 +116,7 @@ endif()
 # imported SHARED targets in the link closure — anira's DLL and, for the
 # engine consumers, onnxruntime.dll through anira::onnxruntime.
 if(WIN32)
-    foreach(_consumer consumer consumer_compat consumer_engine consumer_engine_module)
+    foreach(_consumer consumer consumer_c consumer_compat consumer_engine consumer_engine_module)
         if(TARGET ${_consumer})
             add_custom_command(TARGET ${_consumer} POST_BUILD
                 COMMAND ${CMAKE_COMMAND}

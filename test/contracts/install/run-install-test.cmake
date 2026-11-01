@@ -2,8 +2,10 @@
 #
 # Installs the just-built anira into a throwaway prefix, then configures, builds
 # and runs the separate find_package(anira) consumers of test/install against it:
-# `consumer` (anira alone), `consumer_compat` (a 2.x-shaped consumer through the
-# header-only anira/compat/v2.hpp) and, when ONNX Runtime is part of the package,
+# `consumer` (anira alone), `consumer_c` (the same from pure C, gate 5),
+# `consumer_compat` (a 2.x-shaped consumer through the header-only anira/compat/v2.hpp),
+# on ELF and Mach-O `consumer_tanh_first` (a host's own tanh-lib linked first, gate 5) and,
+# when ONNX Runtime is part of the package,
 # `consumer_engine` (calls the engine itself through anira::onnxruntime) plus its
 # plugin-shaped twin, whose export table must carry no engine symbol. The
 # consumer project itself asserts that the engine header is unreachable without
@@ -40,11 +42,29 @@ message(STATUS "[install-test] installing anira -> ${_prefix}")
 _step("install" ${CMAKE_COMMAND} --install "${ANIRA_BUILD_DIR}" --prefix "${_prefix}"
     --config "${BUILD_TYPE}")
 
+# consumer_tanh_first fetches tanh-lib; offline, from the source the anira build tree used.
+set(_tanh_source "")
+if(EXISTS "${ANIRA_BUILD_DIR}/CMakeCache.txt")
+    file(STRINGS "${ANIRA_BUILD_DIR}/CMakeCache.txt" _tanh_source_line
+        REGEX "^FETCHCONTENT_SOURCE_DIR_TANH-LIB:[A-Z]+=.+")
+    if(_tanh_source_line)
+        string(REGEX REPLACE "^[^=]+=" "" _tanh_source "${_tanh_source_line}")
+    endif()
+endif()
+if(_tanh_source STREQUAL "" AND EXISTS "${ANIRA_BUILD_DIR}/_deps/tanh-lib-src/CMakeLists.txt")
+    set(_tanh_source "${ANIRA_BUILD_DIR}/_deps/tanh-lib-src")
+endif()
+set(_tanh_arg "")
+if(NOT _tanh_source STREQUAL "")
+    set(_tanh_arg "-DFETCHCONTENT_SOURCE_DIR_TANH-LIB=${_tanh_source}")
+endif()
+
 message(STATUS "[install-test] configuring consumers (find_package(anira))")
 _step("configure" ${CMAKE_COMMAND} -S "${CONSUMER_SRC}" -B "${_consumer_build}"
     -G "${GENERATOR}"
     "-DCMAKE_PREFIX_PATH=${_prefix}"
-    "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}")
+    "-DCMAKE_BUILD_TYPE=${BUILD_TYPE}"
+    ${_tanh_arg})
 
 message(STATUS "[install-test] building consumers")
 _step("build" ${CMAKE_COMMAND} --build "${_consumer_build}" --config "${BUILD_TYPE}")
@@ -85,6 +105,46 @@ endif()
 message(STATUS "[install-test] running ${_exe}")
 _step("run" "${_exe}")
 
+_find_built(consumer_c _c_exe)
+if(_c_exe STREQUAL "")
+    message(FATAL_ERROR "install-test: consumer_c executable not found under ${_consumer_build}")
+endif()
+message(STATUS "[install-test] running ${_c_exe}")
+_step("run consumer_c" "${_c_exe}")
+
+# The host's own tanh-lib, linked first (ELF and Mach-O only), and the nm half of its proof: a
+# shared libanira names no thl symbol in its dynamic table, defined or undefined, so nothing of
+# anira's tanh-lib can bind to the host's (or the host's to anira's).
+_find_built(consumer_tanh_first _tanh_exe)
+if(NOT _tanh_exe STREQUAL "")
+    message(STATUS "[install-test] running ${_tanh_exe}")
+    _step("run consumer_tanh_first" "${_tanh_exe}")
+    file(GLOB _anira_shared "${_prefix}/lib/libanira.so.*" "${_prefix}/lib64/libanira.so.*"
+        "${_prefix}/lib/libanira.*.dylib")
+    find_program(_nm_tanh NAMES nm llvm-nm)
+    foreach(_lib IN LISTS _anira_shared)
+        if(IS_SYMLINK "${_lib}" OR NOT _nm_tanh)
+            continue()
+        endif()
+        if(APPLE)
+            set(_nm_tanh_args -g)
+        else()
+            set(_nm_tanh_args -D)
+        endif()
+        execute_process(COMMAND "${_nm_tanh}" ${_nm_tanh_args} "${_lib}"
+            OUTPUT_VARIABLE _syms RESULT_VARIABLE _rc)
+        if(NOT _rc EQUAL 0)
+            message(FATAL_ERROR "install-test: nm failed on ${_lib}")
+        endif()
+        string(REGEX MATCHALL "[^\n]*(_ZN3thl|_ZNK3thl|N3thl)[^\n]*" _thl "${_syms}")
+        if(_thl)
+            list(JOIN _thl "\n" _thl)
+            message(FATAL_ERROR "install-test: ${_lib} names thl symbols in its dynamic table:\n${_thl}")
+        endif()
+        message(STATUS "[install-test] ${_lib} names no thl symbol — OK")
+    endforeach()
+endif()
+
 _find_built(consumer_compat _compat_exe)
 if(_compat_exe STREQUAL "")
     message(FATAL_ERROR "install-test: consumer_compat executable not found under ${_consumer_build}")
@@ -123,7 +183,14 @@ if(NOT _engine_exe STREQUAL "")
                 list(JOIN _leaks "\n" _leaks)
                 message(FATAL_ERROR "install-test: consumer_engine_module exports engine symbols:\n${_leaks}")
             endif()
-            message(STATUS "[install-test] consumer_engine_module exports no engine symbol — OK")
+            # Nor anira's: the module's own exports are its business, and a static anira inside it
+            # is hidden (ANIRA_STATIC), so no anira_* entry may appear among its definitions.
+            string(REGEX MATCHALL "[^\n]* _?anira_[a-z0-9_]+(\n|$)" _anira_leaks "${_exports}")
+            if(_anira_leaks)
+                list(JOIN _anira_leaks "" _anira_leaks)
+                message(FATAL_ERROR "install-test: consumer_engine_module exports anira entries:\n${_anira_leaks}")
+            endif()
+            message(STATUS "[install-test] consumer_engine_module exports no engine symbol and no anira entry — OK")
         endif()
     endif()
 endif()
