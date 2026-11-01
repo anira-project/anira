@@ -668,6 +668,12 @@ public:
     explicit LiteRtLoaded(std::shared_ptr<LiteRtEngine> engine)
         : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
 
+    /// Every slot is copied through a managed tensor buffer of the compiled model's own.
+    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
+        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                        .m_reason = "litert: copied through a tensor buffer of its own"};
+    }
+
     /// The CPU path (the CPU accelerator), or an accelerator by its hardware's name
     /// (ANIRA_PROVIDER_CUSTOM with the name); whether the environment registers one is load's
     /// question. No other provider of the enum names a LiteRT accelerator.

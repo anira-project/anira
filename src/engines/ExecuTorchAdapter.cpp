@@ -583,6 +583,13 @@ public:
     explicit ExecuTorchLoaded(std::shared_ptr<ExecuTorchEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
+    /// Every slot is copied through the method's own tensor (a staging buffer in, the
+    /// memory-planned result out).
+    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
+        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                        .m_reason = "executorch: copied through the method's own tensor"};
+    }
+
     /// The CPU path (a portable export, or whatever delegates the runtime has for the
     /// export's), or a backend registered to this runtime and available, by the name the
     /// enum's spelling maps to or the registered name itself.

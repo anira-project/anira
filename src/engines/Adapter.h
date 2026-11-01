@@ -330,6 +330,20 @@ public:
     /// The alignment every engine gets unless it asks for more.
     static constexpr size_t k_default_buffer_alignment = 64;
 
+    /// How the engine passes one slot's chunk buffer to its runtime, as the plan report states
+    /// it (anira_plan_slot.edge_class and reason): ANIRA_EDGE_ZERO_COPY where it binds the
+    /// buffer in place, ANIRA_EDGE_HOST_COPY with the reason where it copies through memory of
+    /// its own. A registered engine is handed the buffer itself: zero-copy by default.
+    struct SlotEdge {
+        anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+        const char* m_reason = nullptr;  ///< static storage; NULL with nothing to say
+    };
+    virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
+        static_cast<void>(is_input);
+        static_cast<void>(slot);
+        return SlotEdge{};
+    }
+
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
     /// engine's load decides). load refuses a record on a provider the adapter does not serve

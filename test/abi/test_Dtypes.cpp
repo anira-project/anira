@@ -108,6 +108,20 @@ std::vector<std::byte> run_stream(anira_handler* h, anira_dtype dtype) {
     return out_stream;
 }
 
+/// Slot 0 of one side of the selected plan's report row.
+anira_plan_slot slot_row(const anira_handler* h, bool inputs) {
+    std::array<anira_plan_slot, 4> rows{};
+    uint32_t count = static_cast<uint32_t>(rows.size());
+    EXPECT_EQ(anira_plan_report_slots(anira_handler_plan_report(h),
+                                      anira_handler_get_plan(h),
+                                      inputs ? 1U : 0U,
+                                      sizeof(anira_plan_slot),
+                                      &count,
+                                      rows.data()),
+              ANIRA_OK);
+    return rows[0];
+}
+
 /// The input stream delayed by `latency` samples, zeros first: what a pass-through delivers.
 std::vector<std::byte> delayed(anira_dtype dtype, size_t latency) {
     const size_t element = size_of(dtype);
@@ -154,6 +168,13 @@ TEST(AbiDtypes, AModelOfEveryDtypeStreamsWithoutARingSetting) {
         const anira::SessionElement& session = *anira_test::session_of(h);
         EXPECT_EQ(session.send_ring(0).dtype(), dtype) << "the ring streams the spec's dtype";
         EXPECT_EQ(session.receive_ring(0).dtype(), dtype);
+        // The report names both dtypes; a registered engine is handed the chunk's buffer.
+        for (const bool inputs : {true, false}) {
+            const anira_plan_slot row = slot_row(h, inputs);
+            EXPECT_EQ(row.dtype, dtype);
+            EXPECT_EQ(row.ring_dtype, dtype);
+            EXPECT_EQ(row.edge_class, ANIRA_EDGE_ZERO_COPY);
+        }
         const std::vector<std::byte> out = run_stream(h, dtype);
         EXPECT_EQ(out, delayed(dtype, anira_handler_get_latency(h, 0)));
         EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
@@ -423,6 +444,11 @@ TEST(AbiDtypes, AFloatHostOnAnotherModelDtypeConvertsInItsProcessor) {
             << err.message;
         ASSERT_EQ(anira_handler_prepare(h, contract.native(), &err), ANIRA_OK) << err.message;
         const size_t latency = anira_handler_get_latency(h, 0);
+        for (const bool inputs : {true, false}) {
+            const anira_plan_slot row = slot_row(h, inputs);
+            EXPECT_EQ(row.dtype, dtype) << "the model tensor's";
+            EXPECT_EQ(row.ring_dtype, ANIRA_DTYPE_F32) << "the host's, named in the contract";
+        }
 
         std::vector<float> in_stream;
         std::vector<float> out_stream;

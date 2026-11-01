@@ -1140,18 +1140,36 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     EXPECT_EQ(find_record(collector, head.c_str(), "native").m_level,
               static_cast<uint32_t>(ANIRA_LOG_INFO));
     EXPECT_EQ(find_record(collector, head.c_str(), "native").m_group, "anira.capi");
+    const anira_plan_report* report = anira_handler_plan_report(h);
     for (uint32_t i = 0; i < num_plans; ++i) {
         const std::string plan = "plan " + std::to_string(i) + ": ";
         EXPECT_EQ(count_records(collector, (plan + "variant 0, engine ").c_str(), "native"), 1U);
-        const std::string row =
-            "': host -> host, edge zero_copy (allocate zero_copy), wait "
-            "spin_backoff, recipe host";
-        for (const char* slot :
-             {"input 0 'audio_in", "input 1 'gain", "output 0 'audio_out", "output 1 'gain_out"}) {
-            std::string line = plan;
-            line += slot;
-            line += row;
-            EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << plan << slot;
+        // The edge is the plan's engine's (zero-copy where it binds the slot, a host copy where
+        // it copies); the dtypes are the spec's and the ring's (none for a Static slot).
+        for (const bool is_input : {true, false}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;  // in: the capacity of rows
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              i,
+                                              is_input ? 1U : 0U,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            ASSERT_EQ(count, 2U);
+            const std::array<const char*, 2> names =
+                is_input ? std::array<const char*, 2>{"audio_in", "gain"}
+                         : std::array<const char*, 2>{"audio_out", "gain_out"};
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                const char* edge =
+                    rows.at(slot).edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "host_copy";
+                const std::string line = plan + (is_input ? "input " : "output ") +
+                                         std::to_string(slot) + " '" + names.at(slot) +
+                                         "': host -> host, edge " + edge + " (allocate " + edge +
+                                         "), wait spin_backoff, recipe host, dtype float32, ring " +
+                                         (slot == 0 ? "float32" : "none");
+                EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << line;
+            }
         }
     }
     // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
@@ -1166,6 +1184,55 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(count_records(collector, "anira_handler_prepare: plan report: ", "native"), 2U);
 #endif
+}
+
+// Every slot row names the spec's dtype and its ring's (0 for a Static slot, which has none),
+// and the edge the plan's engine takes with the slot's buffer: zero-copy where it binds the
+// buffer in place (ONNX Runtime both ways, LibTorch's inputs, a registered engine, which is
+// handed the buffer), a host copy with the engine's reason where it copies (LibTorch's outputs,
+// LiteRT, TFLite, ExecuTorch). The allocate class follows the edge on a slot in host memory.
+TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
+    const Context context;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    const uint32_t num_plans = anira_plan_report_num_plans(report);
+    std::vector<anira_plan_info> plans(num_plans);
+    uint32_t num = num_plans;
+    ASSERT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &num, plans.data()),
+              ANIRA_OK);
+    for (uint32_t i = 0; i < num_plans; ++i) {
+        const anira_plan_info& info = plans.at(i);
+        for (const bool is_input : {true, false}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;  // in: the capacity of rows
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              i,
+                                              is_input ? 1U : 0U,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            ASSERT_EQ(count, 2U);
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                const anira_plan_slot& row = rows.at(slot);
+                SCOPED_TRACE("plan " + std::to_string(i) + (is_input ? " input " : " output ") +
+                             std::to_string(slot));
+                EXPECT_EQ(row.dtype, ANIRA_DTYPE_F32);
+                EXPECT_EQ(row.ring_dtype, slot == 0 ? ANIRA_DTYPE_F32 : 0U)
+                    << "a Static slot has no ring";
+                const bool copies = info.engine == ANIRA_ENGINE_LITERT ||
+                                    info.engine == ANIRA_ENGINE_TFLITE ||
+                                    info.engine == ANIRA_ENGINE_EXECUTORCH ||
+                                    (info.engine == ANIRA_ENGINE_LIBTORCH && !is_input);
+                EXPECT_EQ(row.edge_class, copies ? ANIRA_EDGE_HOST_COPY : ANIRA_EDGE_ZERO_COPY);
+                EXPECT_EQ(row.allocate_class, row.edge_class);
+                EXPECT_EQ(row.reason != nullptr, copies);
+            }
+        }
+    }
 }
 
 TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {

@@ -487,6 +487,12 @@ public:
     explicit TFLiteLoaded(std::shared_ptr<TFLiteEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
+    /// Every slot is copied through the interpreter's own tensor.
+    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
+        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                        .m_reason = "tflite: copied through the interpreter's own tensor"};
+    }
+
     std::string provider_reason() const override {
         return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
                "adapter runs the CPU path alone in this pre-release";

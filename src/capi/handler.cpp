@@ -1344,29 +1344,56 @@ void build_plans(anira_handler& handler,
 // A slot row of the report: the declared host-end domain of the tensor (the contract's,
 // anira_contract_set_host_domain) on the host's side of the row and the engine's domain on
 // the other, an input read from its host end into the engine and an output written from the
-// engine to its host end; zero-copy, since every engine of the 2.x runtime binds host memory
-// and validate refused any other declaration; the wait strategy the core runs; how the plan's
-// loaded model bound the slot to the engine's tensor at load.
+// engine to its host end; the edge the plan's engine takes with the slot's buffer (zero-copy
+// where it binds it in place, a host copy with its reason where it copies; validate refused
+// any domain but the host's); the wait strategy the core runs; how the plan's loaded model
+// bound the slot to the engine's tensor at load; the spec's dtype and the ring's.
+struct SlotFacts {
+    anira_role m_role = ANIRA_ROLE_STREAMED;
+    anira_domain m_host_domain = ANIRA_DOMAIN_HOST;
+    anira_binding m_binding = ANIRA_BINDING_POSITION;
+    anira::engine::Loaded::SlotEdge m_edge;
+    anira_dtype m_dtype = 0;
+    anira_dtype m_ring_dtype = 0;  ///< 0: no ring
+};
+
 anira_plan_slot host_slot(uint32_t slot,
                           bool is_input,
                           anira_wait_strategy wait,
-                          anira_role role,
-                          anira_domain host_domain,
-                          anira_binding binding) noexcept {
+                          const SlotFacts& facts) noexcept {
     constexpr auto k_engine_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
     anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
     row.slot = slot;
     row.is_input = is_input ? 1U : 0U;
-    row.domain_in = is_input ? static_cast<uint32_t>(host_domain) : k_engine_domain;
-    row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(host_domain);
-    row.edge_class = ANIRA_EDGE_ZERO_COPY;
-    row.allocate_class = ANIRA_EDGE_ZERO_COPY;
+    row.domain_in = is_input ? static_cast<uint32_t>(facts.m_host_domain) : k_engine_domain;
+    row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(facts.m_host_domain);
+    row.edge_class = static_cast<uint32_t>(facts.m_edge.m_class);
+    row.allocate_class = static_cast<uint32_t>(facts.m_edge.m_class);
     row.wait_strategy = static_cast<uint32_t>(wait);
     row.recipe = k_host_recipe;
-    row.reason = nullptr;
-    row.role = static_cast<uint32_t>(role);
-    row.binding = static_cast<uint32_t>(binding);
+    row.reason = facts.m_edge.m_reason;
+    row.role = static_cast<uint32_t>(facts.m_role);
+    row.binding = static_cast<uint32_t>(facts.m_binding);
+    row.dtype = facts.m_dtype;
+    row.ring_dtype = facts.m_ring_dtype;
     return row;
+}
+
+// The edge the plan's engine takes with one slot's buffer (anira::engine::Loaded::slot_edge),
+// under the plan's dense index; zero-copy for a slot of a plan without a loaded model.
+anira::engine::Loaded::SlotEdge edge_of(const anira::SessionElement& session,
+                                        size_t plan,
+                                        bool is_input,
+                                        uint32_t slot) noexcept {
+    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) { return {}; }
+    return session.m_plans[plan].m_loaded->slot_edge(is_input, slot);
+}
+
+// The dtype a slot's ring holds (its stream port's), 0 for a slot without a ring.
+anira_dtype ring_dtype_of(const anira::capi::Ports& ports, uint32_t slot) noexcept {
+    const auto* stream =
+        slot < ports.size() ? std::get_if<anira::capi::StreamPort>(&ports[slot]) : nullptr;
+    return stream != nullptr ? stream->m_ring_dtype : 0U;
 }
 
 // How the loaded model of a plan bound one slot (anira::engine::Loaded::bindings), read off
@@ -1405,22 +1432,24 @@ void build_report(anira_handler& handler,
         std::vector<anira_plan_slot> inputs;
         inputs.reserve(handler.m_num_inputs);
         for (uint32_t i = 0; i < handler.m_num_inputs; ++i) {
-            inputs.push_back(host_slot(i,
-                                       true,
-                                       wait,
-                                       anira::capi::port_role(handler.m_input_ports[i]),
-                                       host_domains.m_inputs[i],
-                                       binding_of(session, index, true, i)));
+            const SlotFacts facts{.m_role = anira::capi::port_role(handler.m_input_ports[i]),
+                                  .m_host_domain = host_domains.m_inputs[i],
+                                  .m_binding = binding_of(session, index, true, i),
+                                  .m_edge = edge_of(session, index, true, i),
+                                  .m_dtype = model.m_inputs[i].m_dtype,
+                                  .m_ring_dtype = ring_dtype_of(handler.m_input_ports, i)};
+            inputs.push_back(host_slot(i, true, wait, facts));
         }
         std::vector<anira_plan_slot> outputs;
         outputs.reserve(handler.m_num_outputs);
         for (uint32_t i = 0; i < handler.m_num_outputs; ++i) {
-            outputs.push_back(host_slot(i,
-                                        false,
-                                        wait,
-                                        anira::capi::port_role(handler.m_output_ports[i]),
-                                        host_domains.m_outputs[i],
-                                        binding_of(session, index, false, i)));
+            const SlotFacts facts{.m_role = anira::capi::port_role(handler.m_output_ports[i]),
+                                  .m_host_domain = host_domains.m_outputs[i],
+                                  .m_binding = binding_of(session, index, false, i),
+                                  .m_edge = edge_of(session, index, false, i),
+                                  .m_dtype = model.m_outputs[i].m_dtype,
+                                  .m_ring_dtype = ring_dtype_of(handler.m_output_ports, i)};
+            outputs.push_back(host_slot(i, false, wait, facts));
         }
         report.m_inputs.push_back(std::move(inputs));
         report.m_outputs.push_back(std::move(outputs));
@@ -1486,7 +1515,7 @@ void log_slots(uint32_t plan,
         const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
         ANIRA_LOG_INFO(anira::log_group::k_capi,
                        "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
-                       "%s), wait %s, recipe %s, bound by %s%s%s",
+                       "%s), wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
                        plan,
                        side,
                        slot.slot,
@@ -1497,6 +1526,8 @@ void log_slots(uint32_t plan,
                        edge_class_word(slot.allocate_class),
                        wait_strategy_word(slot.wait_strategy),
                        slot.recipe != nullptr ? slot.recipe : "none",
+                       anira::capi::dtype_word(slot.dtype),
+                       slot.ring_dtype != 0 ? anira::capi::dtype_word(slot.ring_dtype) : "none",
                        binding_word(slot.binding),
                        slot.reason != nullptr ? ", reason: " : "",
                        slot.reason != nullptr ? slot.reason : "");

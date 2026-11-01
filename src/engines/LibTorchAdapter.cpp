@@ -493,6 +493,14 @@ public:
     explicit LibTorchLoaded(std::shared_ptr<LibTorchEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
+    /// The inputs are bound in place (from_blob); a method returns tensors of its own, so every
+    /// output is copied into the chunk.
+    SlotEdge slot_edge(bool is_input, uint32_t /*slot*/) const noexcept override {
+        if (is_input) { return SlotEdge{}; }
+        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                        .m_reason = "libtorch: the method returns tensors of its own, copied"};
+    }
+
     std::string provider_reason() const override {
         return "a LibTorch device needs the device-domain edges of a later pre-release (a "
                ".to(device) per call allocates), so the adapter runs the CPU path "
