@@ -4,7 +4,7 @@
 # and runs the separate find_package(anira) consumers of test/install against it:
 # `consumer` (anira alone), `consumer_c` (the same from pure C, gate 5),
 # `consumer_compat` (a 2.x-shaped consumer through the header-only anira/compat/v2.hpp),
-# on ELF and Mach-O `consumer_tanh_first` (a host's own tanh-lib linked first, gate 5) and,
+# `consumer_tanh_first` (a host's own tanh-lib linked first, gate 5) and,
 # when ONNX Runtime is part of the package,
 # `consumer_engine` (calls the engine itself through anira::onnxruntime) plus its
 # plugin-shaped twin, whose export table must carry no engine symbol. The
