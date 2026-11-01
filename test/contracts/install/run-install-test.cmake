@@ -42,17 +42,18 @@ message(STATUS "[install-test] installing anira -> ${_prefix}")
 _step("install" ${CMAKE_COMMAND} --install "${ANIRA_BUILD_DIR}" --prefix "${_prefix}"
     --config "${BUILD_TYPE}")
 
-# consumer_tanh_first fetches tanh-lib; offline, from the source the anira build tree used.
+# consumer_tanh_first fetches tanh-lib (the pin anira builds its own copy from); offline, from the
+# source the anira build tree used for anira_tanh_lib.
 set(_tanh_source "")
 if(EXISTS "${ANIRA_BUILD_DIR}/CMakeCache.txt")
     file(STRINGS "${ANIRA_BUILD_DIR}/CMakeCache.txt" _tanh_source_line
-        REGEX "^FETCHCONTENT_SOURCE_DIR_TANH-LIB:[A-Z]+=.+")
+        REGEX "^FETCHCONTENT_SOURCE_DIR_ANIRA_TANH_LIB:[A-Z]+=.+")
     if(_tanh_source_line)
         string(REGEX REPLACE "^[^=]+=" "" _tanh_source "${_tanh_source_line}")
     endif()
 endif()
-if(_tanh_source STREQUAL "" AND EXISTS "${ANIRA_BUILD_DIR}/_deps/tanh-lib-src/CMakeLists.txt")
-    set(_tanh_source "${ANIRA_BUILD_DIR}/_deps/tanh-lib-src")
+if(_tanh_source STREQUAL "" AND EXISTS "${ANIRA_BUILD_DIR}/_deps/anira_tanh_lib-src/CMakeLists.txt")
+    set(_tanh_source "${ANIRA_BUILD_DIR}/_deps/anira_tanh_lib-src")
 endif()
 set(_tanh_arg "")
 if(NOT _tanh_source STREQUAL "")

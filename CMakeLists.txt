@@ -72,7 +72,7 @@ anira_compute_abi_version()
 
 # Platform axes (cmake/tanh/platform.cmake): TANH_OPERATING_SYSTEM, TANH_BINARY_FORMAT
 # (ELF | Mach-O | PE | Wasm), TANH_IOS_PLATFORM. Every OS/format decision below keys on
-# these, never on APPLE/UNIX/WIN32. tanh::Core carries the matching THL_PLATFORM_*
+# these, never on APPLE/UNIX/WIN32. anira_tanh_core carries the matching THL_PLATFORM_*
 # compile definitions for C++. The symbol-policy module comes with it: engines.cmake
 # (below, before the library target) already needs tanh_hidden_archive_link_items to
 # wire the static engine archives.
@@ -189,81 +189,65 @@ target_compile_definitions(anira_concurrentqueue INTERFACE moodycamel=anira_mood
 # Fetch tanh-lib (Apache-2.0 core component only)
 # ==============================================================================
 
-# Only the Apache-2.0 core component (tanh::Core) is fetched — never the AGPL
-# ones. It is private (docs/anira-v3-architecture.md, section 6b): built by its own CMake as a
-# hidden static archive (TANH_STATIC, an empty TANH_API), its objects absorbed into libanira
-# below, nothing of it installed and nothing of it in anira's package or export table.
-# Plain (non-cache) variables: they shadow tanh-lib's option() defaults under
-# CMP0077 NEW without clobbering a parent that fetches tanh-lib itself.
-set(TANH_BUILD_CORE ON)
-set(TANH_BUILD_STATE OFF)
-set(TANH_BUILD_DSP OFF)
-set(TANH_BUILD_MODULATION OFF)
-set(TANH_BUILD_AUDIO_IO OFF)
-set(TANH_WITH_TESTS OFF)
-set(TANH_WITH_EXAMPLES OFF)
-set(TANH_WITH_DOCS OFF)
-set(TANH_WITH_JOURNALD OFF)
-set(TANH_WITH_RTSAN ${ANIRA_WITH_RTSAN})
-# tanh-lib is instrumented in the same build (its options mirror anira's;
-# UBSan is USAN in tanh-lib's spelling).
-set(TANH_WITH_ASAN ${ANIRA_WITH_ASAN})
-set(TANH_WITH_USAN ${ANIRA_WITH_UBSAN})
-set(TANH_WITH_TSAN ${ANIRA_WITH_TSAN})
-set(TANH_WITH_LSAN ${ANIRA_WITH_LSAN})
-set(TANH_WITH_INSTALL OFF)
+# Only the Apache-2.0 core component is built, never the AGPL ones. It is private
+# (docs/anira-v3-architecture.md, section 6b): anira_tanh_core, a static archive compiled hidden
+# (TANH_STATIC, an empty TANH_API) in the inline namespace thl::anira, its objects absorbed into
+# libanira below, nothing of it installed and nothing of it in anira's package or export table.
+# The namespace keeps it apart from a host's own tanh-lib (thl::v<major>_<minor> by default, or
+# whatever the host chose) on every platform and in every link mode: no symbol of the two copies
+# shares a mangled name, header-only code included.
+#
+# The repository is fetched under anira's own FetchContent name and only populated: anira never
+# runs tanh-lib's top-level CMakeLists.txt, so it builds its pin whatever a parent project
+# declared under "tanh-lib", and a parent's tanh_core and anira's anira_tanh_core coexist in one
+# build. The core is defined by the function of the pinned tree itself
+# (cmake/core-library.cmake, included right before the call, as the function asks).
+include(cmake/tanh-lib-pin.cmake)
+FetchContent_Declare(
+    anira_tanh_lib
+    GIT_REPOSITORY ${ANIRA_TANH_LIB_REPOSITORY}
+    GIT_TAG ${ANIRA_TANH_LIB_COMMIT}
+    SOURCE_SUBDIR anira-uses-the-core-only
+)
+FetchContent_MakeAvailable(anira_tanh_lib)
+if(NOT EXISTS "${anira_tanh_lib_SOURCE_DIR}/cmake/core-library.cmake")
+    message(FATAL_ERROR
+        "anira: the tanh-lib at ${anira_tanh_lib_SOURCE_DIR} has no cmake/core-library.cmake "
+        "(tanh_add_core_library and the ABI namespace); anira needs the commit of "
+        "cmake/tanh-lib-pin.cmake or a later one (FETCHCONTENT_SOURCE_DIR_ANIRA_TANH_LIB points "
+        "anira at another checkout)")
+endif()
+include(${anira_tanh_lib_SOURCE_DIR}/cmake/core-library.cmake)
 # Every log level is compiled into anira's private logger in every build type, so that the
 # runtime level of the context config is the only filter and a warning the call survives
 # exists in a shipped build (docs/anira-v3-error-and-log-strategy.md, rule 4). tanh-lib's
-# own default would compile everything below Error out of Release builds.
-set(TANH_LOG_COMPILED_MAX_LEVEL 4)
-
-# The commit, and why it is the one, in cmake/tanh-lib-pin.cmake (the install consumers read it too).
-include(cmake/tanh-lib-pin.cmake)
-FetchContent_Declare(
-    tanh-lib
-    GIT_REPOSITORY ${ANIRA_TANH_LIB_REPOSITORY}
-    GIT_TAG ${ANIRA_TANH_LIB_COMMIT}
-)
-# Scoped: tanh_core is a static archive whatever anira is, and BUILD_SHARED_LIBS is anira's again
-# after the fetch.
-set(_anira_tanh_from_parent FALSE)
-if(TARGET tanh_core)
-    set(_anira_tanh_from_parent TRUE)
+# AUTO would compile everything below Error out of Release builds.
+tanh_add_core_library(anira_tanh_core
+    SOURCE_DIR ${anira_tanh_lib_SOURCE_DIR}
+    ABI_NAMESPACE anira
+    STATIC
+    LOG_COMPILED_MAX_LEVEL 4)
+# Instrumented as anira is, with tanh-lib's own defines (its sources test TANH_WITH_RTSAN; UBSan
+# is USAN in tanh-lib's spelling) and its ASan ignorelist, as tanh-lib instruments its tanh_core.
+if(ANIRA_WITH_RTSAN OR ANIRA_WITH_ASAN OR ANIRA_WITH_UBSAN OR ANIRA_WITH_TSAN OR ANIRA_WITH_LSAN)
+    include(cmake/tanh/sanitizers.cmake)
+    if(ANIRA_WITH_RTSAN)
+        tanh_add_sanitizer(anira_tanh_core rtsan DEFINE TANH_WITH_RTSAN)
+    endif()
+    if(ANIRA_WITH_ASAN)
+        tanh_add_sanitizer(anira_tanh_core asan DEFINE TANH_WITH_ASAN
+            IGNORELIST "${anira_tanh_lib_SOURCE_DIR}/sanitizers/asan_ignorelist.txt")
+    endif()
+    if(ANIRA_WITH_UBSAN)
+        tanh_add_sanitizer(anira_tanh_core ubsan DEFINE TANH_WITH_USAN)
+    endif()
+    if(ANIRA_WITH_TSAN)
+        tanh_add_sanitizer(anira_tanh_core tsan DEFINE TANH_WITH_TSAN)
+    endif()
+    if(ANIRA_WITH_LSAN)
+        tanh_add_sanitizer(anira_tanh_core lsan DEFINE TANH_WITH_LSAN)
+    endif()
 endif()
-set(_anira_build_shared_libs ${BUILD_SHARED_LIBS})
-set(BUILD_SHARED_LIBS OFF)
-FetchContent_MakeAvailable(tanh-lib)
-set(BUILD_SHARED_LIBS ${_anira_build_shared_libs})
-unset(_anira_build_shared_libs)
-# A project that fetched tanh-lib before anira made the call above a no-op: its tanh_core is the
-# one anira absorbs, whatever the variables above say. It must be the hidden static archive (a
-# shared tanh_core would export thl beside anira and bind to a host's copy, and the static
-# libanira's prelink would keep its default-visibility symbols global), and its compiled log
-# ceiling decides which of anira's records exist in a Release build.
-get_target_property(_anira_tanh_type tanh_core TYPE)
-get_target_property(_anira_tanh_definitions tanh_core INTERFACE_COMPILE_DEFINITIONS)
-if(NOT _anira_tanh_definitions)
-    set(_anira_tanh_definitions "")
-endif()
-if(NOT _anira_tanh_type STREQUAL "STATIC_LIBRARY" OR NOT "TANH_STATIC" IN_LIST _anira_tanh_definitions)
-    message(FATAL_ERROR
-        "anira: tanh-lib's tanh_core is a ${_anira_tanh_type} without TANH_STATIC; anira absorbs "
-        "tanh-lib's core as a hidden static archive (TANH_STATIC, docs/anira-v3-architecture.md, "
-        "section 6b). The project fetched tanh-lib before anira and built it shared: add anira "
-        "before tanh-lib, so that anira's fetch builds it, or build tanh-lib static "
-        "(set(BUILD_SHARED_LIBS OFF) around its FetchContent_MakeAvailable).")
-endif()
-if(_anira_tanh_from_parent AND NOT "THL_LOG_COMPILED_MAX_LEVEL=4" IN_LIST _anira_tanh_definitions)
-    message(WARNING
-        "anira: the project fetched tanh-lib before anira with a compiled log ceiling below 4 "
-        "(TANH_LOG_COMPILED_MAX_LEVEL is not 4), so anira's records below that level are compiled "
-        "out of a Release build and the context config's log level cannot bring them back. Set "
-        "TANH_LOG_COMPILED_MAX_LEVEL 4 before fetching tanh-lib.")
-endif()
-unset(_anira_tanh_from_parent)
-unset(_anira_tanh_type)
-unset(_anira_tanh_definitions)
 
 # Fetch the release tarball instead of cloning the repo — the full git
 # history plus test suite is ~150MB while the release archive is a few MB, the
@@ -322,19 +306,17 @@ FetchContent_MakeAvailable(nlohmann_json)
 add_library(anira_objects OBJECT)
 tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 
-# tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira, shared or
-# static, compiled hidden with an empty TANH_API (section 6b of docs/anira-v3-architecture.md). A
-# shared libanira exports none of them, so a host's own tanh-lib and anira's never meet. A static
-# archive is linked into the consumer's image, where hidden separates nothing: a consumer's
-# reference binds to a hidden definition of the archive like to any object's, and anira's own
-# references to thl are ordinary (default-visibility) undefined ones, so the link order picks one
-# copy for both. On ELF the static libanira is therefore one prelinked object in which every
-# hidden symbol but the anira_* entries is local (cmake/prelink-archive.cmake). Mach-O and PE
-# archives keep the objects as they are (the remaining limitation, docs/sphinx/troubleshooting.rst),
-# and so do a multi-config generator and a toolchain without readelf and objcopy.
-# The path taken is printed: a plain archive passes every test and still leaves a host's own
-# tanh-lib and anira's bound to one copy, so the static Android legs of CI check it
-# (build_test_mobile.yml).
+# anira_tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira,
+# shared or static, compiled hidden with an empty TANH_API in the inline namespace thl::anira
+# (section 6b of docs/anira-v3-architecture.md). A shared libanira exports none of them; a static
+# one is linked into the consumer's image, where hidden separates nothing, but no symbol of anira's
+# copy shares a mangled name with a host's own tanh-lib (thl::v<major>_<minor>), so the two never
+# bind to each other on any platform. On ELF the static libanira is moreover one prelinked object
+# in which every hidden symbol but the anira_* entries is local (cmake/prelink-archive.cmake): it
+# keeps anira's own C++ internals out of the consumer's link. Mach-O and PE archives keep the
+# objects as they are, and so do a multi-config generator and a toolchain without readelf and
+# objcopy. The path taken is printed, and the static Android legs of CI check that it is the
+# prelinked one (build_test_mobile.yml).
 set(_anira_plain_reason "")
 get_property(_anira_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT BUILD_SHARED_LIBS)
@@ -367,9 +349,10 @@ if(NOT BUILD_SHARED_LIBS AND _anira_plain_reason STREQUAL "")
     add_custom_command(OUTPUT "${_anira_prelinked}"
         COMMAND ${CMAKE_COMMAND} "-DCXX=${CMAKE_CXX_COMPILER}" ${_anira_cxx_target}
             "-DREADELF=${CMAKE_READELF}" "-DOBJCOPY=${CMAKE_OBJCOPY}" "-DOUTPUT=${_anira_prelinked}"
-            "-DINPUTS=$<TARGET_OBJECTS:anira_objects>;$<TARGET_OBJECTS:tanh_core>"
+            "-DINPUTS=$<TARGET_OBJECTS:anira_objects>;$<TARGET_OBJECTS:anira_tanh_core>"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prelink-archive.cmake"
-        DEPENDS anira_objects tanh_core $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>
+        DEPENDS anira_objects anira_tanh_core $<TARGET_OBJECTS:anira_objects>
+            $<TARGET_OBJECTS:anira_tanh_core>
             "${CMAKE_CURRENT_SOURCE_DIR}/cmake/prelink-archive.cmake"
         COMMENT "Prelinking the static libanira (one object, only anira_* global)"
         VERBATIM)
@@ -394,7 +377,7 @@ if(NOT BUILD_SHARED_LIBS AND _anira_plain_reason STREQUAL "")
     unset(_anira_link_language_text)
     unset(_anira_link_language_old)
 else()
-    add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
+    add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:anira_tanh_core>)
 endif()
 unset(_anira_plain_reason)
 unset(_anira_multi_config)
@@ -579,8 +562,8 @@ unset(_anira_target)
 # tanh-lib, the queue and the JSON library: the objects' build-time requirements (include
 # directories, TANH_STATIC and the THL_* definitions), which reach the white-box binaries that
 # link the objects and nothing else; libanira carries tanh's objects (above) and links none of
-# the three. The one system library tanh_core links, repeated for the absorbed objects.
-target_link_libraries(anira_objects PUBLIC anira_concurrentqueue nlohmann_json::nlohmann_json tanh::Core)
+# the three. The one system library anira_tanh_core links, repeated for the absorbed objects.
+target_link_libraries(anira_objects PUBLIC anira_concurrentqueue nlohmann_json::nlohmann_json anira_tanh_core)
 if(TANH_OPERATING_SYSTEM STREQUAL "Android")
     target_link_libraries(${PROJECT_NAME} PRIVATE log)
 endif()
