@@ -98,35 +98,61 @@ if(NOT FILES)
     message(FATAL_ERROR "abi-namespaces: ${FILES_FROM} names no file")
 endif()
 
+# The names of one nm/dumpbin call over <files>..., appended to _names in the caller. Each name is
+# cut out of the whole output by one regex pass, with no CMake loop over its lines: a PE build's
+# symbol tables run to hundreds of thousands of lines, and a loop that appends line by line took
+# most of the test's ten minutes on Windows.
+function(_anira_read_symbols)
+    if(FORMAT STREQUAL "PE")
+        execute_process(COMMAND "${DUMPBIN}" /nologo /symbols ${ARGN}
+            OUTPUT_VARIABLE _raw RESULT_VARIABLE _rc ERROR_VARIABLE _err)
+    else()
+        execute_process(COMMAND "${NM}" ${ARGN}
+            OUTPUT_VARIABLE _raw RESULT_VARIABLE _rc ERROR_VARIABLE _err)
+    endif()
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "abi-namespaces: reading the symbols of ${ARGN} failed: ${_err}")
+    endif()
+    string(REPLACE ";" "," _raw "${_raw}")
+    if(FORMAT STREQUAL "PE")
+        # "... | ?name@scope@@... (undecorated)": the decorated name after the line's first bar.
+        string(REGEX MATCHALL "\n[^|\n]*\\| +[^ \n]+" _found "\n${_raw}")
+        list(TRANSFORM _found REPLACE "^\n[^|]*\\| +" "")
+    else()
+        # "<address> <type> <name>", the whole line: every line gets a newline of its own on
+        # both sides, so that one match can end at its line's end without taking the next's start.
+        string(REPLACE "\n" "\n\n" _raw "\n${_raw}\n")
+        string(REGEX MATCHALL "\n[0-9A-Fa-f]* +[A-Za-z?-] +[^ \n]+\n" _found "${_raw}")
+        list(TRANSFORM _found REPLACE "^\n[0-9A-Fa-f]* +[A-Za-z?-] +([^ \n]+)\n$" "\\1")
+    endif()
+    list(REMOVE_DUPLICATES _found)
+    list(APPEND _names ${_found})
+    set(_names "${_names}" PARENT_SCOPE)
+endfunction()
+
+# The files in batches, one tool call each: a shared PE build reads every object of the DLL, and a
+# process per object adds up. A batch stays far below Windows' 32767-character command line.
 set(_names "")
+set(_batch "")
+set(_batch_length 0)
 foreach(_file IN LISTS FILES)
     if(NOT EXISTS "${_file}")
         message(FATAL_ERROR "abi-namespaces: '${_file}' does not exist")
     endif()
-    if(FORMAT STREQUAL "PE")
-        execute_process(COMMAND "${DUMPBIN}" /nologo /symbols "${_file}"
-            OUTPUT_VARIABLE _raw RESULT_VARIABLE _rc ERROR_VARIABLE _err)
-    else()
-        execute_process(COMMAND "${NM}" "${_file}"
-            OUTPUT_VARIABLE _raw RESULT_VARIABLE _rc ERROR_VARIABLE _err)
+    string(LENGTH "${_file}" _length)
+    math(EXPR _batch_length "${_batch_length} + ${_length} + 3")
+    if(_batch AND _batch_length GREATER 16000)
+        _anira_read_symbols(${_batch})
+        set(_batch "")
+        math(EXPR _batch_length "${_length} + 3")
     endif()
-    if(NOT _rc EQUAL 0)
-        message(FATAL_ERROR "abi-namespaces: reading the symbols of ${_file} failed: ${_err}")
-    endif()
-    string(REPLACE ";" "," _raw "${_raw}")
-    string(REPLACE "\n" ";" _lines "${_raw}")
-    foreach(_line IN LISTS _lines)
-        if(FORMAT STREQUAL "PE")
-            # "... | ?name@scope@@..." — the decorated name after the bar.
-            if(_line MATCHES "\\| +([^ ]+)")
-                list(APPEND _names "${CMAKE_MATCH_1}")
-            endif()
-        elseif(_line MATCHES "^[0-9A-Fa-f]* +[A-Za-z?-] +([^ ]+)$")
-            list(APPEND _names "${CMAKE_MATCH_1}")
-        endif()
-    endforeach()
+    list(APPEND _batch "${_file}")
 endforeach()
+_anira_read_symbols(${_batch})
 list(REMOVE_DUPLICATES _names)
+list(LENGTH _names _count)
+# Only a name that spells thl or moodycamel can count or fail below.
+list(FILTER _names INCLUDE REGEX "thl|moodycamel")
 
 set(_thl 0)
 set(_queue 0)
@@ -161,7 +187,6 @@ foreach(_name IN LISTS _names)
     endif()
 endforeach()
 
-list(LENGTH _names _count)
 list(LENGTH _foreign _bad)
 if(_bad GREATER 0)
     list(SUBLIST _foreign 0 20 _shown)
