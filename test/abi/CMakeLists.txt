@@ -11,6 +11,10 @@
 #                         under the strict flags with no anira define at all; the platform
 #                         companions and the generated umbrellas alone
 #   anira_header_cxx17    gate 4: the same as C++17
+#   anira_header_isolation
+#                         gate 4 (strict): every public header, compiled with exactly the usage
+#                         requirements of anira::anira, where no private header (src/, an engine,
+#                         tanh-lib, the queue, the JSON library, gtest, benchmark) is reachable
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
 #   anira_header_compat   anira/compat/v2.hpp alone as C++20 under the strict flags, the
@@ -22,7 +26,7 @@
 #                         internal: the library's private scheduler classes (src/scheduler/Core.h,
 #                         src/scheduler/InferenceThread.h) beside anira.hpp: no class of namespace
 #                         anira in both
-#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
+#   anira_abi_rt_contract gate 6: test_rt_contract.c, ANIRA_NONBLOCKING functions
 #                         calling every [callback-safe] tensor entry and the nonblocking Hard
 #                         entries over host tensors, under -Werror=function-effects on clang
 #                         20 or later
@@ -40,7 +44,7 @@
 # On WebAssembly (ANIRA_WITH_ABI_TESTS, the wasm-abi preset; no CTest there) the gates are
 # members of ALL and run under node (CMAKE_CROSSCOMPILING_EMULATOR, which Emscripten's
 # toolchain file sets), through the target anira_abi_wasm_gates that build_web runs:
-#   anira_header_c11 / anira_header_cxx17
+#   anira_header_c11 / anira_header_cxx17 / anira_header_isolation
 #                         gate 4 as above, anira/anira_em.h with its declarations compiled
 #   anira_abi_layout      gate 3: the printer as a node executable, its table diffed against
 #                         abi/layout-<major>.txt (the wasm32 column of the layout identity)
@@ -172,6 +176,37 @@ else()
 endif()
 anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
+
+# Gate 6, the compile-time half: clang's function-effects analysis as an error on the C gates
+# (consumer-shaped, so a nonblocking function a consumer writes that calls a blocking entry or
+# allocates is the error the consumer would see). The compilers that have the analysis: upstream
+# clang 20 or later behind the GNU front end (gcc rejects the flag; an older clang such as an NDK
+# one, and AppleClang, whose version numbers are its own, may not know the warning group, which
+# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it).
+function(anira_abi_function_effects target)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
+            AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+            AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        target_compile_options(${target} PRIVATE -Werror=function-effects)
+    endif()
+endfunction()
+anira_abi_function_effects(anira_header_c11)
+
+# ---- gate 4 (strict): nothing private reachable through anira::anira --------------------------
+# header_isolation.cpp links anira::anira and nothing else, so it is compiled with exactly the
+# include directories and definitions a consumer gets; its probes fail the compile when a private
+# header resolves. A build-driving CTest on desktop, a member of ALL on Android, iOS and Wasm.
+if(_abi_on_device OR _abi_on_wasm)
+    add_library(anira_header_isolation OBJECT header_isolation.cpp)
+else()
+    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL header_isolation.cpp)
+    anira_abi_build_test(anira_header_isolation)
+endif()
+set_property(TARGET anira_header_isolation PROPERTY COMPILE_DEFINITIONS "")
+set_target_properties(anira_header_isolation PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_link_libraries(anira_header_isolation PRIVATE anira::anira)
+target_compile_options(anira_header_isolation PRIVATE ${_abi_strict_flags})
 
 # ---- the WebAssembly arm: gate 3 and the anira_em.h smoke under node -------------------------
 if(_abi_on_wasm)
@@ -429,14 +464,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
     target_compile_options(anira_header_compat PRIVATE -Werror=function-effects)
 endif()
 
-# ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
+# ---- gate 6: the real-time contract in a consumer's compiler --------------------------------
 # test_rt_contract.c holds ANIRA_NONBLOCKING functions calling every [callback-safe] entry of
-# the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the header gates (C11, the strict flags, no anira
-# define), plus -Werror=function-effects where the compiler has the analysis: upstream clang
-# 20 or later behind the GNU front end. gcc rejects the flag outright; an older clang (an NDK)
-# and AppleClang, whose version numbers are its own, may not know the warning group, which
-# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it. There the
-# file is plain C11. Nothing links it: a regression is a compiler error.
+# the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the
+# header gates (C11, the strict flags, no anira define), plus -Werror=function-effects where the
+# compiler has the analysis (anira_abi_function_effects above); elsewhere the file is plain C11.
+# Nothing links it: a regression is a compiler error.
 if(_abi_on_device)
     add_library(anira_abi_rt_contract OBJECT test_rt_contract.c)
 else()
@@ -444,11 +477,7 @@ else()
     anira_abi_build_test(anira_abi_rt_contract)
 endif()
 anira_abi_consumer_target(anira_abi_rt_contract C)
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
-        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
-        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    target_compile_options(anira_abi_rt_contract PRIVATE -Werror=function-effects)
-endif()
+anira_abi_function_effects(anira_abi_rt_contract)
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
 # header_compat_with_hpp.inc includes the C umbrella, <anira/anira.hpp> and the compat shim in the
@@ -498,6 +527,7 @@ anira_abi_consumer_target(anira_abi_layout C)
 add_executable(anira_abi_link generated/link_probe.c)
 target_link_libraries(anira_abi_link PRIVATE anira::anira)
 anira_abi_consumer_target(anira_abi_link C)
+anira_abi_function_effects(anira_abi_link)
 if(ANIRA_WITH_UBSAN)
     # The probe is C, so the C driver links it, and that driver leaves out the C++ half of
     # the UBSan runtime. libanira's -fsanitize=vptr checks live there

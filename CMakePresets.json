@@ -378,7 +378,7 @@
         {
             "name": "desktop-tests-rtsan",
             "inherits": "ci-clang-base",
-            "description": "RTSan gate for the ANIRA_NONBLOCKING hot path (clang >= 20; tanh-lib built with TANH_WITH_RTSAN).",
+            "description": "Gate 6 at run time: the whole suite under RealtimeSanitizer, which instruments every ANIRA_NONBLOCKING entry and the absorbed tanh-lib (clang >= 20); the unload harness alone is left out (an uninstrumented host cannot load an instrumented module).",
             "binaryDir": "${sourceDir}/build/ci/rtsan",
             "cacheVariables": {
                 "BUILD_SHARED_LIBS": "ON",

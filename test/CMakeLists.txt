@@ -222,31 +222,6 @@ anira_add_test_binary(test_abi WHITE_BOX
 # body (handler_support.h).
 add_subdirectory(abi)
 
-# Header-isolation check: anira's public headers must compile with anira's own include
-# directories alone: no engine include directory and none of anira's private dependencies. The
-# engine state lives in each engine adapter's own translation unit under src/engines; this
-# is what lets anira link its backends PRIVATE and makes
-# "include an engine header -> link anira::<engine>" true at compile time. The object
-# is excluded from the default build and compiled by a CTest, so that a regression
-# shows up as a failed test with the compiler's error instead of a broken build.
-if(NOT TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS|Emscripten)$")
-    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL contracts/header_isolation.cpp)
-    set_target_properties(anira_header_isolation PROPERTIES
-        CXX_STANDARD 20
-        CXX_STANDARD_REQUIRED ON)
-    target_include_directories(anira_header_isolation PRIVATE
-        "${anira_SOURCE_DIR}/include"
-        "${ANIRA_GENERATED_INCLUDE_DIR}")
-    target_compile_definitions(anira_header_isolation PRIVATE
-        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
-    add_test(NAME anira_header_isolation
-        COMMAND ${CMAKE_COMMAND} --build "${CMAKE_BINARY_DIR}" --config $<CONFIG>
-                --target anira_header_isolation)
-    # The test drives the build tree; keep build-invoking tests mutually
-    # exclusive under a parallel ctest (-j).
-    set_tests_properties(anira_header_isolation PROPERTIES RESOURCE_LOCK anira_build_tree)
-endif()
-
 # Host-shaped library-unload test: a plugin-like module embedding anira is dlopen'ed,
 # driven and dlclose'd by an executable that does not link anira. It proves that no
 # anira thread survives the unload (and that the library really gets unmapped). Not

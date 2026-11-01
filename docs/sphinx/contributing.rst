@@ -202,8 +202,9 @@ directory decides which ``test_*`` binary compiles it (see ``test/CMakeLists.txt
   ``scheduler/test_OneSidedStreamingInternals.cpp``, in ``test_scheduler`` with the other
   white-box suites.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: header isolation, engine linkage, the library-unload harness,
-  the installed-package consumer.
+  than of any one unit: engine linkage, the library-unload harness, the installed-package
+  consumers. The header gates, header isolation among them, live with the other ABI gates in
+  ``test/abi/``.
 - A binary is white-box or black-box (``anira_add_test_binary(<target> [WHITE_BOX] ...)``).
   The white-box binaries (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``)
   read anira's private classes, so they link the library's objects (``anira_objects``) with
