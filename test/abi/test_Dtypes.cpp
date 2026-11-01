@@ -491,6 +491,9 @@ std::vector<anira_engine> typed_engines() {
 #ifdef USE_ONNXRUNTIME
     engines.push_back(ANIRA_ENGINE_ONNXRUNTIME);
 #endif
+#ifdef USE_LIBTORCH
+    engines.push_back(ANIRA_ENGINE_LIBTORCH);
+#endif
     return engines;
 }
 

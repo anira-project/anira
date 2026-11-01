@@ -193,10 +193,24 @@ public:
     /// engine's text for an inference that fails. Nothing by default.
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
 
+    /// The copies of a slot's memory this executor made since it was made, per side: an engine
+    /// counts one per slot in its copy branches and nothing where it binds the memory in place,
+    /// so the tests see what the plan report's edge class claims (warm-up calls included).
+    uint64_t copies_in() const noexcept { return m_copies_in.load(std::memory_order_relaxed); }
+    uint64_t copies_out() const noexcept { return m_copies_out.load(std::memory_order_relaxed); }
+
 protected:
+    /// One copy of an input slot's memory into the engine's own, or of an output out of it.
+    void count_copy_in() const noexcept { m_copies_in.fetch_add(1, std::memory_order_relaxed); }
+    void count_copy_out() const noexcept { m_copies_out.fetch_add(1, std::memory_order_relaxed); }
+
     /// The latch of this executor's process: the engine's text goes to the log for the first
     /// failing chunk since the last success, the scheduler's latch counts the rest.
     FailureLatch m_failures;
+
+private:
+    mutable std::atomic<uint64_t> m_copies_in{0};
+    mutable std::atomic<uint64_t> m_copies_out{0};
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
