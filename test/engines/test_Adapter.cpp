@@ -1588,15 +1588,15 @@ TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
 
 namespace {
 
-/// `count` floats `skew` bytes past a 64-byte boundary: a slot's memory that meets LiteRT's
+/// `count` floats `skew` floats past a 64-byte boundary: a slot's memory that meets LiteRT's
 /// boundary (skew 0, as a chunk's buffer does) or misses it.
 class FloatsAt {
 public:
-    FloatsAt(size_t count, size_t skew) : m_bytes((count * sizeof(float)) + 128) {
-        void* start = m_bytes.data();
-        size_t space = m_bytes.size();
-        std::align(64, (count * sizeof(float)) + skew, start, space);
-        m_data = static_cast<float*>(static_cast<void*>(static_cast<std::byte*>(start) + skew));
+    FloatsAt(size_t count, size_t skew) : m_floats(count + skew + (64 / sizeof(float))) {
+        void* start = m_floats.data();
+        size_t space = m_floats.size() * sizeof(float);
+        std::align(64, (count + skew) * sizeof(float), start, space);
+        m_data = static_cast<float*>(start) + skew;
     }
     float* data() const noexcept { return m_data; }
     float& operator[](size_t i) const noexcept { return m_data[i]; }
@@ -1611,7 +1611,7 @@ public:
     }
 
 private:
-    std::vector<std::byte> m_bytes;
+    std::vector<float> m_floats;
     float* m_data = nullptr;
 };
 
@@ -1643,7 +1643,7 @@ TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
     };
     const Memory first(0);
     const Memory second(0);
-    const Memory past(sizeof(float));
+    const Memory past(1);
     const auto run_over = [&adapter](const Memory& memory, float scale, uint64_t copies) {
         for (size_t n = 0; n < k_block; ++n) {
             memory.m_audio_in[n] = scale * static_cast<float>(n) / k_block;

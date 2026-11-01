@@ -18,6 +18,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 
 #include <algorithm>
 #include <array>

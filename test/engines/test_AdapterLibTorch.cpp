@@ -150,9 +150,9 @@ TEST(AdapterLibTorch, ATypedModelBindsItsInputsAndCopiesItsOutputs) {
         const char* m_word;
         anira_dtype m_dtype;
     };
-    for (const Case& c : {Case{"int16", ANIRA_DTYPE_I16},
-                          Case{"int8", ANIRA_DTYPE_I8},
-                          Case{"float16", ANIRA_DTYPE_F16}}) {
+    for (const Case& c : {Case{.m_word = "int16", .m_dtype = ANIRA_DTYPE_I16},
+                          Case{.m_word = "int8", .m_dtype = ANIRA_DTYPE_I8},
+                          Case{.m_word = "float16", .m_dtype = ANIRA_DTYPE_F16}}) {
         SCOPED_TRACE(c.m_word);
         Model model = model_record(
             ANIRA_ENGINE_LIBTORCH,

@@ -7,7 +7,6 @@
 #include <anira/abi/tensor.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>

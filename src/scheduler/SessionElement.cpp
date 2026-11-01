@@ -31,6 +31,7 @@
 #include "../utils/Logger.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
+#include "ChunkStorage.h"
 #include "InstanceWaitList.h"  // IWYU pragma: keep (the complete wait list of PlanSlot)
 #include "LatencyCalculator.h"
 #include "TensorRun.h"

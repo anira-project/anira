@@ -6,6 +6,7 @@
 #include <anira/abi/tensor.h>
 
 #include "capi/validate.h"
+#include "scheduler/ChunkStorage.h"
 #include "scheduler/SessionElement.h"
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)

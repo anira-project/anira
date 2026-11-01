@@ -5,9 +5,11 @@
 // spec's dtype, and nothing in anira converts. A host of another sample type names its type in
 // the contract's ring dtypes and converts in its own processor; a host tensor of another dtype
 // than the ring's is refused per call and leaves the stream untouched.
+#include <anira/abi/config.h>
+#include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
-#include <anira/abi/processor.h>
+#include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <gtest/gtest.h>
@@ -22,8 +24,10 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
+#include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "capi/words.h"
 #include "handler_support.h"
@@ -111,7 +115,7 @@ std::vector<std::byte> run_stream(anira_handler* h, anira_dtype dtype) {
 /// Slot 0 of one side of the selected plan's report row.
 anira_plan_slot slot_row(const anira_handler* h, bool inputs) {
     std::array<anira_plan_slot, 4> rows{};
-    uint32_t count = static_cast<uint32_t>(rows.size());
+    auto count = static_cast<uint32_t>(rows.size());
     EXPECT_EQ(anira_plan_report_slots(anira_handler_plan_report(h),
                                       anira_handler_get_plan(h),
                                       inputs ? 1U : 0U,
@@ -319,7 +323,7 @@ uint16_t to_half(float value) {
     const uint32_t dropped = mantissa & 0x1fffU;
     mantissa >>= 13;
     if (dropped > 0x1000U || (dropped == 0x1000U && (mantissa & 1U) != 0)) { ++mantissa; }
-    uint32_t half_exponent = static_cast<uint32_t>(exponent);
+    auto half_exponent = static_cast<uint32_t>(exponent);
     if (mantissa == 0x800U) {
         mantissa >>= 1;
         ++half_exponent;
