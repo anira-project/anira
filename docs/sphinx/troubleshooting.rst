@@ -215,6 +215,8 @@ the host's (typically older) runtime and the first API call crashes the host.
     3. Restrict your plugin's exports to its entry points — e.g. on macOS ``-Wl,-exported_symbols_list`` with only ``_bundleEntry``/``_bundleExit``/``_GetPluginFactory`` for a VST3, on Linux a version script (``-Wl,--version-script``) with the same names under ``global:`` and ``local: *;`` (for a CLAP plugin the only name is ``clap_entry``; with anira's CMake package the two lines ``tanh_apply_symbol_policy(<plugin>)`` and ``tanh_set_export_allowlist(<plugin> SYMBOL clap_entry)`` do all of this — see ``examples/clap-audio-plugin/CMakeLists.txt``). This also covers any other statically linked dependency and is *required* on macOS when your plugin links a static anira with the ExecuTorch engine: its desktop archives are force-loaded, and ld64 has no hidden variant of ``-force_load``, so nothing short of an export list keeps ``executorch::``/``xnn_*`` out of the plugin's export table. Verify with ``nm -gU your_plugin`` (macOS) or ``nm -D --defined-only your_plugin.so`` (Linux): no ``Ort``/engine symbols should appear. anira runs the same check on its own binaries in CTest (``anira_exports``, ``tanh_add_export_check`` from ``cmake/tanh/check-exports.cmake`` — usable for your plugin too).
     4. Optional, but it pairs with the allowlist: dead-code stripping. anira's objects are compiled with one section per function and variable (``-ffunction-sections -fdata-sections``, ``/Gy``), and the shared ``libanira`` links with ``--gc-sections`` (ELF), ``-dead_strip`` (macOS) or ``/OPT:REF`` (MSVC). A static ``libanira`` has no link step of its own, so pass the linker flag from your plugin's build to drop everything of anira and the engines that the plugin never references. ``examples/clap-audio-plugin`` shows the complete plugin-side set: hidden visibility, ``-fno-gnu-unique`` under GCC, dead-code stripping, and the export list of solution 3.
 
+.. _host-tanh-lib:
+
 A host that uses tanh-lib itself
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
@@ -222,20 +224,32 @@ A host that uses tanh-lib itself
 threads, its state).
 
 **Answer**: anira's tanh-lib is private: its objects are inside ``libanira``, compiled hidden,
-and nothing of it is installed. With a shared ``libanira`` (``libanira.so.0``,
-``libanira.0.dylib``) the two copies cannot meet: ``libanira`` names no ``thl`` symbol in its
-dynamic table, so the host's tanh-lib keeps a logger, a level and threads of its own and anira
-keeps its own (the install consumer ``consumer_tanh_first`` proves it on ELF and Mach-O). A static
-``libanira.a`` is linked into the host's image, where the static linker would bind a host
-reference to a ``thl`` symbol to a hidden copy inside the archive as to any object's definition;
-on Linux and Android the static ``libanira.a`` built with a single-configuration generator (Ninja,
-Unix Makefiles) is therefore one prelinked object in which
-tanh-lib's symbols, like anira's own C++ internals, are local (``cmake/prelink-archive.cmake``),
-and ``consumer_tanh_first`` proves the separation there too. A static anira on macOS or iOS
-keeps its objects in the archive, so there host and anira would share one copy, anira's
-version, with one logger whose callback both install (the second installation replaces the
-first): a host that uses tanh-lib itself links the shared anira on Apple platforms. On Windows no
-visibility applies to either shape: list ``anira::anira`` before ``tanh::Core``.
+and nothing of it is installed. Whether the host's copy and anira's can meet depends on the
+shape of ``libanira``:
+
+- **Shared** (``libanira.so.0``, ``libanira.0.dylib``, ``anira-0.dll``): the two copies cannot
+  meet. ``libanira`` exports the ``anira_*`` C entries alone and names no ``thl`` symbol in its
+  dynamic table, defined or undefined, so the host's tanh-lib keeps a logger, a level and threads
+  of its own and anira keeps its own. The install consumer ``consumer_tanh_first`` proves it on
+  ELF and Mach-O; on Windows gate 1 checks the DLL's export table.
+- **Static, Linux and Android** (a single-configuration generator: Ninja, Unix Makefiles): the
+  static ``libanira.a`` is one prelinked object in which tanh-lib's symbols, like anira's own C++
+  internals, are local (``cmake/prelink-archive.cmake``), and ``consumer_tanh_first`` proves the
+  separation there too. It is exact for tanh-lib's compiled code. tanh-lib's header-only code
+  (templates such as ``thl::core::RingBuffer<T>``, inline functions) stays in weak COMDAT groups,
+  which the final link merges with the host's instantiations of the same signature, so for that
+  code the separation assumes the host uses the tanh-lib version anira pins.
+- **Static, everywhere else** (macOS and iOS, Windows' ``lib/anira.lib``, a multi-config
+  generator, a toolchain without ``readelf`` and ``objcopy``; the configure log says
+  ``anira: static libanira is a plain archive (<reason>)``): the archive keeps its objects, and
+  anira's own references to ``thl`` are ordinary undefined references. One copy serves both, and
+  the link order picks which: with the host's tanh-lib first on the link line anira binds to the
+  host's copy (with a different tanh-lib version an ABI mismatch, not only a shared logger); with
+  ``anira::anira`` first the host binds to anira's. Either way there is one logger, whose callback
+  both install (the second installation replaces the first). A host that uses tanh-lib itself
+  links the shared anira on these platforms. A static anira works there only when the host uses
+  the tanh-lib version anira pins and lists ``tanh::Core`` after ``anira::anira``, and the two
+  then share that one logger.
 
 .. _plugin-library-unload:
 

@@ -4,8 +4,9 @@
 // copies must not bind to each other: the host's logger never sees one of anira's records, and
 // anira's records reach anira's sink, not the host's. run-install-test.cmake adds the nm half of
 // the proof (a shared libanira names no thl symbol in its dynamic table, defined or undefined).
-// ELF and Mach-O only: PE has no visibility on undefined references, and the link-order rule is
-// documented there instead (docs/anira-v3-architecture.md, section 6b).
+// ELF (shared and the prelinked static libanira) and a shared Mach-O libanira only: a plain static
+// archive (Mach-O, PE) keeps its objects, so the link order picks one copy for both
+// (docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself").
 #include <tanh/core/Logger.h>
 
 #include <anira/anira.hpp>

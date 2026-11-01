@@ -212,13 +212,28 @@ Integrate the benchmark with Google Test for easy execution:
 Integrate via CMake
 ~~~~~~~~~~~~~~~~~~~
 
-Set up your CMake project to include the benchmark and find the test. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; this repository's fixture target links it for its own benchmarks, and anira itself links no test library):
+Extend the project of *CMake Configuration* above to include the test and find it. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; anira itself links no test library). ``test.cpp`` calls tanh-lib's thread API, and anira's tanh-lib is private to ``libanira``, so the project fetches tanh-lib's core and links ``tanh::Core`` itself, as this repository's fixture target does for its own benchmarks. Declare it after anira: under ``add_subdirectory(anira)`` the declaration then reuses the tanh-lib anira fetched (a tanh-lib built shared before anira fails anira's configure):
 
 .. code-block:: cmake
 
-    # Create benchmark executable
-    add_executable(benchmark_target benchmark.cpp test.cpp)
-    target_link_libraries(benchmark_target anira::anira anira_benchmark_fixture GTest::gtest_main)
+    # tanh-lib's core component, for the thread priority of test.cpp
+    FetchContent_Declare(tanh-lib
+        GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
+        GIT_TAG v0.4.0)
+    set(TANH_BUILD_STATE OFF)
+    set(TANH_BUILD_DSP OFF)
+    set(TANH_BUILD_MODULATION OFF)
+    set(TANH_BUILD_AUDIO_IO OFF)
+    set(TANH_WITH_TESTS OFF)
+    set(TANH_WITH_EXAMPLES OFF)
+    FetchContent_MakeAvailable(tanh-lib)
+
+    # Create benchmark executable with the copied fixture and the test
+    add_executable(benchmark_target benchmark.cpp test.cpp
+        fixture/ProcessBlockFixture.cpp fixture/ProcessBlockFixture.h)
+    target_include_directories(benchmark_target PRIVATE fixture)
+    target_compile_features(benchmark_target PRIVATE cxx_std_20)
+    target_link_libraries(benchmark_target anira::anira benchmark::benchmark GTest::gtest_main tanh::Core)
 
     # Add Google Test support
     enable_testing()

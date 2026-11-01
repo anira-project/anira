@@ -139,11 +139,14 @@ target_link_libraries(your_target anira::anira)
 target_link_libraries(your_target anira::onnxruntime)
 ```
 
-`anira::anira` carries anira's headers and the `USE_<ENGINE>` definitions, but no engine header: the
-engines are linked privately. A target that calls an engine itself links the matching engine target —
-`anira::onnxruntime`, `anira::tflite`, `anira::litert`, `anira::libtorch` or `anira::executorch` — which
-exists both in the build tree and in the installed package, carries the engine's headers, and is the
-very file anira links, so the process never holds a second copy of the engine.
+`anira::anira` carries anira's headers but no engine header: the engines are linked privately. Inside
+anira's build tree it also carries the `USE_<ENGINE>` definitions the bundled examples select on; the
+installed `anira::anira` does not, and code that needs to know which engines a build compiled in asks
+`anira_enabled_engines` (`anira::enabled_engines()`). A target that calls an engine itself links the
+matching engine target — `anira::onnxruntime`, `anira::tflite`, `anira::litert`, `anira::libtorch` or
+`anira::executorch` — which exists both in the build tree and in the installed package, carries the
+engine's headers, and is the very file anira links, so the process never holds a second copy of the
+engine.
 
 #### Option 3: Build from Source
 

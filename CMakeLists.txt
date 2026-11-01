@@ -326,14 +326,16 @@ tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 # tanh_core's objects (core.cpp, Dispatcher, Logger, Thread, RCU) are part of libanira, shared or
 # static, compiled hidden with an empty TANH_API (section 6b of docs/anira-v3-architecture.md). A
 # shared libanira exports none of them, so a host's own tanh-lib and anira's never meet. A static
-# archive is linked into the consumer's image, where a consumer's reference binds to a hidden
-# definition of the archive like to any object's; on ELF the static libanira is therefore one
-# prelinked object in which every hidden symbol but the anira_* entries is local
-# (cmake/prelink-archive.cmake). Mach-O and PE archives keep the objects as they are (the
-# remaining limitation, docs/sphinx/troubleshooting.rst), and so do a multi-config generator and
-# a toolchain without readelf and objcopy.
+# archive is linked into the consumer's image, where hidden separates nothing: a consumer's
+# reference binds to a hidden definition of the archive like to any object's, and anira's own
+# references to thl are ordinary (default-visibility) undefined ones, so the link order picks one
+# copy for both. On ELF the static libanira is therefore one prelinked object in which every
+# hidden symbol but the anira_* entries is local (cmake/prelink-archive.cmake). Mach-O and PE
+# archives keep the objects as they are (the remaining limitation, docs/sphinx/troubleshooting.rst),
+# and so do a multi-config generator and a toolchain without readelf and objcopy.
 # The path taken is printed: a plain archive passes every test and still leaves a host's own
-# tanh-lib bindable to anira's, so the static Android legs of CI check it (build_test_mobile.yml).
+# tanh-lib and anira's bound to one copy, so the static Android legs of CI check it
+# (build_test_mobile.yml).
 set(_anira_plain_reason "")
 get_property(_anira_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT BUILD_SHARED_LIBS)

@@ -37,7 +37,7 @@ headers, and nothing of its private dependencies:
     include/anira/anira.hpp          the C++20 face, header-only over the C entries
     include/anira/compat/v2.hpp      the 2.x source-compatible face, header-only
     include/anira/abi/*.h            the C ABI, one header per area; abi/draft/ the draft entries
-    lib/libanira.so.0 (libanira.0.dylib, bin/anira-0.dll + lib/anira-0.lib, or lib/libanira.a)
+    lib/libanira.so.0 (libanira.0.dylib, bin/anira-0.dll + lib/anira-0.lib; static: lib/libanira.a, lib/anira.lib)
     include/anira-engines/<engine>/  and the engine libraries, for code that calls an engine itself
     lib/cmake/anira/                 the CMake package: find_package(anira) → anira::anira
 

@@ -80,11 +80,14 @@ endif()
 #    carries its tanh-lib inside, hidden, and names no thl symbol in its dynamic table (ELF and
 #    Mach-O); a static ELF libanira is one prelinked object in which tanh-lib's symbols are local
 #    (cmake/prelink-archive.cmake). Either way the two copies cannot bind to each other. Not on a
-#    static Mach-O anira, whose archive keeps its objects (a host reference to thl binds to the
-#    hidden copy inside it: docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself"),
-#    and not on PE, where the link-order rule is documented instead. Any tanh-lib would do; the
-#    commit anira pins keeps the two tanh-tooling versions equal. run-install-test.cmake points
-#    FetchContent at the anira build tree's tanh-lib source, CI fetches it.
+#    static Mach-O anira, whose archive keeps its objects: there one copy serves both, the one
+#    the link order puts first (with tanh::Core first, anira binds to the host's;
+#    docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself"). Not on PE: a static
+#    archive behaves as on Mach-O, and the shared DLL exports the anira_* entries alone, which
+#    gate 1 checks. Any tanh-lib would do for the out-of-line code; the commit anira pins keeps
+#    the header-only code (merged by the static link) and the two tanh-tooling versions equal.
+#    run-install-test.cmake points FetchContent at the anira build tree's tanh-lib source, CI
+#    fetches it.
 if(TANH_BINARY_FORMAT STREQUAL "ELF"
         OR (TANH_BINARY_FORMAT STREQUAL "Mach-O" AND _anira_type STREQUAL "SHARED_LIBRARY"))
     include(FetchContent)
@@ -103,8 +106,9 @@ if(TANH_BINARY_FORMAT STREQUAL "ELF"
         GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966)
     FetchContent_MakeAvailable(tanh-lib)
     add_executable(consumer_tanh_first main_tanh_first.cpp)
-    # tanh::Core first, anira::anira second: the order in which anira's references to thl would
-    # bind to the host's copy if libanira exported or imported a thl symbol.
+    # tanh::Core first, anira::anira second: the order in which anira's references to thl bind
+    # to the host's copy wherever anira's copy is not separate (a plain static archive), and the
+    # one the gate must survive.
     target_link_libraries(consumer_tanh_first PRIVATE tanh::Core anira::anira)
 endif()
 
