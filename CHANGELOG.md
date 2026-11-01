@@ -7,13 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Model tensors of any dtype anira names:** `ANIRA_DTYPE_F32`, `F64`, `F16`, `BF16`, `I8`, `U8`, `I16`, `I32`, `I64` and `BOOL8`, for every role. The validator no longer refuses a model tensor that is not float32: each tensor travels in its spec's dtype end to end (its ring, the chunk's buffer, its Static store, its State pair), so a registered engine's descriptors carry each tensor's dtype on every call, as its load and prepare records already did. A dtype anira does not name (several lanes, an unsigned integer wider than 8 bits) is `ANIRA_ERROR_NOT_SUPPORTED` at `anira_handler_create`. Nothing converts: a tensor's ring streams its spec's dtype unless the contract names another, and a host of another sample type names its type in `ring_dtypes` and adds a processor that converts in `pre_process` / `post_process` with its own scaling. Tests: `test/abi/test_Dtypes.cpp` (a model of each of the ten dtypes through a registered engine with no ring setting, a typed Static tensor, the per-call refusal of a host tensor of another dtype, float16 and int8 models behind a float32 host's converting processor).
+
 ### Changed
+
+- **Engines:** a built-in engine refuses a model tensor it cannot bind with `ANIRA_ERROR_NOT_SUPPORTED` at load, where the float32 rule of the adapters returned `ANIRA_ERROR_CONFIG`: a limit of an engine is not a configuration error.
 
 - **C ABI, configuration:** a tensor's ring dtype defaults to its spec's dtype (the model's), where it was `ANIRA_DTYPE_F32`: `anira_contract_hard_set_ring_dtype`, `anira::Hard::ring_dtypes` and a contract file's `ring_dtypes` name a ring dtype only where the host's samples differ from the model's, and then a processor that converts goes with it (nothing in anira converts; a ring dtype that differs from the spec's dtype stays `ANIRA_ERROR_CONFIG` at prepare without one). `anira_contract_hard_num_ring_dtypes` / `anira_contract_hard_ring_dtype` still list what was set; `anira_ring_dtype` reports the resolved one. Not breaking: every model a v3.0.0-alpha.2 handler can prepare has float32 Streamed tensors only (the validator refuses every other dtype), so for each of them the default is float32 as before, and an explicitly set ring dtype is unchanged.
 - **C ABI, handler:** the dtype refusals name their remedy and spell a dtype by its word. A host tensor whose dtype is not its Streamed slot's ring dtype (`ANIRA_ERROR_CONFIG` per call, recorded in `anira_handler_rt_error`, nothing staged, as before) logs "… is int16, the slot's ring dtype is float32; nothing converts: pass a tensor of the ring dtype, or name int16 in the contract's ring_dtypes and add a processor that converts in pre_process"; a Static tensor of another dtype says that a Static tensor carries its spec's dtype; a ring dtype that differs from the spec's at prepare names the converting processor or dropping the ring dtype; `anira_em_audio_node_create`, whose node streams float32, names the ring dtype and the converting processor.
 
 ### Fixed
 
+- **C ABI, configuration:** `anira_tensor_spec_create` refuses a dtype of 0 (`ANIRA_ERROR_INVALID_ARGUMENT`), and `anira_model_config_to_json` refuses a tensor of a dtype that has no word in a model file (`ANIRA_ERROR_NOT_SUPPORTED`), where it wrote `"float32"` for it.
 - **Docs:** `anira_model_config_model_path` returns NULL for an entry without a source too (an `anira_model_config_add_model_path` entry with a NULL path, the C++ `ModelConfig::add_model(engine_id)`), not only for a bytes entry or an index out of range, and `anira::ModelConfig::model_path` throws `ANIRA_ERROR_INVALID_STATE` for both kinds of entry and `ANIRA_ERROR_INVALID_ARGUMENT` for an index out of range; the docs named the bytes entry alone. `anira_em_audio_node_create` lists a Streamed slot whose ring dtype is not float32 under `ANIRA_ERROR_CONFIG`, the status it returns, where its doc had it under `ANIRA_ERROR_INVALID_ARGUMENT`.
 
 ## [v3.0.0-alpha.2] - 2026-11-01

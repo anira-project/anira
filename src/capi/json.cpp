@@ -1327,6 +1327,12 @@ void upgrade_context_v2(const Json& root, anira_context_config& context_config) 
 Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
     Json object = Json::object();
     object["name"] = spec.m_name;
+    if (!anira::capi::known_dtype(spec.m_dtype)) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          "tensor '" + spec.m_name + "': dtype " +
+                              anira::capi::dtype_label(spec.m_dtype) +
+                              " has no word in a model file");
+    }
     object["dtype"] = word_of(spec.m_dtype, anira::capi::k_dtype_words);
     object["role"] = word_of(spec.m_role, k_roles);
     Json axes = Json::array();

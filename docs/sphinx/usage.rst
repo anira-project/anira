@@ -73,8 +73,9 @@ wrap.
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 A tensor spec describes one input or output of the model: its **canonical name**, its data
-type (``ANIRA_DTYPE_F32``; the ``ANIRA_DTYPE_*`` constants of ``anira/abi/enums.h``) and its
-role.
+type (one of the ten ``ANIRA_DTYPE_*`` constants of ``anira/abi/enums.h``: ``F32``, ``F64``,
+``F16``, ``BF16``, ``I8``, ``U8``, ``I16``, ``I32``, ``I64``, ``BOOL8``; the model's own, which
+the tensor keeps end to end) and its role.
 
 The canonical name is **your** name for the tensor. You choose it when you create the spec, and
 every other part of the configuration refers to the tensor by it: the per-entry tensor records
@@ -101,8 +102,7 @@ The roles are:
   like every other tensor (its position in the list, the number a processor sees it at too), but
   no Hard entry carries it: a single form that names its slot is
   ``ANIRA_ERROR_INVALID_ARGUMENT``, and its position in an array of a ``_multi`` form must
-  hold the empty tensor. No Time axis, window, time ratio or latency; float32 in this
-  pre-release. A model with a pair runs as
+  hold the empty tensor. No Time axis, window, time ratio or latency. A model with a pair runs as
   Stateful whatever its ``state`` says.
 
 The axes are set with ``axis(i, tag, extent)`` by index in the model's memory order, each with
@@ -814,9 +814,9 @@ Streamed tensor. Its four phases run in this order:
 The edge sits directly before and after the engine and is anira's: a processor never crosses a
 domain. Every phase works at the host end of every slot, in the domain the contract declares
 for that tensor (``host_domain``, section 1.3; host memory, the only domain this pre-release
-accepts), and the descriptor carries no domain of its own. In this pre-release every model
-tensor is ``ANIRA_DTYPE_F32``, except a declared State pair, which takes any dtype the engine
-accepts (section 3.4).
+accepts), and the descriptor carries no domain of its own. Every model tensor carries its
+spec's dtype; the host end of a Streamed tensor carries its ring dtype, the spec's unless the
+contract names another, and only a processor that fills the phase moves between two dtypes.
 
 **NULL and filled slots.** A phase slot left ``NULL`` means anira's default body runs:
 ``anira_processor_default_pre_process`` pops one hop per channel of every Streamed input from its
@@ -2044,10 +2044,10 @@ the latter with ``ANIRA_ERROR_INVALID_ARGUMENT`` and the loader ``state_source``
 with ``ANIRA_ERROR_JSON``); two halves of unequal dtype or shape; a Time axis, a window, a time
 ratio or a latency on a State spec; a ring dtype or the anchor naming one.
 ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release: a transposed layout on a State spec (a view
-layout prepares). A State pair of another dtype than ``float32`` is legal on the handler (its
-buffers never travel through the queue, whose storage is float32 in this pre-release), and
-whether an engine takes it is decided at prepare: a registered engine binds what its
-``prepare`` accepts, a built-in adapter refuses it with ``ANIRA_ERROR_CONFIG``. A Channel axis
+layout prepares). A State pair takes any dtype anira names, like every model tensor, and
+whether an engine takes it is the engine's: a registered engine binds what its ``prepare``
+accepts, a built-in adapter refuses what its runtime cannot carry at load with
+``ANIRA_ERROR_NOT_SUPPORTED``. A Channel axis
 of any extent is legal, as on every non-Streamed spec.
 
 .. note::

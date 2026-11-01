@@ -257,7 +257,7 @@ void require_f32(const Model& model, const char* engine) {
                                             code.size(),
                                             "0x%x",
                                             static_cast<unsigned int>(tensor.m_dtype)));
-            throw StatusError(ANIRA_ERROR_CONFIG,
+            throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                               std::string(engine) + ": " + side + " tensor '" + tensor.m_name +
                                   "' has dtype " + code.data() + "; the " + engine +
                                   " adapter binds float32 tensors alone in this pre-release");

@@ -1732,9 +1732,9 @@ TEST(AbiState, ThePairingIsValidatedAtCreate) {
         expect_refused(model, ANIRA_ERROR_CONFIG, "state_in", "the anchor is a Streamed tensor");
     }
     {
-        // Both halves of another dtype, equal: legal, since a pair lives in the handler's own
-        // buffers in the spec's dtype and never in the queue (AnInt32StatePair runs one); the
-        // float32 rule of the queue stands on the Streamed tensor beside it.
+        // Both halves of another dtype, equal: legal, a pair lives in the handler's own
+        // buffers in the spec's dtype (AnInt32StatePair runs one); a Streamed tensor of that
+        // dtype beside it is legal too, every model tensor travels in its spec's dtype.
         Parts parts;
         for (TensorSpec* half : {&parts.m_state_in, &parts.m_state_out}) {
             const bool input = half == &parts.m_state_in;
@@ -1753,7 +1753,7 @@ TEST(AbiState, ThePairingIsValidatedAtCreate) {
             .axis(1, ANIRA_AXIS_CHANNEL, k_channels)
             .axis(2, ANIRA_AXIS_TIME, k_hop);
         stream.m_data.window(k_hop, k_hop, 0);
-        expect_refused(stream.model(), ANIRA_ERROR_NOT_SUPPORTED, "data", "float32");
+        EXPECT_EQ(create_status(stream.model(), message), ANIRA_OK) << message;
     }
     {
         // A transposed layout on a state tensor, like on every tensor today; a view prepares.

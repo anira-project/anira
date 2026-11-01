@@ -569,7 +569,7 @@ TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
         anira::engine::require_f32(model, "onnxruntime");
         FAIL() << "an int16 input passed";
     } catch (const anira::StatusError& e) {
-        EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(e.status(), ANIRA_ERROR_NOT_SUPPORTED);
         const std::string message = e.what();
         EXPECT_NE(message.find("onnxruntime"), std::string::npos) << message;
         EXPECT_NE(message.find("input tensor 'gain'"), std::string::npos) << message;
@@ -581,7 +581,7 @@ TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
         anira::engine::require_f32(model, "libtorch");
         FAIL() << "an int32 output passed";
     } catch (const anira::StatusError& e) {
-        EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(e.status(), ANIRA_ERROR_NOT_SUPPORTED);
         const std::string message = e.what();
         EXPECT_NE(message.find("libtorch"), std::string::npos) << message;
         EXPECT_NE(message.find("output tensor 'peak'"), std::string::npos) << message;
@@ -1202,14 +1202,15 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE);
     }
-    // An int16 record: CONFIG naming the engine and the tensor, before the file is opened.
+    // An int16 record: NOT_SUPPORTED naming the engine and the tensor, before the file is
+    // opened (the adapter binds float32 alone until its typed binding).
     {
         Model model = onnx_gain_model();
         model.m_path = "this/model/does/not/exist.onnx";
         model.m_inputs[0].m_dtype = ANIRA_DTYPE_I16;
         const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
-        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(error.status(), ANIRA_ERROR_NOT_SUPPORTED);
         EXPECT_NE(std::string(error.what()).find("onnxruntime: input tensor 'audio_in'"),
                   std::string::npos)
             << error.what();

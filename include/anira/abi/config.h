@@ -282,7 +282,8 @@ typedef struct anira_webgpu_desc {
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role,
- *         or a NULL out.
+ *         a dtype of 0, or a NULL out. A dtype anira does not name is refused where the spec is
+ *         used (ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1724,7 +1725,8 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* 
  * @param cap Capacity of buf in bytes.
  * @param out_len Receives the text length without the NUL; always written.
  * @return ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or
- *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len.
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len; ANIRA_ERROR_NOT_SUPPORTED
+ *         for a tensor of a dtype that has no word in a model file (one anira does not name).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1

@@ -213,6 +213,7 @@ anira_status ANIRA_CALL anira_tensor_spec_create(const char* name,
                        "tensor '%s': unknown role %d",
                        name,
                        static_cast<int>(role));
+    ANIRA_CAPI_REQUIRE(dtype != 0, err, ANIRA_ERROR_INVALID_ARGUMENT, "tensor '%s': dtype 0", name);
     auto spec = std::make_unique<anira_tensor_spec>();
     spec->m_name = name;
     spec->m_dtype = dtype;

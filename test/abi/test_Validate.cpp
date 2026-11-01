@@ -942,17 +942,28 @@ TEST(AbiValidate, LatencyIsAnOutputProperty) {
     expect_contains(outcome.m_message, "tensor 'in': latency is an output property");
 }
 
-TEST(AbiValidate, ANonFloat32DtypeIsNotSupported) {
-    ModelConfig model;
-    model.add_model_path(k_custom, "model.custom");
-    model.input(streamed("in"));
-    model.output(TensorSpec("out", ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED)
-                     .axis(0, ANIRA_AXIS_TIME, 512)
-                     .window(512, 512, 0));
-    const Outcome outcome = derive(model);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "tensor 'out': dtype");
-    expect_contains(outcome.m_message, "the queue stores float32");
+// A model tensor of any dtype anira names derives (a Streamed int16 output beside a float32
+// input; their rings stream each spec's dtype); a dtype anira does not name (four lanes, an
+// unsigned 16-bit integer) has no ring and no word and is NOT_SUPPORTED, naming the tensor.
+TEST(AbiValidate, ADtypeAniraDoesNotNameIsNotSupported) {
+    const auto with_output = [](anira_dtype dtype) {
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("in"));
+        model.output(TensorSpec("out", dtype, ANIRA_ROLE_STREAMED)
+                         .axis(0, ANIRA_AXIS_TIME, 512)
+                         .window(512, 512, 0));
+        return model;
+    };
+    Outcome outcome = derive(with_output(ANIRA_DTYPE_I16));
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    for (const anira_dtype dtype :
+         {ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_MAKE_DTYPE(ANIRA_DTYPE_UINT, 16, 1)}) {
+        outcome = derive(with_output(dtype));
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message, "tensor 'out': dtype 0x");
+        expect_contains(outcome.m_message, "anira carries float32, float64, float16");
+    }
 }
 
 // A tensor the contract names no ring dtype for streams its spec's dtype; a named one streams

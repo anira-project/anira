@@ -218,16 +218,14 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +
                      ")");
     }
-    // The queue stores float32 in this pre-release: every tensor that travels through it (a
-    // Streamed one through its ring and the chunk's buffer, a Static one materialised into the
-    // chunk's buffer) is float32 until the typed storage arrives. A State tensor travels
-    // through neither: its pair lives in the handler's two buffers in the spec's dtype (port.h),
-    // which the engine is bound to as they are, so the rule does not stand on it (a built-in
-    // engine refuses a model with a non-float32 tensor at load; a registered engine binds
-    // what its load accepts).
-    if (spec.m_dtype != ANIRA_DTYPE_F32 && spec.m_role != ANIRA_ROLE_STATE) {
+    // A model tensor travels in its spec's dtype end to end (its ring, its chunk buffer, its
+    // Static store, its State pair): one of the ten dtypes anira names, each with a ring arm and
+    // a word. Another (several lanes, an unsigned integer wider than 8 bits) has neither. What
+    // an engine carries is the engine's to refuse, at load.
+    if (!known_dtype(spec.m_dtype)) {
         not_supported(where + "dtype " + dtype_label(spec.m_dtype) +
-                      ": the queue stores float32 in this pre-release");
+                      ": anira carries float32, float64, float16, bfloat16, int8, uint8, int16, "
+                      "int32, int64 and bool");
     }
     out.m_time_axis = time_axis;
 

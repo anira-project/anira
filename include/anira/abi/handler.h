@@ -71,17 +71,17 @@
  * counts as a user of the core: anira_shutdown is refused while one lives. In this pre-release
  * every handler is Host-only (every backend's domain is the host's), its plans are one per
  * model entry of one variant and candidate naming that entry's engine and a provider it accepts
- * (anira_pipeline_add_inference), an Async contract is refused at prepare, and every model
- * tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's dtype is refused at
- * prepare unless the pipeline's processor fills the phase that moves that ring (pre_process for
- * an input, post_process for an output), since nothing in anira converts. Every tensor of
- * either side has one declared host-end domain (anira_contract_set_host_domain, default
- * ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static store
- * and, overriding the backend's domain of the plans that run the pair (host memory for every
- * backend of this pre-release), the state buffers of the slot in, and the domain all four
- * processor phases work in; the plan report's slot rows carry it as domain_in of an input and
- * domain_out of an output, against the backend's domain on the other side. Anything but
- * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
+ * (anira_pipeline_add_inference), an Async contract is refused at prepare, and a ring dtype
+ * that differs from its spec's dtype is refused at prepare unless the pipeline's processor
+ * fills the phase that moves that ring (pre_process for an input, post_process for an output),
+ * since nothing in anira converts. Every tensor of either side has one declared host-end domain
+ * (anira_contract_set_host_domain, default ANIRA_DOMAIN_HOST): the domain anira allocates the
+ * ring, the model tensor, the Static store and, overriding the backend's domain of the plans
+ * that run the pair (host memory for every backend of this pre-release), the state buffers of
+ * the slot in, and the domain all four processor phases work in; the plan report's slot rows
+ * carry it as domain_in of an input and domain_out of an output, against the backend's domain
+ * on the other side. Anything but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in
+ * this pre-release.
  */
 
 #include <stddef.h>
