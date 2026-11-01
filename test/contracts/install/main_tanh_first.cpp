@@ -1,12 +1,11 @@
 // Gate 5: a host that brings its own tanh-lib and links it before anira. The host's tanh::Core (a
-// shared libtanh_core the consumer project builds itself) comes first on the link line and
-// anira::anira second; anira's copy of tanh-lib is inside libanira, compiled hidden. The two
-// copies must not bind to each other: the host's logger never sees one of anira's records, and
-// anira's records reach anira's sink, not the host's. run-install-test.cmake adds the nm half of
-// the proof (a shared libanira names no thl symbol in its dynamic table, defined or undefined).
-// ELF (shared and the prelinked static libanira) and a shared Mach-O libanira only: a plain static
-// archive (Mach-O, PE) keeps its objects, so the link order picks one copy for both
-// (docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself").
+// shared libtanh_core the consumer project builds itself, in tanh-lib's default namespace
+// thl::v<major>_<minor>) comes first on the link line and anira::anira second; anira's copy of
+// tanh-lib is inside libanira, compiled hidden in thl::anira. The two copies must not bind to
+// each other: the host's logger never sees one of anira's records, and anira's records reach
+// anira's sink, not the host's. On every platform and with a shared or a static libanira;
+// run-install-test.cmake adds the nm half of the proof for a shared libanira (it names no thl
+// symbol in its dynamic table, defined or undefined).
 #include <tanh/core/Logger.h>
 
 #include <anira/anira.hpp>

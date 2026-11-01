@@ -212,14 +212,14 @@ Integrate the benchmark with Google Test for easy execution:
 Integrate via CMake
 ~~~~~~~~~~~~~~~~~~~
 
-Extend the project of *CMake Configuration* above to include the test and find it. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; anira itself links no test library). ``test.cpp`` calls tanh-lib's thread API, and anira's tanh-lib is private to ``libanira``, so the project fetches tanh-lib's core and links ``tanh::Core`` itself, as this repository's fixture target does for its own benchmarks. Declare it after anira: under ``add_subdirectory(anira)`` the declaration then reuses the tanh-lib anira fetched (a tanh-lib built shared before anira fails anira's configure):
+Extend the project of *CMake Configuration* above to include the test and find it. The benchmark is a Google Test executable, so it links ``gtest_main`` (``GTest::gtest_main`` from your project's Google Test; anira itself links no test library). ``test.cpp`` calls tanh-lib's thread API, and anira's tanh-lib is private to ``libanira``, so the project fetches tanh-lib's core and links ``tanh::Core`` itself. It is a tanh-lib of its own: anira builds its private copy under another FetchContent name and in its own namespace (``thl::anira``), so the two never meet, whatever the order, shape or version (:ref:`host-tanh-lib`):
 
 .. code-block:: cmake
 
     # tanh-lib's core component, for the thread priority of test.cpp
     FetchContent_Declare(tanh-lib
         GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-        GIT_TAG v0.4.0)
+        GIT_TAG v0.5.0)
     set(TANH_BUILD_STATE OFF)
     set(TANH_BUILD_DSP OFF)
     set(TANH_BUILD_MODULATION OFF)

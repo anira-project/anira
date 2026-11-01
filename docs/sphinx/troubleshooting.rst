@@ -210,10 +210,40 @@ weak-symbol coalescing on macOS (e.g. the ORT C++ header's
 the host's (typically older) runtime and the first API call crashes the host.
 
 **Solutions**:
-    1. Use anira's build system, which links every engine in exactly one of two shapes and keeps it private. Engine linkage follows ``BUILD_SHARED_LIBS``: a shared ``libanira`` links the shared engine libraries, a static ``libanira`` links the static engine archives, and an engine that does not ship the required linkage is disabled (LibTorch in static builds, ExecuTorch in shared builds). In both shapes the guarantee is the same — one copy of the engine per process, never exported. anira links its engines ``PRIVATE`` through their ``anira::<engine>`` targets (``cmake/aniraEngineHelpers.cmake``): the static archives are linked on demand and hidden (``-load_hidden`` on macOS, ``--exclude-libs`` on Linux/Android; the desktop ExecuTorch archives get ``--exclude-libs`` on ELF; anira's own tanh-lib is no archive of the link at all, its objects are inside ``libanira``, compiled hidden with an empty ``TANH_API``), and anira itself is compiled with hidden symbol visibility (``tanh_apply_symbol_policy``, from the shared ``cmake/tanh/symbol-policy.cmake``). A static ``libanira`` is compiled without any export decoration (``ANIRA_API`` is empty under ``ANIRA_STATIC``, which the CMake package defines for consumers), so a plugin that embeds it with hidden visibility exports nothing of anira. A shared ``libanira`` instead pins its export table to the ``anira_*`` C entries at link time (``tanh_set_export_allowlist(anira SYMBOL "anira_*")`` generates the ELF version script / macOS ``-exported_symbols_list`` at configure time; ``anira_symbol_baseline`` fails on any other exported name): compiler visibility alone cannot hide what a header stamps default-visibility itself — libstdc++'s ``std::`` instantiations, LibTorch's ``C10_API`` typeinfo, or the default-visibility ExecuTorch desktop archives. anira's ONNX Runtime processor additionally verifies at startup that ``OrtGetApiBase()`` resolved to a compatible runtime and throws a descriptive error instead of crashing the host.
+    1. Use anira's build system, which links every engine in exactly one of two shapes and keeps it private. Engine linkage follows ``BUILD_SHARED_LIBS``: a shared ``libanira`` links the shared engine libraries, a static ``libanira`` links the static engine archives, and an engine that does not ship the required linkage is disabled (LibTorch in static builds, ExecuTorch in shared builds). In both shapes the guarantee is the same — anira links one copy of each engine and exports none of it; it never adds a second copy of an engine of its own (a host's own copy of a *shared* engine library is the case below the solutions). anira links its engines ``PRIVATE`` through their ``anira::<engine>`` targets (``cmake/aniraEngineHelpers.cmake``): the static archives are linked on demand and hidden (``-load_hidden`` on macOS, ``--exclude-libs`` on Linux/Android; the desktop ExecuTorch archives get ``--exclude-libs`` on ELF; anira's own tanh-lib is no archive of the link at all, its objects are inside ``libanira``, compiled hidden with an empty ``TANH_API``), and anira itself is compiled with hidden symbol visibility (``tanh_apply_symbol_policy``, from the shared ``cmake/tanh/symbol-policy.cmake``). A static ``libanira`` is compiled without any export decoration (``ANIRA_API`` is empty under ``ANIRA_STATIC``, which the CMake package defines for consumers), so a plugin that embeds it with hidden visibility exports nothing of anira. A shared ``libanira`` instead pins its export table to the ``anira_*`` C entries at link time (``tanh_set_export_allowlist(anira SYMBOL "anira_*")`` generates the ELF version script / macOS ``-exported_symbols_list`` at configure time; ``anira_symbol_baseline`` fails on any other exported name): compiler visibility alone cannot hide what a header stamps default-visibility itself — libstdc++'s ``std::`` instantiations, LibTorch's ``C10_API`` typeinfo, or the default-visibility ExecuTorch desktop archives. anira's ONNX Runtime processor additionally verifies at startup that ``OrtGetApiBase()`` resolved to a compatible runtime and throws a descriptive error instead of crashing the host.
     2. If your plugin's own translation units include engine headers (e.g. ``onnxruntime_cxx_api.h``), link the engine's target — ``target_link_libraries(your_plugin PRIVATE anira::anira anira::onnxruntime)`` — and compile those translation units with hidden visibility too (``CXX_VISIBILITY_PRESET hidden``, ``VISIBILITY_INLINES_HIDDEN ON``). ``anira::anira`` alone carries no engine header, on purpose: the engine target is the same file anira links (one copy per process), and it is where the engine's include directory lives. Weak symbols the engine headers instantiate in *your* objects (``Ort::Global<void>::api_``) are only hidden by your own visibility setting.
     3. Restrict your plugin's exports to its entry points — e.g. on macOS ``-Wl,-exported_symbols_list`` with only ``_bundleEntry``/``_bundleExit``/``_GetPluginFactory`` for a VST3, on Linux a version script (``-Wl,--version-script``) with the same names under ``global:`` and ``local: *;`` (for a CLAP plugin the only name is ``clap_entry``; with anira's CMake package the two lines ``tanh_apply_symbol_policy(<plugin>)`` and ``tanh_set_export_allowlist(<plugin> SYMBOL clap_entry)`` do all of this — see ``examples/clap-audio-plugin/CMakeLists.txt``). This also covers any other statically linked dependency and is *required* on macOS when your plugin links a static anira with the ExecuTorch engine: its desktop archives are force-loaded, and ld64 has no hidden variant of ``-force_load``, so nothing short of an export list keeps ``executorch::``/``xnn_*`` out of the plugin's export table. Verify with ``nm -gU your_plugin`` (macOS) or ``nm -D --defined-only your_plugin.so`` (Linux): no ``Ort``/engine symbols should appear. anira runs the same check on its own binaries in CTest (``anira_exports``, ``tanh_add_export_check`` from ``cmake/tanh/check-exports.cmake`` — usable for your plugin too).
     4. Optional, but it pairs with the allowlist: dead-code stripping. anira's objects are compiled with one section per function and variable (``-ffunction-sections -fdata-sections``, ``/Gy``), and the shared ``libanira`` links with ``--gc-sections`` (ELF), ``-dead_strip`` (macOS) or ``/OPT:REF`` (MSVC). A static ``libanira`` has no link step of its own, so pass the linker flag from your plugin's build to drop everything of anira and the engines that the plugin never references. ``examples/clap-audio-plugin`` shows the complete plugin-side set: hidden visibility, ``-fno-gnu-unique`` under GCC, dead-code stripping, and the export list of solution 3.
+
+**Shared engine libraries: one per process, chosen by name.** The solutions above keep the
+engine's *symbols* private. A shared engine library (the shape a shared ``libanira`` uses:
+``libonnxruntime``, LibTorch's libraries, a shared LiteRT or TFLite) can still meet a host's copy
+without any exported symbol, because the system's loader picks it by its name:
+
+- **Linux:** a library is loaded once per soname. anira's ONNX Runtime has the soname
+  ``libonnxruntime.so.1``, like every ONNX Runtime 1.x (the PyPI ``onnxruntime`` wheel and Firefox
+  builds ship one too): when the process has loaded another 1.x first, ``libanira``'s dependency
+  resolves to that copy. LibTorch's ``libtorch.so`` and LiteRT's ``libLiteRt.so`` are matched the
+  same way.
+- **Windows:** a DLL whose module name is already loaded is reused, whatever folder it came
+  from. A DLL's dependencies are searched in the *application's* folder (the host's executable,
+  not your plugin's), then in ``System32`` — which on recent Windows versions holds an
+  ``onnxruntime.dll`` (Windows ML) — and the other Windows folders, then on ``PATH``.
+- **macOS:** a library is referenced by its install name (``otool -L``); run the host with
+  ``DYLD_PRINT_LIBRARIES=1`` to see which copy is loaded.
+
+What happens then depends on the engine. anira's ONNX Runtime checks, when the engine initialises
+at the first prepare that loads one of its models (and when a context probes the capabilities),
+that the loaded runtime serves the API version anira was built against, and refuses an older one
+with the error above (a newer runtime serves older API versions). LibTorch, LiteRT and TFLite have
+no such check; a different version there is undefined behaviour.
+
+**Solution:** for a plugin, or any module loaded into another application's process, build anira
+static (``BUILD_SHARED_LIBS=OFF``): the engines are then static archives inside your binary, hidden
+as in solution 1, and no loader can swap them. LibTorch has no static build, so a plugin that needs
+LibTorch carries this risk. With a shared anira, ship the engine libraries next to the executable
+you control, in the versions anira pins. Separating the shared engine libraries by name is
+planned: `anira-project/anira#232 <https://github.com/anira-project/anira/issues/232>`_.
 
 .. _host-tanh-lib:
 
@@ -223,33 +253,29 @@ A host that uses tanh-lib itself
 **Issue**: The host, or a plugin embedding anira, links tanh-lib itself (its logger, its
 threads, its state).
 
-**Answer**: anira's tanh-lib is private: its objects are inside ``libanira``, compiled hidden,
-and nothing of it is installed. Whether the host's copy and anira's can meet depends on the
-shape of ``libanira``:
+**Answer**: nothing to do: the two copies never meet, on every platform and with a shared or a
+static anira. anira's tanh-lib is private: anira builds tanh-lib's core itself, from the commit it
+pins (``cmake/tanh-lib-pin.cmake``), under a FetchContent name of its own (``anira_tanh_lib``),
+compiles it hidden into ``libanira`` and installs nothing of it. And it builds it in an inline ABI
+namespace of its own, ``thl::anira``, where your tanh-lib is in tanh-lib's default namespace
+(``thl::v<major>_<minor>``) or one you chose. Code spells both ``thl::...``, but no symbol of the
+two copies shares a mangled name (``_ZN3thl5anira...`` against ``_ZN3thl4v0_5...``), header-only
+templates and inline functions included, so no link can bind one copy's references to the other:
 
-- **Shared** (``libanira.so.0``, ``libanira.0.dylib``, ``anira-0.dll``): the two copies cannot
-  meet. ``libanira`` exports the ``anira_*`` C entries alone and names no ``thl`` symbol in its
-  dynamic table, defined or undefined, so the host's tanh-lib keeps a logger, a level and threads
-  of its own and anira keeps its own. The install consumer ``consumer_tanh_first`` proves it on
-  ELF and Mach-O; on Windows gate 1 checks the DLL's export table.
-- **Static, Linux and Android** (a single-configuration generator: Ninja, Unix Makefiles): the
-  static ``libanira.a`` is one prelinked object in which tanh-lib's symbols, like anira's own C++
-  internals, are local (``cmake/prelink-archive.cmake``), and ``consumer_tanh_first`` proves the
-  separation there too. It is exact for tanh-lib's compiled code. tanh-lib's header-only code
-  (templates such as ``thl::core::RingBuffer<T>``, inline functions) stays in weak COMDAT groups,
-  which the final link merges with the host's instantiations of the same signature, so for that
-  code the separation assumes the host uses the tanh-lib version anira pins.
-- **Static, everywhere else** (macOS and iOS, Windows' ``lib/anira.lib``, a multi-config
-  generator, a toolchain without ``readelf`` and ``objcopy``; the configure log says
-  ``anira: static libanira is a plain archive (<reason>)``): the archive keeps its objects, and
-  anira's own references to ``thl`` are ordinary undefined references. One copy serves both, and
-  the link order picks which: with the host's tanh-lib first on the link line anira binds to the
-  host's copy (with a different tanh-lib version an ABI mismatch, not only a shared logger); with
-  ``anira::anira`` first the host binds to anira's. Either way there is one logger, whose callback
-  both install (the second installation replaces the first). A host that uses tanh-lib itself
-  links the shared anira on these platforms. A static anira works there only when the host uses
-  the tanh-lib version anira pins and lists ``tanh::Core`` after ``anira::anira``, and the two
-  then share that one logger.
+- your tanh-lib keeps a logger, a level, a callback and threads of its own, and anira keeps its
+  own; neither sees the other's records;
+- your project may fetch tanh-lib before or after adding anira, shared or static, at any version:
+  anira always builds its pin, and the two core libraries (your ``tanh_core``, anira's
+  ``anira_tanh_core``) coexist in one build;
+- the link order of ``tanh::Core`` and ``anira::anira`` does not matter.
+
+The queue anira uses internally is renamed the same way (``anira_moodycamel`` instead of
+concurrentqueue's ``moodycamel``), so a host that uses concurrentqueue itself does not share
+anira's template instantiations either. anira proves both in CTest: ``anira_abi_namespaces`` reads
+every symbol of the built library and fails on any ``thl`` symbol outside ``thl::anira`` and on any
+``moodycamel`` one, and the install consumer ``consumer_tanh_first`` links a shared tanh-lib of its
+own before ``anira::anira`` and checks that the two loggers stay apart, against a shared and a
+static anira on Linux, macOS and Windows.
 
 .. _plugin-library-unload:
 

@@ -183,8 +183,9 @@ anira_add_test_binary(test_handler
 	test_OneSidedStreaming.cpp
 )
 # test_InferenceHandler reads its reference WAV files with tanh-lib's WavReader: the binary links
-# tanh-lib itself, as a host using it does (anira's own copy is private to libanira).
-target_link_libraries(test_handler tanh::Core)
+# anira's own copy of tanh-lib's core, anira_tanh_core (thl::anira; this build tree only), being
+# one of anira's own tests. A host links its own tanh-lib.
+target_link_libraries(test_handler anira_tanh_core)
 
 # The C ABI (include/anira/abi/, src/capi/): version negotiation, status text, the
 # exception firewall and the log entries. test/abi/ also holds the ABI gates.

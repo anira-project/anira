@@ -76,41 +76,37 @@ if(ANIRA_WITH_ONNXRUNTIME)
     message(STATUS "anira install consumer: engine header unreachable without anira::onnxruntime — OK")
 endif()
 
-# 5. Gate 5: a host that links its own tanh-lib, shared, before anira::anira. A shared libanira
-#    carries its tanh-lib inside, hidden, and names no thl symbol in its dynamic table (ELF and
-#    Mach-O); a static ELF libanira is one prelinked object in which tanh-lib's symbols are local
-#    (cmake/prelink-archive.cmake). Either way the two copies cannot bind to each other. Not on a
-#    static Mach-O anira, whose archive keeps its objects: there one copy serves both, the one
-#    the link order puts first (with tanh::Core first, anira binds to the host's;
-#    docs/sphinx/troubleshooting.rst, "A host that uses tanh-lib itself"). Not on PE: a static
-#    archive behaves as on Mach-O, and the shared DLL exports the anira_* entries alone, which
-#    gate 1 checks. Any tanh-lib would do for the out-of-line code; the commit anira pins keeps
-#    the header-only code (merged by the static link) and the two tanh-tooling versions equal.
-#    run-install-test.cmake points FetchContent at the anira build tree's tanh-lib source, CI
-#    fetches it.
-if(TANH_BINARY_FORMAT STREQUAL "ELF"
-        OR (TANH_BINARY_FORMAT STREQUAL "Mach-O" AND _anira_type STREQUAL "SHARED_LIBRARY"))
-    include(FetchContent)
-    set(BUILD_SHARED_LIBS ON)
-    set(TANH_BUILD_CORE ON)
-    set(TANH_BUILD_STATE OFF)
-    set(TANH_BUILD_DSP OFF)
-    set(TANH_BUILD_MODULATION OFF)
-    set(TANH_BUILD_AUDIO_IO OFF)
-    set(TANH_WITH_TESTS OFF)
-    set(TANH_WITH_EXAMPLES OFF)
-    set(TANH_WITH_DOCS OFF)
-    set(TANH_WITH_INSTALL OFF)
-    FetchContent_Declare(tanh-lib
-        GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-        GIT_TAG 7ae7c690d57806acc56dd4b5ffbba50551913966)
-    FetchContent_MakeAvailable(tanh-lib)
-    add_executable(consumer_tanh_first main_tanh_first.cpp)
-    # tanh::Core first, anira::anira second: the order in which anira's references to thl bind
-    # to the host's copy wherever anira's copy is not separate (a plain static archive), and the
-    # one the gate must survive.
-    target_link_libraries(consumer_tanh_first PRIVATE tanh::Core anira::anira)
-endif()
+# 5. Gate 5: a host that links its own tanh-lib, shared, before anira::anira. anira's copy of
+#    tanh-lib's core is compiled into libanira in the inline namespace thl::anira; the host's is
+#    tanh-lib's default, thl::v<major>_<minor>. No symbol of the two shares a mangled name, so
+#    they cannot bind to each other on any platform and in either shape of libanira: a shared one
+#    (which exports anira_* alone, and names no thl symbol in its dynamic table: the nm half of the
+#    proof in run-install-test.cmake) and a static one, whose objects are linked into the host's
+#    image beside the host's tanh-lib (the namespace gate anira_abi_namespaces proves the names).
+#    The host pins the commit anira pins (cmake/tanh-lib-pin.cmake, the one file both read) and
+#    builds it with its own namespace. run-install-test.cmake points FetchContent at the anira
+#    build tree's tanh-lib source, CI fetches it.
+include(FetchContent)
+set(TANH_BUILD_CORE ON)
+set(TANH_BUILD_STATE OFF)
+set(TANH_BUILD_DSP OFF)
+set(TANH_BUILD_MODULATION OFF)
+set(TANH_BUILD_AUDIO_IO OFF)
+set(TANH_WITH_TESTS OFF)
+set(TANH_WITH_EXAMPLES OFF)
+set(TANH_WITH_DOCS OFF)
+set(TANH_WITH_INSTALL OFF)
+include("${CMAKE_CURRENT_LIST_DIR}/../../../cmake/tanh-lib-pin.cmake")
+FetchContent_Declare(tanh-lib
+    GIT_REPOSITORY ${ANIRA_TANH_LIB_REPOSITORY}
+    GIT_TAG ${ANIRA_TANH_LIB_COMMIT})
+set(BUILD_SHARED_LIBS ON)
+FetchContent_MakeAvailable(tanh-lib)
+unset(BUILD_SHARED_LIBS)
+add_executable(consumer_tanh_first main_tanh_first.cpp)
+# tanh::Core first, anira::anira second: the order in which anira's references to thl would bind
+# to the host's copy if the two shared a name, and the one the gate must survive.
+target_link_libraries(consumer_tanh_first PRIVATE tanh::Core anira::anira)
 
 # Windows: an application ships its DLLs next to its executable. The loader searches
 # the application directory first and System32 before PATH — and Windows itself ships
@@ -121,7 +117,8 @@ endif()
 # imported SHARED targets in the link closure — anira's DLL and, for the
 # engine consumers, onnxruntime.dll through anira::onnxruntime.
 if(WIN32)
-    foreach(_consumer consumer consumer_c consumer_compat consumer_engine consumer_engine_module)
+    foreach(_consumer consumer consumer_c consumer_compat consumer_engine consumer_engine_module
+                      consumer_tanh_first)
         if(TARGET ${_consumer})
             add_custom_command(TARGET ${_consumer} POST_BUILD
                 COMMAND ${CMAKE_COMMAND}

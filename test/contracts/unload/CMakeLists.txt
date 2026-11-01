@@ -116,7 +116,7 @@ tanh_add_export_check(NAME anira_exports
     LIBRARY anira MODULE anira_unload_module
     NAMESPACES anira
     ALLOW_REGEX "^_?anira_[a-z0-9_]+$"
-    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl moodycamel nlohmann
+    FORBID_NAMESPACES Ort onnxruntime torch c10 caffe2 executorch tflite litert flatbuffers Eigen absl thl moodycamel anira_moodycamel nlohmann
     FORBID_PREFIXES Ort OrtApi xnn_ pthreadpool_ cpuinfo_ kai_ TfLite LiteRt
     TOLERATE_REGEX_PE "@(torch|c10|caffe2)@@" "^(TfLite|LiteRt)")
 

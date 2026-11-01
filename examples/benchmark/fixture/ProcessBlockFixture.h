@@ -50,8 +50,8 @@ public:
     /**
      * @brief Starts a repetition over the prepared handler: sizes the input buffer (the anchor
      * input's channels times the buffer size, as one planar float32 tensor), and when the model,
-     * the contract or the plan changed, resets the statistics and prints the header of the
-     * run
+     * the contract, the plan or the plan's backend (its engine and provider) changed, resets the
+     * statistics and prints the header of the run
      *
      * @param model The model config the handler runs (for the model's name)
      * @param hard The Hard contract it was prepared with (the buffer size and the sample rate:
@@ -129,7 +129,8 @@ private:
     std::string m_benchmark_name;            ///< Name of the currently running benchmark
     std::string m_model_name;                ///< File name of the model being benchmarked
     std::string m_engine_name;               ///< Name of the engine of the measured plan
-    std::string m_run_key;                   ///< The model, contract and plan of the last run
+    std::string m_run_key;                   ///< The model, contract, plan and backend of the
+                                             ///< last run
     double m_sample_rate = 0.0;              ///< Host sample rate of the current run
     // The input buffer: one plane per channel, and the planar tensor over them.
     std::vector<std::vector<float>> m_planes;

@@ -1,20 +1,18 @@
 # ==============================================================================
 # cmake/prelink-archive.cmake — the one object of a static ELF libanira.
 #
-# A static libanira's objects (anira's and the absorbed tanh_core's) are linked into one
+# A static libanira's objects (anira's and the absorbed anira_tanh_core's) are linked into one
 # relocatable object, and every symbol of it that is defined, STB_GLOBAL and STV_HIDDEN — anira's
 # C++ internals and tanh-lib's, compiled under the hidden symbol policy — is made local, except
-# the anira_* C entries. A consumer's link then binds nothing of its own to anira's copy of
-# tanh-lib, and nothing of anira's to the consumer's: hidden alone does not do that inside one
-# static link, where the consumer's objects and the archive's are linked together, a reference of
-# the consumer's (a host that uses tanh-lib itself) binds to the archive's hidden definition like
-# to any object's, and anira's own references to thl are default-visibility undefined ones that
-# the first definition on the link line satisfies. In the prelinked object they are resolved
-# inside it. Weak definitions (the COMDAT groups of inline and template instantiations) stay as
-# they are: the final link keeps one group per signature, and a group whose symbols were made
-# local would be discarded under its references. tanh-lib's header-only code is therefore merged
-# with a host's instantiations of the same signature, and is separate only as long as both use
-# one tanh-lib version.
+# the anira_* C entries. A consumer's link then binds nothing of its own to anira's internals:
+# hidden alone does not do that inside one static link, where the consumer's objects and the
+# archive's are linked together and a reference of the consumer's binds to the archive's hidden
+# definition like to any object's. (tanh-lib's code and the queue's are kept apart by their
+# namespaces as well, thl::anira and anira_moodycamel, on every platform; the prelink is what
+# keeps anira's own C++ out of the consumer's link.) Weak definitions (the COMDAT groups of inline
+# and template instantiations) stay as they are: the final link keeps one group per signature,
+# and a group whose symbols were made local would be discarded under its references; with the
+# namespaces, only anira's own instantiations share a group.
 #
 #   cmake -DCXX=<compiler> [-DCXX_TARGET=<triple>] -DREADELF=<readelf> -DOBJCOPY=<objcopy>
 #         -DOUTPUT=<object> -DINPUTS=<object>;<object>... -P cmake/prelink-archive.cmake

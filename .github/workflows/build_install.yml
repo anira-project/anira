@@ -86,7 +86,7 @@ jobs:
           echo "::endgroup::"
       # test/contracts/install builds the consumers — anira alone from C++ and from C
       # (consumer_c, gate 5), a host with its own tanh-lib linked before anira
-      # (consumer_tanh_first, gate 5: Linux shared and static, macOS shared), and one that calls ONNX
+      # (consumer_tanh_first, gate 5: every leg, shared and static), and one that calls ONNX
       # Runtime itself through
       # anira::onnxruntime — and asserts at configure time that the engine header is
       # unreachable without that target.
@@ -95,7 +95,7 @@ jobs:
         with:
           PREFIX: ${{ env.ANIRA_PREFIX }}
           CONSUMER_DIR: test/contracts/install
-          BINARIES: ${{ runner.os == 'Linux' && 'consumer consumer_c consumer_tanh_first consumer_engine' || 'consumer consumer_c consumer_engine' }}
+          BINARIES: consumer consumer_c consumer_tanh_first consumer_engine
           GENERATOR: ${{ runner.os != 'Windows' && 'Ninja' || '' }}
       # The plugin-shaped engine consumer must export no engine symbol (the
       # InstallConsumer CTest runs the same check).
@@ -139,7 +139,7 @@ jobs:
             cmake --build "build-consumer-$cfg" --parallel
             "./build-consumer-$cfg/consumer"
             "./build-consumer-$cfg/consumer_c"
-            if [ "$cfg" = "shared" ]; then "./build-consumer-$cfg/consumer_tanh_first"; fi
+            "./build-consumer-$cfg/consumer_tanh_first"
             "./build-consumer-$cfg/consumer_engine"
             if nm -gU "build-consumer-$cfg/consumer_engine_module.so" | grep -E "_ZN3Ort|_ZN11onnxruntime|[ _]Ort[A-Z]|OrtGetApiBase| _?anira_"; then
               echo "consumer_engine_module exports engine symbols or anira entries"; exit 1

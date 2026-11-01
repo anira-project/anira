@@ -36,6 +36,10 @@
 #                         static library the only presence check there is)
 #   anira_symbol_baseline presence: every promised and draft entry point is in the shared
 #                         library's real export table (cmake/abi-symbols.cmake)
+#   anira_abi_namespaces  the private copies keep their names: every thl symbol of libanira
+#                         (archive members, a shared library's full symbol table, a DLL's
+#                         objects) lies in thl::anira, and none names moodycamel instead of
+#                         anira_moodycamel (cmake/abi-namespaces.cmake)
 #
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
@@ -549,6 +553,9 @@ if(NOT _abi_on_device)
     anira_add_symbol_baseline(NAME anira_symbol_baseline LIBRARY anira
         SYMBOLS "${anira_SOURCE_DIR}/abi/symbols-${ANIRA_ABI_MAJOR}.txt"
                 "${anira_SOURCE_DIR}/abi/symbols-draft.txt")
+    include("${anira_SOURCE_DIR}/cmake/abi-namespaces.cmake")
+    anira_add_namespace_check(NAME anira_abi_namespaces LIBRARY anira
+        OBJECTS anira_objects anira_tanh_core)
 endif()
 
 # ---- the registry check ------------------------------------------------------------------
