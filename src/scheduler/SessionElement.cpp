@@ -600,7 +600,7 @@ bool SessionElement::receive_rings_have_room() {
         size_t const hop = output_hop(i);
         if (hop == 0) { continue; }  // Non-streamable outputs have no ring
         const RingBuffer& ring = receive_ring(i);
-        if (ring.get_num_samples() - ring.get_available_samples(0) < hop) { return false; }
+        if (ring.capacity() - ring.available(0) < hop) { return false; }
     }
     return true;
 }

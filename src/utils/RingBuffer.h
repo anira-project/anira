@@ -65,14 +65,12 @@ struct RingOwner {
  * `C`. A stride of 1, the default, is the packed run and takes the unit-stride path of the
  * storage (two block copies); the elements between the strided ones are neither read nor written.
  *
- * ABI. This is a C++ type with a std::variant inside: like every 2.x class it is compiled into
- * the library and into whoever includes this header, so it is not a stable binary interface and
- * its layout may change with any release. What crosses the ABI is the opaque `anira_ring*` and
- * the C accessors of `abi/processor.h` (`anira_ring_dtype`, `anira_ring_push_block`, ...), which
- * are implemented on top of these members inside the library; a 3.x processor pops its samples
- * through those, or through the `anira.hpp` wrapper over them, never through this struct. The 2.x
- * pre/post processors of this pre-release use the members directly, as they used the previous
- * float ring, under the 2.x rule that the library and the plugin are built together.
+ * ABI. This is a private C++ type with a std::variant inside, compiled into the library alone; its
+ * layout may change with any release. What crosses the ABI is the opaque `anira_ring*` and the C
+ * accessors of `abi/processor.h` (`anira_ring_dtype`, `anira_ring_push_block`, ...), which are
+ * implemented on top of these members inside the library; a processor pops its samples through
+ * those, or through the `anira.hpp` wrapper over them (`anira::RingView`), never through this
+ * struct.
  *
  * Dispatch. The arms live in a std::variant, which holds exactly one of them at a time and
  * remembers which; std::visit calls the given lambda with the active arm, instantiating the
@@ -81,34 +79,23 @@ struct RingOwner {
  * can block, so it is legal on the driver thread.
  *
  * Semantics of the storage (tanh-lib's Apache-2.0 core component, thl::core::RingBuffer):
- *  - push_sample() into a full channel silently overwrites the oldest sample (the read
- *    position advances); pop_sample() on an empty channel yields a value-initialised element
+ *  - push_block() into a full channel silently overwrites the oldest elements (the read
+ *    position advances); pop_block() beyond the unread elements yields value-initialised ones
  *    (0 for arithmetic types). Neither logs.
- *  - get_future_sample(ch, n) reads the n-th unread sample without popping; get_past_sample(ch,
- *    n) reads the n-th sample behind the read position (history). Offsets are wrapped modulo the
- *    capacity and are not range checked against the available/consumed counts: reading further
- *    than that returns whatever the slot holds (0 after clear/initialise).
- *  - available() (get_available_samples()) is the unread count; available_past()
- *    (get_available_past_samples()) is the number of consumed samples still retained as history
- *    (0 right after initialise/clear, growing as samples are popped).
- *  - There is no direct pointer/sample access to the storage.
+ *  - available() is the unread count; available_past() is the number of consumed elements still
+ *    retained as history (0 right after initialise/clear, growing as elements are popped), which
+ *    peek_past_block() reads.
+ *  - There is no direct pointer/element access to the storage.
  *
- * The float API (push_sample, pop_sample, the float block calls, get_future_sample,
- * get_past_sample, the two-argument initialize_with_positions) is the face the 2.x pre/post
- * processors were written against; it is the float32 arm of this type. On a ring of another
- * dtype it does nothing and returns 0: the 3.x entries check the ring dtype before they reach
- * it. anira::RingBuffer names this type for the core's C++ headers (the session's rings).
+ * Every call names the dtype of the caller's memory and moves nothing when it is not the ring's
+ * own; there is no float32 face beside it (the 2.x pre/post processors that used one are gone).
+ * anira::RingBuffer names this type for the core's C++ headers (the session's rings).
  *
  * @see anira::RingBufferT
  */
 struct anira_ring {
 public:
     anira_ring() = default;
-
-    /// The 2.x face: a float32 ring of `num_channels` channels and `num_samples` elements each.
-    void initialize_with_positions(size_t num_channels, size_t num_samples) {
-        (void)initialize_with_positions(num_channels, num_samples, ANIRA_DTYPE_F32);
-    }
 
     /**
      * @brief Makes this a ring of `dtype`, `num_channels` channels and `num_samples` elements
@@ -255,8 +242,8 @@ public:
      * @param data The first element of the run; room for `count` elements of `dtype`, `stride`
      * apart.
      * @param dtype The dtype of the caller's memory; it must be the ring's own.
-     * @param count Elements of history to copy. Like get_past_sample() the range is not checked
-     * against available_past().
+     * @param count Elements of history to copy; the range is not checked against
+     * available_past().
      * @param stride Elements of `dtype` between two consecutive elements of the run, 1 or more;
      * 1, the default, is a packed run.
      * @return `count`; 0, with nothing written, when `dtype` is not the ring's dtype.
@@ -340,51 +327,6 @@ public:
             m_storage);
         return num_batches * window;
     }
-
-    // ---- The 2.x float face: the float32 arm. On a ring of another dtype these do nothing
-    // and return 0 (the 3.x entries check the dtype before they get here). ------------------
-
-    void push_sample(size_t channel, float sample) {
-        if (auto* ring = f32()) { ring->push_sample(channel, sample); }
-    }
-
-    float pop_sample(size_t channel) {
-        auto* ring = f32();
-        return ring != nullptr ? ring->pop_sample(channel) : 0.0F;
-    }
-
-    void push_block(size_t channel, const float* data, size_t count) {
-        if (auto* ring = f32()) { ring->push_block(channel, data, count); }
-    }
-
-    void pop_block(size_t channel, float* data, size_t count) {
-        if (auto* ring = f32()) { ring->pop_block(channel, data, count); }
-    }
-
-    void peek_past_block(size_t channel, float* data, size_t count) const {
-        if (const auto* ring = f32()) { ring->peek_past_block(channel, data, count); }
-    }
-
-    void push_fill(size_t channel, float value, size_t count) {
-        if (auto* ring = f32()) { ring->push_fill(channel, value, count); }
-    }
-
-    [[nodiscard]] float get_future_sample(size_t channel, size_t offset) const {
-        const auto* ring = f32();
-        return ring != nullptr ? ring->get_future_sample(channel, offset) : 0.0F;
-    }
-
-    [[nodiscard]] float get_past_sample(size_t channel, size_t offset) const {
-        const auto* ring = f32();
-        return ring != nullptr ? ring->get_past_sample(channel, offset) : 0.0F;
-    }
-
-    [[nodiscard]] size_t get_available_samples(size_t channel) const { return available(channel); }
-    [[nodiscard]] size_t get_available_past_samples(size_t channel) const {
-        return available_past(channel);
-    }
-    [[nodiscard]] size_t get_num_channels() const { return num_channels(); }
-    [[nodiscard]] size_t get_num_samples() const { return capacity(); }
 
 private:
     // One arm per scalar dtype, in the order of k_arm_dtypes: the variant's index is the dtype.

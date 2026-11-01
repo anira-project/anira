@@ -887,8 +887,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
     EXPECT_EQ(delivered, (std::vector<size_t>{0, 0, 0}));
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(stored_input(), (std::array<float, 3>{})) << "a refused call set nothing";
-    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U)
-        << "a refused call pushed samples";
+    EXPECT_EQ(rig.session().send_ring(2).available(0), 0U) << "a refused call pushed samples";
     EXPECT_EQ(anira_handler_push_data_multi(h, inputs.data(), 3), ANIRA_ERROR_INVALID_ARGUMENT);
     // A zeroed record is rank 0: not the empty tensor.
     inputs[1] = anira_tensor{};
@@ -915,7 +914,7 @@ TEST(AbiState, AStatePositionInAMultiArrayMustBeEmpty) {
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_handler_pop_data_multi_wait(h, outputs.data(), 3, nullptr, 0.0),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(rig.session().send_ring(2).get_available_samples(0), 0U);
+    EXPECT_EQ(rig.session().send_ring(2).available(0), 0U);
     EXPECT_EQ(state, (std::array<float, static_cast<size_t>(k_channels) * k_state_width>{}))
         << "the memory a State element names is never touched";
     anira_drain_log();

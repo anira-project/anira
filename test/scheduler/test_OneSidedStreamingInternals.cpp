@@ -254,7 +254,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     size_t const num_structs = session.m_num_structs;
     ASSERT_EQ(session.m_inference_queue.size(), num_structs);
     RingBuffer& ring = session.receive_ring(0);
-    size_t const ring_capacity = ring.get_num_samples();
+    size_t const ring_capacity = ring.capacity();
     ASSERT_EQ(ring_capacity, static_cast<size_t>(latency) + num_structs * k_hop)
         << "The receive ring holds the latency pre-fill plus one hop per struct.";
 
@@ -291,7 +291,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     }
     ASSERT_TRUE(wait_for([&] {
         push_collect_only();
-        return ring.get_available_samples(0) == ring_capacity;
+        return ring.available(0) == ring_capacity;
     })) << "push_data must collect finished inferences while the receive ring has room.";
     for (const auto& ts_struct : session.m_inference_queue) {
         EXPECT_TRUE(ts_struct->m_free.load()) << "A placed result releases its struct.";
@@ -312,7 +312,7 @@ TEST(OneSidedStreamingInternals, TwoSidedPushWithoutPopIsGatedNotOverwritten) {
     // drain see a completed-but-unpublished result as "not ready".
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     push_collect_only();
-    EXPECT_EQ(ring.get_available_samples(0), ring_capacity)
+    EXPECT_EQ(ring.available(0), ring_capacity)
         << "The gate must hold results in their structs instead of overwriting unread "
            "output.";
     for (const auto& ts_struct : session.m_inference_queue) {

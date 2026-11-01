@@ -1897,12 +1897,12 @@ TEST(AbiProcessor, PopWindowsLaysOutEveryWindowWithItsHistory) {
     constexpr size_t k_batches = 4;
     constexpr size_t k_total = k_offset + (k_batches * (k_new + k_old));
     anira::RingBuffer ring;
-    ring.initialize_with_positions(1, 64);
-    for (int n = 0; n < 2 + static_cast<int>(k_batches * k_new); ++n) {
-        ring.push_sample(0, static_cast<float>(n + 1));
-    }
-    (void)ring.pop_sample(0);  // 1 and 2 become history
-    (void)ring.pop_sample(0);
+    ASSERT_TRUE(ring.initialize_with_positions(1, 64, ANIRA_DTYPE_F32));
+    std::array<float, 2 + (k_batches * k_new)> pushed{};
+    for (size_t n = 0; n < pushed.size(); ++n) { pushed.at(n) = static_cast<float>(n + 1); }
+    ASSERT_EQ(ring.push_block(0, pushed.data(), ANIRA_DTYPE_F32, pushed.size()), pushed.size());
+    std::array<float, 2> history{};
+    ASSERT_EQ(ring.pop_block(0, history.data(), ANIRA_DTYPE_F32, history.size()), 2U);  // 1 and 2
 
     std::array<float, k_total> windows{};
     EXPECT_EQ(anira_ring_pop_windows(&ring,
@@ -1931,19 +1931,22 @@ TEST(AbiProcessor, DefaultPreProcessFillsTheWindowHeadWithHistory) {
     constexpr size_t k_window = 8;
     constexpr size_t k_step = 4;
     anira::RingBuffer seed;
-    seed.initialize_with_positions(1, 32);
+    ASSERT_TRUE(seed.initialize_with_positions(1, 32, ANIRA_DTYPE_F32));
     seed.set_owner(k_step, nullptr);
     HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, seed, {1, 1, static_cast<int64_t>(k_window)});
     anira::RingBuffer& ring = built.ring();
     const float* window = built.data();
 
-    for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(n + 1)); }
+    std::array<float, k_step> hop{};
+    for (size_t n = 0; n < k_step; ++n) { hop.at(n) = static_cast<float>(n + 1); }
+    ASSERT_EQ(ring.push_block(0, hop.data(), ANIRA_DTYPE_F32, hop.size()), k_step);
     EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_step; ++n) {
         EXPECT_EQ(window[n], 0.0F) << "no history yet, sample " << n;
         EXPECT_EQ(window[k_step + n], static_cast<float>(n + 1));
     }
-    for (size_t n = 0; n < k_step; ++n) { ring.push_sample(0, static_cast<float>(k_step + n + 1)); }
+    for (size_t n = 0; n < k_step; ++n) { hop.at(n) = static_cast<float>(k_step + n + 1); }
+    ASSERT_EQ(ring.push_block(0, hop.data(), ANIRA_DTYPE_F32, hop.size()), k_step);
     EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < k_window; ++n) {
         EXPECT_EQ(window[n], static_cast<float>(n + 1)) << "window sample " << n;
@@ -1960,12 +1963,13 @@ TEST(AbiProcessor, DefaultPreProcessFillsTheWindowHeadWithHistory) {
 // default fill mixes no history in (a latent frame of four channels).
 TEST(AbiProcessor, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     anira::RingBuffer seed;
-    seed.initialize_with_positions(4, 8);
+    ASSERT_TRUE(seed.initialize_with_positions(4, 8, ANIRA_DTYPE_F32));
     seed.set_owner(1, nullptr);
     HandBuiltCtx built(ANIRA_PHASE_PRE_PROCESS, seed, {1, 4, 1});
     anira::RingBuffer& ring = built.ring();
     for (size_t channel = 0; channel < 4; ++channel) {
-        ring.push_sample(channel, static_cast<float>(channel + 1));
+        const auto sample = static_cast<float>(channel + 1);
+        ASSERT_EQ(ring.push_block(channel, &sample, ANIRA_DTYPE_F32, 1), 1U);
     }
     EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < 4; ++n) { EXPECT_EQ(built.data()[n], static_cast<float>(n + 1)); }

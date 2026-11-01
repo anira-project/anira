@@ -1264,7 +1264,7 @@ bool Core::inputs_ready(const std::shared_ptr<SessionElement>& session) {
     for (size_t tensor_index = 0; tensor_index < session->num_inputs(); tensor_index++) {
         if (session->input_hop(tensor_index) > 0) {
             for (size_t channel = 0; channel < session->input_channels(tensor_index); channel++) {
-                if (session->send_ring(tensor_index).get_available_samples(channel) <
+                if (session->send_ring(tensor_index).available(channel) <
                     session->input_hop(tensor_index)) {
                     return false;
                 }

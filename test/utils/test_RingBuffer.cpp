@@ -11,59 +11,6 @@
 
 using namespace anira;
 
-namespace {
-class RingBufferTest : public ::testing::Test {
-protected:
-    void SetUp() override {
-        // Set up a 2-channel, 5-sample ring buffer for most tests
-        m_ring_buffer.initialize_with_positions(2, 5);
-    }
-
-    void TearDown() override {
-        // Clean up after each test
-    }
-
-    RingBuffer m_ring_buffer;
-};
-}  // namespace
-
-// Test basic initialization
-// RingBufferTest.Initialization was removed: anira::RingBuffer is an alias over
-// thl::core::RingBuffer, whose own suite asserts the same post-init state
-// (RingBuffer.InitialiseWithPositions: dimensions + available samples;
-// ClearWithPositions: zero past samples) — audit, docs/ci-overhaul.md step 9a.
-// Test single channel push and pop operations
-TEST_F(RingBufferTest, SingleChannelPushPop) {
-    const size_t channel = 0;
-    const std::array<float, 3> test_values = {1.0f, 2.0f, 3.0f};
-
-    // Push some samples
-    for (float const value : test_values) { m_ring_buffer.push_sample(channel, value); }
-
-    EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 3);
-
-    // Pop samples and verify they come out in FIFO order
-    for (float const expected_value : test_values) {
-        float const popped_value = m_ring_buffer.pop_sample(channel);
-        EXPECT_FLOAT_EQ(popped_value, expected_value);
-    }
-
-    EXPECT_EQ(m_ring_buffer.get_available_samples(channel), 0);
-}
-
-// The ring buffer no longer inherits Buffer<float> (thl::core composition):
-// dimensions are exposed directly, and element types beyond float are
-// available through anira::RingBufferT<T>.
-TEST_F(RingBufferTest, DimensionsAndTypedVariant) {
-    EXPECT_EQ(m_ring_buffer.get_num_channels(), 2);
-    EXPECT_EQ(m_ring_buffer.get_num_samples(), 5);
-
-    RingBufferT<int64_t> tokens;
-    tokens.initialize_with_positions(1, 4);
-    const int64_t big = (1LL << 40) + 7;  // exact beyond float32's 2^24 range
-    tokens.push_sample(0, big);
-    EXPECT_EQ(tokens.pop_sample(0), big);
-}
 // ---- The typed rings: one instantiation per scalar dtype behind anira_ring -------------------
 
 namespace {
@@ -190,8 +137,9 @@ TEST(RingBufferTyped, EveryDtypeIsItsOwnRing) {
 
 TEST(RingBufferTyped, DtypesTheRingsCannotStoreAreRefusedAtInitialize) {
     anira::RingBuffer ring;
-    ring.initialize_with_positions(1, 4);
-    ring.push_sample(0, 1.0F);
+    ASSERT_TRUE(ring.initialize_with_positions(1, 4, ANIRA_DTYPE_F32));
+    const float one = 1.0F;
+    ASSERT_EQ(ring.push_block(0, &one, ANIRA_DTYPE_F32, 1), 1U);
     EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4)))
         << "lanes > 1";
     EXPECT_FALSE(ring.initialize_with_positions(1, 4, ANIRA_MAKE_DTYPE(ANIRA_DTYPE_OPAQUE, 64, 1)));
@@ -201,36 +149,9 @@ TEST(RingBufferTyped, DtypesTheRingsCannotStoreAreRefusedAtInitialize) {
         << "a width no dtype has";
     EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_F32) << "the ring is left as it was";
     EXPECT_EQ(ring.available(0), 1U);
-    EXPECT_FLOAT_EQ(ring.pop_sample(0), 1.0F);
-}
-
-TEST(RingBufferTyped, TheFloatFaceIsTheFloat32Arm) {
-    anira::RingBuffer ring;
-    ASSERT_TRUE(ring.initialize_with_positions(1, 4, ANIRA_DTYPE_I16));
-    const int16_t value = 3;
-    EXPECT_EQ(ring.push_block(0, &value, ANIRA_DTYPE_I16, 1), 1U);
-
-    // The 2.x float calls do nothing on an int16 ring; the counts are dtype-independent.
-    ring.push_sample(0, 1.0F);
-    EXPECT_EQ(ring.get_available_samples(0), 1U);
-    EXPECT_FLOAT_EQ(ring.pop_sample(0), 0.0F);
-    EXPECT_EQ(ring.get_available_samples(0), 1U) << "nothing was popped";
-    std::array<float, 2> floats{5.0F, 5.0F};
-    ring.pop_block(0, floats.data(), floats.size());
-    EXPECT_FLOAT_EQ(floats[0], 5.0F) << "nothing was written";
-    EXPECT_FLOAT_EQ(ring.get_future_sample(0, 0), 0.0F);
-    EXPECT_FLOAT_EQ(ring.get_past_sample(0, 1), 0.0F);
-    EXPECT_EQ(ring.get_num_channels(), 1U);
-    EXPECT_EQ(ring.get_num_samples(), 4U);
-
-    // The two-argument initialise is the float face: the ring is float32 again.
-    ring.initialize_with_positions(1, 4);
-    EXPECT_EQ(ring.dtype(), ANIRA_DTYPE_F32);
-    ring.push_sample(0, 2.0F);
-    ring.push_sample(0, 3.0F);
-    EXPECT_FLOAT_EQ(ring.get_future_sample(0, 1), 3.0F);
-    EXPECT_FLOAT_EQ(ring.pop_sample(0), 2.0F);
-    EXPECT_FLOAT_EQ(ring.get_past_sample(0, 1), 2.0F);
+    float back = 0.0F;
+    EXPECT_EQ(ring.pop_block(0, &back, ANIRA_DTYPE_F32, 1), 1U);
+    EXPECT_FLOAT_EQ(back, 1.0F);
 }
 
 TEST(RingBufferTyped, ADefaultConstructedRingIsAnEmptyFloat32Ring) {
@@ -470,23 +391,4 @@ TEST(RingBufferStrided, Int32) {
 }
 TEST(RingBufferStrided, Int64) {
     strided<int64_t>(ANIRA_DTYPE_I64);
-}
-
-// The float face is untouched by the stride: a float pointer with three arguments is still the
-// 2.x call, never the typed one with a defaulted stride.
-TEST(RingBufferStrided, TheFloatFaceKeepsItsThreeArguments) {
-    anira::RingBuffer ring;
-    ring.initialize_with_positions(1, 4);
-    const std::array<float, 3> in{1.0F, 2.0F, 3.0F};
-    ring.push_block(0, in.data(), in.size());
-    EXPECT_EQ(ring.available(0), 3U);
-    // Interleaved stereo, the right channel: 10 and 20.
-    const std::array<float, 4> interleaved{-1.0F, 10.0F, -1.0F, 20.0F};
-    EXPECT_EQ(ring.push_block(0, interleaved.data() + 1, ANIRA_DTYPE_F32, 2, 2), 2U);
-    std::array<float, 4> out{};
-    ring.pop_block(0, out.data(), out.size());
-    EXPECT_FLOAT_EQ(out[0], 2.0F) << "5 into 4: the oldest element was overwritten";
-    EXPECT_FLOAT_EQ(out[1], 3.0F);
-    EXPECT_FLOAT_EQ(out[2], 10.0F);
-    EXPECT_FLOAT_EQ(out[3], 20.0F);
 }

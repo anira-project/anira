@@ -546,7 +546,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
         size_t discarded = 0;
         for (size_t i = 0; i < num_outputs; ++i) {
             if (m_session->output_hop(i) == 0 || m_missing_samples[i] == 0) { continue; }
-            size_t const available = m_session->receive_ring(i).get_available_samples(0);
+            size_t const available = m_session->receive_ring(i).available(0);
             size_t const to_drop = std::min(m_missing_samples[i], available);
             if (to_drop == 0) { continue; }
             for (size_t channel = 0; channel < m_session->output_channels(i); ++channel) {
@@ -568,7 +568,7 @@ size_t* InferenceManager::process_output(const anira_tensor* outputs,
     bool enough_samples = true;
     for (size_t i = 0; i < num_outputs; ++i) {
         if (m_session->output_hop(i) > 0) {
-            if (m_session->receive_ring(i).get_available_samples(0) < num_samples[i]) {
+            if (m_session->receive_ring(i).available(0) < num_samples[i]) {
                 enough_samples = false;
                 break;
             }
@@ -740,7 +740,7 @@ size_t InferenceManager::get_available_samples(size_t tensor_index, size_t chann
     // overload polled m_done_atomic, which a session with a wait ratio never sets.
     Core::collect_completed(m_session);
     if (m_session->output_hop(tensor_index) > 0) {
-        return m_session->receive_ring(tensor_index).get_available_samples(channel);
+        return m_session->receive_ring(tensor_index).available(channel);
     } else {
         return 0;
     }
