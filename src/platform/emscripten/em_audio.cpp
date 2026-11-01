@@ -29,6 +29,7 @@
 
 #include "../../capi/capi_internal.h"
 #include "../../capi/handler.h"
+#include "../../capi/words.h"
 
 using anira::capi::translate_exception;
 
@@ -504,9 +505,12 @@ anira_status resolve_streams(const anira_handler& handler,
         ANIRA_CAPI_REQUIRE(port->m_ring_dtype == ANIRA_DTYPE_F32,
                            err,
                            ANIRA_ERROR_CONFIG,
-                           "audio node: %s slot %u streams another dtype than float32",
+                           "audio node: %s slot %u streams %s, and an audio node streams float32: "
+                           "name float32 in the contract's ring_dtypes and add a processor that "
+                           "converts",
                            side,
-                           s);
+                           s,
+                           anira::capi::dtype_word(port->m_ring_dtype));
         ANIRA_CAPI_REQUIRE(port->m_channels >= 1 && port->m_channels <= k_max_channels,
                            err,
                            ANIRA_ERROR_CONFIG,

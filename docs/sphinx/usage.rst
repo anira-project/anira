@@ -489,13 +489,18 @@ minted again. On an Async handle it throws ``anira::Error`` with
   one tensor, by the tensor's canonical name: the ring holds exactly that type, and the Hard
   entries (section 3.2; they take the ``anira_tensor`` of section 3.3) carry it across the
   ABI as is. Per tensor, so an
-  input and an output may differ; every tensor never set uses ``ANIRA_DTYPE_F32``. Nothing
+  input and an output may differ; every tensor never set streams its spec's dtype, so a host
+  whose samples are the model's sets nothing. Nothing
   in anira converts: a name that is not a Streamed tensor is ``ANIRA_ERROR_CONFIG`` at
   prepare, and so is a ring dtype that differs from the spec's dtype (the model's), unless the
   pipeline's processor fills the phase that moves that ring (``pre_process`` for an input,
   ``post_process`` for an output; section 2) and so takes the conversion on itself: the ring
   then holds the host's element type, the model tensor the spec's, and the processor moves
-  between the two.
+  between the two. A host of another sample type therefore sets both, the ring dtype and the
+  converting processor. A host tensor whose dtype is not the slot's ring dtype is refused per
+  call (``ANIRA_ERROR_CONFIG``, recorded in ``anira_handler_rt_error``, nothing staged), and the
+  log line names both remedies: pass a tensor of the ring dtype, or name the host's dtype in
+  ``ring_dtypes`` and add the converting processor.
 - **Stream latency.** ``hard.latencies = {{"audio_out", 4096}}`` on the aggregate,
   ``contract.hard_latency("audio_out", 4096)`` on a handle
   (``anira_contract_hard_set_latency``; ``"latencies": {"audio_out": 4096}`` in the contract
@@ -689,7 +694,7 @@ the function is set in code), ``wait_ratio`` as a number, the
 host-block keys ``host_block_min`` / ``host_block_max`` / ``host_rate`` (optional, any number, a fractional
 block included; the blocks in elements of the model's anchor tensor and the host rate in anchor
 elements per second, as everywhere; a plugin patches them from the host with ``hard_host_blocks``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
-by canonical name), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
+by canonical name; a tensor not named streams its spec's dtype), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
 latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost`` and ``host_domains``
 (``{"audio_in": "host"}``, section 1.3), which stand beside either root.
 

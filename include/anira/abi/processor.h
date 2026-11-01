@@ -124,10 +124,10 @@ extern "C" {
 
 /**
  * @brief The element type the ring stores: the ring dtype the host declared for the slot on the
- * Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was
- * declared. It is never inferred from the tensor spec's dtype, which may differ when the
- * processor converts; every data accessor states the dtype it believes it is reading or
- * writing.
+ * Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing was
+ * declared. The two differ only where the contract names another dtype, which a
+ * processor that converts goes with; every data accessor states the dtype it believes it
+ * is reading or writing.
  * @param ring A ring of the processor context, or NULL.
  * @return The ring's dtype; 0, which is no dtype, for a NULL ring.
  * @par Thread contract

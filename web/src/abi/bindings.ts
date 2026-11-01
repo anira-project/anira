@@ -1463,14 +1463,16 @@ export class AniraBindings {
    * ring, a ring dtype that differs from the spec's dtype (the model's) is
    * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase
    * that moves that ring (pre_process for an input, post_process for an output) and so
-   * takes the difference on itself; the default bodies of anira/abi/processor.h still
-   * refuse such a slot at run time. Set per tensor by canonical name, so an input and an
-   * output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
-   * Streamed tensor is checked at prepare, not here.
+   * takes the difference on itself; the default bodies of anira/abi/processor.h refuse
+   * such a slot at run time. Set per tensor by canonical name, so an input and an output
+   * may differ; a tensor never set streams its spec's dtype, so a host whose samples are
+   * the model's sets nothing, and one of another sample type sets its type here and adds
+   * the converting processor. A name that matches no Streamed tensor is checked at
+   * prepare, not here.
    *
    * @param contract A Hard contract.
    * @param canonical The tensor's canonical name (the one its spec was created with).
-   * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32
+   * @param dtype The element type of the host's samples for that tensor; the spec's dtype
    *   for every tensor that was never set.
    * @returns ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
    *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
@@ -3909,7 +3911,7 @@ export class AniraBindings {
 
   /**
    * The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
-   * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+   * ring_dtypes) named; every other tensor's ring dtype is its spec's dtype.
    *
    * @param contract A Hard contract.
    * @returns The count; 0 on an Async contract and for NULL.
@@ -3922,8 +3924,9 @@ export class AniraBindings {
 
   /**
    * One ring dtype the contract names, enumerated by index in bytewise order of the
-   * canonical names: what lists what was set, which a lookup by name could not (it would
-   * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+   * canonical names: what lists what was set. A name it does not list streams its spec's
+   * dtype, which the contract does not know (a contract has no model), so a lookup by
+   * name could not answer it.
    *
    * @param contract A Hard contract.
    * @param index Below anira_contract_hard_num_ring_dtypes.
@@ -4588,10 +4591,10 @@ export class AniraBindings {
 
   /**
    * The element type the ring stores: the ring dtype the host declared for the slot on
-   * the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing
-   * was declared. It is never inferred from the tensor spec's dtype, which may differ
-   * when the processor converts; every data accessor states the dtype it believes it is
-   * reading or writing.
+   * the Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing
+   * was declared. The two differ only where the contract names another dtype, which a
+   * processor that converts goes with; every data accessor states the dtype it believes
+   * it is reading or writing.
    *
    * @param ring A ring of the processor context, or NULL.
    * @returns The ring's dtype; 0, which is no dtype, for a NULL ring.

@@ -319,14 +319,19 @@ anira_status slot_tensor_status(anira_handler& handler,
     switch (status) {
         case ANIRA_ERROR_CONFIG:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of %s slot %u '%s' has dtype %u, the slot's is "
-                                   "%u; nothing converts",
+                                   "%s: the tensor of %s slot %u '%s' is %s, the slot's ring dtype "
+                                   "is %s; nothing converts: pass a tensor of the ring dtype, or "
+                                   "name %s in the contract's ring_dtypes and add a processor that "
+                                   "converts in %s",
                                    entry,
                                    side,
                                    slot,
                                    slot_name(handler, input, slot),
-                                   static_cast<unsigned int>(tensor.dtype),
-                                   static_cast<unsigned int>(dtype));
+                                   anira::capi::dtype_word(tensor.dtype),
+                                   anira::capi::dtype_word(dtype),
+                                   anira::capi::dtype_word(tensor.dtype),
+                                   anira::capi::phase_word(input ? ANIRA_PHASE_PRE_PROCESS
+                                                                 : ANIRA_PHASE_POST_PROCESS));
             break;
         case ANIRA_ERROR_NOT_SUPPORTED:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
@@ -388,14 +393,15 @@ anira_status static_tensor_status(anira_handler& handler,
     switch (status) {
         case ANIRA_ERROR_CONFIG:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                                   "%s: the tensor of Static %s slot %u '%s' has dtype %u, the "
-                                   "spec's is %u; nothing converts",
+                                   "%s: the tensor of Static %s slot %u '%s' is %s, the spec's "
+                                   "dtype is %s; a Static tensor carries its spec's dtype (nothing "
+                                   "converts)",
                                    entry,
                                    side,
                                    slot,
                                    slot_name(handler, input, slot),
-                                   static_cast<unsigned int>(tensor.dtype),
-                                   static_cast<unsigned int>(store.dtype()));
+                                   anira::capi::dtype_word(tensor.dtype),
+                                   anira::capi::dtype_word(store.dtype()));
             break;
         case ANIRA_ERROR_NOT_SUPPORTED:
             ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
@@ -793,8 +799,8 @@ void check_host_blocks(const anira::capi::HardContract& hard) {
 // The BYPASS rules of prepare, after validate (the rule is the Hard driver's, so it lives here
 // and not in capi::validate): the anchor must be an input, and every
 // streamed output must have the anchored input's channel count and its ring dtype (the block
-// is copied from host memory to host memory, and nothing converts; every ring is float32 in
-// this pre-release, so the dtype rule cannot fire yet).
+// is copied from host memory to host memory, and nothing converts: an input and an output
+// whose rings hold different dtypes cannot take BYPASS).
 void check_miss_policy(const anira::capi::HardContract& hard,
                        const anira_model_config& model,
                        const anira::capi::Derived& derived,

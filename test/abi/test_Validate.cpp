@@ -31,6 +31,7 @@
 #include "capi/validate.h"
 #include "fixtures.h"
 #include "scheduler/LatencyCalculator.h"
+#include "scheduler/SessionElement.h"
 #include "utils/StatusError.h"
 
 namespace {
@@ -952,6 +953,32 @@ TEST(AbiValidate, ANonFloat32DtypeIsNotSupported) {
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
     expect_contains(outcome.m_message, "tensor 'out': dtype");
     expect_contains(outcome.m_message, "the queue stores float32");
+}
+
+// A tensor the contract names no ring dtype for streams its spec's dtype; a named one streams
+// the dtype it is named with (ring_dtypes_of, which runs after validate).
+TEST(AbiValidate, ARingDtypeDefaultsToTheSpecsDtype) {
+    const auto int16_stream = [](std::string_view name) {
+        TensorSpec spec(name, ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED);
+        spec.axis(0, ANIRA_AXIS_TIME, 512).window(512, 512, 0);
+        return spec;
+    };
+    ModelConfig model;
+    model.add_model_path(k_custom, "model.custom");
+    model.input(streamed("in"));
+    model.input(int16_stream("in16"));
+    model.output(int16_stream("out16"));
+    model.output(streamed("out"));
+    ContractHandle contract(explicit_hard());
+    contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
+    const anira::RingDtypes dtypes =
+        anira::capi::ring_dtypes_of(*contract.native(), *model.native());
+    ASSERT_EQ(dtypes.m_inputs.size(), 2U);
+    ASSERT_EQ(dtypes.m_outputs.size(), 2U);
+    EXPECT_EQ(dtypes.m_inputs[0], ANIRA_DTYPE_I16) << "named in the contract";
+    EXPECT_EQ(dtypes.m_inputs[1], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[0], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[1], ANIRA_DTYPE_F32) << "not named: its spec's dtype";
 }
 
 TEST(AbiValidate, NoStreamedTensorIsConfig) {

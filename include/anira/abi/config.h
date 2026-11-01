@@ -656,13 +656,15 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
  * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that
  * moves that ring (pre_process for an input, post_process for an output) and so takes
- * the difference on itself; the default bodies of anira/abi/processor.h still refuse
- * such a slot at run time. Set per tensor by canonical name, so an input and an output
- * may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
- * Streamed tensor is checked at prepare, not here.
+ * the difference on itself; the default bodies of anira/abi/processor.h refuse such a
+ * slot at run time. Set per tensor by canonical name, so an input and an output may
+ * differ; a tensor never set streams its spec's dtype, so a host whose samples are the
+ * model's sets nothing, and one of another sample type sets its type here and adds the
+ * converting processor. A name that matches no Streamed tensor is checked at prepare,
+ * not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
- * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for
+ * @param dtype The element type of the host's samples for that tensor; the spec's dtype for
  *        every tensor that was never set.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
@@ -2197,7 +2199,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_wait_ratio(const anira_con
 
 /**
  * @brief The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
- * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+ * ring_dtypes) named; every other tensor's ring dtype is its spec's dtype.
  * @param contract A Hard contract.
  * @return The count; 0 on an Async contract and for NULL.
  * @par Thread contract
@@ -2209,8 +2211,9 @@ ANIRA_API uint32_t ANIRA_CALL anira_contract_hard_num_ring_dtypes(const anira_co
 
 /**
  * @brief One ring dtype the contract names, enumerated by index in bytewise order of the
- * canonical names: what lists what was set, which a lookup by name could not (it would
- * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+ * canonical names: what lists what was set. A name it does not list streams its spec's
+ * dtype, which the contract does not know (a contract has no model), so a lookup by name
+ * could not answer it.
  * @param contract A Hard contract.
  * @param index Below anira_contract_hard_num_ring_dtypes.
  * @param canonical Receives the tensor's canonical name (object-owned).

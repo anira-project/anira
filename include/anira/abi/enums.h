@@ -75,8 +75,8 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
 
 /**
- * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
- * never set on a Hard contract and the only one anira_tensor_data_f32 returns.
+ * @brief 32-bit float, one lane: the type of every 2.x stream and the only one
+ * anira_tensor_data_f32 returns.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 

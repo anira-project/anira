@@ -122,8 +122,9 @@ struct HardContract {
     /// Per-tensor ring dtype by canonical name: the element type the typed Hard entries
     /// carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in
     /// anira converts: the Hard entries copy between the host and the ring, and a ring dtype
-    /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare.
-    /// Absent = ANIRA_DTYPE_F32, which is what the float entries are legal on.
+    /// that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare unless
+    /// the pipeline's processor fills the phase that moves that ring and converts. Absent = the
+    /// spec's dtype.
     std::map<std::string, anira_dtype> m_ring_dtypes;
     /// The declared stream latency per Streamed output by canonical name, in samples of that
     /// output (anira_contract_hard_set_latency, the JSON key "latencies"): it replaces the

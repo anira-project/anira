@@ -462,9 +462,9 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
 
     // Every ring lives in its slot's stream port (the handler's port vector) and is sized here,
     // in place: only a Streamed slot has one. Every ring stores the element type of its slot's ring
-    // dtype (float32 unless the host declared another one); the sizes above are element counts, so
-    // they are the same whatever the type. A dtype the rings cannot store is a configuration error,
-    // like an unresolvable reference stream.
+    // dtype (its spec's unless the contract names another one); the sizes above are element counts,
+    // so they are the same whatever the type. A dtype the rings cannot store is a configuration
+    // error, like an unresolvable reference stream.
     const auto ring_dtype = [](const std::vector<anira_dtype>& dtypes, size_t slot) {
         return slot < dtypes.size() ? dtypes[slot] : ANIRA_DTYPE_F32;
     };

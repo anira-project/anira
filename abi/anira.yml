@@ -372,7 +372,7 @@ headers:
         value: "((d) >> 16)"
         ts: "(d: number): number => d >>> 16"
         doc: "The lane count of a packed dtype."
-      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor never set on a Hard contract and the only one anira_tensor_data_f32 returns."}
+      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream and the only one anira_tensor_data_f32 returns."}
       - {kind: define, name: ANIRA_DTYPE_F64, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)", ts: "0x00014002", doc: "64-bit float, one lane."}
       - {kind: define, name: ANIRA_DTYPE_F16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)", ts: "0x00011002", doc: "16-bit float."}
       - {kind: define, name: ANIRA_DTYPE_BF16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BFLOAT, 16, 1)", ts: "0x00011004", doc: "bfloat16."}
@@ -1713,11 +1713,11 @@ headers:
         params:
           - {type: anira_contract*, name: contract, doc: "A Hard contract."}
           - {type: const char*, name: canonical, doc: "The tensor's canonical name (the one its spec was created with)."}
-          - {type: anira_dtype, name: dtype, doc: "The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for every tensor that was never set."}
+          - {type: anira_dtype, name: dtype, doc: "The element type of the host's samples for that tensor; the spec's dtype for every tensor that was never set."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/processor.h still refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed tensor is checked at prepare, not here."
+        doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/processor.h refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; a tensor never set streams its spec's dtype, so a host whose samples are the model's sets nothing, and one of another sample type sets its type here and adds the converting processor. A name that matches no Streamed tensor is checked at prepare, not here."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
       - kind: function
         name: anira_contract_hard_set_latency
@@ -2819,7 +2819,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32."
+        doc: "The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's ring_dtypes) named; every other tensor's ring dtype is its spec's dtype."
         return_doc: "The count; 0 on an Async contract and for NULL."
       - kind: function
         name: anira_contract_hard_ring_dtype
@@ -2832,7 +2832,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "One ring dtype the contract names, enumerated by index in bytewise order of the canonical names: what lists what was set, which a lookup by name could not (it would answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike)."
+        doc: "One ring dtype the contract names, enumerated by index in bytewise order of the canonical names: what lists what was set. A name it does not list streams its spec's dtype, which the contract does not know (a contract has no model), so a lookup by name could not answer it."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
       - kind: function
         name: anira_contract_hard_num_latencies
@@ -3452,7 +3452,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The element type the ring stores: the ring dtype the host declared for the slot on the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was declared. It is never inferred from the tensor spec's dtype, which may differ when the processor converts; every data accessor states the dtype it believes it is reading or writing."
+        doc: "The element type the ring stores: the ring dtype the host declared for the slot on the Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing was declared. The two differ only where the contract names another dtype, which a processor that converts goes with; every data accessor states the dtype it believes it is reading or writing."
         return_doc: "The ring's dtype; 0, which is no dtype, for a NULL ring."
       - kind: function
         name: anira_ring_num_channels

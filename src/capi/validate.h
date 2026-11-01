@@ -212,7 +212,7 @@ void validate(const anira_model_config& model,
               bool default_set = false);
 
 /// The ring dtype of every slot: two vectors sized to the model's input and output lists,
-/// ANIRA_DTYPE_F32 everywhere, then each entry of the Hard contract's ring dtypes resolved
+/// each slot's spec's dtype, then each entry of the Hard contract's ring dtypes resolved
 /// by tensor name into its slot. Run validate first: it refuses a name that matches no
 /// tensor, a non-Streamed tensor, and a dtype other than the spec's (nothing converts) unless
 /// a processor fills the phase that moves that ring.
