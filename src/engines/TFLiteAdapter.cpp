@@ -6,10 +6,12 @@
  * where the entry's tensors record or the canonical name matches a key (a tensor name for a
  * file without signatures) and by the signature's key order (the runner's names, sorted)
  * otherwise, the inputs resized to the record's engine dims where the file's differ, every
- * tensor checked against its allocated dims at load, and every block copied from and into the
- * descriptors' memory with TfLiteTensorCopyFromBuffer / CopyToBuffer per call (the
- * interpreter's tensors need TFLite's own alignment; binding anira's memory in place waits
- * for the aligned chunk storage). reset re-initialises the interpreter's variable tensors.
+ * tensor checked against its allocated dims and dtype at load, and every slot bound in place
+ * per call: the slot's memory is the tensor's custom allocation
+ * (TfLiteInterpreterSetCustomAllocationForTensor, then AllocateTensors, which re-plans nothing
+ * when only an allocation moved) where it starts on TFLite's 64-byte boundary, as a chunk's
+ * buffer does, and an aligned block of the executor's own, copied into or out of, where it does
+ * not. reset re-initialises the interpreter's variable tensors.
  * File-local over anira::engine::Model: nothing of TensorFlow Lite enters a public header.
  */
 #ifdef USE_TFLITE
@@ -17,12 +19,14 @@
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 #include <tensorflow/lite/core/c/c_api.h>
 #include <tensorflow/lite/core/c/c_api_types.h>
 #include <tensorflow/lite/core/c/common.h>
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <memory>
 #include <string>
@@ -30,6 +34,8 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../scheduler/ChunkStorage.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
@@ -40,13 +46,24 @@
 #include <comdef.h>
 #endif
 
-// TfLiteInterpreterResetVariableTensors lives in tensorflow/lite/core/c/c_api_experimental.h,
-// which includes tensorflow/lite/c/c_api_types.h, a path the pinned 2.17 include tree does not
-// carry; the symbol is exported by the prebuilt library (checked with nm), so its prototype is
-// declared here as that header declares it.
-// NOLINTBEGIN(readability-identifier-naming) TFLite's C API spells the name
+// TfLiteInterpreterResetVariableTensors, the tensor indices of the interpreter's inputs and
+// outputs and TfLiteInterpreterSetCustomAllocationForTensor live in
+// tensorflow/lite/core/c/c_api_experimental.h, which includes tensorflow/lite/c/c_api_types.h,
+// a path the pinned 2.17 include tree does not carry; the symbols are exported by the prebuilt
+// library (checked with nm), so their prototypes are declared here as that header declares them.
+// NOLINTBEGIN(readability-identifier-naming) TFLite's C API spells the names
 extern "C" TFL_CAPI_EXPORT TfLiteStatus
     TfLiteInterpreterResetVariableTensors(TfLiteInterpreter* interpreter);
+extern "C" TFL_CAPI_EXPORT int32_t
+    TfLiteInterpreterGetInputTensorIndex(const TfLiteInterpreter* interpreter, int32_t input_index);
+extern "C" TFL_CAPI_EXPORT int32_t
+    TfLiteInterpreterGetOutputTensorIndex(const TfLiteInterpreter* interpreter,
+                                          int32_t output_index);
+extern "C" TFL_CAPI_EXPORT TfLiteStatus
+    TfLiteInterpreterSetCustomAllocationForTensor(TfLiteInterpreter* interpreter,
+                                                  int tensor_index,
+                                                  const TfLiteCustomAllocation* allocation,
+                                                  int64_t flags);
 // NOLINTEND(readability-identifier-naming)
 
 namespace anira::engine {
@@ -82,9 +99,32 @@ anira_dtype dtype_of(TfLiteType type) {
         case kTfLiteInt16: return ANIRA_DTYPE_I16;
         case kTfLiteInt32: return ANIRA_DTYPE_I32;
         case kTfLiteInt64: return ANIRA_DTYPE_I64;
+        case kTfLiteBool: return ANIRA_DTYPE_BOOL8;
         default: return 0;
     }
 }
+
+// Whether the runtime has an element type for an anira dtype: every dtype anira names; the
+// validator refuses any other before a record reaches the adapter.
+bool carries(anira_dtype dtype) noexcept {
+    switch (dtype) {
+        case ANIRA_DTYPE_F32:
+        case ANIRA_DTYPE_F64:
+        case ANIRA_DTYPE_F16:
+        case ANIRA_DTYPE_BF16:
+        case ANIRA_DTYPE_I8:
+        case ANIRA_DTYPE_U8:
+        case ANIRA_DTYPE_I16:
+        case ANIRA_DTYPE_I32:
+        case ANIRA_DTYPE_I64:
+        case ANIRA_DTYPE_BOOL8: return true;
+        default: return false;
+    }
+}
+
+// TFLite's boundary for a custom allocation (kDefaultTensorAlignment of lite/util.h, which the
+// C API does not carry; the doc of TfLiteInterpreterSetCustomAllocationForTensor names it).
+constexpr size_t k_tensor_alignment = 64;
 
 // One tensor as the interpreter holds it: the key it is reached by, its dims and its type.
 // The dims are the signature's where the tensor has unknown extents (dims_signature, -1 for
@@ -111,6 +151,10 @@ EngineTensor engine_tensor_of(const TfLiteTensor* tensor, const std::string& nam
     engine_tensor.m_dtype = dtype_of(TfLiteTensorType(tensor));
     engine_tensor.m_type_word =
         "TfLiteType " + std::to_string(static_cast<int>(TfLiteTensorType(tensor)));
+    // Quantisation parameters (the struct's field, as dims_signature is read, and the per-layer
+    // parameters the C API reports) make the tensor's values scale * (q - zero point).
+    engine_tensor.m_quantised = tensor->quantization.type != kTfLiteNoQuantization ||
+                                TfLiteTensorQuantizationParams(tensor).scale != 0.F;
     return engine_tensor;
 }
 
@@ -183,12 +227,23 @@ public:
     std::vector<std::string> output_names() const;
 
     /// Resizes every input the record's engine dims differ from (a dynamic extent of the file
-    /// takes the pinned window's), allocates the tensors, keeps per slot the tensor it copies
-    /// from or into, and checks every tensor's allocated dims and type against the record
-    /// (the check of the binding rule: StatusError(ANIRA_ERROR_CONFIG) naming both shapes).
+    /// takes the pinned window's), allocates the tensors, checks every tensor's allocated dims
+    /// and type against the record (the check of the binding rule:
+    /// StatusError(ANIRA_ERROR_CONFIG) naming both shapes; a quantised tensor is
+    /// ANIRA_ERROR_NOT_SUPPORTED), and keeps per slot the tensor, its index among the
+    /// interpreter's tensors and an aligned block of the executor's own that is the tensor's
+    /// custom allocation until a call binds the slot's memory (a tensor that takes none, a
+    /// signature tensor that is not one of the interpreter's inputs or outputs, is copied
+    /// through instead).
     void bind(const Model& model,
               const std::vector<SlotBinding>& inputs,
               const std::vector<SlotBinding>& outputs);
+
+    /// Whether the slot's memory is bound in place per call (bind found its tensor's index and
+    /// the tensor took a custom allocation).
+    bool bound(bool is_input, size_t slot) const noexcept {
+        return (is_input ? m_input_index : m_output_index)[slot] >= 0;
+    }
 
     /// The FIXED warm-up of the record (zeros in); a failing invoke is
     /// StatusError(ANIRA_ERROR_ENGINE).
@@ -208,8 +263,18 @@ private:
     const TfLiteTensor* output_tensor(const std::string& name, size_t index);
     TfLiteStatus resize_input(const std::string& name, size_t index, const std::vector<int>& dims);
     TfLiteStatus invoke();
-    /// Copies every input descriptor into its tensor, invokes, copies every output tensor into
-    /// its descriptor; throws StatusError.
+    TfLiteStatus allocate();
+    /// The index among the interpreter's tensors of one of its inputs (or outputs), matched by
+    /// pointer (the runner's tensors are the interpreter's for the first signature's subgraph);
+    /// -1 for none.
+    int interpreter_index(const TfLiteTensor* tensor, bool is_input) const;
+    /// Makes `memory` the custom allocation of the slot's tensor; false when the interpreter
+    /// refuses it.
+    bool set_allocation(int index, void* memory, size_t bytes);
+    /// Binds every slot's memory as its tensor's allocation (an aligned block of the
+    /// executor's own, copied into or out of, where the memory is off TFLite's boundary; a copy
+    /// through the tensor for a slot bind could not bind), invokes, copies what was not bound
+    /// in place out; throws StatusError.
     void run(const anira_engine_ctx& ctx);
 
     std::shared_ptr<const SharedModel> m_shared;  ///< the model and the options, shared
@@ -220,6 +285,18 @@ private:
     std::vector<const TfLiteTensor*> m_outputs;  ///< per output slot: the tensor it reads
     std::vector<size_t> m_input_elements;
     std::vector<size_t> m_output_elements;
+    std::vector<anira_dtype> m_input_dtypes;  ///< per input slot: the record's dtype
+    std::vector<anira_dtype> m_output_dtypes;
+    std::vector<size_t> m_input_bytes;  ///< per input slot: elements times the dtype's size
+    std::vector<size_t> m_output_bytes;
+    std::vector<int> m_input_index;  ///< per input slot: its tensor's index; -1 copies through it
+    std::vector<int> m_output_index;
+    std::vector<ChunkBlock> m_input_blocks;  ///< per input slot: the executor's aligned block
+    std::vector<ChunkBlock> m_output_blocks;
+    /// Per output slot, this call's memory the result must end up in: the slot's own where it
+    /// was bound in place (nothing to copy unless the runtime moved the tensor), else the
+    /// descriptor's memory a copy goes to.
+    std::vector<void*> m_output_target;
 };
 
 Instance::Instance(std::shared_ptr<const SharedModel> shared) : m_shared(std::move(shared)) {
@@ -319,6 +396,35 @@ TfLiteStatus Instance::invoke() {
                            : TfLiteInterpreterInvoke(m_interpreter);
 }
 
+TfLiteStatus Instance::allocate() {
+    return has_signature() ? TfLiteSignatureRunnerAllocateTensors(m_runner)
+                           : TfLiteInterpreterAllocateTensors(m_interpreter);
+}
+
+int Instance::interpreter_index(const TfLiteTensor* tensor, bool is_input) const {
+    const int32_t count = is_input ? TfLiteInterpreterGetInputTensorCount(m_interpreter)
+                                   : TfLiteInterpreterGetOutputTensorCount(m_interpreter);
+    for (int32_t i = 0; i < count; ++i) {
+        const TfLiteTensor* candidate = is_input
+                                            ? TfLiteInterpreterGetInputTensor(m_interpreter, i)
+                                            : TfLiteInterpreterGetOutputTensor(m_interpreter, i);
+        if (candidate == tensor) {
+            return is_input ? TfLiteInterpreterGetInputTensorIndex(m_interpreter, i)
+                            : TfLiteInterpreterGetOutputTensorIndex(m_interpreter, i);
+        }
+    }
+    return -1;
+}
+
+bool Instance::set_allocation(int index, void* memory, size_t bytes) {
+    const TfLiteCustomAllocation allocation{.data = memory, .bytes = bytes};
+    return TfLiteInterpreterSetCustomAllocationForTensor(m_interpreter,
+                                                         index,
+                                                         &allocation,
+                                                         kTfLiteCustomAllocationFlagsNone) ==
+           kTfLiteOk;
+}
+
 void Instance::bind(const Model& model,
                     const std::vector<SlotBinding>& inputs,
                     const std::vector<SlotBinding>& outputs) {
@@ -351,8 +457,7 @@ void Instance::bind(const Model& model,
                                   "' to the spec's engine dims");
         }
     }
-    tflite_check(has_signature() ? TfLiteSignatureRunnerAllocateTensors(m_runner)
-                                 : TfLiteInterpreterAllocateTensors(m_interpreter),
+    tflite_check(allocate(),
                  has_signature() ? "TfLiteSignatureRunnerAllocateTensors"
                                  : "TfLiteInterpreterAllocateTensors");
     // The check of the binding rule against the allocated tensors, and the per-slot tensors.
@@ -360,6 +465,10 @@ void Instance::bind(const Model& model,
     m_outputs.clear();
     m_input_elements.clear();
     m_output_elements.clear();
+    m_input_dtypes.clear();
+    m_output_dtypes.clear();
+    m_input_bytes.clear();
+    m_output_bytes.clear();
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
         const std::string& name = in_names[inputs[slot].m_index];
         TfLiteTensor* tensor = input_tensor(name, inputs[slot].m_index);
@@ -370,6 +479,9 @@ void Instance::bind(const Model& model,
                             "input");
         m_inputs.push_back(tensor);
         m_input_elements.push_back(model.m_inputs[slot].m_num_elements);
+        m_input_dtypes.push_back(model.m_inputs[slot].m_dtype);
+        m_input_bytes.push_back(model.m_inputs[slot].m_num_elements *
+                                tensor_run::dtype_size(model.m_inputs[slot].m_dtype));
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
         const std::string& name = out_names[outputs[slot].m_index];
@@ -381,16 +493,44 @@ void Instance::bind(const Model& model,
                             "output");
         m_outputs.push_back(tensor);
         m_output_elements.push_back(model.m_outputs[slot].m_num_elements);
+        m_output_dtypes.push_back(model.m_outputs[slot].m_dtype);
+        m_output_bytes.push_back(model.m_outputs[slot].m_num_elements *
+                                 tensor_run::dtype_size(model.m_outputs[slot].m_dtype));
     }
+    // In place: each tensor's index among the interpreter's, and the executor's aligned block as
+    // its custom allocation until a call binds the slot's memory; a tensor without an index or
+    // one the interpreter refuses the allocation for is copied through instead.
+    const auto bind_side = [this](bool is_input) {
+        const size_t count = is_input ? m_inputs.size() : m_outputs.size();
+        std::vector<int>& indices = is_input ? m_input_index : m_output_index;
+        std::vector<ChunkBlock>& blocks = is_input ? m_input_blocks : m_output_blocks;
+        const std::vector<size_t>& bytes = is_input ? m_input_bytes : m_output_bytes;
+        indices.assign(count, -1);
+        blocks.clear();
+        blocks.reserve(count);
+        for (size_t slot = 0; slot < count; ++slot) {
+            blocks.emplace_back(host_chunk_storage(), bytes[slot], k_tensor_alignment);
+            const TfLiteTensor* tensor =
+                is_input ? static_cast<const TfLiteTensor*>(m_inputs[slot]) : m_outputs[slot];
+            const int index = interpreter_index(tensor, is_input);
+            if (index >= 0 && set_allocation(index, blocks[slot].data(), bytes[slot])) {
+                indices[slot] = index;
+            }
+        }
+    };
+    bind_side(true);
+    bind_side(false);
+    tflite_check(allocate(),
+                 has_signature() ? "TfLiteSignatureRunnerAllocateTensors (custom allocations)"
+                                 : "TfLiteInterpreterAllocateTensors (custom allocations)");
+    m_output_target.assign(m_outputs.size(), nullptr);
 }
 
 void Instance::warm_up(uint32_t iterations) {
     if (iterations == 0) { return; }
     for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
-        const std::vector<float> zeros(m_input_elements[slot], 0.F);
-        tflite_check(TfLiteTensorCopyFromBuffer(m_inputs[slot],
-                                                zeros.data(),
-                                                m_input_elements[slot] * sizeof(float)),
+        const std::vector<std::byte> zeros(m_input_bytes[slot], std::byte{0});
+        tflite_check(TfLiteTensorCopyFromBuffer(m_inputs[slot], zeros.data(), zeros.size()),
                      "TfLiteTensorCopyFromBuffer (warm-up)");
     }
     for (uint32_t i = 0; i < iterations; ++i) {
@@ -408,34 +548,68 @@ void Instance::run(const anira_engine_ctx& ctx) {
                 " inputs and " + std::to_string(ctx.num_outputs) + " outputs for a model of " +
                 std::to_string(m_inputs.size()) + " and " + std::to_string(m_outputs.size()));
     }
+    const auto packed = [this](const anira_tensor& tensor, bool is_input, size_t slot) {
+        const anira_dtype dtype = is_input ? m_input_dtypes[slot] : m_output_dtypes[slot];
+        const size_t elements = is_input ? m_input_elements[slot] : m_output_elements[slot];
+        void* data = host_packed(tensor, dtype, elements);
+        if (data == nullptr) {
+            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
+                              std::string(k_engine) + ": " + (is_input ? "input" : "output") +
+                                  " slot " + std::to_string(slot) + " is not a packed " +
+                                  capi::dtype_word(dtype) + " host block of " +
+                                  std::to_string(elements) + " elements");
+        }
+        return data;
+    };
+    // In: the slot's memory is the tensor's allocation where it is on TFLite's boundary, else
+    // it is copied into the executor's block (the tensor's allocation then), or through the
+    // tensor for a slot bind could not bind.
     for (size_t slot = 0; slot < m_inputs.size(); ++slot) {
-        const float* data = static_cast<float*>(
-            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": input slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_input_elements[slot]) + " elements");
+        void* data = packed(ctx.inputs[slot], true, slot);
+        const size_t bytes = m_input_bytes[slot];
+        const int index = m_input_index[slot];
+        if (index >= 0 && aligned_to(data, k_tensor_alignment) &&
+            set_allocation(index, data, bytes)) {
+            continue;
         }
-        tflite_check(TfLiteTensorCopyFromBuffer(m_inputs[slot],
-                                                data,
-                                                m_input_elements[slot] * sizeof(float)),
-                     "TfLiteTensorCopyFromBuffer");
+        if (index >= 0) {
+            std::memcpy(m_input_blocks[slot].data(), data, bytes);
+            if (!set_allocation(index, m_input_blocks[slot].data(), bytes)) {
+                throw StatusError(ANIRA_ERROR_ENGINE,
+                                  std::string(k_engine) + ": input slot " + std::to_string(slot) +
+                                      ": the interpreter refused the executor's own block");
+            }
+        } else {
+            tflite_check(TfLiteTensorCopyFromBuffer(m_inputs[slot], data, bytes),
+                         "TfLiteTensorCopyFromBuffer");
+        }
+        count_copy_in();
     }
-    tflite_check(invoke(), "TfLiteInterpreterInvoke");
+    // Out: likewise; what is not bound in place is copied out after the invoke.
     for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
-        float* data = static_cast<float*>(
-            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": output slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_output_elements[slot]) + " elements");
+        void* data = packed(ctx.outputs[slot], false, slot);
+        m_output_target[slot] = data;
+        const int index = m_output_index[slot];
+        if (index < 0) { continue; }
+        if (aligned_to(data, k_tensor_alignment) &&
+            set_allocation(index, data, m_output_bytes[slot])) {
+            continue;
         }
-        tflite_check(TfLiteTensorCopyToBuffer(m_outputs[slot],
-                                              data,
-                                              m_output_elements[slot] * sizeof(float)),
-                     "TfLiteTensorCopyToBuffer");
+        if (!set_allocation(index, m_output_blocks[slot].data(), m_output_bytes[slot])) {
+            throw StatusError(ANIRA_ERROR_ENGINE,
+                              std::string(k_engine) + ": output slot " + std::to_string(slot) +
+                                  ": the interpreter refused the executor's own block");
+        }
+    }
+    tflite_check(allocate(), "AllocateTensors (the call's allocations)");
+    tflite_check(invoke(), "TfLiteInterpreterInvoke");
+    // A result the runtime left elsewhere than the slot's memory (the executor's block, the
+    // interpreter's own tensor, or a tensor an in-place operator re-pointed) is copied.
+    for (size_t slot = 0; slot < m_outputs.size(); ++slot) {
+        const void* result = TfLiteTensorData(m_outputs[slot]);
+        if (result == m_output_target[slot]) { continue; }
+        std::memcpy(m_output_target[slot], result, m_output_bytes[slot]);
+        count_copy_out();
     }
 }
 
@@ -489,11 +663,19 @@ public:
     explicit TFLiteLoaded(std::shared_ptr<TFLiteEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
-    /// Every slot is copied through the interpreter's own tensor.
-    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
+    /// A slot is bound in place (its memory the tensor's custom allocation per call) where the
+    /// probe's bind could; one whose tensor takes no custom allocation is copied through it.
+    SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
+        const std::vector<bool>& bound = is_input ? m_input_bound : m_output_bound;
+        if (slot < bound.size() && bound[slot]) { return SlotEdge{}; }
         return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
-                        .m_reason = "tflite: copied through the interpreter's own tensor"};
+                        .m_reason =
+                            "tflite: copied through the interpreter's own tensor (the "
+                            "tensor takes no custom allocation)"};
     }
+
+    /// TFLite's boundary for a custom allocation, which every chunk's buffer meets.
+    size_t buffer_alignment() const noexcept override { return k_tensor_alignment; }
 
     std::string provider_reason() const override {
         return "the TensorFlow Lite C API of this build ships no delegate factory, so the "
@@ -502,7 +684,7 @@ public:
 
 protected:
     void do_load(const Model& model) override {
-        require_f32(model, k_engine);
+        require_dtypes(model, k_engine, carries);
         m_shared = std::make_shared<const SharedModel>(model);
         auto probe = std::make_unique<Instance>(m_shared);
         const std::vector<std::string> in_names = probe->input_names();
@@ -511,6 +693,14 @@ protected:
         m_output_bindings =
             bind_slots(model.m_outputs, out_names, out_names.size(), k_engine, "output");
         probe->bind(model, m_input_bindings, m_output_bindings);
+        m_input_bound.assign(model.m_inputs.size(), false);
+        m_output_bound.assign(model.m_outputs.size(), false);
+        for (size_t slot = 0; slot < model.m_inputs.size(); ++slot) {
+            m_input_bound[slot] = probe->bound(true, slot);
+        }
+        for (size_t slot = 0; slot < model.m_outputs.size(); ++slot) {
+            m_output_bound[slot] = probe->bound(false, slot);
+        }
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
     }
@@ -525,6 +715,8 @@ private:
     std::shared_ptr<const SharedModel> m_shared;  ///< freed with the last executor over it
     std::vector<SlotBinding> m_input_bindings;
     std::vector<SlotBinding> m_output_bindings;
+    std::vector<bool> m_input_bound;  ///< per input slot: bound in place (the probe's bind)
+    std::vector<bool> m_output_bound;
 };
 
 }  // namespace

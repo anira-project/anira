@@ -501,6 +501,9 @@ std::vector<anira_engine> typed_engines() {
 #ifdef USE_LITERT
     engines.push_back(ANIRA_ENGINE_LITERT);
 #endif
+#ifdef USE_TFLITE
+    engines.push_back(ANIRA_ENGINE_TFLITE);
+#endif
     return engines;
 }
 
@@ -509,6 +512,9 @@ std::vector<anira_engine> quantised_engines() {
     std::vector<anira_engine> engines;
 #ifdef USE_LITERT
     engines.push_back(ANIRA_ENGINE_LITERT);
+#endif
+#ifdef USE_TFLITE
+    engines.push_back(ANIRA_ENGINE_TFLITE);
 #endif
     return engines;
 }

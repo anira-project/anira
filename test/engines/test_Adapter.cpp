@@ -1368,6 +1368,85 @@ void expect_accumulator_closed_form(Rig& adapter) {
     EXPECT_EQ(state_out[3], 1.F);
 }
 
+/// `count` floats `skew` floats past a 64-byte boundary: a slot's memory that meets the
+/// engine's boundary (skew 0, as a chunk's buffer does) or misses it.
+class FloatsAt {
+public:
+    FloatsAt(size_t count, size_t skew) : m_floats(count + skew + (64 / sizeof(float))) {
+        void* start = m_floats.data();
+        size_t space = m_floats.size() * sizeof(float);
+        std::align(64, (count + skew) * sizeof(float), start, space);
+        m_data = static_cast<float*>(start) + skew;
+    }
+    float* data() const noexcept { return m_data; }
+    float& operator[](size_t i) const noexcept { return m_data[i]; }
+    anira_tensor descriptor(const std::vector<int64_t>& dims) const {
+        anira_tensor tensor{};
+        anira_tensor_init_host(&tensor,
+                               m_data,
+                               ANIRA_DTYPE_F32,
+                               static_cast<uint32_t>(dims.size()),
+                               dims.data());
+        return tensor;
+    }
+
+private:
+    std::vector<float> m_floats;
+    float* m_data = nullptr;
+};
+
+// The gain export through `adapter` over two memories on the 64-byte boundary (two chunks) and
+// one a float past it, each run more than once with new values: the results follow what the
+// memory holds now, with no copy on the boundary and one per slot each way past it; the engine
+// asks the chunk for that boundary and reports the zero-copy edge.
+void expect_bound_on_the_boundary(Rig& adapter) {
+    EXPECT_EQ(adapter.loaded().buffer_alignment(), 64U);
+    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_class, ANIRA_EDGE_ZERO_COPY);
+    EXPECT_EQ(adapter.loaded().slot_edge(false, 1).m_class, ANIRA_EDGE_ZERO_COPY);
+    struct Memory {
+        explicit Memory(size_t skew)
+            : m_audio_in(k_block, skew)
+            , m_gain(1, skew)
+            , m_audio_out(k_block, skew)
+            , m_gain_out(1, skew) {}
+        FloatsAt m_audio_in;
+        FloatsAt m_gain;
+        FloatsAt m_audio_out;
+        FloatsAt m_gain_out;
+    };
+    const Memory first(0);
+    const Memory second(0);
+    const Memory past(1);
+    const auto run_over = [&adapter](const Memory& memory, float scale, uint64_t copies) {
+        for (size_t n = 0; n < k_block; ++n) {
+            memory.m_audio_in[n] = scale * static_cast<float>(n) / k_block;
+            memory.m_audio_out[n] = -1.F;
+        }
+        memory.m_gain[0] = 0.5F;
+        memory.m_gain_out[0] = -1.F;
+        const std::vector<anira_tensor> inputs{memory.m_audio_in.descriptor({1, 1, k_block}),
+                                               memory.m_gain.descriptor({1, 1, 1})};
+        std::vector<anira_tensor> outputs{memory.m_audio_out.descriptor({1, 1, k_block}),
+                                          memory.m_gain_out.descriptor({1})};
+        const uint64_t copies_in = adapter.executor().copies_in();
+        const uint64_t copies_out = adapter.executor().copies_out();
+        ASSERT_EQ(adapter.run(context_of(inputs, outputs), false), ANIRA_OK);
+        EXPECT_EQ(adapter.executor().copies_in() - copies_in, copies);
+        EXPECT_EQ(adapter.executor().copies_out() - copies_out, copies);
+        for (size_t n = 0; n < k_block; ++n) {
+            ASSERT_EQ(memory.m_audio_out[n], 0.5F * memory.m_audio_in[n]) << "sample " << n;
+        }
+        EXPECT_GT(memory.m_gain_out[0], 0.F) << "the peak landed in the caller's memory";
+    };
+    run_over(first, 1.F, 0);
+    run_over(second, 2.F, 0);
+    run_over(first, 3.F, 0);
+    run_over(second, 4.F, 0);
+    run_over(past, 1.F, 2);
+    run_over(past, 2.F, 2);
+    run_over(first, 5.F, 0);
+}
+
 }  // namespace
 
 #endif  // USE_TFLITE || USE_LITERT
@@ -1445,7 +1524,7 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
-    std::vector<float> audio_in(256 * 150, 0.1F);
+    std::vector<float> audio_in(size_t{256} * 150, 0.1F);
     std::vector<float> audio_out(256, 0.F);
     const std::vector<anira_tensor> inputs{descriptor_over(audio_in, {256, 150, 1})};
     std::vector<anira_tensor> outputs{descriptor_over(audio_out, {256, 1})};
@@ -1461,6 +1540,16 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
     EXPECT_EQ(by_name->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
+}
+
+// TFLite binds a slot's memory in place, as the tensor's custom allocation per call, where it
+// starts on TFLite's 64-byte boundary (as every chunk's buffer does: buffer_alignment), and
+// copies through a block of the executor's own where it does not.
+TEST(AdapterTFLite, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_TFLITE));
+    expect_bound_on_the_boundary(*adapter);
 }
 
 #endif  // USE_TFLITE
@@ -1586,92 +1675,14 @@ TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
         << missing.what();
 }
 
-namespace {
-
-/// `count` floats `skew` floats past a 64-byte boundary: a slot's memory that meets LiteRT's
-/// boundary (skew 0, as a chunk's buffer does) or misses it.
-class FloatsAt {
-public:
-    FloatsAt(size_t count, size_t skew) : m_floats(count + skew + (64 / sizeof(float))) {
-        void* start = m_floats.data();
-        size_t space = m_floats.size() * sizeof(float);
-        std::align(64, (count + skew) * sizeof(float), start, space);
-        m_data = static_cast<float*>(start) + skew;
-    }
-    float* data() const noexcept { return m_data; }
-    float& operator[](size_t i) const noexcept { return m_data[i]; }
-    anira_tensor descriptor(const std::vector<int64_t>& dims) const {
-        anira_tensor tensor{};
-        anira_tensor_init_host(&tensor,
-                               m_data,
-                               ANIRA_DTYPE_F32,
-                               static_cast<uint32_t>(dims.size()),
-                               dims.data());
-        return tensor;
-    }
-
-private:
-    std::vector<float> m_floats;
-    float* m_data = nullptr;
-};
-
-}  // namespace
-
 // On the CPU path LiteRT binds a slot's memory in place where it starts on LiteRT's 64-byte
 // boundary (as every chunk's buffer does: buffer_alignment), over a tensor buffer it keeps for
-// that memory's next call, and copies through the slot's managed buffer where it does not. Two
-// memories on the boundary (two chunks) and one past it, each run more than once with new
-// values: the results follow what the memory holds now, with no copy on the boundary and one
-// per slot each way past it.
+// that memory's next call, and copies through the slot's managed buffer where it does not.
 TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_LITERT));
-    EXPECT_EQ(adapter->loaded().buffer_alignment(), 64U);
-    EXPECT_EQ(adapter->loaded().slot_edge(true, 0).m_class, ANIRA_EDGE_ZERO_COPY);
-
-    struct Memory {
-        explicit Memory(size_t skew)
-            : m_audio_in(k_block, skew)
-            , m_gain(1, skew)
-            , m_audio_out(k_block, skew)
-            , m_gain_out(1, skew) {}
-        FloatsAt m_audio_in;
-        FloatsAt m_gain;
-        FloatsAt m_audio_out;
-        FloatsAt m_gain_out;
-    };
-    const Memory first(0);
-    const Memory second(0);
-    const Memory past(1);
-    const auto run_over = [&adapter](const Memory& memory, float scale, uint64_t copies) {
-        for (size_t n = 0; n < k_block; ++n) {
-            memory.m_audio_in[n] = scale * static_cast<float>(n) / k_block;
-            memory.m_audio_out[n] = -1.F;
-        }
-        memory.m_gain[0] = 0.5F;
-        memory.m_gain_out[0] = -1.F;
-        const std::vector<anira_tensor> inputs{memory.m_audio_in.descriptor({1, 1, k_block}),
-                                               memory.m_gain.descriptor({1, 1, 1})};
-        std::vector<anira_tensor> outputs{memory.m_audio_out.descriptor({1, 1, k_block}),
-                                          memory.m_gain_out.descriptor({1})};
-        const uint64_t copies_in = adapter->executor().copies_in();
-        const uint64_t copies_out = adapter->executor().copies_out();
-        ASSERT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_OK);
-        EXPECT_EQ(adapter->executor().copies_in() - copies_in, copies);
-        EXPECT_EQ(adapter->executor().copies_out() - copies_out, copies);
-        for (size_t n = 0; n < k_block; ++n) {
-            ASSERT_EQ(memory.m_audio_out[n], 0.5F * memory.m_audio_in[n]) << "sample " << n;
-        }
-        EXPECT_GT(memory.m_gain_out[0], 0.F) << "the peak landed in the caller's memory";
-    };
-    run_over(first, 1.F, 0);
-    run_over(second, 2.F, 0);
-    run_over(first, 3.F, 0);
-    run_over(second, 4.F, 0);
-    run_over(past, 1.F, 2);
-    run_over(past, 2.F, 2);
-    run_over(first, 5.F, 0);
+    expect_bound_on_the_boundary(*adapter);
 }
 
 #endif  // USE_LITERT
