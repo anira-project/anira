@@ -318,15 +318,15 @@ public:
          * @brief The chunk's storage and its descriptors, built once by the session's prepare
          *
          * One allocation holds the buffer of every slot of either side but a State slot, each
-         * buffer starting on a 64-byte boundary, in the storage's dtype (float32 in this
-         * pre-release) with the spec's extents, zeroed. Every slot gets one descriptor over its
-         * buffer, with the spec's rank and extents and all-zero strides: what the engine call
+         * buffer starting on a 64-byte boundary, in the spec's dtype with the spec's extents,
+         * zeroed. Every slot gets one descriptor over its buffer, with the spec's rank, extents
+         * and dtype and all-zero strides: what the engine call
          * hands its adapter (anira_engine_ctx::inputs / outputs) and what a processor context
          * copies for a slot. A State slot has no buffer: its descriptor is the processor
          * runner's to bind over the pair's port ahead of every inference.
          *
-         * @param inputs What the validator derived per input tensor: the spec's extents
-         * (capi::DerivedSpec::m_dims)
+         * @param inputs What the validator derived per input tensor: the spec's extents and
+         * dtype (capi::DerivedSpec::m_dims, m_dtype)
          * @param outputs The same per output tensor
          * @param input_state Per input tensor: whether it is a State slot
          * @param output_state Per output tensor: whether it is a State slot

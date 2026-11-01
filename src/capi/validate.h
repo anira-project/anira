@@ -41,11 +41,13 @@ namespace anira::capi {
 
 /// What the validator derives for one tensor spec.
 struct DerivedSpec {
-    std::vector<int64_t> m_dims;        ///< the spec's extents, a dynamic Time extent resolved
-    int64_t m_channels = 1;             ///< Streamed: the Channel axis extent, 1 without one;
-                                        ///< Static and Buffer: 1 (the tag names an axis there)
-    int64_t m_window_used = 0;          ///< Streamed only: the window, a flexible one pinned
-                                        ///< from the anchor hop (pin_anchor_hop)
+    std::vector<int64_t> m_dims;            ///< the spec's extents, a dynamic Time extent resolved
+    anira_dtype m_dtype = ANIRA_DTYPE_F32;  ///< the spec's dtype: the model tensor's, and the
+                                            ///< element type of its chunk buffer
+    int64_t m_channels = 1;                 ///< Streamed: the Channel axis extent, 1 without one;
+                                            ///< Static and Buffer: 1 (the tag names an axis there)
+    int64_t m_window_used = 0;              ///< Streamed only: the window, a flexible one pinned
+                                            ///< from the anchor hop (pin_anchor_hop)
     int64_t m_hop = 0;                  ///< Streamed: window_used - context; Static and Buffer: 0
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
 };

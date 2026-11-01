@@ -33,6 +33,7 @@
 #include "../utils/RtLatch.h"
 #include "InstanceWaitList.h"  // IWYU pragma: keep (the complete wait list of PlanSlot)
 #include "LatencyCalculator.h"
+#include "TensorRun.h"
 
 namespace anira {
 
@@ -78,14 +79,14 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::Deriv
                                                    const std::vector<capi::DerivedSpec>& outputs,
                                                    const std::vector<bool>& input_state,
                                                    const std::vector<bool>& output_state) {
-    // The bytes of one slot's buffer, rounded up to the alignment so that the next one starts
-    // on a boundary too; a State slot has none.
-    const auto bytes_of = [](const std::vector<int64_t>& dims) {
+    // The bytes of one slot's buffer, elements of the spec's dtype, rounded up to the alignment
+    // so that the next one starts on a boundary too; a State slot has none.
+    const auto bytes_of = [](const capi::DerivedSpec& spec) {
         size_t elements = 1;
-        for (const int64_t extent : dims) {
+        for (const int64_t extent : spec.m_dims) {
             elements *= extent > 0 ? static_cast<size_t>(extent) : 0U;
         }
-        return elements * sizeof(float);
+        return elements * tensor_run::dtype_size(spec.m_dtype);
     };
     const auto padded = [](size_t bytes) {
         return (bytes + k_alignment - 1) / k_alignment * k_alignment;
@@ -95,19 +96,19 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::Deriv
     };
     size_t total = 0;
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
-        if (stored(input_state, slot)) { total += padded(bytes_of(inputs[slot].m_dims)); }
+        if (stored(input_state, slot)) { total += padded(bytes_of(inputs[slot])); }
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
-        if (stored(output_state, slot)) { total += padded(bytes_of(outputs[slot].m_dims)); }
+        if (stored(output_state, slot)) { total += padded(bytes_of(outputs[slot])); }
     }
     // Value-initialised: every buffer starts at zeros.
     m_block = std::vector<std::byte>(total + k_alignment);
     const auto base = reinterpret_cast<uintptr_t>(m_block.data());
     const uintptr_t aligned = (base + k_alignment - 1) & ~static_cast<uintptr_t>(k_alignment - 1);
     size_t offset = aligned - base;
-    // The spec's rank and extents over the slot's buffer, the storage's dtype (float32 in this
-    // pre-release), all-zero strides; a State slot's descriptor has the shape and no memory
-    // until the processor runner binds it over its pair.
+    // The spec's rank, extents and dtype over the slot's buffer, all-zero strides; a State
+    // slot's descriptor has the shape and the dtype and no memory until the processor runner
+    // binds it over its pair.
     const auto side = [&](const std::vector<capi::DerivedSpec>& specs,
                           const std::vector<bool>& state,
                           std::vector<anira_tensor>& tensors,
@@ -118,14 +119,14 @@ SessionElement::ThreadSafeStruct::ThreadSafeStruct(const std::vector<capi::Deriv
             const std::vector<int64_t>& dims = specs[slot].m_dims;
             std::byte* data = nullptr;
             if (stored(state, slot)) {
-                const size_t bytes = bytes_of(dims);
+                const size_t bytes = bytes_of(specs[slot]);
                 data = m_block.data() + offset;
                 buffers[slot] = std::span<std::byte>(data, bytes);
                 offset += padded(bytes);
             }
             anira_tensor_init_host(&tensors[slot],
                                    data,
-                                   ANIRA_DTYPE_F32,
+                                   specs[slot].m_dtype,
                                    static_cast<uint32_t>(dims.size()),
                                    dims.data());
         }

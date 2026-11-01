@@ -136,6 +136,7 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
     size_t time_count = 0;
     size_t channel_count = 0;
     out.m_dims.assign(spec.m_ndim, 0);
+    out.m_dtype = spec.m_dtype;
     for (size_t i = 0; i < spec.m_ndim; ++i) {
         const Axis& axis = spec.m_axes[i];
         if (!axis.m_written) {
