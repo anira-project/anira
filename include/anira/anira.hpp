@@ -1501,7 +1501,9 @@ public:
         });
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
-    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry.
+    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry and on an entry
+    /// without a source (add_model(engine_id)), Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index
+    /// out of range.
     std::string_view model_path(uint32_t index) const {
         const char* path = anira_model_config_model_path(m_config, index);
         if (path == nullptr) {

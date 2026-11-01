@@ -1267,7 +1267,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_provider(const anira_
  * @brief The entry's model path.
  * @param config The config.
  * @param model_index An entry.
- * @return Object-owned; NULL for a bytes entry or an index out of range.
+ * @return Object-owned; NULL for a NULL config, an index out of range, a bytes entry and an
+ *         entry without a source (anira_model_config_add_model_path with a NULL path: a custom
+ *         engine's entry that names no model file).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
