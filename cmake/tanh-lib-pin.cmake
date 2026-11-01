@@ -12,13 +12,11 @@
 include_guard(GLOBAL)
 
 set(ANIRA_TANH_LIB_REPOSITORY https://github.com/tanh-lab/tanh-lib.git)
-# v0.4.0 plus tanh-tooling v0.3.0 (tanh-lab/tanh-lib#73; nothing in the core changed since
-# v0.4.0). Needed since v0.4.0: the strided RingBuffer calls (tanh-lab/tanh-lib#50: push_block /
-# pop_block / peek_past_block with a stride) that anira_ring forwards to. Needed since v0.3.0:
-# the logger carriers (tanh-lab/tanh-lib#37: platform identity, per-record flags, the drop count
-# on the record) and the TANH_LOG_COMPILED_MAX_LEVEL option (#38). tanh-tooling v0.3.0, the same
-# tooling tag this tree pins.
-# temporary: tanh-lab/tanh-lib#84 head (branch feat/abi-namespace: tanh_add_core_library in
-# cmake/core-library.cmake and the inline ABI namespace, which CMakeLists.txt needs); re-pinned
-# to v0.5.0 before merge.
-set(ANIRA_TANH_LIB_COMMIT 0b94443a9e4ce0bf05160984a6673b299e073828)
+# v0.5.0 (tanh-lab/tanh-lib#84). Needed since v0.5.0: tanh_add_core_library in
+# cmake/core-library.cmake and the inline ABI namespace (thl::inline THL_ABI_NAMESPACE), through
+# which CMakeLists.txt builds anira_tanh_core in thl::anira. Needed since v0.4.0: the strided
+# RingBuffer calls (tanh-lab/tanh-lib#50: push_block / pop_block / peek_past_block with a stride)
+# that anira_ring forwards to. Needed since v0.3.0: the logger carriers (tanh-lab/tanh-lib#37:
+# platform identity, per-record flags, the drop count on the record) and the compiled log
+# ceiling (#38). tanh-tooling v0.3.0, the same tooling tag this tree pins.
+set(ANIRA_TANH_LIB_COMMIT a62f61649edcb6666de041830d1ef97c7f02e17f)

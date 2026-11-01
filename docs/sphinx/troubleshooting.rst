@@ -221,8 +221,8 @@ engine's *symbols* private. A shared engine library (the shape a shared ``libani
 without any exported symbol, because the system's loader picks it by its name:
 
 - **Linux:** a library is loaded once per soname. anira's ONNX Runtime has the soname
-  ``libonnxruntime.so.1``, like every ONNX Runtime 1.x (other applications and Python packages
-  ship their own): when the process has loaded another 1.x first, ``libanira``'s dependency
+  ``libonnxruntime.so.1``, like every ONNX Runtime 1.x (the PyPI ``onnxruntime`` wheel and Firefox
+  builds ship one too): when the process has loaded another 1.x first, ``libanira``'s dependency
   resolves to that copy. LibTorch's ``libtorch.so`` and LiteRT's ``libLiteRt.so`` are matched the
   same way.
 - **Windows:** a DLL whose module name is already loaded is reused, whatever folder it came
@@ -243,7 +243,7 @@ static (``BUILD_SHARED_LIBS=OFF``): the engines are then static archives inside 
 as in solution 1, and no loader can swap them. LibTorch has no static build, so a plugin that needs
 LibTorch carries this risk. With a shared anira, ship the engine libraries next to the executable
 you control, in the versions anira pins. Separating the shared engine libraries by name is
-planned: anira-project/anira#232.
+planned: `anira-project/anira#232 <https://github.com/anira-project/anira/issues/232>`_.
 
 .. _host-tanh-lib:
 
@@ -259,7 +259,7 @@ pins (``cmake/tanh-lib-pin.cmake``), under a FetchContent name of its own (``ani
 compiles it hidden into ``libanira`` and installs nothing of it. And it builds it in an inline ABI
 namespace of its own, ``thl::anira``, where your tanh-lib is in tanh-lib's default namespace
 (``thl::v<major>_<minor>``) or one you chose. Code spells both ``thl::...``, but no symbol of the
-two copies shares a mangled name (``_ZN3thl5anira...`` against ``_ZN3thl4v0_4...``), header-only
+two copies shares a mangled name (``_ZN3thl5anira...`` against ``_ZN3thl4v0_5...``), header-only
 templates and inline functions included, so no link can bind one copy's references to the other:
 
 - your tanh-lib keeps a logger, a level, a callback and threads of its own, and anira keeps its

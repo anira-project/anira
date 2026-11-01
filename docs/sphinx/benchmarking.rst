@@ -219,7 +219,7 @@ Extend the project of *CMake Configuration* above to include the test and find i
     # tanh-lib's core component, for the thread priority of test.cpp
     FetchContent_Declare(tanh-lib
         GIT_REPOSITORY https://github.com/tanh-lab/tanh-lib.git
-        GIT_TAG v0.4.0)
+        GIT_TAG v0.5.0)
     set(TANH_BUILD_STATE OFF)
     set(TANH_BUILD_DSP OFF)
     set(TANH_BUILD_MODULATION OFF)
