@@ -1295,12 +1295,13 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_bytes(const anira_mod
 /**
  * @brief Records what this entry's file calls the tensor you named canonical, and switches that
  * tensor of this entry from positional binding (input slot i to the file's input i, the
- * slot order being the add_input/add_output order; ONNX Runtime's session order, the
- * primary subgraph's order on TFLite and LiteRT) to binding by that name. An entry
- * without a record for a tensor binds it positionally. A name the engine cannot resolve
- * fails prepare with ANIRA_ERROR_CONFIG naming what the file has; a name on a side the
- * engine binds only by position is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create and
- * at prepare (drop the name, keep the layout). Together with
+ * slot order being the add_input/add_output order; ONNX Runtime's session order, on
+ * TFLite and LiteRT the key order of the model's first signature, its names sorted, and
+ * on TFLite the interpreter's order for a file without signatures) to binding by that
+ * name. An entry without a record for a tensor binds it positionally. A name the engine
+ * cannot resolve fails prepare with ANIRA_ERROR_CONFIG naming what the file has; a name
+ * on a side the engine binds only by position is ANIRA_ERROR_NOT_SUPPORTED at
+ * anira_handler_create and at prepare (drop the name, keep the layout). Together with
  * anira_model_config_set_tensor_layout this is the per-entry tensor record, the JSON
  * file's models[].tensors.
  * @param config The config.

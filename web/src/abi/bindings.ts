@@ -2475,11 +2475,12 @@ export class AniraBindings {
    * Records what this entry's file calls the tensor you named canonical, and switches
    * that tensor of this entry from positional binding (input slot i to the file's input
    * i, the slot order being the add_input/add_output order; ONNX Runtime's session order,
-   * the primary subgraph's order on TFLite and LiteRT) to binding by that name. An entry
-   * without a record for a tensor binds it positionally. A name the engine cannot resolve
-   * fails prepare with ANIRA_ERROR_CONFIG naming what the file has; a name on a side the
-   * engine binds only by position is ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create
-   * and at prepare (drop the name, keep the layout). Together with
+   * on TFLite and LiteRT the key order of the model's first signature, its names sorted,
+   * and on TFLite the interpreter's order for a file without signatures) to binding by
+   * that name. An entry without a record for a tensor binds it positionally. A name the
+   * engine cannot resolve fails prepare with ANIRA_ERROR_CONFIG naming what the file has;
+   * a name on a side the engine binds only by position is ANIRA_ERROR_NOT_SUPPORTED at
+   * anira_handler_create and at prepare (drop the name, keep the layout). Together with
    * anira_model_config_set_tensor_layout this is the per-entry tensor record, the JSON
    * file's models[].tensors.
    *
@@ -6691,9 +6692,13 @@ export class AniraBindings {
   /**
    * Fills an engine descriptor whose process (always), reset and query (per bit) are
    * trampolines into the scope registry's engine, and whose release frees the record
-   * behind user_data without crossing into JavaScript. The init, load, unload, prepare
-   * and unprepare slots stay NULL: a JavaScript engine is ready when its Worker's
-   * registry booted (its init resolved), before the Worker enters its loop. flags is
+   * behind user_data without crossing into JavaScript. The init slot stays NULL: a
+   * JavaScript engine is ready when its Worker's registry booted (its init resolved),
+   * before the Worker enters its loop. load, unload, prepare and unprepare are C
+   * trampolines that never cross into JavaScript: load reads the entry's model record
+   * once on the control thread (its row, its path copied, its bytes borrowed), unload
+   * frees it, prepare hands it to every process and reset call as their prepared pointer
+   * (what the package's engineModel reads), and unprepare does nothing. flags is
    * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill
    * before anira_custom_engine_create. A descriptor that is never created keeps its
    * record.

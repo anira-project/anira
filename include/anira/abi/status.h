@@ -65,8 +65,10 @@ typedef enum anira_status {
     ANIRA_ERROR_ENGINE = -8,  /**< The engine failed at run time. */
     /**
      * Prepare-time legality (section 2), and the real-time refusals recorded in
-     * anira_handler_rt_error: a Hard entry's host tensor whose dtype differs from its slot's, a
-     * ring or tensor accessor's dtype.
+     * anira_handler_rt_error, among them a Hard entry's host tensor whose dtype differs from
+     * its slot's, a Static tensor whose dtype differs from its spec's, anira_handler_set_plan
+     * with a plan out of range, a processor phase that moved other than its hop on a ring, and
+     * a ring or tensor accessor's, or a default body's, dtype or size.
      */
     ANIRA_ERROR_CONFIG = -9,
     /**
