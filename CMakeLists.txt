@@ -300,7 +300,24 @@ tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 # (cmake/prelink-archive.cmake). Mach-O and PE archives keep the objects as they are (the
 # remaining limitation, docs/sphinx/troubleshooting.rst), and so does a toolchain without readelf
 # and objcopy.
-if(NOT BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "ELF" AND CMAKE_READELF AND CMAKE_OBJCOPY)
+# The path taken is printed: a plain archive passes every test and still leaves a host's own
+# tanh-lib bindable to anira's, so the static Android legs of CI check it (build_test_mobile.yml).
+set(_anira_plain_reason "")
+if(NOT BUILD_SHARED_LIBS)
+    if(NOT TANH_BINARY_FORMAT STREQUAL "ELF")
+        set(_anira_plain_reason "not ELF: ${TANH_BINARY_FORMAT}")
+    elseif(NOT CMAKE_READELF)
+        set(_anira_plain_reason "no readelf")
+    elseif(NOT CMAKE_OBJCOPY)
+        set(_anira_plain_reason "no objcopy")
+    endif()
+    if(_anira_plain_reason STREQUAL "")
+        message(STATUS "anira: static libanira prelinked (ELF; only anira_* global)")
+    else()
+        message(STATUS "anira: static libanira is a plain archive (${_anira_plain_reason})")
+    endif()
+endif()
+if(NOT BUILD_SHARED_LIBS AND _anira_plain_reason STREQUAL "")
     set(_anira_prelinked "${CMAKE_CURRENT_BINARY_DIR}/anira_prelinked.o")
     set(_anira_cxx_target "")
     if(CMAKE_CXX_COMPILER_TARGET)
@@ -327,6 +344,7 @@ if(NOT BUILD_SHARED_LIBS AND TANH_BINARY_FORMAT STREQUAL "ELF" AND CMAKE_READELF
 else()
     add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
 endif()
+unset(_anira_plain_reason)
 # The shared object is named after the ABI pair (cmake/build-info.cmake), not after the release:
 # the soname is the ABI major (libanira.so.0, libanira.0.dylib and anira-0.dll through the 3.0.0
 # pre-releases; 3 from v3.0.0 on) and the file version is the pair. On Mach-O the current and the
