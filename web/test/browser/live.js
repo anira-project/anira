@@ -304,6 +304,9 @@ const run = async () => {
       `frames of silence)`
   )
   small.stop()
+  // The main context suspended: while it plays, headless Chromium paces the sized contexts'
+  // callbacks every 480 frames for stretches (481 by baseLatency), and the 480 case reads 480.
+  await audio.suspend()
 
   // Contexts of another render size, where the browser takes renderSizeHint: 256 and 480 frames
   // (480 is no power of two: a callback of 2048 renders 4 or 5 of them; on CI's callback of 481

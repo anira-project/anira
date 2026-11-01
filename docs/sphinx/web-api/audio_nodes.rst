@@ -61,15 +61,15 @@ geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
    frames, 9.1875 ms at 48 kHz on a CI runner: 3 or 4 quanta of 128, a burst of 512). The worst
    case can be rarer than any window: a callback of 481 frames at a quantum of 480 renders one
    quantum per callback and two back to back once every 480 callbacks (about 5 s), when the frame
-   left over each time adds up to a quantum. So a probe ``AudioWorklet`` measures two things: the
-   longest run of back-to-back calls it sees (a run ends where a gap reaches halfway from one
-   quantum's duration to the longest gap between callbacks, so a call late by a few milliseconds
-   does not split it), and the frames per device callback, the period at which the runs begin
-   timed with a Worker's microsecond clock (the worklet scope has only ``Date.now``) times the
-   rate. The burst is the more of the two in whole quanta: the frames per callback over the
-   quantum, rounded up (481 / 480: 2 quanta, 960 frames), with half a frame taken off first so an
-   exact fit stays one quantum (a ``"hardware"`` quantum of the callback's size). A quantum at
-   least the callback's size is rendered one call per callback or fewer: a burst of one quantum.
+   left over each time adds up to a quantum. So a probe ``AudioWorklet`` measures the frames per
+   device callback, the period at which the runs of calls begin timed with a Worker's microsecond
+   clock (the worklet scope has only ``Date.now``) times the rate. The burst is the frames per
+   callback over the quantum, rounded up (481 / 480: 2 quanta, 960 frames), with half a frame
+   taken off first so an exact fit stays one quantum (a ``"hardware"`` quantum of the callback's
+   size). A quantum at least the callback's size is rendered one call per callback or fewer: a
+   burst of one quantum. The longest run of back-to-back calls counts only while that estimate is
+   not settled, or without a Worker (a page whose policy refuses one): a renderer that wakes late
+   renders the quanta it owes back to back, a run the device never asks for.
    A context whose sample rate differs from the device's is resampled: each callback renders the
    device's frames times the context's rate over the device's, in context frames (2048 device
    frames at 48 kHz for a context of 44.1 kHz: 1881.6 frames, runs of 14 and 15 quanta of 128, a
