@@ -179,6 +179,11 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(concurrentqueue)
 add_library(anira_concurrentqueue INTERFACE)
 target_include_directories(anira_concurrentqueue SYSTEM INTERFACE "${concurrentqueue_SOURCE_DIR}")
+# The queue's namespace is anira's own in every TU that includes it (the objects and the white-box
+# suites that link them): moodycamel's templates carry no ABI namespace, so in a static libanira
+# their instantiations would merge by name with a host's own concurrentqueue. The preprocessor
+# renames the token; nothing is patched on disk, and no public header names the queue (gate 4).
+target_compile_definitions(anira_concurrentqueue INTERFACE moodycamel=anira_moodycamel)
 
 # ==============================================================================
 # Fetch tanh-lib (Apache-2.0 core component only)
