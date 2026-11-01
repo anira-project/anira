@@ -330,14 +330,18 @@ tanh_apply_symbol_policy(anira_objects EXPORT_PREFIX ANIRA)
 # definition of the archive like to any object's; on ELF the static libanira is therefore one
 # prelinked object in which every hidden symbol but the anira_* entries is local
 # (cmake/prelink-archive.cmake). Mach-O and PE archives keep the objects as they are (the
-# remaining limitation, docs/sphinx/troubleshooting.rst), and so does a toolchain without readelf
-# and objcopy.
+# remaining limitation, docs/sphinx/troubleshooting.rst), and so do a multi-config generator and
+# a toolchain without readelf and objcopy.
 # The path taken is printed: a plain archive passes every test and still leaves a host's own
 # tanh-lib bindable to anira's, so the static Android legs of CI check it (build_test_mobile.yml).
 set(_anira_plain_reason "")
+get_property(_anira_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT BUILD_SHARED_LIBS)
     if(NOT TANH_BINARY_FORMAT STREQUAL "ELF")
         set(_anira_plain_reason "not ELF: ${TANH_BINARY_FORMAT}")
+    elseif(_anira_multi_config)
+        # One fixed OUTPUT of the prelink cannot hold the objects of several configurations.
+        set(_anira_plain_reason "multi-config generator")
     elseif(NOT CMAKE_READELF)
         set(_anira_plain_reason "no readelf")
     elseif(NOT CMAKE_OBJCOPY)
@@ -351,8 +355,12 @@ if(NOT BUILD_SHARED_LIBS)
 endif()
 if(NOT BUILD_SHARED_LIBS AND _anira_plain_reason STREQUAL "")
     set(_anira_prelinked "${CMAKE_CURRENT_BINARY_DIR}/anira_prelinked.o")
+    # The cross-compiling target of a clang driver (an NDK's); g++ takes no --target. Nothing of
+    # CMAKE_CXX_FLAGS is forwarded: a sanitizer or coverage flag on the -r link would drag its
+    # runtime into the object, so a flag that changes the relocatable output itself (-m32 on a
+    # 64-bit host) is not supported here.
     set(_anira_cxx_target "")
-    if(CMAKE_CXX_COMPILER_TARGET)
+    if(CMAKE_CXX_COMPILER_TARGET AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
         set(_anira_cxx_target "-DCXX_TARGET=${CMAKE_CXX_COMPILER_TARGET}")
     endif()
     add_custom_command(OUTPUT "${_anira_prelinked}"
@@ -366,17 +374,29 @@ if(NOT BUILD_SHARED_LIBS AND _anira_plain_reason STREQUAL "")
         VERBATIM)
     # An object alone names no language. The archive is C++ inside, and CMake links a static
     # library's consumers with the runtimes of its source languages (its link interface languages),
-    # so an empty C++ source names it, as the objects did.
-    file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/anira_link_language.cpp"
+    # so an empty C++ source names it, as the objects did. Written only when its text changes: a
+    # reconfigure must not re-archive libanira.a and relink every static consumer.
+    set(_anira_link_language "${CMAKE_CURRENT_BINARY_DIR}/anira_link_language.cpp")
+    set(_anira_link_language_text
         "// The link language of the prelinked static libanira (CMakeLists.txt): C++.\n")
-    add_library(${PROJECT_NAME} STATIC "${_anira_prelinked}"
-        "${CMAKE_CURRENT_BINARY_DIR}/anira_link_language.cpp")
+    set(_anira_link_language_old "")
+    if(EXISTS "${_anira_link_language}")
+        file(READ "${_anira_link_language}" _anira_link_language_old)
+    endif()
+    if(NOT _anira_link_language_old STREQUAL _anira_link_language_text)
+        file(WRITE "${_anira_link_language}" "${_anira_link_language_text}")
+    endif()
+    add_library(${PROJECT_NAME} STATIC "${_anira_prelinked}" "${_anira_link_language}")
     unset(_anira_prelinked)
     unset(_anira_cxx_target)
+    unset(_anira_link_language)
+    unset(_anira_link_language_text)
+    unset(_anira_link_language_old)
 else()
     add_library(${PROJECT_NAME} $<TARGET_OBJECTS:anira_objects> $<TARGET_OBJECTS:tanh_core>)
 endif()
 unset(_anira_plain_reason)
+unset(_anira_multi_config)
 # The shared object is named after the ABI pair (cmake/build-info.cmake), not after the release:
 # the soname is the ABI major (libanira.so.0, libanira.0.dylib and anira-0.dll through the 3.0.0
 # pre-releases; 3 from v3.0.0 on) and the file version is the pair. On Mach-O the current and the

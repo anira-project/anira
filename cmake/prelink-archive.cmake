@@ -15,7 +15,8 @@
 #   cmake -DCXX=<compiler> [-DCXX_TARGET=<triple>] -DREADELF=<readelf> -DOBJCOPY=<objcopy>
 #         -DOUTPUT=<object> -DINPUTS=<object>;<object>... -P cmake/prelink-archive.cmake
 #
-# ELF only (cmake/tanh: TANH_BINARY_FORMAT); the caller archives OUTPUT as libanira.a.
+# ELF only (cmake/tanh: TANH_BINARY_FORMAT) and single-configuration generators; CXX_TARGET is a
+# clang driver's --target. The caller archives OUTPUT as libanira.a.
 # ==============================================================================
 cmake_minimum_required(VERSION 3.18)
 foreach(_var CXX READELF OBJCOPY OUTPUT INPUTS)
@@ -29,8 +30,11 @@ set(_target_flag "")
 if(CXX_TARGET)
     set(_target_flag "--target=${CXX_TARGET}")
 endif()
-# The compiler driver runs the toolchain's linker (ld, lld) in relocatable mode.
-execute_process(COMMAND "${CXX}" ${_target_flag} -r -nostdlib -o "${_relocatable}" ${INPUTS}
+# The compiler driver runs the toolchain's linker (ld, lld) in relocatable mode. No build-id: the
+# consumer's own link gives the final image one, and a second note from the object would be a
+# duplicate. None of the build's compile flags is passed (see CMakeLists.txt).
+execute_process(
+    COMMAND "${CXX}" ${_target_flag} -r -nostdlib -Wl,--build-id=none -o "${_relocatable}" ${INPUTS}
     RESULT_VARIABLE _rc ERROR_VARIABLE _err)
 if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "prelink-archive: the relocatable link failed:\n${_err}")

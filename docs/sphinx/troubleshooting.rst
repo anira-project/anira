@@ -228,7 +228,8 @@ dynamic table, so the host's tanh-lib keeps a logger, a level and threads of its
 keeps its own (the install consumer ``consumer_tanh_first`` proves it on ELF and Mach-O). A static
 ``libanira.a`` is linked into the host's image, where the static linker would bind a host
 reference to a ``thl`` symbol to a hidden copy inside the archive as to any object's definition;
-on Linux and Android the static ``libanira.a`` is therefore one prelinked object in which
+on Linux and Android the static ``libanira.a`` built with a single-configuration generator (Ninja,
+Unix Makefiles) is therefore one prelinked object in which
 tanh-lib's symbols, like anira's own C++ internals, are local (``cmake/prelink-archive.cmake``),
 and ``consumer_tanh_first`` proves the separation there too. A static anira on macOS or iOS
 keeps its objects in the archive, so there host and anira would share one copy, anira's
