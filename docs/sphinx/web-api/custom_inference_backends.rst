@@ -68,6 +68,21 @@ id:
 file, so its model entry needs no ``path``). Register before ``InferenceHandler.create``: a
 handler copies the pipeline.
 
+``edge`` states how the engine passes the slots to its runtime, for the plan report's slot rows
+and the contract's edge cost (``anira::Engine::Loaded::edge``, the native descriptor's ``edge``,
+:doc:`../custom_engines`): the engine runs in the inference Workers, so the main thread gives the
+statement here, once for every slot. Without one the rows follow the provider rule, zero-copy on
+the CPU path; an engine that copies the slots into memory of its own says so:
+
+.. code-block:: ts
+
+   pipeline.addEngine('org.example.copying', {
+     edge: { edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY, reason: 'copies into its own tensors' },
+   })
+
+Its rows then read ``ANIRA_EDGE_HOST_COPY`` moved by the engine (``PlanSlot.movedBy``,
+``ANIRA_MOVER_ENGINE``), with the reason.
+
 ONNX Runtime Web
 ----------------
 
@@ -97,9 +112,13 @@ The model is the config's, stated once:
 ``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
 each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
 (a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
-The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
-the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
-module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID`` with ``ONNXRUNTIME_WEB_ENGINE_OPTIONS``, both
+from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_OPTIONS } from
+'@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID,
+ONNXRUNTIME_WEB_ENGINE_OPTIONS)``). The options carry the engine's edge statement, a host copy of
+every slot by the engine (the two wasm memories), so its plan rows say so; without them they read
+zero-copy. The id and the options are a module of their own, so the page does not bundle
+onnxruntime-web; only the worker module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.
 
 ``onnxRuntimeWeb({ numThreads: 2 })`` runs each inference on two threads: the inference Worker's

@@ -585,8 +585,15 @@ An **Async** contract (the ``anira::Async`` aggregate: an optional ``deadline``,
 deadline, the offline posture; ``anira::Contract`` is the ``std::variant`` of the two, and the
 handle is minted from either. ``contract.kind()`` tells the two apart, and a Hard setter on an
 Async contract throws ``anira::Error`` with ``ANIRA_ERROR_WRONG_CONTRACT``. ``edge_cost``, on
-both aggregates, is the plan-validation policy for pipelines and does not affect scheduling;
-``host_domain`` on the handle (above) is common to both kinds the same way.
+both aggregates and on the handle (``contract.edge_cost(ANIRA_EDGE_ZERO_COPY)``), is plan
+validation, not scheduling: the worst edge class (section 1.7, "The engines") a plan may take
+for any slot. ``ANIRA_EDGE_TRANSFER``, the default, admits every edge;
+``ANIRA_EDGE_DEVICE_COPY`` admits no traffic between host and device, ``ANIRA_EDGE_HOST_COPY``
+no copy in device memory either, and ``ANIRA_EDGE_ZERO_COPY`` no copy at all. At prepare a plan
+with a slot above it is dropped once its model has loaded (its edges are its engine's), with an
+Info record naming each such slot, its class, who moves its bytes and why; the report holds the
+eligible plans alone, and with none left prepare throws ``ANIRA_ERROR_EDGE_UNREACHABLE`` naming
+them. ``host_domain`` on the handle (above) is common to both kinds the same way.
 
 1.4. Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -695,7 +702,8 @@ host-block keys ``host_block_min`` / ``host_block_max`` / ``host_rate`` (optiona
 block included; the blocks in elements of the model's anchor tensor and the host rate in anchor
 elements per second, as everywhere; a plugin patches them from the host with ``hard_host_blocks``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name; a tensor not named streams its spec's dtype), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
-latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost`` and ``host_domains``
+latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost``
+(``"zero_copy"``, ``"host_copy"``, ``"device_copy"`` or ``"transfer"``, section 1.3) and ``host_domains``
 (``{"audio_in": "host"}``, section 1.3), which stand beside either root.
 
 .. code-block:: cpp
@@ -901,12 +909,26 @@ The float16 case in C++, over the typed model tensor and the float32 rings (``to
 fixtures (int16, int8 and float16) run through each of them exactly, and the ONNX dtype matrix
 runs all ten through ONNX Runtime and through the ONNX Runtime Web engine
 (``test/abi/test_Dtypes.cpp``, ``web/test/dtypes.test.ts``). How each one hands a slot's memory
-over, which the plan report's ``edge_class`` states per slot: ``ANIRA_EDGE_ZERO_COPY`` bound in
-place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side
-execution providers), ``ANIRA_EDGE_HOST_COPY`` with the reason where a copy happens, the
-engine's own or the upload and readback a device provider's runtime makes itself (a GPU
-execution provider, a LiteRT accelerator, an ExecuTorch GPU delegate), the class the capability
-rows give that edge. The table is the CPU path:
+over, which the plan report states per slot: ``edge_class`` says where the bytes go, ordered by
+cost, from the slot's memory until the engine computes on them and back for outputs (a layout
+transform inside a runtime's graph is no edge), and ``moved_by`` who moves them, as bits:
+``ANIRA_MOVER_ANIRA`` for anira's own code, ``ANIRA_MOVER_ENGINE`` for the runtime's, both where
+each moves the bytes (the edge then has the class of the worse move).
+
+- ``ANIRA_EDGE_ZERO_COPY``, ``ANIRA_MOVER_NONE``: bound in place on a provider that runs over
+  host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers).
+- ``ANIRA_EDGE_HOST_COPY`` with the reason: one copy inside host memory, by the adapter
+  (``ANIRA_MOVER_ANIRA``, the copies anira makes and counts) or by the runtime's own API
+  (``ANIRA_MOVER_ENGINE``).
+- ``ANIRA_EDGE_DEVICE_COPY``: a copy or pass inside device memory (the device rows of a later
+  pre-release).
+- ``ANIRA_EDGE_TRANSFER``, ``ANIRA_MOVER_ENGINE``, with the reason: the bytes cross between
+  host and device, the upload and readback a device provider's runtime makes itself (a GPU
+  execution provider, a LiteRT accelerator, an ExecuTorch GPU delegate).
+
+These are the class and mover the capability rows give the same edge. A registered engine
+states its own per slot (``anira_engine_desc.edge``, ``anira::Engine::Loaded::edge``;
+:doc:`custom_engines`), its code the mover wherever bytes move. The table is the CPU path:
 
 .. list-table::
    :header-rows: 1
@@ -919,32 +941,35 @@ rows give that edge. The table is the CPU path:
      - bound in place
    * - LibTorch
      - bound in place (``from_blob``)
-     - one copy: a TorchScript method returns tensors of its own
+     - one copy, the adapter's: a TorchScript method returns tensors of its own
    * - LiteRT
      - bound in place (a tensor buffer over the slot's memory, kept per memory), on an
        accelerator too: anira copies nothing, the accelerator uploads the slot itself
+       (``ANIRA_EDGE_TRANSFER``, moved by the engine)
      - the same
    * - TFLite
      - bound in place (the slot's memory is the tensor's custom allocation per call)
      - the same
    * - ExecuTorch
      - bound in place where the memory plan leaves the input out (``set_input`` aliases it);
-       one copy, ``set_input``'s, into a planned one
-     - bound in place where the plan leaves the output out (``set_output_data_ptr``); one copy
-       out of a planned one
+       one copy, ``set_input``'s (moved by the engine), into a planned one
+     - bound in place where the plan leaves the output out (``set_output_data_ptr``); one copy,
+       the adapter's, out of a planned one
    * - ONNX Runtime Web
-     - one copy: anira's module and onnxruntime-web's are two wasm memories
+     - one copy, the engine's: anira's module and onnxruntime-web's are two wasm memories
      - one copy
    * - a registered engine
-     - the chunk's buffer, as it is
-     - the chunk's buffer
+     - the chunk's buffer, as it is; the engine states what it does with it
+     - the chunk's buffer, likewise
 
 A chunk's buffers start on the largest boundary any engine of the plans asks for (64 bytes for
 every built-in one), so the in-place paths always apply to anira's own memory; a descriptor off
 the boundary takes the copy. On a device provider (a LiteRT GPU accelerator, a GPU execution
 provider of ONNX Runtime) anira copies nothing either: the slot's host memory is bound in place,
-and the provider's runtime uploads it to the device and reads the results back itself. That
-upload is the runtime's and cannot be avoided while a chunk lives in host memory; device chunks,
+and the provider's runtime uploads it to the device and reads the results back itself
+(``ANIRA_EDGE_TRANSFER``, ``ANIRA_MOVER_ENGINE``). That upload is the runtime's and cannot be
+avoided while a chunk lives in host memory; a contract that admits no such traffic says so with
+``edge_cost(ANIRA_EDGE_DEVICE_COPY)`` (section 1.3) and keeps the host plans alone; device chunks,
 which the runtime binds where it computes, come with the provider support of a later
 pre-release. An engine that binds an input in place may write it: nothing reads
 a chunk's inputs after the inference but an ``after_inference`` hook, which sees what the engine
@@ -1634,7 +1659,8 @@ convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
 entry accepts (the engine, the provider, ``provider_id`` for a custom one, the custom engine's
 id, a registered engine's ``engine_flags``, the budget of that
 plan), and per plan the ``anira_plan_slot`` rows of its inputs and outputs (host rows in this
-pre-release: host to host, zero-copy, recipe ``"host"``, the wait strategy the core runs;
+pre-release: host to host, recipe ``"host"``, the edge the plan's engine takes and who moves
+its bytes (section 1.7), the wait strategy the core runs;
 ``role`` is the ``anira_role`` of the tensor's spec, the same in every plan; ``binding`` says
 how the plan bound the slot to the engine's tensor, ``ANIRA_BINDING_NAME``,
 ``ANIRA_BINDING_POSITION`` or ``ANIRA_BINDING_ENGINE`` for a registered engine, which received
@@ -1656,8 +1682,8 @@ selected plan, then one record per plan, per slot and per consumed extension:
 
     anira_handler_prepare: plan report: plans 2, input slots 1, output slots 1, selected plan 0
     anira_handler_prepare: plan 0: variant 0, engine libtorch, provider cpu, budget 5.000 ms
-    anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), wait spin_backoff, recipe host
-    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge zero_copy (allocate zero_copy), wait spin_backoff, recipe host
+    anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), moved by none, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position
+    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge host_copy (allocate host_copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position, reason: libtorch: the method returns tensors of its own
     anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider cpu, budget 5.000 ms
     ...
 
