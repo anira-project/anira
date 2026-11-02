@@ -163,6 +163,11 @@ anira_add_test_binary(test_scheduler WHITE_BOX
 # The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
 # engine room (src/engines/Adapter.h) the suites read white-box.
 
+anira_add_test_binary(test_platform WHITE_BOX
+	platform/test_MemoryProbe.cpp
+)
+# The unified-memory probe (src/platform/memory_probe.h) on the machine the suite runs on.
+
 anira_add_test_binary(test_engines WHITE_BOX
 	engines/test_Adapter.cpp
 	engines/test_ExecuTorchModelFunction.cpp

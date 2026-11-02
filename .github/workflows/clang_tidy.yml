@@ -83,7 +83,7 @@ jobs:
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
-      # SOURCES excludes src/platform/ (the Emscripten companion,
+      # SOURCES excludes src/platform/emscripten/ (the Emscripten companion,
       # src/platform/emscripten/em_hooks.cpp) because its translation
       # units are only built by the wasm presets (Emscripten toolchain) and are
       # therefore absent from this build's compilation database — and test/contracts/install/ (an external consumer project that only compiles against an installed prefix),
@@ -95,7 +95,7 @@ jobs:
         if: steps.plan.outputs.work == 'true'
         with:
           PRESET: clang-tidy
-          SOURCES: "src/engines/ src/capi/ src/scheduler/ src/utils/ examples/benchmark/fixture/ test/engines/ test/scheduler/ test/utils/ test/support/ test/contracts/unload/ test/abi/ test/contracts/test_EngineLinkage.cpp test/*.cpp"
+          SOURCES: "src/engines/ src/capi/ src/scheduler/ src/utils/ src/platform/memory_probe.cpp examples/benchmark/fixture/ test/engines/ test/scheduler/ test/utils/ test/platform/ test/support/ test/contracts/unload/ test/abi/ test/contracts/test_EngineLinkage.cpp test/*.cpp"
           # Pull requests check the .cpp files they change; the queue and a
           # dispatch sweep SOURCES. A header or build change does not widen the
           # set: what it breaks in an untouched file fails in the queue.

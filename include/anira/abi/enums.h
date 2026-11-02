@@ -567,6 +567,36 @@ typedef enum anira_probe_rung {
 } anira_probe_rung;
 
 /**
+ * @brief The physical memory a provider's device computes in, against the host's (section 7):
+ * the fact a device provider's edge over host memory takes its class from. Asked of the
+ * device's own API at run time, never inferred from a platform's name: Metal's
+ * hasUnifiedMemory, the Vulkan device type cross-checked with its memory heaps, the CUDA
+ * driver's CU_DEVICE_ATTRIBUTE_INTEGRATED, HIP's hipDeviceAttributeIntegrated, OpenCL's
+ * CL_DEVICE_HOST_UNIFIED_MEMORY, D3D12's ARCHITECTURE.UMA; a browser exposes none.
+ */
+typedef enum anira_memory_kind {
+    /**
+     * No probe established it: the device's API is missing or failed, the provider maps to no
+     * API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing
+     * runtime picks among disagree. Counted as dedicated until a probe shows unified: the edge
+     * is a dedicated transfer.
+     */
+    ANIRA_MEMORY_UNKNOWN = 0,
+    /**
+     * The host's own physical memory: the CPU path, an integrated GPU, a CPU device. A crossing
+     * between the CPU's domain and the device's is a unified transfer: a copy plus a hand-over
+     * between the processors, no bus.
+     */
+    ANIRA_MEMORY_UNIFIED = 1,
+    /**
+     * Memory of the device's own across a bus (a discrete GPU's VRAM): a crossing to or from it
+     * is a dedicated transfer over the bus.
+     */
+    ANIRA_MEMORY_DEDICATED = 2,
+    ANIRA_MEMORY_FORCE32 = 0x7fffffff
+} anira_memory_kind;
+
+/**
  * @brief num_threads sentinel: the library's default pool size; 0 means bring your own threads.
  */
 #define ANIRA_THREADS_AUTO 0xffffffffu

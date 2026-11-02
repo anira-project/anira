@@ -291,6 +291,14 @@ export const anira_probe_rung = {
 /** @internal */
 export type anira_probe_rung = (typeof anira_probe_rung)[keyof typeof anira_probe_rung]
 
+export const anira_memory_kind = {
+  ANIRA_MEMORY_UNKNOWN: 0,
+  ANIRA_MEMORY_UNIFIED: 1,
+  ANIRA_MEMORY_DEDICATED: 2,
+} as const
+/** @internal */
+export type anira_memory_kind = (typeof anira_memory_kind)[keyof typeof anira_memory_kind]
+
 export const anira_model_state = {
   ANIRA_MODEL_STATELESS: 0,
   ANIRA_MODEL_STATEFUL: 1,

@@ -424,6 +424,9 @@ target_sources(anira_objects
         src/utils/LogSinks.cpp
         src/utils/RtLatch.cpp
 
+        # Platform: the unified-memory probe (every device API loaded at run time)
+        src/platform/memory_probe.cpp
+
         # Interface
 
         # System
@@ -551,9 +554,10 @@ foreach(_anira_target anira_objects ${PROJECT_NAME})
     # cmake/aniraEngineHelpers.cmake): the library for its own link and, when static, its
     # export; the objects so that a white-box binary linking them gets the same closure.
     anira_link_backends(${_anira_target})
-    # The LibTorch engine's init looks OpenBLAS up with dlsym (src/engines/LibTorchAdapter.cpp,
-    # pin_openblas_to_one_thread); glibc before 2.34 keeps dlsym in libdl.
-    if(ANIRA_WITH_LIBTORCH AND TANH_BINARY_FORMAT STREQUAL "ELF")
+    # The unified-memory probe loads every device API with dlopen (src/platform/memory_probe.cpp),
+    # and the LibTorch engine's init looks OpenBLAS up with dlsym (src/engines/LibTorchAdapter.cpp,
+    # pin_openblas_to_one_thread); glibc before 2.34 keeps both in libdl.
+    if(TANH_BINARY_FORMAT STREQUAL "ELF")
         target_link_libraries(${_anira_target} PRIVATE ${CMAKE_DL_LIBS})
     endif()
 endforeach()

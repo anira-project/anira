@@ -1544,6 +1544,33 @@
           ]
         },
         {
+          "kind": "enum",
+          "name": "anira_memory_kind",
+          "terminator": "ANIRA_MEMORY_FORCE32",
+          "doc": "The physical memory a provider's device computes in, against the host's (section 7): the fact a device provider's edge over host memory takes its class from. Asked of the device's own API at run time, never inferred from a platform's name: Metal's hasUnifiedMemory, the Vulkan device type cross-checked with its memory heaps, the CUDA driver's CU_DEVICE_ATTRIBUTE_INTEGRATED, HIP's hipDeviceAttributeIntegrated, OpenCL's CL_DEVICE_HOST_UNIFIED_MEMORY, D3D12's ARCHITECTURE.UMA; a browser exposes none.",
+          "values": [
+            {
+              "name": "ANIRA_MEMORY_UNKNOWN",
+              "value": 0,
+              "doc": "No probe established it: the device's API is missing or failed, the provider maps to no API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing runtime picks among disagree. Counted as dedicated until a probe shows unified: the edge is a dedicated transfer."
+            },
+            {
+              "name": "ANIRA_MEMORY_UNIFIED",
+              "value": 1,
+              "doc": "The host's own physical memory: the CPU path, an integrated GPU, a CPU device. A crossing between the CPU's domain and the device's is a unified transfer: a copy plus a hand-over between the processors, no bus."
+            },
+            {
+              "name": "ANIRA_MEMORY_DEDICATED",
+              "value": 2,
+              "doc": "Memory of the device's own across a bus (a discrete GPU's VRAM): a crossing to or from it is a dedicated transfer over the bus."
+            },
+            {
+              "name": "ANIRA_MEMORY_FORCE32",
+              "value": "0x7fffffff"
+            }
+          ]
+        },
+        {
           "kind": "define",
           "name": "ANIRA_THREADS_AUTO",
           "value": "0xffffffffu",
