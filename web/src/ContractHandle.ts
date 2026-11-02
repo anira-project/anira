@@ -32,6 +32,14 @@ export type HardContractOptions = {
    * default).
    */
   warmupIterations?: number
+  /**
+   * The ring dtype per Streamed tensor by canonical name (`anira::Hard::ring_dtypes`,
+   * `anira_contract_hard_set_ring_dtype`; the spec's dtype for every tensor not named): the
+   * element type of the host's samples, set only where it differs from the model's, and then a
+   * processor that converts goes with it (nothing in anira converts). An audio node streams
+   * float32: a model of another dtype behind one names `ANIRA_DTYPE_F32` here.
+   */
+  ringDtypes?: Record<string, number>
 }
 
 /**
@@ -98,6 +106,9 @@ export class ContractHandle {
           : anira_warmup_mode.ANIRA_WARMUP_NONE,
         warmup
       )
+      for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
+        contract.hardRingDtype(canonical, dtype)
+      }
     } catch (error) {
       contract.destroy()
       throw error
@@ -118,6 +129,19 @@ export class ContractHandle {
       hostBlockMax,
       hostRate
     )
+    return this
+  }
+
+  /**
+   * The ring dtype of one tensor under this Hard contract, by canonical name
+   * (`anira_contract_hard_set_ring_dtype`, `anira::ContractHandle::hard_ring_dtype`): the
+   * element type the host's samples of that tensor carry and its ring holds as is; the spec's
+   * dtype for every tensor never set. Nothing converts: a name that is no Streamed tensor is
+   * `ANIRA_ERROR_CONFIG` at prepare, and so is a ring dtype that differs from the spec's dtype
+   * unless a processor of the pipeline fills the phase that moves that ring and converts.
+   */
+  hardRingDtype(canonical: string, dtype: number): this {
+    this.abi.anira_contract_hard_set_ring_dtype(this.contract, canonical, dtype)
     return this
   }
 
