@@ -268,9 +268,9 @@ export type anira_log_drain = (typeof anira_log_drain)[keyof typeof anira_log_dr
 
 export const anira_edge_class = {
   ANIRA_EDGE_ZERO_COPY: 0,
-  ANIRA_EDGE_HOST_COPY: 1,
-  ANIRA_EDGE_DEVICE_COPY: 2,
-  ANIRA_EDGE_TRANSFER: 3,
+  ANIRA_EDGE_COPY: 1,
+  ANIRA_EDGE_UNIFIED_TRANSFER: 2,
+  ANIRA_EDGE_DEDICATED_TRANSFER: 3,
 } as const
 /** @internal */
 export type anira_edge_class = (typeof anira_edge_class)[keyof typeof anira_edge_class]

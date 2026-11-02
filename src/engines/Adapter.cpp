@@ -376,7 +376,7 @@ bool host_memory_provider(anira_provider provider, std::string_view provider_id)
 
 Loaded::SlotEdge Loaded::provider_edge() const noexcept {
     if (host_memory_provider(m_model.m_provider, m_model.m_provider_id)) { return SlotEdge{}; }
-    return SlotEdge{.m_class = ANIRA_EDGE_TRANSFER,
+    return SlotEdge{.m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
                     .m_moved_by = ANIRA_MOVER_ENGINE,
                     .m_reason =
                         "the provider computes in its device's memory: the slot is "

@@ -72,7 +72,7 @@ void set_provider_edge(anira_edge_info& edge,
         edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
         edge.reason = host_reason;
     } else {
-        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_TRANSFER);
+        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER);
         edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
         edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
         edge.reason = device_reason;

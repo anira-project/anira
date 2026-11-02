@@ -185,7 +185,7 @@ void DescriptorLoaded::state_edges(const Model& model) {
                                   ": it returned " + std::to_string(static_cast<int>(status)) +
                                   " (" + anira_status_string(status) + ")");
         }
-        if (edge.edge_class > static_cast<uint32_t>(ANIRA_EDGE_TRANSFER)) {
+        if (edge.edge_class > static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER)) {
             throw StatusError(ANIRA_ERROR_ENGINE,
                               "the engine '" + id() + "' stated edge class " +
                                   std::to_string(edge.edge_class) + " for " + where +

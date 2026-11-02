@@ -1466,22 +1466,22 @@
             {
               "name": "ANIRA_EDGE_ZERO_COPY",
               "value": 0,
-              "doc": "Nothing moves: the engine computes on the slot's own memory."
+              "doc": "Nothing moves: the engine computes on the slot's own memory, a device on unified memory included where its runtime wraps the slot's buffer."
             },
             {
-              "name": "ANIRA_EDGE_HOST_COPY",
+              "name": "ANIRA_EDGE_COPY",
               "value": 1,
-              "doc": "One copy inside host memory."
+              "doc": "A copy or pass within one domain, the CPU's or one device's, with no hand-over between processors: a memcpy in host memory, a relayout or copy inside a device's memory."
             },
             {
-              "name": "ANIRA_EDGE_DEVICE_COPY",
+              "name": "ANIRA_EDGE_UNIFIED_TRANSFER",
               "value": 2,
-              "doc": "A copy or pass inside device memory; nothing reaches the host."
+              "doc": "The bytes cross between the CPU's domain and a device's within one unified physical memory (an Apple silicon GPU, an integrated GPU, a CPU device): a copy plus a hand-over between the processors (a submission, a fence, possibly cache maintenance or a relayout), and no bus."
             },
             {
-              "name": "ANIRA_EDGE_TRANSFER",
+              "name": "ANIRA_EDGE_DEDICATED_TRANSFER",
               "value": 3,
-              "doc": "The bytes cross between host and device memory: an upload, a readback, a staging copy."
+              "doc": "The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory (a discrete GPU's VRAM), a discrete device reading mapped host memory, a copy between two devices."
             },
             {
               "name": "ANIRA_EDGE_CLASS_FORCE32",
@@ -4258,7 +4258,7 @@
             {
               "type": "anira_edge_class",
               "name": "worst_allowed",
-              "doc": "The worst class a plan may take for any of its slots: ANIRA_EDGE_TRANSFER (the default) admits every edge, ANIRA_EDGE_DEVICE_COPY no bytes crossing between host and device, ANIRA_EDGE_HOST_COPY no device memory either, ANIRA_EDGE_ZERO_COPY no copy at all."
+              "doc": "The worst class a plan may take for any of its slots: ANIRA_EDGE_DEDICATED_TRANSFER (the default) admits every edge, ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between domains, ANIRA_EDGE_ZERO_COPY no copy at all."
             }
           ],
           "thread": "main-thread",
@@ -5908,7 +5908,7 @@
             {
               "type": "const char*",
               "name": "utf8",
-              "doc": "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost (the worst edge class allowed, by its word: \"zero_copy\", \"host_copy\", \"device_copy\" or \"transfer\"; anira_contract_set_edge_cost) and an optional top-level host_domains ({\"<name>\": \"<domain word>\"}, anira_contract_set_host_domain), or a v2 document."
+              "doc": "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost (the worst edge class allowed, by its word: \"zero_copy\", \"copy\", \"unified_transfer\" or \"dedicated_transfer\"; anira_contract_set_edge_cost) and an optional top-level host_domains ({\"<name>\": \"<domain word>\"}, anira_contract_set_host_domain), or a v2 document."
             },
             {
               "type": "size_t",
@@ -6669,7 +6669,7 @@
           "status": "promised",
           "since": "0.2",
           "doc": "The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may take.",
-          "return_doc": "The class; ANIRA_EDGE_TRANSFER, the default, for NULL."
+          "return_doc": "The class; ANIRA_EDGE_DEDICATED_TRANSFER, the default, for NULL."
         },
         {
           "kind": "function",
@@ -8820,7 +8820,7 @@
             {
               "name": "edge_class",
               "type": "uint32_t",
-              "doc": "anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until it computes on them and back for an output. Arrives as the provider rule's (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_TRANSFER on every other provider): an engine that leaves it states that."
+              "doc": "anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until it computes on them and back for an output. Arrives as the provider rule's (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_DEDICATED_TRANSFER on every other provider): an engine that leaves it states that."
             },
             {
               "name": "reason",
@@ -8866,7 +8866,7 @@
             }
           ],
           "thread": "main-thread",
-          "doc": "The edge statement of an engine, the built-in engines' Loaded::slot_edge for a custom one: how it passes each slot to its runtime, for the plan report's slot rows and the contract's edge cost (anira_contract_set_edge_cost). Called on the thread of anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot of each loaded model right after its load succeeded, inputs first, in slot order; anira keeps the answers for the loaded model's life. An engine that copies a slot into memory of its own says ANIRA_EDGE_HOST_COPY, one on a device that computes in host memory says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the load's unload is called."
+          "doc": "The edge statement of an engine, the built-in engines' Loaded::slot_edge for a custom one: how it passes each slot to its runtime, for the plan report's slot rows and the contract's edge cost (anira_contract_set_edge_cost). Called on the thread of anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot of each loaded model right after its load succeeded, inputs first, in slot order; anira keeps the answers for the loaded model's life. An engine that copies a slot into memory of its own says ANIRA_EDGE_COPY, one on a device that computes in host memory says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the load's unload is called."
         },
         {
           "kind": "struct",
@@ -9002,7 +9002,7 @@
           "name": "anira_plan_slot",
           "tier": 2,
           "struct_id": "ANIRA_STRUCT_PLAN_SLOT",
-          "doc": "One tensor slot of one plan: the edge the plan takes for it, its class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, why the edge is what it is and who moves the bytes, and the role of the tensor, which decides the entries that take the slot. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride (a caller whose header ends before a tail field gets its rows without it). In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe \"host\"; the edge is ANIRA_EDGE_ZERO_COPY, moved by nobody, where the plan's engine binds the slot's buffer in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers); ANIRA_EDGE_HOST_COPY with the reason where the slot is copied inside host memory, by the engine's adapter (ANIRA_MOVER_ANIRA: LibTorch's outputs, a memory-planned ExecuTorch output) or by the runtime's own API (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE, where a device provider's runtime uploads the slot's host memory and reads the results back itself (a GPU execution provider, a LiteRT accelerator), the class and mover the capability rows give that edge.",
+          "doc": "One tensor slot of one plan: the edge the plan takes for it, its class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, why the edge is what it is and who moves the bytes, and the role of the tensor, which decides the entries that take the slot. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride (a caller whose header ends before a tail field gets its rows without it). In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe \"host\"; the edge is ANIRA_EDGE_ZERO_COPY, moved by nobody, where the plan's engine binds the slot's buffer in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers); ANIRA_EDGE_COPY with the reason where the slot is copied inside host memory, by the engine's adapter (ANIRA_MOVER_ANIRA: LibTorch's outputs, a memory-planned ExecuTorch output) or by the runtime's own API (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE, where a device provider's runtime uploads the slot's host memory and reads the results back itself (a GPU execution provider, a LiteRT accelerator), the class and mover the capability rows give that edge.",
           "fields": [
             {
               "name": "struct_size",
@@ -9472,7 +9472,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a copy, a transfer the engine makes itself (ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's.",
+          "doc": "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a copy, a transfer the engine makes itself (ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's.",
           "return_doc": "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row for the pair (out untouched: a custom engine the pipeline does not add, a provider it does not declare or its query cleared, a domain other than the host's); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields; or the status a custom engine's query returned when it failed."
         },
         {

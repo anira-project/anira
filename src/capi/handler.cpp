@@ -1350,8 +1350,8 @@ void build_plans(anira_handler& handler,
 // anira_contract_set_host_domain) on the host's side of the row and the engine's domain on
 // the other, an input read from its host end into the engine and an output written from the
 // engine to its host end; the edge the plan's engine takes with the slot's buffer and who
-// moves its bytes (zero-copy where it binds it in place, a host copy or a device's transfer
-// with its reason where the bytes move; validate refused any domain but the host's); the wait
+// moves its bytes (zero-copy where it binds it in place, a copy or a device's transfer with
+// its reason where the bytes move; validate refused any domain but the host's); the wait
 // strategy the core runs; how the plan's loaded model
 // bound the slot to the engine's tensor at load; the spec's dtype and the ring's.
 struct SlotFacts {
@@ -1430,7 +1430,9 @@ anira_binding binding_of(const anira::SessionElement& session,
 bool drop_plans_over_edge_cost(anira_handler& handler,
                                const anira_model_config& model,
                                anira_edge_class worst_allowed) {
-    if (worst_allowed == ANIRA_EDGE_TRANSFER) { return false; }  // every edge is within it
+    if (worst_allowed == ANIRA_EDGE_DEDICATED_TRANSFER) {
+        return false;
+    }  // every edge is within it
     const anira::SessionElement& session = handler.m_manager->session();
     std::vector<anira::capi::PlanKey>& plans = handler.m_derived.m_plans;
     std::vector<anira::capi::PlanKey> kept;

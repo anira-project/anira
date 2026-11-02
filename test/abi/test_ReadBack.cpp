@@ -579,7 +579,7 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     EXPECT_EQ(anira_contract_hard_wait_ratio(hard.m_contract, &ratio), ANIRA_OK);
     EXPECT_EQ(ratio, 0.0);
     EXPECT_EQ(anira_contract_hard_num_ring_dtypes(hard.m_contract), 0u);
-    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_TRANSFER);
+    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_DEDICATED_TRANSFER);
 
     // Every setter, then its getter.
     ASSERT_EQ(anira_contract_hard_set_host_blocks(hard.m_contract, 128, 1024, 44100.0), ANIRA_OK);
@@ -749,7 +749,7 @@ TEST(AbiReadBack, TheHardFamilyIsWrongContractOnAsync) {
     EXPECT_STREQ(canonical, "untouched");
     EXPECT_EQ(dtype, ANIRA_DTYPE_I8);
     // The edge cost is common to both kinds.
-    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_TRANSFER);
+    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_DEDICATED_TRANSFER);
     ASSERT_EQ(anira_contract_set_edge_cost(async_contract.m_contract, ANIRA_EDGE_ZERO_COPY),
               ANIRA_OK);
     EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_ZERO_COPY);
@@ -802,7 +802,7 @@ TEST(AbiReadBack, TheNullAnswersOfTheContract) {
     EXPECT_EQ(warmup, ANIRA_WARMUP_NONE);
     EXPECT_EQ(policy, ANIRA_MISS_ZEROS);
     EXPECT_EQ(fn, &decline_miss);
-    EXPECT_EQ(anira_contract_edge_cost(nullptr), ANIRA_EDGE_TRANSFER);
+    EXPECT_EQ(anira_contract_edge_cost(nullptr), ANIRA_EDGE_DEDICATED_TRANSFER);
 }
 
 TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {

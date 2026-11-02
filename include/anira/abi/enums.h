@@ -508,16 +508,29 @@ typedef enum anira_log_drain {
  * its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
-    ANIRA_EDGE_ZERO_COPY = 0,  /**< Nothing moves: the engine computes on the slot's own memory. */
-    ANIRA_EDGE_HOST_COPY = 1,  /**< One copy inside host memory. */
     /**
-     * A copy or pass inside device memory; nothing reaches the host.
+     * Nothing moves: the engine computes on the slot's own memory, a device on unified memory
+     * included where its runtime wraps the slot's buffer.
      */
-    ANIRA_EDGE_DEVICE_COPY = 2,
+    ANIRA_EDGE_ZERO_COPY = 0,
     /**
-     * The bytes cross between host and device memory: an upload, a readback, a staging copy.
+     * A copy or pass within one domain, the CPU's or one device's, with no hand-over between
+     * processors: a memcpy in host memory, a relayout or copy inside a device's memory.
      */
-    ANIRA_EDGE_TRANSFER = 3,
+    ANIRA_EDGE_COPY = 1,
+    /**
+     * The bytes cross between the CPU's domain and a device's within one unified physical
+     * memory (an Apple silicon GPU, an integrated GPU, a CPU device): a copy plus a hand-over
+     * between the processors (a submission, a fence, possibly cache maintenance or a relayout),
+     * and no bus.
+     */
+    ANIRA_EDGE_UNIFIED_TRANSFER = 2,
+    /**
+     * The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory
+     * (a discrete GPU's VRAM), a discrete device reading mapped host memory, a copy between two
+     * devices.
+     */
+    ANIRA_EDGE_DEDICATED_TRANSFER = 3,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
 } anira_edge_class;
 

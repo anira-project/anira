@@ -3,7 +3,7 @@
 // anira_engine_edge record anira_em_pipeline_add_js_engine reads (the wasm32 layout of
 // anira/abi/engine.h) carries the class and the reason; without, the entry gets NULL, the
 // provider rule, except for an engine the package ships: added under its id the plain way, the
-// ONNX Runtime Web engine states its host copy by default, and an explicit `edge` overrides it.
+// ONNX Runtime Web engine states its copy by default, and an explicit `edge` overrides it.
 // A stand-in module.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -84,7 +84,7 @@ test("addEngine states the edge record, the bundled engine's by default, or NULL
   pipeline.addEngine('org.example.double')
   pipeline.addEngine('org.example.copying', {
     edge: {
-      edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
+      edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
       reason: 'copies its slots',
     },
   })
@@ -96,14 +96,14 @@ test("addEngine states the edge record, the bundled engine's by default, or NULL
   assert.equal(stack(), before, 'the stack is restored')
   const ort = {
     structSize: 12,
-    edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
+    edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
     reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
   }
   assert.deepEqual(stated, [
     null,
     {
       structSize: 12,
-      edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
+      edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
       reason: 'copies its slots',
     },
     ort,

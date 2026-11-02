@@ -47,9 +47,9 @@ test("a Hard contract's edge cost reaches the setter; left out, the default stay
 
   const contract = ContractHandle.hard(
     { abi },
-    { ...options, edgeCost: anira_edge_class.ANIRA_EDGE_HOST_COPY }
+    { ...options, edgeCost: anira_edge_class.ANIRA_EDGE_COPY }
   )
-  assert.deepEqual(costs, [[77, anira_edge_class.ANIRA_EDGE_HOST_COPY]])
+  assert.deepEqual(costs, [[77, anira_edge_class.ANIRA_EDGE_COPY]])
   assert.equal(contract.edgeCost(anira_edge_class.ANIRA_EDGE_ZERO_COPY), contract)
   assert.deepEqual(costs[1], [77, anira_edge_class.ANIRA_EDGE_ZERO_COPY])
   contract.destroy()

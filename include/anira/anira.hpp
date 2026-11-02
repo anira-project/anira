@@ -963,10 +963,11 @@ struct Hard {
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
     /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
-    /// contract file's "edge_cost"): prepare drops a plan above it. ANIRA_EDGE_TRANSFER, the
-    /// default, admits every edge; ANIRA_EDGE_DEVICE_COPY no host-device traffic,
-    /// ANIRA_EDGE_HOST_COPY no copy in device memory either, ANIRA_EDGE_ZERO_COPY no copy.
-    anira_edge_class edge_cost = ANIRA_EDGE_TRANSFER;
+    /// contract file's "edge_cost"): prepare drops a plan above it. ANIRA_EDGE_DEDICATED_TRANSFER,
+    /// the default, admits every edge; ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU
+    /// and a device within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between
+    /// domains, ANIRA_EDGE_ZERO_COPY no copy at all.
+    anira_edge_class edge_cost = ANIRA_EDGE_DEDICATED_TRANSFER;
 };
 
 /// Jobs without a real-time deadline: the offline posture.
@@ -978,7 +979,7 @@ struct Async {
     uint32_t max_in_flight = 0;
     anira_delivery delivery = ANIRA_DELIVERY_POLLED;
     /// The worst edge class a plan may take for any slot, as Hard::edge_cost.
-    anira_edge_class edge_cost = ANIRA_EDGE_TRANSFER;
+    anira_edge_class edge_cost = ANIRA_EDGE_DEDICATED_TRANSFER;
 };
 
 using Contract = std::variant<Hard, Async>;
@@ -3170,9 +3171,9 @@ public:
         /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
         /// returned this Loaded, once per slot, inputs first, on the same thread and under the
         /// same lock. `provider_rule` is what anira reports without a statement (zero-copy on
-        /// ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_TRANSFER on every other provider), and
-        /// the base returns it. An engine that copies the slot into memory of its own returns
-        /// ANIRA_EDGE_HOST_COPY and why. It may throw, as load may: the prepare fails with the
+        /// ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_DEDICATED_TRANSFER on every other provider),
+        /// and the base returns it. An engine that copies the slot into memory of its own returns
+        /// ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails with the
         /// status, and the Loaded is deleted.
         virtual EngineEdge edge(bool /*is_input*/,
                                 uint32_t /*slot*/,

@@ -137,11 +137,11 @@ struct SlotEdge {
 inline SlotEdge gain_edge(uint32_t engine, bool is_input) {
     if (engine == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH)) {
         return {
-            .m_class = ANIRA_EDGE_HOST_COPY,
+            .m_class = ANIRA_EDGE_COPY,
             .m_moved_by = static_cast<uint32_t>(is_input ? ANIRA_MOVER_ENGINE : ANIRA_MOVER_ANIRA)};
     }
     if (engine == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH) && !is_input) {
-        return {.m_class = ANIRA_EDGE_HOST_COPY, .m_moved_by = ANIRA_MOVER_ANIRA};
+        return {.m_class = ANIRA_EDGE_COPY, .m_moved_by = ANIRA_MOVER_ANIRA};
     }
     return {};
 }

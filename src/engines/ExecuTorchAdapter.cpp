@@ -371,7 +371,7 @@ public:
               const std::vector<SlotBinding>& outputs);
 
     /// The edge of a slot after bind: ZERO_COPY for an input the plan leaves out and for an
-    /// unplanned output whose slot holds its capacity, HOST_COPY with the reason else.
+    /// unplanned output whose slot holds its capacity, COPY with the reason else.
     Loaded::SlotEdge slot_edge(bool is_input, size_t slot) const noexcept;
 
     /// The FIXED warm-up of the record over the executor's own blocks (zeros); a failing
@@ -525,17 +525,17 @@ std::vector<size_t> Instance::output_capacities() {
 Loaded::SlotEdge Instance::slot_edge(bool is_input, size_t slot) const noexcept {
     if (is_input) {
         if (slot < m_input_planned.size() && !m_input_planned[slot]) { return {}; }
-        return {.m_class = ANIRA_EDGE_HOST_COPY,
+        return {.m_class = ANIRA_EDGE_COPY,
                 .m_moved_by = ANIRA_MOVER_ENGINE,
                 .m_reason = "executorch: the memory plan owns the input, which set_input fills"};
     }
     if (slot < m_output_planned.size() && m_output_planned[slot]) {
-        return {.m_class = ANIRA_EDGE_HOST_COPY,
+        return {.m_class = ANIRA_EDGE_COPY,
                 .m_moved_by = ANIRA_MOVER_ANIRA,
                 .m_reason = "executorch: the memory plan owns the output"};
     }
     if (slot < m_output_bindable.size() && m_output_bindable[slot]) { return {}; }
-    return {.m_class = ANIRA_EDGE_HOST_COPY,
+    return {.m_class = ANIRA_EDGE_COPY,
             .m_moved_by = ANIRA_MOVER_ANIRA,
             .m_reason =
                 "executorch: the output's capacity exceeds the slot, so it lands in a "

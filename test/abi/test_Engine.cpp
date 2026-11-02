@@ -325,7 +325,7 @@ struct GainEngine {
     // The edge statement (gain_edge, a descriptor with desc.edge): the class its outputs get
     // (the inputs keep the provider rule's), the status it returns in place of ANIRA_OK, and
     // every question with the loaded pointer and the rule's class it came with.
-    uint32_t m_output_edge = ANIRA_EDGE_HOST_COPY;
+    uint32_t m_output_edge = ANIRA_EDGE_COPY;
     anira_status m_refuse_edge = ANIRA_OK;
     struct EdgeAsked {
         uint32_t m_is_input = 0;
@@ -1334,7 +1334,7 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
             EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
             EXPECT_EQ(row.reason, nullptr);
         } else {
-            EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+            EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_COPY));
             EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
             ASSERT_NE(row.reason, nullptr);
             EXPECT_STREQ(row.reason, "org.example.gain: copies its outputs");
@@ -1346,12 +1346,12 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err),
               ANIRA_ERROR_EDGE_UNREACHABLE);
     EXPECT_NE(std::strstr(err.message,
-                          "output 0 'out': edge host_copy, moved by the engine "
+                          "output 0 'out': edge copy, moved by the engine "
                           "(org.example.gain: copies its outputs)"),
               nullptr)
         << err.message;
 
-    contract.edge_cost(ANIRA_EDGE_TRANSFER);
+    contract.edge_cost(ANIRA_EDGE_DEDICATED_TRANSFER);
     gain.m_refuse_edge = ANIRA_ERROR_DEVICE;
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_DEVICE);
     EXPECT_NE(std::strstr(err.message, "refused its edge statement for input 0"), nullptr)
@@ -1365,12 +1365,12 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
 }
 
 // The contract's edge cost at prepare, over one row on coreml and on the CPU path. The default
-// (ANIRA_EDGE_TRANSFER) keeps both plans. Under ANIRA_EDGE_DEVICE_COPY (no bytes between host and
-// device) the coreml plan, whose slots the engine moves to its device itself (TRANSFER), is
-// dropped once its model has loaded, with an Info record naming each slot, its class, its mover
-// and why; the CPU plan stays, alone in the report and selected, its model loaded once (the
-// session made again over it takes the pooled one), the dropped plan's loaded and unloaded and
-// never prepared; the stream runs on it. A contract no plan is within refuses with
+// (ANIRA_EDGE_DEDICATED_TRANSFER) keeps both plans. Under ANIRA_EDGE_COPY (no crossing between
+// domains) the coreml plan, whose slots the engine moves to its device itself (a transfer), is
+// dropped once its model has loaded, with an Info record naming each slot, its class, its mover and
+// why; the CPU plan stays, alone in the report and selected, its model loaded once (the session
+// made again over it takes the pooled one), the dropped plan's loaded and unloaded and never
+// prepared; the stream runs on it. A contract no plan is within refuses with
 // ANIRA_ERROR_EDGE_UNREACHABLE naming the dropped plan's slots, the handler left unprepared.
 TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);  // the record's level
@@ -1394,7 +1394,7 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     const int loaded = gain.m_loaded;
     const int unloaded = gain.m_unloaded;
     const int prepared = gain.m_prepared;
-    contract.edge_cost(ANIRA_EDGE_DEVICE_COPY);
+    contract.edge_cost(ANIRA_EDGE_COPY);
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
     const std::vector<anira_plan_info> plans = plan_rows(handler);
     ASSERT_EQ(plans.size(), 1U);
@@ -1411,10 +1411,11 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     const std::string why =
         " (the provider computes in its device's memory: the slot is uploaded to it and the "
         "results read back, per call)";
-    const std::string dropped = std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
-                                ":coreml is dropped, above the contract's edge cost (device_copy "
-                                "at most): input 0 'in': edge transfer, moved by the engine" +
-                                why + "; output 0 'out': edge transfer, moved by the engine" + why;
+    const std::string dropped =
+        std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
+        ":coreml is dropped, above the contract's edge cost (copy "
+        "at most): input 0 'in': edge dedicated_transfer, moved by the engine" +
+        why + "; output 0 'out': edge dedicated_transfer, moved by the engine" + why;
     EXPECT_EQ(anira_test::count_records(collector, dropped.c_str(), "native"), 1U) << dropped;
 #endif
     ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2, gain.m_gain));
@@ -1428,14 +1429,14 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
         << on_coreml.m_err.message;
     on_coreml.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
     ASSERT_EQ(on_coreml.create_handler(context, &handler), ANIRA_OK) << on_coreml.m_err.message;
-    contract.edge_cost(ANIRA_EDGE_HOST_COPY);
+    contract.edge_cost(ANIRA_EDGE_COPY);
     err = ANIRA_ERROR_INIT;
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err),
               ANIRA_ERROR_EDGE_UNREACHABLE);
     const std::string refusal = std::string(
-                                    "no plan is within the contract's edge cost (host_copy "
+                                    "no plan is within the contract's edge cost (copy "
                                     "at most): models[0] on ") +
-                                k_gain_id + ":coreml: input 0 'in': edge transfer";
+                                k_gain_id + ":coreml: input 0 'in': edge dedicated_transfer";
     EXPECT_NE(std::strstr(err.message, refusal.c_str()), nullptr) << err.message;
     EXPECT_EQ(anira_handler_plan_report(handler), nullptr) << "unprepared";
     anira_handler_destroy(handler);
@@ -1963,7 +1964,7 @@ TEST(AbiEngine, TheQueryRunsAtCreateAndPrepareReusesItsAnswer) {
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the
 // pipeline and provider usable here: the declared providers the query keeps, in list order,
 // or the CPU path alone for an engine without a list, with the engine's id; every call runs
-// the queries. The edges follow the CPU rule: zero-copy to the CPU path, a host copy the engine
+// the queries. The edges follow the CPU rule: zero-copy to the CPU path, a transfer the engine
 // makes itself to a device one; a provider the query cleared, an engine the pipeline does not add
 // and a domain other than the host's have no row; a built-in backend is the context's answer.
 TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
@@ -2059,7 +2060,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     EXPECT_EQ(default_edge.to_provider_id, nullptr);
     const auto [coreml_status, coreml_edge] = edge(ANIRA_PROVIDER_COREML, nullptr, k_gain_id);
     ASSERT_EQ(coreml_status, ANIRA_OK);
-    EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+    EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
     EXPECT_EQ(coreml_edge.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE))
         << "the engine moves host memory to its device itself";
     EXPECT_EQ(coreml_edge.rung, static_cast<uint32_t>(ANIRA_RUNG_IDENTITY));
@@ -2099,7 +2100,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                                                    &to,
                                                    &row),
                   ANIRA_OK);
-        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
         EXPECT_STREQ(row.to_engine_id, k_gain_id);
         EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE))
             << "beyond the caller's struct_size";

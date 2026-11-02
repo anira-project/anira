@@ -753,10 +753,10 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
  * engine's (anira_plan_slot.edge_class), known once its model has loaded.
  * @param contract Either contract kind.
  * @param worst_allowed The worst class a plan may take for any of its slots:
- *        ANIRA_EDGE_TRANSFER (the default) admits every edge,
- *        ANIRA_EDGE_DEVICE_COPY no bytes crossing between host and device,
- *        ANIRA_EDGE_HOST_COPY no device memory either, ANIRA_EDGE_ZERO_COPY no
- *        copy at all.
+ *        ANIRA_EDGE_DEDICATED_TRANSFER (the default) admits every edge,
+ *        ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device
+ *        within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between
+ *        domains, ANIRA_EDGE_ZERO_COPY no copy at all.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
  *         anira_edge_class does not name.
  * @par Thread contract
@@ -1807,9 +1807,9 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
  * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
- *        edge_cost (the worst edge class allowed, by its word: "zero_copy", "host_copy",
- *        "device_copy" or "transfer"; anira_contract_set_edge_cost) and an optional
- *        top-level host_domains ({"<name>": "<domain word>"},
+ *        edge_cost (the worst edge class allowed, by its word: "zero_copy", "copy",
+ *        "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost) and an
+ *        optional top-level host_domains ({"<name>": "<domain word>"},
  *        anira_contract_set_host_domain), or a v2 document.
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
@@ -2281,7 +2281,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contra
  * @brief The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
  * take.
  * @param contract Either contract kind.
- * @return The class; ANIRA_EDGE_TRANSFER, the default, for NULL.
+ * @return The class; ANIRA_EDGE_DEDICATED_TRANSFER, the default, for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2

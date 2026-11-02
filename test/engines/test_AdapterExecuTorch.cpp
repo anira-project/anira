@@ -102,8 +102,8 @@ std::shared_ptr<Rig> executorch_adapter() {
 
 // The int16 TypedGainNetwork exports, the memory plan's two cases: the planned export (every
 // input and output the plan's) costs one copy per slot each way, set_input's into the plan (the
-// runtime's: HOST_COPY moved by the engine, nothing counted) and the adapter's out of it
-// (HOST_COPY moved by anira, counted); the unplanned one at its static 512-sample window aliases
+// runtime's: COPY moved by the engine, nothing counted) and the adapter's out of it (COPY
+// moved by anira, counted); the unplanned one at its static 512-sample window aliases
 // the inputs (set_input) and binds the outputs to the caller's memory per call
 // (set_output_data_ptr): no copy, the results in the caller's memory, ZERO_COPY on every slot.
 // Two memories alternated, new values each call: the results follow the memory.
@@ -125,7 +125,7 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
         const std::shared_ptr<Rig> adapter = executorch_adapter();
         adapter->prepare(model);
         ASSERT_TRUE(adapter->prepared());
-        const anira_edge_class edge = unplanned ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY;
+        const anira_edge_class edge = unplanned ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_COPY;
         for (const bool is_input : {true, false}) {
             const anira_mover_flags moved_by = unplanned  ? ANIRA_MOVER_NONE
                                                : is_input ? ANIRA_MOVER_ENGINE

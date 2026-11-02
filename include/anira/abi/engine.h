@@ -454,8 +454,8 @@ typedef struct anira_engine_edge {
     /**
      * anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until
      * it computes on them and back for an output. Arrives as the provider rule's
-     * (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_TRANSFER on every
-     * other provider): an engine that leaves it states that.
+     * (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_DEDICATED_TRANSFER on
+     * every other provider): an engine that leaves it states that.
      */
     uint32_t edge_class;
     /**
@@ -476,8 +476,8 @@ typedef struct anira_engine_edge {
  * anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot
  * of each loaded model right after its load succeeded, inputs first, in slot order;
  * anira keeps the answers for the loaded model's life. An engine that copies a slot into
- * memory of its own says ANIRA_EDGE_HOST_COPY, one on a device that computes in host
- * memory says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class
+ * memory of its own says ANIRA_EDGE_COPY, one on a device that computes in host memory
+ * says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class
  * anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails
  * with it, and the load's unload is called.
  * @param loaded What the load handed back (NULL for a descriptor without a load).

@@ -205,9 +205,9 @@ inline std::string backend_label(anira_engine engine,
 /// messages about a plan dropped for its edges.
 inline constexpr std::array<std::pair<const char*, anira_edge_class>, 4> k_edge_class_words{{
     {"zero_copy", ANIRA_EDGE_ZERO_COPY},
-    {"host_copy", ANIRA_EDGE_HOST_COPY},
-    {"device_copy", ANIRA_EDGE_DEVICE_COPY},
-    {"transfer", ANIRA_EDGE_TRANSFER},
+    {"copy", ANIRA_EDGE_COPY},
+    {"unified_transfer", ANIRA_EDGE_UNIFIED_TRANSFER},
+    {"dedicated_transfer", ANIRA_EDGE_DEDICATED_TRANSFER},
 }};
 
 /// The word of an edge class; "unknown" for a value the enum does not name.

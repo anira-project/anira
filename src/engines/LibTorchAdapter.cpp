@@ -541,7 +541,7 @@ public:
     /// adapter copies every output into the chunk.
     SlotEdge slot_edge(bool is_input, uint32_t /*slot*/) const noexcept override {
         if (is_input) { return SlotEdge{}; }
-        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+        return SlotEdge{.m_class = ANIRA_EDGE_COPY,
                         .m_moved_by = ANIRA_MOVER_ANIRA,
                         .m_reason = "libtorch: the method returns tensors of its own"};
     }

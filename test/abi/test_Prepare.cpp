@@ -1145,8 +1145,8 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     for (uint32_t i = 0; i < num_plans; ++i) {
         const std::string plan = "plan " + std::to_string(i) + ": ";
         EXPECT_EQ(count_records(collector, (plan + "variant 0, engine ").c_str(), "native"), 1U);
-        // The edge is the plan's engine's (zero-copy where it binds the slot, a host copy where
-        // it copies); the dtypes are the spec's and the ring's (none for a Static slot).
+        // The edge is the plan's engine's (zero-copy where it binds the slot, a copy where it
+        // copies); the dtypes are the spec's and the ring's (none for a Static slot).
         for (const bool is_input : {true, false}) {
             std::array<anira_plan_slot, 2> rows{};
             uint32_t count = 2;  // in: the capacity of rows
@@ -1163,8 +1163,7 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
                          : std::array<const char*, 2>{"audio_out", "gain_out"};
             for (uint32_t slot = 0; slot < 2; ++slot) {
                 const anira_plan_slot& row = rows.at(slot);
-                const char* edge =
-                    row.edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "host_copy";
+                const char* edge = row.edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "copy";
                 const char* mover = row.moved_by == ANIRA_MOVER_ANIRA    ? "anira"
                                     : row.moved_by == ANIRA_MOVER_ENGINE ? "the engine"
                                                                          : "none";
@@ -1242,7 +1241,7 @@ TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
 }
 
 // The contract's edge cost over the built-in engines of the build on the CPU path (the gain
-// files): under ANIRA_EDGE_HOST_COPY every plan stays (none moves bytes off the host); under
+// files): under ANIRA_EDGE_COPY every plan stays (none moves bytes across a bus); under
 // ANIRA_EDGE_ZERO_COPY a plan whose engine copies a slot (gain_edge: LibTorch's outputs, the
 // memory-planned ExecuTorch export) leaves the table and every other one stays, in candidate
 // order, each slot zero-copy and moved by nobody. A build whose engines all copy has no plan
@@ -1273,7 +1272,7 @@ TEST(AbiPrepare, TheEdgeCostKeepsThePlansWithinIt) {
     };
     Handler handler(context, model, candidates);
     ContractHandle contract = explicit_contract();
-    contract.edge_cost(ANIRA_EDGE_HOST_COPY);
+    contract.edge_cost(ANIRA_EDGE_COPY);
     ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(plan_engines(handler.m_handler).size(), candidates.size());
 

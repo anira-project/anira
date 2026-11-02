@@ -1614,8 +1614,9 @@ export class AniraBindings {
    *
    * @param contract Either contract kind.
    * @param worst_allowed The worst class a plan may take for any of its slots:
-   *   ANIRA_EDGE_TRANSFER (the default) admits every edge, ANIRA_EDGE_DEVICE_COPY no bytes
-   *   crossing between host and device, ANIRA_EDGE_HOST_COPY no device memory either,
+   *   ANIRA_EDGE_DEDICATED_TRANSFER (the default) admits every edge,
+   *   ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified
+   *   memory only (no bus), ANIRA_EDGE_COPY no crossing between domains,
    *   ANIRA_EDGE_ZERO_COPY no copy at all.
    * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
    *   anira_edge_class does not name. A failed status throws an AniraError.
@@ -3300,8 +3301,8 @@ export class AniraBindings {
    * (ANIRA_SUCCESS_UPGRADED).
    *
    * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional
-   *   top-level edge_cost (the worst edge class allowed, by its word: "zero_copy",
-   *   "host_copy", "device_copy" or "transfer"; anira_contract_set_edge_cost) and an
+   *   top-level edge_cost (the worst edge class allowed, by its word: "zero_copy", "copy",
+   *   "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost) and an
    *   optional top-level host_domains ({"<name>": "<domain word>"},
    *   anira_contract_set_host_domain), or a v2 document.
    * @returns What the entry writes to out. A failed status throws an AniraError with the
@@ -4021,7 +4022,7 @@ export class AniraBindings {
    * take.
    *
    * @param contract Either contract kind.
-   * @returns The class; ANIRA_EDGE_TRANSFER, the default, for NULL.
+   * @returns The class; ANIRA_EDGE_DEDICATED_TRANSFER, the default, for NULL.
    * Thread: [main-thread]
    */
   anira_contract_edge_cost(contract: number): number {
@@ -5462,7 +5463,7 @@ export class AniraBindings {
    * added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider
    * usable here (its query runs, as anira_pipeline_capabilities_backends runs it):
    * zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches
-   * without a copy, a transfer the engine makes itself (ANIRA_EDGE_TRANSFER,
+   * without a copy, a transfer the engine makes itself (ANIRA_EDGE_DEDICATED_TRANSFER,
    * ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared
    * the provider and its query reported it usable. The strings' lifetime is
    * anira_pipeline_capabilities_backends's.

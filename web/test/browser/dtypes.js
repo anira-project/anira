@@ -6,7 +6,7 @@
 // from the page by the Hard process entry over int16 tensors in the module's heap, and waited
 // for. The stream comes out doubled after the handler's latency, exactly, and the plan report
 // names int16 on both sides of the stream and each engine's edge: zero-copy for the module's
-// own ONNX Runtime, a host copy by the engine for the ONNX Runtime Web engine (its statement,
+// own ONNX Runtime, a copy by the engine for the ONNX Runtime Web engine (its statement,
 // which addEngine states by default under the engine's id). Then an audio node, which streams float32, is refused
 // for the int16 handler, and its message names the remedy. The verdict is
 // window.anira_test_result.
@@ -145,7 +145,7 @@ const run = async () => {
       'the ONNX Runtime Web engine',
       './dtypes-ort-web-int16.model.json',
       ONNXRUNTIME_WEB_ENGINE_ID,
-      [anira_edge_class.ANIRA_EDGE_HOST_COPY, anira_mover_flags.ANIRA_MOVER_ENGINE],
+      [anira_edge_class.ANIRA_EDGE_COPY, anira_mover_flags.ANIRA_MOVER_ENGINE],
     ],
   ]) {
     const model = await ModelConfig.fromUrl(anira, new URL(file, import.meta.url))

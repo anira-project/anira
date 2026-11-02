@@ -600,7 +600,7 @@ bool names(const anira_backend_id& row, const anira::engine::ProviderInfo& provi
 // runtime reports usable here (the CPU path first, then the runtime's list, the adapters' own
 // query being the oracle), a custom provider carried by its name beside ANIRA_PROVIDER_CUSTOM;
 // the host domain; the registered extension kinds; one host edge per
-// backend row, zero-copy to a CPU provider and a host copy to a device one, found by engine
+// backend row, zero-copy to a CPU provider and a transfer to a device one, found by engine
 // and provider (a custom one by its name); a probe asks the runtimes again and answers the
 // same. The enumeration convention throughout: the count, a short buffer, the caller's stride.
 TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
@@ -692,8 +692,9 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         const bool cpu = backends[i].provider_id == nullptr &&
                          (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_CPU) ||
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
-        EXPECT_EQ(edges[i].edge_class,
-                  static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_TRANSFER));
+        EXPECT_EQ(
+            edges[i].edge_class,
+            static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_DEDICATED_TRANSFER));
         EXPECT_EQ(edges[i].moved_by,
                   static_cast<uint32_t>(cpu ? ANIRA_MOVER_NONE : ANIRA_MOVER_ENGINE));
         EXPECT_EQ(edges[i].rung,
@@ -740,7 +741,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row), ANIRA_OK)
             << backend.provider_id;
         EXPECT_STREQ(row.to_provider_id, backend.provider_id);
-        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
         EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
         to.provider_id = nullptr;
     }

@@ -29,9 +29,9 @@ export type EngineOptions = {
    * How the engine passes every slot to its runtime (`anira::Engine::Loaded::edge`, the
    * descriptor's `edge`): the engine runs in the inference Workers, so the main thread states it
    * here, once for every slot, where the plan report is built. An engine that copies the slots
-   * into memory of its own says `ANIRA_EDGE_HOST_COPY`. Default: the statement of an engine the
-   * package ships, by its id (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGE`, a host
-   * copy), else none, the provider rule (zero-copy on the CPU path).
+   * into memory of its own says `ANIRA_EDGE_COPY`. Default: the statement of an engine the
+   * package ships, by its id (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGE`, a copy
+   * within host memory), else none, the provider rule (zero-copy on the CPU path).
    */
   edge?: EngineEdge
 }

@@ -738,8 +738,8 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
 #ifdef USE_LITERT
 // The typed fixtures on a LiteRT GPU accelerator, where one is registered here (a -gpu package;
 // Mesa's lavapipe on a machine without a GPU): the slots bound in place as on the CPU path, the
-// accelerator uploading them itself, so every slot row says ANIRA_EDGE_TRANSFER moved by the
-// engine, with the reason, and anira copies nothing; the results exact. Skipped without a GPU
+// accelerator uploading them itself, so every slot row says ANIRA_EDGE_DEDICATED_TRANSFER moved by
+// the engine, with the reason, and anira copies nothing; the results exact. Skipped without a GPU
 // accelerator (the pinned CPU package, CI).
 TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
@@ -755,10 +755,10 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
                          .provider = ANIRA_PROVIDER_CUSTOM,
                          .engine_id = nullptr,
                          .provider_id = "gpu"}};
-    expect_typed_fixtures(
-        context,
-        gpu,
-        anira_test::SlotEdge{.m_class = ANIRA_EDGE_TRANSFER, .m_moved_by = ANIRA_MOVER_ENGINE});
+    expect_typed_fixtures(context,
+                          gpu,
+                          anira_test::SlotEdge{.m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
+                                               .m_moved_by = ANIRA_MOVER_ENGINE});
 }
 #endif  // USE_LITERT
 

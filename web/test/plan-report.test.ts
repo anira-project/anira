@@ -6,6 +6,7 @@ import { test } from 'node:test'
 import type { AniraBindings } from '../src/abi/bindings'
 import {
   ANIRA_VARIANT_ANY,
+  anira_edge_class,
   anira_engine,
   anira_provider,
   anira_status,
@@ -167,13 +168,13 @@ test('a slot row reads the mover beside the class, at the wasm32 offsets of anir
       strides.push(stride)
       u32[count >>> 2] = 1
       if (out === 0) return anira_status.ANIRA_OK
-      u32[(out + 20) >>> 2] = 3 // edge_class: ANIRA_EDGE_TRANSFER
+      u32[(out + 20) >>> 2] = anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER
       u32[(out + 56) >>> 2] = 2 // moved_by: ANIRA_MOVER_ENGINE
       return anira_status.ANIRA_OK
     },
   } as unknown as AniraBindings
   const [row] = new PlanReport(abi, 1024).slots(0, true)
   assert.deepEqual(strides, [60, 60], 'the caller passes its sizeof as the stride')
-  assert.equal(row.edgeClass, 3)
+  assert.equal(row.edgeClass, anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER)
   assert.equal(row.movedBy, 2)
 })

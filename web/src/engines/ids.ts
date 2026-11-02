@@ -9,13 +9,13 @@ import type { EngineEdge } from '../Pipeline'
 export const ONNXRUNTIME_WEB_ENGINE_ID = 'org.anira.onnxruntime-web'
 
 /**
- * The ONNX Runtime Web engine's edge statement: a copy of every slot in host memory by the
+ * The ONNX Runtime Web engine's edge statement: a copy of every slot within host memory by the
  * engine's own code, between anira's module and onnxruntime-web's (two wasm memories).
  * `Pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)` states it by default; an engine defined under
  * another id states it with `addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })`.
  */
 export const ONNXRUNTIME_WEB_ENGINE_EDGE: EngineEdge = {
-  edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
+  edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
   reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
 }
 

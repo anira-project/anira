@@ -179,7 +179,7 @@ struct anira_contract {
     /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the JSON
     /// key "edge_cost"), common to both kinds; prepare drops a plan above it. The default admits
     /// every edge.
-    anira_edge_class m_edge_cost = ANIRA_EDGE_TRANSFER;
+    anira_edge_class m_edge_cost = ANIRA_EDGE_DEDICATED_TRANSFER;
     /// The declared host-end domain per tensor, by canonical name, common to both kinds
     /// (anira_contract_set_host_domain, the JSON key "host_domains"): the domain the ring, the
     /// model tensor, the Static store and the state buffers of the slot live in and every processor

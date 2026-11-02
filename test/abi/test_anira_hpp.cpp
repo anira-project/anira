@@ -421,7 +421,7 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_DOUBLE_EQ(zero.wait_ratio, 0.0);
     EXPECT_TRUE(zero.ring_dtypes.empty());
     EXPECT_TRUE(zero.latencies.empty());
-    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_TRANSFER);
+    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_DEDICATED_TRANSFER);
 }
 
 TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
@@ -2179,13 +2179,13 @@ std::unique_ptr<anira::Engine::Prepared> CountingLoaded::prepare(const anira::Pr
 
 // An Engine's statement of its edges (Engine::Loaded::edge): asked once per slot right after
 // load, inputs first, with the provider rule's edge (zero-copy on the CPU path), which the base
-// keeps. A Loaded that copies its outputs says ANIRA_EDGE_HOST_COPY: the output row reads it,
+// keeps. A Loaded that copies its outputs says ANIRA_EDGE_COPY: the output row reads it,
 // moved by the engine, with the reason; the input row keeps the rule. The contract's edge cost
 // reads it as a built-in engine's: under ANIRA_EDGE_ZERO_COPY nothing is left.
 TEST(AbiCxx, AnEngineStatesItsEdges) {
     const anira_test::Context context;
     auto engine = std::make_shared<CountingEngine>();
-    engine->m_output_edge = ANIRA_EDGE_HOST_COPY;
+    engine->m_output_edge = ANIRA_EDGE_COPY;
     anira::Pipeline pipe;
     pipe.add_engine(engine);
     pipe.add_inference(engine_stream_model());
@@ -2204,7 +2204,7 @@ TEST(AbiCxx, AnEngineStatesItsEdges) {
     EXPECT_EQ(inputs[0].edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
     EXPECT_EQ(inputs[0].moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
     EXPECT_EQ(inputs[0].reason, nullptr);
-    EXPECT_EQ(outputs[0].edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+    EXPECT_EQ(outputs[0].edge_class, static_cast<uint32_t>(ANIRA_EDGE_COPY));
     EXPECT_EQ(outputs[0].moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
     ASSERT_NE(outputs[0].reason, nullptr);
     EXPECT_STREQ(outputs[0].reason, "org.example.cxx: copies its outputs");
@@ -2213,7 +2213,7 @@ TEST(AbiCxx, AnEngineStatesItsEdges) {
     strict.edge_cost(ANIRA_EDGE_ZERO_COPY);
     EXPECT_EQ(handler.prepare(strict), ANIRA_ERROR_EDGE_UNREACHABLE);
     EXPECT_NE(std::strstr(handler.m_err.message,
-                          "output 0 'out': edge host_copy, moved by the engine "
+                          "output 0 'out': edge copy, moved by the engine "
                           "(org.example.cxx: copies its outputs)"),
               nullptr)
         << handler.m_err.message;
@@ -2587,8 +2587,8 @@ TEST(AbiCxx, AddEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
 
 // available() is the engine's query: the bitmask over providers() that says which are usable
 // here. A Pipeline's capabilities on a context list the context's rows and then the engine's
-// rows for the providers the mask keeps, in list order; an edge to a custom provider is a
-// host copy, to the CPU path zero-copy; a candidate on a declared
+// rows for the providers the mask keeps, in list order; an edge to a device provider is a
+// transfer, to the CPU path zero-copy; a candidate on a declared
 // provider the mask clears is refused at create, the message saying so; a throwing
 // available() fails the entry with its status.
 TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
@@ -2614,7 +2614,7 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_cpu).edge_class,
               static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).edge_class,
-              static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+              static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).moved_by,
               static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
     const Thrown unreachable = thrown_by([&] {

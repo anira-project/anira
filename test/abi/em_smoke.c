@@ -158,7 +158,7 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
                   ANIRA_ERROR_INVALID_ARGUMENT,
               "anira_em_engine_desc_init refuses an edge class anira_edge_class does not name");
         char reason[] = "two wasm memories";
-        edge.edge_class = ANIRA_EDGE_HOST_COPY;
+        edge.edge_class = ANIRA_EDGE_COPY;
         edge.reason = reason;
         check_status(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, &edge),
                      NULL,
@@ -167,7 +167,7 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
         anira_engine_edge answer = ANIRA_ENGINE_EDGE_INIT;
         check(stated.edge != NULL &&
                   stated.edge(NULL, 0u, 1u, &answer, stated.user_data) == ANIRA_OK &&
-                  answer.edge_class == ANIRA_EDGE_HOST_COPY && answer.reason != NULL &&
+                  answer.edge_class == ANIRA_EDGE_COPY && answer.reason != NULL &&
                   strcmp(answer.reason, "two wasm memories") == 0,
               "the descriptor's edge answers the statement, its reason the record's copy");
         stated.release(stated.user_data); /* never created: the record is the caller's to free */

@@ -33,8 +33,8 @@ namespace anira::capi {
 /// (engine::host_memory_provider, engine::Loaded::provider_edge), for the context's rows and a
 /// pipeline's alike: to a provider that runs over host memory zero-copy, moved by nobody, from
 /// compiled-in knowledge (ANIRA_RUNG_STATIC) with `host_reason`; to every other one a transfer
-/// the engine's runtime makes itself (ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE), as sure as the
-/// report that lists the provider (ANIRA_RUNG_IDENTITY) with `device_reason`. Both reasons
+/// the engine's runtime makes itself (ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE), as sure
+/// as the report that lists the provider (ANIRA_RUNG_IDENTITY) with `device_reason`. Both reasons
 /// are static storage.
 void set_provider_edge(anira_edge_info& edge,
                        anira_provider provider,

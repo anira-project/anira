@@ -346,15 +346,15 @@ public:
 
     /// How the engine passes one slot's chunk buffer to its runtime, as the plan report states
     /// it (anira_plan_slot.edge_class, moved_by and reason): ANIRA_EDGE_ZERO_COPY where it binds
-    /// the buffer in place on a provider that runs over host memory; ANIRA_EDGE_HOST_COPY where
+    /// the buffer in place on a provider that runs over host memory; ANIRA_EDGE_COPY where
     /// the slot is copied inside host memory, by the adapter (ANIRA_MOVER_ANIRA, a copy the
-    /// executor counts) or by the runtime's own API (ANIRA_MOVER_ENGINE); ANIRA_EDGE_TRANSFER,
-    /// ANIRA_MOVER_ENGINE, where a device provider's runtime uploads the slot and reads the
-    /// results back itself (host_memory_provider). The movers are bits: a slot both the adapter
-    /// and the runtime move carries both, under the class of the worse move, so the slots with
-    /// the ANIRA_MOVER_ANIRA bit are exactly the copies the executor counts per call. By default
-    /// the slot is bound in place (a registered engine is handed the buffer itself), so the
-    /// edge follows the record's provider.
+    /// executor counts) or by the runtime's own API (ANIRA_MOVER_ENGINE);
+    /// ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE, where a device provider's runtime uploads
+    /// the slot and reads the results back itself (host_memory_provider). The movers are bits: a
+    /// slot both the adapter and the runtime move carries both, under the class of the worse move,
+    /// so the slots with the ANIRA_MOVER_ANIRA bit are exactly the copies the executor counts per
+    /// call. By default the slot is bound in place (a registered engine is handed the buffer
+    /// itself), so the edge follows the record's provider.
     struct SlotEdge {
         anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
         uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
@@ -366,8 +366,8 @@ public:
         return provider_edge();
     }
     /// The edge of a slot bound in place on the record's provider: zero-copy where it runs over
-    /// host memory, else ANIRA_EDGE_TRANSFER moved by the engine, the provider's runtime moving
-    /// the slot to its device and back itself.
+    /// host memory, else ANIRA_EDGE_DEDICATED_TRANSFER moved by the engine, the provider's runtime
+    /// moving the slot to its device and back itself.
     SlotEdge provider_edge() const noexcept;
 
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
@@ -615,9 +615,9 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
 /// provider is a device or an accelerator (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU,
 /// Vulkan, a LiteRT accelerator, an ExecuTorch GPU or NPU delegate, a custom engine's device)
 /// whose runtime uploads host memory to it and reads the results back itself, per call: the
-/// bytes cross between host and device (ANIRA_EDGE_TRANSFER, moved by the engine). The one
-/// rule of the plan rows (Loaded::provider_edge) and of the capability rows (the context's
-/// and a pipeline's, src/capi/context.cpp and src/capi/providers.cpp).
+/// bytes cross between host and device (ANIRA_EDGE_DEDICATED_TRANSFER, moved by the engine). The
+/// one rule of the plan rows (Loaded::provider_edge) and of the capability rows (the context's and
+/// a pipeline's, src/capi/context.cpp and src/capi/providers.cpp).
 bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side

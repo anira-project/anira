@@ -669,7 +669,7 @@ public:
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
         const std::vector<bool>& bound = is_input ? m_input_bound : m_output_bound;
         if (slot < bound.size() && bound[slot]) { return SlotEdge{}; }
-        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+        return SlotEdge{.m_class = ANIRA_EDGE_COPY,
                         .m_moved_by = ANIRA_MOVER_ANIRA,
                         .m_reason = "tflite: the tensor takes no custom allocation"};
     }

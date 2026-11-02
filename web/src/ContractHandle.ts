@@ -43,8 +43,10 @@ export type HardContractOptions = {
   /**
    * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
    * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
-   * it. Default `ANIRA_EDGE_TRANSFER`, which admits every edge; `ANIRA_EDGE_ZERO_COPY` admits
-   * no copy at all.
+   * it. Default `ANIRA_EDGE_DEDICATED_TRANSFER`, which admits every edge;
+   * `ANIRA_EDGE_UNIFIED_TRANSFER` crossings between the CPU and a device within unified memory
+   * only (no bus), `ANIRA_EDGE_COPY` no crossing between domains, `ANIRA_EDGE_ZERO_COPY` no copy
+   * at all.
    */
   edgeCost?: number
 }
