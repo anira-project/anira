@@ -124,7 +124,7 @@ inline std::vector<anira_engine> oracle_engines() {
 /// The edge of a plan slot row and who moves its bytes (anira_plan_slot.edge_class, moved_by).
 struct SlotEdge {
     anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
-    uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover bits
+    uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
 };
 
 /// The edge a plan of `engine` reports for a slot of the bundled gain files on the CPU path

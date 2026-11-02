@@ -1428,7 +1428,7 @@ private:
 // accelerator: float16).
 void expect_bound_on_the_boundary(Rig& adapter,
                                   anira_edge_class edge = ANIRA_EDGE_ZERO_COPY,
-                                  anira_mover moved_by = ANIRA_MOVER_NONE,
+                                  anira_mover_flags moved_by = ANIRA_MOVER_NONE,
                                   float relative = 0.F) {
     EXPECT_EQ(adapter.loaded().buffer_alignment(), 64U);
     for (const bool is_input : {true, false}) {

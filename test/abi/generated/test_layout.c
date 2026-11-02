@@ -75,8 +75,8 @@ _Static_assert(sizeof(anira_log_drain) == 4, "anira_log_drain is a 32-bit enum")
 _Static_assert(ANIRA_LOG_DRAIN_FORCE32 == 0x7fffffff, "anira_log_drain terminator");
 _Static_assert(sizeof(anira_edge_class) == 4, "anira_edge_class is a 32-bit enum");
 _Static_assert(ANIRA_EDGE_CLASS_FORCE32 == 0x7fffffff, "anira_edge_class terminator");
-_Static_assert(sizeof(anira_mover) == 4, "anira_mover is a 32-bit enum");
-_Static_assert(ANIRA_MOVER_FORCE32 == 0x7fffffff, "anira_mover terminator");
+_Static_assert(sizeof(anira_mover_flags) == 4, "anira_mover_flags is a 32-bit enum");
+_Static_assert(ANIRA_MOVER_FLAGS_FORCE32 == 0x7fffffff, "anira_mover_flags terminator");
 _Static_assert(sizeof(anira_probe_rung) == 4, "anira_probe_rung is a 32-bit enum");
 _Static_assert(ANIRA_RUNG_FORCE32 == 0x7fffffff, "anira_probe_rung terminator");
 _Static_assert(sizeof(anira_model_state) == 4, "anira_model_state is a 32-bit enum");

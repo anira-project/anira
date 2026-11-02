@@ -504,8 +504,8 @@ typedef enum anira_log_drain {
  * of a chain is the largest value and an edge of several moves has the class of its
  * worst. The class covers the bytes from the slot's memory until the engine computes on
  * them, and back for outputs; layout transforms inside a runtime's graph are not edges.
- * Who executes the moves is the row's anira_mover bits, whether the edge exists its
- * available flag (anira_edge_info).
+ * Who executes the moves is the row's anira_mover_flags bits, whether the edge exists
+ * its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
     ANIRA_EDGE_ZERO_COPY = 0,  /**< Nothing moves: the engine computes on the slot's own memory. */
@@ -522,12 +522,12 @@ typedef enum anira_edge_class {
 } anira_edge_class;
 
 /**
- * @brief Who executes an edge's moves (section 7), as bits: anira_plan_slot.moved_by and
- * anira_edge_info.moved_by hold an OR of them, ANIRA_MOVER_NONE when nothing moves, both
- * bits when anira and the runtime each move the bytes (the edge's class is then the
- * worse of the two moves).
+ * @brief Bit flags of anira_plan_slot::moved_by and anira_edge_info::moved_by: who executes an
+ * edge's moves (section 7). The field holds an OR of them, ANIRA_MOVER_NONE when nothing
+ * moves, both bits when anira and the runtime each move the bytes (the edge's class is
+ * then the worse of the two moves).
  */
-typedef enum anira_mover {
+typedef enum anira_mover_flags {
     ANIRA_MOVER_NONE = 0,  /**< No bit: nothing moves (ANIRA_EDGE_ZERO_COPY). */
     /**
      * anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are
@@ -540,8 +540,8 @@ typedef enum anira_mover {
      * registered engine's code.
      */
     ANIRA_MOVER_ENGINE = 2,
-    ANIRA_MOVER_FORCE32 = 0x7fffffff
-} anira_mover;
+    ANIRA_MOVER_FLAGS_FORCE32 = 0x7fffffff
+} anira_mover_flags;
 
 /**
  * @brief The rung a context probe reached for an edge (section 4).

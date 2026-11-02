@@ -189,8 +189,8 @@ typedef struct anira_plan_slot {
      */
     anira_dtype ring_dtype;
     /**
-     * anira_mover bits: who executes the slot's moves, an OR of ANIRA_MOVER_ANIRA where anira's
-     * own code copies the slot (an engine adapter's copy, what anira counts) and
+     * anira_mover_flags bits: who executes the slot's moves, an OR of ANIRA_MOVER_ANIRA where
+     * anira's own code copies the slot (an engine adapter's copy, what anira counts) and
      * ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a device
      * provider's upload and readback, a registered engine's code); ANIRA_MOVER_NONE on a
      * zero-copy edge. A tail field: a caller whose header ends before it gets its rows without

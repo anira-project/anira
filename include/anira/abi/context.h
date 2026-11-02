@@ -123,9 +123,9 @@ typedef struct anira_edge_info {
      */
     const char* to_engine_id;
     /**
-     * anira_mover bits: who executes the edge's moves: ANIRA_MOVER_NONE on a zero-copy edge,
-     * ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and back
-     * itself. A tail field: a caller whose header ends before it gets its rows without it.
+     * anira_mover_flags bits: who executes the edge's moves: ANIRA_MOVER_NONE on a zero-copy
+     * edge, ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and
+     * back itself. A tail field: a caller whose header ends before it gets its rows without it.
      */
     uint32_t moved_by;
 } anira_edge_info;

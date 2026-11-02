@@ -357,7 +357,7 @@ public:
     /// edge follows the record's provider.
     struct SlotEdge {
         anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
-        uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover bits
+        uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
         const char* m_reason = nullptr;          ///< why; static storage, NULL with nothing to say
     };
     virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {

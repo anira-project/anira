@@ -275,13 +275,13 @@ export const anira_edge_class = {
 /** @internal */
 export type anira_edge_class = (typeof anira_edge_class)[keyof typeof anira_edge_class]
 
-export const anira_mover = {
+export const anira_mover_flags = {
   ANIRA_MOVER_NONE: 0,
   ANIRA_MOVER_ANIRA: 1,
   ANIRA_MOVER_ENGINE: 2,
 } as const
 /** @internal */
-export type anira_mover = (typeof anira_mover)[keyof typeof anira_mover]
+export type anira_mover_flags = (typeof anira_mover_flags)[keyof typeof anira_mover_flags]
 
 export const anira_probe_rung = {
   ANIRA_RUNG_STATIC: 0,

@@ -225,9 +225,9 @@ inline constexpr bool known_edge_class(anira_edge_class edge_class) noexcept {
     return false;
 }
 
-/// Who moves an edge's bytes, an OR of anira_mover bits, as the plan report's log lines and the
-/// messages about a dropped plan say it ("moved by the engine"); "unknown" for a bit
-/// anira_mover does not name.
+/// Who moves an edge's bytes, an OR of anira_mover_flags bits, as the plan report's log lines and
+/// the messages about a dropped plan say it ("moved by the engine"); "unknown" for a bit
+/// anira_mover_flags does not name.
 inline constexpr const char* movers_word(uint32_t moved_by) noexcept {
     switch (moved_by) {
         case ANIRA_MOVER_NONE: return "none";

@@ -67,7 +67,7 @@ export type PlanSlot = {
   /** `anira_dtype` of the slot's ring (the host end of a Streamed tensor), 0 without one. */
   ringDtype: number
   /**
-   * `anira_mover` bits: who executes the slot's moves, an OR of `ANIRA_MOVER_ANIRA` (anira's own
+   * `anira_mover_flags` bits: who executes the slot's moves, an OR of `ANIRA_MOVER_ANIRA` (anira's own
    * code: an engine adapter's copy) and `ANIRA_MOVER_ENGINE` (the engine's runtime);
    * `ANIRA_MOVER_NONE` on a zero-copy edge.
    */

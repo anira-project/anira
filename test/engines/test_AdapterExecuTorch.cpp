@@ -127,9 +127,9 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
         ASSERT_TRUE(adapter->prepared());
         const anira_edge_class edge = unplanned ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY;
         for (const bool is_input : {true, false}) {
-            const anira_mover moved_by = unplanned  ? ANIRA_MOVER_NONE
-                                         : is_input ? ANIRA_MOVER_ENGINE
-                                                    : ANIRA_MOVER_ANIRA;
+            const anira_mover_flags moved_by = unplanned  ? ANIRA_MOVER_NONE
+                                               : is_input ? ANIRA_MOVER_ENGINE
+                                                          : ANIRA_MOVER_ANIRA;
             for (uint32_t slot = 0; slot < 2; ++slot) {
                 EXPECT_EQ(adapter->loaded().slot_edge(is_input, slot).m_class, edge);
                 EXPECT_EQ(adapter->loaded().slot_edge(is_input, slot).m_moved_by, moved_by);

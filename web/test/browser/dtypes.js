@@ -14,7 +14,7 @@ import {
   ANIRA_DTYPE_I16,
   Anira,
   anira_edge_class,
-  anira_mover,
+  anira_mover_flags,
   Context,
   ContractHandle,
   InferenceHandler,
@@ -142,13 +142,13 @@ const run = async () => {
       "the module's own ONNX Runtime",
       './dtypes-int16.model.json',
       undefined,
-      [anira_edge_class.ANIRA_EDGE_ZERO_COPY, anira_mover.ANIRA_MOVER_NONE],
+      [anira_edge_class.ANIRA_EDGE_ZERO_COPY, anira_mover_flags.ANIRA_MOVER_NONE],
     ],
     [
       'the ONNX Runtime Web engine',
       './dtypes-ort-web-int16.model.json',
       ONNXRUNTIME_WEB_ENGINE_ID,
-      [anira_edge_class.ANIRA_EDGE_HOST_COPY, anira_mover.ANIRA_MOVER_ENGINE],
+      [anira_edge_class.ANIRA_EDGE_HOST_COPY, anira_mover_flags.ANIRA_MOVER_ENGINE],
     ],
   ]) {
     const model = await ModelConfig.fromUrl(anira, new URL(file, import.meta.url))
