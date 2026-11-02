@@ -478,10 +478,11 @@ typedef struct anira_engine_edge {
  * anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot
  * of each loaded model right after its load succeeded, inputs first, in slot order;
  * anira keeps the answers for the loaded model's life. An engine that copies a slot into
- * memory of its own says ANIRA_EDGE_COPY, one on a device that computes in host memory
- * says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class
- * anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails
- * with it, and the load's unload is called.
+ * host memory of its own says ANIRA_EDGE_COPY; one whose device computes on the slot's
+ * memory as it is (a runtime that wraps the buffer on unified memory) says
+ * ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class
+ * does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the
+ * load's unload is called.
  * @param loaded What the load handed back (NULL for a descriptor without a load).
  * @param is_input 1 for an input slot, 0 for an output slot.
  * @param slot The slot: the tensor's position in the model config's input or output list.

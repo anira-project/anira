@@ -925,7 +925,8 @@ them:
 - ``ANIRA_EDGE_ZERO_COPY``, ``ANIRA_MOVER_NONE``: nothing moves, the engine computes on the
   slot's own memory: the slot is bound in place on a provider that runs over host memory (the
   CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers), or a device's runtime wraps it
-  on unified memory.
+  on unified memory (a registered engine that knows its runtime does says so; the provider rule
+  never assumes it, so no built-in device path reports it).
 - ``ANIRA_EDGE_COPY`` with the reason: a copy or pass within one domain, the CPU's or one
   device's, with no hand-over between processors. In host memory by the adapter
   (``ANIRA_MOVER_ANIRA``, the copies anira makes and counts) or by the runtime's own API

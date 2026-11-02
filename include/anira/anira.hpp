@@ -3178,7 +3178,7 @@ public:
         /// ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory,
         /// ANIRA_EDGE_DEDICATED_TRANSFER where it has memory of its own or no probe established
         /// which (the plan row's memory_kind, anira_memory_kind), the reason saying which and what
-        /// the probe saw. An engine that copies the slot into memory of its own returns
+        /// the probe saw. An engine that copies the slot into host memory of its own returns
         /// ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails with the status,
         /// and the Loaded is deleted.
         virtual EngineEdge edge(bool /*is_input*/,
