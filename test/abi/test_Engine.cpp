@@ -46,6 +46,8 @@
 #include "engines/Adapter.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "memory_support.h"
+#include "platform/memory_probe.h"
 #include "scheduler/SessionElement.h"
 
 namespace {
@@ -1364,15 +1366,21 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
     EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every load's unload, the refused ones' too";
 }
 
-// The contract's edge cost at prepare, over one row on coreml and on the CPU path. The default
-// (ANIRA_EDGE_DEDICATED_TRANSFER) keeps both plans. Under ANIRA_EDGE_COPY (no crossing between
-// domains) the coreml plan, whose slots the engine moves to its device itself (a transfer), is
-// dropped once its model has loaded, with an Info record naming each slot, its class, its mover and
-// why; the CPU plan stays, alone in the report and selected, its model loaded once (the session
-// made again over it takes the pooled one), the dropped plan's loaded and unloaded and never
-// prepared; the stream runs on it. A contract no plan is within refuses with
-// ANIRA_ERROR_EDGE_UNREACHABLE naming the dropped plan's slots, the handler left unprepared.
+// The contract's edge cost at prepare, over one row on coreml and on the CPU path, on a fake
+// machine whose Metal device has memory of its own. The default (ANIRA_EDGE_DEDICATED_TRANSFER)
+// keeps both plans. Under ANIRA_EDGE_COPY (no crossing between domains) the coreml plan, whose
+// slots the engine moves across the bus to its device itself (a dedicated transfer), is dropped
+// once its model has loaded, with an Info record naming each slot, its class, its mover and why;
+// the CPU plan stays, alone in the report and selected, its model loaded once (the session made
+// again over it takes the pooled one), the dropped plan's loaded and unloaded and never prepared;
+// the stream runs on it. A contract no plan is within refuses with ANIRA_ERROR_EDGE_UNREACHABLE
+// naming the dropped plan's slots, the handler left unprepared.
 TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Metal,
+        anira_test::fake_devices(
+            {anira_test::fake_device("Fake GPU", ANIRA_MEMORY_DEDICATED, "hasUnifiedMemory NO")}));
     const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);  // the record's level
     RecordCollector collector;
     GainEngine gain;
@@ -1409,8 +1417,9 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     // One record for the plan, naming each slot above the threshold: its class, who moves its
     // bytes and why (the provider rule's reason).
     const std::string why =
-        " (the provider computes in its device's memory: the slot is uploaded to it and the "
-        "results read back, per call)";
+        " (the provider's device computes in memory of its own (Metal device 0 'Fake GPU': "
+        "hasUnifiedMemory NO): its runtime moves the slot across the bus and the results back, "
+        "per call)";
     const std::string dropped =
         std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
         ":coreml is dropped, above the contract's edge cost (copy "
@@ -1441,6 +1450,203 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     EXPECT_EQ(anira_handler_plan_report(handler), nullptr) << "unprepared";
     anira_handler_destroy(handler);
     EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every model it loaded went back";
+}
+
+// A registered engine on four providers of a fake machine: CUDA (a device of its own memory),
+// DirectML (a DXGI adapter of unified memory), Core ML (Metal could not be asked) and the CPU
+// path. Each plan's row names its provider's memory kind; each input slot, which the engine
+// leaves to the provider rule, reads the class that kind gives, moved by the engine, with the
+// reason naming the kind and what the probe saw (or why it saw nothing); the engine's statement
+// was asked with the same rule. The edge cost reads the same classes: ANIRA_EDGE_UNIFIED_TRANSFER
+// drops the CUDA and the Core ML plans (dedicated transfers, Core ML's as unknown memory),
+// ANIRA_EDGE_COPY the DirectML plan too (a unified transfer), and ANIRA_EDGE_ZERO_COPY keeps the
+// CPU path alone as well. Each API is asked once, by the first prepare.
+TEST(AbiEngine, TheClassOfADeviceProviderFollowsItsDevicesMemory) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Cuda,
+        anira_test::fake_devices({anira_test::fake_device("Fake RTX",
+                                                          ANIRA_MEMORY_DEDICATED,
+                                                          "CU_DEVICE_ATTRIBUTE_INTEGRATED 0")}));
+    machine.set(anira::platform::DeviceApi::D3d12,
+                anira_test::fake_devices(
+                    {anira_test::fake_device("Fake iGPU",
+                                             ANIRA_MEMORY_UNIFIED,
+                                             "D3D12_FEATURE_DATA_ARCHITECTURE.UMA 1")}));
+    machine.set(anira::platform::DeviceApi::Metal,
+                anira_test::fake_failure("Metal is not loadable (fake)"));
+    const Context context;
+    GainEngine gain;
+    gain.m_output_edge = ANIRA_EDGE_ZERO_COPY;  // the outputs: the engine's own statement
+    const std::array<const char*, 4> served{"cuda", "directml", "coreml", "cpu"};
+    anira_engine_desc desc = gain_desc_serving(gain, served);
+    desc.edge = gain_edge;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, desc), ANIRA_OK) << pipe.m_err.message;
+    pipe.add_inference(gain_model(),
+                       gain_candidates({{ANIRA_PROVIDER_CUDA, nullptr},
+                                        {ANIRA_PROVIDER_DIRECTML, nullptr},
+                                        {ANIRA_PROVIDER_COREML, nullptr},
+                                        {ANIRA_PROVIDER_CPU, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+
+    struct Expected {
+        anira_memory_kind m_kind;
+        anira_edge_class m_class;
+        uint32_t m_moved_by;
+        const char* m_reason;
+    };
+    const std::array<Expected, 4> expected{{
+        {.m_kind = ANIRA_MEMORY_DEDICATED,
+         .m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
+         .m_moved_by = ANIRA_MOVER_ENGINE,
+         .m_reason = "the provider's device computes in memory of its own (CUDA device 0 'Fake "
+                     "RTX': CU_DEVICE_ATTRIBUTE_INTEGRATED 0): its runtime moves the slot across "
+                     "the bus and the results back, per call"},
+        {.m_kind = ANIRA_MEMORY_UNIFIED,
+         .m_class = ANIRA_EDGE_UNIFIED_TRANSFER,
+         .m_moved_by = ANIRA_MOVER_ENGINE,
+         .m_reason = "the provider's device computes in the host's memory (D3D12 device 0 'Fake "
+                     "iGPU': D3D12_FEATURE_DATA_ARCHITECTURE.UMA 1): its runtime hands the slot "
+                     "over to the device within that memory, no bus, and the results back, per "
+                     "call"},
+        {.m_kind = ANIRA_MEMORY_UNKNOWN,
+         .m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
+         .m_moved_by = ANIRA_MOVER_ENGINE,
+         .m_reason = "memory kind not probed: Metal is not loadable (fake)"},
+        {.m_kind = ANIRA_MEMORY_UNIFIED,
+         .m_class = ANIRA_EDGE_ZERO_COPY,
+         .m_moved_by = ANIRA_MOVER_NONE,
+         .m_reason = nullptr},
+    }};
+    const std::vector<anira_plan_info> plans = plan_rows(handler);
+    ASSERT_EQ(plans.size(), expected.size());
+    const anira_plan_report* report = anira_handler_plan_report(handler);
+    for (uint32_t plan = 0; plan < plans.size(); ++plan) {
+        SCOPED_TRACE(plan);
+        const Expected& want = expected.at(plan);
+        EXPECT_EQ(plans[plan].memory_kind, static_cast<uint32_t>(want.m_kind));
+        anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
+        uint32_t count = 1;
+        ASSERT_EQ(anira_plan_report_slots(report, plan, 1U, sizeof(row), &count, &row), ANIRA_OK);
+        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(want.m_class));
+        EXPECT_EQ(row.moved_by, want.m_moved_by);
+        if (want.m_reason == nullptr) {
+            EXPECT_EQ(row.reason, nullptr);
+        } else {
+            ASSERT_NE(row.reason, nullptr);
+            EXPECT_STREQ(row.reason, want.m_reason);
+        }
+    }
+    // The engine was asked with the rule of its load's provider: two slots per load.
+    std::vector<uint32_t> rules;
+    rules.reserve(gain.m_edges_asked.size());
+    for (const GainEngine::EdgeAsked& asked : gain.m_edges_asked) { rules.push_back(asked.m_rule); }
+    std::ranges::sort(rules);
+    EXPECT_EQ(rules,
+              (std::vector<uint32_t>{ANIRA_EDGE_ZERO_COPY,
+                                     ANIRA_EDGE_ZERO_COPY,
+                                     ANIRA_EDGE_UNIFIED_TRANSFER,
+                                     ANIRA_EDGE_UNIFIED_TRANSFER,
+                                     ANIRA_EDGE_DEDICATED_TRANSFER,
+                                     ANIRA_EDGE_DEDICATED_TRANSFER,
+                                     ANIRA_EDGE_DEDICATED_TRANSFER,
+                                     ANIRA_EDGE_DEDICATED_TRANSFER}));
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1);
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::D3d12), 1);
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Metal), 1);
+    EXPECT_EQ(machine.probes(), 3) << "nothing asked for the CPU path";
+
+    contract.edge_cost(ANIRA_EDGE_UNIFIED_TRANSFER);
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    std::vector<anira_plan_info> kept = plan_rows(handler);
+    ASSERT_EQ(kept.size(), 2U);
+    EXPECT_EQ(kept[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_DIRECTML));
+    EXPECT_EQ(kept[1].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+
+    for (const anira_edge_class worst_allowed : {ANIRA_EDGE_COPY, ANIRA_EDGE_ZERO_COPY}) {
+        SCOPED_TRACE(worst_allowed);
+        contract.edge_cost(worst_allowed);
+        ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        kept = plan_rows(handler);
+        ASSERT_EQ(kept.size(), 1U);
+        EXPECT_EQ(kept[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+    }
+    EXPECT_EQ(machine.probes(), 3) << "the context kept every answer";
+    anira_handler_destroy(handler);
+}
+
+// The memory kind is asked lazily and kept by the context: creating it, listing a pipeline's
+// backends and reading a row of the CPU path ask nothing; the first read of a device row asks
+// its device's API, a second read and a prepare on it ask nothing more; anira_context_probe
+// forgets, so the next read asks again.
+TEST(AbiEngine, TheMemoryKindIsAskedLazilyAndKeptByTheContext) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Cuda,
+        anira_test::fake_devices({anira_test::fake_device("Fake RTX", ANIRA_MEMORY_DEDICATED)}));
+    const Context context;
+    EXPECT_EQ(machine.probes(), 0) << "never at the context's creation";
+    GainEngine gain;
+    const std::array<const char*, 2> served{"cuda", "cpu"};
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+        << pipe.m_err.message;
+    pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_CUDA, nullptr}}));
+    uint32_t count = 0;
+    ASSERT_EQ(anira_pipeline_capabilities_backends(pipe.m_pipeline,
+                                                   context.m_context,
+                                                   sizeof(anira_backend_id),
+                                                   &count,
+                                                   nullptr),
+              ANIRA_OK);
+    const auto edge = [&](anira_provider provider) {
+        anira_backend_id to = ANIRA_BACKEND_ID_INIT;
+        to.engine = ANIRA_ENGINE_CUSTOM;
+        to.provider = static_cast<uint32_t>(provider);
+        to.engine_id = k_gain_id;
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        EXPECT_EQ(anira_pipeline_capabilities_edge(pipe.m_pipeline,
+                                                   context.m_context,
+                                                   ANIRA_DOMAIN_HOST,
+                                                   &to,
+                                                   &row),
+                  ANIRA_OK);
+        return row;
+    };
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CPU).memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_UNIFIED));
+    EXPECT_EQ(machine.probes(), 0) << "listing the backends and a CPU row ask nothing";
+
+    const anira_edge_info cuda = edge(ANIRA_PROVIDER_CUDA);
+    EXPECT_EQ(cuda.memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
+    EXPECT_EQ(cuda.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
+    ASSERT_NE(cuda.reason, nullptr);
+    EXPECT_STREQ(cuda.reason,
+                 "the engine declared the provider and its query reports it usable here; the "
+                 "provider's device computes in memory of its own (CUDA device 0 'Fake RTX': "
+                 "fake): its runtime moves the slot across the bus and the results back, per "
+                 "call");
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1);
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CUDA).reason, cuda.reason) << "the context's kept string";
+
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    ASSERT_EQ(anira_handler_prepare(handler, explicit_contract().native(), &err), ANIRA_OK)
+        << err.message;
+    EXPECT_EQ(plan_rows(handler).at(0).memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1)
+        << "the prepare reads the kept one";
+    anira_handler_destroy(handler);
+
+    ASSERT_EQ(anira_context_probe(context.m_context, 0, &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1) << "the probe asks nothing yet";
+    EXPECT_EQ(edge(ANIRA_PROVIDER_CUDA).memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
+    EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 2) << "forgotten, asked again";
 }
 
 // ==== finding a plan ==========================================================================
@@ -1964,10 +2170,16 @@ TEST(AbiEngine, TheQueryRunsAtCreateAndPrepareReusesItsAnswer) {
 // A pipeline's capabilities are the context's rows and then one row per custom engine of the
 // pipeline and provider usable here: the declared providers the query keeps, in list order,
 // or the CPU path alone for an engine without a list, with the engine's id; every call runs
-// the queries. The edges follow the CPU rule: zero-copy to the CPU path, a transfer the engine
-// makes itself to a device one; a provider the query cleared, an engine the pipeline does not add
-// and a domain other than the host's have no row; a built-in backend is the context's answer.
+// the queries. The edges follow the provider rule: zero-copy to the CPU path, a move the engine
+// makes itself to a device one, a dedicated transfer here (the fake machine's Metal device has
+// memory of its own); a provider the query cleared, an engine the pipeline does not add and a
+// domain other than the host's have no row; a built-in backend is the context's answer.
 TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Metal,
+        anira_test::fake_devices(
+            {anira_test::fake_device("Fake GPU", ANIRA_MEMORY_DEDICATED, "hasUnifiedMemory NO")}));
     const Context context;
     static constexpr std::array<const char*, 3> k_served{"coreml", "com.example.npu", "cpu"};
     GainEngine gain;
@@ -2063,9 +2275,14 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
     EXPECT_EQ(coreml_edge.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE))
         << "the engine moves host memory to its device itself";
+    EXPECT_EQ(coreml_edge.memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
+    EXPECT_EQ(default_edge.memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_UNIFIED))
+        << "the CPU path computes in host memory";
     EXPECT_EQ(coreml_edge.rung, static_cast<uint32_t>(ANIRA_RUNG_IDENTITY));
     ASSERT_NE(coreml_edge.reason, nullptr);
     EXPECT_NE(std::strstr(coreml_edge.reason, "query"), nullptr) << coreml_edge.reason;
+    EXPECT_NE(std::strstr(coreml_edge.reason, "Metal device 0 'Fake GPU'"), nullptr)
+        << coreml_edge.reason;
     EXPECT_STREQ(coreml_edge.to_engine_id, k_gain_id);
     {
         // A caller whose header ends before the tail field reads the row without it.
@@ -2087,7 +2304,8 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
         EXPECT_EQ(row.to_engine_id, sentinel) << "beyond the caller's struct_size";
     }
     {
-        // Likewise for the mover, the last tail field: a device row's ENGINE stays unwritten.
+        // Likewise for the mover and the memory kind, the last tail fields: a device row's
+        // ENGINE and DEDICATED stay unwritten.
         anira_backend_id to = ANIRA_BACKEND_ID_INIT;
         to.engine = ANIRA_ENGINE_CUSTOM;
         to.provider = ANIRA_PROVIDER_COREML;
@@ -2103,6 +2321,8 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
         EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
         EXPECT_STREQ(row.to_engine_id, k_gain_id);
         EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE))
+            << "beyond the caller's struct_size";
+        EXPECT_EQ(row.memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_UNKNOWN))
             << "beyond the caller's struct_size";
     }
     EXPECT_EQ(edge(ANIRA_PROVIDER_CUSTOM, "com.example.npu", k_gain_id).first,

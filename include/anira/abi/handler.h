@@ -113,11 +113,13 @@ extern "C" {
  * Runtime's CPU-side execution providers); ANIRA_EDGE_COPY with the reason where the
  * slot is copied inside host memory, by the engine's adapter (ANIRA_MOVER_ANIRA:
  * LibTorch's outputs, a memory-planned ExecuTorch output) or by the runtime's own API
- * (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and
- * ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE, where a device provider's runtime
- * uploads the slot's host memory and reads the results back itself (a GPU execution
- * provider, a LiteRT accelerator), the class and mover the capability rows give that
- * edge.
+ * (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and, moved by the engine
+ * (ANIRA_MOVER_ENGINE), where a device provider's runtime moves the slot's host memory
+ * to its device and reads the results back itself (a GPU execution provider, a LiteRT
+ * accelerator), the class the memory kind of its device gives
+ * (anira_plan_info.memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+ * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory, the reason saying which
+ * and what the probe saw), the class and mover the capability rows give that edge.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
@@ -271,11 +273,19 @@ typedef struct anira_plan_info {
      * before it gets its rows without it.
      */
     const char* provider_id;
+    /**
+     * anira_memory_kind: the physical memory the plan's provider computes in, as the handler's
+     * context probed it at the prepare that loaded the plan's model
+     * (anira_edge_info.memory_kind): the fact a device provider's slot classes follow.
+     * ANIRA_MEMORY_UNIFIED on a provider that runs over host memory. A tail field: a caller
+     * whose header ends before it gets its rows without it.
+     */
+    uint32_t memory_kind;
 } anira_plan_info;
 /**
  * @brief No plan.
  */
-#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL)
+#define ANIRA_PLAN_INFO_INIT ANIRA_INIT(anira_plan_info, sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN)
 
 /**
  * @brief The variant of an anira_plan_query that matches every variant (0 is a variant: the
@@ -555,10 +565,13 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable
  * here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to
  * ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a
- * copy, a transfer the engine makes itself (ANIRA_EDGE_DEDICATED_TRANSFER,
- * ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared the
- * provider and its query reported it usable. The strings' lifetime is
- * anira_pipeline_capabilities_backends's.
+ * copy; to every other provider a move the engine makes itself (ANIRA_MOVER_ENGINE)
+ * whose class follows the memory kind of the provider's device as the context probes it
+ * (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+ * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory), the reason saying the
+ * engine declared the provider and its query reported it usable, and the memory kind
+ * with what the probe saw. Only the row asked is probed. The strings' lifetime is
+ * anira_pipeline_capabilities_backends's, the reason's the context's.
  * @param pipeline The pipeline whose custom engines are asked.
  * @param context The context whose edge registry answers for a built-in engine.
  * @param from The tensor's domain.
@@ -662,23 +675,25 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at
  * anira_handler_create), runs the processor's init when it has not run yet (once per
  * registration, before any model loads), loads the model of every candidate with an
- * entry, warms up as the contract says, drops every plan with a slot whose edge is above
- * the contract's edge cost (anira_contract_set_edge_cost; an Info record per dropped
- * plan names the slots, their class, mover and reason), sizes the rings for the
- * contract's block range and the latency, builds the plan report, selects the plan of
- * the variant's default engine when that engine has a plan (else plan 0), logs the
- * report (Info records of the group anira.capi: the counts and the selected plan, then
- * one record per plan, per slot and per consumed extension) re-arms the real-time
- * latches, logging the count of failures suppressed since the last prepare or reset, and
- * last calls the processor's prepare function, when the pipeline has a processor with
- * one, with an anira_prepare_info (the handler, the report, the entry count, a template
- * of the model end of every slot and the canonical names) and keeps the prepared pointer
- * it hands back for this handler (a status other than ANIRA_OK fails this call with it,
- * and unprepare is not called for a refused prepare). A second prepare replaces the
- * previous session whole: the processor's unprepare of the previous prepare runs once
- * the old session is released, before the new prepare. A failed prepare leaves the
- * handler unprepared, the previous prepare's unprepare called all the same. Refused in
- * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+ * entry (a device provider's with the memory kind of its device, the context's kept
+ * answer or its device API's asked now, which its slot classes follow:
+ * anira_plan_info.memory_kind), warms up as the contract says, drops every plan with a
+ * slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost; an
+ * Info record per dropped plan names the slots, their class, mover and reason), sizes
+ * the rings for the contract's block range and the latency, builds the plan report,
+ * selects the plan of the variant's default engine when that engine has a plan (else
+ * plan 0), logs the report (Info records of the group anira.capi: the counts and the
+ * selected plan, then one record per plan, per slot and per consumed extension) re-arms
+ * the real-time latches, logging the count of failures suppressed since the last prepare
+ * or reset, and last calls the processor's prepare function, when the pipeline has a
+ * processor with one, with an anira_prepare_info (the handler, the report, the entry
+ * count, a template of the model end of every slot and the canonical names) and keeps
+ * the prepared pointer it hands back for this handler (a status other than ANIRA_OK
+ * fails this call with it, and unprepare is not called for a refused prepare). A second
+ * prepare replaces the previous session whole: the processor's unprepare of the previous
+ * prepare runs once the old session is released, before the new prepare. A failed
+ * prepare leaves the handler unprepared, the previous prepare's unprepare called all the
+ * same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
  * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
  * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
  * output's channel count or ring dtype differs from the anchored input's,

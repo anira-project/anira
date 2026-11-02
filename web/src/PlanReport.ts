@@ -40,6 +40,13 @@ export type PlanInfo = {
   engineFlags: number
   /** The name of the plan's custom provider, null for one the enum names. */
   providerId: string | null
+  /**
+   * `anira_memory_kind`: the physical memory the plan's provider computes in, the fact a
+   * device provider's slot classes follow. `ANIRA_MEMORY_UNIFIED` on a provider that runs
+   * over host memory; on the web every device provider's is `ANIRA_MEMORY_UNKNOWN` (a
+   * browser exposes no memory kind), its slots `ANIRA_EDGE_DEDICATED_TRANSFER`.
+   */
+  memoryKind: number
 }
 
 /** One slot of a plan (`anira_plan_slot`): the edge its tensor takes into the engine. */
@@ -85,7 +92,7 @@ export type PlanExtension = {
 }
 
 // The wasm32 layouts of the three Tier-2 rows (anira/abi/handler.h): 4-byte pointers, the
-// double of anira_plan_info at 24. The rows are enumerated at these strides (the entries take
+// double of anira_plan_info at 24, its memory_kind in the tail at 44. The rows are enumerated at these strides (the entries take
 // the caller's element size and write the fields the stride covers).
 const PLAN_INFO = {
   size: 48,
@@ -95,7 +102,7 @@ const PLAN_INFO = {
   engineId: 16,
   budgetMs: 24,
 }
-const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40 }
+const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40, memoryKind: 44 }
 const PLAN_SLOT = {
   size: 60,
   slot: 4,
@@ -153,6 +160,7 @@ export class PlanReport {
         budgetMs: heap(m).HEAPF64[(row + PLAN_INFO.budgetMs) >>> 3],
         engineFlags: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.engineFlags) >>> 2],
         providerId: this.text(heap(m).HEAPU32[(row + PLAN_INFO_TAIL.providerId) >>> 2]),
+        memoryKind: heap(m).HEAPU32[(row + PLAN_INFO_TAIL.memoryKind) >>> 2],
       })
     )
   }

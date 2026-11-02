@@ -104,8 +104,9 @@ typedef struct anira_edge_info {
     uint32_t rung;  /**< anira_rung: how the availability was established. */
     uint32_t available;  /**< 1 when the edge can be used here, else 0. */
     /**
-     * Why the edge is unavailable, or why it is available and of its class; static storage of
-     * the library, NULL when there is nothing to say.
+     * Why the edge is unavailable, or why it is available and of its class (a device provider's
+     * names its memory kind and what the probe saw); valid while the context is, NULL when
+     * there is nothing to say.
      */
     const char* reason;
     /**
@@ -128,11 +129,22 @@ typedef struct anira_edge_info {
      * back itself. A tail field: a caller whose header ends before it gets its rows without it.
      */
     uint32_t moved_by;
+    /**
+     * anira_memory_kind: the physical memory the backend's provider computes in, the fact a
+     * device provider's class follows: ANIRA_MEMORY_UNIFIED for a provider that runs over host
+     * memory (nothing probed) and for a device of unified memory (ANIRA_EDGE_UNIFIED_TRANSFER),
+     * ANIRA_MEMORY_DEDICATED for a device of its own memory (ANIRA_EDGE_DEDICATED_TRANSFER),
+     * ANIRA_MEMORY_UNKNOWN where no probe established it (ANIRA_EDGE_DEDICATED_TRANSFER). A
+     * device provider's kind is asked of its device's API the first time a row of it is read,
+     * and kept by the context. A tail field: a caller whose header ends before it gets its rows
+     * without it.
+     */
+    uint32_t memory_kind;
 } anira_edge_info;
 /**
  * @brief No edge: both axes unset, unavailable.
  */
-#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_ZERO_COPY, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL, ANIRA_MOVER_NONE)
+#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_ZERO_COPY, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL, ANIRA_MOVER_NONE, ANIRA_MEMORY_UNKNOWN)
 
 /**
  * @brief Creates a context over this copy's core: reconciles the config into the core (see the
@@ -177,7 +189,9 @@ ANIRA_API void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NO
 /**
  * @brief Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
  * engines on the providers their runtimes report usable now
- * (anira_capabilities_backends), one host edge per backend row, the host domain. Nothing
+ * (anira_capabilities_backends), one host edge per backend row, the host domain. The
+ * memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or
+ * prepare that needs a device provider's kind asks its device's API again. Nothing else
  * is cached in this pre-release, so force changes nothing.
  * @param context The handle.
  * @param force Nonzero re-runs every rung even where a cached answer exists.
@@ -262,10 +276,15 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
 
 /**
  * @brief Every row of the edge registry, available or not; one host edge to each backend row of
- * this pre-release (zero-copy to a provider that runs over host memory, a transfer the
- * engine's runtime makes itself to any other). Stride-explicit enumeration. The strings
- * the rows point to (to_provider_id, reason) are the context's, valid until its next
- * anira_context_probe replaces them or the context is destroyed.
+ * this pre-release: zero-copy to a provider that runs over host memory; to a device
+ * provider a move the engine's runtime makes itself, whose class follows the device's
+ * memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+ * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory). The first read of a
+ * device provider's row asks its device's API (the unified-memory probe, run lazily, on
+ * a thread of its own, waited for 5 s at most per API, never at the context's creation)
+ * and the context keeps the answer. Stride-explicit enumeration. The strings the rows
+ * point to (to_provider_id, reason) are the context's: to_provider_id valid until its
+ * next anira_context_probe replaces it, reason until the context is destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.
@@ -285,7 +304,8 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilit
  * @brief One row of the edge registry, by domain and backend: the engine on the provider, a
  * custom provider (ANIRA_PROVIDER_CUSTOM) by its provider_id (read when the caller's
  * record has the slot). A custom engine (ANIRA_ENGINE_CUSTOM) has no row here: its rows
- * are its pipeline's (anira_pipeline_capabilities_edge).
+ * are its pipeline's (anira_pipeline_capabilities_edge). A device provider's row asks
+ * its memory kind as anira_capabilities_edges does, for this row alone.
  * @param capabilities The capabilities.
  * @param from The tensor's domain.
  * @param to The backend; read within its struct_size.

@@ -24,11 +24,18 @@
 #include "engine.h"
 #include "handler.h"  // IWYU pragma: keep - the body of anira_pipeline
 #include "handles.h"
+#include "memory.h"
 #include "words.h"
 
 namespace anira::capi {
 
 namespace {
+
+// The reasons of a pipeline's custom rows (set_provider_edge).
+constexpr const char* k_custom_host_reason =
+    "host memory reaches a custom engine's CPU provider without a copy";
+constexpr const char* k_custom_device_reason =
+    "the engine declared the provider and its query reports it usable here";
 
 anira::engine::ProviderInfo cpu_path() {
     return anira::engine::ProviderInfo{.m_provider = ANIRA_PROVIDER_CPU, .m_provider_id = ""};
@@ -64,18 +71,21 @@ std::string provider_list(const std::vector<anira::engine::ProviderInfo>& provid
 void set_provider_edge(anira_edge_info& edge,
                        anira_provider provider,
                        std::string_view provider_id,
+                       const anira::engine::DeviceMemory& memory,
                        const char* host_reason,
-                       const char* device_reason) noexcept {
+                       const char* device_reason,
+                       MemoryKinds& texts) {
+    const anira::engine::ProviderRule rule =
+        anira::engine::provider_rule(provider, provider_id, memory);
+    edge.edge_class = static_cast<uint32_t>(rule.m_class);
+    edge.moved_by = rule.m_moved_by;
+    edge.memory_kind = static_cast<uint32_t>(memory.m_kind);
     if (anira::engine::host_memory_provider(provider, provider_id)) {
-        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
-        edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_NONE);
         edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
         edge.reason = host_reason;
     } else {
-        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER);
-        edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
         edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
-        edge.reason = device_reason;
+        edge.reason = texts.keep(std::string(device_reason) + "; " + rule.m_reason);
     }
 }
 
@@ -256,16 +266,43 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
             edge.to_provider_id = provider_id;
             edge.to_engine_id = engine->id().c_str();
             edge.available = 1;
-            set_provider_edge(edge,
-                              info.m_provider,
-                              info.m_provider_id,
-                              "host memory reaches a custom engine's CPU provider without a copy",
-                              "the engine declared the provider and its query reports it usable "
-                              "here; the provider computes in its device's memory");
+            edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
+            if (anira::engine::host_memory_provider(info.m_provider, info.m_provider_id)) {
+                set_provider_edge(edge,
+                                  info.m_provider,
+                                  info.m_provider_id,
+                                  host_memory(),
+                                  k_custom_host_reason,
+                                  k_custom_device_reason,
+                                  context.m_capabilities.m_memory);
+            } else {
+                // Until complete_custom_edge asks the device's memory kind: the move the
+                // engine makes itself, counted as a dedicated transfer.
+                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER);
+                edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
+                edge.reason = k_custom_device_reason;
+            }
             rows.m_edges.push_back(edge);
         }
     }
     return rows;
+}
+
+void complete_custom_edge(const anira_context& context, anira_edge_info& edge) {
+    const auto provider = static_cast<anira_provider>(edge.to_provider);
+    const std::string_view provider_id =
+        edge.to_provider_id != nullptr ? std::string_view(edge.to_provider_id) : "";
+    if (anira::engine::host_memory_provider(provider, provider_id)) { return; }
+    // A custom engine's options are its own vocabulary: no device_id is read from them.
+    const anira::engine::DeviceMemory memory =
+        context.m_capabilities.m_memory.memory_of(ANIRA_ENGINE_CUSTOM, provider, provider_id, {});
+    set_provider_edge(edge,
+                      provider,
+                      provider_id,
+                      memory,
+                      k_custom_host_reason,
+                      k_custom_device_reason,
+                      context.m_capabilities.m_memory);
 }
 
 }  // namespace anira::capi

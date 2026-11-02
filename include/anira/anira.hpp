@@ -2023,7 +2023,9 @@ public:
             "anira_capabilities_ext_kinds");
         return {kinds.begin(), kinds.end()};
     }
-    /// Every row of the edge registry, available or not.
+    /// Every row of the edge registry, available or not. The first read of a device
+    /// provider's row asks its device's memory kind (anira_edge_info.memory_kind; the
+    /// unified-memory probe, bounded, kept by the context), so call it off the audio thread.
     std::vector<anira_edge_info> edges() const {
         return detail::enumerate<anira_edge_info>(
             [this](uint32_t* count, anira_edge_info* out) {
@@ -2034,7 +2036,8 @@ public:
             },
             "anira_capabilities_edges");
     }
-    /// One row, by domain and backend.
+    /// One row, by domain and backend (a device provider's asks its memory kind as edges()
+    /// does, for this row alone).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
         anira_edge_info row = ANIRA_EDGE_INFO_INIT;
@@ -3170,11 +3173,14 @@ public:
         /// `is_input`, else the output slot), for the plan report's slot rows and the
         /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
         /// returned this Loaded, once per slot, inputs first, on the same thread and under the
-        /// same lock. `provider_rule` is what anira reports without a statement (zero-copy on
-        /// ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_DEDICATED_TRANSFER on every other provider),
-        /// and the base returns it. An engine that copies the slot into memory of its own returns
-        /// ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails with the
-        /// status, and the Loaded is deleted.
+        /// same lock. `provider_rule` is what anira reports without a statement, and the base
+        /// returns it: zero-copy on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider
+        /// ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory,
+        /// ANIRA_EDGE_DEDICATED_TRANSFER where it has memory of its own or no probe established
+        /// which (the plan row's memory_kind, anira_memory_kind), the reason saying which and what
+        /// the probe saw. An engine that copies the slot into memory of its own returns
+        /// ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails with the status,
+        /// and the Loaded is deleted.
         virtual EngineEdge edge(bool /*is_input*/,
                                 uint32_t /*slot*/,
                                 const EngineEdge& provider_rule) const {

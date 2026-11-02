@@ -67,6 +67,7 @@
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../engines/DescriptorAdapter.h"
+#include "../platform/memory_probe.h"
 #include "../scheduler/Core.h"
 #include "../scheduler/InferenceManager.h"
 #include "../scheduler/InferenceThread.h"
@@ -81,6 +82,7 @@
 #include "enumerate.h"
 #include "ext_registry.h"
 #include "handles.h"
+#include "memory.h"
 #include "port.h"
 #include "processor.h"
 #include "providers.h"
@@ -1249,6 +1251,14 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
                 request.m_model.m_options = set->m_options;
             }
         }
+        // The memory the provider's device computes in, which its slots' classes follow (the
+        // provider rule): the context's kept answer, or the device API's asked now, on this
+        // control thread; nothing is asked for a provider that runs over host memory.
+        request.m_model.m_device_memory =
+            handler.m_context->m_capabilities.m_memory.memory_of(row.m_engine,
+                                                                 key.m_provider,
+                                                                 key.m_provider_id,
+                                                                 request.m_model.m_options);
         if (const std::shared_ptr<const anira::capi::EngineCarrier> engine =
                 registered_engine(handler.m_pipeline, row)) {
             if (variant == nullptr) {
@@ -1281,6 +1291,17 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
     return requests;
 }
 
+// The memory kind of a plan's provider's device as its loaded model's record carries it (the
+// context's answer at the prepare that loaded it), under the plan's dense index; unknown for a
+// plan without a loaded model.
+anira_memory_kind memory_kind_of(const anira_handler& handler, size_t plan) noexcept {
+    const anira::SessionElement& session = handler.m_manager->session();
+    if (plan >= session.m_plans.size() || session.m_plans[plan].m_loaded == nullptr) {
+        return ANIRA_MEMORY_UNKNOWN;
+    }
+    return session.m_plans[plan].m_loaded->model().m_device_memory.m_kind;
+}
+
 // The plan table of the report: one plan per row and provider of the validator's table, in
 // entry order and candidate order, the same order the session's table was built in from
 // plan_requests (the dense index is the position on both sides); a custom row is
@@ -1293,7 +1314,8 @@ void build_plans(anira_handler& handler,
                  const anira_model_config& model,
                  const anira::capi::Derived& derived,
                  const anira::capi::HardContract& hard) {
-    for (const anira::capi::PlanKey& key : derived.m_plans) {
+    for (size_t index = 0; index < derived.m_plans.size(); ++index) {
+        const anira::capi::PlanKey& key = derived.m_plans[index];
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::capi::Plan plan;
@@ -1308,6 +1330,7 @@ void build_plans(anira_handler& handler,
             plan.m_info.provider_id = handler.m_report.m_strings.back().c_str();
         }
         plan.m_info.budget_ms = hard.m_budget_ms;
+        plan.m_info.memory_kind = static_cast<uint32_t>(memory_kind_of(handler, index));
         // A built-in engine promises nothing through the flags; a registered engine's are its
         // descriptor's.
         plan.m_info.engine_flags = 0;
@@ -1628,14 +1651,16 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
         const std::string provider =
             anira::capi::provider_label(static_cast<anira_provider>(info.provider),
                                         info.provider_id != nullptr ? info.provider_id : "");
-        ANIRA_LOG_INFO(anira::log_group::k_capi,
-                       "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
-                       "budget %.3f ms",
-                       i,
-                       info.variant,
-                       engine.c_str(),
-                       provider.c_str(),
-                       info.budget_ms);
+        ANIRA_LOG_INFO(
+            anira::log_group::k_capi,
+            "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
+            "budget %.3f ms, memory %s",
+            i,
+            info.variant,
+            engine.c_str(),
+            provider.c_str(),
+            info.budget_ms,
+            anira::platform::memory_kind_word(static_cast<anira_memory_kind>(info.memory_kind)));
         log_slots(i, report.m_inputs[i], model.m_inputs, "input");
         log_slots(i, report.m_outputs[i], model.m_outputs, "output");
         for (const anira_plan_ext& ext : report.m_exts[i]) {
@@ -2514,12 +2539,14 @@ anira_status ANIRA_CALL anira_pipeline_capabilities_edge(const anira_pipeline* p
     // custom_rows builds (the engines' queries run here); anything else has no row.
     if (from != ANIRA_DOMAIN_HOST) { return ANIRA_ERROR_EDGE_UNREACHABLE; }
     const std::string_view wanted_engine(to->engine_id);
-    const anira::capi::CustomRows rows = anira::capi::custom_rows(*context, *pipeline);
+    anira::capi::CustomRows rows = anira::capi::custom_rows(*context, *pipeline);
     for (size_t i = 0; i < rows.m_backends.size(); ++i) {
         const anira_backend_id& row = rows.m_backends[i];
         const std::string_view listed = row.provider_id != nullptr ? row.provider_id : "";
         if (std::string_view(row.engine_id) == wanted_engine && row.provider == to->provider &&
             listed == provider_id) {
+            // This row's memory kind alone (a device provider's, the context's kept answer).
+            anira::capi::complete_custom_edge(*context, rows.m_edges[i]);
             std::memcpy(out,
                         &rows.m_edges[i],
                         std::min<size_t>(out->struct_size, sizeof(anira_edge_info)));

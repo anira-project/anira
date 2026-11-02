@@ -769,19 +769,20 @@ public:
     /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
     /// leaves out is bound in place, a planned one costs one copy (set_input's for an input,
     /// the adapter's for an output). A delegate on a device (a GPU or an NPU backend) moves
-    /// the slot to it and back itself: the provider's edge, the worse move, with the adapter's
-    /// bit beside the engine's where the adapter also copies the output out of the plan's
-    /// memory or its own block.
+    /// the slot to it and back itself: the provider's edge (a unified transfer on a
+    /// unified-memory device, a dedicated transfer on a dedicated or unknown one) with the class
+    /// of the worse move, and
+    /// the adapter's bit beside the engine's where the adapter also copies the output out of
+    /// the plan's memory or its own block.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
         const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
         const SlotEdge host = slot < edges.size() ? edges[slot] : SlotEdge{};
         if (host_memory_provider(model().m_provider, model().m_provider_id)) { return host; }
         SlotEdge device = provider_edge();
+        device.m_class = std::max(device.m_class, host.m_class);
         if ((host.m_moved_by & ANIRA_MOVER_ANIRA) != 0) {
             device.m_moved_by |= ANIRA_MOVER_ANIRA;
-            device.m_reason =
-                "executorch: the delegate computes in its device's memory and the output "
-                "lands in memory of the plan's or the executor's own";
+            device.m_reason = m_device_output_reason.c_str();
         }
         return device;
     }
@@ -858,6 +859,12 @@ protected:
         for (size_t slot = 0; slot < model.m_outputs.size(); ++slot) {
             m_output_edges.push_back(probe->slot_edge(false, slot));
         }
+        const SlotEdge device = provider_edge();
+        m_device_output_reason =
+            std::string(
+                "executorch: the output lands in memory of the plan's or the "
+                "executor's own, which the adapter copies out; ") +
+            (device.m_reason != nullptr ? device.m_reason : "the delegate computes on its device");
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
     }
@@ -874,6 +881,9 @@ private:
     std::vector<SlotBinding> m_output_bindings;
     std::vector<SlotEdge> m_input_edges;  ///< per input slot: the probe's edge
     std::vector<SlotEdge> m_output_edges;
+    /// The reason of an output a device delegate computes and the adapter copies out, the
+    /// provider rule's reason behind the adapter's copy.
+    std::string m_device_output_reason;
 };
 
 }  // namespace

@@ -18,6 +18,7 @@ import {
   ModelConfig,
   Pipeline,
   anira_engine,
+  anira_memory_kind,
   anira_provider,
   anira_status,
 } from '../../dist/index.js'
@@ -77,6 +78,11 @@ const run = async () => {
     plans.length === 2 && builtIn >= 0 && custom >= 0,
     `the report holds the built-in ONNX Runtime plan (${builtIn}) and the JavaScript ` +
       `engine's (${custom}) of ${plans.length}`
+  )
+  check(
+    plans.every((p) => p.memoryKind === anira_memory_kind.ANIRA_MEMORY_UNIFIED),
+    `both plans run on the CPU path, in host memory (memory kinds ` +
+      `${plans.map((p) => p.memoryKind).join(', ')}, read at the wasm32 tail offset 44)`
   )
 
   const byId = report.find({

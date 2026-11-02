@@ -67,6 +67,48 @@ struct TensorInfo {
     bool operator==(const TensorInfo& other) const = default;
 };
 
+/// The physical memory a record's provider computes in, against the host's, and why: what the
+/// handler's context established for the provider's device (src/capi/memory.h, the
+/// unified-memory probe of src/platform/memory_probe.h), ANIRA_MEMORY_UNIFIED with nothing
+/// probed for a provider that runs over host memory (host_memory_provider). The class of a
+/// device provider's edge follows it (provider_rule).
+struct DeviceMemory {
+    anira_memory_kind m_kind = ANIRA_MEMORY_UNKNOWN;
+    /// What the probe saw ("CUDA device 0 'NVIDIA ...': CU_DEVICE_ATTRIBUTE_INTEGRATED 0"), or
+    /// why it established nothing; empty for a host-memory provider.
+    std::string m_why;
+};
+
+/// Whether a provider runs over host memory as it is, so that an engine binding a slot's
+/// memory in place moves nothing: the CPU path (ANIRA_PROVIDER_CPU), XNNPACK, and the CPU-side
+/// execution providers ONNX Runtime reports by name (DnnlExecutionProvider, oneDNN on the CPU;
+/// ACLExecutionProvider and ArmNNExecutionProvider, the Arm CPU libraries). Every other
+/// provider is a device or an accelerator (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU,
+/// Vulkan, a LiteRT accelerator, an ExecuTorch GPU or NPU delegate, a custom engine's device)
+/// whose runtime moves host memory to it and reads the results back itself, per call: where
+/// the bytes go is its device's memory kind's (provider_rule).
+bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
+
+/// The provider rule: the edge of a slot an engine binds in place on `provider`, whose device
+/// computes in `memory`. The one rule of the plan rows (Loaded::provider_edge) and of the
+/// capability rows (the context's and a pipeline's, capi::set_provider_edge):
+/// - a provider that runs over host memory (host_memory_provider): ANIRA_EDGE_ZERO_COPY, moved
+///   by nobody, no reason;
+/// - a device provider: moved by the engine (ANIRA_MOVER_ENGINE), its runtime moving the slot
+///   to the device and back itself, per call; ANIRA_EDGE_UNIFIED_TRANSFER on a device of
+///   unified memory (a copy and a hand-over between the processors, no bus),
+///   ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one (across the bus) and on one whose memory
+///   kind no probe established ("memory kind not probed: <why>"), dedicated until a probe shows
+///   unified. The reason names the kind and what the probe saw.
+struct ProviderRule {
+    anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+    uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
+    std::string m_reason;                    ///< empty on a host-memory provider
+};
+ProviderRule provider_rule(anira_provider provider,
+                           std::string_view provider_id,
+                           const DeviceMemory& memory);
+
 /// The record of one loaded model: everything an engine reads at load, copied out of the
 /// configuration it came from (a model entry and the validator's derived quantities), so that
 /// a pooled model never aliases a session's
@@ -116,6 +158,10 @@ struct Model {
     uint32_t m_instances = 1;
     uint32_t m_warm_up = 0;  ///< the inferences load runs on every executor before the first
                              ///< real one
+    /// The memory of the provider's device as the handler's context probed it: what the provider
+    /// rule takes a device provider's class from. No part of the key: it is a fact of the
+    /// machine, the same for every context that loads the record.
+    DeviceMemory m_device_memory;
 
     bool operator==(const Model& other) const;
 };
@@ -365,9 +411,12 @@ public:
         static_cast<void>(slot);
         return provider_edge();
     }
-    /// The edge of a slot bound in place on the record's provider: zero-copy where it runs over
-    /// host memory, else ANIRA_EDGE_DEDICATED_TRANSFER moved by the engine, the provider's runtime
-    /// moving the slot to its device and back itself.
+    /// The edge of a slot bound in place on the record's provider, the provider rule
+    /// (provider_rule) over the record's device memory, kept from the load: zero-copy where it
+    /// runs over host memory, else moved by the engine, the provider's runtime moving the slot to
+    /// its device and back itself: ANIRA_EDGE_UNIFIED_TRANSFER on a unified-memory device,
+    /// ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one and on one whose memory kind is unknown.
+    /// The reason lives as long as this Loaded.
     SlotEdge provider_edge() const noexcept;
 
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
@@ -449,6 +498,7 @@ private:
 
     Model m_model;
     Bindings m_bindings;
+    ProviderRule m_provider_rule;           ///< the record's provider rule, from load on
     std::vector<std::atomic<bool>> m_busy;  ///< one busy flag per shared slot, sized at load
     uint32_t m_num_instances = 0;           ///< the shared slots; 0 before load
     bool m_loaded = false;
@@ -607,18 +657,6 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
                                     size_t required,
                                     const char* engine,
                                     const char* side);
-
-/// Whether a provider runs over host memory as it is, so that an engine binding a slot's
-/// memory in place moves nothing: the CPU path (ANIRA_PROVIDER_CPU), XNNPACK, and the CPU-side
-/// execution providers ONNX Runtime reports by name (DnnlExecutionProvider, oneDNN on the CPU;
-/// ACLExecutionProvider and ArmNNExecutionProvider, the Arm CPU libraries). Every other
-/// provider is a device or an accelerator (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU,
-/// Vulkan, a LiteRT accelerator, an ExecuTorch GPU or NPU delegate, a custom engine's device)
-/// whose runtime uploads host memory to it and reads the results back itself, per call: the
-/// bytes cross between host and device (ANIRA_EDGE_DEDICATED_TRANSFER, moved by the engine). The
-/// one rule of the plan rows (Loaded::provider_edge) and of the capability rows (the context's and
-/// a pipeline's, src/capi/context.cpp and src/capi/providers.cpp).
-bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an

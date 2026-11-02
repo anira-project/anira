@@ -453,9 +453,11 @@ typedef struct anira_engine_edge {
     uint32_t struct_size;
     /**
      * anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until
-     * it computes on them and back for an output. Arrives as the provider rule's
-     * (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_DEDICATED_TRANSFER on
-     * every other provider): an engine that leaves it states that.
+     * it computes on them and back for an output. Arrives as the provider rule's:
+     * ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider
+     * ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory and
+     * ANIRA_EDGE_DEDICATED_TRANSFER where it has its own memory or no probe established which
+     * (the plan's anira_plan_info.memory_kind). An engine that leaves it states that.
      */
     uint32_t edge_class;
     /**

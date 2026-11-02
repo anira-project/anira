@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -1732,12 +1733,14 @@ TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
 // are bound in place exactly as on the CPU path: the accelerator takes host-memory buffers though
 // its requirements list only its own buffer type (probe P2g), reads the kept buffers' memory at
 // every run with no lock, and leaves the results in it when the run returns. It uploads the slots
-// itself: the report says ANIRA_EDGE_DEDICATED_TRANSFER moved by the engine, with the reason, and
-// anira counts no copy. The record's warm-up runs over the managed buffers first, then the runs go
-// in place, off the boundary (the managed buffers again) and in place once more: a compiled model
-// refuses a run over another buffer type than its first run's (P2g), so every buffer the adapter
-// hands it is of LiteRT's host-memory type, and this order runs through. Skipped where no GPU
-// accelerator is registered (the pinned CPU package, the CI legs).
+// itself: over a record whose device memory is unified (lavapipe's, as the handler's context
+// would give it), the report says ANIRA_EDGE_UNIFIED_TRANSFER moved by the engine, with the
+// reason naming the memory, and anira counts no copy. The
+// record's warm-up runs over the managed buffers first, then the runs go in place, off the
+// boundary (the managed buffers again) and in place once more: a compiled model refuses a run
+// over another buffer type than its first run's (P2g), so every buffer the adapter hands it is of
+// LiteRT's host-memory type, and this order runs through. Skipped where no GPU accelerator is
+// registered (the pinned CPU package, the CI legs).
 TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
     if (!std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
@@ -1750,15 +1753,26 @@ TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
     gpu.m_outputs[1].m_export_name = "output_1";
     gpu.m_provider = ANIRA_PROVIDER_CUSTOM;
     gpu.m_provider_id = "gpu";
+    gpu.m_device_memory = anira::engine::DeviceMemory{
+        .m_kind = ANIRA_MEMORY_UNIFIED,
+        .m_why =
+            "Vulkan device 0 'llvmpipe': type CPU; memory type 0 is device-local and "
+            "host-visible"};
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(gpu);  // the warm-up: two runs over the managed host buffers
     // The accelerator computes the float32 export in float16 (its default precision): two
     // roundings of 2^-11 each.
     expect_bound_on_the_boundary(*adapter,
-                                 ANIRA_EDGE_DEDICATED_TRANSFER,
+                                 ANIRA_EDGE_UNIFIED_TRANSFER,
                                  ANIRA_MOVER_ENGINE,
                                  1.F / 512.F);
+    const char* reason = adapter->loaded().slot_edge(true, 0).m_reason;
+    ASSERT_NE(reason, nullptr);
+    EXPECT_NE(std::string_view(reason).find("computes in the host's memory (Vulkan device 0 "
+                                            "'llvmpipe'"),
+              std::string_view::npos)
+        << reason;
 }
 
 #endif  // USE_LITERT

@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iostream>
 #include <memory>
 #include <optional>
 #include <span>
@@ -31,10 +32,12 @@
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
+#include "capi/context.h"  // IWYU pragma: keep - the body of anira_context
 #include "capi/words.h"
 #include "engines/Adapter.h"
 #include "engines/Adapters.h"
 #include "handler_support.h"
+#include "platform/memory_probe.h"
 #include "scheduler/SessionElement.h"
 
 namespace {
@@ -738,9 +741,12 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
 #ifdef USE_LITERT
 // The typed fixtures on a LiteRT GPU accelerator, where one is registered here (a -gpu package;
 // Mesa's lavapipe on a machine without a GPU): the slots bound in place as on the CPU path, the
-// accelerator uploading them itself, so every slot row says ANIRA_EDGE_DEDICATED_TRANSFER moved by
-// the engine, with the reason, and anira copies nothing; the results exact. Skipped without a GPU
-// accelerator (the pinned CPU package, CI).
+// accelerator moving them to its device itself, so every slot row says the class of the
+// device's memory kind (as this machine's probe answers it: ANIRA_EDGE_UNIFIED_TRANSFER on
+// lavapipe, a CPU device and so unified; ANIRA_EDGE_DEDICATED_TRANSFER on a discrete GPU) moved by
+// the engine, with
+// the reason, and anira copies nothing; the results exact. Skipped without a GPU accelerator (the
+// pinned CPU package, CI).
 TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
     if (!std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
@@ -755,9 +761,18 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
                          .provider = ANIRA_PROVIDER_CUSTOM,
                          .engine_id = nullptr,
                          .provider_id = "gpu"}};
+    const anira::engine::DeviceMemory memory =
+        context.m_context->m_capabilities.m_memory.memory_of(ANIRA_ENGINE_LITERT,
+                                                             ANIRA_PROVIDER_CUSTOM,
+                                                             "gpu",
+                                                             {});
+    std::cout << "the accelerator's memory: " << anira::platform::memory_kind_word(memory.m_kind)
+              << " (" << memory.m_why << ")\n";
     expect_typed_fixtures(context,
                           gpu,
-                          anira_test::SlotEdge{.m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
+                          anira_test::SlotEdge{.m_class = memory.m_kind == ANIRA_MEMORY_UNIFIED
+                                                              ? ANIRA_EDGE_UNIFIED_TRANSFER
+                                                              : ANIRA_EDGE_DEDICATED_TRANSFER,
                                                .m_moved_by = ANIRA_MOVER_ENGINE});
 }
 #endif  // USE_LITERT

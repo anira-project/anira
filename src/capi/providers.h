@@ -26,21 +26,25 @@
 #include "../engines/Adapters.h"
 #include "engine.h"
 #include "handles.h"
+#include "memory.h"
 
 namespace anira::capi {
 
-/// The edge of a capability row to a backend on `provider`, by the plan rows' rule
-/// (engine::host_memory_provider, engine::Loaded::provider_edge), for the context's rows and a
-/// pipeline's alike: to a provider that runs over host memory zero-copy, moved by nobody, from
-/// compiled-in knowledge (ANIRA_RUNG_STATIC) with `host_reason`; to every other one a transfer
-/// the engine's runtime makes itself (ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE), as sure
-/// as the report that lists the provider (ANIRA_RUNG_IDENTITY) with `device_reason`. Both reasons
-/// are static storage.
+/// The edge of a capability row to a backend on `provider`, whose device computes in `memory`,
+/// by the plan rows' rule (engine::provider_rule), for the context's rows and a pipeline's
+/// alike: the class, the mover and the memory kind; to a provider that runs over host memory
+/// zero-copy, moved by nobody, from compiled-in knowledge (ANIRA_RUNG_STATIC) with
+/// `host_reason`; to every other one the move the engine's runtime makes itself, its class the
+/// memory kind's, as sure as the report that lists the provider (ANIRA_RUNG_IDENTITY), the
+/// reason `device_reason` and then the rule's (the memory kind and what the probe saw), kept in
+/// `texts`. The two given reasons are static storage.
 void set_provider_edge(anira_edge_info& edge,
                        anira_provider provider,
                        std::string_view provider_id,
+                       const anira::engine::DeviceMemory& memory,
                        const char* host_reason,
-                       const char* device_reason) noexcept;
+                       const char* device_reason,
+                       MemoryKinds& texts);
 
 /// The facts of the core a query receives: the level in effect, the thread count the
 /// context's config asks for (ANIRA_THREADS_AUTO resolved; 0 for a caller's own threads), the
@@ -109,14 +113,21 @@ std::string unserved_message(const ServedProviders& served,
 
 /// The rows and the host edges of a pipeline's custom engines on a context, in the order the
 /// engines were added: per engine the CPU path alone for an engine without a list, else every
-/// declared provider its query reports usable; the strings point into the carriers. The queries run
-/// here, on the caller's thread (the capabilities entries are [main-thread]). Throws as
-/// query_engine does.
+/// declared provider its query reports usable; the strings point into the carriers. The queries
+/// run here, on the caller's thread (the capabilities entries are [main-thread]). A device
+/// provider's edge is not complete: complete_custom_edge asks its memory kind, for the row a
+/// caller reads alone. Throws as query_engine does.
 struct CustomRows {
     std::vector<anira_backend_id> m_backends;
     std::vector<anira_edge_info> m_edges;
 };
 CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipeline);
+
+/// Completes the edge of a custom row (custom_rows) on a device provider: its device's memory
+/// kind as the context keeps it (asked now when it has none) and the provider rule's class,
+/// mover and reason, kept by the context. Nothing for a host-memory provider's row, which
+/// custom_rows completed.
+void complete_custom_edge(const anira_context& context, anira_edge_info& edge);
 
 }  // namespace anira::capi
 

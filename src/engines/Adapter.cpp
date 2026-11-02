@@ -62,6 +62,8 @@ void Loaded::load(const Model& model) {
     m_num_instances = 0;
     m_busy.clear();
     m_model = model;
+    m_provider_rule =
+        provider_rule(m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
     // The provider is checked once more at the door of every adapter (the handler checked
     // the plan's against the capabilities or the descriptor's list): an adapter that does not
     // serve it never sees the record.
@@ -374,13 +376,38 @@ bool host_memory_provider(anira_provider provider, std::string_view provider_id)
             provider_id == "ArmNNExecutionProvider");
 }
 
+ProviderRule provider_rule(anira_provider provider,
+                           std::string_view provider_id,
+                           const DeviceMemory& memory) {
+    if (host_memory_provider(provider, provider_id)) { return ProviderRule{}; }
+    ProviderRule rule;
+    rule.m_moved_by = ANIRA_MOVER_ENGINE;
+    switch (memory.m_kind) {
+        case ANIRA_MEMORY_UNIFIED:
+            rule.m_class = ANIRA_EDGE_UNIFIED_TRANSFER;
+            rule.m_reason = "the provider's device computes in the host's memory (" + memory.m_why +
+                            "): its runtime hands the slot over to the device within that memory, "
+                            "no bus, and the results back, per call";
+            break;
+        case ANIRA_MEMORY_DEDICATED:
+            rule.m_class = ANIRA_EDGE_DEDICATED_TRANSFER;
+            rule.m_reason = "the provider's device computes in memory of its own (" + memory.m_why +
+                            "): its runtime moves the slot across the bus and the results back, "
+                            "per call";
+            break;
+        default:
+            rule.m_class = ANIRA_EDGE_DEDICATED_TRANSFER;
+            rule.m_reason = "memory kind not probed: " + memory.m_why;
+            break;
+    }
+    return rule;
+}
+
 Loaded::SlotEdge Loaded::provider_edge() const noexcept {
-    if (host_memory_provider(m_model.m_provider, m_model.m_provider_id)) { return SlotEdge{}; }
-    return SlotEdge{.m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
-                    .m_moved_by = ANIRA_MOVER_ENGINE,
-                    .m_reason =
-                        "the provider computes in its device's memory: the slot is "
-                        "uploaded to it and the results read back, per call"};
+    return SlotEdge{
+        .m_class = m_provider_rule.m_class,
+        .m_moved_by = m_provider_rule.m_moved_by,
+        .m_reason = m_provider_rule.m_reason.empty() ? nullptr : m_provider_rule.m_reason.c_str()};
 }
 
 void check_engine_tensor(const TensorInfo& slot,

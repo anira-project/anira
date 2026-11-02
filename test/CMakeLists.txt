@@ -220,6 +220,7 @@ anira_add_test_binary(test_abi WHITE_BOX
 	abi/test_RtError.cpp
 	abi/test_Processor.cpp
 	abi/test_Engine.cpp
+	abi/test_MemoryKind.cpp
 	abi/test_State.cpp
 	abi/test_Dtypes.cpp
 	abi/test_Tensor.cpp

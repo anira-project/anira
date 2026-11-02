@@ -4136,8 +4136,10 @@ export class AniraBindings {
   /**
    * Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
    * engines on the providers their runtimes report usable now
-   * (anira_capabilities_backends), one host edge per backend row, the host domain.
-   * Nothing is cached in this pre-release, so force changes nothing.
+   * (anira_capabilities_backends), one host edge per backend row, the host domain. The
+   * memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or
+   * prepare that needs a device provider's kind asks its device's API again. Nothing else
+   * is cached in this pre-release, so force changes nothing.
    *
    * @param context The handle.
    * @param force Nonzero re-runs every rung even where a cached answer exists.
@@ -4255,10 +4257,15 @@ export class AniraBindings {
 
   /**
    * Every row of the edge registry, available or not; one host edge to each backend row
-   * of this pre-release (zero-copy to a provider that runs over host memory, a transfer
-   * the engine's runtime makes itself to any other). Stride-explicit enumeration. The
-   * strings the rows point to (to_provider_id, reason) are the context's, valid until its
-   * next anira_context_probe replaces them or the context is destroyed.
+   * of this pre-release: zero-copy to a provider that runs over host memory; to a device
+   * provider a move the engine's runtime makes itself, whose class follows the device's
+   * memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory). The first read of a
+   * device provider's row asks its device's API (the unified-memory probe, run lazily, on
+   * a thread of its own, waited for 5 s at most per API, never at the context's creation)
+   * and the context keeps the answer. Stride-explicit enumeration. The strings the rows
+   * point to (to_provider_id, reason) are the context's: to_provider_id valid until its
+   * next anira_context_probe replaces it, reason until the context is destroyed.
    *
    * @param capabilities The capabilities.
    * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of
@@ -4289,7 +4296,8 @@ export class AniraBindings {
    * One row of the edge registry, by domain and backend: the engine on the provider, a
    * custom provider (ANIRA_PROVIDER_CUSTOM) by its provider_id (read when the caller's
    * record has the slot). A custom engine (ANIRA_ENGINE_CUSTOM) has no row here: its rows
-   * are its pipeline's (anira_pipeline_capabilities_edge).
+   * are its pipeline's (anira_pipeline_capabilities_edge). A device provider's row asks
+   * its memory kind as anira_capabilities_edges does, for this row alone.
    *
    * @param capabilities The capabilities.
    * @param from The tensor's domain.
@@ -5463,10 +5471,13 @@ export class AniraBindings {
    * added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider
    * usable here (its query runs, as anira_pipeline_capabilities_backends runs it):
    * zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches
-   * without a copy, a transfer the engine makes itself (ANIRA_EDGE_DEDICATED_TRANSFER,
-   * ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared
-   * the provider and its query reported it usable. The strings' lifetime is
-   * anira_pipeline_capabilities_backends's.
+   * without a copy; to every other provider a move the engine makes itself
+   * (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the provider's device as
+   * the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory), the reason saying the
+   * engine declared the provider and its query reported it usable, and the memory kind
+   * with what the probe saw. Only the row asked is probed. The strings' lifetime is
+   * anira_pipeline_capabilities_backends's, the reason's the context's.
    *
    * @param pipeline The pipeline whose custom engines are asked.
    * @param context The context whose edge registry answers for a built-in engine.
@@ -5588,21 +5599,23 @@ export class AniraBindings {
    * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as
    * at anira_handler_create), runs the processor's init when it has not run yet (once per
    * registration, before any model loads), loads the model of every candidate with an
-   * entry, warms up as the contract says, drops every plan with a slot whose edge is
-   * above the contract's edge cost (anira_contract_set_edge_cost; an Info record per
-   * dropped plan names the slots, their class, mover and reason), sizes the rings for the
-   * contract's block range and the latency, builds the plan report, selects the plan of
-   * the variant's default engine when that engine has a plan (else plan 0), logs the
-   * report (Info records of the group anira.capi: the counts and the selected plan, then
-   * one record per plan, per slot and per consumed extension) re-arms the real-time
-   * latches, logging the count of failures suppressed since the last prepare or reset,
-   * and last calls the processor's prepare function, when the pipeline has a processor
-   * with one, with an anira_prepare_info (the handler, the report, the entry count, a
-   * template of the model end of every slot and the canonical names) and keeps the
-   * prepared pointer it hands back for this handler (a status other than ANIRA_OK fails
-   * this call with it, and unprepare is not called for a refused prepare). A second
-   * prepare replaces the previous session whole: the processor's unprepare of the
-   * previous prepare runs once the old session is released, before the new prepare. A
+   * entry (a device provider's with the memory kind of its device, the context's kept
+   * answer or its device API's asked now, which its slot classes follow:
+   * anira_plan_info.memory_kind), warms up as the contract says, drops every plan with a
+   * slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost; an
+   * Info record per dropped plan names the slots, their class, mover and reason), sizes
+   * the rings for the contract's block range and the latency, builds the plan report,
+   * selects the plan of the variant's default engine when that engine has a plan (else
+   * plan 0), logs the report (Info records of the group anira.capi: the counts and the
+   * selected plan, then one record per plan, per slot and per consumed extension) re-arms
+   * the real-time latches, logging the count of failures suppressed since the last
+   * prepare or reset, and last calls the processor's prepare function, when the pipeline
+   * has a processor with one, with an anira_prepare_info (the handler, the report, the
+   * entry count, a template of the model end of every slot and the canonical names) and
+   * keeps the prepared pointer it hands back for this handler (a status other than
+   * ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare).
+   * A second prepare replaces the previous session whole: the processor's unprepare of
+   * the previous prepare runs once the old session is released, before the new prepare. A
    * failed prepare leaves the handler unprepared, the previous prepare's unprepare called
    * all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED
    * and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and

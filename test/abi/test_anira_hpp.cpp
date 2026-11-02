@@ -45,6 +45,8 @@
 #include "dlpack_producer.h"
 #include "fixtures.h"
 #include "handler_support.h"
+#include "memory_support.h"
+#include "platform/memory_probe.h"
 #include "utils/RingBuffer.h"
 
 namespace {
@@ -2588,10 +2590,15 @@ TEST(AbiCxx, AddEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
 // available() is the engine's query: the bitmask over providers() that says which are usable
 // here. A Pipeline's capabilities on a context list the context's rows and then the engine's
 // rows for the providers the mask keeps, in list order; an edge to a device provider is a
-// transfer, to the CPU path zero-copy; a candidate on a declared
+// dedicated transfer on a device of its own memory (a fake machine's), to the CPU path zero-copy; a
+// candidate on a declared
 // provider the mask clears is refused at create, the message saying so; a throwing
 // available() fails the entry with its status.
 TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Metal,
+        anira_test::fake_devices({anira_test::fake_device("Fake GPU", ANIRA_MEMORY_DEDICATED)}));
     const anira_test::Context context;
     auto engine = std::make_shared<CountingEngine>();
     engine->m_providers = {"coreml", "com.example.npu", "cpu"};
@@ -2617,6 +2624,8 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
               static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).moved_by,
               static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).memory_kind,
+              static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
     const Thrown unreachable = thrown_by([&] {
         const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
                                       .engine = ANIRA_ENGINE_CUSTOM,

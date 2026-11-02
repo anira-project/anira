@@ -462,6 +462,7 @@ target_sources(anira_objects PRIVATE
     src/capi/thread.cpp
     src/capi/validate.cpp
     src/capi/providers.cpp
+    src/capi/memory.cpp
     src/capi/version.cpp
     src/capi/handler.cpp
     src/capi/processor.cpp

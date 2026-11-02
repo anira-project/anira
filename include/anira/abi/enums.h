@@ -520,15 +520,17 @@ typedef enum anira_edge_class {
     ANIRA_EDGE_COPY = 1,
     /**
      * The bytes cross between the CPU's domain and a device's within one unified physical
-     * memory (an Apple silicon GPU, an integrated GPU, a CPU device): a copy plus a hand-over
-     * between the processors (a submission, a fence, possibly cache maintenance or a relayout),
-     * and no bus.
+     * memory (an Apple silicon GPU, an integrated GPU, a CPU device: ANIRA_MEMORY_UNIFIED): a
+     * copy plus a hand-over between the processors (a submission, a fence, possibly cache
+     * maintenance or a relayout), and no bus.
      */
     ANIRA_EDGE_UNIFIED_TRANSFER = 2,
     /**
      * The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory
-     * (a discrete GPU's VRAM), a discrete device reading mapped host memory, a copy between two
-     * devices.
+     * (a discrete GPU's VRAM, ANIRA_MEMORY_DEDICATED), a discrete device reading mapped host
+     * memory, a copy between two devices. Also the class of a device provider whose memory kind
+     * no probe established (ANIRA_MEMORY_UNKNOWN), the reason saying "memory kind not probed"
+     * and why.
      */
     ANIRA_EDGE_DEDICATED_TRANSFER = 3,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
