@@ -22,6 +22,17 @@
 
 #include "platform/memory_probe.h"
 
+#if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
+// The drivers' own allocations are theirs: NVIDIA's OpenCL ICD, which the OpenCL loader opens at
+// the first clGetPlatformIDs, keeps its platform list until the process exits and LeakSanitizer
+// reports it (69 blocks, 4248 bytes on the RTX PRO 6000 box, every frame inside libOpenCL.so and
+// the ICD). This binary is the one that runs the real probes under a sanitizer, so it says so.
+extern "C" const char* __lsan_default_suppressions();   // NOLINT(bugprone-reserved-identifier)
+extern "C" const char* __lsan_default_suppressions() {  // NOLINT(bugprone-reserved-identifier)
+    return "leak:libOpenCL.so\n";
+}
+#endif
+
 namespace {
 
 using anira::platform::ApiAnswer;
