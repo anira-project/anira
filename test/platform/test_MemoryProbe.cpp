@@ -12,8 +12,9 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
-#include <iostream>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -57,11 +58,24 @@ std::vector<std::pair<std::string, std::string>> expected_kinds() {
     return pairs;
 }
 
+// One line of what an API answered, on stdout (the ctest log keeps a test's output, and a binary
+// run on its own prints it) and as a property of the running test, for gtest's XML report.
+void report(const std::string& key, const std::string& line) {
+    std::printf("%s\n", line.c_str());
+    std::fflush(stdout);
+    ::testing::Test::RecordProperty(key, line);
+}
+
 }  // namespace
 
+// Every API of the platform asked once: its wait is bounded, a failure lists no device, and each
+// device carries the API's answer and a kind anira_memory_kind names. Nothing is expected of the
+// machine's hardware. Each answer is reported, one line per API without a device and per device:
+// "Metal: device 0 'Apple M2': unified (hasUnifiedMemory 1)", "D3D12: not answered: <why>", so a
+// CI log shows what each runner's devices said.
 TEST(MemoryProbe, EveryApiAnswersConsistently) {
     for (const DeviceApi api : anira::platform::k_device_apis) {
-        const char* name = anira::platform::device_api_name(api);
+        const std::string name = anira::platform::device_api_name(api);
         SCOPED_TRACE(name);
         const auto start = std::chrono::steady_clock::now();
         const ApiAnswer answer = anira::platform::probe_api(api);
@@ -70,15 +84,25 @@ TEST(MemoryProbe, EveryApiAnswersConsistently) {
             << "the wait is bounded";
         if (!answer.m_failure.empty()) {
             EXPECT_TRUE(answer.m_devices.empty()) << "a failure lists no device";
-            std::cout << name << ": not answered: " << answer.m_failure << "\n";
+            std::ostringstream line;
+            line << name << ": not answered: " << answer.m_failure;
+            report(name, line.str());
             continue;
         }
-        if (answer.m_devices.empty()) { std::cout << name << ": no device\n"; }
+        if (answer.m_devices.empty()) {
+            std::ostringstream line;
+            line << name << ": no device";
+            report(name, line.str());
+        }
         for (size_t i = 0; i < answer.m_devices.size(); ++i) {
             const ProbedDevice& device = answer.m_devices[i];
-            std::cout << name << " device " << i << " '" << device.m_name
-                      << "': " << anira::platform::memory_kind_word(device.m_kind) << " ("
-                      << device.m_evidence << ")\n";
+            std::ostringstream key;
+            key << name << " device " << i;
+            std::ostringstream line;
+            line << name << ": device " << i << " '" << device.m_name
+                 << "': " << anira::platform::memory_kind_word(device.m_kind) << " ("
+                 << device.m_evidence << ")";
+            report(key.str(), line.str());
             EXPECT_FALSE(device.m_evidence.empty()) << "the API's answer is kept";
             EXPECT_TRUE(device.m_kind == ANIRA_MEMORY_UNKNOWN ||
                         device.m_kind == ANIRA_MEMORY_UNIFIED ||
