@@ -16,6 +16,6 @@ export const ONNXRUNTIME_WEB_ENGINE_ID = 'org.anira.onnxruntime-web'
 export const ONNXRUNTIME_WEB_ENGINE_OPTIONS: EngineOptions = {
   edge: {
     edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
-    reason: "onnxruntime-web: anira's module and onnxruntime-web's are two wasm memories",
+    reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
   },
 }

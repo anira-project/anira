@@ -98,8 +98,7 @@ test('addEngine states the edge record, or NULL for the provider rule', () => {
     {
       structSize: 12,
       edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
-      reason:
-        "onnxruntime-web: anira's module and onnxruntime-web's are two wasm memories",
+      reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
     },
   ])
 })
