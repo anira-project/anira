@@ -18,7 +18,10 @@ import {
   ModelConfig,
   Pipeline,
 } from '../../dist/index.js'
-import { ONNXRUNTIME_WEB_ENGINE_ID } from '../../dist/engines/onnxruntime-web.js'
+import {
+  ONNXRUNTIME_WEB_ENGINE_ID,
+  ONNXRUNTIME_WEB_ENGINE_OPTIONS,
+} from '../../dist/engines/onnxruntime-web.js'
 
 const RATE = 48000
 const QUANTUM = 128
@@ -37,7 +40,7 @@ const requests = async (pathname) =>
 const renderGain = async (anira, context, model) => {
   const pipeline = Pipeline.create(anira)
     .addInference(model)
-    .addEngine(ONNXRUNTIME_WEB_ENGINE_ID)
+    .addEngine(ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_OPTIONS)
   const contract = ContractHandle.hard(anira, {
     hostBlockMin: QUANTUM,
     hostRate: RATE,

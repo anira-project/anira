@@ -322,6 +322,18 @@ struct GainEngine {
     /// queries that ran on another one.
     std::thread::id m_query_thread;
     std::atomic<int> m_queried_off_thread{0};
+    // The edge statement (gain_edge, a descriptor with desc.edge): the class its outputs get
+    // (the inputs keep the provider rule's), the status it returns in place of ANIRA_OK, and
+    // every question with the loaded pointer and the rule's class it came with.
+    uint32_t m_output_edge = ANIRA_EDGE_HOST_COPY;
+    anira_status m_refuse_edge = ANIRA_OK;
+    struct EdgeAsked {
+        uint32_t m_is_input = 0;
+        uint32_t m_slot = 0;
+        bool m_live_loaded = false;  ///< asked over a loaded pointer load handed back
+        uint32_t m_rule = 0;         ///< the class the record arrived with
+    };
+    std::vector<EdgeAsked> m_edges_asked;
 };
 
 /// Whether `loaded` is a pointer load handed back that unload has not received (the counts,
@@ -572,6 +584,24 @@ void ANIRA_CALL gain_unprepare(void* prepared, void* user_data) {
 
 void ANIRA_CALL gain_release(void* user_data) {
     ++static_cast<GainEngine*>(user_data)->m_released;
+}
+
+anira_status ANIRA_CALL gain_edge(void* loaded,
+                                  uint32_t is_input,
+                                  uint32_t slot,
+                                  anira_engine_edge* out,
+                                  void* user_data) {
+    auto* engine = static_cast<GainEngine*>(user_data);
+    engine->m_edges_asked.push_back({.m_is_input = is_input,
+                                     .m_slot = slot,
+                                     .m_live_loaded = loaded_is_live(*engine, loaded),
+                                     .m_rule = out->edge_class});
+    if (engine->m_refuse_edge != ANIRA_OK) { return engine->m_refuse_edge; }
+    if (is_input == 0) {
+        out->edge_class = engine->m_output_edge;
+        out->reason = "org.example.gain: copies its outputs";
+    }
+    return ANIRA_OK;
 }
 
 /// The gain engine's descriptor over `engine`, every slot filled, `flags` as given.
@@ -1264,6 +1294,74 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     pipe.destroy();
     EXPECT_EQ(gain.m_released, 1);
+}
+
+// A registered engine states its edges (anira_engine_desc.edge): asked once per slot right after
+// each load, inputs first, over the load's loaded pointer, the record arriving with the provider
+// rule's edge (zero-copy on the CPU path). The plan rows say what it stated, moved by the engine,
+// with its reason (here: its outputs copied, its inputs left at the rule), and the contract's
+// edge cost reads them as a built-in engine's (under ANIRA_EDGE_ZERO_COPY nothing is left). A
+// refused statement fails the prepare with its status, a class anira_edge_class does not name
+// with ANIRA_ERROR_ENGINE, the load's unload called either way.
+TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
+    const Context context;
+    GainEngine gain;
+    anira_engine_desc desc = gain_desc(gain);
+    desc.edge = gain_edge;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, desc), ANIRA_OK) << pipe.m_err.message;
+    pipe.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_CPU, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(gain.m_edges_asked.size(), 2U);
+    for (size_t i = 0; i < 2; ++i) {
+        const GainEngine::EdgeAsked& asked = gain.m_edges_asked[i];
+        EXPECT_EQ(asked.m_is_input, i == 0 ? 1U : 0U) << "inputs first";
+        EXPECT_EQ(asked.m_slot, 0U);
+        EXPECT_TRUE(asked.m_live_loaded) << "over the load's loaded pointer";
+        EXPECT_EQ(asked.m_rule, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+    }
+    const anira_plan_report* report = anira_handler_plan_report(handler);
+    for (const uint32_t inputs : {1U, 0U}) {
+        anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
+        uint32_t count = 1;
+        ASSERT_EQ(anira_plan_report_slots(report, 0, inputs, sizeof(row), &count, &row), ANIRA_OK);
+        if (inputs != 0) {
+            EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+            EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
+            EXPECT_EQ(row.reason, nullptr);
+        } else {
+            EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+            EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+            ASSERT_NE(row.reason, nullptr);
+            EXPECT_STREQ(row.reason, "org.example.gain: copies its outputs");
+        }
+    }
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2, gain.m_gain));
+
+    contract.edge_cost(ANIRA_EDGE_ZERO_COPY);
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err),
+              ANIRA_ERROR_EDGE_UNREACHABLE);
+    EXPECT_NE(std::strstr(err.message,
+                          "output 0 'out': edge host_copy, moved by the engine "
+                          "(org.example.gain: copies its outputs)"),
+              nullptr)
+        << err.message;
+
+    contract.edge_cost(ANIRA_EDGE_TRANSFER);
+    gain.m_refuse_edge = ANIRA_ERROR_DEVICE;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_DEVICE);
+    EXPECT_NE(std::strstr(err.message, "refused its edge statement for input 0"), nullptr)
+        << err.message;
+    gain.m_refuse_edge = ANIRA_OK;
+    gain.m_output_edge = 9;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_ENGINE);
+    EXPECT_NE(std::strstr(err.message, "stated edge class 9 for output 0"), nullptr) << err.message;
+    anira_handler_destroy(handler);
+    EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every load's unload, the refused ones' too";
 }
 
 // The contract's edge cost at prepare, over one row on coreml and on the CPU path. The default

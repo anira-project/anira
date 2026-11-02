@@ -21,6 +21,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -2042,6 +2043,9 @@ public:
     CountingLoaded& operator=(CountingLoaded&&) = delete;
 
     std::unique_ptr<anira::Engine::Prepared> prepare(const anira::PrepareInfo& info) override;
+    anira::EngineEdge edge(bool is_input,
+                           uint32_t slot,
+                           const anira::EngineEdge& provider_rule) const override;
 
 private:
     CountingEngine* m_engine;
@@ -2129,6 +2133,12 @@ public:
     mutable int m_queried = 0;
     mutable const anira_context* m_query_context = nullptr;
     bool m_init_throws = false;
+    /// What the Loaded states for its outputs (Engine::Loaded::edge); unset: the provider rule.
+    std::optional<anira_edge_class> m_output_edge;
+    /// The (is_input, slot) of every edge question, in order, and the provider rule each came
+    /// with.
+    mutable std::vector<std::pair<bool, uint32_t>> m_edges_asked;
+    mutable std::vector<anira_edge_class> m_rules_seen;
     PrepareMode m_mode = PrepareMode::Ok;
     ThrowAt m_throw_at = ThrowAt::Prepare;
     std::atomic<int> m_released{0};
@@ -2141,6 +2151,16 @@ public:
     std::vector<std::shared_ptr<EngineLoadCounts>> m_loads;       ///< one per load, in order
     std::vector<std::shared_ptr<EnginePreparedCounts>> m_counts;  ///< one per prepare, in order
 };
+
+anira::EngineEdge CountingLoaded::edge(bool is_input,
+                                       uint32_t slot,
+                                       const anira::EngineEdge& provider_rule) const {
+    m_engine->m_edges_asked.emplace_back(is_input, slot);
+    m_engine->m_rules_seen.push_back(provider_rule.edge_class);
+    if (is_input || !m_engine->m_output_edge.has_value()) { return provider_rule; }
+    return {.edge_class = *m_engine->m_output_edge,
+            .reason = "org.example.cxx: copies its outputs"};
+}
 
 std::unique_ptr<anira::Engine::Prepared> CountingLoaded::prepare(const anira::PrepareInfo& info) {
     ++m_engine->m_prepared;
@@ -2156,6 +2176,48 @@ std::unique_ptr<anira::Engine::Prepared> CountingLoaded::prepare(const anira::Pr
 }
 
 }  // namespace
+
+// An Engine's statement of its edges (Engine::Loaded::edge): asked once per slot right after
+// load, inputs first, with the provider rule's edge (zero-copy on the CPU path), which the base
+// keeps. A Loaded that copies its outputs says ANIRA_EDGE_HOST_COPY: the output row reads it,
+// moved by the engine, with the reason; the input row keeps the rule. The contract's edge cost
+// reads it as a built-in engine's: under ANIRA_EDGE_ZERO_COPY nothing is left.
+TEST(AbiCxx, AnEngineStatesItsEdges) {
+    const anira_test::Context context;
+    auto engine = std::make_shared<CountingEngine>();
+    engine->m_output_edge = ANIRA_EDGE_HOST_COPY;
+    anira::Pipeline pipe;
+    pipe.add_engine(engine);
+    pipe.add_inference(engine_stream_model());
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine->m_edges_asked,
+              (std::vector<std::pair<bool, uint32_t>>{{true, 0}, {false, 0}}));
+    EXPECT_EQ(engine->m_rules_seen,
+              (std::vector<anira_edge_class>{ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY}));
+    const anira::PlanReport report(anira_handler_plan_report(handler.m_handler));
+    const std::vector<anira_plan_slot> inputs = report.slots(0, true);
+    const std::vector<anira_plan_slot> outputs = report.slots(0, false);
+    ASSERT_EQ(inputs.size(), 1U);
+    ASSERT_EQ(outputs.size(), 1U);
+    EXPECT_EQ(inputs[0].edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+    EXPECT_EQ(inputs[0].moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
+    EXPECT_EQ(inputs[0].reason, nullptr);
+    EXPECT_EQ(outputs[0].edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+    EXPECT_EQ(outputs[0].moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    ASSERT_NE(outputs[0].reason, nullptr);
+    EXPECT_STREQ(outputs[0].reason, "org.example.cxx: copies its outputs");
+
+    anira::ContractHandle strict = anira_test::explicit_contract();
+    strict.edge_cost(ANIRA_EDGE_ZERO_COPY);
+    EXPECT_EQ(handler.prepare(strict), ANIRA_ERROR_EDGE_UNREACHABLE);
+    EXPECT_NE(std::strstr(handler.m_err.message,
+                          "output 0 'out': edge host_copy, moved by the engine "
+                          "(org.example.cxx: copies its outputs)"),
+              nullptr)
+        << handler.m_err.message;
+}
 
 // An Engine subclass end to end through a C-created handler: add_engine hands the
 // object's C engine a copy of the shared_ptr, a handler created from the pipeline carries it

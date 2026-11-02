@@ -110,6 +110,8 @@ void DescriptorLoaded::do_load(const Model& model) {
     // A second load starts over: what the first one loaded goes back to the engine first.
     unload();
     m_loaded_pointer = nullptr;
+    m_input_edges.clear();
+    m_output_edges.clear();
     // The engine received the names and binds the slots itself.
     Bindings bindings;
     bindings.m_inputs.assign(model.m_inputs.size(), ANIRA_BINDING_ENGINE);
@@ -117,7 +119,12 @@ void DescriptorLoaded::do_load(const Model& model) {
     set_bindings(std::move(bindings));
 
     const anira_engine_desc& desc = m_carrier->desc();
-    if (desc.load == nullptr) { return; }  // nothing to load: loaded stays NULL
+    if (desc.load != nullptr) { load_engine(model); }  // without one, loaded stays NULL
+    if (desc.edge != nullptr) { state_edges(model); }
+}
+
+void DescriptorLoaded::load_engine(const Model& model) {
+    const anira_engine_desc& desc = m_carrier->desc();
 
     const std::vector<anira_tensor> inputs = templates_of(model.m_inputs);
     const std::vector<anira_tensor> outputs = templates_of(model.m_outputs);
@@ -159,6 +166,51 @@ void DescriptorLoaded::do_load(const Model& model) {
     if (status != ANIRA_OK) { throw StatusError(status, refused(id(), ANIRA_PHASE_LOAD, status)); }
     m_loaded_pointer = loaded;
     m_unload_owed = true;
+}
+
+void DescriptorLoaded::state_edges(const Model& model) {
+    const anira_engine_desc& desc = m_carrier->desc();
+    const SlotEdge rule = provider_edge();
+    const auto ask = [&](bool is_input, uint32_t slot) {
+        anira_engine_edge edge = ANIRA_ENGINE_EDGE_INIT;
+        edge.edge_class = static_cast<uint32_t>(rule.m_class);
+        edge.reason = rule.m_reason;
+        const anira_status status =
+            desc.edge(m_loaded_pointer, is_input ? 1U : 0U, slot, &edge, desc.user_data);
+        const std::string where =
+            std::string(is_input ? "input " : "output ") + std::to_string(slot);
+        if (status != ANIRA_OK) {
+            throw StatusError(status,
+                              "the engine '" + id() + "' refused its edge statement for " + where +
+                                  ": it returned " + std::to_string(static_cast<int>(status)) +
+                                  " (" + anira_status_string(status) + ")");
+        }
+        if (edge.edge_class > static_cast<uint32_t>(ANIRA_EDGE_TRANSFER)) {
+            throw StatusError(ANIRA_ERROR_ENGINE,
+                              "the engine '" + id() + "' stated edge class " +
+                                  std::to_string(edge.edge_class) + " for " + where +
+                                  ", which anira_edge_class does not name");
+        }
+        return Stated{.m_class = static_cast<anira_edge_class>(edge.edge_class),
+                      .m_reason = edge.reason != nullptr ? edge.reason : ""};
+    };
+    for (uint32_t slot = 0; slot < model.m_inputs.size(); ++slot) {
+        m_input_edges.push_back(ask(true, slot));
+    }
+    for (uint32_t slot = 0; slot < model.m_outputs.size(); ++slot) {
+        m_output_edges.push_back(ask(false, slot));
+    }
+}
+
+Loaded::SlotEdge DescriptorLoaded::slot_edge(bool is_input, uint32_t slot) const noexcept {
+    const std::vector<Stated>& edges = is_input ? m_input_edges : m_output_edges;
+    if (slot >= edges.size()) { return provider_edge(); }
+    const Stated& stated = edges[slot];
+    return SlotEdge{.m_class = stated.m_class,
+                    .m_moved_by = stated.m_class == ANIRA_EDGE_ZERO_COPY
+                                      ? static_cast<uint32_t>(ANIRA_MOVER_NONE)
+                                      : static_cast<uint32_t>(ANIRA_MOVER_ENGINE),
+                    .m_reason = stated.m_reason.empty() ? nullptr : stated.m_reason.c_str()};
 }
 
 std::unique_ptr<Prepared> DescriptorLoaded::do_prepare(const PrepareRequest& request) {

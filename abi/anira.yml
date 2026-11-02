@@ -4067,11 +4067,35 @@ headers:
         thread: main-thread
         doc: "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread only: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. anira_handler_prepare, which may run on another thread, never calls it: the handler keeps the answer its create got and checks the plans against that again. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
       - kind: struct
+        name: anira_engine_edge
+        tier: 2
+        padding_free: true
+        doc: "How a custom engine passes one slot to its runtime, as the plan report states it (anira_plan_slot.edge_class and reason): what anira_engine_edge_fn writes. Tier 2, struct_size first, no implicit padding (LP64 16 bytes, ILP32 12). The mover follows from the class: a registered engine is handed the chunk's buffer itself, so whatever moves the bytes is the engine's code, ANIRA_MOVER_ENGINE for any class but ANIRA_EDGE_ZERO_COPY and ANIRA_MOVER_NONE for that."
+        fields:
+          - {name: struct_size, type: uint32_t, doc: "sizeof(anira_engine_edge) of the library, as anira hands the record over; the engine writes within it."}
+          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until it computes on them and back for an output. Arrives as the provider rule's (ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_TRANSFER on every other provider): an engine that leaves it states that."}
+          - {name: reason, type: const char*, doc: "Why the edge is what it is; NULL with nothing to say (arrives as the provider rule's). Copied before the callback returns."}
+        init:
+          name: ANIRA_ENGINE_EDGE_INIT
+          value: "sizeof(anira_engine_edge), ANIRA_EDGE_ZERO_COPY, NULL"
+          doc: "Zero-copy, nothing to say."
+      - kind: callback
+        name: anira_engine_edge_fn
+        returns: anira_status
+        params:
+          - {type: void*, name: loaded, doc: "What the load handed back (NULL for a descriptor without a load)."}
+          - {type: uint32_t, name: is_input, doc: "1 for an input slot, 0 for an output slot."}
+          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's input or output list."}
+          - {type: anira_engine_edge*, name: out, doc: "Arrives filled with the provider rule's edge for the load's provider; the engine overwrites what differs, within out->struct_size."}
+          - {type: void*, name: user_data, doc: "The descriptor's user_data."}
+        thread: main-thread
+        doc: "The edge statement of an engine, the built-in engines' Loaded::slot_edge for a custom one: how it passes each slot to its runtime, for the plan report's slot rows and the contract's edge cost (anira_contract_set_edge_cost). Called on the thread of anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot of each loaded model right after its load succeeded, inputs first, in slot order; anira keeps the answers for the loaded model's life. An engine that copies a slot into memory of its own says ANIRA_EDGE_HOST_COPY, one on a device that computes in host memory says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the load's unload is called."
+      - kind: struct
         name: anira_engine_desc
         tier: 2
         callback_descriptor: true
         padding_free: true
-        doc: "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 120 bytes, ILP32 72), growth at the tail. The slots are listed as the processor's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves and the query that says which of them are usable here. process is required; every other slot may be NULL."
+        doc: "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 128 bytes, ILP32 76), growth at the tail. The slots are listed as the processor's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves and the query that says which of them are usable here; then the edge statement, how the engine passes each slot to its runtime. process is required; every other slot may be NULL."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_engine_desc) of the caller's header."}
           - {name: abi_version, type: uint32_t, doc: "ANIRA_ABI_VERSION the caller compiled against."}
@@ -4091,9 +4115,10 @@ headers:
           - {name: num_providers, type: uint32_t, doc: "The length of providers."}
           - {name: reserved, type: uint32_t, doc: "0."}
           - {name: query, type: anira_engine_query_fn, doc: "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; called on the main thread, at anira_handler_create and by the capabilities entries (anira_pipeline_capabilities_backends / _edge), before init and any number of times; anira_handler_prepare uses the answer create got. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."}
+          - {name: edge, type: anira_engine_edge_fn, doc: "How the engine passes each slot to its runtime (anira_engine_edge_fn), asked once per slot after each load; NULL: the provider rule, zero-copy on ANIRA_PROVIDER_CPU and XNNPACK and a transfer the engine makes itself on every other provider (anira_pipeline_capabilities_edge). A tail field: a caller whose header ends before it has no edge statement."}
         init:
           name: ANIRA_ENGINE_DESC_INIT
-          value: "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL"
+          value: "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL"
           doc: "An engine without a callback and without a promise (flags 0): process must be filled before anira_custom_engine_create."
 
   # ----------------------------------------------------------------------------
@@ -5011,11 +5036,12 @@ headers:
           - {type: uint32_t, name: js_key, doc: "The key the hook receives, the engine's entry in the instance's registry."}
           - {type: uint32_t, name: hook_mask, doc: "An OR of the ANIRA_EM_ENGINE_HOOK_* bits; process crosses without one."}
           - {type: uint32_t, name: engine_flags, doc: "The descriptor's flags, the engine's promises, which JavaScript cannot write into the descriptor itself: an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, or 0 for none. Stored as given: a bit the header does not define is refused by anira_custom_engine_create."}
+          - {type: const anira_engine_edge*, name: edge, doc: "The engine's edge statement for every slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. NULL: no statement, the provider rule (zero-copy on the CPU path)."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
+        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. edge answers the statement for every slot where one was given, and stays NULL without one. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not define, or an edge whose struct_size is below its edge_class or whose edge_class anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
       - kind: function
         name: anira_em_pipeline_add_js_engine
         returns: anira_status
@@ -5025,11 +5051,12 @@ headers:
           - {type: uint32_t, name: js_key, doc: "As in anira_em_engine_desc_init."}
           - {type: uint32_t, name: hook_mask, doc: "As in anira_em_engine_desc_init."}
           - {type: uint32_t, name: engine_flags, doc: "The descriptor's flags: an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, which JavaScript cannot write into the descriptor itself."}
+          - {type: const anira_engine_edge*, name: edge, doc: "The engine's edge statement for every slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. NULL: no statement, the provider rule (zero-copy on the CPU path)."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "anira_em_engine_desc_init with engine_flags, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it."
+        doc: "anira_em_engine_desc_init with engine_flags and edge, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it."
         return_doc: "As anira_em_engine_desc_init, then as anira_custom_engine_create (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix \"anira.\" or a flags bit the header does not define), then as anira_pipeline_add_engine (ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine under the id)."
       - kind: function
         name: anira_em_set_log_hook

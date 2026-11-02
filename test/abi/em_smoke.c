@@ -133,18 +133,45 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     static const char* const k_providers[2] = {"cpu", "org.anira-test.never-usable"};
     anira_error err = ANIRA_ERROR_INIT;
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
+    check(anira_em_engine_desc_init(&desc, SMOKE_QUERY_KEY, 4u, 0, NULL) ==
+              ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_engine_desc_init refuses an undefined bit");
     check_status(anira_em_engine_desc_init(&desc,
                                            SMOKE_QUERY_KEY,
                                            ANIRA_EM_ENGINE_HOOK_QUERY,
-                                           ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL),
+                                           ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                           NULL),
                  NULL,
                  "anira_em_engine_desc_init");
     check(desc.flags == ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, "the engine's flags, as given");
     check(desc.process != NULL && desc.query != NULL && desc.reset == NULL && desc.init == NULL &&
-              desc.release != NULL,
-          "process always, query per bit, the release slot always, init never");
+              desc.release != NULL && desc.edge == NULL,
+          "process always, query per bit, the release slot always, init never, no edge "
+          "statement without one");
+    /* An edge statement: refused where it names no class; else kept, its reason copied, and
+       answered by the descriptor's edge for every slot without crossing into JavaScript. */
+    {
+        anira_engine_desc stated = ANIRA_ENGINE_DESC_INIT;
+        anira_engine_edge edge = ANIRA_ENGINE_EDGE_INIT;
+        edge.edge_class = 9u;
+        check(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, &edge) ==
+                  ANIRA_ERROR_INVALID_ARGUMENT,
+              "anira_em_engine_desc_init refuses an edge class anira_edge_class does not name");
+        char reason[] = "two wasm memories";
+        edge.edge_class = ANIRA_EDGE_HOST_COPY;
+        edge.reason = reason;
+        check_status(anira_em_engine_desc_init(&stated, SMOKE_QUERY_KEY, 0u, 0u, &edge),
+                     NULL,
+                     "anira_em_engine_desc_init with an edge statement");
+        reason[0] = 'X';
+        anira_engine_edge answer = ANIRA_ENGINE_EDGE_INIT;
+        check(stated.edge != NULL &&
+                  stated.edge(NULL, 0u, 1u, &answer, stated.user_data) == ANIRA_OK &&
+                  answer.edge_class == ANIRA_EDGE_HOST_COPY && answer.reason != NULL &&
+                  strcmp(answer.reason, "two wasm memories") == 0,
+              "the descriptor's edge answers the statement, its reason the record's copy");
+        stated.release(stated.user_data); /* never created: the record is the caller's to free */
+    }
     desc.providers = k_providers;
     desc.num_providers = 2;
     anira_custom_engine* engine = NULL;
@@ -206,6 +233,7 @@ static void check_unpromised_processor(anira_context* context, const anira_contr
                                                  SMOKE_ENGINE_KEY,
                                                  0,
                                                  ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 NULL,
                                                  &err),
                  &err,
                  "anira_em_pipeline_add_js_engine");
@@ -257,7 +285,7 @@ static void check_pipeline(void) {
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check(anira_em_pipeline_add_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
+    check(anira_em_pipeline_add_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, NULL, &err) ==
               ANIRA_ERROR_INVALID_ARGUMENT,
           "anira_em_pipeline_add_js_engine refuses an id without a '.'");
     check_status(anira_em_pipeline_add_js_engine(
@@ -266,6 +294,7 @@ static void check_pipeline(void) {
                      SMOKE_ENGINE_KEY,
                      ANIRA_EM_ENGINE_HOOK_QUERY,
                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE,
+                     NULL,
                      &err),
                  &err,
                  "anira_em_pipeline_add_js_engine");

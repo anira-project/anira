@@ -5,12 +5,16 @@
 // (dtypes-ort-web-int16.model.json; the worker module ort-worker.js). Each block is handed over
 // from the page by the Hard process entry over int16 tensors in the module's heap, and waited
 // for. The stream comes out doubled after the handler's latency, exactly, and the plan report
-// names int16 on both sides of the stream. Then an audio node, which streams float32, is refused
+// names int16 on both sides of the stream and each engine's edge: zero-copy for the module's
+// own ONNX Runtime, a host copy by the engine for the ONNX Runtime Web engine (its statement,
+// ONNXRUNTIME_WEB_ENGINE_OPTIONS). Then an audio node, which streams float32, is refused
 // for the int16 handler, and its message names the remedy. The verdict is
 // window.anira_test_result.
 import {
   ANIRA_DTYPE_I16,
   Anira,
+  anira_edge_class,
+  anira_mover,
   Context,
   ContractHandle,
   InferenceHandler,
@@ -19,7 +23,10 @@ import {
   heap,
   layout,
 } from '../../dist/index.js'
-import { ONNXRUNTIME_WEB_ENGINE_ID } from '../../dist/engines/onnxruntime-web.js'
+import {
+  ONNXRUNTIME_WEB_ENGINE_ID,
+  ONNXRUNTIME_WEB_ENGINE_OPTIONS,
+} from '../../dist/engines/onnxruntime-web.js'
 
 const RATE = 48000
 const BLOCK = 512 // the export's window, one block per inference
@@ -73,7 +80,7 @@ const streamThrough = async (anira, handler) => {
 // checks the quantum against the host blocks before the ring dtypes).
 const runThrough = async (anira, context, model, engineId) => {
   const pipeline = Pipeline.create(anira).addInference(model)
-  if (engineId !== undefined) pipeline.addEngine(engineId)
+  if (engineId !== undefined) pipeline.addEngine(engineId, ONNXRUNTIME_WEB_ENGINE_OPTIONS)
   const contract = ContractHandle.hard(anira, {
     hostBlockMin: BLOCK,
     hostRate: RATE,
@@ -130,12 +137,18 @@ const run = async () => {
     workerModule: new URL('./ort-worker.js', import.meta.url),
   })
 
-  for (const [label, file, engineId] of [
-    ["the module's own ONNX Runtime", './dtypes-int16.model.json', undefined],
+  for (const [label, file, engineId, edge] of [
+    [
+      "the module's own ONNX Runtime",
+      './dtypes-int16.model.json',
+      undefined,
+      [anira_edge_class.ANIRA_EDGE_ZERO_COPY, anira_mover.ANIRA_MOVER_NONE],
+    ],
     [
       'the ONNX Runtime Web engine',
       './dtypes-ort-web-int16.model.json',
       ONNXRUNTIME_WEB_ENGINE_ID,
+      [anira_edge_class.ANIRA_EDGE_HOST_COPY, anira_mover.ANIRA_MOVER_ENGINE],
     ],
   ]) {
     const model = await ModelConfig.fromUrl(anira, new URL(file, import.meta.url))
@@ -147,6 +160,11 @@ const run = async () => {
       ),
       `${label}: the plan report names int16 as the stream's dtype and ring dtype on both sides ` +
         `(${result.rows.map((row) => `0x${row.dtype.toString(16)}/0x${row.ringDtype.toString(16)}`).join(', ')})`
+    )
+    check(
+      result.rows.every((row) => row.edgeClass === edge[0] && row.movedBy === edge[1]),
+      `${label}: the plan report says edge class ${edge[0]}, moved by ${edge[1]}, on both sides ` +
+        `(${result.rows.map((row) => `${row.edgeClass}/${row.movedBy}`).join(', ')})`
     )
     check(
       result.wrong < 0,

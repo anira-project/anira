@@ -4,6 +4,17 @@ import type { InputSpec } from './staticInput'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
 
+/**
+ * How a JavaScript engine passes its slots to its runtime, as the plan report states it
+ * (`anira_engine_edge`, `anira::EngineEdge`): where the bytes go (`edgeClass`, an
+ * `anira_edge_class`) and why. The engine's code moves whatever moves, so its rows read
+ * `ANIRA_MOVER_ENGINE` for any class but `ANIRA_EDGE_ZERO_COPY`.
+ */
+export type EngineEdge = {
+  edgeClass: number
+  reason?: string
+}
+
 /** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_add_js_engine`). */
 export type EngineOptions = {
   /**
@@ -13,7 +24,18 @@ export type EngineOptions = {
   flags?: number
   /** `ANIRA_EM_ENGINE_HOOK_*` beyond process (`ANIRA_EM_ENGINE_HOOK_RESET`). Default none. */
   hooks?: number
+  /**
+   * How the engine passes every slot to its runtime (`anira::Engine::Loaded::edge`, the
+   * descriptor's `edge`): the engine runs in the inference Workers, so the main thread states it
+   * here, once for every slot, where the plan report is built. Default none: the provider rule
+   * (zero-copy on the CPU path). An engine that copies the slots into memory of its own says
+   * `ANIRA_EDGE_HOST_COPY` (the ONNX Runtime Web engine does: `ONNXRUNTIME_WEB_ENGINE_OPTIONS`).
+   */
+  edge?: EngineEdge
 }
+
+// anira_engine_edge on wasm32 (anira/abi/engine.h): struct_size, edge_class, reason.
+const ENGINE_EDGE = { size: 12, edgeClass: 4, reason: 8 }
 
 /** The JavaScript processor of the pipeline (`anira_em_pipeline_add_js_processor`). */
 export type ProcessorOptions = {
@@ -80,13 +102,32 @@ export class Pipeline {
 
   /** A JavaScript engine under its reverse-URI `id`, which the model entries name. */
   addEngine(id: string, options: EngineOptions = {}): this {
-    this.abi.anira_em_pipeline_add_js_engine(
-      this.pipeline,
-      id,
-      keyOf(id),
-      options.hooks ?? 0,
-      options.flags ?? 0
-    )
+    const m = this.abi.module
+    const sp = m.stackSave()
+    try {
+      let edge = 0
+      if (options.edge !== undefined) {
+        const reason =
+          options.edge.reason === undefined
+            ? 0
+            : m.stringToUTF8OnStack(options.edge.reason)
+        edge = m.stackAlloc(ENGINE_EDGE.size)
+        const u32 = heap(m).HEAPU32
+        u32[edge >>> 2] = ENGINE_EDGE.size
+        u32[(edge + ENGINE_EDGE.edgeClass) >>> 2] = options.edge.edgeClass
+        u32[(edge + ENGINE_EDGE.reason) >>> 2] = reason
+      }
+      this.abi.anira_em_pipeline_add_js_engine(
+        this.pipeline,
+        id,
+        keyOf(id),
+        options.hooks ?? 0,
+        options.flags ?? 0,
+        edge
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
     return this
   }
 

@@ -245,8 +245,8 @@ export interface AbiModule {
   _anira_tensor_init_d3d12(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number): void
   _anira_em_processor_desc_init(_0: number, _1: number, _2: number, _3: number): number
   _anira_em_pipeline_add_js_processor(_0: number, _1: number, _2: number, _3: number, _4: number): number
-  _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number): number
-  _anira_em_pipeline_add_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number): number
+  _anira_em_engine_desc_init(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_em_pipeline_add_js_engine(_0: number, _1: number, _2: number, _3: number, _4: number, _5: number, _6: number): number
   _anira_em_set_log_hook(_0: number): void
   _anira_em_context_config_set_worker_module(_0: number, _1: number, _2: number): number
   _anira_em_inference_threads_in_loop(): number
@@ -6720,7 +6720,8 @@ export class AniraBindings {
    * trampolines that never cross into JavaScript: load reads the entry's model record
    * once on the control thread (its row, its path copied, its bytes borrowed), unload
    * frees it, prepare hands it to every process and reset call as their prepared pointer
-   * (what the package's engineModel reads), and unprepare does nothing. flags is
+   * (what the package's engineModel reads), and unprepare does nothing. edge answers the
+   * statement for every slot where one was given, and stays NULL without one. flags is
    * engine_flags; providers stay empty (the CPU path alone), for a C caller to fill
    * before anira_custom_engine_create. A descriptor that is never created keeps its
    * record.
@@ -6735,29 +6736,36 @@ export class AniraBindings {
    *   ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and
    *   ANIRA_ENGINE_FLAG_STATE_ALIAS, or 0 for none. Stored as given: a bit the header does
    *   not define is refused by anira_custom_engine_create.
-   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask
-   *   does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated. A
-   *   failed status throws an AniraError.
+   * @param edge The engine's edge statement for every slot, read within its struct_size
+   *   and copied (the reason too): a JavaScript engine runs in the inference Workers, so
+   *   the main thread states it here, where the plan report is built; the descriptor's edge
+   *   answers it without crossing into JavaScript. NULL: no statement, the provider rule
+   *   (zero-copy on the CPU path).
+   * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does
+   *   not define, or an edge whose struct_size is below its edge_class or whose edge_class
+   *   anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be
+   *   allocated. A failed status throws an AniraError.
    * Thread: [main-thread]
    */
   anira_em_engine_desc_init(
     desc: number,
     js_key: number,
     hook_mask: number,
-    engine_flags: number
+    engine_flags: number,
+    edge: number
   ): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_em_engine_desc_init(desc, js_key, hook_mask, engine_flags),
+      m._anira_em_engine_desc_init(desc, js_key, hook_mask, engine_flags, edge),
       'anira_em_engine_desc_init'
     )
   }
 
   /**
-   * anira_em_engine_desc_init with engine_flags, anira_custom_engine_create under
-   * engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle:
-   * the pipeline holds the JavaScript engine, and model entries name it as
+   * anira_em_engine_desc_init with engine_flags and edge, anira_custom_engine_create
+   * under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the
+   * handle: the pipeline holds the JavaScript engine, and model entries name it as
    * ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the
    * engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an
    * engine with providers is built with anira_em_engine_desc_init. A refused create frees
@@ -6773,6 +6781,11 @@ export class AniraBindings {
    *   ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE,
    *   ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, which JavaScript
    *   cannot write into the descriptor itself.
+   * @param edge The engine's edge statement for every slot, read within its struct_size
+   *   and copied (the reason too): a JavaScript engine runs in the inference Workers, so
+   *   the main thread states it here, where the plan report is built; the descriptor's edge
+   *   answers it without crossing into JavaScript. NULL: no statement, the provider rule
+   *   (zero-copy on the CPU path).
    * @returns As anira_em_engine_desc_init, then as anira_custom_engine_create
    *   (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix "anira." or a
    *   flags bit the header does not define), then as anira_pipeline_add_engine
@@ -6785,7 +6798,8 @@ export class AniraBindings {
     engine_id: string,
     js_key: number,
     hook_mask: number,
-    engine_flags: number
+    engine_flags: number,
+    edge: number
   ): number {
     const m = this.module
     const sp = m.stackSave()
@@ -6800,6 +6814,7 @@ export class AniraBindings {
           js_key,
           hook_mask,
           engine_flags,
+          edge,
           err
         ),
         'anira_em_pipeline_add_js_engine',

@@ -167,6 +167,10 @@ struct HookRecord {
     uint32_t m_js_key = 0;
     uint32_t m_hook_mask = 0;
     std::string m_engine_id;  ///< empty for a processor
+    /// An engine's edge statement for every slot (anira_em_pipeline_add_js_engine's edge), which
+    /// the descriptor's edge answers; m_edge_class unused without one.
+    uint32_t m_edge_class = ANIRA_EDGE_ZERO_COPY;
+    std::string m_edge_reason;  ///< empty: nothing to say
 };
 
 HookRecord& record_of(void* user_data) noexcept {
@@ -302,6 +306,26 @@ anira_status ANIRA_CALL engine_query(const anira_init_info* info,
     return call_engine(user_data, ANIRA_PHASE_QUERY, address(info), address(out_available));
 }
 
+// The statement the main thread gave for every slot (the engine itself runs in the Workers).
+anira_status ANIRA_CALL engine_edge(void* /*loaded*/,
+                                    uint32_t /*is_input*/,
+                                    uint32_t /*slot*/,
+                                    anira_engine_edge* out,
+                                    void* user_data) noexcept {
+    const HookRecord& record = record_of(user_data);
+    out->edge_class = record.m_edge_class;
+    out->reason = record.m_edge_reason.empty() ? nullptr : record.m_edge_reason.c_str();
+    return ANIRA_OK;
+}
+
+// Whether `edge` is a statement the descriptor's edge can answer: NULL (none), or a record whose
+// struct_size reaches its class and whose class anira_edge_class names.
+bool valid_edge(const anira_engine_edge* edge) noexcept {
+    if (edge == nullptr) { return true; }
+    return edge->struct_size >= offsetof(anira_engine_edge, edge_class) + sizeof(uint32_t) &&
+           edge->edge_class <= static_cast<uint32_t>(ANIRA_EDGE_TRANSFER);
+}
+
 // No JavaScript release: a JavaScript engine's lifetime is its Worker's.
 void ANIRA_CALL engine_release(void* user_data) noexcept {
     delete static_cast<HookRecord*>(user_data);  // NOLINT(cppcoreguidelines-owning-memory)
@@ -345,14 +369,23 @@ void fill_processor_desc(anira_processor_desc& desc,
     desc.user_data = record.release();
 }
 
-// Fills an engine descriptor of trampolines over a new record; throws std::bad_alloc only.
+// Fills an engine descriptor of trampolines over a new record, the edge statement (valid_edge)
+// copied into it; throws std::bad_alloc only.
 void fill_engine_desc(anira_engine_desc& desc,
                       uint32_t js_key,
                       uint32_t hook_mask,
-                      uint32_t engine_flags) {
+                      uint32_t engine_flags,
+                      const anira_engine_edge* edge) {
     auto record = std::make_unique<HookRecord>();
     record->m_js_key = js_key;
     record->m_hook_mask = hook_mask;
+    if (edge != nullptr) {
+        record->m_edge_class = edge->edge_class;
+        if (edge->struct_size >= offsetof(anira_engine_edge, reason) + sizeof(const char*) &&
+            edge->reason != nullptr) {
+            record->m_edge_reason = edge->reason;
+        }
+    }
     desc = ANIRA_ENGINE_DESC_INIT;
     desc.process = &engine_process;
     // The model record of every call (no crossing: the engine runs in the Workers' scopes,
@@ -363,6 +396,7 @@ void fill_engine_desc(anira_engine_desc& desc,
     desc.unprepare = &engine_unprepare;
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_RESET) != 0) { desc.reset = &engine_reset; }
     if ((hook_mask & ANIRA_EM_ENGINE_HOOK_QUERY) != 0) { desc.query = &engine_query; }
+    if (edge != nullptr) { desc.edge = &engine_edge; }
     desc.release = &engine_release;
     // As given: anira_custom_engine_create judges the bits.
     desc.flags = engine_flags;
@@ -407,11 +441,13 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipeline* pipel
 anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* desc,
                                                   uint32_t js_key,
                                                   uint32_t hook_mask,
-                                                  uint32_t engine_flags) ANIRA_NOEXCEPT try {
-    if (desc == nullptr || (hook_mask & ~k_engine_hooks) != 0) {
+                                                  uint32_t engine_flags,
+                                                  const anira_engine_edge* edge) ANIRA_NOEXCEPT
+    try {
+    if (desc == nullptr || (hook_mask & ~k_engine_hooks) != 0 || !valid_edge(edge)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    fill_engine_desc(*desc, js_key, hook_mask, engine_flags);
+    fill_engine_desc(*desc, js_key, hook_mask, engine_flags, edge);
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -420,6 +456,7 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline* pipeline
                                                         uint32_t js_key,
                                                         uint32_t hook_mask,
                                                         uint32_t engine_flags,
+                                                        const anira_engine_edge* edge,
                                                         anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE((hook_mask & ~k_engine_hooks) == 0,
                        err,
@@ -428,8 +465,14 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline* pipeline
                        "ANIRA_EM_ENGINE_HOOK_* defines (they are 0x%x)",
                        hook_mask,
                        k_engine_hooks);
+    ANIRA_CAPI_REQUIRE(valid_edge(edge),
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "JavaScript engine: the edge statement is too short to hold its class, or "
+                       "names a class anira_edge_class does not (ANIRA_EDGE_ZERO_COPY to "
+                       "ANIRA_EDGE_TRANSFER)");
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
-    fill_engine_desc(desc, js_key, hook_mask, engine_flags);
+    fill_engine_desc(desc, js_key, hook_mask, engine_flags, edge);
     // A refused create never calls release: until it succeeds the record is ours.
     std::unique_ptr<HookRecord> record(static_cast<HookRecord*>(desc.user_data));
     if (engine_id != nullptr) { record->m_engine_id = engine_id; }

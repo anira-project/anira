@@ -435,6 +435,13 @@ _Static_assert(sizeof(((const anira_engine_ctx*)0)->loaded_bits) == 8, "anira_en
 _Static_assert(offsetof(anira_engine_ctx, reserved_ptr1) == 56, "anira_engine_ctx.reserved_ptr1 offset");
 _Static_assert(sizeof(((const anira_engine_ctx*)0)->reserved_ptr1_bits) == 8, "anira_engine_ctx.reserved_ptr1 is an 8-byte slot");
 
+_Static_assert(offsetof(anira_engine_edge, struct_size) == 0, "anira_engine_edge.struct_size first");
+_Static_assert(sizeof(anira_engine_edge) ==
+                   sizeof(((const anira_engine_edge*)0)->struct_size) +
+                   sizeof(((const anira_engine_edge*)0)->edge_class) +
+                   sizeof(((const anira_engine_edge*)0)->reason),
+               "anira_engine_edge has no implicit padding");
+
 _Static_assert(offsetof(anira_engine_desc, struct_size) == 0, "anira_engine_desc.struct_size first");
 _Static_assert(offsetof(anira_engine_desc, abi_version) == 4, "anira_engine_desc.abi_version second");
 _Static_assert(offsetof(anira_engine_desc, user_data) == 8, "anira_engine_desc.user_data third");
@@ -456,7 +463,8 @@ _Static_assert(sizeof(anira_engine_desc) ==
                    sizeof(((const anira_engine_desc*)0)->providers) +
                    sizeof(((const anira_engine_desc*)0)->num_providers) +
                    sizeof(((const anira_engine_desc*)0)->reserved) +
-                   sizeof(((const anira_engine_desc*)0)->query),
+                   sizeof(((const anira_engine_desc*)0)->query) +
+                   sizeof(((const anira_engine_desc*)0)->edge),
                "anira_engine_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_plan_slot, struct_size) == 0, "anira_plan_slot.struct_size first");

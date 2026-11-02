@@ -2846,6 +2846,21 @@ private:
 // ---- engines (section 7) -------------------------------------------------------------------
 
 /**
+ * @brief How a custom engine passes one slot to its runtime, as the plan report states it
+ * (anira_engine_edge of anira/abi/engine.h): where the bytes go, and why. Engine::Loaded::edge
+ * returns it; the mover follows from the class (the engine's code moves whatever moves, nobody
+ * on a zero-copy edge).
+ */
+// NOLINTBEGIN(readability-identifier-naming) the aggregate spells anira_engine_edge's field names
+struct EngineEdge {
+    anira_edge_class edge_class = ANIRA_EDGE_ZERO_COPY;
+    /// Why the edge is what it is: static storage or a member of the Loaded (anira copies it
+    /// before the call returns); nullptr with nothing to say.
+    const char* reason = nullptr;
+};
+// NOLINTEND(readability-identifier-naming)
+
+/**
  * @brief The record an Engine's load receives, anira_engine_load_info of anira/abi/engine.h as
  * views. Valid for the duration of load: the spans and the model die with the call, so an
  * engine copies what it keeps (the templates, the names, what it loads from the row's path or
@@ -3149,6 +3164,21 @@ public:
         /// loaded models may run at once). It may throw, as Engine::load may; a null return is
         /// ANIRA_ERROR_INTERNAL.
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
+
+        /// How this model's engine passes one slot to its runtime (the input slot `slot` under
+        /// `is_input`, else the output slot), for the plan report's slot rows and the
+        /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
+        /// returned this Loaded, once per slot, inputs first, on the same thread and under the
+        /// same lock. `provider_rule` is what anira reports without a statement (zero-copy on
+        /// ANIRA_PROVIDER_CPU and XNNPACK, ANIRA_EDGE_TRANSFER on every other provider), and
+        /// the base returns it. An engine that copies the slot into memory of its own returns
+        /// ANIRA_EDGE_HOST_COPY and why. It may throw, as load may: the prepare fails with the
+        /// status, and the Loaded is deleted.
+        virtual EngineEdge edge(bool /*is_input*/,
+                                uint32_t /*slot*/,
+                                const EngineEdge& provider_rule) const {
+            return provider_rule;
+        }
     };
 
     /// The engine object under its id: the reverse-URI name model entries name it by
@@ -3284,7 +3314,7 @@ struct EngineHandle {
 struct EngineTrampolines {
     /// The C engine of `engine`: the one its handle names while anything holds it, else a new
     /// one (anira_custom_engine_create) under the object's id, whose descriptor is read from the
-    /// object now: flags(), consumed_kinds(), providers(), the nine slots. A new C engine's
+    /// object now: flags(), consumed_kinds(), providers(), the ten slots. A new C engine's
     /// handle keeps it alive until Pipeline::add_engine added it and detached the handle
     /// (a refused addition detaches too, so the C engine goes again and release answers it).
     /// @throws Error when the C entry refuses the id (no reverse-URI name, or anira's own) or
@@ -3313,6 +3343,7 @@ struct EngineTrampolines {
         desc.init = &init;
         desc.release = &release;
         desc.query = &query;
+        desc.edge = &edge;
         // The C engine owns the copy from a successful create on and deletes it in release; a
         // refused create never calls release, so the copy dies here with the throw. The handle
         // exists first, so that nothing between the create and its owner can leak the engine.
@@ -3394,6 +3425,29 @@ struct EngineTrampolines {
                 return ANIRA_ERROR_INTERNAL;
             }
             *out_loaded = loaded.release();
+            return ANIRA_OK;
+        });
+    }
+
+    /// The Loaded's statement for one slot, over the provider rule's edge the record arrives
+    /// with; a call without a Loaded is ANIRA_ERROR_INTERNAL (an Engine always loads one).
+    static anira_status ANIRA_CALL edge(void* loaded,
+                                        uint32_t is_input,
+                                        uint32_t slot,
+                                        anira_engine_edge* out,
+                                        void* /*user_data*/) noexcept {
+        return guarded("edge", [&] {
+            if (loaded == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the engine's edge statement was asked without a Loaded");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            const EngineEdge rule{.edge_class = static_cast<anira_edge_class>(out->edge_class),
+                                  .reason = out->reason};
+            const EngineEdge stated = loaded_of(loaded).edge(is_input != 0, slot, rule);
+            out->edge_class = static_cast<uint32_t>(stated.edge_class);
+            out->reason = stated.reason;
             return ANIRA_OK;
         });
     }

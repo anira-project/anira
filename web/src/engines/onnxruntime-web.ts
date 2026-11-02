@@ -40,7 +40,7 @@ import {
 import ortWasmFactory from 'onnxruntime-web/ort-wasm-simd-threaded.mjs'
 
 // The id lives in a module of its own, which the root entry re-exports without this engine.
-export { ONNXRUNTIME_WEB_ENGINE_ID } from './ids'
+export { ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_OPTIONS } from './ids'
 
 export type OnnxRuntimeWebOptions = {
   /**

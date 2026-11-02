@@ -207,7 +207,8 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
  * trampolines that never cross into JavaScript: load reads the entry's model record once
  * on the control thread (its row, its path copied, its bytes borrowed), unload frees it,
  * prepare hands it to every process and reset call as their prepared pointer (what the
- * package's engineModel reads), and unprepare does nothing. flags is engine_flags;
+ * package's engineModel reads), and unprepare does nothing. edge answers the statement
+ * for every slot where one was given, and stays NULL without one. flags is engine_flags;
  * providers stay empty (the CPU path alone), for a C caller to fill before
  * anira_custom_engine_create. A descriptor that is never created keeps its record.
  * @param desc The caller's descriptor, overwritten from ANIRA_ENGINE_DESC_INIT.
@@ -219,8 +220,15 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
  *        ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, or 0
  *        for none. Stored as given: a bit the header does not define is refused by
  *        anira_custom_engine_create.
- * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not
- *         define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated.
+ * @param edge The engine's edge statement for every slot, read within its struct_size and
+ *        copied (the reason too): a JavaScript engine runs in the inference Workers, so
+ *        the main thread states it here, where the plan report is built; the descriptor's
+ *        edge answers it without crossing into JavaScript. NULL: no statement, the
+ *        provider rule (zero-copy on the CPU path).
+ * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not
+ *         define, or an edge whose struct_size is below its edge_class or whose edge_class
+ *         anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be
+ *         allocated.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
@@ -228,10 +236,11 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_processor(anira_pipel
 ANIRA_API anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* desc,
                                                             uint32_t js_key,
                                                             uint32_t hook_mask,
-                                                            uint32_t engine_flags) ANIRA_NOEXCEPT;
+                                                            uint32_t engine_flags,
+                                                            const anira_engine_edge* edge) ANIRA_NOEXCEPT;
 
 /**
- * @brief anira_em_engine_desc_init with engine_flags, anira_custom_engine_create under
+ * @brief anira_em_engine_desc_init with engine_flags and edge, anira_custom_engine_create under
  * engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle:
  * the pipeline holds the JavaScript engine, and model entries name it as
  * ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the
@@ -247,6 +256,11 @@ ANIRA_API anira_status ANIRA_CALL anira_em_engine_desc_init(anira_engine_desc* d
  *        ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and
  *        ANIRA_ENGINE_FLAG_STATE_ALIAS, which JavaScript cannot write into the
  *        descriptor itself.
+ * @param edge The engine's edge statement for every slot, read within its struct_size and
+ *        copied (the reason too): a JavaScript engine runs in the inference Workers, so
+ *        the main thread states it here, where the plan report is built; the descriptor's
+ *        edge answers it without crossing into JavaScript. NULL: no statement, the
+ *        provider rule (zero-copy on the CPU path).
  * @param err Nullable.
  * @return As anira_em_engine_desc_init, then as anira_custom_engine_create
  *         (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix "anira." or a
@@ -261,6 +275,7 @@ ANIRA_API anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline
                                                                   uint32_t js_key,
                                                                   uint32_t hook_mask,
                                                                   uint32_t engine_flags,
+                                                                  const anira_engine_edge* edge,
                                                                   anira_error* err) ANIRA_NOEXCEPT;
 
 /**
