@@ -5,9 +5,13 @@
  * program is the documented way to run one program from several), the slots bound to the
  * method's inputs and outputs by position (the method meta carries no tensor names) and
  * checked against its tensor metas at load (the meta reports the planned upper bound of every
- * axis and marks no axis dynamic, so an extent at or below the bound matches), every input of
- * a call copied into the executor's staging tensors (the program's inputs are the runtime's
- * own) and every memory-planned output copied out into the descriptor's memory. The XNNPACK
+ * axis and marks no axis dynamic, so an extent at or below the bound matches), and every slot
+ * handed over by the memory plan's rule: the executor keeps one tensor per input slot and
+ * re-points its data at the descriptor's memory per call, which set_input aliases for an input
+ * the plan leaves out and copies into the plan's memory for a planned one (the one copy, the
+ * runtime's); an output the plan leaves out is bound to the descriptor's memory per call
+ * (set_output_data_ptr) where the slot holds the output's capacity, and a planned one is
+ * copied out of the plan's memory into the descriptor's. The XNNPACK
  * delegate of every method is loaded with its runtime options set to no shared workspace and
  * no weight cache (the process-wide mutexes the prebuilt runtime otherwise takes around every
  * call), and it captures its thread pool at that load under NoThreadPoolGuard, so every call
@@ -38,6 +42,8 @@
 #include <vector>
 
 #include "../capi/words.h"
+#include "../scheduler/ChunkStorage.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
@@ -238,7 +244,42 @@ anira_dtype dtype_of(executorch::aten::ScalarType type) {
         case executorch::aten::ScalarType::Short: return ANIRA_DTYPE_I16;
         case executorch::aten::ScalarType::Int: return ANIRA_DTYPE_I32;
         case executorch::aten::ScalarType::Long: return ANIRA_DTYPE_I64;
+        case executorch::aten::ScalarType::Bool: return ANIRA_DTYPE_BOOL8;
         default: return 0;
+    }
+}
+
+// The ExecuTorch scalar type of an anira dtype: every dtype anira names has one; Undefined for
+// any other, which the validator refuses before a record reaches the adapter.
+executorch::aten::ScalarType executorch_type_of(anira_dtype dtype) noexcept {
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: return executorch::aten::ScalarType::Float;
+        case ANIRA_DTYPE_F64: return executorch::aten::ScalarType::Double;
+        case ANIRA_DTYPE_F16: return executorch::aten::ScalarType::Half;
+        case ANIRA_DTYPE_BF16: return executorch::aten::ScalarType::BFloat16;
+        case ANIRA_DTYPE_I8: return executorch::aten::ScalarType::Char;
+        case ANIRA_DTYPE_U8: return executorch::aten::ScalarType::Byte;
+        case ANIRA_DTYPE_I16: return executorch::aten::ScalarType::Short;
+        case ANIRA_DTYPE_I32: return executorch::aten::ScalarType::Int;
+        case ANIRA_DTYPE_I64: return executorch::aten::ScalarType::Long;
+        case ANIRA_DTYPE_BOOL8: return executorch::aten::ScalarType::Bool;
+        default: return executorch::aten::ScalarType::Undefined;
+    }
+}
+
+bool carries(anira_dtype dtype) noexcept {
+    return executorch_type_of(dtype) != executorch::aten::ScalarType::Undefined;
+}
+
+// Whether a scalar type is quantised (its values mean scale * (q - zero point)).
+bool quantised(executorch::aten::ScalarType type) noexcept {
+    switch (type) {
+        case executorch::aten::ScalarType::QInt8:
+        case executorch::aten::ScalarType::QUInt8:
+        case executorch::aten::ScalarType::QInt32:
+        case executorch::aten::ScalarType::QUInt4x2:
+        case executorch::aten::ScalarType::QUInt2x4: return true;
+        default: return false;
     }
 }
 
@@ -255,6 +296,7 @@ EngineTensor engine_tensor_of(
     tensor.m_dtype = dtype_of(info->scalar_type());
     tensor.m_type_word =
         "ExecuTorch scalar type " + std::to_string(static_cast<int>(info->scalar_type()));
+    tensor.m_quantised = quantised(info->scalar_type());
     return tensor;
 }
 
@@ -298,8 +340,8 @@ SharedProgram::SharedProgram(const Model& model) {
 /// One Module over the shared program with its own loaded entry method: what one executor of
 /// the adapter runs on. Loads the method at construction (the delegates initialised with the
 /// runtime options above, under the thread-pool guard; the planned memory allocated); binds
-/// afterwards; runs every inference over the context's descriptors through its own staging
-/// tensors.
+/// afterwards; runs every inference over the context's descriptors, each slot handed over by
+/// the memory plan's rule (the file comment).
 class Instance final : public Executor {
 public:
     Instance(std::shared_ptr<const SharedProgram> shared, const Model& model);
@@ -318,14 +360,22 @@ public:
     /// The method executed per inference.
     const std::string& method() const noexcept { return m_method; }
 
-    /// Builds the staging tensors once, one per input slot wrapping instance-owned host memory
-    /// of the record's element count and engine dims, in the method's positional order.
+    /// Builds the kept tensors once, in the method's positional order: per input slot one of
+    /// the record's dtype and engine dims over an aligned block of the executor's own (zeros:
+    /// the warm-up's input, until a call re-points it), and per output the plan leaves out one
+    /// over a block of the output's capacity, which is the output's memory (set_output) until a
+    /// call binds the slot's. Reads per slot whether the plan owns the tensor and whether an
+    /// unplanned output's slot holds its capacity.
     void bind(const Model& model,
               const std::vector<SlotBinding>& inputs,
               const std::vector<SlotBinding>& outputs);
 
-    /// The FIXED warm-up of the record over the staging tensors (zeros); a failing execute is
-    /// StatusError(ANIRA_ERROR_ENGINE) with the error named.
+    /// The edge of a slot after bind: ZERO_COPY for an input the plan leaves out and for an
+    /// unplanned output whose slot holds its capacity, HOST_COPY with the reason else.
+    Loaded::SlotEdge slot_edge(bool is_input, size_t slot) const noexcept;
+
+    /// The FIXED warm-up of the record over the executor's own blocks (zeros); a failing
+    /// execute is StatusError(ANIRA_ERROR_ENGINE) with the error named.
     void warm_up(uint32_t iterations) override;
 
     /// One inference over the context's descriptors: ANIRA_ERROR_INVALID_ARGUMENT for a
@@ -334,9 +384,14 @@ public:
     anira_status process(const anira_engine_ctx& ctx) noexcept override;
 
 private:
-    /// Copies every input descriptor into its staging tensor, executes and copies every result
-    /// into its output descriptor; throws StatusError.
+    /// Re-points every input tensor at its descriptor's memory, binds every unplanned output
+    /// (the slot's memory, or the executor's block of the output's capacity), executes, and
+    /// copies every result that did not land in its descriptor's memory; throws StatusError.
     void run(const anira_engine_ctx& ctx);
+    /// Whether the plan owns each tensor of a side, and an output's capacity (its meta's bytes,
+    /// the planned upper bound), from the method's meta.
+    std::vector<bool> planned(bool is_input);
+    std::vector<size_t> output_capacities();
 
     std::shared_ptr<const SharedProgram> m_shared;            ///< the program, shared
     std::unique_ptr<executorch::extension::Module> m_module;  ///< this executor's, over it
@@ -347,14 +402,24 @@ private:
     executorch::runtime::BackendOptions<2> m_xnnpack_options;
     executorch::runtime::LoadBackendOptionsMap m_backend_options;
 
-    std::vector<std::vector<float>> m_input_data;  ///< instance-owned host memory behind the
-                                                   ///< input tensors, per input slot
-    std::vector<executorch::extension::TensorPtr> m_input_tensors;  ///< wrapping m_input_data
-    std::vector<executorch::runtime::EValue> m_input_values;        ///< the reusable argument list,
-                                                                    ///< in the method's order
+    std::vector<ChunkBlock> m_input_blocks;  ///< per input slot: the executor's own memory
+    /// Per input slot: kept, re-pointed per call at the descriptor's memory (TensorImpl's data,
+    /// no allocation).
+    std::vector<executorch::extension::TensorPtr> m_input_tensors;
+    std::vector<executorch::runtime::EValue> m_input_values;  ///< the reusable argument list,
+                                                              ///< in the method's order
     std::vector<size_t> m_input_elements;
-    std::vector<size_t> m_result_of_slot;  ///< per output slot: the result's index
+    std::vector<anira_dtype> m_input_dtypes;  ///< per input slot: the record's dtype
+    std::vector<bool> m_input_planned;        ///< per input slot: set_input copies into the plan
+    std::vector<size_t> m_result_of_slot;     ///< per output slot: the result's index
     std::vector<size_t> m_output_elements;
+    std::vector<anira_dtype> m_output_dtypes;
+    std::vector<bool> m_output_planned;  ///< per output slot: the plan owns the result
+    /// Per output slot the plan leaves out: whether the slot holds the output's capacity (bound
+    /// in place), the executor's block of that capacity and the kept tensor set_output takes.
+    std::vector<bool> m_output_bindable;
+    std::vector<ChunkBlock> m_output_blocks;
+    std::vector<executorch::extension::TensorPtr> m_output_tensors;
 };
 
 Instance::Instance(std::shared_ptr<const SharedProgram> shared, const Model& model)
@@ -428,30 +493,119 @@ std::vector<std::string> Instance::backends() {
     return names;
 }
 
+std::vector<bool> Instance::planned(bool is_input) {
+    auto meta = m_module->method_meta(m_method);
+    executorch_check(meta.error(),
+                     "Module::method_meta",
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_shared->m_where);
+    const size_t count = is_input ? meta->num_inputs() : meta->num_outputs();
+    std::vector<bool> planned(count, true);
+    for (size_t i = 0; i < count; ++i) {
+        const auto info = is_input ? meta->input_tensor_meta(i) : meta->output_tensor_meta(i);
+        planned[i] = !info.ok() || info->is_memory_planned();
+    }
+    return planned;
+}
+
+std::vector<size_t> Instance::output_capacities() {
+    auto meta = m_module->method_meta(m_method);
+    executorch_check(meta.error(),
+                     "Module::method_meta",
+                     ANIRA_ERROR_MODEL_LOAD,
+                     m_shared->m_where);
+    std::vector<size_t> capacities(meta->num_outputs(), 0);
+    for (size_t i = 0; i < capacities.size(); ++i) {
+        const auto info = meta->output_tensor_meta(i);
+        if (info.ok()) { capacities[i] = info->nbytes(); }
+    }
+    return capacities;
+}
+
+Loaded::SlotEdge Instance::slot_edge(bool is_input, size_t slot) const noexcept {
+    if (is_input) {
+        if (slot < m_input_planned.size() && !m_input_planned[slot]) { return {}; }
+        return {.m_class = ANIRA_EDGE_HOST_COPY,
+                .m_reason = "executorch: the memory plan owns the input; set_input copies into it"};
+    }
+    if (slot < m_output_planned.size() && m_output_planned[slot]) {
+        return {.m_class = ANIRA_EDGE_HOST_COPY,
+                .m_reason = "executorch: the memory plan owns the output; copied out of it"};
+    }
+    if (slot < m_output_bindable.size() && m_output_bindable[slot]) { return {}; }
+    return {.m_class = ANIRA_EDGE_HOST_COPY,
+            .m_reason =
+                "executorch: the output's capacity exceeds the slot; copied through a block "
+                "of the executor's own"};
+}
+
 void Instance::bind(const Model& model,
                     const std::vector<SlotBinding>& inputs,
                     const std::vector<SlotBinding>& outputs) {
     // Positional on both sides: the exactly-once rule made slot i the method's input i.
-    m_input_data.assign(inputs.size(), {});
+    const std::vector<bool> inputs_planned = planned(true);
+    const std::vector<bool> outputs_planned = planned(false);
+    const std::vector<size_t> capacities = output_capacities();
+    m_input_blocks.clear();
     m_input_tensors.clear();
     m_input_values.clear();
     m_input_elements.clear();
+    m_input_dtypes.clear();
+    m_input_planned.clear();
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
-        const std::vector<int64_t>& dims = model.m_inputs[slot].m_dims;
-        std::vector<executorch::aten::SizesType> sizes(dims.begin(), dims.end());
-        m_input_data[slot].assign(model.m_inputs[slot].m_num_elements, 0.F);
+        const TensorInfo& tensor = model.m_inputs[slot];
+        std::vector<executorch::aten::SizesType> sizes(tensor.m_dims.begin(), tensor.m_dims.end());
+        m_input_blocks.emplace_back(host_chunk_storage(),
+                                    tensor.m_num_elements * tensor_run::dtype_size(tensor.m_dtype),
+                                    Loaded::k_default_buffer_alignment);
         m_input_tensors.push_back(
-            executorch::extension::from_blob(m_input_data[slot].data(),
+            executorch::extension::from_blob(m_input_blocks.back().data(),
                                              std::move(sizes),
-                                             executorch::aten::ScalarType::Float));
+                                             executorch_type_of(tensor.m_dtype)));
         m_input_values.emplace_back(*m_input_tensors.back());
-        m_input_elements.push_back(model.m_inputs[slot].m_num_elements);
+        m_input_elements.push_back(tensor.m_num_elements);
+        m_input_dtypes.push_back(tensor.m_dtype);
+        m_input_planned.push_back(inputs[slot].m_index >= inputs_planned.size() ||
+                                  inputs_planned[inputs[slot].m_index]);
     }
     m_result_of_slot.clear();
     m_output_elements.clear();
+    m_output_dtypes.clear();
+    m_output_planned.clear();
+    m_output_bindable.clear();
+    m_output_blocks.clear();
+    m_output_tensors.clear();
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
-        m_result_of_slot.push_back(outputs[slot].m_index);
-        m_output_elements.push_back(model.m_outputs[slot].m_num_elements);
+        const TensorInfo& tensor = model.m_outputs[slot];
+        const size_t index = outputs[slot].m_index;
+        const size_t bytes = tensor.m_num_elements * tensor_run::dtype_size(tensor.m_dtype);
+        m_result_of_slot.push_back(index);
+        m_output_elements.push_back(tensor.m_num_elements);
+        m_output_dtypes.push_back(tensor.m_dtype);
+        const bool is_planned = index >= outputs_planned.size() || outputs_planned[index];
+        m_output_planned.push_back(is_planned);
+        // An output the plan leaves out has no memory until set_output gives it some: a block of
+        // the output's capacity (the runtime refuses a smaller one), its memory until a call
+        // binds the slot's; the slot is bound in place when it holds that capacity.
+        const size_t capacity = index < capacities.size() ? capacities[index] : 0;
+        m_output_bindable.push_back(!is_planned && capacity <= bytes);
+        if (is_planned) {
+            m_output_blocks.emplace_back();
+            m_output_tensors.emplace_back();
+            continue;
+        }
+        const size_t element = tensor_run::dtype_size(tensor.m_dtype);
+        m_output_blocks.emplace_back(host_chunk_storage(),
+                                     capacity,
+                                     Loaded::k_default_buffer_alignment);
+        m_output_tensors.push_back(executorch::extension::from_blob(
+            m_output_blocks.back().data(),
+            {static_cast<executorch::aten::SizesType>(capacity / element)},
+            executorch_type_of(tensor.m_dtype)));
+        executorch_check(m_module->set_output(m_method, *m_output_tensors.back(), index),
+                         "Module::set_output",
+                         ANIRA_ERROR_MODEL_LOAD,
+                         m_shared->m_where);
     }
 }
 
@@ -473,18 +627,44 @@ void Instance::run(const anira_engine_ctx& ctx) {
                               std::to_string(m_input_elements.size()) + " and " +
                               std::to_string(m_result_of_slot.size()));
     }
-    // Staging in: the program's inputs are the runtime's own tensors, so every input block is
-    // copied from its descriptor's memory, read on this call.
-    for (size_t slot = 0; slot < m_input_elements.size(); ++slot) {
-        const float* data = static_cast<float*>(
-            host_packed(ctx.inputs[slot], ANIRA_DTYPE_F32, m_input_elements[slot]));
+    const auto packed = [](const anira_tensor& tensor,
+                           anira_dtype dtype,
+                           size_t elements,
+                           const char* side,
+                           size_t slot) {
+        void* data = host_packed(tensor, dtype, elements);
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": input slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_input_elements[slot]) + " elements");
+                              std::string(k_engine) + ": " + side + " slot " +
+                                  std::to_string(slot) + " is not a packed " +
+                                  capi::dtype_word(dtype) + " host block of " +
+                                  std::to_string(elements) + " elements");
         }
-        std::memcpy(m_input_data[slot].data(), data, m_input_elements[slot] * sizeof(float));
+        return data;
+    };
+    // In: every kept input tensor re-pointed at its descriptor's memory, which set_input
+    // aliases for an input the plan leaves out and copies into the plan's memory (the one copy,
+    // counted) for a planned one.
+    for (size_t slot = 0; slot < m_input_elements.size(); ++slot) {
+        void* data =
+            packed(ctx.inputs[slot], m_input_dtypes[slot], m_input_elements[slot], "input", slot);
+        m_input_tensors[slot]->unsafeGetTensorImpl()->set_data(data);
+        if (m_input_planned[slot]) { count_copy_in(); }
+    }
+    // Out: every output the plan leaves out bound to the slot's memory where it holds the
+    // output's capacity, else to the executor's block.
+    for (size_t slot = 0; slot < m_result_of_slot.size(); ++slot) {
+        if (m_output_planned[slot]) { continue; }
+        void* target = m_output_bindable[slot] ? packed(ctx.outputs[slot],
+                                                        m_output_dtypes[slot],
+                                                        m_output_elements[slot],
+                                                        "output",
+                                                        slot)
+                                               : m_output_blocks[slot].data();
+        m_output_tensors[slot]->unsafeGetTensorImpl()->set_data(target);
+        executorch_check(
+            m_module->set_output(m_method, *m_output_tensors[slot], m_result_of_slot[slot]),
+            "Module::set_output");
     }
 
     // Inline on this thread: the guard keeps every operator that asks for the thread pool
@@ -494,7 +674,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
     executorch_check(result.error(), m_execute_label.c_str());
     const std::vector<executorch::runtime::EValue>& outputs = result.get();
 
-    // Out of the memory-planned results, one copy each into the descriptor's memory.
+    // Out of the plan's memory or the executor's block, one copy each into the descriptor's
+    // memory; a result in the descriptor's memory is the slot's already.
     for (size_t slot = 0; slot < m_result_of_slot.size(); ++slot) {
         const size_t index = m_result_of_slot[slot];
         if (index >= outputs.size() || !outputs[index].isTensor()) {
@@ -505,7 +686,8 @@ void Instance::run(const anira_engine_ctx& ctx) {
                                   " of " + std::to_string(outputs.size()) + ")");
         }
         const executorch::aten::Tensor& tensor = outputs[index].toTensor();
-        if (tensor.scalar_type() != executorch::aten::ScalarType::Float ||
+        const anira_dtype dtype = m_output_dtypes[slot];
+        if (tensor.scalar_type() != executorch_type_of(dtype) ||
             std::cmp_not_equal(tensor.numel(), m_output_elements[slot])) {
             throw StatusError(ANIRA_ERROR_ENGINE,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +
@@ -513,17 +695,14 @@ void Instance::run(const anira_engine_ctx& ctx) {
                                   " elements of scalar type " +
                                   std::to_string(static_cast<int>(tensor.scalar_type())) +
                                   " for the spec's " + std::to_string(m_output_elements[slot]) +
-                                  " float32 elements");
+                                  " " + capi::dtype_word(dtype) + " elements");
         }
-        float* data = static_cast<float*>(
-            host_packed(ctx.outputs[slot], ANIRA_DTYPE_F32, m_output_elements[slot]));
-        if (data == nullptr) {
-            throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
-                              std::string(k_engine) + ": output slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_output_elements[slot]) + " elements");
-        }
-        std::memcpy(data, tensor.const_data_ptr<float>(), m_output_elements[slot] * sizeof(float));
+        void* data = packed(ctx.outputs[slot], dtype, m_output_elements[slot], "output", slot);
+        if (tensor.const_data_ptr() == data) { continue; }
+        std::memcpy(data,
+                    tensor.const_data_ptr(),
+                    m_output_elements[slot] * tensor_run::dtype_size(dtype));
+        count_copy_out();
     }
 }
 
@@ -585,11 +764,11 @@ public:
     explicit ExecuTorchLoaded(std::shared_ptr<ExecuTorchEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
-    /// Every slot is copied through the method's own tensor (a staging buffer in, the
-    /// memory-planned result out).
-    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
-        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
-                        .m_reason = "executorch: copied through the method's own tensor"};
+    /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
+    /// leaves out is bound in place, a planned one costs one copy.
+    SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
+        const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
+        return slot < edges.size() ? edges[slot] : SlotEdge{};
     }
 
     /// The CPU path (a portable export, or whatever delegates the runtime has for the
@@ -621,7 +800,7 @@ public:
 
 protected:
     void do_load(const Model& model) override {
-        require_f32(model, k_engine);
+        require_dtypes(model, k_engine, carries);
         m_shared = std::make_shared<const SharedProgram>(model);
         auto probe = std::make_unique<Instance>(m_shared, model);
         // A pinned entry names the delegate (ExecuTorch's backend) its export was lowered for:
@@ -656,6 +835,14 @@ protected:
                                       k_engine,
                                       "output");
         probe->bind(model, m_input_bindings, m_output_bindings);
+        m_input_edges.clear();
+        m_output_edges.clear();
+        for (size_t slot = 0; slot < model.m_inputs.size(); ++slot) {
+            m_input_edges.push_back(probe->slot_edge(true, slot));
+        }
+        for (size_t slot = 0; slot < model.m_outputs.size(); ++slot) {
+            m_output_edges.push_back(probe->slot_edge(false, slot));
+        }
         set_bindings(bindings_of(m_input_bindings, m_output_bindings));
         adopt(std::move(probe));
     }
@@ -670,6 +857,8 @@ private:
     std::shared_ptr<const SharedProgram> m_shared;  ///< freed with the last executor over it
     std::vector<SlotBinding> m_input_bindings;
     std::vector<SlotBinding> m_output_bindings;
+    std::vector<SlotEdge> m_input_edges;  ///< per input slot: the probe's edge
+    std::vector<SlotEdge> m_output_edges;
 };
 
 }  // namespace

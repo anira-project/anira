@@ -13,8 +13,10 @@
 #include <anira/abi/tensor.h>
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -75,6 +77,14 @@ public:
     anira_status run(const anira_engine_ctx& ctx, bool reset_first) noexcept {
         return m_prepared->run(ctx, reset_first);
     }
+    const anira::engine::Loaded& loaded() const noexcept { return *m_loaded; }
+    /// The executor the session runs on: its own for an exclusive session, else shared slot 0.
+    const anira::engine::Executor& executor() const {
+        const auto* prepared =
+            dynamic_cast<const anira::engine::ExecutorPrepared*>(m_prepared.get());
+        if (prepared != nullptr && prepared->own() != nullptr) { return *prepared->own(); }
+        return dynamic_cast<const anira::engine::ExecutorLoaded&>(*m_loaded).executor(0);
+    }
 
 private:
     std::shared_ptr<anira::engine::Loaded> m_loaded;
@@ -89,6 +99,89 @@ std::shared_ptr<Rig> executorch_adapter() {
 }
 
 }  // namespace
+
+// The int16 TypedGainNetwork exports, the memory plan's two cases: the planned export (every
+// input and output the plan's) costs one copy per slot each way (set_input's into the plan,
+// counted, and the result's out of it) and reports HOST_COPY; the unplanned one at its static
+// 512-sample window aliases the inputs (set_input) and binds the outputs to the caller's memory
+// per call (set_output_data_ptr): no copy, the results in the caller's memory, ZERO_COPY on
+// every slot. Two memories alternated, new values each call: the results follow the memory.
+TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
+    for (const bool unplanned : {false, true}) {
+        SCOPED_TRACE(unplanned ? "unplanned" : "planned");
+        Model model = model_record(
+            ANIRA_ENGINE_EXECUTORCH,
+            std::string(
+                ANIRA_EXTRAS_MODELS_DIR
+                "/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_int16") +
+                (unplanned ? "_unplanned.pte" : ".pte"),
+            {{1, 1, 512}, {1}},
+            {{1, 1, 512}, {1}},
+            1);
+        for (auto* side : {&model.m_inputs, &model.m_outputs}) {
+            for (anira::engine::TensorInfo& tensor : *side) { tensor.m_dtype = ANIRA_DTYPE_I16; }
+        }
+        const std::shared_ptr<Rig> adapter = executorch_adapter();
+        adapter->prepare(model);
+        ASSERT_TRUE(adapter->prepared());
+        const anira_edge_class edge = unplanned ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY;
+        for (const bool is_input : {true, false}) {
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                EXPECT_EQ(adapter->loaded().slot_edge(is_input, slot).m_class, edge);
+            }
+        }
+        struct Memory {
+            std::vector<int16_t> m_data = std::vector<int16_t>(512);
+            std::array<int16_t, 1> m_gain{2};
+            std::vector<int16_t> m_out = std::vector<int16_t>(512);
+            std::array<int16_t, 1> m_peak{};
+        };
+        std::array<Memory, 2> memories;
+        const std::array<int64_t, 3> block{1, 1, 512};
+        const std::array<int64_t, 1> scalar{1};
+        for (int call = 0; call < 4; ++call) {
+            Memory& memory = memories.at(static_cast<size_t>(call % 2));
+            const int scale = call + 1;
+            for (size_t n = 0; n < 512; ++n) {
+                memory.m_data[n] = static_cast<int16_t>(scale * (static_cast<int>(n % 17) - 8));
+            }
+            std::ranges::fill(memory.m_out, int16_t{0x5a5a});
+            std::vector<anira_tensor> inputs(2);
+            std::vector<anira_tensor> outputs(2);
+            anira_tensor_init_host(&inputs[0],
+                                   memory.m_data.data(),
+                                   ANIRA_DTYPE_I16,
+                                   3,
+                                   block.data());
+            anira_tensor_init_host(&inputs[1],
+                                   memory.m_gain.data(),
+                                   ANIRA_DTYPE_I16,
+                                   1,
+                                   scalar.data());
+            anira_tensor_init_host(&outputs[0],
+                                   memory.m_out.data(),
+                                   ANIRA_DTYPE_I16,
+                                   3,
+                                   block.data());
+            anira_tensor_init_host(&outputs[1],
+                                   memory.m_peak.data(),
+                                   ANIRA_DTYPE_I16,
+                                   1,
+                                   scalar.data());
+            const uint64_t copies_in = adapter->executor().copies_in();
+            const uint64_t copies_out = adapter->executor().copies_out();
+            ASSERT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_OK);
+            const uint64_t copies = unplanned ? 0U : 2U;
+            EXPECT_EQ(adapter->executor().copies_in() - copies_in, copies);
+            EXPECT_EQ(adapter->executor().copies_out() - copies_out, copies);
+            for (size_t n = 0; n < 512; ++n) {
+                ASSERT_EQ(memory.m_out[n], 2 * memory.m_data[n])
+                    << "call " << call << " sample " << n;
+            }
+            EXPECT_EQ(memory.m_peak[0], 16 * scale);
+        }
+    }
+}
 
 // A .pte supplied as bytes loads through the BufferDataLoader branch and runs the same named
 // method as the same program supplied as a path. "gain2" multiplies by two, so the output

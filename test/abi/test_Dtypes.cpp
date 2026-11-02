@@ -504,6 +504,9 @@ std::vector<anira_engine> typed_engines() {
 #ifdef USE_TFLITE
     engines.push_back(ANIRA_ENGINE_TFLITE);
 #endif
+#ifdef USE_EXECUTORCH
+    engines.push_back(ANIRA_ENGINE_EXECUTORCH);
+#endif
     return engines;
 }
 
@@ -649,6 +652,52 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
         }
     }
 }
+
+#ifdef USE_EXECUTORCH
+// The TypedGainNetwork ExecuTorch exports whose inputs and outputs the memory plan leaves to
+// the caller (a static 512-sample window), at int16, int8 and float16, through the Hard
+// entries: the report says every slot is bound in place, and the stream comes out doubled and
+// the peak 16, exactly, as the planned exports do above.
+TEST(AbiDtypes, TheUnplannedExecuTorchFixturesAreBoundInPlace) {
+    const anira_test::Context context(2);
+    const std::array<std::pair<const char*, anira_dtype>, 3> sets{{
+        {k_typed_gain_int16_unplanned_model_json, ANIRA_DTYPE_I16},
+        {k_typed_gain_int8_unplanned_model_json, ANIRA_DTYPE_I8},
+        {k_typed_gain_float16_unplanned_model_json, ANIRA_DTYPE_F16},
+    }};
+    const std::vector<anira_backend_id> candidates = one_engine(ANIRA_ENGINE_EXECUTORCH);
+    for (const auto& [model_json, dtype] : sets) {
+        SCOPED_TRACE(anira::capi::dtype_word(dtype));
+        const ModelConfig model = ModelConfig::from_file(model_json);
+        anira_test::Handler handler(context, model, candidates);
+        ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_block)),
+                  ANIRA_OK)
+            << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        for (const bool inputs : {true, false}) {
+            EXPECT_EQ(slot_row(h, inputs).edge_class, ANIRA_EDGE_ZERO_COPY);
+        }
+        const std::array<int64_t, 1> scalar{1};
+        std::array<std::byte, 8> gain{};
+        store_value(gain.data(), dtype, 2.0F);
+        const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
+        ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
+        const std::vector<float> out = run_values(h, dtype, gain_sample);
+        const size_t latency = anira_handler_get_latency(h, 0);
+        for (size_t n = 0; n < out.size(); ++n) {
+            const float want =
+                n < latency ? 0.0F
+                            : 2.0F * gain_sample((n - latency) / k_block, (n - latency) % k_block);
+            ASSERT_EQ(out[n], want) << "sample " << n;
+        }
+        std::array<std::byte, 8> peak{};
+        const Tensor peak_out = Tensor::from_host(peak.data(), dtype, scalar);
+        ASSERT_EQ(anira_handler_get_static_output(h, 1, &peak_out), ANIRA_OK);
+        EXPECT_EQ(load_value(peak.data(), dtype), 16.0F);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
+}
+#endif  // USE_EXECUTORCH
 
 // The fully integer TFLite model: its int8 input and output carry a scale and a zero point
 // (quantised I/O, which anira does not support), so the load refuses it with NOT_SUPPORTED
