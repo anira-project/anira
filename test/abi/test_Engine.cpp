@@ -1266,6 +1266,79 @@ TEST(AbiEngine, OneRowUnderThreeProvidersIsThreePlansAndThreeLoads) {
     EXPECT_EQ(gain.m_released, 1);
 }
 
+// The contract's edge cost at prepare, over one row on coreml and on the CPU path. The default
+// (ANIRA_EDGE_TRANSFER) keeps both plans. Under ANIRA_EDGE_DEVICE_COPY (no bytes between host and
+// device) the coreml plan, whose slots the engine moves to its device itself (TRANSFER), is
+// dropped once its model has loaded, with an Info record naming each slot, its class, its mover
+// and why; the CPU plan stays, alone in the report and selected, its model loaded once (the
+// session made again over it takes the pooled one), the dropped plan's loaded and unloaded and
+// never prepared; the stream runs on it. A contract no plan is within refuses with
+// ANIRA_ERROR_EDGE_UNREACHABLE naming the dropped plan's slots, the handler left unprepared.
+TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);  // the record's level
+    RecordCollector collector;
+    GainEngine gain;
+    gain.m_gain = 0.5F;
+    Pipe pipe;
+    const std::array<const char*, 2> served{"coreml", "cpu"};
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+        << pipe.m_err.message;
+    pipe.add_inference(
+        gain_model(),
+        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_CPU, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(plan_rows(handler).size(), 2U) << "the default admits every edge";
+
+    const int loaded = gain.m_loaded;
+    const int unloaded = gain.m_unloaded;
+    const int prepared = gain.m_prepared;
+    contract.edge_cost(ANIRA_EDGE_DEVICE_COPY);
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    const std::vector<anira_plan_info> plans = plan_rows(handler);
+    ASSERT_EQ(plans.size(), 1U);
+    EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+    EXPECT_EQ(anira_handler_get_plan(handler), 0U);
+    EXPECT_EQ(gain.m_loaded - loaded, 2) << "each plan's model loads once";
+    EXPECT_EQ(gain.m_unloaded - unloaded, 3) << "the previous session's two, the dropped one";
+    EXPECT_EQ(gain.m_prepared - prepared, 1) << "the dropped plan is never prepared";
+    EXPECT_EQ(gain.m_unload_before_unprepare, 0);
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    const std::string dropped = std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
+                                ":coreml is dropped, above the contract's edge cost (device_copy "
+                                "at most): input 0 'in': edge transfer, moved by the engine (";
+    EXPECT_TRUE(collector.has(dropped.c_str(), "native")) << dropped;
+    EXPECT_TRUE(collector.has("; output 0 'out': edge transfer, moved by the engine", "native"));
+#endif
+    ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2, gain.m_gain));
+    EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
+    anira_handler_destroy(handler);
+    pipe.destroy();
+
+    // Only the coreml plan: nothing is within the edge cost.
+    Pipe on_coreml;
+    ASSERT_EQ(on_coreml.add_new_engine(k_gain_id, gain_desc_serving(gain, served)), ANIRA_OK)
+        << on_coreml.m_err.message;
+    on_coreml.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+    ASSERT_EQ(on_coreml.create_handler(context, &handler), ANIRA_OK) << on_coreml.m_err.message;
+    contract.edge_cost(ANIRA_EDGE_HOST_COPY);
+    err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err),
+              ANIRA_ERROR_EDGE_UNREACHABLE);
+    const std::string refusal = std::string(
+                                    "no plan is within the contract's edge cost (host_copy "
+                                    "at most): models[0] on ") +
+                                k_gain_id + ":coreml: input 0 'in': edge transfer";
+    EXPECT_NE(std::strstr(err.message, refusal.c_str()), nullptr) << err.message;
+    EXPECT_EQ(anira_handler_plan_report(handler), nullptr) << "unprepared";
+    anira_handler_destroy(handler);
+    EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every model it loaded went back";
+}
+
 // ==== finding a plan ==========================================================================
 
 namespace {

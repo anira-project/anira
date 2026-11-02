@@ -742,16 +742,27 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
                                                                   anira_delivery delivery) ANIRA_NOEXCEPT;
 
 /**
- * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
+ * @brief The edge cost of the plans (section 7), plan validation, not scheduling: at
+ * anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is
+ * not eligible: it is dropped from the plans, under the default candidate set and named
+ * candidates alike, with an Info record of the group anira.capi naming each such slot,
+ * its class, who moves its bytes and why; the report and the plan indices hold the
+ * eligible plans alone. The edge is the plan engine's (anira_plan_slot.edge_class),
+ * known once its model has loaded.
  * @param contract Either contract kind.
- * @param cost PERMISSIVE (default) or STRICT.
- * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value.
+ * @param worst_allowed The worst class a plan may take for any of its slots:
+ *        ANIRA_EDGE_TRANSFER (the default) admits every edge,
+ *        ANIRA_EDGE_DEVICE_COPY no bytes crossing between host and device,
+ *        ANIRA_EDGE_HOST_COPY no device memory either, ANIRA_EDGE_ZERO_COPY no
+ *        copy at all.
+ * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
+ *         anira_edge_class does not name.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
  */
 ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
-                                                               anira_edge_cost cost) ANIRA_NOEXCEPT;
+                                                               anira_edge_class worst_allowed) ANIRA_NOEXCEPT;
 
 /**
  * @brief The host-end domain of one tensor, common to both contract kinds like
@@ -1794,7 +1805,9 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
  * ANIRA_ERROR_JSON. A version 2 document yields its legacy Hard contract directly
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
- *        edge_cost and an optional top-level host_domains ({"<name>": "<domain word>"},
+ *        edge_cost (the worst edge class allowed, by its word: "zero_copy", "host_copy",
+ *        "device_copy" or "transfer"; anira_contract_set_edge_cost) and an optional
+ *        top-level host_domains ({"<name>": "<domain word>"},
  *        anira_contract_set_host_domain), or a v2 document.
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
@@ -2263,15 +2276,16 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contra
                                                               uint32_t* samples) ANIRA_NOEXCEPT;
 
 /**
- * @brief The edge cost policy anira_contract_set_edge_cost stored.
+ * @brief The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
+ * take.
  * @param contract Either contract kind.
- * @return The policy; ANIRA_EDGE_COST_PERMISSIVE, the default, for NULL.
+ * @return The class; ANIRA_EDGE_TRANSFER, the default, for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
-ANIRA_API anira_edge_cost ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
-                                                              ANIRA_NOEXCEPT;
+ANIRA_API anira_edge_class ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
+                                                               ANIRA_NOEXCEPT;
 
 /**
  * @brief The pool size and the wait strategy as anira_context_config_set_threads (or a context

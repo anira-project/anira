@@ -1240,6 +1240,72 @@ TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
     }
 }
 
+// The contract's edge cost over the built-in engines of the build on the CPU path (the gain
+// files): under ANIRA_EDGE_HOST_COPY every plan stays (none moves bytes off the host); under
+// ANIRA_EDGE_ZERO_COPY a plan whose engine copies a slot (gain_edge: LibTorch's outputs, the
+// memory-planned ExecuTorch export) leaves the table and every other one stays, in candidate
+// order, each slot zero-copy and moved by nobody. A build whose engines all copy has no plan
+// left: ANIRA_ERROR_EDGE_UNREACHABLE, the message naming the threshold.
+TEST(AbiPrepare, TheEdgeCostKeepsThePlansWithinIt) {
+    const Context context;
+    const ModelConfig model = gain_with_custom(false);
+    const std::vector<anira_backend_id> candidates = anira_test::engine_candidates();
+    std::vector<uint32_t> bound;  // the engines whose gain plans copy no slot
+    for (const anira_backend_id& candidate : candidates) {
+        if (anira_test::gain_edge(candidate.engine, true).m_class == ANIRA_EDGE_ZERO_COPY &&
+            anira_test::gain_edge(candidate.engine, false).m_class == ANIRA_EDGE_ZERO_COPY) {
+            bound.push_back(candidate.engine);
+        }
+    }
+    const auto plan_engines = [](const anira_handler* h) {
+        const anira_plan_report* report = anira_handler_plan_report(h);
+        std::vector<anira_plan_info> plans(anira_plan_report_num_plans(report));
+        auto count = static_cast<uint32_t>(plans.size());
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, plans.data()),
+                  ANIRA_OK);
+        std::vector<uint32_t> engines;
+        engines.reserve(plans.size());
+        for (const anira_plan_info& plan : plans) { engines.push_back(plan.engine); }
+        return engines;
+    };
+    Handler handler(context, model, candidates);
+    ContractHandle contract = explicit_contract();
+    contract.edge_cost(ANIRA_EDGE_HOST_COPY);
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(plan_engines(handler.m_handler).size(), candidates.size());
+
+    contract.edge_cost(ANIRA_EDGE_ZERO_COPY);
+    const anira_status status = handler.prepare(contract);
+    if (bound.empty()) {
+        EXPECT_EQ(status, ANIRA_ERROR_EDGE_UNREACHABLE);
+        EXPECT_NE(std::strstr(handler.m_err.message,
+                              "no plan is within the contract's edge cost (zero_copy at most)"),
+                  nullptr)
+            << handler.m_err.message;
+        return;
+    }
+    ASSERT_EQ(status, ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(plan_engines(handler.m_handler), bound);
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    for (uint32_t plan = 0; plan < bound.size(); ++plan) {
+        for (const uint32_t inputs : {1U, 0U}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              plan,
+                                              inputs,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            for (uint32_t slot = 0; slot < count; ++slot) {
+                EXPECT_EQ(rows.at(slot).edge_class, ANIRA_EDGE_ZERO_COPY);
+                EXPECT_EQ(rows.at(slot).moved_by, ANIRA_MOVER_NONE);
+            }
+        }
+    }
+}
+
 TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {
     const Context context;  // ANIRA_LOG_ERROR
     RecordCollector collector;

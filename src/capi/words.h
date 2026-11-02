@@ -5,6 +5,7 @@
  * custom provider's name in the engine's own vocabulary. The built-in engines: the "engine"
  * word of a model entry, the adapters' message prefix and every message that names one. The
  * domains: the "host_domains" words of a contract file and the plan report's log lines. The
+ * edge classes: the "edge_cost" word of a contract file and the plan report's log lines. The
  * phases: how every message about a slot names its phase. The labels (engine_label,
  * provider_label, backend_label) are the one spelling of a value or a custom name in a
  * message.
@@ -198,9 +199,43 @@ inline std::string backend_label(anira_engine engine,
     return label;
 }
 
-/// The words of anira_phase, the lower-case names of its values: how every message anira writes
-/// about a slot names the phase (a processor phase that fails or that an accessor refuses, a
-/// refused init, load or prepare of a processor or an engine, a failed engine call).
+/// The words of the edge classes, ordered by cost as the enum is: the "edge_cost" word of a
+/// contract file (the worst class a plan may take), the plan report's log lines, and the
+/// messages about a plan dropped for its edges.
+inline constexpr std::array<std::pair<const char*, anira_edge_class>, 4> k_edge_class_words{{
+    {"zero_copy", ANIRA_EDGE_ZERO_COPY},
+    {"host_copy", ANIRA_EDGE_HOST_COPY},
+    {"device_copy", ANIRA_EDGE_DEVICE_COPY},
+    {"transfer", ANIRA_EDGE_TRANSFER},
+}};
+
+/// The word of an edge class; "unknown" for a value the enum does not name.
+inline constexpr const char* edge_class_word(anira_edge_class edge_class) noexcept {
+    for (const auto& [name, value] : k_edge_class_words) {
+        if (value == edge_class) { return name; }
+    }
+    return "unknown";
+}
+
+/// Whether a value is an edge class the enum names.
+inline constexpr bool known_edge_class(anira_edge_class edge_class) noexcept {
+    for (const auto& [name, value] : k_edge_class_words) {
+        if (value == edge_class) { return true; }
+    }
+    return false;
+}
+
+/// Who moves an edge's bytes, as the plan report's log lines and the messages about a dropped
+/// plan say it ("moved by the engine"); "unknown" for a value anira_mover does not name.
+inline constexpr const char* mover_word(anira_mover mover) noexcept {
+    switch (mover) {
+        case ANIRA_MOVER_NONE: return "none";
+        case ANIRA_MOVER_ANIRA: return "anira";
+        case ANIRA_MOVER_ENGINE: return "the engine";
+        default: return "unknown";
+    }
+}
+
 /// The ten dtypes anira names (each has an ANIRA_DTYPE_* constant and a ring arm): the "dtype"
 /// and "ring_dtypes" words of a model and a contract file, and how every message names one.
 inline constexpr std::array<std::pair<const char*, anira_dtype>, 10> k_dtype_words{{
@@ -244,6 +279,9 @@ inline std::string dtype_label(anira_dtype dtype) {
     return text;
 }
 
+/// The words of anira_phase, the lower-case names of its values: how every message anira writes
+/// about a slot names the phase (a processor phase that fails or that an accessor refuses, a
+/// refused init, load or prepare of a processor or an engine, a failed engine call).
 inline constexpr std::array<std::pair<const char*, anira_phase>, 13> k_phase_words{{
     {"pre_process", ANIRA_PHASE_PRE_PROCESS},
     {"post_process", ANIRA_PHASE_POST_PROCESS},

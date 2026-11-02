@@ -659,28 +659,30 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at
  * anira_handler_create), runs the processor's init when it has not run yet (once per
  * registration, before any model loads), loads the model of every candidate with an
- * entry, warms up as the contract says, sizes the rings for the contract's block range
- * and the latency, builds the plan report, selects the plan of the variant's default
- * engine when that engine has a plan (else plan 0), logs the report (Info records of the
- * group anira.capi: the counts and the selected plan, then one record per plan, per slot
- * and per consumed extension) re-arms the real-time latches, logging the count of
- * failures suppressed since the last prepare or reset, and last calls the processor's
- * prepare function, when the pipeline has a processor with one, with an
- * anira_prepare_info (the handler, the report, the entry count, a template of the model
- * end of every slot and the canonical names) and keeps the prepared pointer it hands
- * back for this handler (a status other than ANIRA_OK fails this call with it, and
- * unprepare is not called for a refused prepare). A second prepare replaces the previous
- * session whole: the processor's unprepare of the previous prepare runs once the old
- * session is released, before the new prepare. A failed prepare leaves the handler
- * unprepared, the previous prepare's unprepare called all the same. Refused in this
- * pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE
- * (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up),
- * ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel
- * count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a
- * function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed
- * tensor, or one that differs from its spec's dtype while the processor does not fill
- * the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a processor
- * whose filled pre_process, post_process or reset carries no
+ * entry, warms up as the contract says, drops every plan with a slot whose edge is above
+ * the contract's edge cost (anira_contract_set_edge_cost; an Info record per dropped
+ * plan names the slots, their class, mover and reason), sizes the rings for the
+ * contract's block range and the latency, builds the plan report, selects the plan of
+ * the variant's default engine when that engine has a plan (else plan 0), logs the
+ * report (Info records of the group anira.capi: the counts and the selected plan, then
+ * one record per plan, per slot and per consumed extension) re-arms the real-time
+ * latches, logging the count of failures suppressed since the last prepare or reset, and
+ * last calls the processor's prepare function, when the pipeline has a processor with
+ * one, with an anira_prepare_info (the handler, the report, the entry count, a template
+ * of the model end of every slot and the canonical names) and keeps the prepared pointer
+ * it hands back for this handler (a status other than ANIRA_OK fails this call with it,
+ * and unprepare is not called for a refused prepare). A second prepare replaces the
+ * previous session whole: the processor's unprepare of the previous prepare runs once
+ * the old session is released, before the new prepare. A failed prepare leaves the
+ * handler unprepared, the previous prepare's unprepare called all the same. Refused in
+ * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+ * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED
+ * or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed
+ * output's channel count or ring dtype differs from the anchored input's,
+ * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype
+ * that names no Streamed tensor, or one that differs from its spec's dtype while the
+ * processor does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the
+ * field), and a processor whose filled pre_process, post_process or reset carries no
  * ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those
  * three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag).
  * @param handler The handler.
@@ -693,10 +695,12 @@ ANIRA_API void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NO
  *         contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or
  *         ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
  *         spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
- *         ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
- *         processor's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
- *         streams through the handler (WebAssembly: its render callback may be inside a process
- *         call; re-prepare through anira_em_audio_node_prepare).
+ *         ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load;
+ *         ANIRA_ERROR_EDGE_UNREACHABLE when no plan is within the contract's edge cost, every
+ *         dropped plan's slots named in the message; the status a processor's prepare function
+ *         returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler
+ *         (WebAssembly: its render callback may be inside a process call; re-prepare through
+ *         anira_em_audio_node_prepare).
  * @par Thread contract
  * [main-thread & !processing]
  * @since ABI 0.2

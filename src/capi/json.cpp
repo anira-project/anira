@@ -195,10 +195,6 @@ const std::array<std::pair<const char*, anira_delivery>, 2> k_deliveries{{
     {"polled", ANIRA_DELIVERY_POLLED},
     {"immediate", ANIRA_DELIVERY_IMMEDIATE},
 }};
-const std::array<std::pair<const char*, anira_edge_cost>, 2> k_edge_costs{{
-    {"permissive", ANIRA_EDGE_COST_PERMISSIVE},
-    {"strict", ANIRA_EDGE_COST_STRICT},
-}};
 const std::array<std::pair<const char*, anira_gl_threads>, 2> k_gl_threads{{
     {"caller_thread", ANIRA_GL_CALLER_THREAD},
     {"shared_context", ANIRA_GL_SHARED_CONTEXT},
@@ -869,7 +865,7 @@ void load_contract_v3(const Json& root, anira_contract& contract) {
             load_async_v3(value, key, async_part);
             contract.m_kind = async_part;
         } else if (key == "edge_cost") {
-            contract.m_edge_cost = vocabulary(value, key, k_edge_costs);
+            contract.m_edge_cost = vocabulary(value, key, anira::capi::k_edge_class_words);
         } else if (key == "host_domains") {
             // Common to both kinds, like edge_cost: the declared host-end domain per tensor.
             require_object(value, key);

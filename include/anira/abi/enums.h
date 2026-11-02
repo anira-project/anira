@@ -422,15 +422,6 @@ typedef enum anira_delivery {
 } anira_delivery;
 
 /**
- * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
- */
-typedef enum anira_edge_cost {
-    ANIRA_EDGE_COST_PERMISSIVE = 0,  /**< Any available edge (default). */
-    ANIRA_EDGE_COST_STRICT = 1,  /**< Zero-copy edges only. */
-    ANIRA_EDGE_COST_FORCE32 = 0x7fffffff
-} anira_edge_cost;
-
-/**
  * @brief timeout_ms sentinel of the _wait twins: wait without limit (the v2 set_non_realtime
  * behaviour).
  */

@@ -64,9 +64,6 @@ bool valid_priority(anira_priority priority) {
 bool valid_delivery(anira_delivery delivery) {
     return delivery == ANIRA_DELIVERY_POLLED || delivery == ANIRA_DELIVERY_IMMEDIATE;
 }
-bool valid_edge_cost(anira_edge_cost cost) {
-    return cost == ANIRA_EDGE_COST_PERMISSIVE || cost == ANIRA_EDGE_COST_STRICT;
-}
 bool valid_domain(anira_domain domain) {
     return domain >= ANIRA_DOMAIN_HOST && domain <= ANIRA_DOMAIN_FRAME;
 }
@@ -478,9 +475,12 @@ anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract* contract
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* contract,
-                                                     anira_edge_cost cost) ANIRA_NOEXCEPT try {
-    if (contract == nullptr || !valid_edge_cost(cost)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    contract->m_edge_cost = cost;
+                                                     anira_edge_class worst_allowed) ANIRA_NOEXCEPT
+    try {
+    if (contract == nullptr || !anira::capi::known_edge_class(worst_allowed)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    contract->m_edge_cost = worst_allowed;
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
@@ -1482,8 +1482,9 @@ anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contract* contra
     return ANIRA_OK;
 } catch (...) { return translate_exception(nullptr, __func__); }
 
-anira_edge_cost ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract) ANIRA_NOEXCEPT {
-    return contract == nullptr ? ANIRA_EDGE_COST_PERMISSIVE : contract->m_edge_cost;
+anira_edge_class ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
+    ANIRA_NOEXCEPT {
+    return contract == nullptr ? ANIRA_EDGE_TRANSFER : contract->m_edge_cost;
 }
 
 // ---- context config ----

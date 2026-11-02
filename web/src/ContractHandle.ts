@@ -40,6 +40,13 @@ export type HardContractOptions = {
    * float32: a model of another dtype behind one names `ANIRA_DTYPE_F32` here.
    */
   ringDtypes?: Record<string, number>
+  /**
+   * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
+   * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
+   * it. Default `ANIRA_EDGE_TRANSFER`, which admits every edge; `ANIRA_EDGE_ZERO_COPY` admits
+   * no copy at all.
+   */
+  edgeCost?: number
 }
 
 /**
@@ -109,6 +116,7 @@ export class ContractHandle {
       for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
         contract.hardRingDtype(canonical, dtype)
       }
+      if (options.edgeCost !== undefined) contract.edgeCost(options.edgeCost)
     } catch (error) {
       contract.destroy()
       throw error
@@ -142,6 +150,17 @@ export class ContractHandle {
    */
   hardRingDtype(canonical: string, dtype: number): this {
     this.abi.anira_contract_hard_set_ring_dtype(this.contract, canonical, dtype)
+    return this
+  }
+
+  /**
+   * The worst edge class a plan may take for any slot, on either contract kind
+   * (`anira_contract_set_edge_cost`, `anira::ContractHandle::edge_cost`; an `anira_edge_class`
+   * value): prepare drops a plan with a slot above it, and refuses with
+   * `ANIRA_ERROR_EDGE_UNREACHABLE` when no plan remains.
+   */
+  edgeCost(worstAllowed: number): this {
+    this.abi.anira_contract_set_edge_cost(this.contract, worstAllowed)
     return this
   }
 

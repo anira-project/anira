@@ -633,7 +633,7 @@ int anira_header_cxx20_probe() {
                             .wait_ratio = 0.5,
                             .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
                             .latencies = {{"audio_out", 4096}},
-                            .edge_cost = ANIRA_EDGE_COST_STRICT};
+                            .edge_cost = ANIRA_EDGE_ZERO_COPY};
     const anira::Async async{.deadline = std::chrono::milliseconds(20), .on_late = ANIRA_LATE_DROP};
     const anira::Contract contract = hard;
     const anira::JobOptions options{.head_trim = {0, 0}, .tail_flush = false};

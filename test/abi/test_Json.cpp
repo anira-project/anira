@@ -484,7 +484,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_host_rate, 48000.0);
     EXPECT_EQ(hard->hard()->m_budget, ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
-    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
+    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_TRANSFER);
     anira_contract_destroy(hard);
 
     anira_contract* async_contract = nullptr;
@@ -497,7 +497,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(anira_contract_get_kind(async_contract), ANIRA_CONTRACT_ASYNC);
     EXPECT_DOUBLE_EQ(async_contract->asynchronous()->m_deadline_ms, 33.3);
     EXPECT_EQ(async_contract->asynchronous()->m_on_late, ANIRA_LATE_DROP);
-    EXPECT_EQ(async_contract->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(async_contract->m_edge_cost, ANIRA_EDGE_ZERO_COPY);
     anira_contract_destroy(async_contract);
 
     const char* explicit_text =
@@ -693,7 +693,9 @@ TEST(AbiJsonContract, FractionalHostBlocks) {
 TEST(AbiJsonContract, Rejections) {
     const std::vector<std::pair<const char*, const char*>> cases = {
         {R"({"hard": {}, "async": {}})", "exactly one root"},
-        {R"({"edge_cost": "strict"})", "exactly one root"},
+        {R"({"edge_cost": "zero_copy"})", "exactly one root"},
+        {R"({"hard": {}, "edge_cost": "strict"})",
+         R"("strict" is not one of "zero_copy", "host_copy", "device_copy", "transfer")"},
         {R"({"hard": {"budget": "guess"}})", "hard.budget"},
         {R"({"hard": {"warmup": {"fixed": -1}}})", "hard.warmup.fixed"},
         {R"({"hard": {"host_block_min": 9, "host_block_max": 1}})",

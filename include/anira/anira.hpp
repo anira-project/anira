@@ -962,7 +962,11 @@ struct Hard {
     /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
+    /// contract file's "edge_cost"): prepare drops a plan above it. ANIRA_EDGE_TRANSFER, the
+    /// default, admits every edge; ANIRA_EDGE_DEVICE_COPY no host-device traffic,
+    /// ANIRA_EDGE_HOST_COPY no copy in device memory either, ANIRA_EDGE_ZERO_COPY no copy.
+    anira_edge_class edge_cost = ANIRA_EDGE_TRANSFER;
 };
 
 /// Jobs without a real-time deadline: the offline posture.
@@ -973,7 +977,8 @@ struct Async {
     uint32_t lanes = 0;
     uint32_t max_in_flight = 0;
     anira_delivery delivery = ANIRA_DELIVERY_POLLED;
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot, as Hard::edge_cost.
+    anira_edge_class edge_cost = ANIRA_EDGE_TRANSFER;
 };
 
 using Contract = std::variant<Hard, Async>;
@@ -1219,8 +1224,10 @@ public:
                       "anira_contract_async_set_policy");
         return *this;
     }
-    ContractHandle& edge_cost(anira_edge_cost cost) {
-        detail::check(anira_contract_set_edge_cost(m_contract, cost),
+    /// The worst edge class a plan may take for any slot, on either contract kind
+    /// (anira_contract_set_edge_cost, Hard::edge_cost): prepare drops a plan above it.
+    ContractHandle& edge_cost(anira_edge_class worst_allowed) {
+        detail::check(anira_contract_set_edge_cost(m_contract, worst_allowed),
                       "anira_contract_set_edge_cost");
         return *this;
     }

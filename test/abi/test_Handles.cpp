@@ -916,8 +916,8 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
                                               0,
                                               ANIRA_DELIVERY_POLLED),
               ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_contract_set_edge_cost(async_contract, ANIRA_EDGE_COST_STRICT), ANIRA_OK);
-    EXPECT_EQ(anira_contract_set_edge_cost(hard, bad_enum<anira_edge_cost>(2)),
+    EXPECT_EQ(anira_contract_set_edge_cost(async_contract, ANIRA_EDGE_ZERO_COPY), ANIRA_OK);
+    EXPECT_EQ(anira_contract_set_edge_cost(hard, bad_enum<anira_edge_class>(4)),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_contract_create_hard(2, 1, 48000.0, &hard, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "host_block_min"), nullptr);

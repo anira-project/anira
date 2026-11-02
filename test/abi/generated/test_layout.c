@@ -61,8 +61,6 @@ _Static_assert(sizeof(anira_priority) == 4, "anira_priority is a 32-bit enum");
 _Static_assert(ANIRA_PRIORITY_FORCE32 == 0x7fffffff, "anira_priority terminator");
 _Static_assert(sizeof(anira_delivery) == 4, "anira_delivery is a 32-bit enum");
 _Static_assert(ANIRA_DELIVERY_FORCE32 == 0x7fffffff, "anira_delivery terminator");
-_Static_assert(sizeof(anira_edge_cost) == 4, "anira_edge_cost is a 32-bit enum");
-_Static_assert(ANIRA_EDGE_COST_FORCE32 == 0x7fffffff, "anira_edge_cost terminator");
 _Static_assert(sizeof(anira_ownership) == 4, "anira_ownership is a 32-bit enum");
 _Static_assert(ANIRA_OWNERSHIP_FORCE32 == 0x7fffffff, "anira_ownership terminator");
 _Static_assert(sizeof(anira_exec_policy) == 4, "anira_exec_policy is a 32-bit enum");

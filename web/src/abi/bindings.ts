@@ -1602,19 +1602,28 @@ export class AniraBindings {
   }
 
   /**
-   * Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
+   * The edge cost of the plans (section 7), plan validation, not scheduling: at
+   * anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is
+   * not eligible: it is dropped from the plans, under the default candidate set and named
+   * candidates alike, with an Info record of the group anira.capi naming each such slot,
+   * its class, who moves its bytes and why; the report and the plan indices hold the
+   * eligible plans alone. The edge is the plan engine's (anira_plan_slot.edge_class),
+   * known once its model has loaded.
    *
    * @param contract Either contract kind.
-   * @param cost PERMISSIVE (default) or STRICT.
-   * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value. A failed
-   *   status throws an AniraError.
+   * @param worst_allowed The worst class a plan may take for any of its slots:
+   *   ANIRA_EDGE_TRANSFER (the default) admits every edge, ANIRA_EDGE_DEVICE_COPY no bytes
+   *   crossing between host and device, ANIRA_EDGE_HOST_COPY no device memory either,
+   *   ANIRA_EDGE_ZERO_COPY no copy at all.
+   * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
+   *   anira_edge_class does not name. A failed status throws an AniraError.
    * Thread: [main-thread]
    */
-  anira_contract_set_edge_cost(contract: number, cost: number): number {
+  anira_contract_set_edge_cost(contract: number, worst_allowed: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_contract_set_edge_cost(contract, cost),
+      m._anira_contract_set_edge_cost(contract, worst_allowed),
       'anira_contract_set_edge_cost'
     )
   }
@@ -3289,8 +3298,10 @@ export class AniraBindings {
    * (ANIRA_SUCCESS_UPGRADED).
    *
    * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional
-   *   top-level edge_cost and an optional top-level host_domains ({"<name>": "<domain
-   *   word>"}, anira_contract_set_host_domain), or a v2 document.
+   *   top-level edge_cost (the worst edge class allowed, by its word: "zero_copy",
+   *   "host_copy", "device_copy" or "transfer"; anira_contract_set_edge_cost) and an
+   *   optional top-level host_domains ({"<name>": "<domain word>"},
+   *   anira_contract_set_host_domain), or a v2 document.
    * @returns What the entry writes to out. A failed status throws an AniraError with the
    *   entry's message.
    * Thread: [main-thread]
@@ -4004,10 +4015,11 @@ export class AniraBindings {
   }
 
   /**
-   * The edge cost policy anira_contract_set_edge_cost stored.
+   * The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
+   * take.
    *
    * @param contract Either contract kind.
-   * @returns The policy; ANIRA_EDGE_COST_PERMISSIVE, the default, for NULL.
+   * @returns The class; ANIRA_EDGE_TRANSFER, the default, for NULL.
    * Thread: [main-thread]
    */
   anira_contract_edge_cost(contract: number): number {
@@ -5573,22 +5585,24 @@ export class AniraBindings {
    * anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as
    * at anira_handler_create), runs the processor's init when it has not run yet (once per
    * registration, before any model loads), loads the model of every candidate with an
-   * entry, warms up as the contract says, sizes the rings for the contract's block range
-   * and the latency, builds the plan report, selects the plan of the variant's default
-   * engine when that engine has a plan (else plan 0), logs the report (Info records of
-   * the group anira.capi: the counts and the selected plan, then one record per plan, per
-   * slot and per consumed extension) re-arms the real-time latches, logging the count of
-   * failures suppressed since the last prepare or reset, and last calls the processor's
-   * prepare function, when the pipeline has a processor with one, with an
-   * anira_prepare_info (the handler, the report, the entry count, a template of the model
-   * end of every slot and the canonical names) and keeps the prepared pointer it hands
-   * back for this handler (a status other than ANIRA_OK fails this call with it, and
-   * unprepare is not called for a refused prepare). A second prepare replaces the
-   * previous session whole: the processor's unprepare of the previous prepare runs once
-   * the old session is released, before the new prepare. A failed prepare leaves the
-   * handler unprepared, the previous prepare's unprepare called all the same. Refused in
-   * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
-   * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and
+   * entry, warms up as the contract says, drops every plan with a slot whose edge is
+   * above the contract's edge cost (anira_contract_set_edge_cost; an Info record per
+   * dropped plan names the slots, their class, mover and reason), sizes the rings for the
+   * contract's block range and the latency, builds the plan report, selects the plan of
+   * the variant's default engine when that engine has a plan (else plan 0), logs the
+   * report (Info records of the group anira.capi: the counts and the selected plan, then
+   * one record per plan, per slot and per consumed extension) re-arms the real-time
+   * latches, logging the count of failures suppressed since the last prepare or reset,
+   * and last calls the processor's prepare function, when the pipeline has a processor
+   * with one, with an anira_prepare_info (the handler, the report, the entry count, a
+   * template of the model end of every slot and the canonical names) and keeps the
+   * prepared pointer it hands back for this handler (a status other than ANIRA_OK fails
+   * this call with it, and unprepare is not called for a refused prepare). A second
+   * prepare replaces the previous session whole: the processor's unprepare of the
+   * previous prepare runs once the old session is released, before the new prepare. A
+   * failed prepare leaves the handler unprepared, the previous prepare's unprepare called
+   * all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED
+   * and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and
    * FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a
    * streamed output's channel count or ring dtype differs from the anchored input's,
    * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring
@@ -5608,11 +5622,13 @@ export class AniraBindings {
    *   contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or
    *   ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a
    *   spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE,
-   *   ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a
-   *   processor's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node
-   *   streams through the handler (WebAssembly: its render callback may be inside a process
-   *   call; re-prepare through anira_em_audio_node_prepare). A failed status throws an
-   *   AniraError with the entry's message.
+   *   ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load;
+   *   ANIRA_ERROR_EDGE_UNREACHABLE when no plan is within the contract's edge cost, every
+   *   dropped plan's slots named in the message; the status a processor's prepare function
+   *   returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler
+   *   (WebAssembly: its render callback may be inside a process call; re-prepare through
+   *   anira_em_audio_node_prepare). A failed status throws an AniraError with the entry's
+   *   message.
    * Thread: [main-thread & !processing]
    */
   anira_handler_prepare(handler: number, contract: number): number {

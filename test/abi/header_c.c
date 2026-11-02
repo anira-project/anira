@@ -341,7 +341,7 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_COST_PERMISSIVE ? 1 : 0;
+            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_TRANSFER ? 1 : 0;
             /* The declared stream latency: the setter, the count and the enumeration. */
             checks += anira_contract_hard_set_latency(NULL, "audio_out", 1024u) ==
                               ANIRA_ERROR_INVALID_ARGUMENT

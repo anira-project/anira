@@ -222,13 +222,6 @@ export const anira_delivery = {
 /** @internal */
 export type anira_delivery = (typeof anira_delivery)[keyof typeof anira_delivery]
 
-export const anira_edge_cost = {
-  ANIRA_EDGE_COST_PERMISSIVE: 0,
-  ANIRA_EDGE_COST_STRICT: 1,
-} as const
-/** @internal */
-export type anira_edge_cost = (typeof anira_edge_cost)[keyof typeof anira_edge_cost]
-
 export const anira_ownership = {
   ANIRA_OWNERSHIP_BORROWED: 0,
   ANIRA_OWNERSHIP_OWNED: 1,

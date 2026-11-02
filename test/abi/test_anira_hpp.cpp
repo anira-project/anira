@@ -384,7 +384,7 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
         .wait_ratio = 0.25,
         .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}},
         .latencies = {{"audio_out", 1024}},
-        .edge_cost = ANIRA_EDGE_COST_STRICT,
+        .edge_cost = ANIRA_EDGE_ZERO_COPY,
     };
     ContractHandle handle(hard);
     EXPECT_EQ(handle.kind(), ANIRA_CONTRACT_HARD);
@@ -401,7 +401,7 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_DOUBLE_EQ(minted.wait_ratio, 0.25);
     EXPECT_EQ(minted.ring_dtypes, hard.ring_dtypes);
     EXPECT_EQ(minted.latencies, hard.latencies);
-    EXPECT_EQ(minted.edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(minted.edge_cost, ANIRA_EDGE_ZERO_COPY);
 
     handle.hard_host_blocks(1, 512, 48000.0);
     const anira::Hard patched = handle.hard();
@@ -420,7 +420,7 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_DOUBLE_EQ(zero.wait_ratio, 0.0);
     EXPECT_TRUE(zero.ring_dtypes.empty());
     EXPECT_TRUE(zero.latencies.empty());
-    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_COST_PERMISSIVE);
+    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_TRANSFER);
 }
 
 TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
@@ -431,7 +431,7 @@ TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
         .lanes = 2,
         .max_in_flight = 4,
         .delivery = ANIRA_DELIVERY_IMMEDIATE,
-        .edge_cost = ANIRA_EDGE_COST_STRICT,
+        .edge_cost = ANIRA_EDGE_ZERO_COPY,
     };
     const ContractHandle handle(with_deadline);
     EXPECT_EQ(handle.kind(), ANIRA_CONTRACT_ASYNC);
@@ -443,7 +443,7 @@ TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {
     EXPECT_EQ(fields->m_lanes, 2u);
     EXPECT_EQ(fields->m_max_in_flight, 4u);
     EXPECT_EQ(fields->m_delivery, ANIRA_DELIVERY_IMMEDIATE);
-    EXPECT_EQ(handle.native()->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(handle.native()->m_edge_cost, ANIRA_EDGE_ZERO_COPY);
 
     const ContractHandle offline{anira::Async{}};
     EXPECT_EQ(offline.kind(), ANIRA_CONTRACT_ASYNC);
@@ -481,7 +481,7 @@ TEST(AbiCxx, ContractHandleFromJsonReportsAnUpgrade) {
     EXPECT_FALSE(asynchronous.upgraded());
     ASSERT_NE(asynchronous.native()->asynchronous(), nullptr);
     EXPECT_DOUBLE_EQ(asynchronous.native()->asynchronous()->m_deadline_ms, 33.3);
-    EXPECT_EQ(asynchronous.native()->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(asynchronous.native()->m_edge_cost, ANIRA_EDGE_ZERO_COPY);
 
     const ContractHandle legacy = ContractHandle::from_json(anira_test::k_simple_gain_v2);
     EXPECT_EQ(legacy.kind(), ANIRA_CONTRACT_HARD);
@@ -766,7 +766,7 @@ TEST(AbiCxx, ContractSettersPatchALoadedContract) {
         .hard_warmup(ANIRA_WARMUP_FIXED, 4)
         .hard_on_miss(ANIRA_MISS_ZEROS)
         .hard_wait_ratio(0.5)
-        .edge_cost(ANIRA_EDGE_COST_STRICT);
+        .edge_cost(ANIRA_EDGE_ZERO_COPY);
     const anira::capi::HardContract* fields = hard.native()->hard();
     ASSERT_NE(fields, nullptr);
     EXPECT_EQ(fields->m_budget, ANIRA_BUDGET_EXPLICIT);
@@ -775,7 +775,7 @@ TEST(AbiCxx, ContractSettersPatchALoadedContract) {
     EXPECT_EQ(fields->m_warmup_iterations, 4u);
     EXPECT_EQ(fields->m_on_miss, ANIRA_MISS_ZEROS);
     EXPECT_DOUBLE_EQ(fields->m_wait_ratio, 0.5);
-    EXPECT_EQ(hard.native()->m_edge_cost, ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(hard.native()->m_edge_cost, ANIRA_EDGE_ZERO_COPY);
     hard.hard_budget(ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(fields->m_budget, ANIRA_BUDGET_MEASURED);
 

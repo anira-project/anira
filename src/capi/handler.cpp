@@ -1073,6 +1073,15 @@ bool listless_engine(const anira_pipeline& pipeline, const anira::capi::ModelEnt
     });
 }
 
+// Keeps the validator's rows that still have a plan, after plans left its table.
+void keep_rows_with_plans(anira::capi::Derived& derived) {
+    std::erase_if(derived.m_rows, [&derived](size_t row) {
+        return std::ranges::none_of(derived.m_plans, [row](const anira::capi::PlanKey& key) {
+            return key.m_row == row;
+        });
+    });
+}
+
 // Whether every plan of the table runs on a provider its engine serves here, through the one
 // path of providers.h: a built-in engine's provider must be in the context's capabilities
 // (what its runtime reported at the last probe), a registered engine's in its descriptor's
@@ -1126,11 +1135,7 @@ void check_providers(const anira_context& context,
     const bool dropped = kept.size() != derived.m_plans.size();
     derived.m_plans = std::move(kept);
     if (!dropped) { return; }
-    std::erase_if(derived.m_rows, [&derived](size_t row) {
-        return std::ranges::none_of(derived.m_plans, [row](const anira::capi::PlanKey& key) {
-            return key.m_row == row;
-        });
-    });
+    keep_rows_with_plans(derived);
     if (derived.m_plans.empty()) {
         throw StatusError(ANIRA_ERROR_CONFIG,
                           "handler: none of the " + std::to_string(model.m_models.size()) +
@@ -1414,6 +1419,73 @@ anira_binding binding_of(const anira::SessionElement& session,
     return slot < side.size() ? side[slot] : ANIRA_BINDING_POSITION;
 }
 
+// The contract's edge cost (anira_contract_set_edge_cost) over the session's plans, whose
+// models have loaded: a plan with a slot whose edge (the plan engine's,
+// anira::engine::Loaded::slot_edge) is above the worst class allowed is not eligible. Each such
+// plan leaves the validator's table, under the default candidate set and named candidates
+// alike, with an Info record of the group anira.capi naming its slots above the threshold,
+// their class, who moves their bytes and why; when none remains, ANIRA_ERROR_EDGE_UNREACHABLE
+// names every one. True when a plan was dropped: the session still holds the table before the
+// drop, so the caller makes it again over the plans that remain.
+bool drop_plans_over_edge_cost(anira_handler& handler,
+                               const anira_model_config& model,
+                               anira_edge_class worst_allowed) {
+    if (worst_allowed == ANIRA_EDGE_TRANSFER) { return false; }  // every edge is within it
+    const anira::SessionElement& session = handler.m_manager->session();
+    std::vector<anira::capi::PlanKey>& plans = handler.m_derived.m_plans;
+    std::vector<anira::capi::PlanKey> kept;
+    std::string dropped;
+    for (size_t index = 0; index < plans.size(); ++index) {
+        std::string slots;
+        for (const bool is_input : {true, false}) {
+            const std::vector<anira_tensor_spec>& specs =
+                is_input ? model.m_inputs : model.m_outputs;
+            for (uint32_t slot = 0; slot < specs.size(); ++slot) {
+                const anira::engine::Loaded::SlotEdge edge =
+                    edge_of(session, index, is_input, slot);
+                if (edge.m_class <= worst_allowed) { continue; }
+                slots += slots.empty() ? "" : "; ";
+                slots += std::string(is_input ? "input " : "output ") + std::to_string(slot) +
+                         " '" + specs[slot].m_name + "': edge " +
+                         anira::capi::edge_class_word(edge.m_class) + ", moved by " +
+                         anira::capi::mover_word(edge.m_moved_by);
+                if (edge.m_reason != nullptr) { slots += std::string(" (") + edge.m_reason + ")"; }
+            }
+        }
+        if (slots.empty()) {
+            kept.push_back(std::move(plans[index]));
+            continue;
+        }
+        const anira::capi::PlanKey& key = plans[index];
+        const anira::capi::ModelEntry& row = model.m_models[key.m_row];
+        const std::string plan = "models[" + std::to_string(key.m_row) + "] on " +
+                                 anira::capi::backend_label(row.m_engine,
+                                                            row.m_engine_id,
+                                                            key.m_provider,
+                                                            key.m_provider_id);
+        ANIRA_LOG_INFO(anira::log_group::k_capi,
+                       "anira_handler_prepare: %s is dropped, above the contract's edge cost "
+                       "(%s at most): %s",
+                       plan.c_str(),
+                       anira::capi::edge_class_word(worst_allowed),
+                       slots.c_str());
+        dropped += dropped.empty() ? "" : "; ";
+        dropped += plan;
+        dropped += ": ";
+        dropped += slots;
+    }
+    if (dropped.empty()) { return false; }
+    if (kept.empty()) {
+        throw StatusError(ANIRA_ERROR_EDGE_UNREACHABLE,
+                          std::string("handler: no plan is within the contract's edge cost (") +
+                              anira::capi::edge_class_word(worst_allowed) +
+                              " at most): " + dropped);
+    }
+    plans = std::move(kept);
+    keep_rows_with_plans(handler.m_derived);
+    return true;
+}
+
 // The plan report: the plan rows, the slots of every plan (their binding read off the
 // session's loaded models, under the same dense index) and the extensions each plan's
 // candidate consumes (`consumers` are the pipeline's: its processor and its registered engines,
@@ -1481,27 +1553,8 @@ void build_report(anira_handler& handler,
 
 #ifdef ENABLE_LOGGING
 // The words of the plan report's log lines: the JSON vocabulary where one exists (the
-// engine, provider and domain words of words.h, a custom engine's or provider's own name), the
-// enumerator's own word else.
-const char* edge_class_word(uint32_t edge_class) {
-    switch (edge_class) {
-        case ANIRA_EDGE_ZERO_COPY: return "zero_copy";
-        case ANIRA_EDGE_HOST_COPY: return "host_copy";
-        case ANIRA_EDGE_DEVICE_COPY: return "device_copy";
-        case ANIRA_EDGE_TRANSFER: return "transfer";
-        default: return "unknown";
-    }
-}
-
-const char* mover_word(uint32_t mover) {
-    switch (mover) {
-        case ANIRA_MOVER_NONE: return "none";
-        case ANIRA_MOVER_ANIRA: return "anira";
-        case ANIRA_MOVER_ENGINE: return "the engine";
-        default: return "unknown";
-    }
-}
-
+// engine, provider, domain and edge class words of words.h, a custom engine's or provider's own
+// name), the enumerator's own word else.
 const char* wait_strategy_word(uint32_t wait) {
     return wait == ANIRA_WAIT_BLOCKING ? "blocking" : "spin_backoff";
 }
@@ -1524,25 +1577,26 @@ void log_slots(uint32_t plan,
                const char* side) {
     for (const anira_plan_slot& slot : slots) {
         const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
-        ANIRA_LOG_INFO(anira::log_group::k_capi,
-                       "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
-                       "%s), moved by %s, wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
-                       plan,
-                       side,
-                       slot.slot,
-                       name,
-                       anira::capi::domain_word(static_cast<anira_domain>(slot.domain_in)),
-                       anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
-                       edge_class_word(slot.edge_class),
-                       edge_class_word(slot.allocate_class),
-                       mover_word(slot.moved_by),
-                       wait_strategy_word(slot.wait_strategy),
-                       slot.recipe != nullptr ? slot.recipe : "none",
-                       anira::capi::dtype_word(slot.dtype),
-                       slot.ring_dtype != 0 ? anira::capi::dtype_word(slot.ring_dtype) : "none",
-                       binding_word(slot.binding),
-                       slot.reason != nullptr ? ", reason: " : "",
-                       slot.reason != nullptr ? slot.reason : "");
+        ANIRA_LOG_INFO(
+            anira::log_group::k_capi,
+            "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
+            "%s), moved by %s, wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
+            plan,
+            side,
+            slot.slot,
+            name,
+            anira::capi::domain_word(static_cast<anira_domain>(slot.domain_in)),
+            anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
+            anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.edge_class)),
+            anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.allocate_class)),
+            anira::capi::mover_word(static_cast<anira_mover>(slot.moved_by)),
+            wait_strategy_word(slot.wait_strategy),
+            slot.recipe != nullptr ? slot.recipe : "none",
+            anira::capi::dtype_word(slot.dtype),
+            slot.ring_dtype != 0 ? anira::capi::dtype_word(slot.ring_dtype) : "none",
+            binding_word(slot.binding),
+            slot.reason != nullptr ? ", reason: " : "",
+            slot.reason != nullptr ? slot.reason : "");
     }
 }
 #endif
@@ -1740,19 +1794,29 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     const anira_contract& prepared_contract = handler.m_contract;
     const anira::capi::HardContract& prepared_hard = *prepared_contract.hard();
     const anira::capi::Derived& prepared = handler.m_derived;
-    std::vector<anira::engine::PlanRequest> requests =
-        plan_requests(handler, prepared, prepared_hard);
     handler.m_pp = std::make_unique<anira::capi::ProcessorRunner>(processor,
                                                                   handler.m_input_ports,
                                                                   handler.m_output_ports);
     anira::capi::ProcessorRunner* const processor_runner = handler.m_pp.get();
-    handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
-                                                                  model,
-                                                                  prepared,
-                                                                  prepared_hard,
-                                                                  std::move(requests),
-                                                                  handler.m_context->m_config,
-                                                                  &handler.m_rt);
+    const auto make_session = [&handler, &model, &prepared, &prepared_hard] {
+        return std::make_unique<anira::InferenceManager>(
+            *handler.m_pp,
+            model,
+            prepared,
+            prepared_hard,
+            plan_requests(handler, prepared, prepared_hard),
+            handler.m_context->m_config,
+            &handler.m_rt);
+    };
+    handler.m_manager = make_session();
+    // The contract's edge cost, checked on the loaded plans (a plan's edges are its engine's):
+    // a plan above it leaves the table, and the session is made again over the plans that
+    // remain while the first one still holds their loaded models, so the pool hands the same
+    // ones over and none loads twice; the first goes when the block ends.
+    if (drop_plans_over_edge_cost(handler, model, prepared_contract.m_edge_cost)) {
+        const std::unique_ptr<anira::InferenceManager> first = std::move(handler.m_manager);
+        handler.m_manager = make_session();
+    }
     handler.m_manager->set_miss_policy(prepared_hard.m_on_miss);
     handler.m_miss_fn = prepared_hard.m_miss_fn;
     handler.m_miss_user_data = prepared_hard.m_miss_user_data;
