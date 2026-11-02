@@ -1406,11 +1406,16 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     EXPECT_EQ(gain.m_unload_before_unprepare, 0);
     anira_drain_log();
 #ifdef ENABLE_LOGGING
+    // One record for the plan, naming each slot above the threshold: its class, who moves its
+    // bytes and why (the provider rule's reason).
+    const std::string why =
+        " (the provider computes in its device's memory: the slot is uploaded to it and the "
+        "results read back, per call)";
     const std::string dropped = std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
                                 ":coreml is dropped, above the contract's edge cost (device_copy "
-                                "at most): input 0 'in': edge transfer, moved by the engine (";
-    EXPECT_TRUE(collector.has(dropped.c_str(), "native")) << dropped;
-    EXPECT_TRUE(collector.has("; output 0 'out': edge transfer, moved by the engine", "native"));
+                                "at most): input 0 'in': edge transfer, moved by the engine" +
+                                why + "; output 0 'out': edge transfer, moved by the engine" + why;
+    EXPECT_EQ(anira_test::count_records(collector, dropped.c_str(), "native"), 1U) << dropped;
 #endif
     ASSERT_NO_FATAL_FAILURE(run_ramp(handler, 2, gain.m_gain));
     EXPECT_EQ(anira_handler_rt_error(handler), ANIRA_OK);
