@@ -60,6 +60,18 @@
 #include "litert/c/internal/litert_accelerator.h"
 #endif
 
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#elif !defined(__EMSCRIPTEN__)
+#include <dlfcn.h>
+#endif
+
 namespace anira::engine {
 
 namespace {
@@ -81,6 +93,52 @@ constexpr std::array<std::pair<int, const char*>, k_hardware_count> k_hardware{{
     {kLiteRtHwAcceleratorWebNn, "webnn"},
 #endif
 }};
+
+// The directory of the module that holds the LiteRT runtime (the shared library, or the binary
+// a static one is linked into), where a GPU package ships its accelerator libraries
+// (libLiteRtWebGpuAccelerator, libLiteRtMetalAccelerator): an environment loads them from
+// kLiteRtEnvOptionTagRuntimeLibraryDir, and registers no GPU without it (probe P2g, LiteRT
+// 2.2.0). Empty where the module cannot be asked (the web build), so the option is left out.
+const std::string& runtime_library_dir() {
+    static const std::string k_dir = [] {
+        std::string path;
+#if defined(_WIN32)
+        HMODULE module = nullptr;
+        if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                   GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               reinterpret_cast<LPCSTR>(&LiteRtCreateEnvironment),
+                               &module) != 0) {
+            std::array<char, MAX_PATH> name{};
+            const DWORD length = GetModuleFileNameA(module, name.data(), MAX_PATH);
+            if (length > 0 && length < MAX_PATH) { path.assign(name.data(), length); }
+        }
+#elif !defined(__EMSCRIPTEN__)
+        Dl_info info{};
+        if (dladdr(reinterpret_cast<void*>(&LiteRtCreateEnvironment), &info) != 0 &&
+            info.dli_fname != nullptr) {
+            path = info.dli_fname;
+        }
+#endif
+        const size_t slash = path.find_last_of("/\\");
+        return slash == std::string::npos ? std::string() : path.substr(0, slash);
+    }();
+    return k_dir;
+}
+
+// The options of an environment at `severity`: the logger's minimum severity, and the runtime
+// library directory where it is known.
+std::vector<LiteRtEnvOption> environment_options(int64_t severity) {
+    std::vector<LiteRtEnvOption> options{
+        {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
+         .value = {.type = kLiteRtAnyTypeInt, .int_value = severity}},
+    };
+    if (!runtime_library_dir().empty()) {
+        options.push_back(
+            {.tag = kLiteRtEnvOptionTagRuntimeLibraryDir,
+             .value = {.type = kLiteRtAnyTypeString, .str_value = runtime_library_dir().c_str()}});
+    }
+    return options;
+}
 
 // The hardware bit of a provider name; 0 for a name the table lacks.
 int hardware_of(std::string_view provider_id) noexcept {
@@ -292,14 +350,12 @@ public:
 
 protected:
     void do_init(const anira_init_info& info) override {
-        const auto litert_severity = static_cast<int64_t>(info.log_level);
-        const std::array<LiteRtEnvOption, 1> env_options = {{
-            {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
-             .value = {.type = kLiteRtAnyTypeInt, .int_value = litert_severity}},
-        }};
+        const std::vector<LiteRtEnvOption> env_options =
+            environment_options(static_cast<int64_t>(info.log_level));
         LiteRtEnvironment env = nullptr;
-        litert_check(LiteRtCreateEnvironment(1, env_options.data(), &env),
-                     "LiteRtCreateEnvironment");
+        litert_check(
+            LiteRtCreateEnvironment(static_cast<int>(env_options.size()), env_options.data(), &env),
+            "LiteRtCreateEnvironment");
         m_env = env;
     }
 
@@ -504,11 +560,8 @@ private:
     std::vector<anira_dtype> m_output_dtypes;            ///< per output slot
     std::vector<LiteRtRankedTensorType> m_input_types;   ///< per input slot: dims and dtype
     std::vector<LiteRtRankedTensorType> m_output_types;  ///< per output slot
-    /// Whether the slots are bound in place: on the CPU path, where P2 measured it; an
-    /// accelerator copies through the managed buffers as before.
-    bool m_in_place = false;
-    std::vector<KeptTable> m_kept_inputs;   ///< per input slot
-    std::vector<KeptTable> m_kept_outputs;  ///< per output slot
+    std::vector<KeptTable> m_kept_inputs;                ///< per input slot
+    std::vector<KeptTable> m_kept_outputs;               ///< per output slot
     /// The buffers of one call, in the signature's index order (a kept one over the slot's
     /// memory, or the managed one).
     std::vector<LiteRtTensorBuffer> m_call_inputs;
@@ -634,7 +687,6 @@ void Instance::bind(const Model& model,
     m_call_inputs.assign(m_input_buffers.size(), nullptr);
     m_call_outputs.assign(m_output_buffers.size(), nullptr);
     m_output_copied.assign(outputs.size(), false);
-    m_in_place = model.m_provider_id.empty();
     drop_kept();
     m_kept_inputs.assign(inputs.size(), KeptTable{});
     m_kept_outputs.assign(outputs.size(), KeptTable{});
@@ -655,7 +707,7 @@ LiteRtTensorBuffer Instance::buffer_for(const anira_tensor& tensor, size_t slot,
     // In place: a tensor buffer over the descriptor's memory, the caller's (no deallocator),
     // where it starts on LiteRT's boundary, as a chunk's buffer always does; the one kept for
     // the memory, or a new one in the table's oldest entry.
-    if (m_in_place && aligned_to(data, LITERT_HOST_MEMORY_BUFFER_ALIGNMENT)) {
+    if (aligned_to(data, LITERT_HOST_MEMORY_BUFFER_ALIGNMENT)) {
         if (!is_input) { m_output_copied[slot] = false; }
         KeptTable& table = is_input ? m_kept_inputs[slot] : m_kept_outputs[slot];
         for (const KeptBuffer& kept : table.m_entries) {
@@ -807,16 +859,9 @@ public:
     explicit LiteRtLoaded(std::shared_ptr<LiteRtEngine> engine)
         : ExecutorLoaded(engine), m_engine(std::move(engine)) {}
 
-    /// On the CPU path every slot is bound in place (a tensor buffer over the slot's memory,
-    /// kept per memory: Instance::buffer_for), the zero-copy edge; an accelerator copies
-    /// through the managed buffers.
-    SlotEdge slot_edge(bool /*is_input*/, uint32_t /*slot*/) const noexcept override {
-        if (model().m_provider_id.empty()) { return SlotEdge{}; }
-        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
-                        .m_reason =
-                            "litert: an accelerator's slots are copied through tensor "
-                            "buffers of its own (bound in place on the CPU path alone)"};
-    }
+    /// Every slot is bound in place, on the CPU path and on an accelerator alike (a tensor
+    /// buffer over the slot's memory, kept per memory: Instance::buffer_for): the default
+    /// slot_edge, zero-copy on the CPU, the accelerator's own upload on a GPU or an NPU.
     /// LiteRT's boundary for a buffer over host memory, which every chunk's buffer meets.
     size_t buffer_alignment() const noexcept override {
         return LITERT_HOST_MEMORY_BUFFER_ALIGNMENT;
@@ -897,13 +942,12 @@ std::vector<ProviderInfo> litert_providers() {
     // logger keeps errors alone, whatever anira's level. The engine object's environment, made
     // at init with anira's level, is not touched, so the query runs beside an init on another
     // thread, and a load that asks for an accelerator says why it failed.
-    const auto severity = static_cast<int64_t>(ANIRA_LOG_ERROR);
-    const std::array<LiteRtEnvOption, 1> env_options = {{
-        {.tag = kLiteRtEnvOptionTagMinLoggerSeverity,
-         .value = {.type = kLiteRtAnyTypeInt, .int_value = severity}},
-    }};
+    const std::vector<LiteRtEnvOption> env_options =
+        environment_options(static_cast<int64_t>(ANIRA_LOG_ERROR));
     LiteRtEnvironment env = nullptr;
-    if (LiteRtCreateEnvironment(1, env_options.data(), &env) != kLiteRtStatusOk || env == nullptr) {
+    if (LiteRtCreateEnvironment(static_cast<int>(env_options.size()), env_options.data(), &env) !=
+            kLiteRtStatusOk ||
+        env == nullptr) {
         ANIRA_LOG_WARNING(anira::log_group::k_engine_litert,
                           "litert: no environment could be created to ask for the accelerators; "
                           "the capabilities list the CPU path alone");

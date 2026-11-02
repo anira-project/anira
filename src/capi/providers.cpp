@@ -60,8 +60,7 @@ std::string provider_list(const std::vector<anira::engine::ProviderInfo>& provid
 }  // namespace
 
 bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept {
-    return provider_id.empty() &&
-           (provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK);
+    return anira::engine::host_memory_provider(provider, provider_id);
 }
 
 anira_init_info query_info(const anira_context& context) {

@@ -108,8 +108,11 @@ extern "C" {
  * stride (a caller whose header ends before a tail field gets its rows without it). In
  * this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe
  * "host"; the edge is ANIRA_EDGE_ZERO_COPY where the plan's engine binds the slot's
- * buffer in place and ANIRA_EDGE_HOST_COPY, with the reason, where it copies through
- * memory of its own.
+ * buffer in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX
+ * Runtime's CPU-side execution providers), and ANIRA_EDGE_HOST_COPY, with the reason,
+ * where a copy happens: through memory of the engine's own, or the upload and readback a
+ * device provider's runtime makes itself (a GPU execution provider, a LiteRT
+ * accelerator), the class the capability rows give that edge.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */

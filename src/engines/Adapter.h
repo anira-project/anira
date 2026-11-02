@@ -346,8 +346,12 @@ public:
 
     /// How the engine passes one slot's chunk buffer to its runtime, as the plan report states
     /// it (anira_plan_slot.edge_class and reason): ANIRA_EDGE_ZERO_COPY where it binds the
-    /// buffer in place, ANIRA_EDGE_HOST_COPY with the reason where it copies through memory of
-    /// its own. A registered engine is handed the buffer itself: zero-copy by default.
+    /// buffer in place on a provider that runs over host memory, ANIRA_EDGE_HOST_COPY with the
+    /// reason where a copy happens: through memory of the engine's own, or the upload and
+    /// readback a device provider's runtime makes itself (host_memory_provider). By default
+    /// the slot is bound in place (a registered engine is handed the buffer itself), so the
+    /// class follows the record's provider: zero-copy on a host-memory one, the device upload
+    /// on every other.
     struct SlotEdge {
         anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
         const char* m_reason = nullptr;  ///< static storage; NULL with nothing to say
@@ -355,8 +359,12 @@ public:
     virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
         static_cast<void>(is_input);
         static_cast<void>(slot);
-        return SlotEdge{};
+        return provider_edge();
     }
+    /// The edge of a slot bound in place on the record's provider: zero-copy where it runs over
+    /// host memory, else ANIRA_EDGE_HOST_COPY with the reason that the provider's runtime
+    /// moves the slot itself and anira copies nothing.
+    SlotEdge provider_edge() const noexcept;
 
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
@@ -595,6 +603,18 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
                                     size_t required,
                                     const char* engine,
                                     const char* side);
+
+/// Whether a provider runs over host memory as it is, so that an engine binding a slot's
+/// memory in place moves nothing: the CPU path (ANIRA_PROVIDER_CPU), XNNPACK, and the CPU-side
+/// execution providers ONNX Runtime reports by name (DnnlExecutionProvider, oneDNN on the CPU;
+/// ACLExecutionProvider and ArmNNExecutionProvider, the Arm CPU libraries). Every other
+/// provider is a device or an accelerator (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU,
+/// Vulkan, a LiteRT accelerator, an ExecuTorch GPU or NPU delegate, a custom engine's device)
+/// whose runtime uploads host memory to it and reads the results back itself, per call: a
+/// copy through host memory (ANIRA_EDGE_HOST_COPY, anira's edge classes; DEVICE_COPY is a copy
+/// within a device). The one rule of the plan rows (Loaded::provider_edge) and of the
+/// capability rows (anira::capi::cpu_provider).
+bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an

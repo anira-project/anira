@@ -30,10 +30,11 @@
 
 namespace anira::capi {
 
-/// Whether a provider runs on the CPU, where host memory reaches it without a copy: the
-/// CPU path (ANIRA_PROVIDER_CPU) and XNNPACK; every other provider of the enum, and every custom
-/// one, is a device or an accelerator the engine moves host memory to itself. The edge registry's
-/// rule, for the context's rows and a pipeline's alike.
+/// Whether a provider runs on the CPU, where host memory reaches it without a copy
+/// (engine::host_memory_provider: the CPU path, XNNPACK, ONNX Runtime's CPU-side execution
+/// providers by name); every other provider is a device or an accelerator the engine's runtime
+/// moves host memory to itself. The edge registry's rule, for the context's rows and a
+/// pipeline's alike, and the plan rows' (engine::Loaded::provider_edge).
 bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// The facts of the core a query receives: the level in effect, the thread count the

@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -362,6 +363,23 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
                               std::to_string(required) + " of the model's");
     }
     return bindings;
+}
+
+bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept {
+    if (provider_id.empty()) {
+        return provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK;
+    }
+    return provider == ANIRA_PROVIDER_CUSTOM &&
+           (provider_id == "DnnlExecutionProvider" || provider_id == "ACLExecutionProvider" ||
+            provider_id == "ArmNNExecutionProvider");
+}
+
+Loaded::SlotEdge Loaded::provider_edge() const noexcept {
+    if (host_memory_provider(m_model.m_provider, m_model.m_provider_id)) { return SlotEdge{}; }
+    return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                    .m_reason =
+                        "the provider's runtime uploads the slot's host memory to its "
+                        "device and reads the results back itself; anira copies nothing"};
 }
 
 void check_engine_tensor(const TensorInfo& slot,

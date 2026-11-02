@@ -14,6 +14,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -1002,6 +1003,29 @@ std::shared_ptr<Rig> builtin_rig(anira_engine engine) {
 
 }  // namespace
 
+// The edge rule of the plan rows and the capability rows: a provider that runs over host memory
+// (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers by name) takes a slot bound
+// in place without a copy; every other one is a device whose runtime uploads the slot itself.
+TEST(AdapterEdges, AHostMemoryProviderTakesTheSlotAndADeviceUploadsIt) {
+    using anira::engine::host_memory_provider;
+    EXPECT_TRUE(host_memory_provider(ANIRA_PROVIDER_CPU, ""));
+    EXPECT_TRUE(host_memory_provider(ANIRA_PROVIDER_XNNPACK, ""));
+    EXPECT_TRUE(host_memory_provider(ANIRA_PROVIDER_CUSTOM, "DnnlExecutionProvider"));
+    EXPECT_TRUE(host_memory_provider(ANIRA_PROVIDER_CUSTOM, "ACLExecutionProvider"));
+    EXPECT_TRUE(host_memory_provider(ANIRA_PROVIDER_CUSTOM, "ArmNNExecutionProvider"));
+    for (const anira_provider device : {ANIRA_PROVIDER_CUDA,
+                                        ANIRA_PROVIDER_WEBGPU,
+                                        ANIRA_PROVIDER_VULKAN,
+                                        ANIRA_PROVIDER_DIRECTML,
+                                        ANIRA_PROVIDER_COREML}) {
+        EXPECT_FALSE(host_memory_provider(device, "")) << device;
+    }
+    for (const char* device :
+         {"gpu", "npu", "TensorrtExecutionProvider", "ROCMExecutionProvider", "MPSBackend"}) {
+        EXPECT_FALSE(host_memory_provider(ANIRA_PROVIDER_CUSTOM, device)) << device;
+    }
+}
+
 // ============================================================================================
 // ONNX Runtime
 // ============================================================================================
@@ -1398,11 +1422,17 @@ private:
 // The gain export through `adapter` over two memories on the 64-byte boundary (two chunks) and
 // one a float past it, each run more than once with new values: the results follow what the
 // memory holds now, with no copy on the boundary and one per slot each way past it; the engine
-// asks the chunk for that boundary and reports the zero-copy edge.
-void expect_bound_on_the_boundary(Rig& adapter) {
+// asks the chunk for that boundary and reports `edge` (zero-copy on the CPU, the accelerator's
+// own upload on a device). The results are exact, or within `relative` of the exact value on a
+// device that computes a float32 model at a lower precision (LiteRT's GPU accelerator: float16).
+void expect_bound_on_the_boundary(Rig& adapter,
+                                  anira_edge_class edge = ANIRA_EDGE_ZERO_COPY,
+                                  float relative = 0.F) {
     EXPECT_EQ(adapter.loaded().buffer_alignment(), 64U);
-    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_class, ANIRA_EDGE_ZERO_COPY);
-    EXPECT_EQ(adapter.loaded().slot_edge(false, 1).m_class, ANIRA_EDGE_ZERO_COPY);
+    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_class, edge);
+    EXPECT_EQ(adapter.loaded().slot_edge(false, 1).m_class, edge);
+    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_reason != nullptr,
+              edge != ANIRA_EDGE_ZERO_COPY);
     struct Memory {
         explicit Memory(size_t skew)
             : m_audio_in(k_block, skew)
@@ -1417,7 +1447,7 @@ void expect_bound_on_the_boundary(Rig& adapter) {
     const Memory first(0);
     const Memory second(0);
     const Memory past(1);
-    const auto run_over = [&adapter](const Memory& memory, float scale, uint64_t copies) {
+    const auto run_over = [&adapter, relative](const Memory& memory, float scale, uint64_t copies) {
         for (size_t n = 0; n < k_block; ++n) {
             memory.m_audio_in[n] = scale * static_cast<float>(n) / k_block;
             memory.m_audio_out[n] = -1.F;
@@ -1434,7 +1464,13 @@ void expect_bound_on_the_boundary(Rig& adapter) {
         EXPECT_EQ(adapter.executor().copies_in() - copies_in, copies);
         EXPECT_EQ(adapter.executor().copies_out() - copies_out, copies);
         for (size_t n = 0; n < k_block; ++n) {
-            ASSERT_EQ(memory.m_audio_out[n], 0.5F * memory.m_audio_in[n]) << "sample " << n;
+            const float want = 0.5F * memory.m_audio_in[n];
+            if (relative == 0.F) {
+                ASSERT_EQ(memory.m_audio_out[n], want) << "sample " << n;
+            } else {
+                ASSERT_NEAR(memory.m_audio_out[n], want, relative * std::max(1.F, std::abs(want)))
+                    << "sample " << n;
+            }
         }
         EXPECT_GT(memory.m_gain_out[0], 0.F) << "the peak landed in the caller's memory";
     };
@@ -1683,6 +1719,33 @@ TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
     ASSERT_NE(adapter, nullptr);
     adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_LITERT));
     expect_bound_on_the_boundary(*adapter);
+}
+
+// On a GPU accelerator, where the runtime registers one (a LiteRT -gpu package: the WebGPU
+// accelerator over Dawn; on a machine without a GPU, Mesa's software Vulkan, lavapipe), the slots
+// are bound in place exactly as on the CPU path: the accelerator takes host-memory buffers though
+// its requirements list only its own buffer type (probe P2g), reads the kept buffers' memory at
+// every run with no lock, and leaves the results in it when the run returns. It uploads the slots
+// itself: the report says ANIRA_EDGE_HOST_COPY with that reason, and anira counts no copy.
+// Skipped where no GPU accelerator is registered (the pinned CPU package, the CI legs).
+TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
+    const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
+    if (!std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
+            return p.m_provider_id == "gpu";
+        })) {
+        GTEST_SKIP() << "no GPU accelerator is registered here";
+    }
+    Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
+    gpu.m_outputs[0].m_export_name = "output_0";
+    gpu.m_outputs[1].m_export_name = "output_1";
+    gpu.m_provider = ANIRA_PROVIDER_CUSTOM;
+    gpu.m_provider_id = "gpu";
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(gpu);
+    // The accelerator computes the float32 export in float16 (its default precision): two
+    // roundings of 2^-11 each.
+    expect_bound_on_the_boundary(*adapter, ANIRA_EDGE_HOST_COPY, 1.F / 512.F);
 }
 
 #endif  // USE_LITERT

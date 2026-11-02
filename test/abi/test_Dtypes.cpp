@@ -14,6 +14,7 @@
 #include <anira/abi/tensor.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
 #include <cmath>
@@ -21,6 +22,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -30,6 +32,8 @@
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "capi/words.h"
+#include "engines/Adapter.h"
+#include "engines/Adapters.h"
 #include "handler_support.h"
 #include "scheduler/SessionElement.h"
 
@@ -608,50 +612,90 @@ float gain_sample(size_t k, size_t n) {
 
 }  // namespace
 
-// The bundled TypedGainNetwork at int16, int8 and float16 on every built-in engine that binds
-// typed tensors: no ring setting (the rings stream the spec's dtype), the Static gain of 2 in
-// the file's dtype, every block waited for. The stream comes out as the input times 2 delayed by
-// the latency, exactly, and the Static peak is the doubled largest magnitude, 16.
-TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
-    const anira_test::Context context(2);
+namespace {
+
+// The bundled TypedGainNetwork at int16, int8 and float16 through `candidates`: no ring setting
+// (the rings stream the spec's dtype), the Static gain of 2 in the file's dtype, every block
+// waited for. The stream comes out as the input times 2 delayed by the latency, exactly, and the
+// Static peak is the doubled largest magnitude, 16. With `edge`, every slot row reports it.
+void expect_typed_fixtures(const anira_test::Context& context,
+                           const std::vector<anira_backend_id>& candidates,
+                           std::optional<anira_edge_class> edge = std::nullopt) {
     const std::array<std::pair<const char*, anira_dtype>, 3> sets{{
         {k_typed_gain_int16_model_json, ANIRA_DTYPE_I16},
         {k_typed_gain_int8_model_json, ANIRA_DTYPE_I8},
         {k_typed_gain_float16_model_json, ANIRA_DTYPE_F16},
     }};
-    for (const anira_engine engine : typed_engines()) {
-        for (const auto& [model_json, dtype] : sets) {
-            SCOPED_TRACE(std::string(anira::capi::engine_word(engine)) + " " +
-                         anira::capi::dtype_word(dtype));
-            const ModelConfig model = ModelConfig::from_file(model_json);
-            const std::vector<anira_backend_id> candidates = one_engine(engine);
-            anira_test::Handler handler(context, model, candidates);
-            ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_block)),
-                      ANIRA_OK)
-                << handler.m_err.message;
-            anira_handler* h = handler.m_handler;
-            const std::array<int64_t, 1> scalar{1};
-            std::array<std::byte, 8> gain{};
-            store_value(gain.data(), dtype, 2.0F);
-            const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
-            ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
+    for (const auto& [model_json, dtype] : sets) {
+        SCOPED_TRACE(anira::capi::dtype_word(dtype));
+        const ModelConfig model = ModelConfig::from_file(model_json);
+        anira_test::Handler handler(context, model, candidates);
+        ASSERT_EQ(handler.prepare(anira_test::file_contract(k_gain_contract_json, k_block)),
+                  ANIRA_OK)
+            << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        const std::array<int64_t, 1> scalar{1};
+        std::array<std::byte, 8> gain{};
+        store_value(gain.data(), dtype, 2.0F);
+        const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
+        ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
 
-            const std::vector<float> out = run_values(h, dtype, gain_sample);
-            const size_t latency = anira_handler_get_latency(h, 0);
-            for (size_t n = 0; n < out.size(); ++n) {
-                const float want = n < latency ? 0.0F
-                                               : 2.0F * gain_sample((n - latency) / k_block,
-                                                                    (n - latency) % k_block);
-                ASSERT_EQ(out[n], want) << "sample " << n;
+        const std::vector<float> out = run_values(h, dtype, gain_sample);
+        const size_t latency = anira_handler_get_latency(h, 0);
+        for (size_t n = 0; n < out.size(); ++n) {
+            const float want =
+                n < latency ? 0.0F
+                            : 2.0F * gain_sample((n - latency) / k_block, (n - latency) % k_block);
+            ASSERT_EQ(out[n], want) << "sample " << n;
+        }
+        std::array<std::byte, 8> peak{};
+        const Tensor peak_out = Tensor::from_host(peak.data(), dtype, scalar);
+        ASSERT_EQ(anira_handler_get_static_output(h, 1, &peak_out), ANIRA_OK);
+        EXPECT_EQ(load_value(peak.data(), dtype), 16.0F);
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+        if (edge.has_value()) {
+            for (const bool inputs : {true, false}) {
+                const anira_plan_slot row = slot_row(h, inputs);
+                EXPECT_EQ(row.edge_class, *edge);
+                EXPECT_EQ(row.reason != nullptr, *edge != ANIRA_EDGE_ZERO_COPY);
             }
-            std::array<std::byte, 8> peak{};
-            const Tensor peak_out = Tensor::from_host(peak.data(), dtype, scalar);
-            ASSERT_EQ(anira_handler_get_static_output(h, 1, &peak_out), ANIRA_OK);
-            EXPECT_EQ(load_value(peak.data(), dtype), 16.0F);
-            EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
         }
     }
 }
+
+}  // namespace
+
+// The typed fixtures on every built-in engine that binds typed tensors, on the CPU path.
+TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
+    const anira_test::Context context(2);
+    for (const anira_engine engine : typed_engines()) {
+        SCOPED_TRACE(anira::capi::engine_word(engine));
+        expect_typed_fixtures(context, one_engine(engine));
+    }
+}
+
+#ifdef USE_LITERT
+// The typed fixtures on a LiteRT GPU accelerator, where one is registered here (a -gpu package;
+// Mesa's lavapipe on a machine without a GPU): the slots bound in place as on the CPU path, the
+// accelerator uploading them itself, so every slot row says ANIRA_EDGE_HOST_COPY with that
+// reason; the results exact. Skipped without a GPU accelerator (the pinned CPU package, CI).
+TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
+    const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
+    if (!std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
+            return p.m_provider_id == "gpu";
+        })) {
+        GTEST_SKIP() << "no GPU accelerator is registered here";
+    }
+    const anira_test::Context context(2);
+    const std::vector<anira_backend_id> gpu{
+        anira_backend_id{.struct_size = sizeof(anira_backend_id),
+                         .engine = static_cast<uint32_t>(ANIRA_ENGINE_LITERT),
+                         .provider = ANIRA_PROVIDER_CUSTOM,
+                         .engine_id = nullptr,
+                         .provider_id = "gpu"}};
+    expect_typed_fixtures(context, gpu, ANIRA_EDGE_HOST_COPY);
+}
+#endif  // USE_LITERT
 
 #ifdef USE_EXECUTORCH
 // The TypedGainNetwork ExecuTorch exports whose inputs and outputs the memory plan leaves to

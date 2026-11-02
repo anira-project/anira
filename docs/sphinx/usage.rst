@@ -901,8 +901,12 @@ The float16 case in C++, over the typed model tensor and the float32 rings (``to
 fixtures (int16, int8 and float16) run through each of them exactly, and the ONNX dtype matrix
 runs all ten through ONNX Runtime and through the ONNX Runtime Web engine
 (``test/abi/test_Dtypes.cpp``, ``web/test/dtypes.test.ts``). How each one hands a slot's memory
-over, which the plan report's ``edge_class`` states per slot (``ANIRA_EDGE_ZERO_COPY`` bound in
-place, ``ANIRA_EDGE_HOST_COPY`` with the engine's reason):
+over, which the plan report's ``edge_class`` states per slot: ``ANIRA_EDGE_ZERO_COPY`` bound in
+place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side
+execution providers), ``ANIRA_EDGE_HOST_COPY`` with the reason where a copy happens, the
+engine's own or the upload and readback a device provider's runtime makes itself (a GPU
+execution provider, a LiteRT accelerator, an ExecuTorch GPU delegate), the class the capability
+rows give that edge. The table is the CPU path:
 
 .. list-table::
    :header-rows: 1
@@ -917,8 +921,8 @@ place, ``ANIRA_EDGE_HOST_COPY`` with the engine's reason):
      - bound in place (``from_blob``)
      - one copy: a TorchScript method returns tensors of its own
    * - LiteRT
-     - bound in place on the CPU path (a tensor buffer over the slot's memory, kept per memory);
-       one copy on an accelerator
+     - bound in place (a tensor buffer over the slot's memory, kept per memory), on an
+       accelerator too: the GPU accelerator takes host-memory buffers and uploads them itself
      - the same
    * - TFLite
      - bound in place (the slot's memory is the tensor's custom allocation per call)

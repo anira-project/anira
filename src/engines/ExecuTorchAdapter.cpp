@@ -765,8 +765,12 @@ public:
         : ExecutorLoaded(std::move(engine)) {}
 
     /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
-    /// leaves out is bound in place, a planned one costs one copy.
+    /// leaves out is bound in place, a planned one costs one copy. A delegate on a device (a
+    /// GPU or an NPU backend) moves the slot itself: the provider's edge.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
+        if (!host_memory_provider(model().m_provider, model().m_provider_id)) {
+            return provider_edge();
+        }
         const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
         return slot < edges.size() ? edges[slot] : SlotEdge{};
     }
