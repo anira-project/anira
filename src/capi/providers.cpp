@@ -20,7 +20,9 @@
 #include "../scheduler/Core.h"
 #include "../utils/Logger.h"
 #include "../utils/StatusError.h"
+#include "context.h"  // IWYU pragma: keep - the body of anira_context
 #include "engine.h"
+#include "handler.h"  // IWYU pragma: keep - the body of anira_pipeline
 #include "handles.h"
 #include "words.h"
 

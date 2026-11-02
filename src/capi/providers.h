@@ -13,19 +13,18 @@
  * Private to src/capi.
  */
 #include <anira/abi/context.h>
-#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
+#include <anira/abi/status.h>
 
 #include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
-#include "context.h"
 #include "engine.h"
-#include "handler.h"
 #include "handles.h"
 
 namespace anira::capi {
