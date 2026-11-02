@@ -1484,7 +1484,7 @@ anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contract* contra
 
 anira_edge_class ANIRA_CALL anira_contract_edge_cost(const anira_contract* contract)
     ANIRA_NOEXCEPT {
-    return contract == nullptr ? ANIRA_EDGE_DEDICATED_TRANSFER : contract->m_edge_cost;
+    return contract == nullptr ? ANIRA_EDGE_UNKNOWN : contract->m_edge_cost;
 }
 
 // ---- context config ----

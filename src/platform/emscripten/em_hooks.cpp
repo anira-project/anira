@@ -323,7 +323,8 @@ anira_status ANIRA_CALL engine_edge(void* /*loaded*/,
 bool valid_edge(const anira_engine_edge* edge) noexcept {
     if (edge == nullptr) { return true; }
     return edge->struct_size >= offsetof(anira_engine_edge, edge_class) + sizeof(uint32_t) &&
-           edge->edge_class <= static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER);
+           (edge->edge_class <= static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER) ||
+            edge->edge_class == static_cast<uint32_t>(ANIRA_EDGE_UNKNOWN));
 }
 
 // No JavaScript release: a JavaScript engine's lifetime is its Worker's.
@@ -470,7 +471,7 @@ anira_status ANIRA_CALL anira_em_pipeline_add_js_engine(anira_pipeline* pipeline
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "JavaScript engine: the edge statement is too short to hold its class, or "
                        "names a class anira_edge_class does not (ANIRA_EDGE_ZERO_COPY to "
-                       "ANIRA_EDGE_DEDICATED_TRANSFER)");
+                       "ANIRA_EDGE_DEDICATED_TRANSFER, or ANIRA_EDGE_UNKNOWN)");
     anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
     fill_engine_desc(desc, js_key, hook_mask, engine_flags, edge);
     // A refused create never calls release: until it succeeds the record is ours.

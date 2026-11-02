@@ -271,6 +271,7 @@ export const anira_edge_class = {
   ANIRA_EDGE_COPY: 1,
   ANIRA_EDGE_UNIFIED_TRANSFER: 2,
   ANIRA_EDGE_DEDICATED_TRANSFER: 3,
+  ANIRA_EDGE_UNKNOWN: 255,
 } as const
 /** @internal */
 export type anira_edge_class = (typeof anira_edge_class)[keyof typeof anira_edge_class]

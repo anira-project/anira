@@ -919,6 +919,10 @@ TEST(AbiContract, HardAndAsyncGateTheirSetters) {
     EXPECT_EQ(anira_contract_set_edge_cost(async_contract, ANIRA_EDGE_ZERO_COPY), ANIRA_OK);
     EXPECT_EQ(anira_contract_set_edge_cost(hard, bad_enum<anira_edge_class>(4)),
               ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_contract_set_edge_cost(hard, bad_enum<anira_edge_class>(254)),
+              ANIRA_ERROR_INVALID_ARGUMENT)
+        << "between the scale and ANIRA_EDGE_UNKNOWN: room for classes to come";
+    EXPECT_EQ(anira_contract_set_edge_cost(hard, ANIRA_EDGE_UNKNOWN), ANIRA_OK) << "no limit";
     EXPECT_EQ(anira_contract_create_hard(2, 1, 48000.0, &hard, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_NE(std::strstr(err.message, "host_block_min"), nullptr);
     anira_contract_destroy(hard);

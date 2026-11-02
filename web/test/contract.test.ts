@@ -1,8 +1,8 @@
 // The edge cost of a contract on the web (src/ContractHandle.ts), anira::Hard::edge_cost's twin:
 // HardContractOptions.edgeCost reaches anira_contract_set_edge_cost with the class as given, a
-// contract that leaves it out keeps the library's default (the setter is never called), and
-// ContractHandle.edgeCost sets it on a handle afterwards. A stand-in module with the few exports
-// the contract calls.
+// contract that leaves it out keeps the library's default, no limit (the setter is never called),
+// and ContractHandle.edgeCost sets it on a handle afterwards, undefined restoring no limit
+// (ANIRA_EDGE_UNKNOWN to the C entry). A stand-in module with the few exports the contract calls.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { AniraBindings, type AbiModule } from '../src/abi/bindings'
@@ -39,7 +39,7 @@ const fakes = () => {
   return { abi: new AniraBindings(module as unknown as AbiModule), costs }
 }
 
-test("a Hard contract's edge cost reaches the setter; left out, the default stays", () => {
+test("a Hard contract's edge cost reaches the setter; left out, no limit stays", () => {
   const { abi, costs } = fakes()
   const options = { hostBlockMin: 128, hostRate: 48000, budgetMs: 2 }
   ContractHandle.hard({ abi }, options).destroy()
@@ -52,5 +52,11 @@ test("a Hard contract's edge cost reaches the setter; left out, the default stay
   assert.deepEqual(costs, [[77, anira_edge_class.ANIRA_EDGE_COPY]])
   assert.equal(contract.edgeCost(anira_edge_class.ANIRA_EDGE_ZERO_COPY), contract)
   assert.deepEqual(costs[1], [77, anira_edge_class.ANIRA_EDGE_ZERO_COPY])
+  contract.edgeCost(undefined)
+  assert.deepEqual(
+    costs[2],
+    [77, anira_edge_class.ANIRA_EDGE_UNKNOWN],
+    'undefined: no limit'
+  )
   contract.destroy()
 })

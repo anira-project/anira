@@ -277,8 +277,8 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
                                   context.m_capabilities.m_memory);
             } else {
                 // Until complete_custom_edge asks the device's memory kind: the move the
-                // engine makes itself, counted as a dedicated transfer.
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER);
+                // engine makes itself, of a class no probe has established yet.
+                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_UNKNOWN);
                 edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
                 edge.reason = k_custom_device_reason;
             }

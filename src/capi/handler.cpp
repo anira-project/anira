@@ -1444,7 +1444,9 @@ anira_binding binding_of(const anira::SessionElement& session,
 
 // The contract's edge cost (anira_contract_set_edge_cost) over the session's plans, whose
 // models have loaded: a plan with a slot whose edge (the plan engine's,
-// anira::engine::Loaded::slot_edge) is above the worst class allowed is not eligible. Each such
+// anira::engine::Loaded::slot_edge) is above the worst class allowed is not eligible, an
+// ANIRA_EDGE_UNKNOWN edge above every limit, since it is above the scale. No limit
+// (ANIRA_EDGE_UNKNOWN, the default) checks nothing. Each such
 // plan leaves the validator's table, under the default candidate set and named candidates
 // alike, with an Info record of the group anira.capi naming its slots above the threshold,
 // their class, who moves their bytes and why; when none remains, ANIRA_ERROR_EDGE_UNREACHABLE
@@ -1453,9 +1455,7 @@ anira_binding binding_of(const anira::SessionElement& session,
 bool drop_plans_over_edge_cost(anira_handler& handler,
                                const anira_model_config& model,
                                anira_edge_class worst_allowed) {
-    if (worst_allowed == ANIRA_EDGE_DEDICATED_TRANSFER) {
-        return false;
-    }  // every edge is within it
+    if (worst_allowed == ANIRA_EDGE_UNKNOWN) { return false; }  // no limit: every edge is within it
     const anira::SessionElement& session = handler.m_manager->session();
     std::vector<anira::capi::PlanKey>& plans = handler.m_derived.m_plans;
     std::vector<anira::capi::PlanKey> kept;

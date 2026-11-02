@@ -695,8 +695,10 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
         const bool unified = edges[i].memory_kind == ANIRA_MEMORY_UNIFIED;
         EXPECT_TRUE(!cpu || unified) << "a CPU provider computes in host memory";
-        const anira_edge_class device_class =
-            unified ? ANIRA_EDGE_UNIFIED_TRANSFER : ANIRA_EDGE_DEDICATED_TRANSFER;
+        const anira_edge_class device_class = unified ? ANIRA_EDGE_UNIFIED_TRANSFER
+                                              : edges[i].memory_kind == ANIRA_MEMORY_DEDICATED
+                                                  ? ANIRA_EDGE_DEDICATED_TRANSFER
+                                                  : ANIRA_EDGE_UNKNOWN;
         EXPECT_EQ(edges[i].edge_class,
                   static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : device_class));
         EXPECT_EQ(edges[i].moved_by,
@@ -746,9 +748,10 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
             << backend.provider_id;
         EXPECT_STREQ(row.to_provider_id, backend.provider_id);
         EXPECT_EQ(row.edge_class,
-                  static_cast<uint32_t>(row.memory_kind == ANIRA_MEMORY_UNIFIED
-                                            ? ANIRA_EDGE_UNIFIED_TRANSFER
-                                            : ANIRA_EDGE_DEDICATED_TRANSFER));
+                  static_cast<uint32_t>(
+                      row.memory_kind == ANIRA_MEMORY_UNIFIED     ? ANIRA_EDGE_UNIFIED_TRANSFER
+                      : row.memory_kind == ANIRA_MEMORY_DEDICATED ? ANIRA_EDGE_DEDICATED_TRANSFER
+                                                                  : ANIRA_EDGE_UNKNOWN));
         EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
         to.provider_id = nullptr;
     }

@@ -202,8 +202,8 @@ TEST(AbiMemoryKind, AnAnswerBecomesTheKind) {
 
 // The provider rule per memory kind: zero-copy over host memory; on a device, moved by the
 // engine, a unified transfer within unified memory, a dedicated transfer across the bus to
-// dedicated memory and where the kind is unknown (dedicated until a probe shows unified), the
-// reason naming the kind and what was seen.
+// dedicated memory, and ANIRA_EDGE_UNKNOWN where the kind is unknown (an NPU's here), the reason
+// naming the kind and what was seen.
 TEST(AbiMemoryKind, TheProviderRuleFollowsTheMemoryKind) {
     using anira::engine::provider_rule;
     const anira::engine::ProviderRule host =
@@ -237,7 +237,7 @@ TEST(AbiMemoryKind, TheProviderRuleFollowsTheMemoryKind) {
         provider_rule(ANIRA_PROVIDER_CUSTOM,
                       "npu",
                       DeviceMemory{.m_kind = ANIRA_MEMORY_UNKNOWN, .m_why = "?"});
-    EXPECT_EQ(unknown.m_class, ANIRA_EDGE_DEDICATED_TRANSFER);
+    EXPECT_EQ(unknown.m_class, ANIRA_EDGE_UNKNOWN);
     EXPECT_EQ(unknown.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
     EXPECT_EQ(unknown.m_reason, "memory kind not probed: ?");
 }

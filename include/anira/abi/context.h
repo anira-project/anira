@@ -134,10 +134,10 @@ typedef struct anira_edge_info {
      * device provider's class follows: ANIRA_MEMORY_UNIFIED for a provider that runs over host
      * memory (nothing probed) and for a device of unified memory (ANIRA_EDGE_UNIFIED_TRANSFER),
      * ANIRA_MEMORY_DEDICATED for a device of its own memory (ANIRA_EDGE_DEDICATED_TRANSFER),
-     * ANIRA_MEMORY_UNKNOWN where no probe established it (ANIRA_EDGE_DEDICATED_TRANSFER). A
-     * device provider's kind is asked of its device's API the first time a row of it is read,
-     * and kept by the context. A tail field: a caller whose header ends before it gets its rows
-     * without it.
+     * ANIRA_MEMORY_UNKNOWN where no probe established it (ANIRA_EDGE_UNKNOWN). A device
+     * provider's kind is asked of its device's API the first time a row of it is read, and kept
+     * by the context. A tail field: a caller whose header ends before it gets its rows without
+     * it.
      */
     uint32_t memory_kind;
 } anira_edge_info;
@@ -279,12 +279,13 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
  * this pre-release: zero-copy to a provider that runs over host memory; to a device
  * provider a move the engine's runtime makes itself, whose class follows the device's
  * memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
- * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory). The first read of a
- * device provider's row asks its device's API (the unified-memory probe, run lazily, on
- * a thread of its own, waited for 5 s at most per API, never at the context's creation)
- * and the context keeps the answer. Stride-explicit enumeration. The strings the rows
- * point to (to_provider_id, reason) are the context's: to_provider_id valid until its
- * next anira_context_probe replaces it, reason until the context is destroyed.
+ * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
+ * memory). The first read of a device provider's row asks its device's API (the
+ * unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per
+ * API, never at the context's creation) and the context keeps the answer.
+ * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
+ * are the context's: to_provider_id valid until its next anira_context_probe replaces
+ * it, reason until the context is destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.

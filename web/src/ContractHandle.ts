@@ -1,5 +1,5 @@
 import type { AniraBindings } from './abi/bindings'
-import { anira_budget_kind, anira_warmup_mode } from './abi/enums'
+import { anira_budget_kind, anira_edge_class, anira_warmup_mode } from './abi/enums'
 import type { Fetcher, WithAbi } from './ModelConfig'
 
 /**
@@ -43,10 +43,12 @@ export type HardContractOptions = {
   /**
    * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
    * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
-   * it. Default `ANIRA_EDGE_DEDICATED_TRANSFER`, which admits every edge;
-   * `ANIRA_EDGE_UNIFIED_TRANSFER` crossings between the CPU and a device within unified memory
-   * only (no bus), `ANIRA_EDGE_COPY` no crossing between domains, `ANIRA_EDGE_ZERO_COPY` no copy
-   * at all.
+   * it. A class of the cost scale is a limit: `ANIRA_EDGE_DEDICATED_TRANSFER` admits every known
+   * edge, `ANIRA_EDGE_UNIFIED_TRANSFER` crossings between the CPU and a device within unified
+   * memory only (no bus), `ANIRA_EDGE_COPY` no crossing between domains, `ANIRA_EDGE_ZERO_COPY`
+   * no copy at all, and every limit refuses an `ANIRA_EDGE_UNKNOWN` edge (a device provider's
+   * on the web, which exposes no memory kind). Left out (the default): no limit, every edge
+   * admitted, an unknown one included.
    */
   edgeCost?: number
 }
@@ -158,11 +160,15 @@ export class ContractHandle {
   /**
    * The worst edge class a plan may take for any slot, on either contract kind
    * (`anira_contract_set_edge_cost`, `anira::ContractHandle::edge_cost`; an `anira_edge_class`
-   * value): prepare drops a plan with a slot above it, and refuses with
-   * `ANIRA_ERROR_EDGE_UNREACHABLE` when no plan remains.
+   * value): prepare drops a plan with a slot above it, any limit a plan with an
+   * `ANIRA_EDGE_UNKNOWN` edge, and refuses with `ANIRA_ERROR_EDGE_UNREACHABLE` when no plan
+   * remains. `undefined` restores no limit (`ANIRA_EDGE_UNKNOWN` to the C entry).
    */
-  edgeCost(worstAllowed: number): this {
-    this.abi.anira_contract_set_edge_cost(this.contract, worstAllowed)
+  edgeCost(worstAllowed: number | undefined): this {
+    this.abi.anira_contract_set_edge_cost(
+      this.contract,
+      worstAllowed ?? anira_edge_class.ANIRA_EDGE_UNKNOWN
+    )
     return this
   }
 

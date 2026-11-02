@@ -743,7 +743,8 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
 // Mesa's lavapipe on a machine without a GPU): the slots bound in place as on the CPU path, the
 // accelerator moving them to its device itself, so every slot row says the class of the
 // device's memory kind (as this machine's probe answers it: ANIRA_EDGE_UNIFIED_TRANSFER on
-// lavapipe, a CPU device and so unified; ANIRA_EDGE_DEDICATED_TRANSFER on a discrete GPU) moved by
+// lavapipe, a CPU device and so unified; ANIRA_EDGE_DEDICATED_TRANSFER on a discrete GPU;
+// ANIRA_EDGE_UNKNOWN where no probe answered) moved by
 // the engine, with
 // the reason, and anira copies nothing; the results exact. Skipped without a GPU accelerator (the
 // pinned CPU package, CI).
@@ -772,7 +773,9 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
                           gpu,
                           anira_test::SlotEdge{.m_class = memory.m_kind == ANIRA_MEMORY_UNIFIED
                                                               ? ANIRA_EDGE_UNIFIED_TRANSFER
-                                                              : ANIRA_EDGE_DEDICATED_TRANSFER,
+                                                          : memory.m_kind == ANIRA_MEMORY_DEDICATED
+                                                              ? ANIRA_EDGE_DEDICATED_TRANSFER
+                                                              : ANIRA_EDGE_UNKNOWN,
                                                .m_moved_by = ANIRA_MOVER_ENGINE});
 }
 #endif  // USE_LITERT

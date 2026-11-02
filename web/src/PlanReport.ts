@@ -44,7 +44,7 @@ export type PlanInfo = {
    * `anira_memory_kind`: the physical memory the plan's provider computes in, the fact a
    * device provider's slot classes follow. `ANIRA_MEMORY_UNIFIED` on a provider that runs
    * over host memory; on the web every device provider's is `ANIRA_MEMORY_UNKNOWN` (a
-   * browser exposes no memory kind), its slots `ANIRA_EDGE_DEDICATED_TRANSFER`.
+   * browser exposes no memory kind), its slots `ANIRA_EDGE_UNKNOWN`.
    */
   memoryKind: number
 }

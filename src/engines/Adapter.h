@@ -97,9 +97,10 @@ bool host_memory_provider(anira_provider provider, std::string_view provider_id)
 /// - a device provider: moved by the engine (ANIRA_MOVER_ENGINE), its runtime moving the slot
 ///   to the device and back itself, per call; ANIRA_EDGE_UNIFIED_TRANSFER on a device of
 ///   unified memory (a copy and a hand-over between the processors, no bus),
-///   ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one (across the bus) and on one whose memory
-///   kind no probe established ("memory kind not probed: <why>"), dedicated until a probe shows
-///   unified. The reason names the kind and what the probe saw.
+///   ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one (across the bus), and ANIRA_EDGE_UNKNOWN on
+///   one whose memory kind no probe established ("memory kind not probed: <why>"), a class
+///   outside the cost scale that every limit of the edge cost refuses. The reason names the kind
+///   and what the probe saw.
 struct ProviderRule {
     anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
     uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
@@ -415,7 +416,8 @@ public:
     /// (provider_rule) over the record's device memory, kept from the load: zero-copy where it
     /// runs over host memory, else moved by the engine, the provider's runtime moving the slot to
     /// its device and back itself: ANIRA_EDGE_UNIFIED_TRANSFER on a unified-memory device,
-    /// ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one and on one whose memory kind is unknown.
+    /// ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one, ANIRA_EDGE_UNKNOWN on one whose memory
+    /// kind is unknown.
     /// The reason lives as long as this Loaded.
     SlotEdge provider_edge() const noexcept;
 

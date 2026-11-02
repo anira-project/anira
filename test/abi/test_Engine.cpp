@@ -1353,7 +1353,7 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
               nullptr)
         << err.message;
 
-    contract.edge_cost(ANIRA_EDGE_DEDICATED_TRANSFER);
+    contract.edge_cost(std::nullopt);
     gain.m_refuse_edge = ANIRA_ERROR_DEVICE;
     EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_ERROR_DEVICE);
     EXPECT_NE(std::strstr(err.message, "refused its edge statement for input 0"), nullptr)
@@ -1367,14 +1367,14 @@ TEST(AbiEngine, ARegisteredEngineStatesItsEdges) {
 }
 
 // The contract's edge cost at prepare, over one row on coreml and on the CPU path, on a fake
-// machine whose Metal device has memory of its own. The default (ANIRA_EDGE_DEDICATED_TRANSFER)
-// keeps both plans. Under ANIRA_EDGE_COPY (no crossing between domains) the coreml plan, whose
-// slots the engine moves across the bus to its device itself (a dedicated transfer), is dropped
-// once its model has loaded, with an Info record naming each slot, its class, its mover and why;
-// the CPU plan stays, alone in the report and selected, its model loaded once (the session made
-// again over it takes the pooled one), the dropped plan's loaded and unloaded and never prepared;
-// the stream runs on it. A contract no plan is within refuses with ANIRA_ERROR_EDGE_UNREACHABLE
-// naming the dropped plan's slots, the handler left unprepared.
+// machine whose Metal device has memory of its own. The default (no limit) keeps both plans. Under
+// ANIRA_EDGE_COPY (no crossing between domains) the coreml plan, whose slots the engine moves
+// across the bus to its device itself (a dedicated transfer), is dropped once its model has loaded,
+// with an Info record naming each slot, its class, its mover and why; the CPU plan stays, alone in
+// the report and selected, its model loaded once (the session made again over it takes the pooled
+// one), the dropped plan's loaded and unloaded and never prepared; the stream runs on it. A
+// contract no plan is within refuses with ANIRA_ERROR_EDGE_UNREACHABLE naming the dropped plan's
+// slots, the handler left unprepared.
 TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     anira_test::FakeMachine machine;
     machine.set(
@@ -1452,15 +1452,110 @@ TEST(AbiEngine, APlanAboveTheContractsEdgeCostIsDropped) {
     EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every model it loaded went back";
 }
 
+// An unknown edge is outside the cost scale: on a fake machine whose Metal cannot be asked, a
+// Core ML plan's slots are ANIRA_EDGE_UNKNOWN moved by the engine, "memory kind not probed".
+// No limit (the default) admits the plan; each limit of the scale, ANIRA_EDGE_DEDICATED_TRANSFER
+// included, drops it, the Info record naming the slot, the class unknown, the mover and the
+// reason; with the plan alone, prepare refuses with ANIRA_ERROR_EDGE_UNREACHABLE naming the same.
+TEST(AbiEngine, AnUnknownEdgeIsAboveEveryLimit) {
+    anira_test::FakeMachine machine;
+    machine.set(anira::platform::DeviceApi::Metal,
+                anira_test::fake_failure("Metal is not loadable (fake)"));
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);  // the record's level
+    RecordCollector collector;
+    GainEngine gain;
+    gain.m_output_edge = ANIRA_EDGE_ZERO_COPY;  // the outputs: the engine's own statement
+    const std::array<const char*, 2> served{"coreml", "cpu"};
+    anira_engine_desc desc = gain_desc_serving(gain, served);
+    desc.edge = gain_edge;
+    Pipe pipe;
+    ASSERT_EQ(pipe.add_new_engine(k_gain_id, desc), ANIRA_OK) << pipe.m_err.message;
+    pipe.add_inference(
+        gain_model(),
+        gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}, {ANIRA_PROVIDER_CPU, nullptr}}));
+    anira_handler* handler = nullptr;
+    ASSERT_EQ(pipe.create_handler(context, &handler), ANIRA_OK) << pipe.m_err.message;
+    anira_error err = ANIRA_ERROR_INIT;
+    anira::ContractHandle contract = explicit_contract();
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    std::vector<anira_plan_info> plans = plan_rows(handler);
+    ASSERT_EQ(plans.size(), 2U) << "no limit admits the unknown plan";
+    EXPECT_EQ(plans[0].memory_kind, static_cast<uint32_t>(ANIRA_MEMORY_UNKNOWN));
+    anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
+    uint32_t count = 1;
+    ASSERT_EQ(anira_plan_report_slots(anira_handler_plan_report(handler),
+                                      0U,
+                                      1U,
+                                      sizeof(row),
+                                      &count,
+                                      &row),
+              ANIRA_OK);
+    EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_UNKNOWN));
+    EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    ASSERT_NE(row.reason, nullptr);
+    EXPECT_STREQ(row.reason, "memory kind not probed: Metal is not loadable (fake)");
+
+    for (const auto& [limit, word] : std::array<std::pair<anira_edge_class, const char*>, 4>{{
+             {ANIRA_EDGE_DEDICATED_TRANSFER, "dedicated_transfer"},
+             {ANIRA_EDGE_UNIFIED_TRANSFER, "unified_transfer"},
+             {ANIRA_EDGE_COPY, "copy"},
+             {ANIRA_EDGE_ZERO_COPY, "zero_copy"},
+         }}) {
+        SCOPED_TRACE(word);
+        contract.edge_cost(limit);
+        ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+        plans = plan_rows(handler);
+        ASSERT_EQ(plans.size(), 1U);
+        EXPECT_EQ(plans[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
+        anira_drain_log();
+#ifdef ENABLE_LOGGING
+        const std::string dropped =
+            std::string("anira_handler_prepare: models[0] on ") + k_gain_id +
+            ":coreml is dropped, above the contract's edge cost (" + word +
+            " at most): input 0 'in': edge unknown, moved by the engine (memory kind not "
+            "probed: Metal is not loadable (fake))";
+        EXPECT_EQ(anira_test::count_records(collector, dropped.c_str(), "native"), 1U) << dropped;
+#endif
+    }
+    contract.edge_cost(std::nullopt);
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(plan_rows(handler).size(), 2U) << "no limit again";
+    anira_handler_destroy(handler);
+    pipe.destroy();
+
+    // The unknown plan alone: no limit admits it, the widest limit leaves nothing.
+    Pipe on_coreml;
+    ASSERT_EQ(on_coreml.add_new_engine(k_gain_id, desc), ANIRA_OK) << on_coreml.m_err.message;
+    on_coreml.add_inference(gain_model(), gain_candidates({{ANIRA_PROVIDER_COREML, nullptr}}));
+    ASSERT_EQ(on_coreml.create_handler(context, &handler), ANIRA_OK) << on_coreml.m_err.message;
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    contract.edge_cost(ANIRA_EDGE_DEDICATED_TRANSFER);
+    err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(anira_handler_prepare(handler, contract.native(), &err),
+              ANIRA_ERROR_EDGE_UNREACHABLE);
+    const std::string refusal =
+        std::string(
+            "no plan is within the contract's edge cost (dedicated_transfer at most): "
+            "models[0] on ") +
+        k_gain_id +
+        ":coreml: input 0 'in': edge unknown, moved by the engine (memory kind not probed: Metal "
+        "is not loadable (fake))";
+    EXPECT_NE(std::strstr(err.message, refusal.c_str()), nullptr) << err.message;
+    anira_handler_destroy(handler);
+    EXPECT_EQ(gain.m_loaded, gain.m_unloaded) << "every model it loaded went back";
+}
+
 // A registered engine on four providers of a fake machine: CUDA (a device of its own memory),
 // DirectML (a DXGI adapter of unified memory), Core ML (Metal could not be asked) and the CPU
 // path. Each plan's row names its provider's memory kind; each input slot, which the engine
 // leaves to the provider rule, reads the class that kind gives, moved by the engine, with the
 // reason naming the kind and what the probe saw (or why it saw nothing); the engine's statement
-// was asked with the same rule. The edge cost reads the same classes: ANIRA_EDGE_UNIFIED_TRANSFER
-// drops the CUDA and the Core ML plans (dedicated transfers, Core ML's as unknown memory),
-// ANIRA_EDGE_COPY the DirectML plan too (a unified transfer), and ANIRA_EDGE_ZERO_COPY keeps the
-// CPU path alone as well. Each API is asked once, by the first prepare.
+// was asked with the same rule. The edge cost reads the same classes: Core ML's unknown memory
+// gives ANIRA_EDGE_UNKNOWN, which every limit drops, ANIRA_EDGE_DEDICATED_TRANSFER included;
+// ANIRA_EDGE_UNIFIED_TRANSFER drops CUDA too (a dedicated transfer), ANIRA_EDGE_COPY the DirectML
+// plan as well (a unified transfer), ANIRA_EDGE_ZERO_COPY keeps the CPU path alone as COPY does,
+// and no limit admits all four again, the unknown plan included. Each API is asked once, by the
+// first prepare.
 TEST(AbiEngine, TheClassOfADeviceProviderFollowsItsDevicesMemory) {
     anira_test::FakeMachine machine;
     machine.set(
@@ -1515,7 +1610,7 @@ TEST(AbiEngine, TheClassOfADeviceProviderFollowsItsDevicesMemory) {
                      "over to the device within that memory, no bus, and the results back, per "
                      "call"},
         {.m_kind = ANIRA_MEMORY_UNKNOWN,
-         .m_class = ANIRA_EDGE_DEDICATED_TRANSFER,
+         .m_class = ANIRA_EDGE_UNKNOWN,
          .m_moved_by = ANIRA_MOVER_ENGINE,
          .m_reason = "memory kind not probed: Metal is not loadable (fake)"},
         {.m_kind = ANIRA_MEMORY_UNIFIED,
@@ -1554,12 +1649,25 @@ TEST(AbiEngine, TheClassOfADeviceProviderFollowsItsDevicesMemory) {
                                      ANIRA_EDGE_UNIFIED_TRANSFER,
                                      ANIRA_EDGE_DEDICATED_TRANSFER,
                                      ANIRA_EDGE_DEDICATED_TRANSFER,
-                                     ANIRA_EDGE_DEDICATED_TRANSFER,
-                                     ANIRA_EDGE_DEDICATED_TRANSFER}));
+                                     ANIRA_EDGE_UNKNOWN,
+                                     ANIRA_EDGE_UNKNOWN}));
     EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1);
     EXPECT_EQ(machine.probes(anira::platform::DeviceApi::D3d12), 1);
     EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Metal), 1);
     EXPECT_EQ(machine.probes(), 3) << "nothing asked for the CPU path";
+
+    const auto providers = [](const std::vector<anira_plan_info>& rows) {
+        std::vector<uint32_t> out;
+        out.reserve(rows.size());
+        for (const anira_plan_info& row : rows) { out.push_back(row.provider); }
+        return out;
+    };
+    contract.edge_cost(ANIRA_EDGE_DEDICATED_TRANSFER);
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(
+        providers(plan_rows(handler)),
+        (std::vector<uint32_t>{ANIRA_PROVIDER_CUDA, ANIRA_PROVIDER_DIRECTML, ANIRA_PROVIDER_CPU}))
+        << "the widest limit still drops the unknown Core ML plan";
 
     contract.edge_cost(ANIRA_EDGE_UNIFIED_TRANSFER);
     ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
@@ -1576,6 +1684,15 @@ TEST(AbiEngine, TheClassOfADeviceProviderFollowsItsDevicesMemory) {
         ASSERT_EQ(kept.size(), 1U);
         EXPECT_EQ(kept[0].provider, static_cast<uint32_t>(ANIRA_PROVIDER_CPU));
     }
+
+    contract.edge_cost(std::nullopt);
+    ASSERT_EQ(anira_handler_prepare(handler, contract.native(), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(providers(plan_rows(handler)),
+              (std::vector<uint32_t>{ANIRA_PROVIDER_CUDA,
+                                     ANIRA_PROVIDER_DIRECTML,
+                                     ANIRA_PROVIDER_COREML,
+                                     ANIRA_PROVIDER_CPU}))
+        << "no limit admits the unknown plan";
     EXPECT_EQ(machine.probes(), 3) << "the context kept every answer";
     anira_handler_destroy(handler);
 }

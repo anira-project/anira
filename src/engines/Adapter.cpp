@@ -396,7 +396,7 @@ ProviderRule provider_rule(anira_provider provider,
                             "per call";
             break;
         default:
-            rule.m_class = ANIRA_EDGE_DEDICATED_TRANSFER;
+            rule.m_class = ANIRA_EDGE_UNKNOWN;
             rule.m_reason = "memory kind not probed: " + memory.m_why;
             break;
     }

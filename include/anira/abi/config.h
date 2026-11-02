@@ -744,19 +744,23 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
 /**
  * @brief The edge cost of the plans (section 7), plan validation, not scheduling: at
  * anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is
- * not eligible: it is dropped from the plans, under the default candidate set and named
- * candidates alike, with an Info record of the group anira.capi naming each such slot,
- * its class, who moves its bytes and why; the report and the plan indices hold the
- * eligible plans alone. The session is then made again over the remaining plans while
- * the first still holds their loaded models, so no model loads twice; an exclusive
- * session's own executor is made, and warmed up, a second time. The edge is the plan
- * engine's (anira_plan_slot.edge_class), known once its model has loaded.
+ * not eligible (an ANIRA_EDGE_UNKNOWN edge is above every class of the scale, so any
+ * limit refuses it; with no limit nothing is checked): it is dropped from the plans,
+ * under the default candidate set and named candidates alike, with an Info record of the
+ * group anira.capi naming each such slot, its class, who moves its bytes and why; the
+ * report and the plan indices hold the eligible plans alone. The session is then made
+ * again over the remaining plans while the first still holds their loaded models, so no
+ * model loads twice; an exclusive session's own executor is made, and warmed up, a
+ * second time. The edge is the plan engine's (anira_plan_slot.edge_class), known once
+ * its model has loaded.
  * @param contract Either contract kind.
- * @param worst_allowed The worst class a plan may take for any of its slots:
- *        ANIRA_EDGE_DEDICATED_TRANSFER (the default) admits every edge,
- *        ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device
+ * @param worst_allowed The worst class a plan may take for any of its slots, a limit of the
+ *        cost scale or none: ANIRA_EDGE_DEDICATED_TRANSFER admits every known
+ *        edge, ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device
  *        within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between
- *        domains, ANIRA_EDGE_ZERO_COPY no copy at all.
+ *        domains, ANIRA_EDGE_ZERO_COPY no copy at all; under each of them an
+ *        ANIRA_EDGE_UNKNOWN edge is refused. ANIRA_EDGE_UNKNOWN, the default, is
+ *        no limit: every edge allowed, even unknown ones.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
  *         anira_edge_class does not name.
  * @par Thread contract
@@ -1808,9 +1812,9 @@ ANIRA_API anira_status ANIRA_CALL anira_context_config_to_json(const anira_conte
  * (ANIRA_SUCCESS_UPGRADED).
  * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional top-level
  *        edge_cost (the worst edge class allowed, by its word: "zero_copy", "copy",
- *        "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost) and an
- *        optional top-level host_domains ({"<name>": "<domain word>"},
- *        anira_contract_set_host_domain), or a v2 document.
+ *        "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost; without
+ *        the key no limit) and an optional top-level host_domains ({"<name>": "<domain
+ *        word>"}, anira_contract_set_host_domain), or a v2 document.
  * @param len Length of utf8 in bytes.
  * @param out Receives the handle on success.
  * @param err Nullable.
@@ -2279,9 +2283,9 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_latency(const anira_contra
 
 /**
  * @brief The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
- * take.
+ * take, ANIRA_EDGE_UNKNOWN for no limit (even unknown edges allowed).
  * @param contract Either contract kind.
- * @return The class; ANIRA_EDGE_DEDICATED_TRANSFER, the default, for NULL.
+ * @return The class; ANIRA_EDGE_UNKNOWN, the default (no limit), for NULL.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2

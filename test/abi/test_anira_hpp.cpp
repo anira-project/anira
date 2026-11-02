@@ -423,7 +423,39 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
     EXPECT_DOUBLE_EQ(zero.wait_ratio, 0.0);
     EXPECT_TRUE(zero.ring_dtypes.empty());
     EXPECT_TRUE(zero.latencies.empty());
-    EXPECT_EQ(zero.edge_cost, ANIRA_EDGE_DEDICATED_TRANSFER);
+    EXPECT_FALSE(zero.edge_cost.has_value()) << "no limit, the C ANIRA_EDGE_UNKNOWN";
+}
+
+// The edge cost of anira.hpp is an optional: std::nullopt, the aggregates' default, is no limit
+// (ANIRA_EDGE_UNKNOWN to the C entries, every edge admitted), a class of the scale a limit. A
+// limit round-trips through the handle and reads back; ContractHandle::edge_cost(std::nullopt)
+// restores no limit, as the C setter's ANIRA_EDGE_UNKNOWN does, and reads back std::nullopt.
+TEST(AbiCxx, TheEdgeCostIsALimitOrNone) {
+    const anira::Hard none{.budget = anira::Budget::measured()};
+    EXPECT_FALSE(none.edge_cost.has_value());
+    ContractHandle handle{none};
+    EXPECT_EQ(anira_contract_edge_cost(handle.native()), ANIRA_EDGE_UNKNOWN);
+    EXPECT_FALSE(handle.hard().edge_cost.has_value());
+    for (const anira_edge_class limit : {ANIRA_EDGE_ZERO_COPY,
+                                         ANIRA_EDGE_COPY,
+                                         ANIRA_EDGE_UNIFIED_TRANSFER,
+                                         ANIRA_EDGE_DEDICATED_TRANSFER}) {
+        SCOPED_TRACE(limit);
+        handle.edge_cost(limit);
+        EXPECT_EQ(anira_contract_edge_cost(handle.native()), limit);
+        EXPECT_EQ(handle.hard().edge_cost, std::optional<anira_edge_class>(limit));
+    }
+    handle.edge_cost(std::nullopt);
+    EXPECT_EQ(anira_contract_edge_cost(handle.native()), ANIRA_EDGE_UNKNOWN);
+    EXPECT_FALSE(handle.hard().edge_cost.has_value());
+    ASSERT_EQ(anira_contract_set_edge_cost(handle.native(), ANIRA_EDGE_COPY), ANIRA_OK);
+    ASSERT_EQ(anira_contract_set_edge_cost(handle.native(), ANIRA_EDGE_UNKNOWN), ANIRA_OK);
+    EXPECT_FALSE(handle.hard().edge_cost.has_value()) << "ANIRA_EDGE_UNKNOWN is no limit";
+    const ContractHandle limited{
+        anira::Hard{.budget = anira::Budget::measured(), .edge_cost = ANIRA_EDGE_UNIFIED_TRANSFER}};
+    EXPECT_EQ(anira_contract_edge_cost(limited.native()), ANIRA_EDGE_UNIFIED_TRANSFER);
+    const ContractHandle async_none{anira::Async{}};
+    EXPECT_EQ(anira_contract_edge_cost(async_none.native()), ANIRA_EDGE_UNKNOWN);
 }
 
 TEST(AbiCxx, ContractHandleMintsAnAsyncAggregate) {

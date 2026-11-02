@@ -200,8 +200,9 @@ inline std::string backend_label(anira_engine engine,
     return label;
 }
 
-/// The words of the edge classes, ordered by cost as the enum is: the "edge_cost" word of a
-/// contract file (the worst class a plan may take), the plan report's log lines, and the
+/// The words of the four classes of the cost scale, ordered by cost as the enum is: the
+/// "edge_cost" word of a contract file (the worst class a plan may take; a file without the key
+/// sets no limit, so ANIRA_EDGE_UNKNOWN has no word here), the plan report's log lines, and the
 /// messages about a plan dropped for its edges.
 inline constexpr std::array<std::pair<const char*, anira_edge_class>, 4> k_edge_class_words{{
     {"zero_copy", ANIRA_EDGE_ZERO_COPY},
@@ -210,16 +211,20 @@ inline constexpr std::array<std::pair<const char*, anira_edge_class>, 4> k_edge_
     {"dedicated_transfer", ANIRA_EDGE_DEDICATED_TRANSFER},
 }};
 
-/// The word of an edge class; "unknown" for a value the enum does not name.
+/// The word of an edge class in a log line or a message: a scale class's word, "unknown" for
+/// ANIRA_EDGE_UNKNOWN, "unnamed" for a value the enum does not name.
 inline constexpr const char* edge_class_word(anira_edge_class edge_class) noexcept {
+    if (edge_class == ANIRA_EDGE_UNKNOWN) { return "unknown"; }
     for (const auto& [name, value] : k_edge_class_words) {
         if (value == edge_class) { return name; }
     }
-    return "unknown";
+    return "unnamed";
 }
 
-/// Whether a value is an edge class the enum names.
+/// Whether a value is an edge class the enum names: a class of the cost scale or
+/// ANIRA_EDGE_UNKNOWN.
 inline constexpr bool known_edge_class(anira_edge_class edge_class) noexcept {
+    if (edge_class == ANIRA_EDGE_UNKNOWN) { return true; }
     for (const auto& [name, value] : k_edge_class_words) {
         if (value == edge_class) { return true; }
     }

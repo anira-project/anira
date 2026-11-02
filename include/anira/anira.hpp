@@ -963,11 +963,13 @@ struct Hard {
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
     /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
-    /// contract file's "edge_cost"): prepare drops a plan above it. ANIRA_EDGE_DEDICATED_TRANSFER,
-    /// the default, admits every edge; ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU
-    /// and a device within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between
-    /// domains, ANIRA_EDGE_ZERO_COPY no copy at all.
-    anira_edge_class edge_cost = ANIRA_EDGE_DEDICATED_TRANSFER;
+    /// contract file's "edge_cost"): prepare drops a plan above it. A class of the cost scale is
+    /// a limit: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge,
+    /// ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified memory
+    /// only (no bus), ANIRA_EDGE_COPY no crossing between domains, ANIRA_EDGE_ZERO_COPY no copy at
+    /// all, and every limit refuses an ANIRA_EDGE_UNKNOWN edge. std::nullopt, the default, is no
+    /// limit: every edge, an unknown one included (the C value ANIRA_EDGE_UNKNOWN).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 /// Jobs without a real-time deadline: the offline posture.
@@ -978,8 +980,9 @@ struct Async {
     uint32_t lanes = 0;
     uint32_t max_in_flight = 0;
     anira_delivery delivery = ANIRA_DELIVERY_POLLED;
-    /// The worst edge class a plan may take for any slot, as Hard::edge_cost.
-    anira_edge_class edge_cost = ANIRA_EDGE_DEDICATED_TRANSFER;
+    /// The worst edge class a plan may take for any slot, as Hard::edge_cost (std::nullopt: no
+    /// limit).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 using Contract = std::variant<Hard, Async>;
@@ -1031,7 +1034,7 @@ inline anira_contract* mint(const Hard& hard) {
             check(anira_contract_hard_set_latency(contract, name.c_str(), samples),
                   "anira_contract_hard_set_latency");
         }
-        check(anira_contract_set_edge_cost(contract, hard.edge_cost),
+        check(anira_contract_set_edge_cost(contract, hard.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1057,7 +1060,7 @@ inline anira_contract* mint(const Async& async) {
                                               async.max_in_flight,
                                               async.delivery),
               "anira_contract_async_set_policy");
-        check(anira_contract_set_edge_cost(contract, async.edge_cost),
+        check(anira_contract_set_edge_cost(contract, async.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1226,10 +1229,12 @@ public:
         return *this;
     }
     /// The worst edge class a plan may take for any slot, on either contract kind
-    /// (anira_contract_set_edge_cost, Hard::edge_cost): prepare drops a plan above it.
-    ContractHandle& edge_cost(anira_edge_class worst_allowed) {
-        detail::check(anira_contract_set_edge_cost(m_contract, worst_allowed),
-                      "anira_contract_set_edge_cost");
+    /// (anira_contract_set_edge_cost, Hard::edge_cost): prepare drops a plan above it, and any
+    /// limit drops a plan with an ANIRA_EDGE_UNKNOWN edge; std::nullopt restores no limit.
+    ContractHandle& edge_cost(std::optional<anira_edge_class> worst_allowed) {
+        detail::check(
+            anira_contract_set_edge_cost(m_contract, worst_allowed.value_or(ANIRA_EDGE_UNKNOWN)),
+            "anira_contract_set_edge_cost");
         return *this;
     }
     /// The host-end domain of one tensor, by canonical name, on either contract kind
@@ -1313,7 +1318,10 @@ public:
                           "anira_contract_hard_latency");
             out.latencies.emplace(name, samples);
         }
-        out.edge_cost = anira_contract_edge_cost(m_contract);
+        if (const anira_edge_class limit = anira_contract_edge_cost(m_contract);
+            limit != ANIRA_EDGE_UNKNOWN) {
+            out.edge_cost = limit;
+        }
         return out;
     }
 
@@ -3176,11 +3184,11 @@ public:
         /// same lock. `provider_rule` is what anira reports without a statement, and the base
         /// returns it: zero-copy on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider
         /// ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory,
-        /// ANIRA_EDGE_DEDICATED_TRANSFER where it has memory of its own or no probe established
-        /// which (the plan row's memory_kind, anira_memory_kind), the reason saying which and what
-        /// the probe saw. An engine that copies the slot into host memory of its own returns
-        /// ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails with the status,
-        /// and the Loaded is deleted.
+        /// ANIRA_EDGE_DEDICATED_TRANSFER where it has memory of its own, ANIRA_EDGE_UNKNOWN where
+        /// no probe established which (the plan row's memory_kind, anira_memory_kind), the reason
+        /// saying which and what the probe saw. An engine that copies the slot into host memory of
+        /// its own returns ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails
+        /// with the status, and the Loaded is deleted.
         virtual EngineEdge edge(bool /*is_input*/,
                                 uint32_t /*slot*/,
                                 const EngineEdge& provider_rule) const {

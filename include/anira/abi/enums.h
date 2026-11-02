@@ -500,12 +500,15 @@ typedef enum anira_log_drain {
 } anira_log_drain;
 
 /**
- * @brief Where an edge takes a tensor's bytes (section 7), ordered by cost, so the worst edge
+ * @brief Where an edge takes a tensor's bytes (section 7). ANIRA_EDGE_ZERO_COPY to
+ * ANIRA_EDGE_DEDICATED_TRANSFER are the cost scale, ordered by cost, so the worst edge
  * of a chain is the largest value and an edge of several moves has the class of its
- * worst. The class covers the bytes from the slot's memory until the engine computes on
- * them, and back for outputs; layout transforms inside a runtime's graph are not edges.
- * Who executes the moves is the row's anira_mover_flags bits, whether the edge exists
- * its available flag (anira_edge_info).
+ * worst. ANIRA_EDGE_UNKNOWN stands outside the scale and above it (the values between
+ * are room for classes to come), so a chain or a plan with an unknown edge is unknown
+ * and the worst-of-chain maximum still holds. The class covers the bytes from the slot's
+ * memory until the engine computes on them, and back for outputs; layout transforms
+ * inside a runtime's graph are not edges. Who executes the moves is the row's
+ * anira_mover_flags bits, whether the edge exists its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
     /**
@@ -528,11 +531,18 @@ typedef enum anira_edge_class {
     /**
      * The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory
      * (a discrete GPU's VRAM, ANIRA_MEMORY_DEDICATED), a discrete device reading mapped host
-     * memory, a copy between two devices. Also the class of a device provider whose memory kind
-     * no probe established (ANIRA_MEMORY_UNKNOWN), the reason saying "memory kind not probed"
-     * and why.
+     * memory, a copy between two devices.
      */
     ANIRA_EDGE_DEDICATED_TRANSFER = 3,
+    /**
+     * A crossing whose memory kind no probe could establish (ANIRA_MEMORY_UNKNOWN: the device's
+     * API is missing or failed, the provider maps to no API anira can ask, the adapters a
+     * self-choosing runtime picks among disagree), the reason saying "memory kind not probed"
+     * and why. Outside the cost scale: every limit of the contract's edge cost refuses it, and
+     * as the limit itself (anira_contract_set_edge_cost) it means no limit, even unknown edges
+     * allowed.
+     */
+    ANIRA_EDGE_UNKNOWN = 255,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
 } anira_edge_class;
 
@@ -580,8 +590,8 @@ typedef enum anira_memory_kind {
     /**
      * No probe established it: the device's API is missing or failed, the provider maps to no
      * API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing
-     * runtime picks among disagree. Counted as dedicated until a probe shows unified: the edge
-     * is a dedicated transfer.
+     * runtime picks among disagree. The edge is ANIRA_EDGE_UNKNOWN, which every limit of the
+     * edge cost refuses.
      */
     ANIRA_MEMORY_UNKNOWN = 0,
     /**

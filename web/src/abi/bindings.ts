@@ -1604,20 +1604,24 @@ export class AniraBindings {
   /**
    * The edge cost of the plans (section 7), plan validation, not scheduling: at
    * anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is
-   * not eligible: it is dropped from the plans, under the default candidate set and named
-   * candidates alike, with an Info record of the group anira.capi naming each such slot,
-   * its class, who moves its bytes and why; the report and the plan indices hold the
-   * eligible plans alone. The session is then made again over the remaining plans while
-   * the first still holds their loaded models, so no model loads twice; an exclusive
-   * session's own executor is made, and warmed up, a second time. The edge is the plan
-   * engine's (anira_plan_slot.edge_class), known once its model has loaded.
+   * not eligible (an ANIRA_EDGE_UNKNOWN edge is above every class of the scale, so any
+   * limit refuses it; with no limit nothing is checked): it is dropped from the plans,
+   * under the default candidate set and named candidates alike, with an Info record of
+   * the group anira.capi naming each such slot, its class, who moves its bytes and why;
+   * the report and the plan indices hold the eligible plans alone. The session is then
+   * made again over the remaining plans while the first still holds their loaded models,
+   * so no model loads twice; an exclusive session's own executor is made, and warmed up,
+   * a second time. The edge is the plan engine's (anira_plan_slot.edge_class), known once
+   * its model has loaded.
    *
    * @param contract Either contract kind.
-   * @param worst_allowed The worst class a plan may take for any of its slots:
-   *   ANIRA_EDGE_DEDICATED_TRANSFER (the default) admits every edge,
+   * @param worst_allowed The worst class a plan may take for any of its slots, a limit of
+   *   the cost scale or none: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge,
    *   ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified
    *   memory only (no bus), ANIRA_EDGE_COPY no crossing between domains,
-   *   ANIRA_EDGE_ZERO_COPY no copy at all.
+   *   ANIRA_EDGE_ZERO_COPY no copy at all; under each of them an ANIRA_EDGE_UNKNOWN edge is
+   *   refused. ANIRA_EDGE_UNKNOWN, the default, is no limit: every edge allowed, even
+   *   unknown ones.
    * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value
    *   anira_edge_class does not name. A failed status throws an AniraError.
    * Thread: [main-thread]
@@ -3302,8 +3306,8 @@ export class AniraBindings {
    *
    * @param utf8 The document text: {"hard": {...}} or {"async": {...}} with an optional
    *   top-level edge_cost (the worst edge class allowed, by its word: "zero_copy", "copy",
-   *   "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost) and an
-   *   optional top-level host_domains ({"<name>": "<domain word>"},
+   *   "unified_transfer" or "dedicated_transfer"; anira_contract_set_edge_cost; without the
+   *   key no limit) and an optional top-level host_domains ({"<name>": "<domain word>"},
    *   anira_contract_set_host_domain), or a v2 document.
    * @returns What the entry writes to out. A failed status throws an AniraError with the
    *   entry's message.
@@ -4019,10 +4023,10 @@ export class AniraBindings {
 
   /**
    * The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may
-   * take.
+   * take, ANIRA_EDGE_UNKNOWN for no limit (even unknown edges allowed).
    *
    * @param contract Either contract kind.
-   * @returns The class; ANIRA_EDGE_DEDICATED_TRANSFER, the default, for NULL.
+   * @returns The class; ANIRA_EDGE_UNKNOWN, the default (no limit), for NULL.
    * Thread: [main-thread]
    */
   anira_contract_edge_cost(contract: number): number {
@@ -4260,12 +4264,13 @@ export class AniraBindings {
    * of this pre-release: zero-copy to a provider that runs over host memory; to a device
    * provider a move the engine's runtime makes itself, whose class follows the device's
    * memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory). The first read of a
-   * device provider's row asks its device's API (the unified-memory probe, run lazily, on
-   * a thread of its own, waited for 5 s at most per API, never at the context's creation)
-   * and the context keeps the answer. Stride-explicit enumeration. The strings the rows
-   * point to (to_provider_id, reason) are the context's: to_provider_id valid until its
-   * next anira_context_probe replaces it, reason until the context is destroyed.
+   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
+   * memory). The first read of a device provider's row asks its device's API (the
+   * unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per
+   * API, never at the context's creation) and the context keeps the answer.
+   * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
+   * are the context's: to_provider_id valid until its next anira_context_probe replaces
+   * it, reason until the context is destroyed.
    *
    * @param capabilities The capabilities.
    * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of
@@ -5474,10 +5479,11 @@ export class AniraBindings {
    * without a copy; to every other provider a move the engine makes itself
    * (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the provider's device as
    * the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory), the reason saying the
-   * engine declared the provider and its query reported it usable, and the memory kind
-   * with what the probe saw. Only the row asked is probed. The strings' lifetime is
-   * anira_pipeline_capabilities_backends's, the reason's the context's.
+   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
+   * memory), the reason saying the engine declared the provider and its query reported it
+   * usable, and the memory kind with what the probe saw. Only the row asked is probed.
+   * The strings' lifetime is anira_pipeline_capabilities_backends's, the reason's the
+   * context's.
    *
    * @param pipeline The pipeline whose custom engines are asked.
    * @param context The context whose edge registry answers for a built-in engine.
@@ -5602,23 +5608,24 @@ export class AniraBindings {
    * entry (a device provider's with the memory kind of its device, the context's kept
    * answer or its device API's asked now, which its slot classes follow:
    * anira_plan_info.memory_kind), warms up as the contract says, drops every plan with a
-   * slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost; an
-   * Info record per dropped plan names the slots, their class, mover and reason), sizes
-   * the rings for the contract's block range and the latency, builds the plan report,
-   * selects the plan of the variant's default engine when that engine has a plan (else
-   * plan 0), logs the report (Info records of the group anira.capi: the counts and the
-   * selected plan, then one record per plan, per slot and per consumed extension) re-arms
-   * the real-time latches, logging the count of failures suppressed since the last
-   * prepare or reset, and last calls the processor's prepare function, when the pipeline
-   * has a processor with one, with an anira_prepare_info (the handler, the report, the
-   * entry count, a template of the model end of every slot and the canonical names) and
-   * keeps the prepared pointer it hands back for this handler (a status other than
-   * ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare).
-   * A second prepare replaces the previous session whole: the processor's unprepare of
-   * the previous prepare runs once the old session is released, before the new prepare. A
-   * failed prepare leaves the handler unprepared, the previous prepare's unprepare called
-   * all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED
-   * and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and
+   * slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost: an
+   * ANIRA_EDGE_UNKNOWN edge is above every limit; an Info record per dropped plan names
+   * the slots, their class, mover and reason), sizes the rings for the contract's block
+   * range and the latency, builds the plan report, selects the plan of the variant's
+   * default engine when that engine has a plan (else plan 0), logs the report (Info
+   * records of the group anira.capi: the counts and the selected plan, then one record
+   * per plan, per slot and per consumed extension) re-arms the real-time latches, logging
+   * the count of failures suppressed since the last prepare or reset, and last calls the
+   * processor's prepare function, when the pipeline has a processor with one, with an
+   * anira_prepare_info (the handler, the report, the entry count, a template of the model
+   * end of every slot and the canonical names) and keeps the prepared pointer it hands
+   * back for this handler (a status other than ANIRA_OK fails this call with it, and
+   * unprepare is not called for a refused prepare). A second prepare replaces the
+   * previous session whole: the processor's unprepare of the previous prepare runs once
+   * the old session is released, before the new prepare. A failed prepare leaves the
+   * handler unprepared, the previous prepare's unprepare called all the same. Refused in
+   * this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and
+   * ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and
    * FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a
    * streamed output's channel count or ring dtype differs from the anchored input's,
    * ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring

@@ -484,7 +484,7 @@ TEST(AbiJsonContract, HardAndAsyncFiles) {
     EXPECT_EQ(hard->hard()->m_host_rate, 48000.0);
     EXPECT_EQ(hard->hard()->m_budget, ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(hard->hard()->m_warmup, ANIRA_WARMUP_UNTIL_STABLE);
-    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_DEDICATED_TRANSFER);
+    EXPECT_EQ(hard->m_edge_cost, ANIRA_EDGE_UNKNOWN) << "no edge_cost key: no limit";
     anira_contract_destroy(hard);
 
     anira_contract* async_contract = nullptr;
@@ -716,6 +716,9 @@ TEST(AbiJsonContract, Rejections) {
         {R"({"edge_cost": "zero_copy"})", "exactly one root"},
         {R"({"hard": {}, "edge_cost": "strict"})",
          R"("strict" is not one of "zero_copy", "copy", "unified_transfer", "dedicated_transfer")"},
+        // No limit is the missing key: ANIRA_EDGE_UNKNOWN has no word.
+        {R"({"hard": {}, "edge_cost": "unknown"})",
+         R"("unknown" is not one of "zero_copy", "copy", "unified_transfer", "dedicated_transfer")"},
         {R"({"hard": {"budget": "guess"}})", "hard.budget"},
         {R"({"hard": {"warmup": {"fixed": -1}}})", "hard.warmup.fixed"},
         {R"({"hard": {"host_block_min": 9, "host_block_max": 1}})",
