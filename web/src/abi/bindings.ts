@@ -1119,11 +1119,11 @@ export class AniraBindings {
    * prepare): every state input names exactly one state output and every state output is
    * named by exactly one state input; the two halves have equal dtype and shape; a state
    * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor
-   * the anchor may name it. A state pair may have any dtype, unlike every other model
-   * tensor of this pre-release, which is float32: its buffers take the spec's dtype and a
-   * custom engine binds what its load accepts, while a built-in engine refuses a
-   * non-float32 tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state
-   * tensor with a transposed layout. A second call replaces the name.
+   * the anchor may name it. Its buffers take the spec's dtype, as every model tensor
+   * does: a custom engine binds what its load accepts, and a built-in engine refuses at
+   * load (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry.
+   * ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second call
+   * replaces the name.
    *
    * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
    * @param output_canonical The canonical name of the state output this input is fed
@@ -1463,14 +1463,16 @@ export class AniraBindings {
    * ring, a ring dtype that differs from the spec's dtype (the model's) is
    * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase
    * that moves that ring (pre_process for an input, post_process for an output) and so
-   * takes the difference on itself; the default bodies of anira/abi/processor.h still
-   * refuse such a slot at run time. Set per tensor by canonical name, so an input and an
-   * output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
-   * Streamed tensor is checked at prepare, not here.
+   * takes the difference on itself; the default bodies of anira/abi/processor.h refuse
+   * such a slot at run time. Set per tensor by canonical name, so an input and an output
+   * may differ; a tensor never set streams its spec's dtype, so a host whose samples are
+   * the model's sets nothing, and one of another sample type sets its type here and adds
+   * the converting processor. A name that matches no Streamed tensor is checked at
+   * prepare, not here.
    *
    * @param contract A Hard contract.
    * @param canonical The tensor's canonical name (the one its spec was created with).
-   * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32
+   * @param dtype The element type of the host's samples for that tensor; the spec's dtype
    *   for every tensor that was never set.
    * @returns ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
    *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
@@ -2432,7 +2434,9 @@ export class AniraBindings {
    *
    * @param config The config.
    * @param model_index An entry.
-   * @returns Object-owned; NULL for a bytes entry or an index out of range.
+   * @returns Object-owned; NULL for a NULL config, an index out of range, a bytes entry
+   *   and an entry without a source (anira_model_config_add_model_path with a NULL path: a
+   *   custom engine's entry that names no model file).
    * Thread: [main-thread]
    */
   anira_model_config_model_path(config: number, model_index: number): string | null {
@@ -3907,7 +3911,7 @@ export class AniraBindings {
 
   /**
    * The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
-   * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+   * ring_dtypes) named; every other tensor's ring dtype is its spec's dtype.
    *
    * @param contract A Hard contract.
    * @returns The count; 0 on an Async contract and for NULL.
@@ -3920,8 +3924,9 @@ export class AniraBindings {
 
   /**
    * One ring dtype the contract names, enumerated by index in bytewise order of the
-   * canonical names: what lists what was set, which a lookup by name could not (it would
-   * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+   * canonical names: what lists what was set. A name it does not list streams its spec's
+   * dtype, which the contract does not know (a contract has no model), so a lookup by
+   * name could not answer it.
    *
    * @param contract A Hard contract.
    * @param index Below anira_contract_hard_num_ring_dtypes.
@@ -4586,10 +4591,10 @@ export class AniraBindings {
 
   /**
    * The element type the ring stores: the ring dtype the host declared for the slot on
-   * the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing
-   * was declared. It is never inferred from the tensor spec's dtype, which may differ
-   * when the processor converts; every data accessor states the dtype it believes it is
-   * reading or writing.
+   * the Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing
+   * was declared. The two differ only where the contract names another dtype, which a
+   * processor that converts goes with; every data accessor states the dtype it believes
+   * it is reading or writing.
    *
    * @param ring A ring of the processor context, or NULL.
    * @returns The ring's dtype; 0, which is no dtype, for a NULL ring.
@@ -6923,17 +6928,18 @@ export class AniraBindings {
    *   (emscriptenGetAudioObject gives the AudioWorkletNode).
    * @returns ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a
    *   NULL handler or out word, a slot list longer than 32 or without its pointer, a slot
-   *   listed twice, a slot that is not a Streamed slot of its side with a float32 ring, a
-   *   Streamed slot no input or output serves (without
-   *   ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot
-   *   of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler;
-   *   ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the
-   *   quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is
-   *   not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's
-   *   worklet thread failed to start (later failures land in out_status:
-   *   ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN
-   *   for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY. A failed status throws an
-   *   AniraError with the entry's message.
+   *   listed twice, a slot that is not a Streamed slot of its side, a Streamed slot no
+   *   input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node
+   *   without any input or output, a slot of more than 64 channels;
+   *   ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a
+   *   contract that is not Hard or whose block range excludes the quantum, a Streamed slot
+   *   whose ring dtype is not float32, a parameter slot that is not a float32 Static
+   *   scalar, a tensor slot that is not Static or has a dynamic extent;
+   *   ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later
+   *   failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that
+   *   failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
+   *   ANIRA_ERROR_OUT_OF_MEMORY. A failed status throws an AniraError with the entry's
+   *   message.
    * Thread: [main-thread]
    */
   anira_em_audio_node_create(

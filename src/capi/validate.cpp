@@ -54,15 +54,6 @@ const char* role_word(anira_role role) {
     }
 }
 
-std::string hex_dtype(anira_dtype dtype) {
-    static constexpr const char* k_digits = "0123456789abcdef";
-    std::string text = "0x";
-    for (int shift = 28; shift >= 0; shift -= 4) {
-        text += k_digits[(dtype >> static_cast<unsigned>(shift)) & 0xfU];
-    }
-    return text;
-}
-
 std::string engines_list(const std::vector<anira_engine>& engines) {
     std::string text;
     for (const anira_engine engine : engines) {
@@ -136,6 +127,7 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
     size_t time_count = 0;
     size_t channel_count = 0;
     out.m_dims.assign(spec.m_ndim, 0);
+    out.m_dtype = spec.m_dtype;
     for (size_t i = 0; i < spec.m_ndim; ++i) {
         const Axis& axis = spec.m_axes[i];
         if (!axis.m_written) {
@@ -226,16 +218,14 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
         config_error(where + "latency must not be negative (got " + std::to_string(spec.m_latency) +
                      ")");
     }
-    // The queue stores float32 in this pre-release: every tensor that travels through it (a
-    // Streamed one through its ring and the chunk's buffer, a Static one materialised into the
-    // chunk's buffer) is float32 until the typed storage arrives. A State tensor travels
-    // through neither: its pair lives in the handler's two buffers in the spec's dtype (port.h),
-    // which the engine is bound to as they are, so the rule does not stand on it (a built-in
-    // engine refuses a model with a non-float32 tensor at load; a registered engine binds
-    // what its load accepts).
-    if (spec.m_dtype != ANIRA_DTYPE_F32 && spec.m_role != ANIRA_ROLE_STATE) {
-        not_supported(where + "dtype " + hex_dtype(spec.m_dtype) +
-                      ": the queue stores float32 in this pre-release");
+    // A model tensor travels in its spec's dtype end to end (its ring, its chunk buffer, its
+    // Static store, its State pair): one of the ten dtypes anira names, each with a ring arm and
+    // a word. Another (several lanes, an unsigned integer wider than 8 bits) has neither. What
+    // an engine carries is the engine's to refuse, at load.
+    if (!known_dtype(spec.m_dtype)) {
+        not_supported(where + "dtype " + dtype_label(spec.m_dtype) +
+                      ": anira carries float32, float64, float16, bfloat16, int8, uint8, int16, "
+                      "int32, int64 and bool");
     }
     out.m_time_axis = time_axis;
 
@@ -298,11 +288,12 @@ void check_contract(const anira_contract& contract,
             processors != nullptr &&
             (is_input ? processors->m_fills_pre : processors->m_fills_post);
         if (dtype != spec->m_dtype && !processor_moves_ring) {
-            config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
-                         " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (add a processor that fills " +
+            config_error("contract: the ring dtype of '" + name + "' is " + dtype_label(dtype) +
+                         " but its spec's dtype is " + dtype_label(spec->m_dtype) +
+                         "; nothing converts: add a processor that fills " +
                          phase_word(is_input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS) +
-                         " and converts, anira_pipeline_add_processor)");
+                         " and converts (anira_pipeline_add_processor), or drop the ring dtype "
+                         "to stream the spec's");
         }
     }
     // The declared stream latency rules: the figure replaces the computed one for a stream,
@@ -408,8 +399,8 @@ void check_state(const anira_model_config& model) {
                          input.m_name + "'); a State output feeds exactly one State input");
         }
         if (output.m_dtype != input.m_dtype) {
-            config_error(at(input) + "dtype " + hex_dtype(input.m_dtype) +
-                         " differs from the dtype " + hex_dtype(output.m_dtype) +
+            config_error(at(input) + "dtype " + dtype_label(input.m_dtype) +
+                         " differs from the dtype " + dtype_label(output.m_dtype) +
                          " of its state_source '" + output.m_name +
                          "'; the two halves of a state pair have one dtype");
         }
@@ -1014,9 +1005,14 @@ void validate(const anira_model_config& model,
 }
 
 anira::RingDtypes ring_dtypes_of(const anira_contract& contract, const anira_model_config& model) {
+    // A tensor the contract names no ring dtype for streams its spec's dtype.
     anira::RingDtypes dtypes;
-    dtypes.m_inputs.assign(model.m_inputs.size(), ANIRA_DTYPE_F32);
-    dtypes.m_outputs.assign(model.m_outputs.size(), ANIRA_DTYPE_F32);
+    for (const anira_tensor_spec& spec : model.m_inputs) {
+        dtypes.m_inputs.push_back(spec.m_dtype);
+    }
+    for (const anira_tensor_spec& spec : model.m_outputs) {
+        dtypes.m_outputs.push_back(spec.m_dtype);
+    }
     const HardContract* hard = contract.hard();
     if (hard == nullptr) { return dtypes; }
     for (const auto& [name, dtype] : hard->m_ring_dtypes) {

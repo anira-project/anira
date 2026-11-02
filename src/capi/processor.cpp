@@ -31,6 +31,7 @@
 #include <vector>
 
 #include "../scheduler/SessionElement.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/Logger.h"
 #include "../utils/RingBuffer.h"
 #include "../utils/RtLatch.h"
@@ -244,7 +245,7 @@ anira_status ctx_ring(const anira_processor_ctx* ctx,
 }
 
 // The model end of a slot: a copy of the chunk's descriptor of it (216 bytes, the record the
-// engine call hands its adapter: the spec's shape, the storage's dtype, the struct's memory of
+// engine call hands its adapter: the spec's shape and dtype, the struct's memory of
 // the moment, which the scheduler re-points at every claim). Nothing of it survives a call.
 // The frame names the descriptors of a side only in the phases that expose it, and a State slot
 // has no host end (it is fed behind pre_process and captured ahead of post_process), so the two
@@ -805,8 +806,9 @@ anira_status ProcessorRunner::pre_process(Chunk& chunk) noexcept {
         const auto* fixed = std::get_if<StaticPort>(&m_input_ports[tensor]);
         if (fixed == nullptr) { continue; }
         const anira_tensor& model_end = chunk.m_input_tensors[tensor];
-        fixed->m_value.read_packed(model_end.handle.host.ptr,
-                                   anira_tensor_num_elements(&model_end) * sizeof(float));
+        fixed->m_value.read_packed(
+            model_end.handle.host.ptr,
+            anira_tensor_num_elements(&model_end) * tensor_run::dtype_size(model_end.dtype));
     }
     const ProcessorFrame frame = make_frame_with_inputs(chunk);
     const anira_processor_ctx ctx = make_ctx(ANIRA_PHASE_PRE_PROCESS, chunk, frame);
@@ -854,8 +856,9 @@ anira_status ProcessorRunner::post_process(Chunk& chunk) noexcept {
         auto* fixed = std::get_if<StaticPort>(&m_output_ports[tensor]);
         if (fixed == nullptr) { continue; }
         const anira_tensor& model_end = chunk.m_output_tensors[tensor];
-        fixed->m_value.write_packed(model_end.handle.host.ptr,
-                                    anira_tensor_num_elements(&model_end) * sizeof(float));
+        fixed->m_value.write_packed(
+            model_end.handle.host.ptr,
+            anira_tensor_num_elements(&model_end) * tensor_run::dtype_size(model_end.dtype));
     }
     return status;
 }

@@ -75,8 +75,8 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
 
 /**
- * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
- * never set on a Hard contract and the only one anira_tensor_data_f32 returns.
+ * @brief 32-bit float, one lane: the type of every 2.x stream and the only one
+ * anira_tensor_data_f32 returns.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
@@ -333,8 +333,7 @@ typedef enum anira_role {
      * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
      * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
      * more with an extent of 0). A processor sees it at the same slot. No Time axis, window,
-     * time ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
-     * every model tensor.
+     * time ratio or latency; the value takes the spec's dtype, like every model tensor.
      */
     ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff

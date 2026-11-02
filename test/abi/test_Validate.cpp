@@ -31,6 +31,7 @@
 #include "capi/validate.h"
 #include "fixtures.h"
 #include "scheduler/LatencyCalculator.h"
+#include "scheduler/SessionElement.h"
 #include "utils/StatusError.h"
 
 namespace {
@@ -941,17 +942,54 @@ TEST(AbiValidate, LatencyIsAnOutputProperty) {
     expect_contains(outcome.m_message, "tensor 'in': latency is an output property");
 }
 
-TEST(AbiValidate, ANonFloat32DtypeIsNotSupported) {
+// A model tensor of any dtype anira names derives (a Streamed int16 output beside a float32
+// input; their rings stream each spec's dtype); a dtype anira does not name (four lanes, an
+// unsigned 16-bit integer) has no ring and no word and is NOT_SUPPORTED, naming the tensor.
+TEST(AbiValidate, ADtypeAniraDoesNotNameIsNotSupported) {
+    const auto with_output = [](anira_dtype dtype) {
+        ModelConfig model;
+        model.add_model_path(k_custom, "model.custom");
+        model.input(streamed("in"));
+        model.output(TensorSpec("out", dtype, ANIRA_ROLE_STREAMED)
+                         .axis(0, ANIRA_AXIS_TIME, 512)
+                         .window(512, 512, 0));
+        return model;
+    };
+    Outcome outcome = derive(with_output(ANIRA_DTYPE_I16));
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    for (const anira_dtype dtype :
+         {ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_MAKE_DTYPE(ANIRA_DTYPE_UINT, 16, 1)}) {
+        outcome = derive(with_output(dtype));
+        EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
+        expect_contains(outcome.m_message, "tensor 'out': dtype 0x");
+        expect_contains(outcome.m_message, "anira carries float32, float64, float16");
+    }
+}
+
+// A tensor the contract names no ring dtype for streams its spec's dtype; a named one streams
+// the dtype it is named with (ring_dtypes_of, which runs after validate).
+TEST(AbiValidate, ARingDtypeDefaultsToTheSpecsDtype) {
+    const auto int16_stream = [](std::string_view name) {
+        TensorSpec spec(name, ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED);
+        spec.axis(0, ANIRA_AXIS_TIME, 512).window(512, 512, 0);
+        return spec;
+    };
     ModelConfig model;
     model.add_model_path(k_custom, "model.custom");
     model.input(streamed("in"));
-    model.output(TensorSpec("out", ANIRA_DTYPE_I16, ANIRA_ROLE_STREAMED)
-                     .axis(0, ANIRA_AXIS_TIME, 512)
-                     .window(512, 512, 0));
-    const Outcome outcome = derive(model);
-    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(outcome.m_message, "tensor 'out': dtype");
-    expect_contains(outcome.m_message, "the queue stores float32");
+    model.input(int16_stream("in16"));
+    model.output(int16_stream("out16"));
+    model.output(streamed("out"));
+    ContractHandle contract(explicit_hard());
+    contract.hard_ring_dtype("in", ANIRA_DTYPE_I16);
+    const anira::RingDtypes dtypes =
+        anira::capi::ring_dtypes_of(*contract.native(), *model.native());
+    ASSERT_EQ(dtypes.m_inputs.size(), 2U);
+    ASSERT_EQ(dtypes.m_outputs.size(), 2U);
+    EXPECT_EQ(dtypes.m_inputs[0], ANIRA_DTYPE_I16) << "named in the contract";
+    EXPECT_EQ(dtypes.m_inputs[1], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[0], ANIRA_DTYPE_I16) << "not named: its spec's dtype";
+    EXPECT_EQ(dtypes.m_outputs[1], ANIRA_DTYPE_F32) << "not named: its spec's dtype";
 }
 
 TEST(AbiValidate, NoStreamedTensorIsConfig) {

@@ -6,12 +6,27 @@
 //
 // It loads onnxruntime-web's wasm module in each Worker and calls its C API synchronously from
 // the Worker's loop, mirroring the built-in ONNX Runtime engine (src/engines/OnnxRuntimeAdapter.cpp):
-// one float32 ORT tensor per model tensor of the call, shaped by the session's metadata (a single
-// dynamic dimension resolved from the element count), the outputs copied into the call's tensors.
+// one ORT tensor per model tensor of the call, of the tensor's dtype (the spec's: every dtype anira
+// names, as ONNX's element type), shaped by the session's metadata (a single dynamic dimension
+// resolved from the element count), the outputs copied into the call's tensors. The data is
+// copied both ways: anira's module and onnxruntime-web's are two wasm memories.
 // The module's own ONNX Runtime ("engine": "onnxruntime") needs none of this; this engine is for a
 // page that wants onnxruntime-web's build, or more than one thread per inference (`numThreads`),
 // which the module's own engine cannot have: the module starts no pthread.
-import { anira_status } from '../abi/enums'
+import {
+  ANIRA_DTYPE_BF16,
+  ANIRA_DTYPE_BOOL8,
+  ANIRA_DTYPE_F16,
+  ANIRA_DTYPE_F32,
+  ANIRA_DTYPE_F64,
+  ANIRA_DTYPE_I16,
+  ANIRA_DTYPE_I32,
+  ANIRA_DTYPE_I64,
+  ANIRA_DTYPE_I8,
+  ANIRA_DTYPE_U8,
+  anira_status,
+} from '../abi/enums'
+import { dtypeBytes } from '../dtype'
 import {
   engineTensors,
   type Engine,
@@ -104,7 +119,30 @@ interface OrtWasmModule {
   PTR_SIZE: number
 }
 
-type TensorMeta = { namePtr: number; dims: number[] }
+/** A model tensor as the session's metadata describes it, with its ONNX element type. */
+type TensorMeta = { namePtr: number; dims: number[]; onnxType: number }
+
+// ONNX's element type (TensorProto.DataType, what _OrtCreateTensor takes) of each dtype anira
+// names.
+const ONNX_TYPES = new Map<number, number>([
+  [ANIRA_DTYPE_F32, 1],
+  [ANIRA_DTYPE_U8, 2],
+  [ANIRA_DTYPE_I8, 3],
+  [ANIRA_DTYPE_I16, 5],
+  [ANIRA_DTYPE_I32, 6],
+  [ANIRA_DTYPE_I64, 7],
+  [ANIRA_DTYPE_BOOL8, 9],
+  [ANIRA_DTYPE_F16, 10],
+  [ANIRA_DTYPE_F64, 11],
+  [ANIRA_DTYPE_BF16, 16],
+])
+
+/** The anira dtype of an ONNX element type; undefined for one anira does not name. */
+const dtypeOfOnnx = (onnxType: number): number | undefined =>
+  [...ONNX_TYPES].find(([, type]) => type === onnxType)?.[0]
+
+/** The bytes of one input of a run, the tensor's dtype and the dims it is shaped by. */
+type RunInput = { bytes: Uint8Array; dtype: number; dims: number[] }
 
 // One ORT runtime per scope, shared by the scope's engines, with the thread count it started with.
 let ortRuntime: { module: Promise<OrtWasmModule>; numThreads: number } | null = null
@@ -242,12 +280,21 @@ class OnnxRuntimeWebEngine implements Engine {
     this.warmUp(this.options.warmup ?? 0)
   }
 
-  // `iterations` runs over zeros of the inputs' shapes, a dynamic extent taken as 1.
+  // `iterations` runs over zeros of the inputs' shapes (a dynamic extent taken as 1) and the
+  // model's element types.
   private warmUp(iterations: number): void {
-    const inputs = this.inputs.map((meta) => {
+    if (iterations === 0) return
+    const inputs = this.inputs.map((meta): RunInput => {
       const dims = meta.dims.map((d) => (d < 0 ? 1 : d))
       const elements = dims.reduce((product, d) => product * d, 1)
-      return { data: new Float32Array(elements), elements, dims }
+      const dtype = dtypeOfOnnx(meta.onnxType)
+      if (dtype === undefined) {
+        throw new Error(
+          `onnxruntime-web: warm-up: the model's input is of ONNX element type ` +
+            `${meta.onnxType}, which anira names no dtype for`
+        )
+      }
+      return { bytes: new Uint8Array(elements * dtypeBytes(dtype)), dtype, dims }
     })
     for (let k = 0; k < iterations; k++) {
       if (!this.run(inputs, () => {})) {
@@ -260,13 +307,28 @@ class OnnxRuntimeWebEngine implements Engine {
     const ort = this.ort
     if (!ort || this.session === 0) return anira_status.ANIRA_ERROR_INVALID_STATE
     const { inputs, outputs } = engineTensors(this.env, ctx)
-    if (inputs.some((t) => t.f32 === null) || outputs.some((t) => t.f32 === null)) {
-      return anira_status.ANIRA_ERROR_NOT_SUPPORTED // float32 host tensors alone
+    const unsupported = (t: { data: unknown; dtype: number }) =>
+      t.data === null || !ONNX_TYPES.has(t.dtype)
+    if (inputs.some(unsupported) || outputs.some(unsupported)) {
+      return anira_status.ANIRA_ERROR_NOT_SUPPORTED // packed host tensors alone
+    }
+    // The spec's dtype must be the model's element type, as the built-in engine checks at load.
+    const differs = (t: { dtype: number }, meta: TensorMeta | undefined) =>
+      meta !== undefined && ONNX_TYPES.get(t.dtype) !== meta.onnxType
+    if (
+      inputs.some((t, i) => differs(t, this.inputs[i])) ||
+      outputs.some((t, i) => differs(t, this.outputs[i]))
+    ) {
+      return anira_status.ANIRA_ERROR_CONFIG
     }
     const ok = this.run(
       inputs.slice(0, this.inputs.length).map((input, i) => ({
-        data: input.f32!,
-        elements: input.elements,
+        bytes: new Uint8Array(
+          input.data!.buffer,
+          input.data!.byteOffset,
+          input.elements * dtypeBytes(input.dtype)
+        ),
+        dtype: input.dtype,
         dims: resolveDims(this.inputs[i].dims, input.elements),
       })),
       (results) => {
@@ -276,8 +338,9 @@ class OnnxRuntimeWebEngine implements Engine {
           const info = ort.stackAlloc(4 * P)
           ort._OrtGetTensorData(results[i], info, info + P, info + 2 * P, info + 3 * P)
           const data = Number(ort.getValue(info + P, '*'))
-          outputs[i].f32!.set(
-            new Float32Array(ort.HEAPU8.buffer, data, outputs[i].elements)
+          const out = outputs[i].data!
+          new Uint8Array(out.buffer, out.byteOffset, out.byteLength).set(
+            new Uint8Array(ort.HEAPU8.buffer, data, out.byteLength)
           )
         }
       }
@@ -285,12 +348,10 @@ class OnnxRuntimeWebEngine implements Engine {
     return ok ? anira_status.ANIRA_OK : anira_status.ANIRA_ERROR_ENGINE
   }
 
-  // One _OrtRun: each input's `elements` floats copied into ORT's heap and shaped `dims`, the
-  // output tensors handed to `read` before they are released. False when ORT fails.
-  private run(
-    inputs: { data: Float32Array; elements: number; dims: number[] }[],
-    read: (results: number[]) => void
-  ): boolean {
+  // One _OrtRun: each input's bytes copied into ORT's heap as a tensor of its dtype's ONNX
+  // element type shaped `dims`, the output tensors handed to `read` before they are released.
+  // False when ORT fails.
+  private run(inputs: RunInput[], read: (results: number[]) => void): boolean {
     const ort = this.ort!
     const tensors: number[] = []
     const buffers: number[] = []
@@ -298,16 +359,21 @@ class OnnxRuntimeWebEngine implements Engine {
     const sp = ort.stackSave()
     try {
       for (const input of inputs) {
-        const bytes = input.elements * 4
-        const data = ort._malloc(bytes)
+        const bytes = input.bytes.byteLength
+        const data = ort._malloc(Math.max(bytes, 1))
         buffers.push(data)
-        new Float32Array(ort.HEAPU8.buffer, data, input.elements).set(
-          input.data.subarray(0, input.elements)
-        )
+        ort.HEAPU8.set(input.bytes, data)
         const dims = input.dims
         const shape = ort.stackAlloc(dims.length * P)
         dims.forEach((d, k) => ort.setValue(shape + k * P, d, P === 4 ? 'i32' : 'i64'))
-        const tensor = ort._OrtCreateTensor(1, data, bytes, shape, dims.length, 1)
+        const tensor = ort._OrtCreateTensor(
+          ONNX_TYPES.get(input.dtype)!,
+          data,
+          bytes,
+          shape,
+          dims.length,
+          1
+        )
         if (tensor === 0) return false
         tensors.push(tensor)
       }
@@ -385,8 +451,10 @@ class OnnxRuntimeWebEngine implements Engine {
           )
         }
       }
+      // The first word: the ONNX element type (0 for a value that is no tensor).
+      const onnxType = ort.HEAP32[meta >> 2]
       ort._OrtFree(meta)
-      result.push({ namePtr, dims })
+      result.push({ namePtr, dims, onnxType })
     }
     return result
   }

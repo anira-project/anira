@@ -372,7 +372,10 @@ from the tensors of **this** call, never from a value kept at load or prepare, a
 assume a tensor is anira's own buffer. The halves of a declared State pair alternate between
 two buffers from one inference to the next (below), unless the engine's flags carry
 ``ANIRA_ENGINE_FLAG_STATE_ALIAS``, and a later pre-release hands a caller's Buffer tensor
-over in place. The templates of the load record say what the shapes will be;
+over in place. Every tensor is in its spec's dtype (``anira_tensor_data(t, dtype)`` with the
+template's dtype reads it), and an engine may write its input tensors (an in-place model):
+nothing reads a chunk's inputs after the inference but an ``after_inference`` hook, which sees
+what the engine left. The templates of the load record say what the shapes will be;
 the memory is the context's. A Time extent below the template's is legal only under
 ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``. The rule's other half is the executor's: what one call
 runs on owns everything with run-time state (above), so an engine keeps a shared slot's
@@ -495,12 +498,11 @@ either way.
 A model with a declared State pair is stateful: it is loaded once, with no shared slot, and
 every handler of it is exclusive (``ANIRA_PREPARE_EXCLUSIVE``), so an engine that keeps state
 of its own beside the declared pair builds it at ``prepare`` and re-initialises it at
-``reset``. The two buffers take the spec's dtype, and a State pair of any dtype the engine
-accepts is legal on the handler (its buffers never travel through the inference queue): an
-``int32`` pair runs on a registered engine that binds it. Every other model tensor is
-``float32`` in this pre-release, the queue's storage; the built-in adapters refuse a model
-with a tensor of another dtype at load with ``ANIRA_ERROR_CONFIG`` naming the engine and the
-tensor, a registered engine binds what its ``load`` accepts.
+``reset``. The two buffers take the spec's dtype, like every model tensor: an engine's
+descriptors carry each tensor in its spec's dtype (the chunk stores it so), whatever the host
+end's ring dtype is. A registered engine binds what its ``load`` accepts; a built-in adapter
+refuses at load, with ``ANIRA_ERROR_NOT_SUPPORTED`` naming the engine and the tensor, what its
+runtime cannot carry.
 
 Sharing and lifetime
 --------------------

@@ -71,17 +71,17 @@
  * counts as a user of the core: anira_shutdown is refused while one lives. In this pre-release
  * every handler is Host-only (every backend's domain is the host's), its plans are one per
  * model entry of one variant and candidate naming that entry's engine and a provider it accepts
- * (anira_pipeline_add_inference), an Async contract is refused at prepare, and every model
- * tensor is ANIRA_DTYPE_F32: a ring dtype that differs from its spec's dtype is refused at
- * prepare unless the pipeline's processor fills the phase that moves that ring (pre_process for
- * an input, post_process for an output), since nothing in anira converts. Every tensor of
- * either side has one declared host-end domain (anira_contract_set_host_domain, default
- * ANIRA_DOMAIN_HOST): the domain anira allocates the ring, the model tensor, the Static store
- * and, overriding the backend's domain of the plans that run the pair (host memory for every
- * backend of this pre-release), the state buffers of the slot in, and the domain all four
- * processor phases work in; the plan report's slot rows carry it as domain_in of an input and
- * domain_out of an output, against the backend's domain on the other side. Anything but
- * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
+ * (anira_pipeline_add_inference), an Async contract is refused at prepare, and a ring dtype
+ * that differs from its spec's dtype is refused at prepare unless the pipeline's processor
+ * fills the phase that moves that ring (pre_process for an input, post_process for an output),
+ * since nothing in anira converts. Every tensor of either side has one declared host-end domain
+ * (anira_contract_set_host_domain, default ANIRA_DOMAIN_HOST): the domain anira allocates the
+ * ring, the model tensor, the Static store and, overriding the backend's domain of the plans
+ * that run the pair (host memory for every backend of this pre-release), the state buffers of
+ * the slot in, and the domain all four processor phases work in; the plan report's slot rows
+ * carry it as domain_in of an input and domain_out of an output, against the backend's domain
+ * on the other side. Anything but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in
+ * this pre-release.
  */
 
 #include <stddef.h>
@@ -106,8 +106,10 @@ extern "C" {
  * and why, and the role of the tensor, which decides the entries that take the slot.
  * Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's
  * stride (a caller whose header ends before a tail field gets its rows without it). In
- * this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides,
- * ANIRA_EDGE_ZERO_COPY, recipe "host", no reason.
+ * this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe
+ * "host"; the edge is ANIRA_EDGE_ZERO_COPY where the plan's engine binds the slot's
+ * buffer in place and ANIRA_EDGE_HOST_COPY, with the reason, where it copies through
+ * memory of its own.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
@@ -166,11 +168,24 @@ typedef struct anira_plan_slot {
      * it.
      */
     uint32_t binding;
+    /**
+     * The slot's spec's dtype: the model tensor's, what the engine binds and the chunk stores.
+     * A tail field: a caller whose header ends before it gets its rows without it.
+     */
+    anira_dtype dtype;
+    /**
+     * The dtype the slot's ring holds, the host end of a Streamed tensor: the spec's unless the
+     * contract names another (anira_contract_hard_set_ring_dtype), which a converting processor
+     * goes with; 0 for a slot without a ring (Static, State). A host tensor of another dtype is
+     * refused per call. A tail field: a caller whose header ends before it gets its rows
+     * without it.
+     */
+    anira_dtype ring_dtype;
 } anira_plan_slot;
 /**
  * @brief No edge.
  */
-#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION)
+#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u)
 
 /**
  * @brief One extension a plan consumes: where it sits (the host and the tensor or entry it is

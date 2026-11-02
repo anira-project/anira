@@ -1,0 +1,52 @@
+{
+  "models": [
+    {
+      "engine": "org.anira.onnxruntime-web",
+      "path": "../../extras/models/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_int16.onnx"
+    }
+  ],
+  "inputs": [
+    {
+      "name": "audio_in",
+      "dtype": "int16",
+      "role": "streamed",
+      "axes": [
+        ["batch", 1],
+        ["channel", 1],
+        ["time", 512]
+      ],
+      "window": {
+        "min": 512,
+        "max": 512
+      }
+    },
+    {
+      "name": "gain",
+      "dtype": "int16",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "audio_out",
+      "dtype": "int16",
+      "role": "streamed",
+      "axes": [
+        ["batch", 1],
+        ["channel", 1],
+        ["time", 512]
+      ],
+      "window": {
+        "min": 512,
+        "max": 512
+      }
+    },
+    {
+      "name": "gain_out",
+      "dtype": "int16",
+      "role": "static",
+      "axes": [["any", 1]]
+    }
+  ]
+}

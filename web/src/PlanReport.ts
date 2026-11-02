@@ -61,6 +61,10 @@ export type PlanSlot = {
   role: number
   /** `anira_binding`. */
   binding: number
+  /** `anira_dtype` of the slot's spec: the model tensor's. */
+  dtype: number
+  /** `anira_dtype` of the slot's ring (the host end of a Streamed tensor), 0 without one. */
+  ringDtype: number
 }
 
 /** One extension a plan consumes (`anira_plan_ext`). */
@@ -86,7 +90,7 @@ const PLAN_INFO = {
 }
 const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40 }
 const PLAN_SLOT = {
-  size: 48,
+  size: 56,
   slot: 4,
   isInput: 8,
   domainIn: 12,
@@ -98,6 +102,8 @@ const PLAN_SLOT = {
   reason: 36,
   role: 40,
   binding: 44,
+  dtype: 48,
+  ringDtype: 52,
 }
 const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 // anira_plan_query and the anira_backend_id it holds at 8.
@@ -170,6 +176,8 @@ export class PlanReport {
         reason: this.text(u32(m, row, PLAN_SLOT.reason)),
         role: u32(m, row, PLAN_SLOT.role),
         binding: u32(m, row, PLAN_SLOT.binding),
+        dtype: u32(m, row, PLAN_SLOT.dtype),
+        ringDtype: u32(m, row, PLAN_SLOT.ringDtype),
       })
     )
   }

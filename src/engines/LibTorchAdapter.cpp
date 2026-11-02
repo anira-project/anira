@@ -35,6 +35,7 @@
 #endif
 
 #include "../capi/words.h"
+#include "../scheduler/TensorRun.h"
 #include "../utils/ModelFile.h"
 #include "../utils/StatusError.h"
 #include "Adapter.h"
@@ -100,8 +101,32 @@ anira_dtype dtype_of(c10::ScalarType type) {
         case c10::ScalarType::Short: return ANIRA_DTYPE_I16;
         case c10::ScalarType::Int: return ANIRA_DTYPE_I32;
         case c10::ScalarType::Long: return ANIRA_DTYPE_I64;
+        case c10::ScalarType::Bool: return ANIRA_DTYPE_BOOL8;
         default: return 0;
     }
+}
+
+// The torch scalar type of an anira dtype: every dtype anira names has one (the TypedGainNetwork
+// int16, int8 and float16 exports run on the pinned 2.12.0); Undefined for any other, which the
+// validator refuses before a record reaches the adapter.
+c10::ScalarType torch_type_of(anira_dtype dtype) noexcept {
+    switch (dtype) {
+        case ANIRA_DTYPE_F32: return c10::ScalarType::Float;
+        case ANIRA_DTYPE_F64: return c10::ScalarType::Double;
+        case ANIRA_DTYPE_F16: return c10::ScalarType::Half;
+        case ANIRA_DTYPE_BF16: return c10::ScalarType::BFloat16;
+        case ANIRA_DTYPE_I8: return c10::ScalarType::Char;
+        case ANIRA_DTYPE_U8: return c10::ScalarType::Byte;
+        case ANIRA_DTYPE_I16: return c10::ScalarType::Short;
+        case ANIRA_DTYPE_I32: return c10::ScalarType::Int;
+        case ANIRA_DTYPE_I64: return c10::ScalarType::Long;
+        case ANIRA_DTYPE_BOOL8: return c10::ScalarType::Bool;
+        default: return c10::ScalarType::Undefined;
+    }
+}
+
+bool carries(anira_dtype dtype) noexcept {
+    return torch_type_of(dtype) != c10::ScalarType::Undefined;
 }
 
 // "[1, 1, 512]" of a tensor's sizes.
@@ -176,7 +201,6 @@ private:
     std::optional<torch::jit::Method> m_method;
     std::vector<Argument> m_arguments;
     std::optional<size_t> m_num_returns;
-    torch::TensorOptions m_tensor_options;
     /// The record bind was given (the loaded model's, which outlives this executor): what the
     /// warm-up checks the first result against.
     const Model* m_record = nullptr;
@@ -185,13 +209,14 @@ private:
     std::vector<size_t> m_argument_of_slot;          ///< per input slot: the argument it feeds
     std::vector<std::vector<int64_t>> m_input_dims;  ///< per input slot: the engine dims
     std::vector<size_t> m_input_elements;
+    std::vector<torch::TensorOptions> m_input_options;  ///< per input slot: the record's dtype
     std::vector<size_t> m_result_of_slot;  ///< per output slot: the result tensor's index
     std::vector<std::vector<int64_t>> m_output_dims;
     std::vector<size_t> m_output_elements;
+    std::vector<anira_dtype> m_output_dtypes;  ///< per output slot: the record's dtype
 };
 
 Instance::Instance(const Model& model) {
-    m_tensor_options = torch::TensorOptions().dtype(torch::kFloat).requires_grad(false);
     std::string where = model_file::k_memory;
     if (model.m_bytes != nullptr) {
         try {
@@ -256,18 +281,24 @@ void Instance::bind(const Model& model,
     m_argument_of_slot.clear();
     m_input_dims.clear();
     m_input_elements.clear();
+    m_input_options.clear();
     m_result_of_slot.clear();
     m_output_dims.clear();
     m_output_elements.clear();
+    m_output_dtypes.clear();
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
         m_argument_of_slot.push_back(inputs[slot].m_index);
         m_input_dims.push_back(model.m_inputs[slot].m_dims);
         m_input_elements.push_back(model.m_inputs[slot].m_num_elements);
+        m_input_options.push_back(torch::TensorOptions()
+                                      .dtype(torch_type_of(model.m_inputs[slot].m_dtype))
+                                      .requires_grad(false));
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
         m_result_of_slot.push_back(outputs[slot].m_index);
         m_output_dims.push_back(model.m_outputs[slot].m_dims);
         m_output_elements.push_back(model.m_outputs[slot].m_num_elements);
+        m_output_dtypes.push_back(model.m_outputs[slot].m_dtype);
     }
 }
 
@@ -284,15 +315,17 @@ c10::IValue Instance::execute(const anira_engine_ctx& ctx) {
     // Every argument a view over its descriptor's memory, read on this call: nothing is
     // copied in, nothing is owned, and the pointers are read anew every time.
     for (size_t slot = 0; slot < m_argument_of_slot.size(); ++slot) {
-        float* data = host_f32_packed(ctx.inputs[slot], m_input_elements[slot]);
+        const anira_dtype dtype = dtype_of(m_input_options[slot].dtype().toScalarType());
+        void* data = host_packed(ctx.inputs[slot], dtype, m_input_elements[slot]);
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": input slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_input_elements[slot]) + " elements");
+                                  " is not a packed " + capi::dtype_word(dtype) +
+                                  " host block of " + std::to_string(m_input_elements[slot]) +
+                                  " elements");
         }
         m_inputs[m_argument_of_slot[slot]] =
-            torch::from_blob(data, c10::IntArrayRef(m_input_dims[slot]), m_tensor_options);
+            torch::from_blob(data, c10::IntArrayRef(m_input_dims[slot]), m_input_options[slot]);
     }
     if (!m_method.has_value()) {
         throw StatusError(ANIRA_ERROR_INVALID_STATE,
@@ -323,7 +356,8 @@ at::Tensor Instance::result_of(const c10::IValue& result, size_t slot) const {
 void Instance::deliver(const c10::IValue& result, const anira_engine_ctx& ctx) const {
     for (size_t slot = 0; slot < m_result_of_slot.size(); ++slot) {
         const at::Tensor tensor = result_of(result, slot);
-        if (tensor.scalar_type() != c10::ScalarType::Float ||
+        const anira_dtype dtype = m_output_dtypes[slot];
+        if (tensor.scalar_type() != torch_type_of(dtype) ||
             std::cmp_not_equal(tensor.numel(), m_output_elements[slot])) {
             throw StatusError(ANIRA_ERROR_ENGINE,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +
@@ -332,46 +366,55 @@ void Instance::deliver(const c10::IValue& result, const anira_engine_ctx& ctx) c
                                   sizes_text(tensor.sizes()) + " for the spec's engine dims " +
                                   sizes_text(c10::IntArrayRef(m_output_dims[slot])));
         }
-        float* data = host_f32_packed(ctx.outputs[slot], m_output_elements[slot]);
+        void* data = host_packed(ctx.outputs[slot], dtype, m_output_elements[slot]);
         if (data == nullptr) {
             throw StatusError(ANIRA_ERROR_INVALID_ARGUMENT,
                               std::string(k_engine) + ": output slot " + std::to_string(slot) +
-                                  " is not a packed float32 host block of " +
-                                  std::to_string(m_output_elements[slot]) + " elements");
+                                  " is not a packed " + capi::dtype_word(dtype) +
+                                  " host block of " + std::to_string(m_output_elements[slot]) +
+                                  " elements");
         }
         // The result is the engine's own tensor: one copy into the descriptor's memory,
         // straight when the result is contiguous, through a view over the memory else.
         if (tensor.is_contiguous()) {
             std::memcpy(data,
-                        tensor.const_data_ptr<float>(),
-                        m_output_elements[slot] * sizeof(float));
+                        tensor.const_data_ptr(),
+                        m_output_elements[slot] * tensor_run::dtype_size(dtype));
         } else {
-            torch::from_blob(data, c10::IntArrayRef(m_output_dims[slot]), m_tensor_options)
+            torch::from_blob(data,
+                             c10::IntArrayRef(m_output_dims[slot]),
+                             torch::TensorOptions().dtype(torch_type_of(dtype)))
                 .copy_(tensor.reshape(c10::IntArrayRef(m_output_dims[slot])));
         }
+        count_copy_out();
     }
 }
 
 void Instance::warm_up(uint32_t iterations) {
     if (iterations == 0 || m_record == nullptr) { return; }
     const Model& model = *m_record;
-    std::vector<std::vector<float>> input_scratch(m_argument_of_slot.size());
-    std::vector<std::vector<float>> output_scratch(m_result_of_slot.size());
+    // Scratch of the record's element counts and dtypes: zeros in, the results discarded.
+    std::vector<std::vector<std::byte>> input_scratch(m_argument_of_slot.size());
+    std::vector<std::vector<std::byte>> output_scratch(m_result_of_slot.size());
     std::vector<anira_tensor> inputs(input_scratch.size());
     std::vector<anira_tensor> outputs(output_scratch.size());
     for (size_t slot = 0; slot < inputs.size(); ++slot) {
-        input_scratch[slot].assign(m_input_elements[slot], 0.F);
+        const anira_dtype dtype = model.m_inputs[slot].m_dtype;
+        input_scratch[slot].assign(m_input_elements[slot] * tensor_run::dtype_size(dtype),
+                                   std::byte{0});
         anira_tensor_init_host(&inputs[slot],
                                input_scratch[slot].data(),
-                               ANIRA_DTYPE_F32,
+                               dtype,
                                static_cast<uint32_t>(m_input_dims[slot].size()),
                                m_input_dims[slot].data());
     }
     for (size_t slot = 0; slot < outputs.size(); ++slot) {
-        output_scratch[slot].assign(m_output_elements[slot], 0.F);
+        const anira_dtype dtype = m_output_dtypes[slot];
+        output_scratch[slot].assign(m_output_elements[slot] * tensor_run::dtype_size(dtype),
+                                    std::byte{0});
         anira_tensor_init_host(&outputs[slot],
                                output_scratch[slot].data(),
-                               ANIRA_DTYPE_F32,
+                               dtype,
                                static_cast<uint32_t>(m_output_dims[slot].size()),
                                m_output_dims[slot].data());
     }
@@ -401,6 +444,7 @@ void Instance::warm_up(uint32_t iterations) {
                 engine_tensor.m_dims = sizes;
                 engine_tensor.m_dtype = dtype_of(tensor.scalar_type());
                 engine_tensor.m_type_word = c10::toString(tensor.scalar_type());
+                engine_tensor.m_quantised = tensor.is_quantized();
                 check_engine_tensor(model.m_outputs[slot],
                                     engine_tensor,
                                     ExtentRule::Exact,
@@ -493,6 +537,14 @@ public:
     explicit LibTorchLoaded(std::shared_ptr<LibTorchEngine> engine)
         : ExecutorLoaded(std::move(engine)) {}
 
+    /// The inputs are bound in place (from_blob); a method returns tensors of its own, so every
+    /// output is copied into the chunk.
+    SlotEdge slot_edge(bool is_input, uint32_t /*slot*/) const noexcept override {
+        if (is_input) { return SlotEdge{}; }
+        return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+                        .m_reason = "libtorch: the method returns tensors of its own, copied"};
+    }
+
     std::string provider_reason() const override {
         return "a LibTorch device needs the device-domain edges of a later pre-release (a "
                ".to(device) per call allocates), so the adapter runs the CPU path "
@@ -501,7 +553,7 @@ public:
 
 protected:
     void do_load(const Model& model) override {
-        require_f32(model, k_engine);
+        require_dtypes(model, k_engine, carries);
         auto probe = std::make_unique<Instance>(model);
         const Instance& first = *probe;
 

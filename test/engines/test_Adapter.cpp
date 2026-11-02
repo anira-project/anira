@@ -495,45 +495,57 @@ TEST(Adapter, TheClaimLoopGivesUpWhenItsThreadIsToldToStop) {
 // The float32 helpers of the built-in adapters
 // ============================================================================================
 
-TEST(Adapter, HostF32PackedAcceptsPackedAndAllZeroStrides) {
+TEST(Adapter, HostPackedAcceptsPackedAndAllZeroStrides) {
     std::array<float, 8> data{};
     const std::array<int64_t, 3> shape{1, 2, 4};
     anira_tensor tensor;
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "all-zero strides";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "all-zero strides";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 4;
     tensor.strides[2] = 1;
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "row-major strides";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "row-major strides";
 
     tensor.strides[0] = 999;  // an axis of extent 1 is never stepped
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data());
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data());
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.byte_offset = sizeof(float);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data() + 1) << "the offset";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data() + 1)
+        << "the offset";
 
     anira_tensor_init_pinned(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), data.data()) << "page-locked host";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), data.data())
+        << "page-locked host";
+
+    // Any dtype: the element count is the shape's, whatever the element's size.
+    std::array<int16_t, 8> words{};
+    anira_tensor_init_host(&tensor, words.data(), ANIRA_DTYPE_I16, 3, shape.data());
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_I16, 8), words.data());
+    EXPECT_TRUE(anira::engine::aligned_to(words.data(), alignof(int16_t)));
 }
 
-TEST(Adapter, HostF32PackedRefusals) {
+TEST(Adapter, HostPackedRefusals) {
     std::array<float, 8> data{};
     const std::array<int64_t, 3> shape{1, 2, 4};
     anira_tensor tensor;
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_I16, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "dtype";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "dtype";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_I16, 8), data.data())
+        << "a tensor of the dtype asked for";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 7), nullptr) << "wrong count";
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 9), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 7), nullptr) << "wrong count";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 9), nullptr) << "wrong count";
 
     tensor.strides[0] = 8;
     tensor.strides[1] = 1;
     tensor.strides[2] = 2;
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "strided";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "strided";
 
     const std::array<const float*, 1> planes{data.data()};
     const std::array<int64_t, 2> planar_shape{1, 8};
@@ -544,17 +556,18 @@ TEST(Adapter, HostF32PackedRefusals) {
                                   2,
                                   planar_shape.data());
     ASSERT_EQ(tensor.dtype, ANIRA_DTYPE_F32);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "planar";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "planar";
 
     anira_tensor_init_host(&tensor, nullptr, ANIRA_DTYPE_F32, 3, shape.data());
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "no memory";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "no memory";
 
     anira_tensor_init_host(&tensor, data.data(), ANIRA_DTYPE_F32, 3, shape.data());
     tensor.domain = static_cast<uint32_t>(ANIRA_DOMAIN_CUDA);
-    EXPECT_EQ(anira::engine::host_f32_packed(tensor, 8), nullptr) << "a device domain";
+    EXPECT_EQ(anira::engine::host_packed(tensor, ANIRA_DTYPE_F32, 8), nullptr) << "a device domain";
 
     const anira_tensor zero{};
-    EXPECT_EQ(anira::engine::host_f32_packed(zero, 0), nullptr) << "a refused factory's record";
+    EXPECT_EQ(anira::engine::host_packed(zero, ANIRA_DTYPE_F32, 0), nullptr)
+        << "a refused factory's record";
 }
 
 TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
@@ -569,7 +582,7 @@ TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
         anira::engine::require_f32(model, "onnxruntime");
         FAIL() << "an int16 input passed";
     } catch (const anira::StatusError& e) {
-        EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(e.status(), ANIRA_ERROR_NOT_SUPPORTED);
         const std::string message = e.what();
         EXPECT_NE(message.find("onnxruntime"), std::string::npos) << message;
         EXPECT_NE(message.find("input tensor 'gain'"), std::string::npos) << message;
@@ -581,7 +594,7 @@ TEST(Adapter, RequireF32NamesTheEngineAndTheFirstOtherTensor) {
         anira::engine::require_f32(model, "libtorch");
         FAIL() << "an int32 output passed";
     } catch (const anira::StatusError& e) {
-        EXPECT_EQ(e.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_EQ(e.status(), ANIRA_ERROR_NOT_SUPPORTED);
         const std::string message = e.what();
         EXPECT_NE(message.find("libtorch"), std::string::npos) << message;
         EXPECT_NE(message.find("output tensor 'peak'"), std::string::npos) << message;
@@ -967,6 +980,13 @@ public:
     anira_status run(const anira_engine_ctx& ctx, bool reset_first) noexcept {
         return m_prepared->run(ctx, reset_first);
     }
+    /// The executor the session runs on: its own for an exclusive session, else shared slot 0.
+    const anira::engine::Executor& executor() const {
+        const auto* prepared =
+            dynamic_cast<const anira::engine::ExecutorPrepared*>(m_prepared.get());
+        if (prepared != nullptr && prepared->own() != nullptr) { return *prepared->own(); }
+        return dynamic_cast<const anira::engine::ExecutorLoaded&>(*m_loaded).executor(0);
+    }
 
 private:
     std::shared_ptr<Loaded> m_loaded;
@@ -1202,14 +1222,17 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_NO_SUCH_FILE);
     }
-    // An int16 record: CONFIG naming the engine and the tensor, before the file is opened.
+    // An int16 record over the float32 file: ONNX Runtime carries int16, so the file is opened
+    // and the binding check refuses its float32 tensor, CONFIG naming the engine, the tensor
+    // and both types.
     {
         Model model = onnx_gain_model();
-        model.m_path = "this/model/does/not/exist.onnx";
         model.m_inputs[0].m_dtype = ANIRA_DTYPE_I16;
         const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
         const anira::StatusError error = status_error_of([&] { adapter->prepare(model); });
         EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        EXPECT_NE(std::string(error.what()).find("the spec's dtype int16"), std::string::npos)
+            << error.what();
         EXPECT_NE(std::string(error.what()).find("onnxruntime: input tensor 'audio_in'"),
                   std::string::npos)
             << error.what();
@@ -1235,7 +1258,7 @@ TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
     inputs[0] = descriptor_over(audio_in, {1, 1, k_block});
     inputs[0].dtype = ANIRA_DTYPE_I16;
     EXPECT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_ERROR_INVALID_ARGUMENT)
-        << "not float32";
+        << "not the record's float32";
     inputs[0].dtype = ANIRA_DTYPE_F32;
     anira_engine_ctx short_ctx = context_of(inputs, outputs);
     short_ctx.num_inputs = 1;
@@ -1345,6 +1368,85 @@ void expect_accumulator_closed_form(Rig& adapter) {
     EXPECT_EQ(state_out[3], 1.F);
 }
 
+/// `count` floats `skew` floats past a 64-byte boundary: a slot's memory that meets the
+/// engine's boundary (skew 0, as a chunk's buffer does) or misses it.
+class FloatsAt {
+public:
+    FloatsAt(size_t count, size_t skew) : m_floats(count + skew + (64 / sizeof(float))) {
+        void* start = m_floats.data();
+        size_t space = m_floats.size() * sizeof(float);
+        std::align(64, (count + skew) * sizeof(float), start, space);
+        m_data = static_cast<float*>(start) + skew;
+    }
+    float* data() const noexcept { return m_data; }
+    float& operator[](size_t i) const noexcept { return m_data[i]; }
+    anira_tensor descriptor(const std::vector<int64_t>& dims) const {
+        anira_tensor tensor{};
+        anira_tensor_init_host(&tensor,
+                               m_data,
+                               ANIRA_DTYPE_F32,
+                               static_cast<uint32_t>(dims.size()),
+                               dims.data());
+        return tensor;
+    }
+
+private:
+    std::vector<float> m_floats;
+    float* m_data = nullptr;
+};
+
+// The gain export through `adapter` over two memories on the 64-byte boundary (two chunks) and
+// one a float past it, each run more than once with new values: the results follow what the
+// memory holds now, with no copy on the boundary and one per slot each way past it; the engine
+// asks the chunk for that boundary and reports the zero-copy edge.
+void expect_bound_on_the_boundary(Rig& adapter) {
+    EXPECT_EQ(adapter.loaded().buffer_alignment(), 64U);
+    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_class, ANIRA_EDGE_ZERO_COPY);
+    EXPECT_EQ(adapter.loaded().slot_edge(false, 1).m_class, ANIRA_EDGE_ZERO_COPY);
+    struct Memory {
+        explicit Memory(size_t skew)
+            : m_audio_in(k_block, skew)
+            , m_gain(1, skew)
+            , m_audio_out(k_block, skew)
+            , m_gain_out(1, skew) {}
+        FloatsAt m_audio_in;
+        FloatsAt m_gain;
+        FloatsAt m_audio_out;
+        FloatsAt m_gain_out;
+    };
+    const Memory first(0);
+    const Memory second(0);
+    const Memory past(1);
+    const auto run_over = [&adapter](const Memory& memory, float scale, uint64_t copies) {
+        for (size_t n = 0; n < k_block; ++n) {
+            memory.m_audio_in[n] = scale * static_cast<float>(n) / k_block;
+            memory.m_audio_out[n] = -1.F;
+        }
+        memory.m_gain[0] = 0.5F;
+        memory.m_gain_out[0] = -1.F;
+        const std::vector<anira_tensor> inputs{memory.m_audio_in.descriptor({1, 1, k_block}),
+                                               memory.m_gain.descriptor({1, 1, 1})};
+        std::vector<anira_tensor> outputs{memory.m_audio_out.descriptor({1, 1, k_block}),
+                                          memory.m_gain_out.descriptor({1})};
+        const uint64_t copies_in = adapter.executor().copies_in();
+        const uint64_t copies_out = adapter.executor().copies_out();
+        ASSERT_EQ(adapter.run(context_of(inputs, outputs), false), ANIRA_OK);
+        EXPECT_EQ(adapter.executor().copies_in() - copies_in, copies);
+        EXPECT_EQ(adapter.executor().copies_out() - copies_out, copies);
+        for (size_t n = 0; n < k_block; ++n) {
+            ASSERT_EQ(memory.m_audio_out[n], 0.5F * memory.m_audio_in[n]) << "sample " << n;
+        }
+        EXPECT_GT(memory.m_gain_out[0], 0.F) << "the peak landed in the caller's memory";
+    };
+    run_over(first, 1.F, 0);
+    run_over(second, 2.F, 0);
+    run_over(first, 3.F, 0);
+    run_over(second, 4.F, 0);
+    run_over(past, 1.F, 2);
+    run_over(past, 2.F, 2);
+    run_over(first, 5.F, 0);
+}
+
 }  // namespace
 
 #endif  // USE_TFLITE || USE_LITERT
@@ -1422,7 +1524,7 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
-    std::vector<float> audio_in(256 * 150, 0.1F);
+    std::vector<float> audio_in(size_t{256} * 150, 0.1F);
     std::vector<float> audio_out(256, 0.F);
     const std::vector<anira_tensor> inputs{descriptor_over(audio_in, {256, 150, 1})};
     std::vector<anira_tensor> outputs{descriptor_over(audio_out, {256, 1})};
@@ -1438,6 +1540,16 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     by_name->prepare(named);
     EXPECT_EQ(by_name->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
     EXPECT_EQ(by_name->bindings().m_outputs, (std::vector<anira_binding>{ANIRA_BINDING_NAME}));
+}
+
+// TFLite binds a slot's memory in place, as the tensor's custom allocation per call, where it
+// starts on TFLite's 64-byte boundary (as every chunk's buffer does: buffer_alignment), and
+// copies through a block of the executor's own where it does not.
+TEST(AdapterTFLite, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_TFLITE));
+    expect_bound_on_the_boundary(*adapter);
 }
 
 #endif  // USE_TFLITE
@@ -1561,6 +1673,16 @@ TEST(AdapterLiteRt, TheAccumulatorBindsByPositionInTheSignaturesKeyOrder) {
     EXPECT_EQ(missing.status(), ANIRA_ERROR_CONFIG);
     EXPECT_NE(std::string(missing.what()).find("'output_0', 'output_1'"), std::string::npos)
         << missing.what();
+}
+
+// On the CPU path LiteRT binds a slot's memory in place where it starts on LiteRT's 64-byte
+// boundary (as every chunk's buffer does: buffer_alignment), over a tensor buffer it keeps for
+// that memory's next call, and copies through the slot's managed buffer where it does not.
+TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
+    const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
+    ASSERT_NE(adapter, nullptr);
+    adapter->prepare(tensorflow_gain_model(ANIRA_ENGINE_LITERT));
+    expect_bound_on_the_boundary(*adapter);
 }
 
 #endif  // USE_LITERT

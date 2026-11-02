@@ -282,7 +282,8 @@ typedef struct anira_webgpu_desc {
  * @param out Receives the handle on success.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role,
- *         or a NULL out.
+ *         a dtype of 0, or a NULL out. A dtype anira does not name is refused where the spec is
+ *         used (ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -382,11 +383,10 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * prepare): every state input names exactly one state output and every state output is
  * named by exactly one state input; the two halves have equal dtype and shape; a state
  * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
- * anchor may name it. A state pair may have any dtype, unlike every other model tensor
- * of this pre-release, which is float32: its buffers take the spec's dtype and a custom
- * engine binds what its load accepts, while a built-in engine refuses a non-float32
- * tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a
- * transposed layout. A second call replaces the name.
+ * anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a
+ * custom engine binds what its load accepts, and a built-in engine refuses at load
+ * (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED:
+ * a state tensor with a transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
@@ -656,13 +656,15 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_wait_ratio(anira_contr
  * ring, a ring dtype that differs from the spec's dtype (the model's) is
  * ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that
  * moves that ring (pre_process for an input, post_process for an output) and so takes
- * the difference on itself; the default bodies of anira/abi/processor.h still refuse
- * such a slot at run time. Set per tensor by canonical name, so an input and an output
- * may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no
- * Streamed tensor is checked at prepare, not here.
+ * the difference on itself; the default bodies of anira/abi/processor.h refuse such a
+ * slot at run time. Set per tensor by canonical name, so an input and an output may
+ * differ; a tensor never set streams its spec's dtype, so a host whose samples are the
+ * model's sets nothing, and one of another sample type sets its type here and adds the
+ * converting processor. A name that matches no Streamed tensor is checked at prepare,
+ * not here.
  * @param contract A Hard contract.
  * @param canonical The tensor's canonical name (the one its spec was created with).
- * @param dtype The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for
+ * @param dtype The element type of the host's samples for that tensor; the spec's dtype for
  *        every tensor that was never set.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of
@@ -1267,7 +1269,9 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_model_provider(const anira_
  * @brief The entry's model path.
  * @param config The config.
  * @param model_index An entry.
- * @return Object-owned; NULL for a bytes entry or an index out of range.
+ * @return Object-owned; NULL for a NULL config, an index out of range, a bytes entry and an
+ *         entry without a source (anira_model_config_add_model_path with a NULL path: a custom
+ *         engine's entry that names no model file).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -1720,7 +1724,8 @@ ANIRA_API anira_status ANIRA_CALL anira_model_config_from_json_file(const char* 
  * @param cap Capacity of buf in bytes.
  * @param out_len Receives the text length without the NUL; always written.
  * @return ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or
- *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len.
+ *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len; ANIRA_ERROR_NOT_SUPPORTED
+ *         for a tensor of a dtype that has no word in a model file (one anira does not name).
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.1
@@ -2195,7 +2200,7 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_wait_ratio(const anira_con
 
 /**
  * @brief The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's
- * ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32.
+ * ring_dtypes) named; every other tensor's ring dtype is its spec's dtype.
  * @param contract A Hard contract.
  * @return The count; 0 on an Async contract and for NULL.
  * @par Thread contract
@@ -2207,8 +2212,9 @@ ANIRA_API uint32_t ANIRA_CALL anira_contract_hard_num_ring_dtypes(const anira_co
 
 /**
  * @brief One ring dtype the contract names, enumerated by index in bytewise order of the
- * canonical names: what lists what was set, which a lookup by name could not (it would
- * answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike).
+ * canonical names: what lists what was set. A name it does not list streams its spec's
+ * dtype, which the contract does not know (a contract has no model), so a lookup by name
+ * could not answer it.
  * @param contract A Hard contract.
  * @param index Below anira_contract_hard_num_ring_dtypes.
  * @param canonical Receives the tensor's canonical name (object-owned).

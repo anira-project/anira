@@ -141,18 +141,6 @@ const std::array<std::pair<const char*, anira_engine>, 5> k_engines_v2{{
     {"LITERT", ANIRA_ENGINE_LITERT},
     {"EXECUTORCH", ANIRA_ENGINE_EXECUTORCH},
 }};
-const std::array<std::pair<const char*, anira_dtype>, 10> k_dtypes{{
-    {"float32", ANIRA_DTYPE_F32},
-    {"float64", ANIRA_DTYPE_F64},
-    {"float16", ANIRA_DTYPE_F16},
-    {"bfloat16", ANIRA_DTYPE_BF16},
-    {"int8", ANIRA_DTYPE_I8},
-    {"uint8", ANIRA_DTYPE_U8},
-    {"int16", ANIRA_DTYPE_I16},
-    {"int32", ANIRA_DTYPE_I32},
-    {"int64", ANIRA_DTYPE_I64},
-    {"bool", ANIRA_DTYPE_BOOL8},
-}};
 const std::array<std::pair<const char*, anira_role>, 4> k_roles{{
     {"streamed", ANIRA_ROLE_STREAMED},
     {"buffer", ANIRA_ROLE_BUFFER},
@@ -288,7 +276,7 @@ void load_spec_v3(const Json& node,
         if (key == "name") {
             continue;
         } else if (key == "dtype") {
-            spec.m_dtype = vocabulary(value, key_path, k_dtypes);
+            spec.m_dtype = vocabulary(value, key_path, anira::capi::k_dtype_words);
         } else if (key == "role") {
             spec.m_role = vocabulary(value, key_path, k_roles);
         } else if (key == "axes") {
@@ -816,7 +804,7 @@ void load_hard_v3(const Json& node, const std::string& path, anira::capi::HardCo
             for (const auto& [tensor, word] : value.items()) {
                 if (tensor.empty()) { fail_json(key_path, "a tensor name must not be empty"); }
                 hard.m_ring_dtypes[tensor] =
-                    vocabulary(word, child(key_path, tensor.c_str()), k_dtypes);
+                    vocabulary(word, child(key_path, tensor.c_str()), anira::capi::k_dtype_words);
             }
         } else if (key == "latencies") {
             // The declared stream latency per output (anira_contract_hard_set_latency), with
@@ -1339,7 +1327,13 @@ void upgrade_context_v2(const Json& root, anira_context_config& context_config) 
 Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
     Json object = Json::object();
     object["name"] = spec.m_name;
-    object["dtype"] = word_of(spec.m_dtype, k_dtypes);
+    if (!anira::capi::known_dtype(spec.m_dtype)) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          "tensor '" + spec.m_name + "': dtype " +
+                              anira::capi::dtype_label(spec.m_dtype) +
+                              " has no word in a model file");
+    }
+    object["dtype"] = word_of(spec.m_dtype, anira::capi::k_dtype_words);
     object["role"] = word_of(spec.m_role, k_roles);
     Json axes = Json::array();
     for (uint32_t i = 0; i < spec.m_ndim; ++i) {

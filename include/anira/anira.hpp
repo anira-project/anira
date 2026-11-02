@@ -955,7 +955,8 @@ struct Hard {
     void* miss_user_data = nullptr;
     double wait_ratio = 0;  ///< v2 blocking_ratio
     /// The ring dtype per Streamed tensor by canonical name (anira_contract_hard_set_ring_dtype;
-    /// ANIRA_DTYPE_F32 for every tensor not named): the element type of the host's samples.
+    /// the spec's dtype for every tensor not named): the element type of the host's samples, set
+    /// only where it differs from the model's and a converting processor goes with it.
     std::map<std::string, DType> ring_dtypes{};
     /// The declared stream latency per Streamed output by canonical name, in samples of that
     /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
@@ -1141,11 +1142,10 @@ public:
     }
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
     /// type the tensor forms of the Hard entries carry across the ABI and the ring holds as is;
-    /// F32 for every tensor never set. Nothing
-    /// converts: a name that is not a Streamed tensor is ANIRA_ERROR_CONFIG at
-    /// anira_handler_prepare, and so is a ring dtype that differs from the spec's dtype unless a
-    /// processor of the pipeline fills the phase that moves that ring
-    /// (anira_pipeline_add_processor).
+    /// the spec's dtype for every tensor never set. Nothing converts: a name that is not a
+    /// Streamed tensor is ANIRA_ERROR_CONFIG at anira_handler_prepare, and so is a ring dtype that
+    /// differs from the spec's dtype unless a processor of the pipeline fills the phase that
+    /// moves that ring and converts (anira_pipeline_add_processor).
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
@@ -1501,7 +1501,9 @@ public:
         });
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
-    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry.
+    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry and on an entry
+    /// without a source (add_model(engine_id)), Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index
+    /// out of range.
     std::string_view model_path(uint32_t index) const {
         const char* path = anira_model_config_model_path(m_config, index);
         if (path == nullptr) {
@@ -2257,7 +2259,7 @@ public:
     explicit operator bool() const noexcept { return m_ring != nullptr; }
 
     /// anira_ring_dtype: the element type the ring stores, the ring dtype of the Hard contract
-    /// (ANIRA_DTYPE_F32 when none was declared); 0 for a view of no ring.
+    /// (the spec's dtype when none was declared); 0 for a view of no ring.
     DType dtype() const noexcept { return anira_ring_dtype(m_ring); }
     /// anira_ring_num_channels: the extent of the tensor's Channel axis, 1 without one.
     uint32_t num_channels() const noexcept { return anira_ring_num_channels(m_ring); }

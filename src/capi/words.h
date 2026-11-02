@@ -201,6 +201,49 @@ inline std::string backend_label(anira_engine engine,
 /// The words of anira_phase, the lower-case names of its values: how every message anira writes
 /// about a slot names the phase (a processor phase that fails or that an accessor refuses, a
 /// refused init, load or prepare of a processor or an engine, a failed engine call).
+/// The ten dtypes anira names (each has an ANIRA_DTYPE_* constant and a ring arm): the "dtype"
+/// and "ring_dtypes" words of a model and a contract file, and how every message names one.
+inline constexpr std::array<std::pair<const char*, anira_dtype>, 10> k_dtype_words{{
+    {"float32", ANIRA_DTYPE_F32},
+    {"float64", ANIRA_DTYPE_F64},
+    {"float16", ANIRA_DTYPE_F16},
+    {"bfloat16", ANIRA_DTYPE_BF16},
+    {"int8", ANIRA_DTYPE_I8},
+    {"uint8", ANIRA_DTYPE_U8},
+    {"int16", ANIRA_DTYPE_I16},
+    {"int32", ANIRA_DTYPE_I32},
+    {"int64", ANIRA_DTYPE_I64},
+    {"bool", ANIRA_DTYPE_BOOL8},
+}};
+
+/// The word of a dtype anira names; "an unnamed dtype" for any other (a real-time message
+/// spells no number).
+inline const char* dtype_word(anira_dtype dtype) noexcept ANIRA_NONBLOCKING {
+    for (const auto& [name, value] : k_dtype_words) {
+        if (value == dtype) { return name; }
+    }
+    return "an unnamed dtype";
+}
+
+/// Whether anira names the dtype (k_dtype_words).
+inline bool known_dtype(anira_dtype dtype) noexcept {
+    for (const auto& [name, value] : k_dtype_words) {
+        if (value == dtype) { return true; }
+    }
+    return false;
+}
+
+/// A dtype in a message: its word, or its hexadecimal code for one anira does not name.
+inline std::string dtype_label(anira_dtype dtype) {
+    if (known_dtype(dtype)) { return dtype_word(dtype); }
+    constexpr std::string_view k_digits = "0123456789abcdef";
+    std::string text = "0x";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        text += k_digits[(dtype >> static_cast<unsigned>(shift)) & 0xfU];
+    }
+    return text;
+}
+
 inline constexpr std::array<std::pair<const char*, anira_phase>, 13> k_phase_words{{
     {"pre_process", ANIRA_PHASE_PRE_PROCESS},
     {"post_process", ANIRA_PHASE_POST_PROCESS},

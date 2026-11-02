@@ -193,10 +193,24 @@ public:
     /// engine's text for an inference that fails. Nothing by default.
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
 
+    /// The copies of a slot's memory this executor made since it was made, per side: an engine
+    /// counts one per slot in its copy branches and nothing where it binds the memory in place,
+    /// so the tests see what the plan report's edge class claims (warm-up calls included).
+    uint64_t copies_in() const noexcept { return m_copies_in.load(std::memory_order_relaxed); }
+    uint64_t copies_out() const noexcept { return m_copies_out.load(std::memory_order_relaxed); }
+
 protected:
+    /// One copy of an input slot's memory into the engine's own, or of an output out of it.
+    void count_copy_in() const noexcept { m_copies_in.fetch_add(1, std::memory_order_relaxed); }
+    void count_copy_out() const noexcept { m_copies_out.fetch_add(1, std::memory_order_relaxed); }
+
     /// The latch of this executor's process: the engine's text goes to the log for the first
     /// failing chunk since the last success, the scheduler's latch counts the rest.
     FailureLatch m_failures;
+
+private:
+    mutable std::atomic<uint64_t> m_copies_in{0};
+    mutable std::atomic<uint64_t> m_copies_out{0};
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
@@ -320,6 +334,29 @@ public:
 
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
+
+    /// The boundary, in bytes (a power of two), a chunk's slot buffer must start on for the
+    /// engine to bind it in place: every session sizes its chunks to the largest any of its
+    /// plans' engines asks for. 64 by default, what LiteRT and TFLite ask of the host memory
+    /// they bind and more than the other runtimes need; an engine whose runtime maps memory on a
+    /// coarser grain (a page, for a GPU that maps host memory) says so.
+    virtual size_t buffer_alignment() const noexcept { return k_default_buffer_alignment; }
+    /// The alignment every engine gets unless it asks for more.
+    static constexpr size_t k_default_buffer_alignment = 64;
+
+    /// How the engine passes one slot's chunk buffer to its runtime, as the plan report states
+    /// it (anira_plan_slot.edge_class and reason): ANIRA_EDGE_ZERO_COPY where it binds the
+    /// buffer in place, ANIRA_EDGE_HOST_COPY with the reason where it copies through memory of
+    /// its own. A registered engine is handed the buffer itself: zero-copy by default.
+    struct SlotEdge {
+        anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+        const char* m_reason = nullptr;  ///< static storage; NULL with nothing to say
+    };
+    virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
+        static_cast<void>(is_input);
+        static_cast<void>(slot);
+        return SlotEdge{};
+    }
 
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
@@ -561,12 +598,15 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an
-/// anira_dtype (0 for one anira has no code for) and the engine's own word for that type.
+/// anira_dtype (0 for one anira has no code for), the engine's own word for that type, and
+/// whether its values are quantised (they mean scale * (q - zero point): TFLite and LiteRT
+/// quantisation parameters, a quantised torch or ExecuTorch scalar type).
 struct EngineTensor {
     std::string m_name;
     std::vector<int64_t> m_dims;
     anira_dtype m_dtype = 0;
     std::string m_type_word;
+    bool m_quantised = false;
 };
 
 /// How check_engine_tensor reads the engine's extents.
@@ -581,7 +621,8 @@ enum class ExtentRule : uint8_t {
 /// The check of the binding rule, whichever way a slot was bound: the engine tensor's element
 /// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
 /// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
-/// tensor, with both shapes.
+/// tensor, with both shapes. A quantised engine tensor comes first: quantised I/O is not
+/// supported (ANIRA_ERROR_NOT_SUPPORTED), refused rather than handed on as plain integers.
 void check_engine_tensor(const TensorInfo& slot,
                          const EngineTensor& engine_tensor,
                          ExtentRule rule,
@@ -605,16 +646,27 @@ std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
 Bindings bindings_of(const std::vector<SlotBinding>& inputs,
                      const std::vector<SlotBinding>& outputs);
 
-/// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
-/// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`
-/// elements, and packed row-major strides (all zero, or the row-major strides themselves; the
-/// stride of an axis of extent 1 is never stepped and may be anything), at byte_offset from
-/// the base. NULL for anything else, a NULL base included.
-float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
+/// The memory of a descriptor a built-in adapter can hand its engine as one packed block:
+/// host memory (pageable or page-locked), of `dtype`, not planar, `expected` elements, and
+/// packed row-major strides (all zero, or the row-major strides themselves; the stride of an
+/// axis of extent 1 is never stepped and may be anything), at byte_offset from the base. NULL
+/// for anything else, a NULL base included.
+void* host_packed(const anira_tensor& tensor, anira_dtype dtype, size_t expected) noexcept;
 
-/// The float32 rule of the built-in adapters: throws anira::StatusError(ANIRA_ERROR_CONFIG)
-/// naming `engine` and the first tensor of the record (inputs, then outputs) whose dtype is
-/// not float32.
+/// Whether `data` starts on an `alignment` boundary (a power of two): what an engine that binds
+/// memory in place checks per call, since no tensor is assumed to be anira's own buffer.
+inline bool aligned_to(const void* data, size_t alignment) noexcept {
+    return (reinterpret_cast<uintptr_t>(
+                data) &  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+            (alignment - 1)) == 0;
+}
+
+/// The dtype rule of a built-in adapter at load: throws anira::StatusError
+/// (ANIRA_ERROR_NOT_SUPPORTED) naming `engine` and the first tensor of the record (inputs,
+/// then outputs) whose dtype `carries` refuses, an engine's limit and no configuration error.
+void require_dtypes(const Model& model, const char* engine, bool (*carries)(anira_dtype) noexcept);
+
+/// The float32 rule of an adapter that binds float32 alone: require_dtypes over float32.
 void require_f32(const Model& model, const char* engine);
 
 }  // namespace anira::engine

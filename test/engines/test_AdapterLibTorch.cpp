@@ -14,8 +14,11 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 
+#include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -49,6 +52,26 @@ std::string rave_model_path() {
     return ANIRA_EXTRAS_MODELS_DIR "/third-party/ircam-acids/RAVE/rave_funk_drum.ts";
 }
 
+/// The float16 bits of a small integer (|value| < 2048, exact), and back: the test's own helpers
+/// (no vendor header in a test).
+uint16_t half_of(int value) {
+    if (value == 0) { return 0; }
+    const uint16_t sign = value < 0 ? 0x8000U : 0U;
+    auto magnitude = static_cast<uint32_t>(value < 0 ? -value : value);
+    int exponent = 0;
+    while ((magnitude >> exponent) > 1U) { ++exponent; }
+    const uint32_t mantissa = (magnitude << (10 - exponent)) & 0x3ffU;
+    return static_cast<uint16_t>(sign | (static_cast<uint32_t>(exponent + 15) << 10) | mantissa);
+}
+
+float float_of_half(uint16_t half) {
+    const uint32_t exponent = (half >> 10) & 0x1fU;
+    if (exponent == 0) { return 0.0F; }
+    const float magnitude = std::ldexp(1.0F + static_cast<float>(half & 0x3ffU) / 1024.0F,
+                                       static_cast<int>(exponent) - 15);
+    return (half & 0x8000U) != 0 ? -magnitude : magnitude;
+}
+
 std::string gain_model_path() {
     return ANIRA_EXTRAS_MODELS_DIR
         "/model-pool/example-models/SimpleGainNetwork/models/simple_gain_network_mono.pt";
@@ -77,6 +100,13 @@ public:
     const anira::engine::Bindings& bindings() const noexcept { return m_loaded->bindings(); }
     anira_status run(const anira_engine_ctx& ctx, bool reset_first) noexcept {
         return m_prepared->run(ctx, reset_first);
+    }
+    /// The executor the session runs on: its own for an exclusive session, else shared slot 0.
+    const anira::engine::Executor& executor() const {
+        const auto* prepared =
+            dynamic_cast<const anira::engine::ExecutorPrepared*>(m_prepared.get());
+        if (prepared != nullptr && prepared->own() != nullptr) { return *prepared->own(); }
+        return dynamic_cast<const anira::engine::ExecutorLoaded&>(*m_loaded).executor(0);
     }
 
 private:
@@ -110,6 +140,91 @@ anira_status run_once(Rig& adapter, anira_test::Buffers& inputs, anira_test::Buf
 }
 
 }  // namespace
+
+// The TypedGainNetwork TorchScript exports at int16, int8 and float16: the record's dtype on
+// every slot, the inputs bound in place (from_blob over the descriptors, no copy counted), the
+// outputs, which a method returns as tensors of its own, copied once each; the stream comes out
+// doubled exactly and the peak is 16.
+TEST(AdapterLibTorch, ATypedModelBindsItsInputsAndCopiesItsOutputs) {
+    struct Case {
+        const char* m_word;
+        anira_dtype m_dtype;
+    };
+    for (const Case& c : {Case{.m_word = "int16", .m_dtype = ANIRA_DTYPE_I16},
+                          Case{.m_word = "int8", .m_dtype = ANIRA_DTYPE_I8},
+                          Case{.m_word = "float16", .m_dtype = ANIRA_DTYPE_F16}}) {
+        SCOPED_TRACE(c.m_word);
+        Model model = model_record(
+            ANIRA_ENGINE_LIBTORCH,
+            ANIRA_EXTRAS_MODELS_DIR
+                "/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_" +
+                std::string(c.m_word) + ".pt",
+            {{1, 1, 512}, {1}},
+            {{1, 1, 512}, {1}},
+            1);
+        for (auto* side : {&model.m_inputs, &model.m_outputs}) {
+            for (anira::engine::TensorInfo& tensor : *side) { tensor.m_dtype = c.m_dtype; }
+        }
+        const std::shared_ptr<Rig> adapter = libtorch_adapter();
+        adapter->prepare(model);
+        ASSERT_TRUE(adapter->prepared());
+
+        const size_t element = c.m_dtype == ANIRA_DTYPE_I8 ? 1 : 2;
+        const auto put = [&](std::byte* at, int value) {
+            if (c.m_dtype == ANIRA_DTYPE_I8) {
+                const auto v = static_cast<int8_t>(value);
+                std::memcpy(at, &v, 1);
+            } else if (c.m_dtype == ANIRA_DTYPE_I16) {
+                const auto v = static_cast<int16_t>(value);
+                std::memcpy(at, &v, 2);
+            } else {
+                const uint16_t v = half_of(value);
+                std::memcpy(at, &v, 2);
+            }
+        };
+        const auto get = [&](const std::byte* at) {
+            if (c.m_dtype == ANIRA_DTYPE_I8) {
+                int8_t v = 0;
+                std::memcpy(&v, at, 1);
+                return static_cast<float>(v);
+            }
+            if (c.m_dtype == ANIRA_DTYPE_I16) {
+                int16_t v = 0;
+                std::memcpy(&v, at, 2);
+                return static_cast<float>(v);
+            }
+            uint16_t v = 0;
+            std::memcpy(&v, at, 2);
+            return float_of_half(v);
+        };
+        std::vector<std::byte> data(512 * element);
+        std::vector<std::byte> gain(element);
+        std::vector<std::byte> out(512 * element, std::byte{0x5a});
+        std::vector<std::byte> peak(element, std::byte{0x5a});
+        for (size_t n = 0; n < 512; ++n) { put(&data[n * element], static_cast<int>(n % 17) - 8); }
+        put(gain.data(), 2);
+        const std::array<int64_t, 3> block{1, 1, 512};
+        const std::array<int64_t, 1> scalar{1};
+        std::vector<anira_tensor> inputs(2);
+        std::vector<anira_tensor> outputs(2);
+        anira_tensor_init_host(&inputs[0], data.data(), c.m_dtype, 3, block.data());
+        anira_tensor_init_host(&inputs[1], gain.data(), c.m_dtype, 1, scalar.data());
+        anira_tensor_init_host(&outputs[0], out.data(), c.m_dtype, 3, block.data());
+        anira_tensor_init_host(&outputs[1], peak.data(), c.m_dtype, 1, scalar.data());
+
+        const uint64_t copies_in = adapter->executor().copies_in();
+        const uint64_t copies_out = adapter->executor().copies_out();
+        ASSERT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_OK);
+        EXPECT_EQ(adapter->executor().copies_in() - copies_in, 0U) << "the inputs are bound";
+        EXPECT_EQ(adapter->executor().copies_out() - copies_out, 2U) << "one copy per output";
+        for (size_t n = 0; n < 512; ++n) {
+            ASSERT_EQ(get(&out[n * element]),
+                      2.0F * static_cast<float>(static_cast<int>(n % 17) - 8))
+                << n;
+        }
+        EXPECT_EQ(get(peak.data()), 16.0F);
+    }
+}
 
 // A model supplied as bytes must load through the in-memory branch.
 TEST(AdapterLibTorch, BinaryModelDataLoadsFromMemory) {

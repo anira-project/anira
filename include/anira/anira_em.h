@@ -382,15 +382,15 @@ ANIRA_API uint32_t ANIRA_CALL anira_em_inference_threads_in_loop(void)
  * @param err Nullable.
  * @return ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL
  *         handler or out word, a slot list longer than 32 or without its pointer, a slot listed
- *         twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed
- *         slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a
- *         node without any input or output, a slot of more than 64 channels;
- *         ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a
- *         contract that is not Hard or whose block range excludes the quantum, a parameter slot
- *         that is not a float32 Static scalar, a tensor slot that is not Static or has a
- *         dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to
- *         start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or
- *         processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
+ *         twice, a slot that is not a Streamed slot of its side, a Streamed slot no input or
+ *         output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any
+ *         input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an
+ *         unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block
+ *         range excludes the quantum, a Streamed slot whose ring dtype is not float32, a
+ *         parameter slot that is not a float32 Static scalar, a tensor slot that is not Static
+ *         or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread
+ *         failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a
+ *         thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused);
  *         ANIRA_ERROR_OUT_OF_MEMORY.
  * @par Thread contract
  * [main-thread]

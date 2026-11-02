@@ -32,8 +32,12 @@ loaded model; ``ModelConfig.fromUrl`` attaches the bytes of a JavaScript engine'
 model file is fetched once, on the main thread, and every Worker reads the same memory.
 ``process(ctx, prepared)`` runs once per inference (``prepared`` the loaded model's record, which
 :js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
-gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
-tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
+gives the call's input and output tensors: ``elements``; ``dtype``, the tensor's ``anira_dtype``
+(its spec's: a model of any dtype anira names reaches the engine in that dtype); ``data``, a typed
+array of that dtype over the tensor's data (``Float32Array`` for float32, ``Int16Array`` for int16,
+``BigInt64Array`` for int64, the 16-bit words as a ``Uint16Array`` for float16 and bfloat16, the
+bytes as a ``Uint8Array`` for bool8); and ``f32``, ``data`` when the tensor is float32. It fills
+the outputs and returns an ``anira_status``. ``reset`` (with
 ``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``addEngine``) runs at a new stream of an exclusive
 handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
 can run here and runs on the main thread, so a page whose engine has one imports the module there
@@ -71,8 +75,10 @@ ONNX Runtime Web
 as such an engine: its ``init`` loads onnxruntime-web's binary (``dist/wasm/
 ort-wasm-simd-threaded.wasm``), its ``load`` creates a session from the model entry's bytes
 (copied into onnxruntime-web's own heap, a separate module) or, for an entry with a path and no
-bytes, from a synchronous fetch of the path, and its ``process`` runs one float32 ORT tensor per
-model tensor of the call:
+bytes, from a synchronous fetch of the path, and its ``process`` runs one ORT tensor per model
+tensor of the call, of the tensor's dtype as ONNX's element type (every dtype anira names; a
+tensor whose dtype is not the model's element type is ``ANIRA_ERROR_CONFIG``), its data copied
+in and the outputs copied out (anira's module and onnxruntime-web's are two wasm memories):
 
 .. code-block:: ts
 
