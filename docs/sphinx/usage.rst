@@ -775,6 +775,185 @@ The JSON files of section 1.5 are the same three loaders: ``anira_model_config_f
 returns ``ANIRA_SUCCESS_UPGRADED`` and ``anira_model_config_take_legacy_contract`` hands out
 its Hard contract.
 
+1.7. Dtypes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A model tensor is of one of the ten dtypes anira names, and it keeps that dtype end to end: the
+chunk stores it in it, a Static tensor is stored and handed over in it, a State pair's two
+buffers hold it, and every engine's descriptors carry it. In a model file the dtype is a word:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Constant
+     - JSON word
+     - Element
+   * - ``ANIRA_DTYPE_F32``
+     - ``"float32"``
+     - IEEE 754 binary32
+   * - ``ANIRA_DTYPE_F64``
+     - ``"float64"``
+     - IEEE 754 binary64
+   * - ``ANIRA_DTYPE_F16``
+     - ``"float16"``
+     - IEEE 754 binary16, as its 16-bit words (C and C++ have no type for it)
+   * - ``ANIRA_DTYPE_BF16``
+     - ``"bfloat16"``
+     - the upper 16 bits of a binary32, as its 16-bit words
+   * - ``ANIRA_DTYPE_I8``, ``U8``
+     - ``"int8"``, ``"uint8"``
+     - 8-bit integers
+   * - ``ANIRA_DTYPE_I16``, ``I32``, ``I64``
+     - ``"int16"``, ``"int32"``, ``"int64"``
+     - signed integers
+   * - ``ANIRA_DTYPE_BOOL8``
+     - ``"bool"``
+     - one byte, 0 or 1
+
+A dtype anira does not name (several lanes, an unsigned integer wider than 8 bits) is
+``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create`` and has no word in a model file
+(``anira_model_config_to_json`` refuses it); ``anira_tensor_spec_create`` refuses a dtype of 0.
+
+**The ring dtype is the spec's.** The ring of a Streamed tensor, its host end, holds the spec's
+dtype unless the contract names another (``ring_dtypes``, section 1.3), so an int16 model takes
+int16 host tensors with no setting. Nothing in anira converts. A host whose samples are of
+another type names its type in ``ring_dtypes`` and adds a processor that converts, in
+``pre_process`` for an input and in ``post_process`` for an output, with its own scaling; a ring
+dtype that differs from the spec's without such a processor is ``ANIRA_ERROR_CONFIG`` at prepare.
+A host tensor whose dtype is not its slot's ring dtype is refused per call with
+``ANIRA_ERROR_CONFIG`` (recorded in ``anira_handler_rt_error``, nothing delivered, nothing
+staged), and the log line names both remedies:
+
+.. code-block:: text
+
+    anira_handler_process: the tensor of input slot 0 'audio_in' is float32, the slot's ring
+    dtype is int16; nothing converts: pass a tensor of the ring dtype, or name float32 in the
+    contract's ring_dtypes and add a processor that converts in pre_process
+
+The plan report names both dtypes of every slot (``anira_plan_slot.dtype`` and
+``anira_plan_slot.ring_dtype``, 0 for a slot without a ring), so a host can compare its own
+sample type with the ring's before its first call.
+
+**Converting processors.** The conversion is the host's, with the host's scaling:
+
+- an int16 PCM host on a float32 model: ``ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}}`` and a
+  ``pre_process`` that writes ``x / 32768.0f`` (section 2 has it in full, in C and in C++);
+- a float32 host on a float16 model: float32 for both rings, a ``pre_process`` that writes the
+  model's float16 and a ``post_process`` that reads it back;
+- a float32 host on an int8 model: the same with the model's own convention, which the host
+  knows and anira does not (``clamp(round(x * 127), -128, 127)`` on the way in and ``q / 127``
+  on the way out, for a model trained so);
+- a host whose type is the model's (an int16 host on an int16 model): no setting, no processor.
+
+The float16 case in C++, over the typed model tensor and the float32 rings (``to_half`` and
+``from_half`` are the host's helpers; ``HOP`` is the model's hop):
+
+.. code-block:: cpp
+
+    class HalfPrepared final : public anira::Processor::Prepared {
+    public:
+        anira_status pre_process(anira::ProcessorContext& ctx) noexcept override {
+            anira::Tensor tensor{};
+            anira::RingView ring;
+            if (ctx.input_tensor(0, tensor) != ANIRA_OK || ctx.input_ring(0, ring) != ANIRA_OK) {
+                return ANIRA_ERROR_CONFIG;
+            }
+            auto* model = static_cast<uint16_t*>(tensor.data(ANIRA_DTYPE_F16));
+            if (model == nullptr || ring.pop_block(0, std::span<float>(m_scratch)) != HOP) {
+                return ANIRA_ERROR_CONFIG;
+            }
+            for (size_t n = 0; n < HOP; ++n) { model[n] = to_half(m_scratch[n]); }
+            return ANIRA_OK;
+        }
+        anira_status post_process(anira::ProcessorContext& ctx) noexcept override {
+            anira::Tensor tensor{};
+            anira::RingView ring;
+            if (ctx.output_tensor(0, tensor) != ANIRA_OK || ctx.output_ring(0, ring) != ANIRA_OK) {
+                return ANIRA_ERROR_CONFIG;
+            }
+            const auto* model = static_cast<const uint16_t*>(tensor.data(ANIRA_DTYPE_F16));
+            if (model == nullptr) { return ANIRA_ERROR_CONFIG; }
+            for (size_t n = 0; n < HOP; ++n) { m_scratch[n] = from_half(model[n]); }
+            return ring.push_block(0, std::span<const float>(m_scratch)) == HOP
+                       ? ANIRA_OK
+                       : ANIRA_ERROR_CONFIG;
+        }
+
+    private:
+        std::array<float, HOP> m_scratch{};
+    };
+
+    class HalfProcessor final : public anira::Processor {
+    public:
+        uint32_t phases() const noexcept override { return k_pre_process | k_post_process; }
+        uint32_t flags() const noexcept override { return ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST; }
+        std::unique_ptr<Prepared> prepare(const anira::PrepareInfo&) override {
+            return std::make_unique<HalfPrepared>();
+        }
+    };
+
+    contract.hard_ring_dtype("audio_in", ANIRA_DTYPE_F32).hard_ring_dtype("audio_out", ANIRA_DTYPE_F32);
+    pipeline.add_processor(std::make_shared<HalfProcessor>());
+
+``test/abi/test_Dtypes.cpp`` runs this processor and its int8 twin through a float32 host.
+
+**The engines.** Every built-in engine carries the ten dtypes: the bundled TypedGainNetwork
+fixtures (int16, int8 and float16) run through each of them exactly, and the ONNX dtype matrix
+runs all ten through ONNX Runtime and through the ONNX Runtime Web engine
+(``test/abi/test_Dtypes.cpp``, ``web/test/dtypes.test.ts``). How each one hands a slot's memory
+over, which the plan report's ``edge_class`` states per slot (``ANIRA_EDGE_ZERO_COPY`` bound in
+place, ``ANIRA_EDGE_HOST_COPY`` with the engine's reason):
+
+.. list-table::
+   :header-rows: 1
+
+   * - Engine
+     - Inputs
+     - Outputs
+   * - ONNX Runtime
+     - bound in place (a value over the slot's memory per call)
+     - bound in place
+   * - LibTorch
+     - bound in place (``from_blob``)
+     - one copy: a TorchScript method returns tensors of its own
+   * - LiteRT
+     - bound in place on the CPU path (a tensor buffer over the slot's memory, kept per memory);
+       one copy on an accelerator
+     - the same
+   * - TFLite
+     - bound in place (the slot's memory is the tensor's custom allocation per call)
+     - the same
+   * - ExecuTorch
+     - bound in place where the memory plan leaves the input out (``set_input`` aliases it);
+       one copy, ``set_input``'s, into a planned one
+     - bound in place where the plan leaves the output out (``set_output_data_ptr``); one copy
+       out of a planned one
+   * - ONNX Runtime Web
+     - one copy: anira's module and onnxruntime-web's are two wasm memories
+     - one copy
+   * - a registered engine
+     - the chunk's buffer, as it is
+     - the chunk's buffer
+
+A chunk's buffers start on the largest boundary any engine of the plans asks for (64 bytes for
+every built-in one), so the in-place paths always apply to anira's own memory; a descriptor off
+the boundary takes the copy. An engine that binds an input in place may write it: nothing reads
+a chunk's inputs after the inference but an ``after_inference`` hook, which sees what the engine
+left.
+
+**Quantised models.** A model whose quantisation lives inside the graph and whose I/O is float
+(ONNX QDQ, a TFLite model with float I/O around quantised operators, PT2E-quantised internals)
+runs as any float model. A model tensor with quantisation parameters at the boundary (an int8
+tensor whose values mean ``scale * (q - zero_point)``, a fully integer TFLite export) is refused
+at load with ``ANIRA_ERROR_NOT_SUPPORTED``, never handed on as plain integers: TFLite and LiteRT
+report the parameters, LibTorch and ExecuTorch a quantised scalar type. ONNX carries no
+quantisation at a graph's boundary, so an ONNX model's int8 I/O is its plain integers by
+definition. Until a later pre-release adds the parameters to the spec, a host that has them
+converts as in the int8 case above.
+
+**On the web** an audio node streams float32: a model of another dtype behind one needs float32
+in the contract's ring dtypes and a converting processor (:doc:`web-api/audio_nodes`).
+
 2. Processors
 -------------
 
@@ -900,7 +1079,7 @@ the dtype it believes the ring holds; when it is another one the call returns ``
 nothing and records ``ANIRA_ERROR_CONFIG``, since **nothing in anira converts**, in either
 direction (a channel out of range: ``0`` and ``ANIRA_ERROR_INVALID_ARGUMENT``; a ``NULL``
 ring: ``0``; ``discard`` takes no dtype). A ring holds the ring dtype the contract declares
-for its tensor (``hard_ring_dtype``, section 1.3; ``ANIRA_DTYPE_F32`` unless declared), which
+for its tensor (``hard_ring_dtype``, section 1.3; the spec's dtype unless declared), which
 may differ from the spec's dtype exactly when the processor fills the phase that moves that ring:
 prepare refuses the difference otherwise, and the default body refuses such a slot at run
 time. The channel count has no such exception, and neither has the domain.

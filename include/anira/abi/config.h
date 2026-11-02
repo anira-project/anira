@@ -383,11 +383,10 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_latency(anira_tensor_spe
  * prepare): every state input names exactly one state output and every state output is
  * named by exactly one state input; the two halves have equal dtype and shape; a state
  * spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the
- * anchor may name it. A state pair may have any dtype, unlike every other model tensor
- * of this pre-release, which is float32: its buffers take the spec's dtype and a custom
- * engine binds what its load accepts, while a built-in engine refuses a non-float32
- * tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a
- * transposed layout. A second call replaces the name.
+ * anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a
+ * custom engine binds what its load accepts, and a built-in engine refuses at load
+ * (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED:
+ * a state tensor with a transposed layout. A second call replaces the name.
  * @param spec The spec of a state INPUT (role ANIRA_ROLE_STATE).
  * @param output_canonical The canonical name of the state output this input is fed from, UTF-8,
  *        copied; resolved when the model is validated (anira_handler_create,
