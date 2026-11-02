@@ -4264,7 +4264,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "The edge cost of the plans (section 7), plan validation, not scheduling: at anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is not eligible: it is dropped from the plans, under the default candidate set and named candidates alike, with an Info record of the group anira.capi naming each such slot, its class, who moves its bytes and why; the report and the plan indices hold the eligible plans alone. The edge is the plan engine's (anira_plan_slot.edge_class), known once its model has loaded.",
+          "doc": "The edge cost of the plans (section 7), plan validation, not scheduling: at anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is not eligible: it is dropped from the plans, under the default candidate set and named candidates alike, with an Info record of the group anira.capi naming each such slot, its class, who moves its bytes and why; the report and the plan indices hold the eligible plans alone. The session is then made again over the remaining plans while the first still holds their loaded models, so no model loads twice; an exclusive session's own executor is made, and warmed up, a second time. The edge is the plan engine's (anira_plan_slot.edge_class), known once its model has loaded.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value anira_edge_class does not name."
         },
         {

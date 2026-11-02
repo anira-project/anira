@@ -747,8 +747,10 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_async_set_policy(anira_contract
  * not eligible: it is dropped from the plans, under the default candidate set and named
  * candidates alike, with an Info record of the group anira.capi naming each such slot,
  * its class, who moves its bytes and why; the report and the plan indices hold the
- * eligible plans alone. The edge is the plan engine's (anira_plan_slot.edge_class),
- * known once its model has loaded.
+ * eligible plans alone. The session is then made again over the remaining plans while
+ * the first still holds their loaded models, so no model loads twice; an exclusive
+ * session's own executor is made, and warmed up, a second time. The edge is the plan
+ * engine's (anira_plan_slot.edge_class), known once its model has loaded.
  * @param contract Either contract kind.
  * @param worst_allowed The worst class a plan may take for any of its slots:
  *        ANIRA_EDGE_TRANSFER (the default) admits every edge,

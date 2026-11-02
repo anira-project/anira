@@ -593,7 +593,9 @@ no copy in device memory either, and ``ANIRA_EDGE_ZERO_COPY`` no copy at all. At
 with a slot above it is dropped once its model has loaded (its edges are its engine's), with an
 Info record naming each such slot, its class, who moves its bytes and why; the report holds the
 eligible plans alone, and with none left prepare throws ``ANIRA_ERROR_EDGE_UNREACHABLE`` naming
-them. ``host_domain`` on the handle (above) is common to both kinds the same way.
+them. The session is then made again over the plans that remain while the first still holds
+their models, so no model loads twice; an exclusive session's own executor is made, and warmed
+up, a second time. ``host_domain`` on the handle (above) is common to both kinds the same way.
 
 1.4. Context configuration
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
