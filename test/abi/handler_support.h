@@ -121,6 +121,18 @@ inline std::vector<anira_engine> oracle_engines() {
     return out;
 }
 
+/// The edge a plan of `engine` reports for a slot of the bundled gain files on the CPU path
+/// (engine::Loaded::slot_edge): ExecuTorch copies both sides once (the bundled .pte is memory
+/// planned), LibTorch copies its outputs (a TorchScript method returns tensors of its own), every
+/// other built-in engine and a registered one bind the chunk's buffer in place. A test that reads
+/// a plan's slot rows expects this for the plan's own engine, whichever engine the build puts
+/// first (TFLite in a TFLite-only build, the iOS leg's shape).
+inline anira_edge_class gain_edge(uint32_t engine, bool is_input) {
+    const bool copies = engine == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH) ||
+                        (engine == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH) && !is_input);
+    return copies ? ANIRA_EDGE_HOST_COPY : ANIRA_EDGE_ZERO_COPY;
+}
+
 /// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,
 /// ANIRA_ENGINE_CUSTOM with its id): the shape of the default set anira_pipeline_add_inference
 /// builds for a NULL list.
