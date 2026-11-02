@@ -1246,11 +1246,13 @@ TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
 // ANIRA_EDGE_ZERO_COPY a plan whose engine copies a slot (gain_edge: LibTorch's outputs, the
 // memory-planned ExecuTorch export) leaves the table and every other one stays, in candidate
 // order, each slot zero-copy and moved by nobody. A build whose engines all copy has no plan
-// left: ANIRA_ERROR_EDGE_UNREACHABLE, the message naming the threshold.
+// left: ANIRA_ERROR_EDGE_UNREACHABLE, the message naming the threshold. Skipped in a build
+// without a built-in engine (the sanitizer trees).
 TEST(AbiPrepare, TheEdgeCostKeepsThePlansWithinIt) {
     const Context context;
     const ModelConfig model = gain_with_custom(false);
     const std::vector<anira_backend_id> candidates = anira_test::engine_candidates();
+    if (candidates.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
     std::vector<uint32_t> bound;  // the engines whose gain plans copy no slot
     for (const anira_backend_id& candidate : candidates) {
         if (anira_test::gain_edge(candidate.engine, true).m_class == ANIRA_EDGE_ZERO_COPY &&
