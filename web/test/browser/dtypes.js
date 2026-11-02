@@ -7,7 +7,7 @@
 // for. The stream comes out doubled after the handler's latency, exactly, and the plan report
 // names int16 on both sides of the stream and each engine's edge: zero-copy for the module's
 // own ONNX Runtime, a host copy by the engine for the ONNX Runtime Web engine (its statement,
-// ONNXRUNTIME_WEB_ENGINE_OPTIONS). Then an audio node, which streams float32, is refused
+// which addEngine states by default under the engine's id). Then an audio node, which streams float32, is refused
 // for the int16 handler, and its message names the remedy. The verdict is
 // window.anira_test_result.
 import {
@@ -23,10 +23,7 @@ import {
   heap,
   layout,
 } from '../../dist/index.js'
-import {
-  ONNXRUNTIME_WEB_ENGINE_ID,
-  ONNXRUNTIME_WEB_ENGINE_OPTIONS,
-} from '../../dist/engines/onnxruntime-web.js'
+import { ONNXRUNTIME_WEB_ENGINE_ID } from '../../dist/engines/onnxruntime-web.js'
 
 const RATE = 48000
 const BLOCK = 512 // the export's window, one block per inference
@@ -80,7 +77,7 @@ const streamThrough = async (anira, handler) => {
 // checks the quantum against the host blocks before the ring dtypes).
 const runThrough = async (anira, context, model, engineId) => {
   const pipeline = Pipeline.create(anira).addInference(model)
-  if (engineId !== undefined) pipeline.addEngine(engineId, ONNXRUNTIME_WEB_ENGINE_OPTIONS)
+  if (engineId !== undefined) pipeline.addEngine(engineId)
   const contract = ContractHandle.hard(anira, {
     hostBlockMin: BLOCK,
     hostRate: RATE,

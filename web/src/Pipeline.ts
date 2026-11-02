@@ -1,6 +1,7 @@
 import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST } from './abi/enums'
 import type { InputSpec } from './staticInput'
+import { BUNDLED_ENGINE_EDGES } from './engines/ids'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
 
@@ -27,9 +28,10 @@ export type EngineOptions = {
   /**
    * How the engine passes every slot to its runtime (`anira::Engine::Loaded::edge`, the
    * descriptor's `edge`): the engine runs in the inference Workers, so the main thread states it
-   * here, once for every slot, where the plan report is built. Default none: the provider rule
-   * (zero-copy on the CPU path). An engine that copies the slots into memory of its own says
-   * `ANIRA_EDGE_HOST_COPY` (the ONNX Runtime Web engine does: `ONNXRUNTIME_WEB_ENGINE_OPTIONS`).
+   * here, once for every slot, where the plan report is built. An engine that copies the slots
+   * into memory of its own says `ANIRA_EDGE_HOST_COPY`. Default: the statement of an engine the
+   * package ships, by its id (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGE`, a host
+   * copy), else none, the provider rule (zero-copy on the CPU path).
    */
   edge?: EngineEdge
 }
@@ -105,16 +107,15 @@ export class Pipeline {
     const m = this.abi.module
     const sp = m.stackSave()
     try {
+      const stated = options.edge ?? BUNDLED_ENGINE_EDGES[id]
       let edge = 0
-      if (options.edge !== undefined) {
+      if (stated !== undefined) {
         const reason =
-          options.edge.reason === undefined
-            ? 0
-            : m.stringToUTF8OnStack(options.edge.reason)
+          stated.reason === undefined ? 0 : m.stringToUTF8OnStack(stated.reason)
         edge = m.stackAlloc(ENGINE_EDGE.size)
         const u32 = heap(m).HEAPU32
         u32[edge >>> 2] = ENGINE_EDGE.size
-        u32[(edge + ENGINE_EDGE.edgeClass) >>> 2] = options.edge.edgeClass
+        u32[(edge + ENGINE_EDGE.edgeClass) >>> 2] = stated.edgeClass
         u32[(edge + ENGINE_EDGE.reason) >>> 2] = reason
       }
       this.abi.anira_em_pipeline_add_js_engine(

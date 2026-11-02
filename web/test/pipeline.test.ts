@@ -2,14 +2,16 @@
 // states it, since the engine runs in the inference Workers. With `edge`, the
 // anira_engine_edge record anira_em_pipeline_add_js_engine reads (the wasm32 layout of
 // anira/abi/engine.h) carries the class and the reason; without, the entry gets NULL, the
-// provider rule. The ONNX Runtime Web engine's options state a host copy. A stand-in module.
+// provider rule, except for an engine the package ships: added under its id the plain way, the
+// ONNX Runtime Web engine states its host copy by default, and an explicit `edge` overrides it.
+// A stand-in module.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { AniraBindings, type AbiModule } from '../src/abi/bindings'
 import { anira_edge_class, anira_status } from '../src/abi/enums'
 import {
+  ONNXRUNTIME_WEB_ENGINE_EDGE,
   ONNXRUNTIME_WEB_ENGINE_ID,
-  ONNXRUNTIME_WEB_ENGINE_OPTIONS,
 } from '../src/engines/ids'
 import { Pipeline } from '../src/Pipeline'
 
@@ -75,7 +77,7 @@ const fakes = () => {
   }
 }
 
-test('addEngine states the edge record, or NULL for the provider rule', () => {
+test("addEngine states the edge record, the bundled engine's by default, or NULL", () => {
   const { abi, stated, stack } = fakes()
   const pipeline = Pipeline.create({ abi })
   const before = stack()
@@ -86,8 +88,17 @@ test('addEngine states the edge record, or NULL for the provider rule', () => {
       reason: 'copies its slots',
     },
   })
-  pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_OPTIONS)
+  pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)
+  pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID, {
+    edge: { edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY },
+  })
+  pipeline.addEngine('org.example.ort', { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })
   assert.equal(stack(), before, 'the stack is restored')
+  const ort = {
+    structSize: 12,
+    edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
+    reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
+  }
   assert.deepEqual(stated, [
     null,
     {
@@ -95,10 +106,8 @@ test('addEngine states the edge record, or NULL for the provider rule', () => {
       edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
       reason: 'copies its slots',
     },
-    {
-      structSize: 12,
-      edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY,
-      reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
-    },
+    ort,
+    { structSize: 12, edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY, reason: null },
+    ort,
   ])
 })

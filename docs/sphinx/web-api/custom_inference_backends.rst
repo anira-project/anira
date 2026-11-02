@@ -112,13 +112,13 @@ The model is the config's, stated once:
 ``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
 each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
 (a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
-The page registers ``ONNXRUNTIME_WEB_ENGINE_ID`` with ``ONNXRUNTIME_WEB_ENGINE_OPTIONS``, both
-from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID, ONNXRUNTIME_WEB_ENGINE_OPTIONS } from
-'@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID,
-ONNXRUNTIME_WEB_ENGINE_OPTIONS)``). The options carry the engine's edge statement, a host copy of
-every slot by the engine (the two wasm memories), so its plan rows say so; without them they read
-zero-copy. The id and the options are a module of their own, so the page does not bundle
-onnxruntime-web; only the worker module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import {
+ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)``).
+Under that id ``addEngine`` states the engine's edge by default, a host copy of every slot by the
+engine (the two wasm memories), so its plan rows say so; an engine defined under another id
+states it with ``addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })``. The id and the statement
+are a module of their own, so the page does not bundle onnxruntime-web; only the worker module
+that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.
 
 ``onnxRuntimeWeb({ numThreads: 2 })`` runs each inference on two threads: the inference Worker's
