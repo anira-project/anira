@@ -124,7 +124,7 @@ inline std::vector<anira_engine> oracle_engines() {
 /// The edge of a plan slot row and who moves its bytes (anira_plan_slot.edge_class, moved_by).
 struct SlotEdge {
     anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
-    anira_mover m_moved_by = ANIRA_MOVER_NONE;
+    uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover bits
 };
 
 /// The edge a plan of `engine` reports for a slot of the bundled gain files on the CPU path
@@ -136,8 +136,9 @@ struct SlotEdge {
 /// TFLite-only build, the iOS leg's shape).
 inline SlotEdge gain_edge(uint32_t engine, bool is_input) {
     if (engine == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH)) {
-        return {.m_class = ANIRA_EDGE_HOST_COPY,
-                .m_moved_by = is_input ? ANIRA_MOVER_ENGINE : ANIRA_MOVER_ANIRA};
+        return {
+            .m_class = ANIRA_EDGE_HOST_COPY,
+            .m_moved_by = static_cast<uint32_t>(is_input ? ANIRA_MOVER_ENGINE : ANIRA_MOVER_ANIRA)};
     }
     if (engine == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH) && !is_input) {
         return {.m_class = ANIRA_EDGE_HOST_COPY, .m_moved_by = ANIRA_MOVER_ANIRA};

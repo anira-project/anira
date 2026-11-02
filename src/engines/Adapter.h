@@ -350,14 +350,15 @@ public:
     /// the slot is copied inside host memory, by the adapter (ANIRA_MOVER_ANIRA, a copy the
     /// executor counts) or by the runtime's own API (ANIRA_MOVER_ENGINE); ANIRA_EDGE_TRANSFER,
     /// ANIRA_MOVER_ENGINE, where a device provider's runtime uploads the slot and reads the
-    /// results back itself (host_memory_provider). A slot the adapter copies is ANIRA's
-    /// whatever else the runtime moves, so the slots of ANIRA_MOVER_ANIRA are exactly the copies
-    /// the executor counts per call. By default the slot is bound in place (a registered engine
-    /// is handed the buffer itself), so the edge follows the record's provider.
+    /// results back itself (host_memory_provider). The movers are bits: a slot both the adapter
+    /// and the runtime move carries both, under the class of the worse move, so the slots with
+    /// the ANIRA_MOVER_ANIRA bit are exactly the copies the executor counts per call. By default
+    /// the slot is bound in place (a registered engine is handed the buffer itself), so the
+    /// edge follows the record's provider.
     struct SlotEdge {
         anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
-        anira_mover m_moved_by = ANIRA_MOVER_NONE;
-        const char* m_reason = nullptr;  ///< why; static storage, NULL with nothing to say
+        uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover bits
+        const char* m_reason = nullptr;          ///< why; static storage, NULL with nothing to say
     };
     virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
         static_cast<void>(is_input);

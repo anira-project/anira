@@ -1375,7 +1375,7 @@ anira_plan_slot host_slot(uint32_t slot,
     row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(facts.m_host_domain);
     row.edge_class = static_cast<uint32_t>(facts.m_edge.m_class);
     row.allocate_class = static_cast<uint32_t>(facts.m_edge.m_class);
-    row.moved_by = static_cast<uint32_t>(facts.m_edge.m_moved_by);
+    row.moved_by = facts.m_edge.m_moved_by;
     row.wait_strategy = static_cast<uint32_t>(wait);
     row.recipe = k_host_recipe;
     row.reason = facts.m_edge.m_reason;
@@ -1448,7 +1448,7 @@ bool drop_plans_over_edge_cost(anira_handler& handler,
                 slots += std::string(is_input ? "input " : "output ") + std::to_string(slot) +
                          " '" + specs[slot].m_name + "': edge " +
                          anira::capi::edge_class_word(edge.m_class) + ", moved by " +
-                         anira::capi::mover_word(edge.m_moved_by);
+                         anira::capi::movers_word(edge.m_moved_by);
                 if (edge.m_reason != nullptr) { slots += std::string(" (") + edge.m_reason + ")"; }
             }
         }
@@ -1589,7 +1589,7 @@ void log_slots(uint32_t plan,
             anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
             anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.edge_class)),
             anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.allocate_class)),
-            anira::capi::mover_word(static_cast<anira_mover>(slot.moved_by)),
+            anira::capi::movers_word(slot.moved_by),
             wait_strategy_word(slot.wait_strategy),
             slot.recipe != nullptr ? slot.recipe : "none",
             anira::capi::dtype_word(slot.dtype),

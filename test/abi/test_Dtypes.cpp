@@ -641,8 +641,8 @@ Copies plan_copies(const anira_handler* h) {
     return copies;
 }
 
-/// The slot rows of one side of the selected plan whose bytes anira's own code moves
-/// (ANIRA_MOVER_ANIRA).
+/// The slot rows of one side of the selected plan whose bytes anira's own code moves (the
+/// ANIRA_MOVER_ANIRA bit, whatever else moves them).
 uint64_t moved_by_anira(const anira_handler* h, bool inputs) {
     std::array<anira_plan_slot, 4> rows{};
     auto count = static_cast<uint32_t>(rows.size());
@@ -655,7 +655,7 @@ uint64_t moved_by_anira(const anira_handler* h, bool inputs) {
               ANIRA_OK);
     return static_cast<uint64_t>(std::ranges::count_if(
         std::span(rows).first(count),
-        [](const anira_plan_slot& row) { return row.moved_by == ANIRA_MOVER_ANIRA; }));
+        [](const anira_plan_slot& row) { return (row.moved_by & ANIRA_MOVER_ANIRA) != 0; }));
 }
 
 /// Streams the typed gain stream through a prepared handler (run_values) and checks the mover's

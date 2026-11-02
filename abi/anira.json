@@ -1461,7 +1461,7 @@
           "kind": "enum",
           "name": "anira_edge_class",
           "terminator": "ANIRA_EDGE_CLASS_FORCE32",
-          "doc": "Where an edge takes a tensor's bytes (section 7), ordered by cost, so the worst edge of a chain is the largest value. The class covers the bytes from the slot's memory until the engine computes on them, and back for outputs; layout transforms inside a runtime's graph are not edges. Who executes the move is the row's anira_mover, whether the edge exists its available flag (anira_edge_info).",
+          "doc": "Where an edge takes a tensor's bytes (section 7), ordered by cost, so the worst edge of a chain is the largest value and an edge of several moves has the class of its worst. The class covers the bytes from the slot's memory until the engine computes on them, and back for outputs; layout transforms inside a runtime's graph are not edges. Who executes the moves is the row's anira_mover bits, whether the edge exists its available flag (anira_edge_info).",
           "values": [
             {
               "name": "ANIRA_EDGE_ZERO_COPY",
@@ -1493,22 +1493,22 @@
           "kind": "enum",
           "name": "anira_mover",
           "terminator": "ANIRA_MOVER_FORCE32",
-          "doc": "Who executes an edge's move (section 7): anira_plan_slot.moved_by and anira_edge_info.moved_by.",
+          "doc": "Who executes an edge's moves (section 7), as bits: anira_plan_slot.moved_by and anira_edge_info.moved_by hold an OR of them, ANIRA_MOVER_NONE when nothing moves, both bits when anira and the runtime each move the bytes (the edge's class is then the worse of the two moves).",
           "values": [
             {
               "name": "ANIRA_MOVER_NONE",
               "value": 0,
-              "doc": "Nothing moves (ANIRA_EDGE_ZERO_COPY)."
+              "doc": "No bit: nothing moves (ANIRA_EDGE_ZERO_COPY)."
             },
             {
               "name": "ANIRA_MOVER_ANIRA",
               "value": 1,
-              "doc": "anira's own code: an engine adapter's copy. A slot anira's code copies has this mover whatever else the runtime moves, so these are the copies anira makes."
+              "doc": "anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are exactly the copies anira makes, the ones it counts and could remove."
             },
             {
               "name": "ANIRA_MOVER_ENGINE",
               "value": 2,
-              "doc": "The engine's runtime: a copy its own API makes (a memory-planned ExecuTorch input), the upload and readback of a device provider over host memory, or a registered engine's code."
+              "doc": "The engine's runtime moves the bytes: a copy its own API makes (a memory-planned ExecuTorch input), the upload and readback of a device provider over host memory, or a registered engine's code."
             },
             {
               "name": "ANIRA_MOVER_FORCE32",
@@ -6834,7 +6834,7 @@
             {
               "name": "moved_by",
               "type": "uint32_t",
-              "doc": "anira_mover: who executes the edge's move: ANIRA_MOVER_NONE on a zero-copy edge, ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and back itself. A tail field: a caller whose header ends before it gets its rows without it."
+              "doc": "anira_mover bits: who executes the edge's moves: ANIRA_MOVER_NONE on a zero-copy edge, ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and back itself. A tail field: a caller whose header ends before it gets its rows without it."
             }
           ],
           "init": {
@@ -9009,7 +9009,7 @@
             {
               "name": "moved_by",
               "type": "uint32_t",
-              "doc": "anira_mover: who executes the slot's move: ANIRA_MOVER_NONE on a zero-copy edge, ANIRA_MOVER_ANIRA where anira's own code copies the slot (an engine adapter's copy, what anira counts), ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a device provider's upload and readback, a registered engine's code). A tail field: a caller whose header ends before it gets its rows without it."
+              "doc": "anira_mover bits: who executes the slot's moves, an OR of ANIRA_MOVER_ANIRA where anira's own code copies the slot (an engine adapter's copy, what anira counts) and ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a device provider's upload and readback, a registered engine's code); ANIRA_MOVER_NONE on a zero-copy edge. A tail field: a caller whose header ends before it gets its rows without it."
             }
           ],
           "init": {

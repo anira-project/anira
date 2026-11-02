@@ -33,6 +33,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
+#include "capi/words.h"
 #include "fixtures.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -1304,6 +1305,17 @@ TEST(AbiPrepare, TheEdgeCostKeepsThePlansWithinIt) {
             }
         }
     }
+}
+
+// The movers of a slot row are bits, and the log lines spell every set of them: a slot both
+// anira and the runtime move (a memory-planned ExecuTorch output on a device delegate) says so.
+TEST(AbiPrepare, TheLogSpellsEverySetOfMovers) {
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_NONE), "none");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ANIRA), "anira");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ENGINE), "the engine");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ANIRA | ANIRA_MOVER_ENGINE),
+                 "anira and the engine");
+    EXPECT_STREQ(anira::capi::movers_word(4U), "unknown");
 }
 
 TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {

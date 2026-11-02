@@ -501,10 +501,11 @@ typedef enum anira_log_drain {
 
 /**
  * @brief Where an edge takes a tensor's bytes (section 7), ordered by cost, so the worst edge
- * of a chain is the largest value. The class covers the bytes from the slot's memory
- * until the engine computes on them, and back for outputs; layout transforms inside a
- * runtime's graph are not edges. Who executes the move is the row's anira_mover, whether
- * the edge exists its available flag (anira_edge_info).
+ * of a chain is the largest value and an edge of several moves has the class of its
+ * worst. The class covers the bytes from the slot's memory until the engine computes on
+ * them, and back for outputs; layout transforms inside a runtime's graph are not edges.
+ * Who executes the moves is the row's anira_mover bits, whether the edge exists its
+ * available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
     ANIRA_EDGE_ZERO_COPY = 0,  /**< Nothing moves: the engine computes on the slot's own memory. */
@@ -521,19 +522,22 @@ typedef enum anira_edge_class {
 } anira_edge_class;
 
 /**
- * @brief Who executes an edge's move (section 7): anira_plan_slot.moved_by and
- * anira_edge_info.moved_by.
+ * @brief Who executes an edge's moves (section 7), as bits: anira_plan_slot.moved_by and
+ * anira_edge_info.moved_by hold an OR of them, ANIRA_MOVER_NONE when nothing moves, both
+ * bits when anira and the runtime each move the bytes (the edge's class is then the
+ * worse of the two moves).
  */
 typedef enum anira_mover {
-    ANIRA_MOVER_NONE = 0,  /**< Nothing moves (ANIRA_EDGE_ZERO_COPY). */
+    ANIRA_MOVER_NONE = 0,  /**< No bit: nothing moves (ANIRA_EDGE_ZERO_COPY). */
     /**
-     * anira's own code: an engine adapter's copy. A slot anira's code copies has this mover
-     * whatever else the runtime moves, so these are the copies anira makes.
+     * anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are
+     * exactly the copies anira makes, the ones it counts and could remove.
      */
     ANIRA_MOVER_ANIRA = 1,
     /**
-     * The engine's runtime: a copy its own API makes (a memory-planned ExecuTorch input), the
-     * upload and readback of a device provider over host memory, or a registered engine's code.
+     * The engine's runtime moves the bytes: a copy its own API makes (a memory-planned
+     * ExecuTorch input), the upload and readback of a device provider over host memory, or a
+     * registered engine's code.
      */
     ANIRA_MOVER_ENGINE = 2,
     ANIRA_MOVER_FORCE32 = 0x7fffffff

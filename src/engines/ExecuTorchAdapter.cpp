@@ -769,15 +769,16 @@ public:
     /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
     /// leaves out is bound in place, a planned one costs one copy (set_input's for an input,
     /// the adapter's for an output). A delegate on a device (a GPU or an NPU backend) moves
-    /// the slot to it and back itself: the provider's edge, still the adapter's where the
-    /// adapter copies the output out of the plan's memory or its own block.
+    /// the slot to it and back itself: the provider's edge, the worse move, with the adapter's
+    /// bit beside the engine's where the adapter also copies the output out of the plan's
+    /// memory or its own block.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
         const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
         const SlotEdge host = slot < edges.size() ? edges[slot] : SlotEdge{};
         if (host_memory_provider(model().m_provider, model().m_provider_id)) { return host; }
         SlotEdge device = provider_edge();
-        if (host.m_moved_by == ANIRA_MOVER_ANIRA) {
-            device.m_moved_by = ANIRA_MOVER_ANIRA;
+        if ((host.m_moved_by & ANIRA_MOVER_ANIRA) != 0) {
+            device.m_moved_by |= ANIRA_MOVER_ANIRA;
             device.m_reason =
                 "executorch: the delegate computes in its device's memory and the output "
                 "lands in memory of the plan's or the executor's own";
