@@ -103,7 +103,7 @@ jobs:
           # resolve as-is; failures are collected so one run reports every suite.
           rc=0
           for build in build-ios-sim build-ios-sim-tflite; do
-            for t in test_utils test_scheduler test_engines test_handler test_abi; do
+            for t in test_utils test_scheduler test_platform test_engines test_handler test_abi; do
               xcrun simctl spawn "$UDID" "$PWD/$build/test/$t.app/$t" --gtest_brief=1 || rc=1
             done
           done
