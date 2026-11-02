@@ -664,14 +664,14 @@ public:
         : ExecutorLoaded(std::move(engine)) {}
 
     /// A slot is bound in place (its memory the tensor's custom allocation per call) where the
-    /// probe's bind could; one whose tensor takes no custom allocation is copied through it.
+    /// probe's bind could; the adapter copies one whose tensor takes no custom allocation
+    /// through the interpreter's own tensor.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
         const std::vector<bool>& bound = is_input ? m_input_bound : m_output_bound;
         if (slot < bound.size() && bound[slot]) { return SlotEdge{}; }
         return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
-                        .m_reason =
-                            "tflite: copied through the interpreter's own tensor (the "
-                            "tensor takes no custom allocation)"};
+                        .m_moved_by = ANIRA_MOVER_ANIRA,
+                        .m_reason = "tflite: the tensor takes no custom allocation"};
     }
 
     /// TFLite's boundary for a custom allocation, which every chunk's buffer meets.

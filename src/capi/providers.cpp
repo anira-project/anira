@@ -59,8 +59,22 @@ std::string provider_list(const std::vector<anira::engine::ProviderInfo>& provid
 
 }  // namespace
 
-bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept {
-    return anira::engine::host_memory_provider(provider, provider_id);
+void set_provider_edge(anira_edge_info& edge,
+                       anira_provider provider,
+                       std::string_view provider_id,
+                       const char* host_reason,
+                       const char* device_reason) noexcept {
+    if (anira::engine::host_memory_provider(provider, provider_id)) {
+        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
+        edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_NONE);
+        edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
+        edge.reason = host_reason;
+    } else {
+        edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_TRANSFER);
+        edge.moved_by = static_cast<uint32_t>(ANIRA_MOVER_ENGINE);
+        edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
+        edge.reason = device_reason;
+    }
 }
 
 anira_init_info query_info(const anira_context& context) {
@@ -240,17 +254,12 @@ CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipel
             edge.to_provider_id = provider_id;
             edge.to_engine_id = engine->id().c_str();
             edge.available = 1;
-            if (cpu_provider(info.m_provider, info.m_provider_id)) {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
-                edge.reason = "host memory reaches a custom engine's CPU provider without a copy";
-            } else {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
-                edge.reason =
-                    "the engine declared the provider and its query reports it usable here; "
-                    "the engine moves host memory to it itself, per call";
-            }
+            set_provider_edge(edge,
+                              info.m_provider,
+                              info.m_provider_id,
+                              "host memory reaches a custom engine's CPU provider without a copy",
+                              "the engine declared the provider and its query reports it usable "
+                              "here; the provider computes in its device's memory");
             rows.m_edges.push_back(edge);
         }
     }

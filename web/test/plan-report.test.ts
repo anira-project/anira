@@ -137,3 +137,43 @@ test('a miss is null; a refused query throws; an unprepared report is refused', 
   )
   assert.equal(calls, 0, 'refused before the C entry')
 })
+
+test('a slot row reads the mover beside the class, at the wasm32 offsets of anira_plan_slot', () => {
+  const buffer = new ArrayBuffer(65536)
+  const u32 = new Uint32Array(buffer)
+  let next = 1024
+  const module = {
+    HEAPU8: new Uint8Array(buffer),
+    HEAPU32: u32,
+    _malloc: (bytes: number) => {
+      const at = next
+      next += (bytes + 15) & ~15
+      return at
+    },
+    _free: () => {},
+    UTF8ToString: () => '',
+  }
+  const strides: number[] = []
+  const abi = {
+    module,
+    anira_plan_report_slots: (
+      _report: number,
+      _plan: number,
+      _inputs: boolean,
+      stride: number,
+      count: number,
+      out: number
+    ) => {
+      strides.push(stride)
+      u32[count >>> 2] = 1
+      if (out === 0) return anira_status.ANIRA_OK
+      u32[(out + 20) >>> 2] = 3 // edge_class: ANIRA_EDGE_TRANSFER
+      u32[(out + 56) >>> 2] = 2 // moved_by: ANIRA_MOVER_ENGINE
+      return anira_status.ANIRA_OK
+    },
+  } as unknown as AniraBindings
+  const [row] = new PlanReport(abi, 1024).slots(0, true)
+  assert.deepEqual(strides, [60, 60], 'the caller passes its sizeof as the stride')
+  assert.equal(row.edgeClass, 3)
+  assert.equal(row.movedBy, 2)
+})

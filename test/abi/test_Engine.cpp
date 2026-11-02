@@ -1875,6 +1875,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     const auto [default_status, default_edge] = edge(ANIRA_PROVIDER_CPU, nullptr, k_gain_id);
     ASSERT_EQ(default_status, ANIRA_OK);
     EXPECT_EQ(default_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+    EXPECT_EQ(default_edge.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
     EXPECT_EQ(default_edge.available, 1U);
     EXPECT_EQ(default_edge.to_engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
     ASSERT_NE(default_edge.to_engine_id, nullptr) << "the custom engine names itself";
@@ -1882,7 +1883,9 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
     EXPECT_EQ(default_edge.to_provider_id, nullptr);
     const auto [coreml_status, coreml_edge] = edge(ANIRA_PROVIDER_COREML, nullptr, k_gain_id);
     ASSERT_EQ(coreml_status, ANIRA_OK);
-    EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+    EXPECT_EQ(coreml_edge.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+    EXPECT_EQ(coreml_edge.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE))
+        << "the engine moves host memory to its device itself";
     EXPECT_EQ(coreml_edge.rung, static_cast<uint32_t>(ANIRA_RUNG_IDENTITY));
     ASSERT_NE(coreml_edge.reason, nullptr);
     EXPECT_NE(std::strstr(coreml_edge.reason, "query"), nullptr) << coreml_edge.reason;
@@ -1905,6 +1908,25 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                   ANIRA_OK);
         EXPECT_EQ(row.available, 1U);
         EXPECT_EQ(row.to_engine_id, sentinel) << "beyond the caller's struct_size";
+    }
+    {
+        // Likewise for the mover, the last tail field: a device row's ENGINE stays unwritten.
+        anira_backend_id to = ANIRA_BACKEND_ID_INIT;
+        to.engine = ANIRA_ENGINE_CUSTOM;
+        to.provider = ANIRA_PROVIDER_COREML;
+        to.engine_id = k_gain_id;
+        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+        row.struct_size = static_cast<uint32_t>(offsetof(anira_edge_info, moved_by));
+        ASSERT_EQ(anira_pipeline_capabilities_edge(pipe.m_pipeline,
+                                                   context.m_context,
+                                                   ANIRA_DOMAIN_HOST,
+                                                   &to,
+                                                   &row),
+                  ANIRA_OK);
+        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+        EXPECT_STREQ(row.to_engine_id, k_gain_id);
+        EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE))
+            << "beyond the caller's struct_size";
     }
     EXPECT_EQ(edge(ANIRA_PROVIDER_CUSTOM, "com.example.npu", k_gain_id).first,
               ANIRA_ERROR_EDGE_UNREACHABLE)
@@ -1951,6 +1973,7 @@ TEST(AbiEngine, ThePipelinesCapabilitiesListTheCustomEnginesRows) {
                                           &from_context),
                   ANIRA_OK);
         EXPECT_EQ(from_pipeline.edge_class, from_context.edge_class);
+        EXPECT_EQ(from_pipeline.moved_by, from_context.moved_by);
         EXPECT_EQ(from_pipeline.to_engine, from_context.to_engine);
         EXPECT_EQ(from_pipeline.to_engine_id, nullptr) << "a built-in engine has no id";
     }

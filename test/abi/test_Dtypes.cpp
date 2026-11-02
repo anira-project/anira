@@ -182,6 +182,7 @@ TEST(AbiDtypes, AModelOfEveryDtypeStreamsWithoutARingSetting) {
             EXPECT_EQ(row.dtype, dtype);
             EXPECT_EQ(row.ring_dtype, dtype);
             EXPECT_EQ(row.edge_class, ANIRA_EDGE_ZERO_COPY);
+            EXPECT_EQ(row.moved_by, ANIRA_MOVER_NONE);
         }
         const std::vector<std::byte> out = run_stream(h, dtype);
         EXPECT_EQ(out, delayed(dtype, anira_handler_get_latency(h, 0)));
@@ -614,13 +615,71 @@ float gain_sample(size_t k, size_t n) {
 
 namespace {
 
+/// The copies of slot memory the executors of a handler's selected plan made so far, per side
+/// (engine::Executor::copies_in, copies_out): the executors of the shared slots and the
+/// session's own (an exclusive session's).
+struct Copies {
+    uint64_t m_in = 0;
+    uint64_t m_out = 0;
+};
+
+Copies plan_copies(const anira_handler* h) {
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
+    const anira::SessionElement::PlanSlot& plan = session->m_plans.at(anira_handler_get_plan(h));
+    Copies copies;
+    const auto add = [&copies](const anira::engine::Executor& executor) {
+        copies.m_in += executor.copies_in();
+        copies.m_out += executor.copies_out();
+    };
+    const auto* loaded = dynamic_cast<const anira::engine::ExecutorLoaded*>(plan.m_loaded.get());
+    if (loaded != nullptr) {
+        for (uint32_t i = 0; i < loaded->num_instances(); ++i) { add(loaded->executor(i)); }
+    }
+    const auto* prepared =
+        dynamic_cast<const anira::engine::ExecutorPrepared*>(plan.m_prepared.get());
+    if (prepared != nullptr && prepared->own() != nullptr) { add(*prepared->own()); }
+    return copies;
+}
+
+/// The slot rows of one side of the selected plan whose bytes anira's own code moves
+/// (ANIRA_MOVER_ANIRA).
+uint64_t moved_by_anira(const anira_handler* h, bool inputs) {
+    std::array<anira_plan_slot, 4> rows{};
+    auto count = static_cast<uint32_t>(rows.size());
+    EXPECT_EQ(anira_plan_report_slots(anira_handler_plan_report(h),
+                                      anira_handler_get_plan(h),
+                                      inputs ? 1U : 0U,
+                                      sizeof(anira_plan_slot),
+                                      &count,
+                                      rows.data()),
+              ANIRA_OK);
+    return static_cast<uint64_t>(std::ranges::count_if(
+        std::span(rows).first(count),
+        [](const anira_plan_slot& row) { return row.moved_by == ANIRA_MOVER_ANIRA; }));
+}
+
+/// Streams the typed gain stream through a prepared handler (run_values) and checks the mover's
+/// invariant on the way: per inference (one per block) the plan's executors copy exactly the
+/// slots its report says anira's own code moves, per side, and nothing else.
+std::vector<float> run_counted(anira_handler* h, anira_dtype dtype) {
+    const Copies before = plan_copies(h);
+    std::vector<float> out = run_values(h, dtype, gain_sample);
+    const Copies after = plan_copies(h);
+    EXPECT_EQ(after.m_in - before.m_in, k_blocks * moved_by_anira(h, true))
+        << "the input copies of " << k_blocks << " inferences";
+    EXPECT_EQ(after.m_out - before.m_out, k_blocks * moved_by_anira(h, false))
+        << "the output copies of " << k_blocks << " inferences";
+    return out;
+}
+
 // The bundled TypedGainNetwork at int16, int8 and float16 through `candidates`: no ring setting
 // (the rings stream the spec's dtype), the Static gain of 2 in the file's dtype, every block
 // waited for. The stream comes out as the input times 2 delayed by the latency, exactly, and the
-// Static peak is the doubled largest magnitude, 16. With `edge`, every slot row reports it.
+// Static peak is the doubled largest magnitude, 16; the executors copy what the report says
+// anira moves (run_counted). With `edge`, every slot row reports it.
 void expect_typed_fixtures(const anira_test::Context& context,
                            const std::vector<anira_backend_id>& candidates,
-                           std::optional<anira_edge_class> edge = std::nullopt) {
+                           std::optional<anira_test::SlotEdge> edge = std::nullopt) {
     const std::array<std::pair<const char*, anira_dtype>, 3> sets{{
         {k_typed_gain_int16_model_json, ANIRA_DTYPE_I16},
         {k_typed_gain_int8_model_json, ANIRA_DTYPE_I8},
@@ -640,7 +699,7 @@ void expect_typed_fixtures(const anira_test::Context& context,
         const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
         ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
 
-        const std::vector<float> out = run_values(h, dtype, gain_sample);
+        const std::vector<float> out = run_counted(h, dtype);
         const size_t latency = anira_handler_get_latency(h, 0);
         for (size_t n = 0; n < out.size(); ++n) {
             const float want =
@@ -656,8 +715,9 @@ void expect_typed_fixtures(const anira_test::Context& context,
         if (edge.has_value()) {
             for (const bool inputs : {true, false}) {
                 const anira_plan_slot row = slot_row(h, inputs);
-                EXPECT_EQ(row.edge_class, *edge);
-                EXPECT_EQ(row.reason != nullptr, *edge != ANIRA_EDGE_ZERO_COPY);
+                EXPECT_EQ(row.edge_class, edge->m_class);
+                EXPECT_EQ(row.moved_by, edge->m_moved_by);
+                EXPECT_EQ(row.reason != nullptr, edge->m_class != ANIRA_EDGE_ZERO_COPY);
             }
         }
     }
@@ -665,7 +725,8 @@ void expect_typed_fixtures(const anira_test::Context& context,
 
 }  // namespace
 
-// The typed fixtures on every built-in engine that binds typed tensors, on the CPU path.
+// The typed fixtures on every built-in engine that binds typed tensors, on the CPU path; on each
+// one the executors copy exactly the slots the report says anira moves.
 TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
     const anira_test::Context context(2);
     for (const anira_engine engine : typed_engines()) {
@@ -677,8 +738,9 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnEveryTypedEngine) {
 #ifdef USE_LITERT
 // The typed fixtures on a LiteRT GPU accelerator, where one is registered here (a -gpu package;
 // Mesa's lavapipe on a machine without a GPU): the slots bound in place as on the CPU path, the
-// accelerator uploading them itself, so every slot row says ANIRA_EDGE_HOST_COPY with that
-// reason; the results exact. Skipped without a GPU accelerator (the pinned CPU package, CI).
+// accelerator uploading them itself, so every slot row says ANIRA_EDGE_TRANSFER moved by the
+// engine, with the reason, and anira copies nothing; the results exact. Skipped without a GPU
+// accelerator (the pinned CPU package, CI).
 TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
     const std::vector<anira::engine::ProviderInfo> listed = anira::engine::litert_providers();
     if (!std::ranges::any_of(listed, [](const anira::engine::ProviderInfo& p) {
@@ -693,15 +755,19 @@ TEST(AbiDtypes, TheTypedGainFixturesRunOnALiteRtAccelerator) {
                          .provider = ANIRA_PROVIDER_CUSTOM,
                          .engine_id = nullptr,
                          .provider_id = "gpu"}};
-    expect_typed_fixtures(context, gpu, ANIRA_EDGE_HOST_COPY);
+    expect_typed_fixtures(
+        context,
+        gpu,
+        anira_test::SlotEdge{.m_class = ANIRA_EDGE_TRANSFER, .m_moved_by = ANIRA_MOVER_ENGINE});
 }
 #endif  // USE_LITERT
 
 #ifdef USE_EXECUTORCH
 // The TypedGainNetwork ExecuTorch exports whose inputs and outputs the memory plan leaves to
 // the caller (a static 512-sample window), at int16, int8 and float16, through the Hard
-// entries: the report says every slot is bound in place, and the stream comes out doubled and
-// the peak 16, exactly, as the planned exports do above.
+// entries: the report says every slot is bound in place, moved by nobody, the executors copy
+// nothing, and the stream comes out doubled and the peak 16, exactly, as the planned exports do
+// above.
 TEST(AbiDtypes, TheUnplannedExecuTorchFixturesAreBoundInPlace) {
     const anira_test::Context context(2);
     const std::array<std::pair<const char*, anira_dtype>, 3> sets{{
@@ -720,13 +786,14 @@ TEST(AbiDtypes, TheUnplannedExecuTorchFixturesAreBoundInPlace) {
         anira_handler* h = handler.m_handler;
         for (const bool inputs : {true, false}) {
             EXPECT_EQ(slot_row(h, inputs).edge_class, ANIRA_EDGE_ZERO_COPY);
+            EXPECT_EQ(slot_row(h, inputs).moved_by, ANIRA_MOVER_NONE);
         }
         const std::array<int64_t, 1> scalar{1};
         std::array<std::byte, 8> gain{};
         store_value(gain.data(), dtype, 2.0F);
         const Tensor gain_in = Tensor::from_host(gain.data(), dtype, scalar);
         ASSERT_EQ(anira_handler_set_static_input(h, 1, &gain_in), ANIRA_OK);
-        const std::vector<float> out = run_values(h, dtype, gain_sample);
+        const std::vector<float> out = run_counted(h, dtype);
         const size_t latency = anira_handler_get_latency(h, 0);
         for (size_t n = 0; n < out.size(); ++n) {
             const float want =

@@ -81,8 +81,9 @@ typedef struct anira_backend_id {
  * @brief One row of the edge registry: whether a tensor in domain from_domain can reach the
  * backend (to_engine, ANIRA_ENGINE_CUSTOM beside to_engine_id for a custom engine;
  * to_provider, ANIRA_PROVIDER_CUSTOM beside to_provider_id for a provider the enum does
- * not name), how (edge_class), how sure the probe is (rung), and why not (reason). Valid
- * for the duration of the enumerating call.
+ * not name: available), where the edge takes the tensor's bytes (edge_class) and who
+ * moves them (moved_by), how sure the probe is (rung), and why (reason). Valid for the
+ * duration of the enumerating call.
  */
 typedef struct anira_edge_info {
     uint32_t struct_size;  /**< sizeof(anira_edge_info) of the caller's header. */
@@ -96,14 +97,15 @@ typedef struct anira_edge_info {
      */
     uint32_t to_provider;
     /**
-     * anira_edge_class: the cost class of the edge, ANIRA_EDGE_UNAVAILABLE when there is none.
+     * anira_edge_class: where the edge takes the tensor's bytes; on a row with available 0, the
+     * edge the row would provide.
      */
     uint32_t edge_class;
     uint32_t rung;  /**< anira_rung: how the availability was established. */
     uint32_t available;  /**< 1 when the edge can be used here, else 0. */
     /**
-     * Why the edge is unavailable, or what makes it available; static storage of the library,
-     * NULL when there is nothing to say.
+     * Why the edge is unavailable, or why it is available and of its class; static storage of
+     * the library, NULL when there is nothing to say.
      */
     const char* reason;
     /**
@@ -120,11 +122,17 @@ typedef struct anira_edge_info {
      * reads the rows without it.
      */
     const char* to_engine_id;
+    /**
+     * anira_mover: who executes the edge's move: ANIRA_MOVER_NONE on a zero-copy edge,
+     * ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and back
+     * itself. A tail field: a caller whose header ends before it gets its rows without it.
+     */
+    uint32_t moved_by;
 } anira_edge_info;
 /**
- * @brief No edge.
+ * @brief No edge: both axes unset, unavailable.
  */
-#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL)
+#define ANIRA_EDGE_INFO_INIT ANIRA_INIT(anira_edge_info, sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_ZERO_COPY, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL, ANIRA_MOVER_NONE)
 
 /**
  * @brief Creates a context over this copy's core: reconciles the config into the core (see the
@@ -254,10 +262,10 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
 
 /**
  * @brief Every row of the edge registry, available or not; one host edge to each backend row of
- * this pre-release (zero-copy to a CPU provider, a host copy to any other).
- * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
- * are the context's, valid until its next anira_context_probe replaces them or the
- * context is destroyed.
+ * this pre-release (zero-copy to a provider that runs over host memory, a transfer the
+ * engine's runtime makes itself to any other). Stride-explicit enumeration. The strings
+ * the rows point to (to_provider_id, reason) are the context's, valid until its next
+ * anira_context_probe replaces them or the context is destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.

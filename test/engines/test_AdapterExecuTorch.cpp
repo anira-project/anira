@@ -101,11 +101,12 @@ std::shared_ptr<Rig> executorch_adapter() {
 }  // namespace
 
 // The int16 TypedGainNetwork exports, the memory plan's two cases: the planned export (every
-// input and output the plan's) costs one copy per slot each way (set_input's into the plan,
-// counted, and the result's out of it) and reports HOST_COPY; the unplanned one at its static
-// 512-sample window aliases the inputs (set_input) and binds the outputs to the caller's memory
-// per call (set_output_data_ptr): no copy, the results in the caller's memory, ZERO_COPY on
-// every slot. Two memories alternated, new values each call: the results follow the memory.
+// input and output the plan's) costs one copy per slot each way, set_input's into the plan (the
+// runtime's: HOST_COPY moved by the engine, nothing counted) and the adapter's out of it
+// (HOST_COPY moved by anira, counted); the unplanned one at its static 512-sample window aliases
+// the inputs (set_input) and binds the outputs to the caller's memory per call
+// (set_output_data_ptr): no copy, the results in the caller's memory, ZERO_COPY on every slot.
+// Two memories alternated, new values each call: the results follow the memory.
 TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
     for (const bool unplanned : {false, true}) {
         SCOPED_TRACE(unplanned ? "unplanned" : "planned");
@@ -126,8 +127,12 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
         ASSERT_TRUE(adapter->prepared());
         const anira_edge_class edge = unplanned ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY;
         for (const bool is_input : {true, false}) {
+            const anira_mover moved_by = unplanned  ? ANIRA_MOVER_NONE
+                                         : is_input ? ANIRA_MOVER_ENGINE
+                                                    : ANIRA_MOVER_ANIRA;
             for (uint32_t slot = 0; slot < 2; ++slot) {
                 EXPECT_EQ(adapter->loaded().slot_edge(is_input, slot).m_class, edge);
+                EXPECT_EQ(adapter->loaded().slot_edge(is_input, slot).m_moved_by, moved_by);
             }
         }
         struct Memory {
@@ -171,9 +176,9 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
             const uint64_t copies_in = adapter->executor().copies_in();
             const uint64_t copies_out = adapter->executor().copies_out();
             ASSERT_EQ(adapter->run(context_of(inputs, outputs), false), ANIRA_OK);
-            const uint64_t copies = unplanned ? 0U : 2U;
-            EXPECT_EQ(adapter->executor().copies_in() - copies_in, copies);
-            EXPECT_EQ(adapter->executor().copies_out() - copies_out, copies);
+            EXPECT_EQ(adapter->executor().copies_in() - copies_in, 0U)
+                << "set_input's copy is the runtime's";
+            EXPECT_EQ(adapter->executor().copies_out() - copies_out, unplanned ? 0U : 2U);
             for (size_t n = 0; n < 512; ++n) {
                 ASSERT_EQ(memory.m_out[n], 2 * memory.m_data[n])
                     << "call " << call << " sample " << n;

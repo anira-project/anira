@@ -1422,17 +1422,23 @@ private:
 // The gain export through `adapter` over two memories on the 64-byte boundary (two chunks) and
 // one a float past it, each run more than once with new values: the results follow what the
 // memory holds now, with no copy on the boundary and one per slot each way past it; the engine
-// asks the chunk for that boundary and reports `edge` (zero-copy on the CPU, the accelerator's
-// own upload on a device). The results are exact, or within `relative` of the exact value on a
-// device that computes a float32 model at a lower precision (LiteRT's GPU accelerator: float16).
+// asks the chunk for that boundary and reports `edge` moved by `moved_by` (zero-copy on the CPU,
+// the accelerator's own transfer on a device). The results are exact, or within `relative` of
+// the exact value on a device that computes a float32 model at a lower precision (LiteRT's GPU
+// accelerator: float16).
 void expect_bound_on_the_boundary(Rig& adapter,
                                   anira_edge_class edge = ANIRA_EDGE_ZERO_COPY,
+                                  anira_mover moved_by = ANIRA_MOVER_NONE,
                                   float relative = 0.F) {
     EXPECT_EQ(adapter.loaded().buffer_alignment(), 64U);
-    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_class, edge);
-    EXPECT_EQ(adapter.loaded().slot_edge(false, 1).m_class, edge);
-    EXPECT_EQ(adapter.loaded().slot_edge(true, 0).m_reason != nullptr,
-              edge != ANIRA_EDGE_ZERO_COPY);
+    for (const bool is_input : {true, false}) {
+        for (const uint32_t slot : {0U, 1U}) {
+            const Loaded::SlotEdge slot_edge = adapter.loaded().slot_edge(is_input, slot);
+            EXPECT_EQ(slot_edge.m_class, edge);
+            EXPECT_EQ(slot_edge.m_moved_by, moved_by);
+            EXPECT_EQ(slot_edge.m_reason != nullptr, edge != ANIRA_EDGE_ZERO_COPY);
+        }
+    }
     struct Memory {
         explicit Memory(size_t skew)
             : m_audio_in(k_block, skew)
@@ -1726,7 +1732,8 @@ TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
 // are bound in place exactly as on the CPU path: the accelerator takes host-memory buffers though
 // its requirements list only its own buffer type (probe P2g), reads the kept buffers' memory at
 // every run with no lock, and leaves the results in it when the run returns. It uploads the slots
-// itself: the report says ANIRA_EDGE_HOST_COPY with that reason, and anira counts no copy. The
+// itself: the report says ANIRA_EDGE_TRANSFER moved by the engine, with the reason, and anira
+// counts no copy. The
 // record's warm-up runs over the managed buffers first, then the runs go in place, off the
 // boundary (the managed buffers again) and in place once more: a compiled model refuses a run
 // over another buffer type than its first run's (P2g), so every buffer the adapter hands it is of
@@ -1749,7 +1756,7 @@ TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
     adapter->prepare(gpu);  // the warm-up: two runs over the managed host buffers
     // The accelerator computes the float32 export in float16 (its default precision): two
     // roundings of 2^-11 each.
-    expect_bound_on_the_boundary(*adapter, ANIRA_EDGE_HOST_COPY, 1.F / 512.F);
+    expect_bound_on_the_boundary(*adapter, ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE, 1.F / 512.F);
 }
 
 #endif  // USE_LITERT

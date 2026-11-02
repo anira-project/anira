@@ -1161,12 +1161,17 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
                 is_input ? std::array<const char*, 2>{"audio_in", "gain"}
                          : std::array<const char*, 2>{"audio_out", "gain_out"};
             for (uint32_t slot = 0; slot < 2; ++slot) {
+                const anira_plan_slot& row = rows.at(slot);
                 const char* edge =
-                    rows.at(slot).edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "host_copy";
+                    row.edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "host_copy";
+                const char* mover = row.moved_by == ANIRA_MOVER_ANIRA    ? "anira"
+                                    : row.moved_by == ANIRA_MOVER_ENGINE ? "the engine"
+                                                                         : "none";
                 const std::string line = plan + (is_input ? "input " : "output ") +
                                          std::to_string(slot) + " '" + names.at(slot) +
                                          "': host -> host, edge " + edge + " (allocate " + edge +
-                                         "), wait spin_backoff, recipe host, dtype float32, ring " +
+                                         "), moved by " + mover +
+                                         ", wait spin_backoff, recipe host, dtype float32, ring " +
                                          (slot == 0 ? "float32" : "none");
                 EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << line;
             }
@@ -1187,10 +1192,12 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
 }
 
 // Every slot row names the spec's dtype and its ring's (0 for a Static slot, which has none),
-// and the edge the plan's engine takes with the slot's buffer: zero-copy where it binds the
-// buffer in place (ONNX Runtime both ways, LibTorch's inputs, a registered engine, which is
-// handed the buffer), a host copy with the engine's reason where it copies (LibTorch's outputs,
-// LiteRT, TFLite, ExecuTorch). The allocate class follows the edge on a slot in host memory.
+// and the edge the plan's engine takes with the slot's buffer and who moves its bytes:
+// zero-copy, moved by nobody, where it binds the buffer in place (ONNX Runtime, LiteRT and
+// TFLite both ways, LibTorch's inputs, a registered engine, which is handed the buffer), a host
+// copy with the engine's reason where it copies (LibTorch's outputs and the bundled ExecuTorch
+// export's, by the adapter; its inputs, by set_input: gain_edge). The allocate class follows
+// the edge on a slot in host memory.
 TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
     const Context context;
     const ModelConfig model = gain_with_custom();
@@ -1223,11 +1230,11 @@ TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
                 EXPECT_EQ(row.dtype, ANIRA_DTYPE_F32);
                 EXPECT_EQ(row.ring_dtype, slot == 0 ? ANIRA_DTYPE_F32 : 0U)
                     << "a Static slot has no ring";
-                const bool copies =
-                    anira_test::gain_edge(info.engine, is_input) == ANIRA_EDGE_HOST_COPY;
-                EXPECT_EQ(row.edge_class, copies ? ANIRA_EDGE_HOST_COPY : ANIRA_EDGE_ZERO_COPY);
+                const anira_test::SlotEdge edge = anira_test::gain_edge(info.engine, is_input);
+                EXPECT_EQ(row.edge_class, edge.m_class);
                 EXPECT_EQ(row.allocate_class, row.edge_class);
-                EXPECT_EQ(row.reason != nullptr, copies);
+                EXPECT_EQ(row.moved_by, edge.m_moved_by);
+                EXPECT_EQ(row.reason != nullptr, edge.m_class != ANIRA_EDGE_ZERO_COPY);
             }
         }
     }

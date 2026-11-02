@@ -2552,7 +2552,9 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_cpu).edge_class,
               static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).edge_class,
-              static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+              static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+    EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).moved_by,
+              static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
     const Thrown unreachable = thrown_by([&] {
         const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
                                       .engine = ANIRA_ENGINE_CUSTOM,

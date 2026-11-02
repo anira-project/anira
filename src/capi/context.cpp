@@ -68,17 +68,13 @@ bool has_device_block(const anira_context_config& config) {
            config.m_metal.has_value() || config.m_d3d12.has_value() || config.m_webgpu.has_value();
 }
 
-// The CPU rule of the edge registry (providers.h cpu_provider), on a probed provider.
-bool cpu_provider(const anira::engine::ProviderInfo& provider) noexcept {
-    return anira::capi::cpu_provider(provider.m_provider, provider.m_provider_id);
-}
-
 // The Host-only capability report of this pre-release: every compiled-in engine on the
 // providers its runtime reports usable here (the CPU path first; ONNX Runtime's available
 // execution providers, LiteRT's registered accelerators; the other engines the CPU path
 // alone), the host domain, the registered extension kinds, and one edge from
-// host memory to each backend row: zero-copy to a CPU provider, a copy the engine makes for
-// itself to a device one. The runtimes are asked at every probe; nothing is cached.
+// host memory to each backend row (providers.h set_provider_edge): zero-copy to a CPU
+// provider, a transfer the engine's runtime makes itself to a device one. The runtimes are
+// asked at every probe; nothing is cached.
 void probe(anira_capabilities& capabilities) {
     std::vector<anira_backend_id> backends;
     std::vector<anira_edge_info> edges;
@@ -106,17 +102,12 @@ void probe(anira_capabilities& capabilities) {
             edge.to_provider = static_cast<uint32_t>(provider.m_provider);
             edge.to_provider_id = provider_id;
             edge.available = 1;
-            if (cpu_provider(provider)) {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_STATIC);
-                edge.reason = "host memory reaches a CPU provider without a copy";
-            } else {
-                edge.edge_class = static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY);
-                edge.rung = static_cast<uint32_t>(ANIRA_RUNG_IDENTITY);
-                edge.reason =
-                    "the engine's runtime reports the provider; the engine moves "
-                    "host memory to it itself, per call";
-            }
+            anira::capi::set_provider_edge(edge,
+                                           provider.m_provider,
+                                           provider.m_provider_id,
+                                           "host memory reaches a CPU provider without a copy",
+                                           "the engine's runtime reports the provider; the "
+                                           "provider computes in its device's memory");
             edges.push_back(edge);
         }
     }

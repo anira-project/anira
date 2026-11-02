@@ -4240,10 +4240,10 @@ export class AniraBindings {
 
   /**
    * Every row of the edge registry, available or not; one host edge to each backend row
-   * of this pre-release (zero-copy to a CPU provider, a host copy to any other).
-   * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
-   * are the context's, valid until its next anira_context_probe replaces them or the
-   * context is destroyed.
+   * of this pre-release (zero-copy to a provider that runs over host memory, a transfer
+   * the engine's runtime makes itself to any other). Stride-explicit enumeration. The
+   * strings the rows point to (to_provider_id, reason) are the context's, valid until its
+   * next anira_context_probe replaces them or the context is destroyed.
    *
    * @param capabilities The capabilities.
    * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of
@@ -5448,9 +5448,10 @@ export class AniraBindings {
    * added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider
    * usable here (its query runs, as anira_pipeline_capabilities_backends runs it):
    * zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches
-   * without a copy, a host copy the engine makes for itself to every other provider, the
-   * reason saying the engine declared the provider and its query reported it usable. The
-   * strings' lifetime is anira_pipeline_capabilities_backends's.
+   * without a copy, a transfer the engine makes itself (ANIRA_EDGE_TRANSFER,
+   * ANIRA_MOVER_ENGINE) to every other provider, the reason saying the engine declared
+   * the provider and its query reported it usable. The strings' lifetime is
+   * anira_pipeline_capabilities_backends's.
    *
    * @param pipeline The pipeline whose custom engines are asked.
    * @param context The context whose edge registry answers for a built-in engine.

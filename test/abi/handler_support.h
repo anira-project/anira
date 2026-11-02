@@ -121,16 +121,28 @@ inline std::vector<anira_engine> oracle_engines() {
     return out;
 }
 
+/// The edge of a plan slot row and who moves its bytes (anira_plan_slot.edge_class, moved_by).
+struct SlotEdge {
+    anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+    anira_mover m_moved_by = ANIRA_MOVER_NONE;
+};
+
 /// The edge a plan of `engine` reports for a slot of the bundled gain files on the CPU path
 /// (engine::Loaded::slot_edge): ExecuTorch copies both sides once (the bundled .pte is memory
-/// planned), LibTorch copies its outputs (a TorchScript method returns tensors of its own), every
-/// other built-in engine and a registered one bind the chunk's buffer in place. A test that reads
-/// a plan's slot rows expects this for the plan's own engine, whichever engine the build puts
-/// first (TFLite in a TFLite-only build, the iOS leg's shape).
-inline anira_edge_class gain_edge(uint32_t engine, bool is_input) {
-    const bool copies = engine == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH) ||
-                        (engine == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH) && !is_input);
-    return copies ? ANIRA_EDGE_HOST_COPY : ANIRA_EDGE_ZERO_COPY;
+/// planned: set_input copies an input, the adapter an output), LibTorch's adapter copies its
+/// outputs (a TorchScript method returns tensors of its own), every other built-in engine and a
+/// registered one bind the chunk's buffer in place. A test that reads a plan's slot rows
+/// expects this for the plan's own engine, whichever engine the build puts first (TFLite in a
+/// TFLite-only build, the iOS leg's shape).
+inline SlotEdge gain_edge(uint32_t engine, bool is_input) {
+    if (engine == static_cast<uint32_t>(ANIRA_ENGINE_EXECUTORCH)) {
+        return {.m_class = ANIRA_EDGE_HOST_COPY,
+                .m_moved_by = is_input ? ANIRA_MOVER_ENGINE : ANIRA_MOVER_ANIRA};
+    }
+    if (engine == static_cast<uint32_t>(ANIRA_ENGINE_LIBTORCH) && !is_input) {
+        return {.m_class = ANIRA_EDGE_HOST_COPY, .m_moved_by = ANIRA_MOVER_ANIRA};
+    }
+    return {};
 }
 
 /// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,

@@ -693,7 +693,9 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
                          (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_CPU) ||
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
         EXPECT_EQ(edges[i].edge_class,
-                  static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY));
+                  static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_TRANSFER));
+        EXPECT_EQ(edges[i].moved_by,
+                  static_cast<uint32_t>(cpu ? ANIRA_MOVER_NONE : ANIRA_MOVER_ENGINE));
         EXPECT_EQ(edges[i].rung,
                   static_cast<uint32_t>(cpu ? ANIRA_RUNG_STATIC : ANIRA_RUNG_IDENTITY));
     }
@@ -738,7 +740,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row), ANIRA_OK)
             << backend.provider_id;
         EXPECT_STREQ(row.to_provider_id, backend.provider_id);
-        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
+        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_TRANSFER));
+        EXPECT_EQ(row.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
         to.provider_id = nullptr;
     }
     to = ANIRA_BACKEND_ID_INIT;

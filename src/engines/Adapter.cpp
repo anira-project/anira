@@ -376,10 +376,11 @@ bool host_memory_provider(anira_provider provider, std::string_view provider_id)
 
 Loaded::SlotEdge Loaded::provider_edge() const noexcept {
     if (host_memory_provider(m_model.m_provider, m_model.m_provider_id)) { return SlotEdge{}; }
-    return SlotEdge{.m_class = ANIRA_EDGE_HOST_COPY,
+    return SlotEdge{.m_class = ANIRA_EDGE_TRANSFER,
+                    .m_moved_by = ANIRA_MOVER_ENGINE,
                     .m_reason =
-                        "the provider's runtime uploads the slot's host memory to its "
-                        "device and reads the results back itself; anira copies nothing"};
+                        "the provider computes in its device's memory: the slot is "
+                        "uploaded to it and the results read back, per call"};
 }
 
 void check_engine_tensor(const TensorInfo& slot,

@@ -50,12 +50,13 @@ export type PlanSlot = {
   /** `anira_domain` of the host end and of the model end. */
   domainIn: number
   domainOut: number
-  /** `anira_edge_class`: the cost class of the edge taken. */
+  /** `anira_edge_class`: where the edge taken moves the slot's bytes. */
   edgeClass: number
   allocateClass: number
   /** `anira_wait_strategy`. */
   waitStrategy: number
   recipe: string | null
+  /** Why the edge is what it is; who moves the bytes is `movedBy`. */
   reason: string | null
   /** `anira_role`. */
   role: number
@@ -65,6 +66,11 @@ export type PlanSlot = {
   dtype: number
   /** `anira_dtype` of the slot's ring (the host end of a Streamed tensor), 0 without one. */
   ringDtype: number
+  /**
+   * `anira_mover`: who executes the slot's move: nobody on a zero-copy edge, anira's own code
+   * (an engine adapter's copy) or the engine's runtime.
+   */
+  movedBy: number
 }
 
 /** One extension a plan consumes (`anira_plan_ext`). */
@@ -90,7 +96,7 @@ const PLAN_INFO = {
 }
 const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40 }
 const PLAN_SLOT = {
-  size: 56,
+  size: 60,
   slot: 4,
   isInput: 8,
   domainIn: 12,
@@ -104,6 +110,7 @@ const PLAN_SLOT = {
   binding: 44,
   dtype: 48,
   ringDtype: 52,
+  movedBy: 56,
 }
 const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 // anira_plan_query and the anira_backend_id it holds at 8.
@@ -178,6 +185,7 @@ export class PlanReport {
         binding: u32(m, row, PLAN_SLOT.binding),
         dtype: u32(m, row, PLAN_SLOT.dtype),
         ringDtype: u32(m, row, PLAN_SLOT.ringDtype),
+        movedBy: u32(m, row, PLAN_SLOT.movedBy),
       })
     )
   }

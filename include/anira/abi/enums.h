@@ -509,15 +509,44 @@ typedef enum anira_log_drain {
 } anira_log_drain;
 
 /**
- * @brief Cost class of an edge between a domain and a backend (section 7).
+ * @brief Where an edge takes a tensor's bytes (section 7), ordered by cost, so the worst edge
+ * of a chain is the largest value. The class covers the bytes from the slot's memory
+ * until the engine computes on them, and back for outputs; layout transforms inside a
+ * runtime's graph are not edges. Who executes the move is the row's anira_mover, whether
+ * the edge exists its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
-    ANIRA_EDGE_ZERO_COPY = 0,  /**< No copy. */
-    ANIRA_EDGE_DEVICE_COPY = 1,  /**< A device-side copy. */
-    ANIRA_EDGE_HOST_COPY = 2,  /**< A copy through host memory. */
-    ANIRA_EDGE_UNAVAILABLE = 3,  /**< No edge. */
+    ANIRA_EDGE_ZERO_COPY = 0,  /**< Nothing moves: the engine computes on the slot's own memory. */
+    ANIRA_EDGE_HOST_COPY = 1,  /**< One copy inside host memory. */
+    /**
+     * A copy or pass inside device memory; nothing reaches the host.
+     */
+    ANIRA_EDGE_DEVICE_COPY = 2,
+    /**
+     * The bytes cross between host and device memory: an upload, a readback, a staging copy.
+     */
+    ANIRA_EDGE_TRANSFER = 3,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
 } anira_edge_class;
+
+/**
+ * @brief Who executes an edge's move (section 7): anira_plan_slot.moved_by and
+ * anira_edge_info.moved_by.
+ */
+typedef enum anira_mover {
+    ANIRA_MOVER_NONE = 0,  /**< Nothing moves (ANIRA_EDGE_ZERO_COPY). */
+    /**
+     * anira's own code: an engine adapter's copy. A slot anira's code copies has this mover
+     * whatever else the runtime moves, so these are the copies anira makes.
+     */
+    ANIRA_MOVER_ANIRA = 1,
+    /**
+     * The engine's runtime: a copy its own API makes (a memory-planned ExecuTorch input), the
+     * upload and readback of a device provider over host memory, or a registered engine's code.
+     */
+    ANIRA_MOVER_ENGINE = 2,
+    ANIRA_MOVER_FORCE32 = 0x7fffffff
+} anira_mover;
 
 /**
  * @brief The rung a context probe reached for an edge (section 4).

@@ -1344,9 +1344,10 @@ void build_plans(anira_handler& handler,
 // A slot row of the report: the declared host-end domain of the tensor (the contract's,
 // anira_contract_set_host_domain) on the host's side of the row and the engine's domain on
 // the other, an input read from its host end into the engine and an output written from the
-// engine to its host end; the edge the plan's engine takes with the slot's buffer (zero-copy
-// where it binds it in place, a host copy with its reason where it copies; validate refused
-// any domain but the host's); the wait strategy the core runs; how the plan's loaded model
+// engine to its host end; the edge the plan's engine takes with the slot's buffer and who
+// moves its bytes (zero-copy where it binds it in place, a host copy or a device's transfer
+// with its reason where the bytes move; validate refused any domain but the host's); the wait
+// strategy the core runs; how the plan's loaded model
 // bound the slot to the engine's tensor at load; the spec's dtype and the ring's.
 struct SlotFacts {
     anira_role m_role = ANIRA_ROLE_STREAMED;
@@ -1369,6 +1370,7 @@ anira_plan_slot host_slot(uint32_t slot,
     row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(facts.m_host_domain);
     row.edge_class = static_cast<uint32_t>(facts.m_edge.m_class);
     row.allocate_class = static_cast<uint32_t>(facts.m_edge.m_class);
+    row.moved_by = static_cast<uint32_t>(facts.m_edge.m_moved_by);
     row.wait_strategy = static_cast<uint32_t>(wait);
     row.recipe = k_host_recipe;
     row.reason = facts.m_edge.m_reason;
@@ -1484,9 +1486,18 @@ void build_report(anira_handler& handler,
 const char* edge_class_word(uint32_t edge_class) {
     switch (edge_class) {
         case ANIRA_EDGE_ZERO_COPY: return "zero_copy";
-        case ANIRA_EDGE_DEVICE_COPY: return "device_copy";
         case ANIRA_EDGE_HOST_COPY: return "host_copy";
-        case ANIRA_EDGE_UNAVAILABLE: return "unavailable";
+        case ANIRA_EDGE_DEVICE_COPY: return "device_copy";
+        case ANIRA_EDGE_TRANSFER: return "transfer";
+        default: return "unknown";
+    }
+}
+
+const char* mover_word(uint32_t mover) {
+    switch (mover) {
+        case ANIRA_MOVER_NONE: return "none";
+        case ANIRA_MOVER_ANIRA: return "anira";
+        case ANIRA_MOVER_ENGINE: return "the engine";
         default: return "unknown";
     }
 }
@@ -1504,9 +1515,9 @@ const char* binding_word(uint32_t binding) {
     }
 }
 
-// One Info record per slot row: the tensor's canonical name beside its slot number, the edge,
-// how a completion on it is waited for and how the plan bound the slot to the engine's
-// tensor; the reason only when the row carries one.
+// One Info record per slot row: the tensor's canonical name beside its slot number, the edge
+// and who moves its bytes, how a completion on it is waited for and how the plan bound the
+// slot to the engine's tensor; the reason only when the row carries one.
 void log_slots(uint32_t plan,
                const std::vector<anira_plan_slot>& slots,
                const std::vector<anira_tensor_spec>& specs,
@@ -1515,7 +1526,7 @@ void log_slots(uint32_t plan,
         const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
         ANIRA_LOG_INFO(anira::log_group::k_capi,
                        "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
-                       "%s), wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
+                       "%s), moved by %s, wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
                        plan,
                        side,
                        slot.slot,
@@ -1524,6 +1535,7 @@ void log_slots(uint32_t plan,
                        anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
                        edge_class_word(slot.edge_class),
                        edge_class_word(slot.allocate_class),
+                       mover_word(slot.moved_by),
                        wait_strategy_word(slot.wait_strategy),
                        slot.recipe != nullptr ? slot.recipe : "none",
                        anira::capi::dtype_word(slot.dtype),

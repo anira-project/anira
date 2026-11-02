@@ -30,12 +30,18 @@
 
 namespace anira::capi {
 
-/// Whether a provider runs on the CPU, where host memory reaches it without a copy
-/// (engine::host_memory_provider: the CPU path, XNNPACK, ONNX Runtime's CPU-side execution
-/// providers by name); every other provider is a device or an accelerator the engine's runtime
-/// moves host memory to itself. The edge registry's rule, for the context's rows and a
-/// pipeline's alike, and the plan rows' (engine::Loaded::provider_edge).
-bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept;
+/// The edge of a capability row to a backend on `provider`, by the plan rows' rule
+/// (engine::host_memory_provider, engine::Loaded::provider_edge), for the context's rows and a
+/// pipeline's alike: to a provider that runs over host memory zero-copy, moved by nobody, from
+/// compiled-in knowledge (ANIRA_RUNG_STATIC) with `host_reason`; to every other one a transfer
+/// the engine's runtime makes itself (ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE), as sure as the
+/// report that lists the provider (ANIRA_RUNG_IDENTITY) with `device_reason`. Both reasons
+/// are static storage.
+void set_provider_edge(anira_edge_info& edge,
+                       anira_provider provider,
+                       std::string_view provider_id,
+                       const char* host_reason,
+                       const char* device_reason) noexcept;
 
 /// The facts of the core a query receives: the level in effect, the thread count the
 /// context's config asks for (ANIRA_THREADS_AUTO resolved; 0 for a caller's own threads), the

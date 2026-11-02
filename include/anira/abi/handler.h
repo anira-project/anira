@@ -101,18 +101,22 @@ extern "C" {
 // NOLINTBEGIN(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 
 /**
- * @brief One tensor slot of one plan: the edge the plan takes for it, its cost class, the class
- * an allocate_* handle would have gotten, how a completion on that edge is waited for,
- * and why, and the role of the tensor, which decides the entries that take the slot.
- * Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's
- * stride (a caller whose header ends before a tail field gets its rows without it). In
- * this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe
- * "host"; the edge is ANIRA_EDGE_ZERO_COPY where the plan's engine binds the slot's
- * buffer in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX
- * Runtime's CPU-side execution providers), and ANIRA_EDGE_HOST_COPY, with the reason,
- * where a copy happens: through memory of the engine's own, or the upload and readback a
- * device provider's runtime makes itself (a GPU execution provider, a LiteRT
- * accelerator), the class the capability rows give that edge.
+ * @brief One tensor slot of one plan: the edge the plan takes for it, its class, the class an
+ * allocate_* handle would have gotten, how a completion on that edge is waited for, why
+ * the edge is what it is and who moves the bytes, and the role of the tensor, which
+ * decides the entries that take the slot. Tier 2, struct_size first; enumerated by
+ * anira_plan_report_slots at the caller's stride (a caller whose header ends before a
+ * tail field gets its rows without it). In this pre-release every slot is in host
+ * memory: ANIRA_DOMAIN_HOST on both sides, recipe "host"; the edge is
+ * ANIRA_EDGE_ZERO_COPY, moved by nobody, where the plan's engine binds the slot's buffer
+ * in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX
+ * Runtime's CPU-side execution providers); ANIRA_EDGE_HOST_COPY with the reason where
+ * the slot is copied inside host memory, by the engine's adapter (ANIRA_MOVER_ANIRA:
+ * LibTorch's outputs, a memory-planned ExecuTorch output) or by the runtime's own API
+ * (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and ANIRA_EDGE_TRANSFER,
+ * ANIRA_MOVER_ENGINE, where a device provider's runtime uploads the slot's host memory
+ * and reads the results back itself (a GPU execution provider, a LiteRT accelerator),
+ * the class and mover the capability rows give that edge.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
@@ -130,10 +134,10 @@ typedef struct anira_plan_slot {
      * anira_domain: where the data leaves the edge (the backend's side for an input).
      */
     uint32_t domain_out;
-    uint32_t edge_class;  /**< anira_edge_class: the cost class of the edge taken. */
+    uint32_t edge_class;  /**< anira_edge_class: where the edge taken moves the slot's bytes. */
     /**
      * anira_edge_class: the class a handle from anira's own allocator would get for this slot;
-     * equal to edge_class on a slot in host memory.
+     * equal to edge_class on a slot in host memory, every slot of this pre-release.
      */
     uint32_t allocate_class;
     /**
@@ -148,8 +152,8 @@ typedef struct anira_plan_slot {
      */
     const char* recipe;
     /**
-     * Why the edge is what it is, or NULL when there is nothing to say; valid while the report
-     * is.
+     * Why the edge is what it is (who moves the bytes is moved_by), or NULL when there is
+     * nothing to say; valid while the report is.
      */
     const char* reason;
     /**
@@ -184,11 +188,20 @@ typedef struct anira_plan_slot {
      * without it.
      */
     anira_dtype ring_dtype;
+    /**
+     * anira_mover: who executes the slot's move: ANIRA_MOVER_NONE on a zero-copy edge,
+     * ANIRA_MOVER_ANIRA where anira's own code copies the slot (an engine adapter's copy, what
+     * anira counts), ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a
+     * device provider's upload and readback, a registered engine's code). A tail field: a
+     * caller whose header ends before it gets its rows without it.
+     */
+    uint32_t moved_by;
 } anira_plan_slot;
 /**
- * @brief No edge.
+ * @brief Output slot 0 in host memory, zero-copy, nothing moved: the defaults the enumerator
+ * overwrites.
  */
-#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u)
+#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE)
 
 /**
  * @brief One extension a plan consumes: where it sits (the host and the tensor or entry it is
@@ -540,9 +553,9 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable
  * here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to
  * ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a
- * copy, a host copy the engine makes for itself to every other provider, the reason
- * saying the engine declared the provider and its query reported it usable. The strings'
- * lifetime is anira_pipeline_capabilities_backends's.
+ * copy, a transfer the engine makes itself (ANIRA_EDGE_TRANSFER, ANIRA_MOVER_ENGINE) to
+ * every other provider, the reason saying the engine declared the provider and its query
+ * reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's.
  * @param pipeline The pipeline whose custom engines are asked.
  * @param context The context whose edge registry answers for a built-in engine.
  * @param from The tensor's domain.

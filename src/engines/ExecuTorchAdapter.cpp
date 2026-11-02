@@ -526,17 +526,20 @@ Loaded::SlotEdge Instance::slot_edge(bool is_input, size_t slot) const noexcept 
     if (is_input) {
         if (slot < m_input_planned.size() && !m_input_planned[slot]) { return {}; }
         return {.m_class = ANIRA_EDGE_HOST_COPY,
-                .m_reason = "executorch: the memory plan owns the input; set_input copies into it"};
+                .m_moved_by = ANIRA_MOVER_ENGINE,
+                .m_reason = "executorch: the memory plan owns the input, which set_input fills"};
     }
     if (slot < m_output_planned.size() && m_output_planned[slot]) {
         return {.m_class = ANIRA_EDGE_HOST_COPY,
-                .m_reason = "executorch: the memory plan owns the output; copied out of it"};
+                .m_moved_by = ANIRA_MOVER_ANIRA,
+                .m_reason = "executorch: the memory plan owns the output"};
     }
     if (slot < m_output_bindable.size() && m_output_bindable[slot]) { return {}; }
     return {.m_class = ANIRA_EDGE_HOST_COPY,
+            .m_moved_by = ANIRA_MOVER_ANIRA,
             .m_reason =
-                "executorch: the output's capacity exceeds the slot; copied through a block "
-                "of the executor's own"};
+                "executorch: the output's capacity exceeds the slot, so it lands in a "
+                "block of the executor's own"};
 }
 
 void Instance::bind(const Model& model,
@@ -643,13 +646,12 @@ void Instance::run(const anira_engine_ctx& ctx) {
         return data;
     };
     // In: every kept input tensor re-pointed at its descriptor's memory, which set_input
-    // aliases for an input the plan leaves out and copies into the plan's memory (the one copy,
-    // counted) for a planned one.
+    // aliases for an input the plan leaves out and copies into the plan's memory for a planned
+    // one (the runtime's copy, not the adapter's: nothing counted).
     for (size_t slot = 0; slot < m_input_elements.size(); ++slot) {
         void* data =
             packed(ctx.inputs[slot], m_input_dtypes[slot], m_input_elements[slot], "input", slot);
         m_input_tensors[slot]->unsafeGetTensorImpl()->set_data(data);
-        if (m_input_planned[slot]) { count_copy_in(); }
     }
     // Out: every output the plan leaves out bound to the slot's memory where it holds the
     // output's capacity, else to the executor's block.
@@ -765,14 +767,22 @@ public:
         : ExecutorLoaded(std::move(engine)) {}
 
     /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
-    /// leaves out is bound in place, a planned one costs one copy. A delegate on a device (a
-    /// GPU or an NPU backend) moves the slot itself: the provider's edge.
+    /// leaves out is bound in place, a planned one costs one copy (set_input's for an input,
+    /// the adapter's for an output). A delegate on a device (a GPU or an NPU backend) moves
+    /// the slot to it and back itself: the provider's edge, still the adapter's where the
+    /// adapter copies the output out of the plan's memory or its own block.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
-        if (!host_memory_provider(model().m_provider, model().m_provider_id)) {
-            return provider_edge();
-        }
         const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
-        return slot < edges.size() ? edges[slot] : SlotEdge{};
+        const SlotEdge host = slot < edges.size() ? edges[slot] : SlotEdge{};
+        if (host_memory_provider(model().m_provider, model().m_provider_id)) { return host; }
+        SlotEdge device = provider_edge();
+        if (host.m_moved_by == ANIRA_MOVER_ANIRA) {
+            device.m_moved_by = ANIRA_MOVER_ANIRA;
+            device.m_reason =
+                "executorch: the delegate computes in its device's memory and the output "
+                "lands in memory of the plan's or the executor's own";
+        }
+        return device;
     }
 
     /// The CPU path (a portable export, or whatever delegates the runtime has for the
