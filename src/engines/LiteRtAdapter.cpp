@@ -517,10 +517,14 @@ private:
     /// Binds every descriptor in place (a tensor buffer over its memory) or, where it cannot,
     /// copies through the slot's managed buffer; runs. Throws StatusError.
     void run(const anira_engine_ctx& ctx);
-    /// The buffer of one slot for this call: on the CPU path, one over the descriptor's memory
-    /// where it is a packed host block of the record's dtype on LiteRT's boundary
+    /// The buffer of one slot for this call: one over the descriptor's memory where it is a
+    /// packed host block of the record's dtype on LiteRT's boundary
     /// (LITERT_HOST_MEMORY_BUFFER_ALIGNMENT), kept for that memory's next call; else the
-    /// managed one (an input copied into it here). Throws StatusError for a descriptor neither
+    /// managed one (an input copied into it here). On the CPU path and on an accelerator alike:
+    /// every buffer this executor hands the compiled model, the warm-up's managed ones included,
+    /// is of LiteRT's host-memory type, so the warm-up, the in-place runs and the off-boundary
+    /// fallback follow one another in any order (a compiled model refuses a run over another
+    /// buffer type than its first run's, probe P2g). Throws StatusError for a descriptor neither
     /// can take.
     LiteRtTensorBuffer buffer_for(const anira_tensor& tensor, size_t slot, bool is_input);
     /// Destroys every kept buffer over a slot's memory (no-op on empty entries).

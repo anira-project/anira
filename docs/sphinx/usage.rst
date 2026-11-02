@@ -922,7 +922,7 @@ rows give that edge. The table is the CPU path:
      - one copy: a TorchScript method returns tensors of its own
    * - LiteRT
      - bound in place (a tensor buffer over the slot's memory, kept per memory), on an
-       accelerator too: the GPU accelerator takes host-memory buffers and uploads them itself
+       accelerator too: anira copies nothing, the accelerator uploads the slot itself
      - the same
    * - TFLite
      - bound in place (the slot's memory is the tensor's custom allocation per call)
@@ -941,7 +941,12 @@ rows give that edge. The table is the CPU path:
 
 A chunk's buffers start on the largest boundary any engine of the plans asks for (64 bytes for
 every built-in one), so the in-place paths always apply to anira's own memory; a descriptor off
-the boundary takes the copy. An engine that binds an input in place may write it: nothing reads
+the boundary takes the copy. On a device provider (a LiteRT GPU accelerator, a GPU execution
+provider of ONNX Runtime) anira copies nothing either: the slot's host memory is bound in place,
+and the provider's runtime uploads it to the device and reads the results back itself. That
+upload is the runtime's and cannot be avoided while a chunk lives in host memory; device chunks,
+which the runtime binds where it computes, come with the provider support of a later
+pre-release. An engine that binds an input in place may write it: nothing reads
 a chunk's inputs after the inference but an ``after_inference`` hook, which sees what the engine
 left.
 

@@ -41,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **C ABI, handler:** a plan of ONNX Runtime on a device execution provider (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU) reported its slots as `ANIRA_EDGE_ZERO_COPY` in the plan report, against its own capability row (`ANIRA_EDGE_HOST_COPY`): the execution provider uploads the slot's host memory and reads the results back itself. The plan rows now say `ANIRA_EDGE_HOST_COPY` with that reason, through the rule the capability rows use (`engine::host_memory_provider`).
 - **C ABI, configuration:** `anira_tensor_spec_create` refuses a dtype of 0 (`ANIRA_ERROR_INVALID_ARGUMENT`), and `anira_model_config_to_json` refuses a tensor of a dtype that has no word in a model file (`ANIRA_ERROR_NOT_SUPPORTED`), where it wrote `"float32"` for it.
 - **Docs:** `anira_model_config_model_path` returns NULL for an entry without a source too (an `anira_model_config_add_model_path` entry with a NULL path, the C++ `ModelConfig::add_model(engine_id)`), not only for a bytes entry or an index out of range, and `anira::ModelConfig::model_path` throws `ANIRA_ERROR_INVALID_STATE` for both kinds of entry and `ANIRA_ERROR_INVALID_ARGUMENT` for an index out of range; the docs named the bytes entry alone. `anira_em_audio_node_create` lists a Streamed slot whose ring dtype is not float32 under `ANIRA_ERROR_CONFIG`, the status it returns, where its doc had it under `ANIRA_ERROR_INVALID_ARGUMENT`.
 
