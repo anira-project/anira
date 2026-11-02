@@ -10,7 +10,8 @@ empty optional. A slot row (``PlanSlot``) says where its edge takes the bytes (`
 ``anira_edge_class``) and who moves them (``movedBy``, an ``anira_mover_flags``: nobody, anira's own
 code, or the engine's runtime), with ``reason`` saying why; a plan row (``PlanInfo``) names the
 memory its provider computes in (``memoryKind``, an ``anira_memory_kind``: unified on the CPU path,
-unknown for a device provider, since a browser exposes no device's memory kind).
+unknown for a device provider, since a browser exposes no device's memory kind, so its slots read
+``ANIRA_EDGE_UNKNOWN``).
 
 .. js:autoclass:: PlanReport.PlanReport
    :short-name:

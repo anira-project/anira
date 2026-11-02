@@ -72,9 +72,10 @@ handler copies the pipeline.
 and the contract's edge cost (``anira::Engine::Loaded::edge``, the native descriptor's ``edge``,
 :doc:`../custom_engines`): the engine runs in the inference Workers, so the main thread gives the
 statement here, once for every slot. Without one the rows follow the provider rule, zero-copy on
-the CPU path; on a device provider a dedicated transfer, since a browser exposes no device's memory kind
+the CPU path; on a device provider ``ANIRA_EDGE_UNKNOWN``, since a browser exposes no device's memory kind
 (``PlanInfo.memoryKind`` reads ``ANIRA_MEMORY_UNKNOWN``, the reason "memory kind not probed:
-the web exposes no memory kind"). An engine that copies the slots into host memory of its own says
+the web exposes no memory kind"), which every limit of the edge cost refuses. An engine that
+copies the slots into host memory of its own says
 so:
 
 .. code-block:: ts

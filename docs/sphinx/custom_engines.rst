@@ -564,8 +564,8 @@ times) and a **visible report**, the pipeline's capabilities:
     /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
        XNNPACK; to every other a move the engine makes itself, ANIRA_MOVER_ENGINE, whose class is
        the memory kind's: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-       ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory, edge.memory_kind; Core ML's
-       device is the Metal default device). */
+       ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory,
+       edge.memory_kind; Core ML's device is the Metal default device). */
     anira_backend_id to = ANIRA_BACKEND_ID_INIT;
     to.engine = ANIRA_ENGINE_CUSTOM;
     to.engine_id = "com.example.myengine";
@@ -590,12 +590,12 @@ The plan report says per slot where the edge takes the bytes and who moves them
 edge cost drops a plan above its threshold (section 1.3). anira hands a custom engine the
 chunk's buffer itself, so by default its rows follow the provider rule: zero-copy on
 ``ANIRA_PROVIDER_CPU`` and XNNPACK; on any other provider the engine moves the slot to its
-device itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory and
-``ANIRA_EDGE_DEDICATED_TRANSFER`` where it has memory of its own or no probe established which
-(the plan row's ``memory_kind``, :doc:`usage` section 1.7 "The engines"). On
-``ANIRA_PROVIDER_CUDA`` the device asked is CUDA device 0 (a custom engine's provider options
-are its own vocabulary); a custom provider's name maps to no device, so its rows are unknown,
-counted as a dedicated transfer. An engine that does something else says so in the
+device itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory,
+``ANIRA_EDGE_DEDICATED_TRANSFER`` where it has memory of its own and ``ANIRA_EDGE_UNKNOWN`` where
+no probe established which (the plan row's ``memory_kind``, :doc:`usage` section 1.7 "The
+engines"); every limit of the edge cost refuses an unknown edge. On ``ANIRA_PROVIDER_CUDA`` the
+device asked is CUDA device 0 (a custom engine's provider options are its own vocabulary); a
+custom provider's name maps to no device, so its rows are ``ANIRA_EDGE_UNKNOWN``. An engine that does something else says so in the
 descriptor's ``edge`` slot (``anira_engine_edge_fn``): anira asks it once per slot right after
 each load, inputs first, on the thread and under the lock of the load, with an
 ``anira_engine_edge`` record already filled with the provider rule's edge, and the engine

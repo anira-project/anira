@@ -7,7 +7,9 @@ field by field (``ContractHandle.hard(...)``); a Hard contract file may leave th
 host (``hardHostBlocks``). ``edgeCost`` (or the ``edgeCost`` field of ``ContractHandle.hard``'s
 options, the contract file's ``"edge_cost"``: ``"zero_copy"``, ``"copy"``,
 ``"unified_transfer"`` or ``"dedicated_transfer"``) is the worst edge class a plan may take for
-any slot: prepare drops a plan above it.
+any slot: prepare drops a plan above it, and every limit drops a plan with an
+``ANIRA_EDGE_UNKNOWN`` edge (a device provider's, on the web). Left out, or ``edgeCost(undefined)``:
+no limit, every edge admitted.
 
 .. js:autoclass:: ContractHandle.ContractHandle
    :short-name:
