@@ -72,16 +72,19 @@ handler copies the pipeline.
 and the contract's edge cost (``anira::Engine::Loaded::edge``, the native descriptor's ``edge``,
 :doc:`../custom_engines`): the engine runs in the inference Workers, so the main thread gives the
 statement here, once for every slot. Without one the rows follow the provider rule, zero-copy on
-the CPU path; an engine that copies the slots into memory of its own says so:
+the CPU path; on a device provider a dedicated transfer, since a browser exposes no device's memory kind
+(``PlanInfo.memoryKind`` reads ``ANIRA_MEMORY_UNKNOWN``, the reason "memory kind not probed:
+the web exposes no memory kind"). An engine that copies the slots into memory of its own says
+so:
 
 .. code-block:: ts
 
    pipeline.addEngine('org.example.copying', {
-     edge: { edgeClass: anira_edge_class.ANIRA_EDGE_HOST_COPY, reason: 'copies into its own tensors' },
+     edge: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies into its own tensors' },
    })
 
-Its rows then read ``ANIRA_EDGE_HOST_COPY`` moved by the engine (``PlanSlot.movedBy``,
-``ANIRA_MOVER_ENGINE``), with the reason.
+Its rows then read ``ANIRA_EDGE_COPY`` (a copy within one domain) moved by the engine
+(``PlanSlot.movedBy``, ``ANIRA_MOVER_ENGINE``), with the reason.
 
 ONNX Runtime Web
 ----------------
@@ -114,8 +117,8 @@ each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({
 (a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
 The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import {
 ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)``).
-Under that id ``addEngine`` states the engine's edge by default, a host copy of every slot by the
-engine (the two wasm memories), so its plan rows say so; an engine defined under another id
+Under that id ``addEngine`` states the engine's edge by default, a copy of every slot within host
+memory by the engine (``ANIRA_EDGE_COPY``: the two wasm memories), so its plan rows say so; an engine defined under another id
 states it with ``addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })``. The id and the statement
 are a module of their own, so the page does not bundle onnxruntime-web; only the worker module
 that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to

@@ -562,8 +562,10 @@ times) and a **visible report**, the pipeline's capabilities:
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
 
     /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
-       XNNPACK; to every other a transfer the engine makes itself, ANIRA_EDGE_TRANSFER moved by
-       ANIRA_MOVER_ENGINE). */
+       XNNPACK; to every other a move the engine makes itself, ANIRA_MOVER_ENGINE, whose class is
+       the memory kind's: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+       ANIRA_EDGE_DEDICATED_TRANSFER on dedicated or unknown memory, edge.memory_kind; Core ML's
+       device is the Metal default device). */
     anira_backend_id to = ANIRA_BACKEND_ID_INIT;
     to.engine = ANIRA_ENGINE_CUSTOM;
     to.engine_id = "com.example.myengine";
@@ -572,7 +574,9 @@ times) and a **visible report**, the pipeline's capabilities:
     anira_pipeline_capabilities_edge(pipe, context, ANIRA_DOMAIN_HOST, &to, &edge);
 
 The rows' strings point into the pipeline's engines and the context's store: valid until the
-pipeline is destroyed and until the context's next probe. ``anira_handler_create`` asks the
+pipeline is destroyed and until the context's next probe, a reason while the context lives. The
+backends list asks no device's memory kind; the edge entry asks it for the row it reads, once per
+device API, and the context keeps the answer. ``anira_handler_create`` asks the
 same question for every candidate's provider of the engine, so what the report lists is what a
 handler runs on. In C++ the query is ``Engine::query(const InitInfo&)`` (the base answers
 every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
@@ -585,8 +589,13 @@ The plan report says per slot where the edge takes the bytes and who moves them
 (``anira_plan_slot.edge_class`` and ``moved_by``, :doc:`usage` section 1.7), and the contract's
 edge cost drops a plan above its threshold (section 1.3). anira hands a custom engine the
 chunk's buffer itself, so by default its rows follow the provider rule: zero-copy on
-``ANIRA_PROVIDER_CPU`` and XNNPACK, ``ANIRA_EDGE_TRANSFER`` on any other provider, whose memory
-the engine moves the slot to itself. An engine that does something else says so in the
+``ANIRA_PROVIDER_CPU`` and XNNPACK; on any other provider the engine moves the slot to its
+device itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory and
+``ANIRA_EDGE_DEDICATED_TRANSFER`` where it has memory of its own or no probe established which
+(the plan row's ``memory_kind``, :doc:`usage` section 1.7 "The engines"). On
+``ANIRA_PROVIDER_CUDA`` the device asked is CUDA device 0 (a custom engine's provider options
+are its own vocabulary); a custom provider's name maps to no device, so its rows are unknown,
+counted as a dedicated transfer. An engine that does something else says so in the
 descriptor's ``edge`` slot (``anira_engine_edge_fn``): anira asks it once per slot right after
 each load, inputs first, on the thread and under the lock of the load, with an
 ``anira_engine_edge`` record already filled with the provider rule's edge, and the engine
@@ -601,7 +610,7 @@ reason before the call returns.
                                            anira_engine_edge* out, void* user_data) {
         (void)loaded; (void)slot; (void)user_data;
         if (!is_input) {
-            out->edge_class = ANIRA_EDGE_HOST_COPY;
+            out->edge_class = ANIRA_EDGE_COPY;
             out->reason = "com.example.myengine: the runtime returns tensors of its own";
         }
         return ANIRA_OK;
@@ -618,7 +627,7 @@ provider_rule)``, whose base returns the rule:
 
     anira::EngineEdge edge(bool is_input, uint32_t, const anira::EngineEdge& rule) const override {
         if (is_input) { return rule; }
-        return {.edge_class = ANIRA_EDGE_HOST_COPY,
+        return {.edge_class = ANIRA_EDGE_COPY,
                 .reason = "com.example.myengine: the runtime returns tensors of its own"};
     }
 

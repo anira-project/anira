@@ -587,9 +587,11 @@ handle is minted from either. ``contract.kind()`` tells the two apart, and a Har
 Async contract throws ``anira::Error`` with ``ANIRA_ERROR_WRONG_CONTRACT``. ``edge_cost``, on
 both aggregates and on the handle (``contract.edge_cost(ANIRA_EDGE_ZERO_COPY)``), is plan
 validation, not scheduling: the worst edge class (section 1.7, "The engines") a plan may take
-for any slot. ``ANIRA_EDGE_TRANSFER``, the default, admits every edge;
-``ANIRA_EDGE_DEVICE_COPY`` admits no traffic between host and device, ``ANIRA_EDGE_HOST_COPY``
-no copy in device memory either, and ``ANIRA_EDGE_ZERO_COPY`` no copy at all. At prepare a plan
+for any slot, four levels in the order of the classes: ``ANIRA_EDGE_DEDICATED_TRANSFER``, the
+default, admits every edge; ``ANIRA_EDGE_UNIFIED_TRANSFER`` admits a crossing between the CPU
+and a device only within unified memory (no bus); ``ANIRA_EDGE_COPY`` admits no crossing between
+domains (a copy within host memory or within one device's memory is fine); and
+``ANIRA_EDGE_ZERO_COPY`` admits no copy at all. At prepare a plan
 with a slot above it is dropped once its model has loaded (its edges are its engine's), with an
 Info record naming each such slot, its class, who moves its bytes and why; the report holds the
 eligible plans alone, and with none left prepare throws ``ANIRA_ERROR_EDGE_UNREACHABLE`` naming
@@ -705,7 +707,8 @@ block included; the blocks in elements of the model's anchor tensor and the host
 elements per second, as everywhere; a plugin patches them from the host with ``hard_host_blocks``), ``ring_dtypes`` as ``{"audio_in": "int16"}`` (optional,
 by canonical name; a tensor not named streams its spec's dtype), ``latencies`` as ``{"audio_out": 4096}`` (optional, the declared stream
 latency of an output by canonical name, section 1.3), and the optional top-level keys ``edge_cost``
-(``"zero_copy"``, ``"host_copy"``, ``"device_copy"`` or ``"transfer"``, section 1.3) and ``host_domains``
+(``"zero_copy"``, ``"copy"``, ``"unified_transfer"`` or ``"dedicated_transfer"``, section 1.3) and
+``host_domains``
 (``{"audio_in": "host"}``, section 1.3), which stand beside either root.
 
 .. code-block:: cpp
@@ -915,18 +918,69 @@ over, which the plan report states per slot: ``edge_class`` says where the bytes
 cost, from the slot's memory until the engine computes on them and back for outputs (a layout
 transform inside a runtime's graph is no edge), and ``moved_by`` who moves them, as bits:
 ``ANIRA_MOVER_ANIRA`` for anira's own code, ``ANIRA_MOVER_ENGINE`` for the runtime's, both where
-each moves the bytes (the edge then has the class of the worse move).
+each moves the bytes (the edge then has the class of the worse move). Four classes, each its
+own sort of move, which follow the domains and the physical memory, never the API's names for
+them:
 
-- ``ANIRA_EDGE_ZERO_COPY``, ``ANIRA_MOVER_NONE``: bound in place on a provider that runs over
-  host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers).
-- ``ANIRA_EDGE_HOST_COPY`` with the reason: one copy inside host memory, by the adapter
+- ``ANIRA_EDGE_ZERO_COPY``, ``ANIRA_MOVER_NONE``: nothing moves, the engine computes on the
+  slot's own memory: the slot is bound in place on a provider that runs over host memory (the
+  CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers), or a device's runtime wraps it
+  on unified memory.
+- ``ANIRA_EDGE_COPY`` with the reason: a copy or pass within one domain, the CPU's or one
+  device's, with no hand-over between processors. In host memory by the adapter
   (``ANIRA_MOVER_ANIRA``, the copies anira makes and counts) or by the runtime's own API
-  (``ANIRA_MOVER_ENGINE``).
-- ``ANIRA_EDGE_DEVICE_COPY``: a copy or pass inside device memory (the device rows of a later
-  pre-release).
-- ``ANIRA_EDGE_TRANSFER``, ``ANIRA_MOVER_ENGINE``, with the reason: the bytes cross between
-  host and device, the upload and readback a device provider's runtime makes itself (a GPU
-  execution provider, a LiteRT accelerator, an ExecuTorch GPU delegate).
+  (``ANIRA_MOVER_ENGINE``); in a device's memory a relayout or a device copy.
+- ``ANIRA_EDGE_UNIFIED_TRANSFER``, ``ANIRA_MOVER_ENGINE``, with the reason: the bytes cross
+  between the CPU's domain and a device's within one unified physical memory, the upload and
+  readback a device provider's runtime makes itself on a device that computes in the host's own
+  memory (an integrated GPU, Apple silicon, a CPU device such as Mesa's lavapipe): a copy plus a
+  hand-over between the processors (a submission, a fence, possibly cache maintenance or a
+  relayout), and no bus.
+- ``ANIRA_EDGE_DEDICATED_TRANSFER``, ``ANIRA_MOVER_ENGINE``, with the reason: the bytes cross a
+  bus to or from dedicated memory, the upload and readback a device provider's runtime makes
+  itself to a device of its own memory (a discrete GPU). A device whose memory kind no probe
+  established counts as dedicated until a probe shows unified (the reason then reads "memory
+  kind not probed: ..." and why).
+
+The memory kind is the fact behind a device provider's class, reported as itself:
+``memory_kind`` (``anira_memory_kind``: ``ANIRA_MEMORY_UNIFIED``,
+``ANIRA_MEMORY_DEDICATED`` or ``ANIRA_MEMORY_UNKNOWN``) on every plan row
+(``anira_plan_info``) and every capability row (``anira_edge_info``), unified on a provider that
+runs over host memory. Its words are the transfer classes': a device of unified memory takes
+``ANIRA_EDGE_UNIFIED_TRANSFER``, one of dedicated memory or of an unknown kind
+``ANIRA_EDGE_DEDICATED_TRANSFER``. anira asks the device's own API, loaded at run time (no link
+dependency): Metal's ``hasUnifiedMemory`` (Apple builds), the Vulkan device type cross-checked
+with its memory heaps, the CUDA driver's ``CU_DEVICE_ATTRIBUTE_INTEGRATED``, HIP's
+``hipDeviceAttributeIntegrated``, OpenCL's ``CL_DEVICE_HOST_UNIFIED_MEMORY``, D3D12's
+``ARCHITECTURE.UMA``; a browser exposes none, so on the web every device provider is unknown.
+Which device a provider runs on:
+
+.. list-table::
+   :header-rows: 1
+
+   * - Provider
+     - Device asked
+   * - CUDA (any engine), ONNX Runtime's TensorRT and NvTensorRTRTX
+     - the CUDA device of ONNX Runtime's ``device_id`` option (0 without one, and for another
+       engine)
+   * - ONNX Runtime's ROCm and MIGraphX
+     - the HIP device of ``device_id``
+   * - DirectML
+     - the DXGI adapter of ``device_id`` (D3D12)
+   * - Core ML, ExecuTorch's MPSBackend
+     - the Metal system default device
+   * - WebGPU (through Dawn), LiteRT's ``gpu`` accelerator, Vulkan (ExecuTorch's VulkanBackend)
+     - every device of the API the runtime picks among: Metal on Apple, D3D12 on Windows, Vulkan
+       elsewhere (OpenCL for LiteRT on Android); their kind when all agree, else unknown, the
+       reason naming each
+   * - an NPU, any other custom provider
+     - none: unknown
+
+The probe runs lazily, the first time a row needs a device provider's kind (a read of its
+capability row, a prepare with a plan on it), never at the context's creation and never on the
+audio thread; each API is asked once on a thread of its own, waited for 5 s at most, and the
+context keeps the answer (``anira_context_probe`` asks again). A Debug record of ``anira.system``
+logs each API's answer.
 
 These are the class and mover the capability rows give the same edge. A registered engine
 states its own per slot (``anira_engine_desc.edge``, ``anira::Engine::Loaded::edge``;
@@ -946,8 +1000,9 @@ states its own per slot (``anira_engine_desc.edge``, ``anira::Engine::Loaded::ed
      - one copy, the adapter's: a TorchScript method returns tensors of its own
    * - LiteRT
      - bound in place (a tensor buffer over the slot's memory, kept per memory), on an
-       accelerator too: anira copies nothing, the accelerator uploads the slot itself
-       (``ANIRA_EDGE_TRANSFER``, moved by the engine)
+       accelerator too: anira copies nothing, the accelerator moves the slot to its device
+       itself (moved by the engine: ``ANIRA_EDGE_UNIFIED_TRANSFER`` on unified memory,
+       lavapipe's included, ``ANIRA_EDGE_DEDICATED_TRANSFER`` on a discrete GPU)
      - the same
    * - TFLite
      - bound in place (the slot's memory is the tensor's custom allocation per call)
@@ -968,12 +1023,15 @@ A chunk's buffers start on the largest boundary any engine of the plans asks for
 every built-in one), so the in-place paths always apply to anira's own memory; a descriptor off
 the boundary takes the copy. On a device provider (a LiteRT GPU accelerator, a GPU execution
 provider of ONNX Runtime) anira copies nothing either: the slot's host memory is bound in place,
-and the provider's runtime uploads it to the device and reads the results back itself
-(``ANIRA_EDGE_TRANSFER``, ``ANIRA_MOVER_ENGINE``). That upload is the runtime's and cannot be
-avoided while a chunk lives in host memory; a contract that admits no such traffic says so with
-``edge_cost(ANIRA_EDGE_DEVICE_COPY)`` (section 1.3) and keeps the host plans alone; device chunks,
-which the runtime binds where it computes, come with the provider support of a later
-pre-release. An engine that binds an input in place may write it: nothing reads
+and the provider's runtime moves it to the device and reads the results back itself
+(``ANIRA_MOVER_ENGINE``): within the one memory on a unified-memory device, no bus but a
+hand-over between the processors (``ANIRA_EDGE_UNIFIED_TRANSFER``), across the bus to a
+dedicated one (``ANIRA_EDGE_DEDICATED_TRANSFER``). That move is the runtime's and cannot be
+avoided while a chunk lives in host memory; a contract that admits no bus traffic says so with
+``edge_cost(ANIRA_EDGE_UNIFIED_TRANSFER)`` (section 1.3), which keeps the host plans and those on
+unified-memory devices, and one that admits no crossing at all with
+``edge_cost(ANIRA_EDGE_COPY)``, which keeps the host plans alone; device chunks, which the runtime binds where it
+computes, come with the provider support of a later pre-release. An engine that binds an input in place may write it: nothing reads
 a chunk's inputs after the inference but an ``after_inference`` hook, which sees what the engine
 left.
 
@@ -1425,10 +1483,12 @@ The context configuration of section 1.4 (an ``anira::ContextConfig``, or the co
     anira::Context context(config);                  // anira_context_create
     const anira::Capabilities caps = context.capabilities();
     for (const anira::BackendId& backend : caps.backends()) { /* engine, provider */ }
-    for (const anira_edge_info& edge : caps.edges()) { /* from_domain -> (to_engine, to_provider) */ }
+    for (const anira_edge_info& edge : caps.edges()) {
+        /* from_domain -> (to_engine, to_provider): edge_class, moved_by, memory_kind, reason */
+    }
     anira::num_inference_threads();                  // the core's pool size: 0 before the first handler
 
-The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_engines`` (``anira::enabled_engines()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here: one row per compiled-in engine and provider its runtime reports usable on this machine, ``ANIRA_PROVIDER_CPU`` first (ONNX Runtime's available execution providers, the enum's value where one fits and ``ANIRA_PROVIDER_CUSTOM`` with the runtime's registered name in ``provider_id`` else; LiteRT's registered accelerators by their hardware, ``"gpu"``, ``"npu"``, where the LiteRT library exports its accelerator query (every package but the Windows DLL, where LiteRT lists the CPU path alone); ExecuTorch's registered backends, ``XnnpackBackend`` as ``ANIRA_PROVIDER_XNNPACK``; LibTorch and TFLite on ``ANIRA_PROVIDER_CPU`` alone in this pre-release), and one host edge per backend row (zero-copy to a CPU provider, a host copy the engine makes for itself to a device one; ``anira_capabilities_edge`` finds a custom provider by its name). A handler admits a built-in engine's provider exactly when its context lists it. In this pre-release every context is Host-only in its domains (the host domain alone), and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. **Provider options.** The options an engine's runtime takes for a provider travel on the context config as the ``provider_options`` extension, one set per backend with its keys in the runtime's vocabulary: ``config.ext(anira::ext::ProviderOptions{...})`` (``anira_context_config_set_ext`` with an ``anira_ext_provider_options``; in a context file ``"provider_options": {"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}``, the pair as two keys, as a model entry spells it). Each set is checked against the backend it names: its engine must read the kind (the ONNX Runtime adapter, which hands the options to the execution provider at load, CUDA's V2 options and the generic entry's map alike; a custom engine whose descriptor lists ``"context:provider_options"``, which receives them in its load record, :doc:`custom_engines`), else the set is refused as unconsumed naming the backend, at ``anira_context_create`` for a built-in engine and at ``anira_handler_create`` for a custom engine of the pipeline; and its provider must be one the engine serves here (the context's capabilities, a custom engine's list), else ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, so a misspelled provider word is refused rather than ignored. A set for a backend no plan of a handler runs on is not an error. At prepare the set of every plan's backend joins the loaded model's record (so two contexts with different options for one backend load twice), where its engine reads it. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions (section 6 says what a plugin must tear down before its host unloads it).
+The same in C: ``anira_context_create(config, &context, &err)``, ``anira_context_capabilities`` with the enumerators ``anira_capabilities_backends`` / ``domains`` / ``ext_kinds`` / ``edges`` / ``edge`` (``out == NULL`` asks for the count, a short buffer returns ``ANIRA_INCOMPLETE``, records are written at the caller's ``element_size``), ``anira_context_probe``, and, taking no context since the queue and the pool are the core's, ``anira_drain_log`` and ``anira_num_inference_threads`` and ``anira_context_destroy``. ``anira_enabled_engines`` (``anira::enabled_engines()``) says what this build compiled in without a context; ``anira_capabilities_backends`` what is usable here: one row per compiled-in engine and provider its runtime reports usable on this machine, ``ANIRA_PROVIDER_CPU`` first (ONNX Runtime's available execution providers, the enum's value where one fits and ``ANIRA_PROVIDER_CUSTOM`` with the runtime's registered name in ``provider_id`` else; LiteRT's registered accelerators by their hardware, ``"gpu"``, ``"npu"``, where the LiteRT library exports its accelerator query (every package but the Windows DLL, where LiteRT lists the CPU path alone); ExecuTorch's registered backends, ``XnnpackBackend`` as ``ANIRA_PROVIDER_XNNPACK``; LibTorch and TFLite on ``ANIRA_PROVIDER_CPU`` alone in this pre-release), and one host edge per backend row (zero-copy to a CPU provider; to a device one the move the engine makes itself, a unified transfer on a device of unified memory and a dedicated transfer on one of its own memory or of an unknown kind, the row's ``memory_kind`` asked of the device's API on the row's first read and kept by the context, section 1.7 "The engines"; ``anira_capabilities_edge`` finds a custom provider by its name). A handler admits a built-in engine's provider exactly when its context lists it. In this pre-release every context is Host-only in its domains (the host domain alone), and a device block on the config is refused with ``ANIRA_ERROR_NOT_SUPPORTED``. **Provider options.** The options an engine's runtime takes for a provider travel on the context config as the ``provider_options`` extension, one set per backend with its keys in the runtime's vocabulary: ``config.ext(anira::ext::ProviderOptions{...})`` (``anira_context_config_set_ext`` with an ``anira_ext_provider_options``; in a context file ``"provider_options": {"sets": [{"engine": "onnxruntime", "provider": "cuda", "options": {"device_id": "0"}}]}``, the pair as two keys, as a model entry spells it). Each set is checked against the backend it names: its engine must read the kind (the ONNX Runtime adapter, which hands the options to the execution provider at load, CUDA's V2 options and the generic entry's map alike; a custom engine whose descriptor lists ``"context:provider_options"``, which receives them in its load record, :doc:`custom_engines`), else the set is refused as unconsumed naming the backend, at ``anira_context_create`` for a built-in engine and at ``anira_handler_create`` for a custom engine of the pipeline; and its provider must be one the engine serves here (the context's capabilities, a custom engine's list), else ``ANIRA_ERROR_NOT_SUPPORTED`` at ``anira_handler_create``, so a misspelled provider word is refused rather than ignored. A set for a backend no plan of a handler runs on is not an error. At prepare the set of every plan's backend joins the loaded model's record (so two contexts with different options for one backend load twice), where its engine reads it; an ONNX Runtime set's ``device_id`` also names the device whose memory kind the plan's slot classes follow. ``anira_now_ms`` / ``anira_now_ns`` are the steady clock deadlines will be spelled in; ``anira_shutdown`` (called by a plugin's module-exit entry point, see the CLAP example) stops the core's threads only when no context and no handler exist, ``anira_has_core`` and ``anira_release_core_if_idle`` are the unload hook's questions (section 6 says what a plugin must tear down before its host unloads it).
 
 **A pipeline's capabilities.** A custom engine belongs to a pipeline, not to the context, so its
 rows are the pipeline's: ``anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, out)`` lists the context's rows and then, for every custom engine added to the pipeline, one row per provider usable here (``ANIRA_PROVIDER_CPU`` alone for an engine whose descriptor lists no provider, else each listed provider the engine's ``query`` slot reports usable, in list order; every call runs the queries), and ``anira_pipeline_capabilities_edge(pipe, context, from, &to, &out)`` answers for a custom backend as ``anira_capabilities_edge`` does for a built-in one (in C++ ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``). See :doc:`custom_engines`, "What a custom engine can serve here".
@@ -1683,10 +1743,10 @@ selected plan, then one record per plan, per slot and per consumed extension:
 .. code-block:: text
 
     anira_handler_prepare: plan report: plans 2, input slots 1, output slots 1, selected plan 0
-    anira_handler_prepare: plan 0: variant 0, engine libtorch, provider cpu, budget 5.000 ms
+    anira_handler_prepare: plan 0: variant 0, engine libtorch, provider cpu, budget 5.000 ms, memory unified
     anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), moved by none, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position
-    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge host_copy (allocate host_copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position, reason: libtorch: the method returns tensors of its own
-    anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider cpu, budget 5.000 ms
+    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge copy (allocate copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position, reason: libtorch: the method returns tensors of its own
+    anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider cpu, budget 5.000 ms, memory unified
     ...
 
 A plan is a dense index
