@@ -1394,8 +1394,8 @@ anira_plan_slot host_slot(uint32_t slot,
     anira_plan_slot row = ANIRA_PLAN_SLOT_INIT;
     row.slot = slot;
     row.is_input = is_input ? 1U : 0U;
-    row.domain_in = is_input ? static_cast<uint32_t>(facts.m_host_domain) : k_engine_domain;
-    row.domain_out = is_input ? k_engine_domain : static_cast<uint32_t>(facts.m_host_domain);
+    row.from_domain = is_input ? static_cast<uint32_t>(facts.m_host_domain) : k_engine_domain;
+    row.to_domain = is_input ? k_engine_domain : static_cast<uint32_t>(facts.m_host_domain);
     row.edge_class = static_cast<uint32_t>(facts.m_edge.m_class);
     row.allocate_class = static_cast<uint32_t>(facts.m_edge.m_class);
     row.moved_by = facts.m_edge.m_moved_by;
@@ -1610,8 +1610,8 @@ void log_slots(uint32_t plan,
             side,
             slot.slot,
             name,
-            anira::capi::domain_word(static_cast<anira_domain>(slot.domain_in)),
-            anira::capi::domain_word(static_cast<anira_domain>(slot.domain_out)),
+            anira::capi::domain_word(static_cast<anira_domain>(slot.from_domain)),
+            anira::capi::domain_word(static_cast<anira_domain>(slot.to_domain)),
             anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.edge_class)),
             anira::capi::edge_class_word(static_cast<anira_edge_class>(slot.allocate_class)),
             anira::capi::movers_word(slot.moved_by),

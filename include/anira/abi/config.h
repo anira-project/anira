@@ -778,13 +778,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_set_edge_cost(anira_contract* c
  * pair's two buffers, which is the backend's domain of the plans that run the pair
  * otherwise (host memory for every backend of this pre-release), the domain the bound
  * State descriptors report; the planner joins it to the backend's domain per slot with
- * the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class /
- * recipe). A tensor declared in the backend's own domain has no edge to cross. The ring,
- * the model tensor and the tensors the context accessors fill share the declared domain,
- * readable from the domain field of any tensor an accessor fills or from the plan row.
- * Set per tensor by canonical name, resolved at anira_handler_prepare: a name that
- * matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but
- * ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
+ * the edge of the registry's rows (anira_plan_slot.from_domain / to_domain / edge_class
+ * / recipe). A tensor declared in the backend's own domain has no edge to cross. The
+ * ring, the model tensor and the tensors the context accessors fill share the declared
+ * domain, readable from the domain field of any tensor an accessor fills or from the
+ * plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name
+ * that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain
+ * but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the
  * declaration is data; anira's runtime allocates in host memory only). In a contract
  * file the key is a top-level "host_domains": {"<name>": "<domain word>"}, the words the
  * lower-case suffixes of anira_domain ("host", "host_pinned", "cuda", ...).

@@ -1643,7 +1643,7 @@ export class AniraBindings {
    * pair's two buffers, which is the backend's domain of the plans that run the pair
    * otherwise (host memory for every backend of this pre-release), the domain the bound
    * State descriptors report; the planner joins it to the backend's domain per slot with
-   * the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class
+   * the edge of the registry's rows (anira_plan_slot.from_domain / to_domain / edge_class
    * / recipe). A tensor declared in the backend's own domain has no edge to cross. The
    * ring, the model tensor and the tensors the context accessors fill share the declared
    * domain, readable from the domain field of any tensor an accessor fills or from the

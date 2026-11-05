@@ -79,7 +79,7 @@
  * ring, the model tensor, the Static store and, overriding the backend's domain of the plans
  * that run the pair (host memory for every backend of this pre-release), the state buffers of
  * the slot in, and the domain all four processor phases work in; the plan report's slot rows
- * carry it as domain_in of an input and domain_out of an output, against the backend's domain
+ * carry it as from_domain of an input and to_domain of an output, against the backend's domain
  * on the other side. Anything but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED at prepare in
  * this pre-release.
  */
@@ -131,13 +131,15 @@ typedef struct anira_plan_slot {
     uint32_t slot;
     uint32_t is_input;  /**< 1 for an input slot, 0 for an output slot. */
     /**
-     * anira_domain: where the data enters the edge (the host's side for an input).
+     * anira_domain: where the data enters the edge, its from end as anira_edge_info names it
+     * (the host's side for an input, the backend's for an output).
      */
-    uint32_t domain_in;
+    uint32_t from_domain;
     /**
-     * anira_domain: where the data leaves the edge (the backend's side for an input).
+     * anira_domain: where the data leaves the edge, its to end (the backend's side for an
+     * input, the host's for an output).
      */
-    uint32_t domain_out;
+    uint32_t to_domain;
     uint32_t edge_class;  /**< anira_edge_class: where the edge taken moves the slot's bytes. */
     /**
      * anira_edge_class: the class a handle from anira's own allocator would get for this slot;

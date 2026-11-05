@@ -940,8 +940,8 @@ TEST(AbiHandler, PlanReportRows) {
     for (uint32_t i = 0; i < 2; ++i) {
         EXPECT_EQ(slots[i].slot, i);
         EXPECT_EQ(slots[i].is_input, 1U);
-        EXPECT_EQ(slots[i].domain_in, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-        EXPECT_EQ(slots[i].domain_out, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(slots[i].from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(slots[i].to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
         EXPECT_EQ(slots[i].edge_class, input_edge) << "plan 0's engine " << rows.at(0).engine;
         EXPECT_EQ(slots[i].allocate_class, input_edge);
         EXPECT_EQ(slots[i].moved_by, static_cast<uint32_t>(gain_input.m_moved_by));

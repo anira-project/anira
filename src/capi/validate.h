@@ -230,7 +230,7 @@ anira::CustomLatencies latencies_of(const anira_contract& contract,
 /// The declared host-end domain of every slot (anira_contract_set_host_domain): two vectors
 /// sized to the model's input and output lists, ANIRA_DOMAIN_HOST everywhere, then each entry
 /// of the contract's host domains resolved by tensor name into its slot. What the plan report's
-/// slot rows carry as domain_in of an input and domain_out of an output, against the engine's
+/// slot rows carry as from_domain of an input and to_domain of an output, against the engine's
 /// domain on the other side. Run validate first: it refuses a name that matches no tensor and,
 /// in this pre-release, any domain but ANIRA_DOMAIN_HOST.
 struct HostDomains {

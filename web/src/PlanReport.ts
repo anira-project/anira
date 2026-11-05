@@ -54,9 +54,12 @@ export type PlanSlot = {
   slot: number
   /** True for an input slot. */
   isInput: boolean
-  /** `anira_domain` of the host end and of the model end. */
-  domainIn: number
-  domainOut: number
+  /**
+   * `anira_domain` where the data enters the slot's edge and where it leaves it: the host's
+   * side first for an input, the engine's for an output.
+   */
+  fromDomain: number
+  toDomain: number
   /** `anira_edge_class`: where the edge taken moves the slot's bytes. */
   edgeClass: number
   allocateClass: number
@@ -107,8 +110,8 @@ const PLAN_SLOT = {
   size: 60,
   slot: 4,
   isInput: 8,
-  domainIn: 12,
-  domainOut: 16,
+  fromDomain: 12,
+  toDomain: 16,
   edgeClass: 20,
   allocateClass: 24,
   waitStrategy: 28,
@@ -183,8 +186,8 @@ export class PlanReport {
       (m, row) => ({
         slot: u32(m, row, PLAN_SLOT.slot),
         isInput: u32(m, row, PLAN_SLOT.isInput) !== 0,
-        domainIn: u32(m, row, PLAN_SLOT.domainIn),
-        domainOut: u32(m, row, PLAN_SLOT.domainOut),
+        fromDomain: u32(m, row, PLAN_SLOT.fromDomain),
+        toDomain: u32(m, row, PLAN_SLOT.toDomain),
         edgeClass: u32(m, row, PLAN_SLOT.edgeClass),
         allocateClass: u32(m, row, PLAN_SLOT.allocateClass),
         waitStrategy: u32(m, row, PLAN_SLOT.waitStrategy),

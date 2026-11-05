@@ -372,8 +372,8 @@ TEST(AbiPrepare, HostDomainRulesAtPrepare) {
                                           rows.data()),
                   ANIRA_OK);
         for (const anira_plan_slot& row : rows) {
-            EXPECT_EQ(row.domain_in, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-            EXPECT_EQ(row.domain_out, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+            EXPECT_EQ(row.from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+            EXPECT_EQ(row.to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
         }
     }
     run_waited_block(handler.m_handler, 1);

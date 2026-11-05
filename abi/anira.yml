@@ -1789,7 +1789,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The host-end domain of one tensor, common to both contract kinds like anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor and the Static store of the slot in, and the domain all four phases of a processor, the feed and the capture work in; for a State input it overrides the domain of the pair's two buffers, which is the backend's domain of the plans that run the pair otherwise (host memory for every backend of this pre-release), the domain the bound State descriptors report; the planner joins it to the backend's domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class / recipe). A tensor declared in the backend's own domain has no edge to cross. The ring, the model tensor and the tensors the context accessors fill share the declared domain, readable from the domain field of any tensor an accessor fills or from the plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the declaration is data; anira's runtime allocates in host memory only). In a contract file the key is a top-level \"host_domains\": {\"<name>\": \"<domain word>\"}, the words the lower-case suffixes of anira_domain (\"host\", \"host_pinned\", \"cuda\", ...)."
+        doc: "The host-end domain of one tensor, common to both contract kinds like anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor and the Static store of the slot in, and the domain all four phases of a processor, the feed and the capture work in; for a State input it overrides the domain of the pair's two buffers, which is the backend's domain of the plans that run the pair otherwise (host memory for every backend of this pre-release), the domain the bound State descriptors report; the planner joins it to the backend's domain per slot with the edge of the registry's rows (anira_plan_slot.from_domain / to_domain / edge_class / recipe). A tensor declared in the backend's own domain has no edge to cross. The ring, the model tensor and the tensors the context accessors fill share the declared domain, readable from the domain field of any tensor an accessor fills or from the plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the declaration is data; anira's runtime allocates in host memory only). In a contract file the key is a top-level \"host_domains\": {\"<name>\": \"<domain word>\"}, the words the lower-case suffixes of anira_domain (\"host\", \"host_pinned\", \"cuda\", ...)."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a domain that is no anira_domain value."
       - kind: function
         name: anira_contract_set_ext
@@ -4213,7 +4213,7 @@ headers:
       the backend's domain of the plans that run the pair (host memory for every backend of this
       pre-release), the state
       buffers of the slot in, and the domain all four processor phases work in; the plan report's
-      slot rows carry it as domain_in of an input and domain_out of an output, against the
+      slot rows carry it as from_domain of an input and to_domain of an output, against the
       backend's domain on the other side. Anything but ANIRA_DOMAIN_HOST is
       ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
     includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h", "tensor.h", "context.h", "processor.h", "engine.h"]
@@ -4228,8 +4228,8 @@ headers:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_slot) of the caller's header."}
           - {name: slot, type: uint32_t, doc: "The slot: the tensor's position in the model config's input list (is_input) or output list. One row per tensor of each list, whatever its role."}
           - {name: is_input, type: uint32_t, doc: "1 for an input slot, 0 for an output slot."}
-          - {name: domain_in, type: uint32_t, doc: "anira_domain: where the data enters the edge (the host's side for an input)."}
-          - {name: domain_out, type: uint32_t, doc: "anira_domain: where the data leaves the edge (the backend's side for an input)."}
+          - {name: from_domain, type: uint32_t, doc: "anira_domain: where the data enters the edge, its from end as anira_edge_info names it (the host's side for an input, the backend's for an output)."}
+          - {name: to_domain, type: uint32_t, doc: "anira_domain: where the data leaves the edge, its to end (the backend's side for an input, the host's for an output)."}
           - {name: edge_class, type: uint32_t, doc: "anira_edge_class: where the edge taken moves the slot's bytes."}
           - {name: allocate_class, type: uint32_t, doc: "anira_edge_class: the class a handle from anira's own allocator would get for this slot; equal to edge_class on a slot in host memory, every slot of this pre-release."}
           - {name: wait_strategy, type: uint32_t, doc: "anira_wait_strategy: how a completion on this edge is waited for; on a host edge the strategy the core runs, which is the first context's or session's (see the file comment of anira/abi/context.h), not necessarily this handler's context's request."}

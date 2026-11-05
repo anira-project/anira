@@ -525,7 +525,7 @@ minted again. On an Async handle it throws ``anira::Error`` with
   allocates the slot's ring, its model tensor, the Static store and the state buffers, and
   where all four phases of the processor, the state feed and the capture work (section 2); the
   planner joins it to the engine's domain per slot with an edge (the plan report's slot rows
-  carry it as ``domain_in`` of an input and ``domain_out`` of an output, the engine's domain
+  carry it as ``from_domain`` of an input and ``to_domain`` of an output, the engine's domain
   on the other side), which is nothing where the two coincide, so a tensor declared in the
   engine's own domain crosses no edge. Resolved at prepare: a name that matches no tensor is
   ``ANIRA_ERROR_CONFIG``, and in this pre-release any domain but ``ANIRA_DOMAIN_HOST`` is
