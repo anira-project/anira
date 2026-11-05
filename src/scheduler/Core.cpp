@@ -1782,12 +1782,23 @@ void Core::reserve_inference_capacity(const std::shared_ptr<SessionElement>& ses
     // its dequeue returned, the slot flagged empty; the drain below takes the others back and
     // waits for the count. When it returns, the blocks of the reservation are the token's
     // producer's and every slot of them is empty.
+    // Nothing was enqueued when the reservation fails (its vector of placeholders or a block
+    // could not be allocated): the count goes back on either path, or the session's drain at
+    // its release would wait for jobs that do not exist.
     session->m_active_inferences->fetch_add(static_cast<int>(count), std::memory_order::seq_cst);
-    if (!detail::reserve_capacity(
+    bool reserved = false;
+    try {
+        reserved = detail::reserve_capacity(
             next_inference,
             session->m_producer_token,
             count,
-            InferenceData{.m_session = session, .m_thread_safe_struct = nullptr})) {
+            InferenceData{.m_session = session, .m_thread_safe_struct = nullptr});
+    } catch (...) {
+        session->m_active_inferences->fetch_sub(static_cast<int>(count),
+                                                std::memory_order::release);
+        throw;
+    }
+    if (!reserved) {
         session->m_active_inferences->fetch_sub(static_cast<int>(count),
                                                 std::memory_order::release);
         throw std::bad_alloc();
