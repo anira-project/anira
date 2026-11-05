@@ -301,10 +301,12 @@ public:
      *   k = \max_i \left\lceil \frac{g L_i}{P_i} \right\rceil, \qquad
      *   \text{result}_i = \frac{P_i}{g} k,
      * @f]
-     * in exact integer arithmetic. Equal hops keep their values (@f$g = P@f$); coprime hops
-     * meet at a whole number of hops (@f$g = 1@f$); a single streamed output keeps its value.
-     * A non-streamable output (a Static value, the output half of a State pair) reports 0,
-     * takes no part in @f$g@f$ and @f$k@f$, and the result has one entry per output tensor.
+     * in exact integer arithmetic (64-bit for @f$g L_i@f$). Equal hops keep their values
+     * (@f$g = P@f$); coprime hops meet at a whole number of hops (@f$g = 1@f$). The one
+     * formula covers the edge cases: one streamed output: @f$g = P@f$, @f$k = L@f$, so its
+     * floor passes unchanged; no streamed output: every entry 0. A non-streamable output (a
+     * Static value, the output half of a State pair) reports 0, takes no part in @f$g@f$ and
+     * @f$k@f$, and the result has one entry per output tensor.
      *
      * @param latencies Integer latencies in samples, one per output tensor
      * @param output_sizes Postprocess output sizes (hops), one per output tensor

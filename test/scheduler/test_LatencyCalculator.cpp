@@ -589,6 +589,23 @@ TEST(LatencyCalculatorSync, StreamedOutputsMeetOnTheGcdGrid) {
               (Latencies{2664, 0, 666}));
 }
 
+// The same formula covers the edge cases, with no branch of its own: one Streamed output has
+// g = P and k = L, so its floor passes unchanged, also off a whole hop and beside non-streamed
+// outputs; without a Streamed output every entry is 0, whatever figure it was given.
+TEST(LatencyCalculatorSync, OneStreamedOutputKeepsItsFloorAndNoneReportsZero) {
+    using Latencies = std::vector<unsigned int>;
+    // Hop 2048 at Lambda = 1.25.
+    EXPECT_EQ(LatencyCalculator::sync_latencies({2560}, {2048}), (Latencies{2560}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({2560, 0}, {2048, 0}), (Latencies{2560, 0}));
+    // Hop 3 at Lambda = 1.5 (floor 4), after a Static output and before a State output.
+    EXPECT_EQ(LatencyCalculator::sync_latencies({0, 4, 0}, {0, 3, 0}), (Latencies{0, 4, 0}));
+    // Hop 1 and a figure of zero.
+    EXPECT_EQ(LatencyCalculator::sync_latencies({0}, {1}), (Latencies{0}));
+    // No Streamed output: g = 0 never divides, every entry is 0.
+    EXPECT_EQ(LatencyCalculator::sync_latencies({5, 7}, {0, 0}), (Latencies{0, 0}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({}, {}), Latencies{});
+}
+
 // Over random hop sets (with Static outputs among them) and random Lambda, and over arbitrary
 // per-output figures: the result is coherent (result_i P_j == result_j P_i), at or above every
 // figure, and the least such vector (least_coherent searches for it without a gcd).
