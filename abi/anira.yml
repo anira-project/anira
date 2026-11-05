@@ -1533,7 +1533,7 @@ headers:
           - {type: anira_tensor_spec*, name: spec, doc: "The spec."}
           - {type: int64_t, name: window_min, doc: "The model's smallest legal Time extent, in elements; 0 with a window_max of 0: no window."}
           - {type: int64_t, name: window_max, doc: "The largest, or ANIRA_UNBOUNDED."}
-          - {type: int64_t, name: overlap, doc: "Overlap of consecutive windows: the elements kept from the previous window. The advance per inference, the hop, is window_used - overlap."}
+          - {type: int64_t, name: overlap, doc: "Overlap of consecutive windows: the elements kept from the previous window. The advance per inference, the hop, is window_used - overlap. An output's window is aligned like an input's: the model writes the whole window, its newest hop at the tail, and the default post_process pushes that hop; the head answers older positions and is not pushed (an overlap-add is the model's or a processor's own)."}
         thread: main-thread
         status: promised
         since: "0.1"
@@ -3849,7 +3849,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The default post_process, for a processor that wants it (\"call super\"): for every Streamed output it pushes one hop per channel from the model tensor, read as packed row-major memory, into the ring: channel c from element c * hop. It never touches a tensor of another role. Real-time by construction. anira runs it itself, once per chunk, when the processor's post_process slot is NULL (or the pipeline has no processor)."
+        doc: "The default post_process, for a processor that wants it (\"call super\"): for every Streamed output it pushes one hop per channel from the model tensor, read as packed row-major memory, into the ring, in the layout anira_processor_default_pre_process gives an input: channel c's window starts at element c * window (the tensor's elements per channel) and its newest hop is the window's tail, so the last hop of each channel's window is pushed. An output without an overlap is a window of one hop, pushed whole; with an overlap the head of the window answers older positions of the stream and is not pushed. It never touches a tensor of another role. Real-time by construction. anira runs it itself, once per chunk, when the processor's post_process slot is NULL (or the pipeline has no processor)."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another phase than ANIRA_PHASE_POST_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a Streamed output is not its tensor's dtype, with that ring untouched and the others pushed. The status is returned, never recorded by the default itself: a processor that returns it fails the chunk with it."
 
   # ----------------------------------------------------------------------------

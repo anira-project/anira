@@ -329,7 +329,11 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
  *        0: no window.
  * @param window_max The largest, or ANIRA_UNBOUNDED.
  * @param overlap Overlap of consecutive windows: the elements kept from the previous window.
- *        The advance per inference, the hop, is window_used - overlap.
+ *        The advance per inference, the hop, is window_used - overlap. An output's
+ *        window is aligned like an input's: the model writes the whole window, its
+ *        newest hop at the tail, and the default post_process pushes that hop; the head
+ *        answers older positions and is not pushed (an overlap-add is the model's or a
+ *        processor's own).
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than
  *         ANIRA_UNBOUNDED as window_max.
  * @par Thread contract

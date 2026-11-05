@@ -120,7 +120,13 @@ many elements along the Time axis one inference consumes (``window_min`` and ``w
 equal for a fixed window, ``window_max = ANIRA_UNBOUNDED`` for an open one) and how many of
 them are **overlap**, the elements kept from the previous window. The advance per inference,
 the hop, is the window minus the overlap. A receptive-field model whose export takes 15380
-samples and yields 2048 fresh ones is a window of 15380 with an overlap of 13332.
+samples and yields 2048 fresh ones is a window of 15380 with an overlap of 13332. An output's
+window is aligned like an input's: the model writes the whole window, channel ``c`` from
+element ``c * window``, its newest hop at the tail, and anira's default ``post_process`` pushes
+that last hop of every channel; the head of the window answers older positions of the stream
+and is not pushed. So a model whose output has the shape of its input (a window in, a window
+out) needs no processor of its own, and the latency stays the one reported. An output that
+overlap-adds its windows does so in its own processor (section 2).
 
 The window is optional. A streamed spec that declares none gets one when the configuration is
 validated: the extent of a fixed Time axis is the window, with no overlap (an export that takes
@@ -1127,7 +1133,9 @@ contract names another, and only a processor that fills the phase moves between 
 ring into the model tensor (with the ring's history ahead of it where the window is longer
 than the hop, the receptive-field fill; channel ``c`` of a tensor of ``n`` elements per
 channel starts at element ``c * n``), ``anira_processor_default_post_process`` pushes one hop per
-channel of every Streamed output from the model tensor into its ring; a Static slot is
+channel of every Streamed output from the model tensor into its ring, in the same layout (channel
+``c`` from element ``c * n``, the last hop of its window, which is all of it without an
+overlap); a Static slot is
 materialised ahead of ``pre_process`` and captured behind ``post_process`` by anira itself,
 and the two hooks have no default. A filled slot means the processor **owns the phase for every
 slot with a host end**: what it does not handle itself it hands to the default body,

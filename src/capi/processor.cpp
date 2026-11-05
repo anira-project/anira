@@ -528,13 +528,21 @@ anira_status ANIRA_CALL anira_processor_default_post_process(const anira_process
         void* data = anira_tensor_data(&tensor, dtype);
         const size_t channels = ring->num_channels();
         const size_t hop = ring->hop();
-        if (data == nullptr || anira_tensor_num_elements(&tensor) < channels * hop) {
+        // The input side's layout: channel c's window at c * window, its newest hop at the
+        // window's tail. An output with an overlap holds a window longer than its hop: its head
+        // answers older positions of the stream, and only the newest hop is pushed.
+        const size_t per_channel = channels > 0 ? anira_tensor_num_elements(&tensor) / channels : 0;
+        if (data == nullptr || per_channel < hop) {
             status = ANIRA_ERROR_CONFIG;
             continue;
         }
+        const size_t history = per_channel - hop;
         const size_t element_size = ring->element_size();
         for (size_t channel = 0; channel < channels; ++channel) {
-            ring->push_block(channel, element_at(data, channel * hop, element_size), dtype, hop);
+            ring->push_block(channel,
+                             element_at(data, (channel * per_channel) + history, element_size),
+                             dtype,
+                             hop);
         }
     }
     return status;
