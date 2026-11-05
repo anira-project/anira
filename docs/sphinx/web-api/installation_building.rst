@@ -275,11 +275,15 @@ cannot grow further (AniraWeb's at its maximum, a module's of fixed size at once
 entry turns that into the status. A failed handler creation or prepare leaves nothing behind. A
 module of your own that prefers the abort passes ``-sABORTING_MALLOC=1`` after anira's options:
 the last ``-s`` wins. For sizing the memory: the core takes 0.2 MiB once the first context
-exists (its queue of inference jobs holds what the handlers reserve, a few KiB each), a handler
-from about 40 KiB (the gain model at a 5 ms budget) to 1.7 MiB (at a 1 s budget, whose pool of
-chunks is large) beside its model's instances (each loaded model instance holds its own copy of
-the model's weights: about 16.5 MiB per instance of a 16 MB RAVE export), and every inference
-thread a 4 MiB stack. The
+exists, a handler from about 40 KiB (the gain model at a 5 ms budget) to 1.7 MiB (at a 1 s
+budget, whose pool of chunks is large) beside its model's instances (each loaded model instance
+holds its own copy of the model's weights: about 16.5 MiB per instance of a 16 MB RAVE export),
+and every inference thread a 4 MiB stack. The core's queue of inference jobs owns nothing of its
+own: each handler reserves its room there when it is prepared, its producer (368 bytes) and one
+block of 564 bytes per 32 chunks of its pool beyond the first, so about 1.5 KiB up to 33 chunks
+and 0.9 KiB for a stateful handler, which has one chunk in the queue at a time. The room stays
+with the queue once the handler is gone, for the next handler to take. (Issue #207: the queue
+preallocated 169 MiB at the first context, and every live handler added 4 MiB.) The
 defaults (``ANIRA_THREADS_AUTO``, AUTO instances) stay: an AUTO pool of 16 Workers with two
 RAVE models (about 530 MiB of instances beside the core) did not fit the former fixed 512 MiB
 (issue #218) and fits the growing memory.
