@@ -88,28 +88,33 @@ LatencyCalculator::Rational LatencyCalculator::rationalize(double value, int64_t
 std::vector<unsigned int> LatencyCalculator::sync_latencies(
     const std::vector<unsigned int>& latencies,
     const std::vector<size_t>& output_sizes) {
-    std::vector<unsigned int> result;
-    result.reserve(latencies.size());
     // Only streamed outputs have anything to align: a non-streamed one (a Static value, the
-    // output half of a State pair) never reaches a stream and reports 0.
-    const auto streamed = std::ranges::count_if(output_sizes, [](size_t size) { return size > 0; });
-    if (streamed > 1) {
-        double ratio = 0.0;
-        for (size_t i = 0; i < latencies.size(); ++i) {
-            if (output_sizes[i] > 0) {
-                ratio = std::max(
-                    ratio,
-                    static_cast<double>(latencies[i]) / static_cast<double>(output_sizes[i]));
-            }
+    // output half of a State pair) never reaches a stream and reports 0. The delays every
+    // streamed output can share are the multiples of 1/g hops, g the gcd of their hops: k/g
+    // hops are P_i k / g whole samples of every output i, and by Bezout no other fraction of a
+    // hop is. The least such delay at or above every L_i is k = max_i ceil(g L_i / P_i). With a
+    // single streamed output g = P and k = L: it keeps its figure.
+    int64_t grid = 0;  // g, the delays run on a grid of 1/g hops
+    for (size_t const output_size : output_sizes) {
+        if (output_size > 0) {
+            grid = greatest_common_divisor(grid, static_cast<int64_t>(output_size));
         }
-        auto const hops = static_cast<unsigned int>(std::ceil(ratio - k_ceil_epsilon));
-        for (size_t const output_size : output_sizes) {
-            result.push_back(output_size > 0 ? hops * static_cast<unsigned int>(output_size) : 0U);
+    }
+    if (grid == 0) { return std::vector<unsigned int>(output_sizes.size(), 0U); }  // no stream
+    int64_t steps = 0;  // k, the common delay in 1/g hops
+    for (size_t i = 0; i < latencies.size(); ++i) {
+        if (output_sizes[i] > 0) {
+            steps = std::max(steps,
+                             ceil_div(grid * static_cast<int64_t>(latencies[i]),
+                                      static_cast<int64_t>(output_sizes[i])));
         }
-    } else {
-        for (size_t i = 0; i < latencies.size(); ++i) {
-            result.push_back(output_sizes[i] > 0 ? latencies[i] : 0U);
-        }
+    }
+    std::vector<unsigned int> result;
+    result.reserve(output_sizes.size());
+    for (size_t const output_size : output_sizes) {
+        result.push_back(output_size > 0 ? static_cast<unsigned int>(
+                                               static_cast<int64_t>(output_size) / grid * steps)
+                                         : 0U);
     }
     return result;
 }

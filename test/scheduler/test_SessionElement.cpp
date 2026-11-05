@@ -379,10 +379,11 @@ INSTANTIATE_TEST_SUITE_P(
             {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
             50.0,
             0.0,
-            {8192, 512},
+            // 106/32 hops, coherent for the hops 2048 and 128 (whole hops made it 8192, 512)
+            {6784, 424},
             10,
             {3, 848},
-            {28672, 1792}),
+            {27264, 1704}),
         // Non-power-of-two buffer size tests
         row({100, 48000, true}, mono(2048), mono(2048), 13.0, 0.0, {2759}, 2, {2147}, {6855}),
         row({300, 44100}, mono(1024), mono(1024), 40.0, 0.0, {2820}, 6, {1320}, {8964}),
@@ -627,7 +628,7 @@ INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
 // (hop 2048, an internal latency of 2224) and its recurrent state as a State output, under host
 // blocks of 512 at 44.1 kHz and a 20 ms budget. The inference queue is 1.25 hops (2560), so the
 // session reports 2560 + 2224 = 4784; a non-streamed output must not round the queue up to two
-// whole hops (4096 + 2224 = 6320). Two Streamed outputs are still synchronized.
+// whole hops (4096 + 2224 = 6320).
 TEST(SessionElementLatency, AStateOutputBesideOneStreamedOutputKeepsItsLatency) {
     SizingHostBlocks const host = host_blocks(512, 44100, false);
     constexpr double k_budget_ms = 20.0;
@@ -658,9 +659,19 @@ TEST(SessionElementLatency, AStateOutputBesideOneStreamedOutputKeepsItsLatency) 
         host,
         k_budget_ms);
     EXPECT_EQ(with_static.m_latency, (std::vector<unsigned int>{0, 4784}));
+}
 
-    // A second Streamed output: both meet at two whole hops before the internal latency.
-    SizingResult const two_streams =
+// Several Streamed outputs meet on the grid of 1/g hops, g the gcd of their hops, not at whole
+// hops. The workshop's timing (hop 2048, host blocks of 512 at 44.1 kHz, a 20 ms budget) puts the
+// queue at 1.25 hops: two outputs of hop 2048 are coherent at 2560 already and report 2560 +
+// 2224 = 4784 and 2560, where whole hops made it 6320 and 4096; beside an output of hop 512
+// (g = 512) the queue is 640 samples of it, where whole hops made it 1024.
+TEST(SessionElementLatency, StreamedOutputsMeetOnTheGcdGrid) {
+    SizingHostBlocks const host = host_blocks(512, 44100, false);
+    constexpr double k_budget_ms = 20.0;
+    constexpr int64_t k_internal = 2224;
+
+    SizingResult const equal_hops =
         prepare_and_measure(anira_test::sizing_model({{.m_elements = 2048}},
                                                      {{.m_elements = 2048}, {.m_elements = 2048}},
                                                      1,
@@ -668,7 +679,17 @@ TEST(SessionElementLatency, AStateOutputBesideOneStreamedOutputKeepsItsLatency) 
                                                      {k_internal, 0}),
                             host,
                             k_budget_ms);
-    EXPECT_EQ(two_streams.m_latency, (std::vector<unsigned int>{4096 + k_internal, 4096}));
+    EXPECT_EQ(equal_hops.m_latency, (std::vector<unsigned int>{2560 + k_internal, 2560}));
+
+    SizingResult const quarter_hop =
+        prepare_and_measure(anira_test::sizing_model({{.m_elements = 2048}},
+                                                     {{.m_elements = 2048}, {.m_elements = 512}},
+                                                     1,
+                                                     std::nullopt,
+                                                     {k_internal, 0}),
+                            host,
+                            k_budget_ms);
+    EXPECT_EQ(quarter_hop.m_latency, (std::vector<unsigned int>{2560 + k_internal, 640}));
 }
 
 // The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
