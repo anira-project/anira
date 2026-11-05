@@ -54,14 +54,16 @@ anira_backend_id backend_end(const anira_edge_info& row) noexcept;
 bool same_ends(const anira_edge_info& row, const anira_edge_info& query) noexcept;
 
 /// The facts of a capability row of a backend on `provider`, whose device computes in `memory`,
-/// by the plan rows' rule (engine::provider_rule), for the context's rows and a pipeline's
-/// alike and for both directions of a backend: the class, the mover and the memory kind; to and
-/// from a provider that runs over host memory zero-copy, moved by nobody, from compiled-in
-/// knowledge (ANIRA_RUNG_STATIC) with `host_reason`; to and from every other one the move the
-/// engine's runtime makes itself, its class the memory kind's, as sure as the report that lists
-/// the provider (ANIRA_RUNG_IDENTITY), the reason `device_reason` and then the rule's (the
-/// memory kind and what the probe saw), kept in `texts`. The ends are the caller's
-/// (backend_rows). The two given reasons are static storage.
+/// by the plan rows' rule (engine::provider_rule) for the row's own direction, read from its
+/// ends (to the backend: an input's upload; from it: an output's readback), for the context's
+/// rows and a pipeline's alike: the class, the mover and the memory kind; to and from a
+/// provider that runs over host memory zero-copy, moved by nobody, from compiled-in knowledge
+/// (ANIRA_RUNG_STATIC) with `host_reason`; to and from every other one the move the engine's
+/// runtime makes itself, its class the memory kind's, as sure as the report that lists the
+/// provider (ANIRA_RUNG_IDENTITY), the reason `device_reason` and then the rule's for the
+/// direction (the memory kind, what the probe saw, the direction's move), kept in `texts`. The
+/// ends are the caller's (backend_rows) and must be set first. The two given reasons are static
+/// storage.
 void set_provider_edge(anira_edge_info& edge,
                        anira_provider provider,
                        std::string_view provider_id,

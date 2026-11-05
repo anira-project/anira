@@ -4263,18 +4263,20 @@ export class AniraBindings {
    * anira_capabilities_backends, in its order, so that rows 2i and 2i + 1 belong to
    * backend i: first the edge from ANIRA_DOMAIN_HOST to the backend (the way an input
    * goes), then the edge from the backend back to ANIRA_DOMAIN_HOST (the way an output
-   * goes), with the same facts in this pre-release: zero-copy to and from a provider that
-   * runs over host memory; to and from a device provider a move the engine's runtime
-   * makes itself, whose class follows the device's memory kind (memory_kind:
-   * ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on
-   * dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory). The first read of a device
-   * provider's rows asks its device's API (the unified-memory probe, run lazily, on a
-   * thread of its own, waited for 5 s at most per API, never at the context's creation)
-   * and the context keeps the answer; this entry finishes every such row before it counts
-   * or copies, so a count and the fill after it read the same rows. Stride-explicit
-   * enumeration. The strings the rows point to (from_provider_id, to_provider_id, reason)
-   * are the context's: the provider ids valid until its next anira_context_probe replaces
-   * them, reason until the context is destroyed.
+   * goes), each by the provider rule for its direction, with the same class, mover and
+   * memory kind in this pre-release and each its direction's reason: zero-copy to and
+   * from a provider that runs over host memory; to and from a device provider a move the
+   * engine's runtime makes itself, whose class follows the device's memory kind
+   * (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
+   * memory). The first read of a device provider's rows asks its device's API (the
+   * unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per
+   * API, never at the context's creation) and the context keeps the answer; this entry
+   * finishes every such row before it counts or copies, so a count and the fill after it
+   * read the same rows. Stride-explicit enumeration. The strings the rows point to
+   * (from_provider_id, to_provider_id, reason) are the context's: the provider ids valid
+   * until its next anira_context_probe replaces them, reason until the context is
+   * destroyed.
    *
    * @param capabilities The capabilities.
    * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of
@@ -5483,8 +5485,9 @@ export class AniraBindings {
    * (anira_capabilities_edge); where one does, the pipeline's rows of its custom engines:
    * for a custom engine added to the pipeline, on a provider usable here (its query runs,
    * as anira_pipeline_capabilities_backends runs it), the edge from ANIRA_DOMAIN_HOST to
-   * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, with the same
-   * facts: zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
+   * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, each by the
+   * provider rule for its direction (the same class and mover, each its direction's
+   * reason): zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
    * memory reaches without a copy; to and from every other provider a move the engine
    * makes itself (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the
    * provider's device as the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER

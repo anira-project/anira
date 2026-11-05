@@ -3215,12 +3215,14 @@ public:
         /// `is_input`, else the output slot), for the plan report's slot rows and the
         /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
         /// returned this Loaded, once per slot, inputs first, on the same thread and under the
-        /// same lock. `provider_rule` is what anira reports without a statement, and the base
-        /// returns it: zero-copy on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider
-        /// ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory,
-        /// ANIRA_EDGE_DEDICATED_TRANSFER where it has memory of its own, ANIRA_EDGE_UNKNOWN where
-        /// no probe established which (the plan row's memory_kind, anira_memory_kind), the reason
-        /// saying which and what the probe saw. An engine that copies the slot into host memory of
+        /// same lock. `provider_rule` is what anira reports without a statement, the provider
+        /// rule for the slot's direction, and the base returns it: zero-copy on
+        /// ANIRA_PROVIDER_CPU and XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where
+        /// its device computes in unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has
+        /// memory of its own, ANIRA_EDGE_UNKNOWN where no probe established which (the plan row's
+        /// memory_kind, anira_memory_kind), the same class both ways, the reason saying which,
+        /// what the probe saw and the direction's move (an input's upload, an output's
+        /// readback). An engine that copies the slot into host memory of
         /// its own returns ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails
         /// with the status, and the Loaded is deleted.
         virtual EngineEdge edge(bool /*is_input*/,

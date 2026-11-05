@@ -769,16 +769,16 @@ public:
     /// Per slot, by the memory plan's rule (the probe's bind): an input or output the plan
     /// leaves out is bound in place, a planned one costs one copy (set_input's for an input,
     /// the adapter's for an output). A delegate on a device (a GPU or an NPU backend) moves
-    /// the slot to it and back itself: the provider's edge (a unified transfer on a
-    /// unified-memory device, a dedicated transfer on a dedicated or unknown one) with the class
-    /// of the worse move, and
-    /// the adapter's bit beside the engine's where the adapter also copies the output out of
-    /// the plan's memory or its own block.
+    /// an input to it and an output back itself: the provider's edge in the slot's direction (a
+    /// unified transfer on a unified-memory device, a dedicated transfer on a dedicated one,
+    /// unknown on an unknown one) with the class of the worse move, and the adapter's bit beside
+    /// the engine's where the adapter also copies the output out of the plan's memory or its own
+    /// block.
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override {
         const std::vector<SlotEdge>& edges = is_input ? m_input_edges : m_output_edges;
         const SlotEdge host = slot < edges.size() ? edges[slot] : SlotEdge{};
         if (host_memory_provider(model().m_provider, model().m_provider_id)) { return host; }
-        SlotEdge device = provider_edge();
+        SlotEdge device = provider_edge(is_input);
         device.m_class = std::max(device.m_class, host.m_class);
         if ((host.m_moved_by & ANIRA_MOVER_ANIRA) != 0) {
             device.m_moved_by |= ANIRA_MOVER_ANIRA;
@@ -859,7 +859,7 @@ protected:
         for (size_t slot = 0; slot < model.m_outputs.size(); ++slot) {
             m_output_edges.push_back(probe->slot_edge(false, slot));
         }
-        const SlotEdge device = provider_edge();
+        const SlotEdge device = provider_edge(false);  // the output's readback
         m_device_output_reason =
             std::string(
                 "executorch: the output lands in memory of the plan's or the "

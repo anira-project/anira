@@ -865,7 +865,8 @@ public:
 
     /// Every slot is bound in place, on the CPU path and on an accelerator alike (a tensor
     /// buffer over the slot's memory, kept per memory: Instance::buffer_for): the default
-    /// slot_edge, zero-copy on the CPU, the accelerator's own upload on a GPU or an NPU.
+    /// slot_edge, zero-copy on the CPU, on a GPU or an NPU the accelerator's own upload of an
+    /// input and readback of an output (the provider rule of the slot's direction).
     /// LiteRT's boundary for a buffer over host memory, which every chunk's buffer meets.
     size_t buffer_alignment() const noexcept override {
         return LITERT_HOST_MEMORY_BUFFER_ALIGNMENT;

@@ -62,8 +62,10 @@ void Loaded::load(const Model& model) {
     m_num_instances = 0;
     m_busy.clear();
     m_model = model;
-    m_provider_rule =
-        provider_rule(m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
+    m_input_rule =
+        provider_rule(true, m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
+    m_output_rule =
+        provider_rule(false, m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
     // The provider is checked once more at the door of every adapter (the handler checked
     // the plan's against the capabilities or the descriptor's list): an adapter that does not
     // serve it never sees the record.
@@ -376,7 +378,8 @@ bool host_memory_provider(anira_provider provider, std::string_view provider_id)
             provider_id == "ArmNNExecutionProvider");
 }
 
-ProviderRule provider_rule(anira_provider provider,
+ProviderRule provider_rule(bool is_input,
+                           anira_provider provider,
                            std::string_view provider_id,
                            const DeviceMemory& memory) {
     if (host_memory_provider(provider, provider_id)) { return ProviderRule{}; }
@@ -386,14 +389,18 @@ ProviderRule provider_rule(anira_provider provider,
         case ANIRA_MEMORY_UNIFIED:
             rule.m_class = ANIRA_EDGE_UNIFIED_TRANSFER;
             rule.m_reason = "the provider's device computes in the host's memory (" + memory.m_why +
-                            "): its runtime hands the slot over to the device within that memory, "
-                            "no bus, and the results back, per call";
+                            (is_input ? "): its runtime hands the slot over to the device within "
+                                        "that memory, no bus, per call"
+                                      : "): its runtime hands the results back within that "
+                                        "memory, no bus, per call");
             break;
         case ANIRA_MEMORY_DEDICATED:
             rule.m_class = ANIRA_EDGE_DEDICATED_TRANSFER;
             rule.m_reason = "the provider's device computes in memory of its own (" + memory.m_why +
-                            "): its runtime moves the slot across the bus and the results back, "
-                            "per call";
+                            (is_input ? "): its runtime moves the slot across the bus to the "
+                                        "device, per call"
+                                      : "): its runtime reads the results back across the bus, "
+                                        "per call");
             break;
         default:
             rule.m_class = ANIRA_EDGE_UNKNOWN;
@@ -403,11 +410,11 @@ ProviderRule provider_rule(anira_provider provider,
     return rule;
 }
 
-Loaded::SlotEdge Loaded::provider_edge() const noexcept {
-    return SlotEdge{
-        .m_class = m_provider_rule.m_class,
-        .m_moved_by = m_provider_rule.m_moved_by,
-        .m_reason = m_provider_rule.m_reason.empty() ? nullptr : m_provider_rule.m_reason.c_str()};
+Loaded::SlotEdge Loaded::provider_edge(bool is_input) const noexcept {
+    const ProviderRule& rule = is_input ? m_input_rule : m_output_rule;
+    return SlotEdge{.m_class = rule.m_class,
+                    .m_moved_by = rule.m_moved_by,
+                    .m_reason = rule.m_reason.empty() ? nullptr : rule.m_reason.c_str()};
 }
 
 void check_engine_tensor(const TensorInfo& slot,

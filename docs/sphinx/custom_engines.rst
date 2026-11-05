@@ -574,7 +574,8 @@ times) and a **visible report**, the pipeline's capabilities:
     edge.to_provider = ANIRA_PROVIDER_COREML;
     anira_pipeline_capabilities_edge(pipe, context, &edge);
 
-    /* The way back, from the engine to host memory: the same facts in this pre-release. */
+    /* The way back, from the engine to host memory: the same class and mover in this
+       pre-release, the reason naming the readback where the other names the upload. */
     anira_edge_info back = ANIRA_EDGE_INFO_INIT;
     back.from_engine = ANIRA_ENGINE_CUSTOM;
     back.from_engine_id = "com.example.myengine";
@@ -598,8 +599,8 @@ The plan report says per slot where the edge takes the bytes and who moves them
 (``anira_plan_slot.edge_class`` and ``moved_by``, :doc:`usage` section 1.7), and the contract's
 edge cost drops a plan above its threshold (section 1.3). anira hands a custom engine the
 chunk's buffer itself, so by default its rows follow the provider rule: zero-copy on
-``ANIRA_PROVIDER_CPU`` and XNNPACK; on any other provider the engine moves the slot to its
-device itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory,
+``ANIRA_PROVIDER_CPU`` and XNNPACK; on any other provider the engine moves an input to its
+device and an output back itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory,
 ``ANIRA_EDGE_DEDICATED_TRANSFER`` where it has memory of its own and ``ANIRA_EDGE_UNKNOWN`` where
 no probe established which (the plan row's ``memory_kind``, :doc:`usage` section 1.7 "The
 engines"); every limit of the edge cost refuses an unknown edge. On ``ANIRA_PROVIDER_CUDA`` the
@@ -607,7 +608,8 @@ device asked is CUDA device 0 (a custom engine's provider options are its own vo
 custom provider's name maps to no device, so its rows are ``ANIRA_EDGE_UNKNOWN``. An engine that does something else says so in the
 descriptor's ``edge`` slot (``anira_engine_edge_fn``): anira asks it once per slot right after
 each load, inputs first, on the thread and under the lock of the load, with an
-``anira_engine_edge`` record already filled with the provider rule's edge, and the engine
+``anira_engine_edge`` record already filled with the provider rule's edge for the slot's direction
+(the same class both ways, the reason naming an input's upload or an output's readback), and the engine
 overwrites what differs. The mover follows from the class: whatever moves, the engine's code
 moves it (``ANIRA_MOVER_ENGINE``; ``ANIRA_MOVER_NONE`` on a zero-copy edge). anira copies the
 reason before the call returns.

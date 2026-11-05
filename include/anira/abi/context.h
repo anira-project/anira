@@ -87,12 +87,13 @@ typedef struct anira_backend_id {
  * ANIRA_PROVIDER_CUSTOM beside a provider id), else its domain (from_domain, to_domain).
  * In this pre-release every row has a Host end and a backend end: two rows per backend,
  * from ANIRA_DOMAIN_HOST to the backend (the way an input goes) and from the backend to
- * ANIRA_DOMAIN_HOST (the way an output goes), with the same facts. A row is the
- * provider's edge, by the provider rule, before any model exists: the best a plan on
- * that backend can do. What a plan's engine does with each tensor (an engine that copies
- * its outputs, say) is that plan's anira_plan_slot rows. Tier 2, struct_size first;
- * looked up by its two ends (anira_capabilities_edge) and enumerated at the caller's
- * stride (anira_capabilities_edges).
+ * ANIRA_DOMAIN_HOST (the way an output goes), with the same class, mover and memory kind
+ * and each its direction's reason (an input's upload, an output's readback). A row is
+ * the provider's edge, by the provider rule for its direction, before any model exists:
+ * the best a plan on that backend can do. What a plan's engine does with each tensor (an
+ * engine that copies its outputs, say) is that plan's anira_plan_slot rows. Tier 2,
+ * struct_size first; looked up by its two ends (anira_capabilities_edge) and enumerated
+ * at the caller's stride (anira_capabilities_edges).
  */
 typedef struct anira_edge_info {
     uint32_t struct_size;  /**< sizeof(anira_edge_info) of the caller's header. */
@@ -300,18 +301,20 @@ ANIRA_API anira_status ANIRA_CALL anira_capabilities_ext_kinds(const anira_capab
  * anira_capabilities_backends, in its order, so that rows 2i and 2i + 1 belong to
  * backend i: first the edge from ANIRA_DOMAIN_HOST to the backend (the way an input
  * goes), then the edge from the backend back to ANIRA_DOMAIN_HOST (the way an output
- * goes), with the same facts in this pre-release: zero-copy to and from a provider that
- * runs over host memory; to and from a device provider a move the engine's runtime makes
- * itself, whose class follows the device's memory kind (memory_kind:
- * ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on
- * dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory). The first read of a device
- * provider's rows asks its device's API (the unified-memory probe, run lazily, on a
- * thread of its own, waited for 5 s at most per API, never at the context's creation)
- * and the context keeps the answer; this entry finishes every such row before it counts
- * or copies, so a count and the fill after it read the same rows. Stride-explicit
- * enumeration. The strings the rows point to (from_provider_id, to_provider_id, reason)
- * are the context's: the provider ids valid until its next anira_context_probe replaces
- * them, reason until the context is destroyed.
+ * goes), each by the provider rule for its direction, with the same class, mover and
+ * memory kind in this pre-release and each its direction's reason: zero-copy to and from
+ * a provider that runs over host memory; to and from a device provider a move the
+ * engine's runtime makes itself, whose class follows the device's memory kind
+ * (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
+ * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
+ * memory). The first read of a device provider's rows asks its device's API (the
+ * unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per
+ * API, never at the context's creation) and the context keeps the answer; this entry
+ * finishes every such row before it counts or copies, so a count and the fill after it
+ * read the same rows. Stride-explicit enumeration. The strings the rows point to
+ * (from_provider_id, to_provider_id, reason) are the context's: the provider ids valid
+ * until its next anira_context_probe replaces them, reason until the context is
+ * destroyed.
  * @param capabilities The capabilities.
  * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of out.
  * @param count In: the capacity of out in elements; out: the number of edges.

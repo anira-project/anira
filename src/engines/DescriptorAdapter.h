@@ -94,8 +94,9 @@ public:
     void* engine_loaded() const noexcept override { return m_loaded_pointer; }
 
     /// The engine's own statement per slot, asked once per slot after the load (the
-    /// descriptor's edge, anira_engine_edge_fn), moved by the engine wherever the bytes move;
-    /// the provider rule for a descriptor without one (Loaded::provider_edge).
+    /// descriptor's edge, anira_engine_edge_fn, its record arriving with the provider rule of
+    /// the slot's direction), moved by the engine wherever the bytes move; the provider rule of
+    /// the slot's direction for a descriptor without one (Loaded::provider_edge).
     SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept override;
 
 protected:

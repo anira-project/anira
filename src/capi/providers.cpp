@@ -143,8 +143,10 @@ void set_provider_edge(anira_edge_info& edge,
                        const char* host_reason,
                        const char* device_reason,
                        MemoryKinds& texts) {
+    // The row's direction is its ends': to the backend is the input row, from it the output.
+    const bool is_input = edge.to_engine != static_cast<uint32_t>(ANIRA_ENGINE_NONE);
     const anira::engine::ProviderRule rule =
-        anira::engine::provider_rule(provider, provider_id, memory);
+        anira::engine::provider_rule(is_input, provider, provider_id, memory);
     edge.edge_class = static_cast<uint32_t>(rule.m_class);
     edge.moved_by = rule.m_moved_by;
     edge.memory_kind = static_cast<uint32_t>(memory.m_kind);

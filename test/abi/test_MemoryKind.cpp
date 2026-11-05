@@ -200,44 +200,62 @@ TEST(AbiMemoryKind, AnAnswerBecomesTheKind) {
     EXPECT_STREQ(kept, "a reason");
 }
 
-// The provider rule per memory kind: zero-copy over host memory; on a device, moved by the
-// engine, a unified transfer within unified memory, a dedicated transfer across the bus to
-// dedicated memory, and ANIRA_EDGE_UNKNOWN where the kind is unknown (an NPU's here), the reason
-// naming the kind and what was seen.
-TEST(AbiMemoryKind, TheProviderRuleFollowsTheMemoryKind) {
+// The provider rule per memory kind and direction: zero-copy over host memory both ways; on a
+// device, moved by the engine, a unified transfer within unified memory, a dedicated transfer
+// across the bus to dedicated memory, and ANIRA_EDGE_UNKNOWN where the kind is unknown (an NPU's
+// here), the same class and mover both ways, the reason naming the kind, what was seen and the
+// direction's move: an input's upload, an output's readback (one text for an unknown kind).
+TEST(AbiMemoryKind, TheProviderRuleFollowsTheMemoryKindAndTheDirection) {
     using anira::engine::provider_rule;
-    const anira::engine::ProviderRule host =
-        provider_rule(ANIRA_PROVIDER_CPU, "", DeviceMemory{.m_kind = ANIRA_MEMORY_UNIFIED});
-    EXPECT_EQ(host.m_class, ANIRA_EDGE_ZERO_COPY);
-    EXPECT_EQ(host.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
-    EXPECT_TRUE(host.m_reason.empty());
+    for (const bool is_input : {true, false}) {
+        SCOPED_TRACE(is_input ? "input" : "output");
+        const anira::engine::ProviderRule host =
+            provider_rule(is_input,
+                          ANIRA_PROVIDER_CPU,
+                          "",
+                          DeviceMemory{.m_kind = ANIRA_MEMORY_UNIFIED});
+        EXPECT_EQ(host.m_class, ANIRA_EDGE_ZERO_COPY);
+        EXPECT_EQ(host.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_NONE));
+        EXPECT_TRUE(host.m_reason.empty());
+        const anira::engine::ProviderRule unknown =
+            provider_rule(is_input,
+                          ANIRA_PROVIDER_CUSTOM,
+                          "npu",
+                          DeviceMemory{.m_kind = ANIRA_MEMORY_UNKNOWN, .m_why = "?"});
+        EXPECT_EQ(unknown.m_class, ANIRA_EDGE_UNKNOWN);
+        EXPECT_EQ(unknown.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+        EXPECT_EQ(unknown.m_reason, "memory kind not probed: ?");
+    }
 
-    const anira::engine::ProviderRule unified =
-        provider_rule(ANIRA_PROVIDER_CUDA,
-                      "",
-                      DeviceMemory{.m_kind = ANIRA_MEMORY_UNIFIED, .m_why = "u"});
-    EXPECT_EQ(unified.m_class, ANIRA_EDGE_UNIFIED_TRANSFER);
-    EXPECT_EQ(unified.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
-    EXPECT_EQ(unified.m_reason,
+    const DeviceMemory unified_memory{.m_kind = ANIRA_MEMORY_UNIFIED, .m_why = "u"};
+    const anira::engine::ProviderRule unified_in =
+        provider_rule(true, ANIRA_PROVIDER_CUDA, "", unified_memory);
+    const anira::engine::ProviderRule unified_out =
+        provider_rule(false, ANIRA_PROVIDER_CUDA, "", unified_memory);
+    for (const anira::engine::ProviderRule* rule : {&unified_in, &unified_out}) {
+        EXPECT_EQ(rule->m_class, ANIRA_EDGE_UNIFIED_TRANSFER);
+        EXPECT_EQ(rule->m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    }
+    EXPECT_EQ(unified_in.m_reason,
               "the provider's device computes in the host's memory (u): its runtime hands the "
-              "slot over to the device within that memory, no bus, and the results back, per "
-              "call");
+              "slot over to the device within that memory, no bus, per call");
+    EXPECT_EQ(unified_out.m_reason,
+              "the provider's device computes in the host's memory (u): its runtime hands the "
+              "results back within that memory, no bus, per call");
 
-    const anira::engine::ProviderRule dedicated =
-        provider_rule(ANIRA_PROVIDER_CUDA,
-                      "",
-                      DeviceMemory{.m_kind = ANIRA_MEMORY_DEDICATED, .m_why = "d"});
-    EXPECT_EQ(dedicated.m_class, ANIRA_EDGE_DEDICATED_TRANSFER);
-    EXPECT_EQ(dedicated.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
-    EXPECT_EQ(dedicated.m_reason,
+    const DeviceMemory dedicated_memory{.m_kind = ANIRA_MEMORY_DEDICATED, .m_why = "d"};
+    const anira::engine::ProviderRule dedicated_in =
+        provider_rule(true, ANIRA_PROVIDER_CUDA, "", dedicated_memory);
+    const anira::engine::ProviderRule dedicated_out =
+        provider_rule(false, ANIRA_PROVIDER_CUDA, "", dedicated_memory);
+    for (const anira::engine::ProviderRule* rule : {&dedicated_in, &dedicated_out}) {
+        EXPECT_EQ(rule->m_class, ANIRA_EDGE_DEDICATED_TRANSFER);
+        EXPECT_EQ(rule->m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    }
+    EXPECT_EQ(dedicated_in.m_reason,
               "the provider's device computes in memory of its own (d): its runtime moves the "
-              "slot across the bus and the results back, per call");
-
-    const anira::engine::ProviderRule unknown =
-        provider_rule(ANIRA_PROVIDER_CUSTOM,
-                      "npu",
-                      DeviceMemory{.m_kind = ANIRA_MEMORY_UNKNOWN, .m_why = "?"});
-    EXPECT_EQ(unknown.m_class, ANIRA_EDGE_UNKNOWN);
-    EXPECT_EQ(unknown.m_moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
-    EXPECT_EQ(unknown.m_reason, "memory kind not probed: ?");
+              "slot across the bus to the device, per call");
+    EXPECT_EQ(dedicated_out.m_reason,
+              "the provider's device computes in memory of its own (d): its runtime reads the "
+              "results back across the bus, per call");
 }

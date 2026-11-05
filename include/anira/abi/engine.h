@@ -453,17 +453,18 @@ typedef struct anira_engine_edge {
     uint32_t struct_size;
     /**
      * anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until
-     * it computes on them and back for an output. Arrives as the provider rule's:
-     * ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider
-     * ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory,
-     * ANIRA_EDGE_DEDICATED_TRANSFER where it has its own memory and ANIRA_EDGE_UNKNOWN where no
-     * probe established which (the plan's anira_plan_info.memory_kind). An engine that leaves
-     * it states that.
+     * it computes on them and back for an output. Arrives as the provider rule's for the slot's
+     * direction (the same class both ways): ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and
+     * XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in
+     * unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has its own memory and
+     * ANIRA_EDGE_UNKNOWN where no probe established which (the plan's
+     * anira_plan_info.memory_kind). An engine that leaves it states that.
      */
     uint32_t edge_class;
     /**
-     * Why the edge is what it is; NULL with nothing to say (arrives as the provider rule's).
-     * Copied before the callback returns.
+     * Why the edge is what it is; NULL with nothing to say (arrives as the provider rule's for
+     * the slot's direction: a device provider's names the upload of an input or the readback of
+     * an output). Copied before the callback returns.
      */
     const char* reason;
 } anira_engine_edge;
@@ -487,8 +488,8 @@ typedef struct anira_engine_edge {
  * @param loaded What the load handed back (NULL for a descriptor without a load).
  * @param is_input 1 for an input slot, 0 for an output slot.
  * @param slot The slot: the tensor's position in the model config's input or output list.
- * @param out Arrives filled with the provider rule's edge for the load's provider; the engine
- *        overwrites what differs, within out->struct_size.
+ * @param out Arrives filled with the provider rule's edge for the load's provider in the slot's
+ *        direction (is_input); the engine overwrites what differs, within out->struct_size.
  * @param user_data The descriptor's user_data.
  * @par Thread contract
  * [main-thread]
@@ -604,10 +605,10 @@ typedef struct anira_engine_desc {
     anira_engine_query_fn query;
     /**
      * How the engine passes each slot to its runtime (anira_engine_edge_fn), asked once per
-     * slot after each load; NULL: the provider rule, zero-copy on ANIRA_PROVIDER_CPU and
-     * XNNPACK and a transfer the engine makes itself on every other provider
-     * (anira_pipeline_capabilities_edge). A tail field: a caller whose header ends before it
-     * has no edge statement.
+     * slot after each load; NULL: the provider rule for each slot's direction, zero-copy on
+     * ANIRA_PROVIDER_CPU and XNNPACK and a transfer the engine makes itself on every other
+     * provider, an input's upload or an output's readback (anira_pipeline_capabilities_edge). A
+     * tail field: a caller whose header ends before it has no edge statement.
      */
     anira_engine_edge_fn edge;
 } anira_engine_desc;

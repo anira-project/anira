@@ -2173,6 +2173,7 @@ public:
     /// with.
     mutable std::vector<std::pair<bool, uint32_t>> m_edges_asked;
     mutable std::vector<anira_edge_class> m_rules_seen;
+    mutable std::vector<std::string> m_rule_reasons_seen;  ///< "" for no reason
     PrepareMode m_mode = PrepareMode::Ok;
     ThrowAt m_throw_at = ThrowAt::Prepare;
     std::atomic<int> m_released{0};
@@ -2191,6 +2192,8 @@ anira::EngineEdge CountingLoaded::edge(bool is_input,
                                        const anira::EngineEdge& provider_rule) const {
     m_engine->m_edges_asked.emplace_back(is_input, slot);
     m_engine->m_rules_seen.push_back(provider_rule.edge_class);
+    m_engine->m_rule_reasons_seen.emplace_back(
+        provider_rule.reason != nullptr ? provider_rule.reason : "");
     if (is_input || !m_engine->m_output_edge.has_value()) { return provider_rule; }
     return {.edge_class = *m_engine->m_output_edge,
             .reason = "org.example.cxx: copies its outputs"};
@@ -2251,6 +2254,54 @@ TEST(AbiCxx, AnEngineStatesItsEdges) {
                           "(org.example.cxx: copies its outputs)"),
               nullptr)
         << handler.m_err.message;
+}
+
+// On a device provider (CUDA of a fake machine, memory of its own) Engine::Loaded::edge is asked
+// with the provider rule of each slot's direction: the same class and mover, the input's reason
+// the upload, the output's the readback. The base keeps the rule, so the plan's slot rows read
+// the same per direction.
+TEST(AbiCxx, AnEngineIsAskedWithTheRuleOfEachSlotsDirection) {
+    anira_test::FakeMachine machine;
+    machine.set(
+        anira::platform::DeviceApi::Cuda,
+        anira_test::fake_devices({anira_test::fake_device("Fake RTX", ANIRA_MEMORY_DEDICATED)}));
+    const anira_test::Context context;
+    auto engine = std::make_shared<CountingEngine>();
+    engine->m_providers = {"cuda"};
+    anira::Pipeline pipe;
+    pipe.add_engine(engine);
+    pipe.add_inference(engine_stream_model(),
+                       {anira::BackendId{.struct_size = sizeof(anira::BackendId),
+                                         .engine = ANIRA_ENGINE_CUSTOM,
+                                         .provider = ANIRA_PROVIDER_CUDA,
+                                         .engine_id = k_cxx_engine_id,
+                                         .provider_id = nullptr}});
+    CHandler handler(context, pipe);
+    ASSERT_EQ(handler.m_status, ANIRA_OK) << handler.m_err.message;
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const std::string device =
+        "the provider's device computes in memory of its own (CUDA device "
+        "0 'Fake RTX': fake): its runtime ";
+    const std::string upload = device + "moves the slot across the bus to the device, per call";
+    const std::string readback = device + "reads the results back across the bus, per call";
+    EXPECT_EQ(engine->m_edges_asked,
+              (std::vector<std::pair<bool, uint32_t>>{{true, 0}, {false, 0}}));
+    EXPECT_EQ(engine->m_rules_seen,
+              (std::vector<anira_edge_class>{ANIRA_EDGE_DEDICATED_TRANSFER,
+                                             ANIRA_EDGE_DEDICATED_TRANSFER}));
+    EXPECT_EQ(engine->m_rule_reasons_seen, (std::vector<std::string>{upload, readback}));
+    const anira::PlanReport report(anira_handler_plan_report(handler.m_handler));
+    const std::vector<anira_plan_slot> inputs = report.slots(0, true);
+    const std::vector<anira_plan_slot> outputs = report.slots(0, false);
+    ASSERT_EQ(inputs.size(), 1U);
+    ASSERT_EQ(outputs.size(), 1U);
+    for (const anira_plan_slot* row : {&inputs[0], &outputs[0]}) {
+        EXPECT_EQ(row->edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
+        EXPECT_EQ(row->moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+        ASSERT_NE(row->reason, nullptr);
+    }
+    EXPECT_EQ(inputs[0].reason, upload);
+    EXPECT_EQ(outputs[0].reason, readback);
 }
 
 // An Engine subclass end to end through a C-created handler: add_engine hands the
@@ -2667,6 +2718,9 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     EXPECT_EQ(coreml_back.to_engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
     EXPECT_EQ(coreml_back.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
     EXPECT_EQ(coreml_back.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    ASSERT_NE(coreml_back.reason, nullptr);
+    EXPECT_NE(std::strstr(coreml_back.reason, "reads the results back across the bus"), nullptr)
+        << "the readback: " << coreml_back.reason;
     EXPECT_EQ(caps.edge(on_cpu, ANIRA_DOMAIN_HOST).edge_class,
               static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
     // A built-in backend through the context's Capabilities, both overloads.

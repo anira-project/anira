@@ -1038,7 +1038,12 @@ and the provider's runtime moves it to the device and reads the results back its
 (``ANIRA_MOVER_ENGINE``): within the one memory on a unified-memory device, no bus but a
 hand-over between the processors (``ANIRA_EDGE_UNIFIED_TRANSFER``), across the bus to a
 dedicated one (``ANIRA_EDGE_DEDICATED_TRANSFER``), unclassified where no probe answered
-(``ANIRA_EDGE_UNKNOWN``, which any limit refuses). That move is the runtime's and cannot be
+(``ANIRA_EDGE_UNKNOWN``, which any limit refuses). The rule is per direction: an input slot is
+the runtime's upload, an output slot its readback, the same class and mover both ways in this
+pre-release and each its own reason ("moves the slot across the bus to the device" against "reads
+the results back across the bus", "hands the slot over to the device within that memory" against
+"hands the results back within that memory"); so are a backend's two capability rows, the one
+from the host and the one back (section 3.1). That move is the runtime's and cannot be
 avoided while a chunk lives in host memory; a contract that admits no bus traffic says so with
 ``edge_cost(ANIRA_EDGE_UNIFIED_TRANSFER)`` (section 1.3), which keeps the host plans and those on
 unified-memory devices, and one that admits no crossing at all with

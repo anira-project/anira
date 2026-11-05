@@ -170,8 +170,9 @@ void DescriptorLoaded::load_engine(const Model& model) {
 
 void DescriptorLoaded::state_edges(const Model& model) {
     const anira_engine_desc& desc = m_carrier->desc();
-    const SlotEdge rule = provider_edge();
     const auto ask = [&](bool is_input, uint32_t slot) {
+        // The record arrives filled with the provider rule of the slot's direction.
+        const SlotEdge rule = provider_edge(is_input);
         anira_engine_edge edge = ANIRA_ENGINE_EDGE_INIT;
         edge.edge_class = static_cast<uint32_t>(rule.m_class);
         edge.reason = rule.m_reason;
@@ -205,7 +206,7 @@ void DescriptorLoaded::state_edges(const Model& model) {
 
 Loaded::SlotEdge DescriptorLoaded::slot_edge(bool is_input, uint32_t slot) const noexcept {
     const std::vector<Stated>& edges = is_input ? m_input_edges : m_output_edges;
-    if (slot >= edges.size()) { return provider_edge(); }
+    if (slot >= edges.size()) { return provider_edge(is_input); }
     const Stated& stated = edges[slot];
     return SlotEdge{.m_class = stated.m_class,
                     .m_moved_by = stated.m_class == ANIRA_EDGE_ZERO_COPY

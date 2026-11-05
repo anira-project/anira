@@ -90,23 +90,29 @@ struct DeviceMemory {
 bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// The provider rule: the edge of a slot an engine binds in place on `provider`, whose device
-/// computes in `memory`. The one rule of the plan rows (Loaded::provider_edge) and of the
-/// capability rows (the context's and a pipeline's, capi::set_provider_edge):
+/// computes in `memory`, in one direction: an input (`is_input`), which the provider's runtime
+/// takes from host memory to its device, or an output, whose results it brings back to host
+/// memory. The one rule of the plan rows (Loaded::provider_edge, per slot's direction) and of
+/// the capability rows (the context's and a pipeline's, capi::set_provider_edge, per row's
+/// direction):
 /// - a provider that runs over host memory (host_memory_provider): ANIRA_EDGE_ZERO_COPY, moved
-///   by nobody, no reason;
+///   by nobody, no reason, both ways;
 /// - a device provider: moved by the engine (ANIRA_MOVER_ENGINE), its runtime moving the slot
-///   to the device and back itself, per call; ANIRA_EDGE_UNIFIED_TRANSFER on a device of
-///   unified memory (a copy and a hand-over between the processors, no bus),
-///   ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one (across the bus), and ANIRA_EDGE_UNKNOWN on
-///   one whose memory kind no probe established ("memory kind not probed: <why>"), a class
-///   outside the cost scale that every limit of the edge cost refuses. The reason names the kind
-///   and what the probe saw.
+///   itself, per call; ANIRA_EDGE_UNIFIED_TRANSFER on a device of unified memory (a copy and a
+///   hand-over between the processors, no bus), ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one
+///   (across the bus), and ANIRA_EDGE_UNKNOWN on one whose memory kind no probe established
+///   ("memory kind not probed: <why>"), a class outside the cost scale that every limit of the
+///   edge cost refuses. The class and the mover are the same both ways; the reason names the
+///   kind, what the probe saw and the direction's move: the upload of an input (the slot handed
+///   over to the device within unified memory, moved across the bus to dedicated memory), the
+///   readback of an output (the results handed back, read back across the bus).
 struct ProviderRule {
     anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
     uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
     std::string m_reason;                    ///< empty on a host-memory provider
 };
-ProviderRule provider_rule(anira_provider provider,
+ProviderRule provider_rule(bool is_input,
+                           anira_provider provider,
                            std::string_view provider_id,
                            const DeviceMemory& memory);
 
@@ -396,30 +402,31 @@ public:
     /// the buffer in place on a provider that runs over host memory; ANIRA_EDGE_COPY where
     /// the slot is copied inside host memory, by the adapter (ANIRA_MOVER_ANIRA, a copy the
     /// executor counts) or by the runtime's own API (ANIRA_MOVER_ENGINE);
-    /// ANIRA_EDGE_DEDICATED_TRANSFER, ANIRA_MOVER_ENGINE, where a device provider's runtime uploads
-    /// the slot and reads the results back itself (host_memory_provider). The movers are bits: a
-    /// slot both the adapter and the runtime move carries both, under the class of the worse move,
-    /// so the slots with the ANIRA_MOVER_ANIRA bit are exactly the copies the executor counts per
-    /// call. By default the slot is bound in place (a registered engine is handed the buffer
-    /// itself), so the edge follows the record's provider.
+    /// the class of its device's memory kind, ANIRA_MOVER_ENGINE, where a device provider's
+    /// runtime uploads an input slot or reads an output slot back itself (host_memory_provider).
+    /// The movers are bits: a slot both the adapter and the runtime move carries both, under the
+    /// class of the worse move, so the slots with the ANIRA_MOVER_ANIRA bit are exactly the copies
+    /// the executor counts per call. By default the slot is bound in place (a registered engine
+    /// is handed the buffer itself), so the edge follows the record's provider in the slot's
+    /// direction (provider_edge).
     struct SlotEdge {
         anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
         uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
         const char* m_reason = nullptr;          ///< why; static storage, NULL with nothing to say
     };
     virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
-        static_cast<void>(is_input);
         static_cast<void>(slot);
-        return provider_edge();
+        return provider_edge(is_input);
     }
-    /// The edge of a slot bound in place on the record's provider, the provider rule
-    /// (provider_rule) over the record's device memory, kept from the load: zero-copy where it
-    /// runs over host memory, else moved by the engine, the provider's runtime moving the slot to
-    /// its device and back itself: ANIRA_EDGE_UNIFIED_TRANSFER on a unified-memory device,
-    /// ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one, ANIRA_EDGE_UNKNOWN on one whose memory
-    /// kind is unknown.
-    /// The reason lives as long as this Loaded.
-    SlotEdge provider_edge() const noexcept;
+    /// The edge of a slot bound in place on the record's provider in one direction (`is_input`:
+    /// an input, else an output), the provider rule (provider_rule) for that direction over the
+    /// record's device memory, both directions' kept from the load (no allocation per call):
+    /// zero-copy where it runs over host memory, else moved by the engine, the provider's runtime
+    /// uploading the input or reading the output back itself: ANIRA_EDGE_UNIFIED_TRANSFER on a
+    /// unified-memory device, ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one,
+    /// ANIRA_EDGE_UNKNOWN on one whose memory kind is unknown; the reason names the direction's
+    /// move. The reason lives as long as this Loaded.
+    SlotEdge provider_edge(bool is_input) const noexcept;
 
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
@@ -500,7 +507,8 @@ private:
 
     Model m_model;
     Bindings m_bindings;
-    ProviderRule m_provider_rule;           ///< the record's provider rule, from load on
+    ProviderRule m_input_rule;   ///< the record's provider rule for an input, from load on
+    ProviderRule m_output_rule;  ///< and for an output
     std::vector<std::atomic<bool>> m_busy;  ///< one busy flag per shared slot, sized at load
     uint32_t m_num_instances = 0;           ///< the shared slots; 0 before load
     bool m_loaded = false;

@@ -119,8 +119,9 @@ extern "C" {
  * accelerator), the class the memory kind of its device gives
  * (anira_plan_info.memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
  * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
- * memory, the reason saying which and what the probe saw), the class and mover the
- * capability rows give that edge.
+ * memory, the reason saying which, what the probe saw and the slot's move: an input's
+ * upload, an output's readback), the class, mover and reason the capability row of the
+ * slot's direction gives that edge.
  */
 typedef struct anira_plan_slot {
     uint32_t struct_size;  /**< sizeof(anira_plan_slot) of the caller's header. */
@@ -568,8 +569,9 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
  * (anira_capabilities_edge); where one does, the pipeline's rows of its custom engines:
  * for a custom engine added to the pipeline, on a provider usable here (its query runs,
  * as anira_pipeline_capabilities_backends runs it), the edge from ANIRA_DOMAIN_HOST to
- * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, with the same
- * facts: zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
+ * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, each by the
+ * provider rule for its direction (the same class and mover, each its direction's
+ * reason): zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
  * memory reaches without a copy; to and from every other provider a move the engine
  * makes itself (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the
  * provider's device as the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER

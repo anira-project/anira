@@ -622,7 +622,8 @@ void expect_same_row(const anira_edge_info& found, const anira_edge_info& listed
 // runtime reports usable here (the CPU path first, then the runtime's list, the adapters' own
 // query being the oracle), a custom provider carried by its name beside ANIRA_PROVIDER_CUSTOM;
 // the host domain; the registered extension kinds; two edge rows per backend row, from the
-// host domain to the backend and back with equal facts, zero-copy to and from a CPU provider
+// host domain to the backend and back with the same class and mover (a device's reason names
+// each direction's move), zero-copy to and from a CPU provider
 // and to and from a device one the engine's move whose class is the memory kind's (whatever
 // this machine's devices answer), found by both ends in either direction (a custom provider by
 // its name); a probe asks the runtimes again and answers the same. The enumeration convention
@@ -694,7 +695,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     EXPECT_TRUE(has_entry);
 
     // Two edge rows per backend row, in row order: edges[2i] from the host domain to
-    // backends[i], edges[2i + 1] from backends[i] back, with equal facts.
+    // backends[i], edges[2i + 1] from backends[i] back, each by the provider rule for its
+    // direction.
     count = 0;
     EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, nullptr), ANIRA_OK);
     EXPECT_EQ(count, 2 * backends.size()) << "two edge rows per backend row";
@@ -733,7 +735,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(output.to_provider, k_no_provider);
         EXPECT_EQ(output.to_engine_id, nullptr);
         EXPECT_EQ(output.to_provider_id, nullptr);
-        // The facts: the provider's edge, the same both ways.
+        // The facts: the provider's edge, the same class and mover both ways.
         const bool cpu = backends[i].provider_id == nullptr &&
                          (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_CPU) ||
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
@@ -757,7 +759,13 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
         EXPECT_EQ(output.moved_by, input.moved_by);
         EXPECT_EQ(output.memory_kind, input.memory_kind);
         EXPECT_EQ(output.rung, input.rung);
-        EXPECT_EQ(output.reason, input.reason) << "one kept reason for both rows";
+        ASSERT_NE(output.reason, nullptr);
+        if (cpu || input.memory_kind == ANIRA_MEMORY_UNKNOWN) {
+            EXPECT_EQ(output.reason, input.reason) << "one reason for both rows";
+        } else {
+            EXPECT_STRNE(output.reason, input.reason)
+                << "a device's input row names the upload, its output row the readback";
+        }
     }
 
     // The lookup by both ends, in either direction: each listed row whole, a custom provider by
