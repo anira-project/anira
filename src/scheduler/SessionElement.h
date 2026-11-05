@@ -613,12 +613,12 @@ public:
     std::atomic<uint64_t> m_stateful_dispatch_gate{0};  ///< {epoch, busy} dispatch gate; busy while
                                                         ///< a stateful task of this session is
                                                         ///< queued or running
-    // Pre-sized in the constructor to m_num_instances — a pending
-    // entry is always a distinct ThreadSafeStruct, so the depth is bounded —
-    // and fed exclusively through m_dispatch_producer_token, so enqueues never
-    // allocate: neither on the audio thread (real-time safety) nor, on
-    // WebAssembly, from a non-main WASM instance (which must not touch the
-    // shared allocator).
+    // Built with no blocks and reserved at prepare for the struct pool
+    // (reserve_pending_dispatch) — a pending entry is always a distinct
+    // ThreadSafeStruct, so the depth is at most m_num_structs — and fed exclusively
+    // through m_dispatch_producer_token, so enqueues never allocate: neither on the
+    // audio thread (real-time safety) nor, on WebAssembly, from a non-main WASM
+    // instance (which must not touch the shared allocator).
     moodycamel::ConcurrentQueue<std::shared_ptr<ThreadSafeStruct>>
         m_dispatch_pending;  ///< Prepared-but-not-yet-dispatched stateful
                              ///< tasks, in submission order
@@ -629,8 +629,18 @@ public:
 
     /** @brief Queue a prepared stateful task awaiting dispatch (called in submission order on the
      * session's driving thread; allocation-free). If the pending queue rejects the task — which
-     * the capacity bound makes unreachable — it is completed with zeroed output instead. */
+     * the reservation for the struct pool makes unreachable — it is completed with zeroed output
+     * instead. */
     void enqueue_pending_dispatch(std::shared_ptr<ThreadSafeStruct> thread_safe_struct);
+    /** @brief prepare's step for an exclusive session, after force_reset_dispatch_chain(): gives
+     * m_dispatch_producer_token the blocks for every struct of the pool at once (one allocating
+     * enqueue_bulk of placeholders, QueueCapacity.h), then takes the placeholders back. Holds
+     * the gate meanwhile: the gate holder is the pending queue's only consumer, so no laggard
+     * worker pops a placeholder (an empty struct pointer) or reuses a block before the ring holds
+     * them all. Blocking (waits out a transient gate holder in 50us steps) and allocating —
+     * control thread only.
+     * @throws std::bad_alloc when the blocks cannot be allocated */
+    void reserve_pending_dispatch() ANIRA_BLOCKING;
     /** @brief Claim the next stateful task to dispatch, or nullptr if one is already in flight or
      * none are pending. Pending entries whose dispatch generation is stale (a wait-free reset
      * bumped m_generation after they were prepared) are returned straight to the free pool and

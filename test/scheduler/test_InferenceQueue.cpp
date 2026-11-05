@@ -449,3 +449,76 @@ TEST(InferenceQueue, AReservationHoldsWhileThePoolTakesThePlaceholders) {
     EXPECT_EQ(anira_test::count_records(collector, "Could not enqueue", "rt"), 0U);
 #endif
 }
+
+// ---- the pending queue of an exclusive session (#199)
+// --------------------------------------------
+
+namespace {
+
+/// Waits until the engine ran `count` inferences, at most 20 s.
+void wait_for_calls(const anira_test::GateEngine& engine, int count) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (engine.m_calls.load() < count && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+}
+
+}  // namespace
+
+// An exclusive session parks every chunk of a call in its pending queue until the dispatch gate
+// lets one go. The queue was sized for the session's instance count (one), so it held 33 to 64
+// entries and completed every chunk beyond them as zeros. Reserved for the struct pool, it holds
+// the 128 chunks of a call of 8192 samples at hop 64, after a re-prepare mid-stream as well, and
+// a whole file of 200 hops of 2048 in one call: every chunk reaches the engine.
+TEST(InferenceQueue, AStatefulSessionParksEveryChunkOfALargeCall) {
+    anira_test::RecordCollector collector;
+    anira_test::GateEngine engine;
+    const anira_test::Context context(2);
+    {
+        anira_test::Handler handler(context,
+                                    hop_model(64, 1, /*stateful=*/true),
+                                    {},
+                                    {},
+                                    engine.engine());
+        const anira_test::DestroyFirst destroy_first(handler, &engine);
+        constexpr uint32_t k_host_block = 8192;
+        constexpr int k_hops_per_call = static_cast<int>(k_host_block / 64);
+        for (int round = 0; round < 2; ++round) {
+            ASSERT_EQ(handler.prepare(anira_test::explicit_contract(k_host_block,
+                                                                    anira_test::k_rate,
+                                                                    ANIRA_MISS_ZEROS,
+                                                                    0.0,
+                                                                    /*budget_ms=*/0.5)),
+                      ANIRA_OK)
+                << handler.m_err.message;
+            const int before = engine.m_calls.load();
+            for (int call = 0; call < 4; ++call) {
+                static_cast<void>(process_block(handler.m_handler, k_host_block));
+                const int expected = before + ((call + 1) * k_hops_per_call);
+                wait_for_calls(engine, expected);
+                ASSERT_EQ(engine.m_calls.load(), expected)
+                    << "round " << round << ", call " << call << ": a parked chunk was dropped";
+            }
+        }
+    }
+    {
+        anira_test::GateEngine file_engine;
+        anira_test::Handler handler(context,
+                                    hop_model(2048, 1, /*stateful=*/true),
+                                    {},
+                                    {},
+                                    file_engine.engine());
+        const anira_test::DestroyFirst destroy_first(handler, &file_engine);
+        constexpr uint32_t k_file = 200 * 2048;
+        ASSERT_EQ(handler.prepare(anira_test::explicit_contract(k_file, anira_test::k_rate)),
+                  ANIRA_OK)
+            << handler.m_err.message;
+        static_cast<void>(process_block(handler.m_handler, k_file));
+        wait_for_calls(file_engine, 200);
+        EXPECT_EQ(file_engine.m_calls.load(), 200) << "a whole-file call dropped chunks";
+    }
+    anira_drain_log();
+#ifdef ENABLE_LOGGING
+    EXPECT_EQ(anira_test::count_records(collector, "Could not enqueue pending", "rt"), 0U);
+#endif
+}
