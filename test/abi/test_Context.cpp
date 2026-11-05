@@ -845,8 +845,8 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
 
     // A probe asks the runtimes again and answers the same rows.
     anira_error err = ANIRA_ERROR_INIT;
-    EXPECT_EQ(anira_context_probe(context, 1U, &err), ANIRA_OK) << err.message;
-    EXPECT_EQ(anira_context_probe(nullptr, 0U, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_context_probe(context, &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(anira_context_probe(nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     count = 0;
     EXPECT_EQ(anira_capabilities_backends(caps, sizeof(anira_backend_id), &count, nullptr),
               ANIRA_OK);

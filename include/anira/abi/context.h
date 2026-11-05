@@ -210,14 +210,13 @@ ANIRA_API anira_status ANIRA_CALL anira_context_create(const anira_context_confi
 ANIRA_API void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NOEXCEPT;
 
 /**
- * @brief Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
- * engines on the providers their runtimes report usable now
+ * @brief Re-runs the probe in full and refreshes the capabilities the handle reports: the
+ * compiled-in engines on the providers their runtimes report usable now, asked anew
  * (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges),
  * the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten
  * too: the next row or prepare that needs a device provider's kind asks its device's API
- * again. Nothing else is cached in this pre-release, so force changes nothing.
+ * again. Nothing else is cached, so every probe is a full one.
  * @param context The handle.
- * @param force Nonzero re-runs every rung even where a cached answer exists.
  * @param err Nullable.
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context.
  * @par Thread contract
@@ -225,7 +224,6 @@ ANIRA_API void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NO
  * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_context_probe(anira_context* context,
-                                                      anira_bool force,
                                                       anira_error* err) ANIRA_NOEXCEPT;
 
 /**

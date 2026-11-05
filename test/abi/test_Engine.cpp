@@ -1768,7 +1768,7 @@ TEST(AbiEngine, TheMemoryKindIsAskedLazilyAndKeptByTheContext) {
         << "the prepare reads the kept one";
     anira_handler_destroy(handler);
 
-    ASSERT_EQ(anira_context_probe(context.m_context, 0, &err), ANIRA_OK) << err.message;
+    ASSERT_EQ(anira_context_probe(context.m_context, &err), ANIRA_OK) << err.message;
     EXPECT_EQ(machine.probes(anira::platform::DeviceApi::Cuda), 1) << "the probe asks nothing yet";
     EXPECT_EQ(edge(ANIRA_PROVIDER_CUDA, true).memory_kind,
               static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));

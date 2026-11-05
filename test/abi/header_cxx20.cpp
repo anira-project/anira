@@ -767,7 +767,7 @@ int anira_header_cxx20_probe() {
         checks += report_rows > 0 ? 1 : 0;
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
         const anira_edge_info back = capabilities.edge(first, ANIRA_DOMAIN_HOST);
-        running.probe(true);
+        running.probe();
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
                                  capabilities.edges().size() + anira::enabled_engines().size() +
                                  anira::drain_log();

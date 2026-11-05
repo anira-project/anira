@@ -2128,10 +2128,11 @@ public:
     Capabilities capabilities() const {
         return Capabilities(anira_context_capabilities(m_context));
     }
-    /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
-    void probe(bool force = false) {
+    /// Re-runs the probe in full: the runtimes are asked anew and the memory kinds the context
+    /// kept are forgotten (anira_context_probe).
+    void probe() {
         anira_error err{};
-        detail::check(anira_context_probe(m_context, force ? 1U : 0U, &err), err);
+        detail::check(anira_context_probe(m_context, &err), err);
     }
     /// The size of a tensor's byte image under the edges this context probed.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {

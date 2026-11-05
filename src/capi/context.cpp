@@ -266,11 +266,10 @@ void ANIRA_CALL anira_context_destroy(anira_context* context) ANIRA_NOEXCEPT try
     anira::capi::context_release(context);
 } catch (...) { anira::capi::report_void_failure(__func__); }
 
-anira_status ANIRA_CALL anira_context_probe(anira_context* context,
-                                            anira_bool force,
-                                            anira_error* err) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_context_probe(anira_context* context, anira_error* err) ANIRA_NOEXCEPT
+    try {
     ANIRA_CAPI_REQUIRE(context != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "context: NULL");
-    static_cast<void>(force);  // every probe asks the runtimes and forgets the memory kinds
+    // A full probe every time: the runtimes are asked anew and the memory kinds forgotten.
     probe(context->m_capabilities, context->m_config);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }

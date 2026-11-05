@@ -156,7 +156,7 @@ export interface AbiModule {
   _anira_context_config_log(_0: number, _1: number): number
   _anira_context_create(_0: number, _1: number, _2: number): number
   _anira_context_destroy(_0: number): void
-  _anira_context_probe(_0: number, _1: number, _2: number): number
+  _anira_context_probe(_0: number, _1: number): number
   _anira_context_capabilities(_0: number): number
   _anira_capabilities_backends(_0: number, _1: number, _2: number, _3: number): number
   _anira_capabilities_domains(_0: number, _1: number, _2: number): number
@@ -4138,27 +4138,26 @@ export class AniraBindings {
   }
 
   /**
-   * Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
-   * engines on the providers their runtimes report usable now
+   * Re-runs the probe in full and refreshes the capabilities the handle reports: the
+   * compiled-in engines on the providers their runtimes report usable now, asked anew
    * (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges),
    * the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten
    * too: the next row or prepare that needs a device provider's kind asks its device's
-   * API again. Nothing else is cached in this pre-release, so force changes nothing.
+   * API again. Nothing else is cached, so every probe is a full one.
    *
    * @param context The handle.
-   * @param force Nonzero re-runs every rung even where a cached answer exists.
    * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context. A failed
    *   status throws an AniraError with the entry's message.
    * Thread: [main-thread]
    */
-  anira_context_probe(context: number, force: boolean): number {
+  anira_context_probe(context: number): number {
     const m = this.module
     const sp = m.stackSave()
     try {
       const err = stackError(m)
       return checkStatus(
         m,
-        m._anira_context_probe(context, force ? 1 : 0, err),
+        m._anira_context_probe(context, err),
         'anira_context_probe',
         err
       )

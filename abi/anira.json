@@ -6959,11 +6959,6 @@
               "doc": "The handle."
             },
             {
-              "type": "anira_bool",
-              "name": "force",
-              "doc": "Nonzero re-runs every rung even where a cached answer exists."
-            },
-            {
               "type": "anira_error*",
               "name": "err",
               "doc": "Nullable."
@@ -6972,7 +6967,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in engines on the providers their runtimes report usable now (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges), the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or prepare that needs a device provider's kind asks its device's API again. Nothing else is cached in this pre-release, so force changes nothing.",
+          "doc": "Re-runs the probe in full and refreshes the capabilities the handle reports: the compiled-in engines on the providers their runtimes report usable now, asked anew (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges), the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or prepare that needs a device provider's kind asks its device's API again. Nothing else is cached, so every probe is a full one.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context."
         },
         {
