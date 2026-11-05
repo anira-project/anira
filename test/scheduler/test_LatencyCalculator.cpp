@@ -388,6 +388,66 @@ TEST(LatencyCalculatorClosedForm, LatencyIsUniformInHopsAcrossOutputs) {
     EXPECT_GE(hops, 31.0 / 32.0);
 }
 
+// Issue #235: only Streamed outputs are synchronized. A non-streamed output (a Static value, the
+// output half of a State pair: hop 0) has nothing to align, so beside one Streamed output it must
+// not round that output's latency up to whole hops; the result keeps one entry per output.
+TEST(LatencyCalculatorSync, OnlyStreamedOutputsAreSynchronized) {
+    using Latencies = std::vector<unsigned int>;
+    EXPECT_EQ(LatencyCalculator::sync_latencies({2560, 0}, {2048, 0}), (Latencies{2560, 0}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({0, 2560}, {0, 2048}), (Latencies{0, 2560}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({0, 2560, 0}, {0, 2048, 0}),
+              (Latencies{0, 2560, 0}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({2560}, {2048}), (Latencies{2560}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({0, 0}, {0, 0}), (Latencies{0, 0}));
+    EXPECT_EQ(LatencyCalculator::sync_latencies({}, {}), Latencies{});
+    // Two Streamed outputs still meet at a whole number of hops, a State output beside them
+    // at 0: ceil(max(2560 / 2048, 3 / 3)) = 2 hops.
+    EXPECT_EQ(LatencyCalculator::sync_latencies({2560, 3, 0}, {2048, 3, 0}),
+              (Latencies{4096, 6, 0}));
+}
+
+// The workshop's stateful model (#235): hop 2048 under host blocks of 512 at 44.1 kHz with a
+// 20 ms budget is Lambda = 3/4 + 2/4 = 1.25 hops = 2560 samples; its State output must not
+// round that to 2 hops (4096). The internal latency of 2224 makes the reported 4784, not 6320
+// (test_SessionElement's AStateOutputBesideOneStreamedOutputKeepsItsLatency).
+TEST(LatencyCalculatorClosedForm, AStateOutputDoesNotRoundTheStreamedLatency) {
+    capi::HardContract const host = hard_contract(512.0, 44100.0, 20.0, 0.0);
+    LatencyCalculator const stateful(streams({2048}, {2048, 0}), host, 1);
+    EXPECT_DOUBLE_EQ(stateful.get_latency_hops(), 1.25);
+    EXPECT_EQ(stateful.get_synced_output_latencies(), (std::vector<unsigned int>{2560, 0}));
+    LatencyCalculator const state_first(streams({2048}, {0, 2048}), host, 1);
+    EXPECT_EQ(state_first.get_synced_output_latencies(), (std::vector<unsigned int>{0, 2560}));
+    // Two Streamed outputs at the same budget are still synchronized to whole hops.
+    LatencyCalculator const two_streams(streams({2048}, {2048, 2048, 0}), host, 1);
+    EXPECT_EQ(two_streams.get_synced_output_latencies(),
+              (std::vector<unsigned int>{4096, 4096, 0}));
+}
+
+// The closed form against the event simulation with a non-streamed output beside the Streamed
+// one: the simulation never aligns anything, so wherever Lambda is not a whole number of hops
+// a synchronization triggered by the second output would show here.
+TEST(LatencyCalculatorClosedForm, EqualsTheEventSimulationBesideAStateOutput) {
+    size_t checked = 0;
+    size_t fractional = 0;
+    for (OracleCase c : oracle_cases()) {
+        c.m_output_sizes.push_back(0);
+        capi::Derived const derived = make_derived(c);
+        LatencyCalculator const calculator(derived, make_hard(c), c.m_n);
+        if (!calculator.is_feasible()) { continue; }
+        OracleResult const oracle = simulate(c);
+        ASSERT_EQ(oracle.m_latency.size(), 2u);
+        EXPECT_EQ(oracle.m_latency[1], 0u);
+        EXPECT_EQ(calculator.get_synced_output_latencies(), oracle.m_latency)
+            << "block " << c.m_p << "/" << c.m_q << " hops, R " << c.m_reference << ", inference "
+            << c.m_inference_samples << " samples, beta " << c.m_beta_quarters << "/4, n " << c.m_n
+            << ", output " << c.m_output_sizes[0];
+        if (oracle.m_latency[0] % c.m_output_sizes[0] != 0) { ++fractional; }
+        ++checked;
+    }
+    EXPECT_GT(checked, 500u);
+    EXPECT_GT(fractional, 100u) << "the cases must include latencies of a fractional hop count";
+}
+
 TEST(LatencyCalculatorClosedForm, RejectsEmptyHostBlocks) {
     capi::Derived const derived = streams({2048}, {2048});
     EXPECT_THROW(LatencyCalculator(derived, capi::HardContract{}, 2), std::invalid_argument);

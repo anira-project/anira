@@ -90,7 +90,10 @@ std::vector<unsigned int> LatencyCalculator::sync_latencies(
     const std::vector<size_t>& output_sizes) {
     std::vector<unsigned int> result;
     result.reserve(latencies.size());
-    if (latencies.size() > 1) {
+    // Only streamed outputs have anything to align: a non-streamed one (a Static value, the
+    // output half of a State pair) never reaches a stream and reports 0.
+    const auto streamed = std::ranges::count_if(output_sizes, [](size_t size) { return size > 0; });
+    if (streamed > 1) {
         double ratio = 0.0;
         for (size_t i = 0; i < latencies.size(); ++i) {
             if (output_sizes[i] > 0) {
@@ -103,8 +106,10 @@ std::vector<unsigned int> LatencyCalculator::sync_latencies(
         for (size_t const output_size : output_sizes) {
             result.push_back(output_size > 0 ? hops * static_cast<unsigned int>(output_size) : 0U);
         }
-    } else if (!latencies.empty()) {
-        result.push_back(output_sizes[0] > 0 ? latencies[0] : 0U);
+    } else {
+        for (size_t i = 0; i < latencies.size(); ++i) {
+            result.push_back(output_sizes[i] > 0 ? latencies[i] : 0U);
+        }
     }
     return result;
 }

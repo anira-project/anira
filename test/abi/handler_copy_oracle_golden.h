@@ -52,6 +52,21 @@
 // the 2.x copy face (InferenceManager over the twin configs) and requires the same transcript.
 // test/scheduler/copy_path_oracle_golden.h, the 2.x golden, was not touched.
 //
+// Recorded again with Fares' authorisation (2026-11-05) for #235: a non-streamed output no longer
+// rounds the latency of the stream up to whole hops (LatencyCalculator::sync_latencies counts
+// the Streamed outputs alone). Four transcripts changed, k_handler_multi_zeros, _hold_last,
+// _bypass and k_handler_waiting_twins, whose model has a Streamed and a Static output under host
+// blocks of 1 to 8 samples of a hop of 8: the inference queue of 15/8 hops is no longer rounded
+// to 2 by the Static output. Their prepare line says latency=[15,0] and recv_capacity=[47,0] (16
+// and 48 before), every receive ring holds one sample less and every output sample arrives one
+// position earlier. One call each follows from that: where the gate stays closed, the ring holds
+// 7 samples after the last delivered block instead of 0, so the starvation sets in one call
+// earlier (k_handler_multi_*: #18 process_f32_multi, k_handler_waiting_twins: #12
+// pop_data_f32_wait) and is MISSED with the policy's fill where it delivered the last 8 samples;
+// the next call, a miss in the previous recording too, discards the 7 as late samples, so the
+// misses that follow leave the rings as they did before. Every other call's outcome is the
+// recording of the previous file.
+//
 // Reading a transcript. The first line is what prepare left: the latencies, the ring
 // capacities, the inference structs, the samples waiting per channel in every send and receive
 // ring ("-" for a Static slot, which has no ring). A call is "#<n> <entry> <arguments>
@@ -602,80 +617,80 @@ latency=[15] send_capacity=[15] recv_capacity=[47] structs=4 send=[0/0] recv=[15
 )oracle";
 
 inline constexpr std::string_view k_handler_multi_zeros = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
+  out1.c0: 910010 910011 910012 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out1.c0: 910020 910021 910022 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
+  out1.c0: 910020 910021 910022 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
+  out1.c0: 910050 910051 910052 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out1.c0: 910060 910061 910062 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out1.c0: 910060 910061 910062 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  io1.c0: 910060 910061 910062 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
+  out1.c0: 910110 910111 910112 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out1.c0: 910110 910111 910112 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out1.c0: 910110 910111 910112 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#18 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
-  out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
-  out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
-  out1.c0: 910050 910051 910052 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  io1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
-  out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 41 42 43 44 45 46 47 48 | . .
-  out0.c1: 1041 1042 1043 1044 1045 1046 1047 1048 | . .
-  out0.c2: 2041 2042 2043 2044 2045 2046 2047 2048 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#18 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
   out1.c0: 910110 910111 910112 | . .
 #19 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
@@ -703,213 +718,213 @@ latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910200 910201 910202 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#24 reset send=[0/0/0,-] recv=[16/16/16,-]
-#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+#24 reset send=[0/0/0,-] recv=[15/15/15,-]
+#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910230 910231 910232 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 89 | . .
+  out0.c1: 0 0 0 0 0 0 0 1089 | . .
+  out0.c2: 0 0 0 0 0 0 0 2089 | . .
   out1.c0: 910250 910251 910252 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_handler_multi_hold_last = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
   out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
   out1.c0: 910050 910051 910052 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   io1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 41 42 43 44 45 46 47 48 | . .
-  out0.c1: 1041 1042 1043 1044 1045 1046 1047 1048 | . .
-  out0.c2: 2041 2042 2043 2044 2045 2046 2047 2048 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#18 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#18 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910110 910111 910112 | . .
 #19 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910110 910111 910112 | . .
 #20 process_f32_multi in=[8,3] out=[8,3] in-place -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  io0.c0: 49 50 51 52 53 54 55 56 | . .
-  io0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  io0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  io0.c0: 42 43 44 45 46 47 48 49 | . .
+  io0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  io0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910110 910111 910112 | . .
 #21 pop_data_f32_multi out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910110 910111 910112 | . .
 #22 pop_data_f32 slot=0 out=8 -> MISSED delivered=0 rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   settled: send=[0/0/0,-] recv=[24/24/24,-]
 #23 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910200 910201 910202 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#24 reset send=[0/0/0,-] recv=[16/16/16,-]
-#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+#24 reset send=[0/0/0,-] recv=[15/15/15,-]
+#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910230 910231 910232 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 89 | . .
+  out0.c1: 0 0 0 0 0 0 0 1089 | . .
+  out0.c2: 0 0 0 0 0 0 0 2089 | . .
   out1.c0: 910250 910251 910252 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_handler_multi_bypass = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
   out1.c0: 910010 910011 910012 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 1 2 3 4 5 6 7 8 | . .
-  out0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  out0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_f32_multi in=[8,0] out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 2 3 4 5 6 7 8 9 | . .
+  out0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  out0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_f32_multi in=[0,3] out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 9 10 11 12 13 14 15 16 | . .
-  out0.c1: 1009 1010 1011 1012 1013 1014 1015 1016 | . .
-  out0.c2: 2009 2010 2011 2012 2013 2014 2015 2016 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#5 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 10 11 12 13 14 15 16 17 | . .
+  out0.c1: 1010 1011 1012 1013 1014 1015 1016 1017 | . .
+  out0.c2: 2010 2011 2012 2013 2014 2015 2016 2017 | . .
   out1.c0: 910020 910021 910022 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  io0.c0: 17 18 19 20 21 22 23 24 | . .
-  io0.c1: 1017 1018 1019 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2017 2018 2019 2020 2021 2022 2023 2024 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#6 process_f32_multi in=[8,3] out=[8,3] in-place -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  io0.c0: 18 19 20 21 22 23 24 25 | . .
+  io0.c1: 1018 1019 1020 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2018 2019 2020 2021 2022 2023 2024 2025 | . .
   out1.c0: 910050 910051 910052 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#8 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#9 set_static_input+get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   io1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[24/24/24,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#10 process_f32 slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#12 push_data_f32_multi in=[0,3] null-unused -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#13 set_static_input slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[23/23/23,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#14 pop_data_f32_multi out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#15 pop_data_f32_multi out=[0,3] null-unused -> OK num_out=[0,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 41 42 43 44 45 46 47 48 | . .
-  out0.c1: 1041 1042 1043 1044 1045 1046 1047 1048 | . .
-  out0.c2: 2041 2042 2043 2044 2045 2046 2047 2048 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#16 pop_data_f32_multi out=[8,0] null-unused -> OK num_out=[8,0] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#17 get_static_output slot=1 -> OK rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out1.c0: 910110 910111 910112 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#18 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#18 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 57 58 59 60 61 62 63 64 | . .
+  out0.c1: 1057 1058 1059 1060 1061 1062 1063 1064 | . .
+  out0.c2: 2057 2058 2059 2060 2061 2062 2063 2064 | . .
   out1.c0: 910110 910111 910112 | . .
 #19 process_f32_multi in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
   out0.c0: 65 66 67 68 69 70 71 72 | . .
@@ -937,106 +952,106 @@ latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-
   out0.c2: 2081 2082 2083 2084 2085 2086 2087 2088 | . .
   out1.c0: 910200 910201 910202 | . .
   settled: send=[0/0/0,-] recv=[8/8/8,-]
-#24 reset send=[0/0/0,-] recv=[16/16/16,-]
-#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
+#24 reset send=[0/0/0,-] recv=[15/15/15,-]
+#25 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
   out1.c0: 910230 910231 910232 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#26 process_f32_multi in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 0 0 0 0 0 0 0 89 | . .
+  out0.c1: 0 0 0 0 0 0 0 1089 | . .
+  out0.c2: 0 0 0 0 0 0 0 2089 | . .
   out1.c0: 910250 910251 910252 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
 )oracle";
 
 inline constexpr std::string_view k_handler_waiting_twins = R"oracle(
-latency=[16,0] send_capacity=[15,0] recv_capacity=[48,0] structs=4 send=[0/0/0,-] recv=[16/16/16,-]
-#1 process_f32_wait slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
+latency=[15,0] send_capacity=[15,0] recv_capacity=[47,0] structs=4 send=[0/0/0,-] recv=[15/15/15,-]
+#1 process_f32_wait slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
   out0.c0: 0 0 0 0 0 0 0 0 | . .
   out0.c1: 0 0 0 0 0 0 0 0 | . .
   out0.c2: 0 0 0 0 0 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#2 process_f32_wait slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 0 0 0 0 0 0 0 0 | . .
-  out0.c1: 0 0 0 0 0 0 0 0 | . .
-  out0.c2: 0 0 0 0 0 0 0 0 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#3 process_f32_inplace_wait slot=0 n=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  io0.c0: 1 2 3 4 5 6 7 8 | . .
-  io0.c1: 1001 1002 1003 1004 1005 1006 1007 1008 | . .
-  io0.c2: 2001 2002 2003 2004 2005 2006 2007 2008 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#4 process_f32_inplace_wait slot=0 n=3 -> OK delivered=3 rt_error=OK send=[3/3/3,-] recv=[13/13/13,-]
-  io0.c0: 9 10 11 | . .
-  io0.c1: 1009 1010 1011 | . .
-  io0.c2: 2009 2010 2011 | . .
-  settled: send=[3/3/3,-] recv=[13/13/13,-]
-#5 process_f32_multi_wait in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[3/3/3,-] recv=[13/13/13,-]
-  out0.c0: 12 13 14 15 16 17 18 19 | . .
-  out0.c1: 1012 1013 1014 1015 1016 1017 1018 1019 | . .
-  out0.c2: 2012 2013 2014 2015 2016 2017 2018 2019 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#2 process_f32_wait slot=0 in=8 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 0 0 0 0 0 0 0 1 | . .
+  out0.c1: 0 0 0 0 0 0 0 1001 | . .
+  out0.c2: 0 0 0 0 0 0 0 2001 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#3 process_f32_inplace_wait slot=0 n=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  io0.c0: 2 3 4 5 6 7 8 9 | . .
+  io0.c1: 1002 1003 1004 1005 1006 1007 1008 1009 | . .
+  io0.c2: 2002 2003 2004 2005 2006 2007 2008 2009 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#4 process_f32_inplace_wait slot=0 n=3 -> OK delivered=3 rt_error=OK send=[3/3/3,-] recv=[12/12/12,-]
+  io0.c0: 10 11 12 | . .
+  io0.c1: 1010 1011 1012 | . .
+  io0.c2: 2010 2011 2012 | . .
+  settled: send=[3/3/3,-] recv=[12/12/12,-]
+#5 process_f32_multi_wait in=[8,3] out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[3/3/3,-] recv=[12/12/12,-]
+  out0.c0: 13 14 15 16 17 18 19 20 | . .
+  out0.c1: 1013 1014 1015 1016 1017 1018 1019 1020 | . .
+  out0.c2: 2013 2014 2015 2016 2017 2018 2019 2020 | . .
   out1.c0: 910050 910051 910052 | . .
-  settled: send=[3/3/3,-] recv=[13/13/13,-]
-#6 process_f32_multi_wait in=[5,3] out=[5,3] in-place -> OK num_out=[5,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  io0.c0: 20 21 22 23 24 | . .
-  io0.c1: 1020 1021 1022 1023 1024 | . .
-  io0.c2: 2020 2021 2022 2023 2024 | . .
+  settled: send=[3/3/3,-] recv=[12/12/12,-]
+#6 process_f32_multi_wait in=[5,3] out=[5,3] in-place -> OK num_out=[5,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  io0.c0: 21 22 23 24 25 | . .
+  io0.c1: 1021 1022 1023 1024 1025 | . .
+  io0.c2: 2021 2022 2023 2024 2025 | . .
   out1.c0: 910060 910061 910062 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#7 push_data_f32 slot=0 in=8 -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#8 pop_data_f32_wait slot=0 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 25 26 27 28 29 30 31 32 | . .
-  out0.c1: 1025 1026 1027 1028 1029 1030 1031 1032 | . .
-  out0.c2: 2025 2026 2027 2028 2029 2030 2031 2032 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#9 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  settled: send=[0/0/0,-] recv=[24/24/24,-]
-#10 pop_data_f32_multi_wait out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[16/16/16,-]
-  out0.c0: 33 34 35 36 37 38 39 40 | . .
-  out0.c1: 1033 1034 1035 1036 1037 1038 1039 1040 | . .
-  out0.c2: 2033 2034 2035 2036 2037 2038 2039 2040 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#7 push_data_f32 slot=0 in=8 -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#8 pop_data_f32_wait slot=0 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 26 27 28 29 30 31 32 33 | . .
+  out0.c1: 1026 1027 1028 1029 1030 1031 1032 1033 | . .
+  out0.c2: 2026 2027 2028 2029 2030 2031 2032 2033 | . .
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#9 push_data_f32_multi in=[8,3] -> OK rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  settled: send=[0/0/0,-] recv=[23/23/23,-]
+#10 pop_data_f32_multi_wait out=[8,3] -> OK num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[15/15/15,-]
+  out0.c0: 34 35 36 37 38 39 40 41 | . .
+  out0.c1: 1034 1035 1036 1037 1038 1039 1040 1041 | . .
+  out0.c2: 2034 2035 2036 2037 2038 2039 2040 2041 | . .
   out1.c0: 910090 910091 910092 | . .
-  settled: send=[0/0/0,-] recv=[16/16/16,-]
-#11 pop_data_f32_wait slot=0 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[8/8/8,-]
-  out0.c0: 41 42 43 44 45 46 47 48 | . .
-  out0.c1: 1041 1042 1043 1044 1045 1046 1047 1048 | . .
-  out0.c2: 2041 2042 2043 2044 2045 2046 2047 2048 | . .
-  settled: send=[0/0/0,-] recv=[8/8/8,-]
-#12 pop_data_f32_wait slot=0 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
-  settled: send=[0/0/0,-] recv=[0/0/0,-]
+  settled: send=[0/0/0,-] recv=[15/15/15,-]
+#11 pop_data_f32_wait slot=0 out=8 -> OK delivered=8 rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
+#12 pop_data_f32_wait slot=0 out=8 -> MISSED delivered=0 rt_error=OK send=[0/0/0,-] recv=[7/7/7,-]
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
+  settled: send=[0/0/0,-] recv=[7/7/7,-]
 #13 process_f32_wait slot=0 in=0 out=8 -> MISSED delivered=0 rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 #14 process_f32_multi_wait in=[0,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910090 910091 910092 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 #15 pop_data_f32_wait slot=0 out=8 -> MISSED delivered=0 rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 #16 pop_data_f32_multi_wait out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910090 910091 910092 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 #17 process_f32_multi_wait in=[8,3] out=[8,3] -> MISSED num_out=[8,3] rt_error=OK send=[0/0/0,-] recv=[0/0/0,-]
-  out0.c0: 49 50 51 52 53 54 55 56 | . .
-  out0.c1: 1049 1050 1051 1052 1053 1054 1055 1056 | . .
-  out0.c2: 2049 2050 2051 2052 2053 2054 2055 2056 | . .
+  out0.c0: 42 43 44 45 46 47 48 49 | . .
+  out0.c1: 1042 1043 1044 1045 1046 1047 1048 1049 | . .
+  out0.c2: 2042 2043 2044 2045 2046 2047 2048 2049 | . .
   out1.c0: 910170 910171 910172 | . .
   settled: send=[0/0/0,-] recv=[0/0/0,-]
 )oracle";

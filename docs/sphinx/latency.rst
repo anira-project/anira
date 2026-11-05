@@ -125,7 +125,7 @@ Additional latency inherent to the model itself, such as look-ahead requirements
 Latency synchronization
 -----------------------
 
-When several output tensors are present, the integer latencies are raised to a common whole number of hops, :math:`\lceil \max_i L_i / P_i \rceil \cdot P_i`, so that the outputs stay coherent.
+When more than one Streamed output is present, their integer latencies are raised to a common whole number of hops, :math:`\lceil \max_i L_i / P_i \rceil \cdot P_i`, so that the outputs stay coherent. Only Streamed outputs count: a Static or a State output beside a single Streamed one aligns nothing, and that Streamed output keeps its figure :math:`\lfloor P \Lambda \rfloor`. A stateful model with one audio output and its recurrent state as a State output (hop 2048, host block 512, 44.1 kHz, a 20 ms budget, an internal latency of 2224) reports :math:`1.25 \cdot 2048 + 2224 = 4784` samples, the inference queue's 1.25 hops unrounded.
 
 The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latencies` is index-aligned with the output tensor list. Outputs without a stream (a Static or a State output) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, one entry per output tensor of the model config's list (``0`` for a Static or a State output), and ``anira_handler_get_latency(h, slot)`` one entry of it.
 

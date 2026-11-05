@@ -157,9 +157,10 @@ public:
     /**
      * @brief Per-output integer latency, synchronized across outputs
      *
-     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one output tensor
-     * the latencies are then raised to a common whole number of hops
-     * (see sync_latencies()). Non-streamable outputs report 0. This is what
+     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one streamed
+     * output the latencies are then raised to a common whole number of hops
+     * (see sync_latencies()). Non-streamable outputs (Static values, the output half of a
+     * State pair) report 0 and never trigger that rounding. This is what
      * SessionElement primes its receive rings with, before the internal model latency
      * and any custom latency are applied.
      *
@@ -287,9 +288,11 @@ public:
     /**
      * @brief Synchronizes integer latencies across several output tensors
      *
-     * With one output the value is kept. With several, every streamable output is raised
-     * to the same whole number of hops, @f$\lceil \max_i L_i / P_i \rceil \cdot P_i@f$;
-     * non-streamable outputs stay at 0. Same rule as before this class existed.
+     * Counts the streamed outputs only (@f$P_i > 0@f$). With at most one, every value is
+     * kept as it is. With several, every streamed output is raised to the same whole number
+     * of hops, @f$\lceil \max_i L_i / P_i \rceil \cdot P_i@f$. Either way a non-streamable
+     * output (a Static value, the output half of a State pair) reports 0 and the result has
+     * one entry per output tensor.
      *
      * @param latencies Integer latencies in samples, one per output tensor
      * @param output_sizes Postprocess output sizes (hops), one per output tensor

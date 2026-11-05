@@ -623,6 +623,54 @@ INSTANTIATE_TEST_SUITE_P(OneSidedStreaming,
                              return info.param ? "allow_smaller_buffers" : "static_buffer";
                          });
 
+// Issue #235, step 9 of the realtime-inference workshop: a stateful model with one audio output
+// (hop 2048, an internal latency of 2224) and its recurrent state as a State output, under host
+// blocks of 512 at 44.1 kHz and a 20 ms budget. The inference queue is 1.25 hops (2560), so the
+// session reports 2560 + 2224 = 4784; a non-streamed output must not round the queue up to two
+// whole hops (4096 + 2224 = 6320). Two Streamed outputs are still synchronized.
+TEST(SessionElementLatency, AStateOutputBesideOneStreamedOutputKeepsItsLatency) {
+    SizingHostBlocks const host = host_blocks(512, 44100, false);
+    constexpr double k_budget_ms = 20.0;
+    constexpr int64_t k_internal = 2224;
+
+    // The recurrent state as a declared State pair.
+    anira::ModelConfig stateful = anira_test::custom_model(1);
+    stateful.input(anira_test::stream_tensor("audio_in", 1, 2048, 2048));
+    anira::TensorSpec state_in("state_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    state_in.axis(0, ANIRA_AXIS_ANY, 64).state_source("state_out");
+    stateful.input(state_in);
+    anira::TensorSpec audio_out = anira_test::stream_tensor("audio_out", 1, 2048, 2048);
+    audio_out.latency(k_internal);
+    stateful.output(audio_out);
+    anira::TensorSpec state_out("state_out", ANIRA_DTYPE_F32, ANIRA_ROLE_STATE);
+    state_out.axis(0, ANIRA_AXIS_ANY, 64);
+    stateful.output(state_out);
+    SizingResult const with_state = prepare_and_measure(stateful, host, k_budget_ms);
+    EXPECT_EQ(with_state.m_latency, (std::vector<unsigned int>{4784, 0}));
+
+    // A Static output in the state's place, first in the list.
+    SizingResult const with_static = prepare_and_measure(
+        anira_test::sizing_model({{.m_elements = 2048}},
+                                 {{.m_elements = 64, .m_hop = 0}, {.m_elements = 2048}},
+                                 1,
+                                 std::nullopt,
+                                 {0, k_internal}),
+        host,
+        k_budget_ms);
+    EXPECT_EQ(with_static.m_latency, (std::vector<unsigned int>{0, 4784}));
+
+    // A second Streamed output: both meet at two whole hops before the internal latency.
+    SizingResult const two_streams =
+        prepare_and_measure(anira_test::sizing_model({{.m_elements = 2048}},
+                                                     {{.m_elements = 2048}, {.m_elements = 2048}},
+                                                     1,
+                                                     std::nullopt,
+                                                     {k_internal, 0}),
+                            host,
+                            k_budget_ms);
+    EXPECT_EQ(two_streams.m_latency, (std::vector<unsigned int>{4096 + k_internal, 4096}));
+}
+
 // The generator hang (#101): with allow_smaller_buffers the buffer-ratio countdown
 // never terminated. Run the prepare on a detached thread against a deadline. A failing test
 // leaks the fixture -- if prepare ever hangs again the detached thread must not touch a
