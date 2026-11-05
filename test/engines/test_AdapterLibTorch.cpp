@@ -121,14 +121,12 @@ std::shared_ptr<Rig> libtorch_adapter() {
     return std::make_shared<Rig>(std::move(loaded));
 }
 
-// The gain model's record: the block and the static gain in, the block and the peak out; a
-// warm-up of one.
-Model gain_model(uint32_t warm_up = 1) {
+// The gain model's record: the block and the static gain in, the block and the peak out.
+Model gain_model() {
     return model_record(ANIRA_ENGINE_LIBTORCH,
                         gain_model_path(),
                         {{1, 1, 512}, {1}},
-                        {{1, 1, 512}, {1}},
-                        warm_up);
+                        {{1, 1, 512}, {1}});
 }
 
 // One run of `adapter` over the buffers, with descriptors in the record's shapes.
@@ -160,8 +158,7 @@ TEST(AdapterLibTorch, ATypedModelBindsItsInputsAndCopiesItsOutputs) {
                 "/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_" +
                 std::string(c.m_word) + ".pt",
             {{1, 1, 512}, {1}},
-            {{1, 1, 512}, {1}},
-            1);
+            {{1, 1, 512}, {1}});
         for (auto* side : {&model.m_inputs, &model.m_outputs}) {
             for (anira::engine::TensorInfo& tensor : *side) { tensor.m_dtype = c.m_dtype; }
         }
@@ -248,17 +245,15 @@ TEST(AdapterLibTorch, BinaryModelDataLoadsFromMemory) {
     EXPECT_TRUE(any_sample_nonzero(output[0]));
 }
 
-// A named entry must be used for the warm-up inferences and for every later run, instead of
+// A named entry must be used for the creation warm-up and for every later run, instead of
 // forward().
 TEST(AdapterLibTorch, NamedModelFunctionIsUsedForWarmUpAndProcessing) {
     const Model model = model_record(ANIRA_ENGINE_LIBTORCH,
                                      rave_model_path(),
                                      {{1, 1, 2048}},
                                      {{1, 4, 1}},
-                                     2,
                                      "encode");
     ASSERT_EQ(model.m_entry, "encode");
-    ASSERT_EQ(model.m_warm_up, 2U);
 
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
     adapter->prepare(model);
@@ -285,7 +280,7 @@ TEST(AdapterLibTorch, UnloadableModelThrowsRuntimeError) {
     EXPECT_FALSE(adapter->prepared());
 
     // A method the module does not have fails the same way.
-    Model no_method = gain_model(0);
+    Model no_method = gain_model();
     no_method.m_entry = "no_such_method";
     try {
         adapter->prepare(no_method);
@@ -328,8 +323,7 @@ TEST(AdapterLibTorch, InputsBindToTheMethodsArgumentsByName) {
     Model model = model_record(ANIRA_ENGINE_LIBTORCH,
                                gain_model_path(),
                                {{1}, {1, 1, 512}},
-                               {{1, 1, 512}, {1}},
-                               1);
+                               {{1, 1, 512}, {1}});
     model.m_inputs[0].m_export_name = "gain";
     model.m_inputs[1].m_export_name = "data";
     const std::shared_ptr<Rig> adapter = libtorch_adapter();
@@ -376,7 +370,6 @@ TEST(AdapterLibTorch, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
                                   rave_model_path(),
                                   {{1, 4, 1}},
                                   {{1, 1, 2048}},
-                                  1,
                                   "decode"));
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
 
@@ -387,36 +380,23 @@ TEST(AdapterLibTorch, AMethodWithADefaultedArgumentBindsItsLeadingArgument) {
 }
 
 // The schema carries no shapes: an output of another shape than the record's is caught on the
-// warm-up's first result at prepare (CONFIG naming both shapes), and, without a warm-up, at
-// the first run (the chunk fails with ENGINE; nothing is written).
-TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtLoadWithOrWithoutAWarmUp) {
-    const Model warmed = model_record(ANIRA_ENGINE_LIBTORCH,
+// first result of the probe's creation warm-up, at load (CONFIG naming both shapes), not at the
+// first chunk.
+TEST(AdapterLibTorch, AnOutputOfAnotherShapeIsRefusedAtLoad) {
+    const Model record = model_record(ANIRA_ENGINE_LIBTORCH,
                                       gain_model_path(),
                                       {{1, 1, 512}, {1}},
-                                      {{1, 1, 512}, {2}},
-                                      1);
-    const Model unwarmed = [&warmed] {
-        Model record = warmed;
-        record.m_warm_up = 0;
-        return record;
-    }();
-    // The schema carries no output shapes, so the check is the first forward's: the warm-up's
-    // where the record has one, one run on the probe at load where it has none.
-    const auto expect_refused_at_load = [](const Model& record) {
-        try {
-            libtorch_adapter()->prepare(record);
-            ADD_FAILURE() << "a [2] output passed for a [1] return (warm_up " << record.m_warm_up
-                          << ")";
-        } catch (const anira::StatusError& error) {
-            EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
-            const std::string message = error.what();
-            EXPECT_NE(message.find("libtorch: output tensor"), std::string::npos) << message;
-            EXPECT_NE(message.find("[1]"), std::string::npos) << message;
-            EXPECT_NE(message.find("[2]"), std::string::npos) << message;
-        }
-    };
-    expect_refused_at_load(warmed);
-    expect_refused_at_load(unwarmed);
+                                      {{1, 1, 512}, {2}});
+    try {
+        libtorch_adapter()->prepare(record);
+        ADD_FAILURE() << "a [2] output passed for a [1] return";
+    } catch (const anira::StatusError& error) {
+        EXPECT_EQ(error.status(), ANIRA_ERROR_CONFIG);
+        const std::string message = error.what();
+        EXPECT_NE(message.find("libtorch: output tensor"), std::string::npos) << message;
+        EXPECT_NE(message.find("[1]"), std::string::npos) << message;
+        EXPECT_NE(message.find("[2]"), std::string::npos) << message;
+    }
 }
 
 // The engine's init pins OpenBLAS to one thread where the LibTorch build carries it (the Linux

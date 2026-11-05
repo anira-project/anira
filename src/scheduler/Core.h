@@ -13,6 +13,7 @@
 #include "../utils/RealtimeSanitizer.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
+#include "Warmup.h"
 
 /// The context config the core reads (anira_context_config_* of anira/abi/config.h); its body
 /// lives in src/capi/handles.h. Declarations that take it by const& or return it by value are
@@ -398,6 +399,45 @@ public:
                                 const RingDtypes& ring_dtypes = {});
 
     /**
+     * @brief One plan's warm-up pass: ordinary inferences of the plan through the session, on the
+     * inference threads
+     *
+     * The contract's warm-up (the session's HardContract: UNTIL_STABLE or FIXED n) decides how
+     * many, WarmupEstimator when to stop. Each inference is one job: a free struct of the
+     * session's pool stamped with @p plan and the session's generation, its inputs the pool's
+     * zero-filled storage (no pre_process), submitted as pre_process() submits a chunk (a shared
+     * session through the inference queue, an exclusive one through its pending queue and the
+     * dispatch gate), waited for (natively blocking, on WebAssembly spinning: the main thread may
+     * not block), and given back to the free pool without post_process: the rings are never
+     * touched. Its time is the job's on its inference thread
+     * (SessionElement::ThreadSafeStruct::m_inference_ns: the declared state's feed and capture,
+     * the processor's inference hooks, the engine call). What the pass leaves in the session
+     * (the structs' outputs, the declared state, an exclusive engine's state) is the caller's to
+     * clear: prepare_session() again, which drains, bumps the generation and rebuilds the pool.
+     *
+     * Control thread, after prepare_session() and before any chunk of the session exists; the
+     * session's plans have their prepared handles.
+     *
+     * @param session The session, prepared
+     * @param plan The plan's index into the session's table
+     * @return What the pass measured
+     * @throws StatusError ANIRA_ERROR_INVALID_STATE when no inference thread is inside its loop
+     * (a context without a pool whose host threads do not run; on WebAssembly a pool whose Workers
+     * have not started yet) or when an inference has not completed within k_warm_up_timeout;
+     * ANIRA_ERROR_ENGINE when an inference failed (its hook or its engine; the inference thread
+     * logged why)
+     */
+    static WarmupFigure warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan);
+
+    /// How long the warm-up pass waits for one inference before the prepare fails: a hang guard
+    /// (a Worker that never runs, a dead engine), far above any inference a stream could run.
+    static constexpr std::chrono::seconds k_warm_up_timeout{10};
+
+    /// How long the warm-up pass waits on a semaphore before it kicks an exclusive session's
+    /// dispatch chain again (warm_up_inference()).
+    static constexpr std::chrono::milliseconds k_warm_up_kick{1};
+
+    /**
      * @brief Gets the number of registered inference sessions
      *
      * @return Number of currently registered sessions
@@ -781,6 +821,17 @@ private:
      * @return True if preprocessing was successful, false otherwise
      */
     static bool pre_process(const std::shared_ptr<SessionElement>& session);
+
+    /**
+     * @brief One inference of warm_up_plan(): a free struct stamped with the plan, submitted as
+     * pre_process() submits one, waited for and given back to the free pool
+     *
+     * @param session The session, prepared, with no chunk in flight
+     * @param plan The plan's index into the session's table
+     * @return The job's time on its inference thread, in ns
+     * @throws StatusError as warm_up_plan() (no free struct: ANIRA_ERROR_INTERNAL)
+     */
+    static int64_t warm_up_inference(const std::shared_ptr<SessionElement>& session, uint32_t plan);
 
     /**
      * @brief Whether every streamable input ring holds a full hop for the next inference

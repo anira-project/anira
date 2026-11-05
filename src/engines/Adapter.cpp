@@ -31,7 +31,7 @@ bool Model::operator==(const Model& other) const {
            m_variant == other.m_variant && m_provider == other.m_provider &&
            m_provider_id == other.m_provider_id && m_options == other.m_options &&
            m_inputs == other.m_inputs && m_outputs == other.m_outputs &&
-           m_instances == other.m_instances && m_warm_up == other.m_warm_up;
+           m_instances == other.m_instances;
 }
 
 // ---- Loaded ---------------------------------------------------------------------------------
@@ -183,14 +183,14 @@ void ExecutorLoaded::adopt(std::unique_ptr<Executor> probe) {
     if (model().m_instances == 0) {
         // No shared slot: the probe waits for the first exclusive session.
         m_spare = std::move(probe);
-        m_spare->warm_up(model().m_warm_up);
+        m_spare->warm_up(k_creation_warm_up);
         return;
     }
     m_shared.reserve(model().m_instances);
     m_shared.push_back(std::move(probe));
     for (uint32_t i = 1; i < model().m_instances; ++i) { m_shared.push_back(make_executor()); }
     for (const std::unique_ptr<Executor>& executor : m_shared) {
-        executor->warm_up(model().m_warm_up);
+        executor->warm_up(k_creation_warm_up);
     }
 }
 
@@ -203,7 +203,7 @@ std::unique_ptr<Prepared> ExecutorLoaded::do_prepare(const PrepareRequest& reque
             own = std::move(m_spare);
         } else {
             own = make_executor();
-            own->warm_up(model().m_warm_up);
+            own->warm_up(k_creation_warm_up);
         }
     }
     return std::make_unique<ExecutorPrepared>(*this, request.m_exclusive, std::move(own));

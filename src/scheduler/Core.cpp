@@ -28,6 +28,7 @@
 #include "../utils/RtLatch.h"
 #include "InferenceThread.h"
 #include "SessionElement.h"
+#include "Warmup.h"
 
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 #include <unistd.h>
@@ -1609,6 +1610,107 @@ void Core::post_process(
     thread_safe_struct->m_free.store(true, std::memory_order::release);
 }
 
+WarmupFigure Core::warm_up_plan(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
+    if (plan >= session->m_plans.size()) {
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "the warm-up was asked for plan " + std::to_string(plan) +
+                              ", which the session does not have");
+    }
+    // The pass's jobs are ordinary jobs: some thread must be inside its loop to take them. A
+    // pool's threads are once prepare_session() started them (natively it waits for that); a
+    // context without a pool has only its host's threads.
+    if (scheduler::InferenceThread::get_num_loop_active() == 0) {
+#ifdef __EMSCRIPTEN__
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "a warm-up needs a running inference thread, and no Worker of the "
+                          "context's pool has started yet: await context.ready() before a "
+                          "prepare that warms up (or set the warmup to ANIRA_WARMUP_NONE with an "
+                          "explicit budget)");
+#else
+        throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                          "a warm-up needs a running inference thread, and none is inside its "
+                          "loop: a context without a pool needs a host thread in "
+                          "anira_inference_thread_run_loop before a prepare that warms up (or "
+                          "set the warmup to ANIRA_WARMUP_NONE with an explicit budget)");
+#endif
+    }
+    const capi::HardContract& hard = session->m_hard;
+    WarmupEstimator estimator(hard.m_warmup, hard.m_warmup_iterations, clock_step_ns());
+    while (!estimator.done()) { estimator.add(warm_up_inference(session, plan)); }
+    return estimator.figure();
+}
+
+int64_t Core::warm_up_inference(const std::shared_ptr<SessionElement>& session, uint32_t plan) {
+    std::shared_ptr<SessionElement::ThreadSafeStruct> chunk;
+    for (const std::shared_ptr<SessionElement::ThreadSafeStruct>& candidate :
+         session->m_struct_pool) {
+        if (candidate->m_free.exchange(false)) {
+            chunk = candidate;
+            break;
+        }
+    }
+    // The pass runs one job at a time on a session no stream drives: every struct is free.
+    if (chunk == nullptr) {
+        throw StatusError(ANIRA_ERROR_INTERNAL,
+                          "the warm-up of plan " + std::to_string(plan) +
+                              " found no free struct in the session's pool");
+    }
+    // The stamps pre_process() gives a chunk, without its pre_process and its time stamp: the
+    // chunk is no position of the stream.
+    chunk->m_plan = plan;
+    chunk->m_completed_as_zeros = false;
+    chunk->m_fills_after = 0;
+    chunk->m_inference_ns = 0;
+    chunk->m_dispatch_generation = session->m_generation.load(std::memory_order::relaxed);
+    if (session->exclusive()) {
+        session->enqueue_pending_dispatch(chunk);
+        try_dispatch_stateful(session);
+    } else {
+        enqueue_inference_or_drop(session, chunk);
+    }
+    // Its done signal, which every path of the job publishes exactly once (a drop at the enqueue
+    // completes it as zeros on this thread).
+    const auto deadline = std::chrono::steady_clock::now() + k_warm_up_timeout;
+    bool done = false;
+    while (!done) {
+        // An exclusive session's job may still wait in its pending queue: this thread's enqueue
+        // and the inference thread's release of the dispatch gate can pass each other, which a
+        // stream's next submission resolves. The pass has no next submission, so it kicks the
+        // chain itself while it waits (nothing while the gate is held).
+        if (session->exclusive()) { try_dispatch_stateful(session); }
+        if (session->uses_semaphore()) {
+#ifdef __EMSCRIPTEN__
+            done = chunk->m_done_semaphore.try_acquire();
+#else
+            done = chunk->m_done_semaphore.try_acquire_until(
+                std::min(deadline, std::chrono::steady_clock::now() + k_warm_up_kick));
+#endif
+        } else {
+            done = chunk->m_done_atomic.exchange(false, std::memory_order::acquire);
+#ifndef __EMSCRIPTEN__
+            if (!done) { std::this_thread::sleep_for(std::chrono::microseconds(20)); }
+#endif
+        }
+        if (!done && std::chrono::steady_clock::now() >= deadline) {
+            // The job stays the session's: its release drains it.
+            throw StatusError(ANIRA_ERROR_INVALID_STATE,
+                              "the warm-up inference of plan " + std::to_string(plan) +
+                                  " did not complete within " +
+                                  std::to_string(k_warm_up_timeout.count()) + " s");
+        }
+    }
+    const bool failed = chunk->m_completed_as_zeros;
+    const int64_t inference_ns = chunk->m_inference_ns;
+    chunk->m_completed_as_zeros = false;
+    chunk->m_free.store(true, std::memory_order::release);
+    if (failed) {
+        throw StatusError(ANIRA_ERROR_ENGINE,
+                          "the warm-up inference of plan " + std::to_string(plan) +
+                              " failed; the log record of the inference says why");
+    }
+    return inference_ns;
+}
+
 void Core::start_thread_pool_locked(State& state) {
 #if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
     // Before a thread can run an inference, so the unload hook can tell an exit (see there).
@@ -1623,15 +1725,12 @@ void Core::start_thread_pool_locked(State& state) {
                 "anira: the operating system (or the browser) refused to create an "
                 "inference thread of the pool");
         }
+        // Natively start() returns once the thread is inside run_loop() (the _wait twins, the
+        // bounded waits of new_data_request() and a prepare's warm-up pass read the loop count,
+        // and a session that prepare hands back must find its pool able to signal a completion
+        // from the first call on). On WebAssembly the Worker enters its loop asynchronously,
+        // after the main instance returns.
         while (!i->is_running()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
-#ifndef __EMSCRIPTEN__
-        // is_running() is set by the start itself, before the thread's body runs. Wait until
-        // the thread is inside run_loop(): the _wait twins and the bounded waits of
-        // new_data_request() read the loop count, and a session that prepare hands back must
-        // find its pool able to signal a completion from the first call on. On WebAssembly the
-        // Worker enters its loop asynchronously, after the main instance returns.
-        while (!i->is_in_loop()) { std::this_thread::sleep_for(std::chrono::microseconds(50)); }
-#endif
     }
 }
 

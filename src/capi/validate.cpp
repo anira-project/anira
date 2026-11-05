@@ -271,16 +271,13 @@ void check_contract(const anira_contract& contract,
         config_error("contract: an explicit budget must be positive (got " +
                      std::to_string(hard->m_budget_ms) + " ms)");
     }
-    if (hard->m_budget != ANIRA_BUDGET_EXPLICIT) {
-        not_supported(
-            "contract: a MEASURED budget needs the 3.x runtime's warmup "
-            "measurement; set an explicit budget (ANIRA_BUDGET_EXPLICIT, the 2.x "
-            "max_inference_time)");
-    }
-    if (hard->m_warmup == ANIRA_WARMUP_UNTIL_STABLE) {
-        not_supported(
-            "contract: UNTIL_STABLE warmup needs the 3.x runtime; set "
-            "ANIRA_WARMUP_FIXED (the 2.x warm_up) or ANIRA_WARMUP_NONE");
+    // The warm-up pass is also the measurement: a measured budget is the maximum of its last
+    // inferences, so it needs at least one (NONE and FIXED 0 run none).
+    if (hard->m_budget == ANIRA_BUDGET_MEASURED && !hard->warms_up()) {
+        config_error(
+            "contract: a MEASURED budget needs at least one warm-up inference, which measures "
+            "it; set the warmup to ANIRA_WARMUP_UNTIL_STABLE (the default) or ANIRA_WARMUP_FIXED "
+            "with iterations > 0, or set an explicit budget (ANIRA_BUDGET_EXPLICIT)");
     }
     if (hard->m_wait_ratio < 0.0) {
         config_error("contract: wait_ratio must not be negative (got " +

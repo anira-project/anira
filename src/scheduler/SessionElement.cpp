@@ -66,6 +66,7 @@ SessionElement::SessionElement(int new_session_id,
     , m_derived(derived)
     , m_hard(hard)
     , m_num_instances(num_instances)
+    , m_budget_ms(hard.m_budget_ms)
     // A 2.x session records into its own latch; a 3.x session into its handler's, which
     // outlives the session (the handler destroys its manager first).
     , m_rt(rt_latch != nullptr ? rt_latch : &m_rt_own) {}
@@ -443,7 +444,7 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // buffer-adaptation delay of Rath & Geier, the inference-queue term and, when the
     // contract allows smaller blocks, the worst case over every smaller block size. Host
     // blocks that cannot size the session throw here, before any session state is touched.
-    LatencyCalculator const latency_calculator(m_derived, m_hard, m_num_instances);
+    LatencyCalculator const latency_calculator(m_derived, m_hard, m_num_instances, m_budget_ms);
     m_block_hops = latency_calculator.get_block_hops();
     m_input_driven = has_streamable_input();
     m_latency = latency_calculator.get_synced_output_latencies();

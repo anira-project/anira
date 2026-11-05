@@ -148,7 +148,10 @@ the model config. The 3.x column gives the C++ builder of ``<anira/anira.hpp>`` 
        (``anira_contract_hard_set_budget(contract, ANIRA_BUDGET_EXPLICIT, ms)``).
    * - ``anira::InferenceConfig::warm_up``
      - ``hard.warmup = ANIRA_WARMUP_FIXED``, ``hard.warmup_iterations = n``
-       (``anira_contract_hard_set_warmup``); ``0`` is ``ANIRA_WARMUP_NONE``.
+       (``anira_contract_hard_set_warmup``); ``0`` is ``ANIRA_WARMUP_NONE``. The 2.x warm-up ran
+       n inferences per instance when the model loaded; 3.x runs n per plan at prepare, through
+       the session on the inference threads, and times them (the warm-up pass,
+       :doc:`usage` section 1.3). Every executor still runs one inference when it is made.
    * - ``anira::InferenceConfig::blocking_ratio``
      - ``hard.wait_ratio`` (``anira_contract_hard_set_wait_ratio``); consumed by the ``_wait``
        twins with ``ANIRA_WAIT_CONTRACT``.

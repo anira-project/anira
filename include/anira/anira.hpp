@@ -901,12 +901,12 @@ private:
 /**
  * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
  * aggregate always names it (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate =
- * 48000, .budget = 5ms, .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}`; the default
- * UNTIL_STABLE warm-up is refused like the measured budget), as the web package's budgetMs. A
- * std::chrono duration converts to an explicit budget (ANIRA_BUDGET_EXPLICIT with that figure,
- * anira_contract_hard_set_budget); Budget::measured() is the budget the warm-up measures
- * (ANIRA_BUDGET_MEASURED), which anira_handler_prepare refuses with ANIRA_ERROR_NOT_SUPPORTED in
- * this pre-release.
+ * 48000, .budget = Budget::measured()}`, or `.budget = 5ms` for an explicit one), as the web
+ * package's budgetMs. A std::chrono duration converts to an explicit budget
+ * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); Budget::measured() is
+ * the budget the warm-up pass measures at prepare (ANIRA_BUDGET_MEASURED). The warm-up pass also
+ * measures the inference time; a measured budget is the maximum of its last four inferences;
+ * under an explicit budget the timings are only reported.
  */
 class Budget {
 public:
@@ -916,7 +916,7 @@ public:
     Budget(std::chrono::duration<Rep, Period> value) noexcept
         : m_kind(ANIRA_BUDGET_EXPLICIT)
         , m_value(std::chrono::duration_cast<std::chrono::nanoseconds>(value)) {}
-    /// The budget the warm-up measures (refused at prepare in this pre-release).
+    /// The budget the warm-up pass measures at prepare: the slowest plan's figure.
     static Budget measured() noexcept {
         return {ANIRA_BUDGET_MEASURED, std::chrono::nanoseconds{}};
     }

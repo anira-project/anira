@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -91,7 +92,17 @@ bool InferenceThread::start() {
     options.m_priority = thl::core::ThreadPriority::RealTime;
     options.m_name = "anira-inference";
     // False when already running or when the OS refused the thread; the caller decides.
-    return m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); });
+    if (!m_thread.start(options, [this](const thl::core::Thread&) { run_loop(); })) {
+        return false;
+    }
+    // is_running() is set by the start itself, before the thread's body runs. Wait until the
+    // thread is inside run_loop() (or already left it): a session prepared after this returns
+    // finds a thread able to take its jobs, the warm-up pass's (Core::warm_up_plan) and the
+    // bounded waits' of new_data_request() included.
+    while (!is_in_loop() && is_running()) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+    return true;
 }
 
 void InferenceThread::request_stop() {

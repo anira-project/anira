@@ -413,13 +413,35 @@ minted again. On an Async handle it throws ``anira::Error`` with
   the hops it needs and the hops the tensors before it allow.
 - **Budget.** Required: ``anira::Hard::budget`` is an ``anira::Budget``, which has no
   default. A ``std::chrono`` duration converts to an explicit budget
-  (``ANIRA_BUDGET_EXPLICIT``, ``.budget = std::chrono::milliseconds(5)``) holding the measured
+  (``ANIRA_BUDGET_EXPLICIT``, ``.budget = std::chrono::milliseconds(5)``) holding the
   worst-case inference time per inference at the pinned window; ``anira::Budget::measured()``
-  (``ANIRA_BUDGET_MEASURED``, the C default) derives it during warmup, which ``prepare``
-  refuses with ``ANIRA_ERROR_NOT_SUPPORTED`` in this pre-release. ``budget.kind()`` and
-  ``budget.value()`` read it back. An inference that exceeds the budget produces a dropout.
-- **Warmup.** ``ANIRA_WARMUP_FIXED`` with ``warmup_iterations``, ``ANIRA_WARMUP_UNTIL_STABLE``
-  (the default) or ``ANIRA_WARMUP_NONE``, which is legal only with an explicit budget.
+  (``ANIRA_BUDGET_MEASURED``, the C default) is what the warm-up pass measures at ``prepare``.
+  ``budget.kind()`` and ``budget.value()`` read it back. An inference that exceeds the budget
+  produces a dropout.
+- **Warmup.** The warm-up pass also measures the inference time; a measured budget is the maximum of its last four inferences; under an explicit budget the timings are only reported. ``prepare`` runs the pass once the session is
+  sized: ordinary inferences of every plan, in table order, through the handler's session on the
+  inference threads, each timed on the thread that runs it (the declared state's feed and
+  capture, the processor's ``before_inference`` and ``after_inference``, the engine call; never
+  ``pre_process``, ``post_process`` or the wait for a thread). ``ANIRA_WARMUP_UNTIL_STABLE`` (the
+  default) stops at the first inference whose last four times all lie within 20 % of their
+  median, or within one clock step when that is more (a browser coarsens its clock to
+  microseconds), at most 32; ``ANIRA_WARMUP_FIXED`` runs ``warmup_iterations`` per plan (fewer
+  than four put the cold start into the figure: take ``UNTIL_STABLE`` or five or more);
+  ``ANIRA_WARMUP_NONE`` runs none and is legal only with an explicit budget (a measured budget
+  with ``NONE`` or ``FIXED`` 0 is ``ANIRA_ERROR_CONFIG``). Under a measured budget every plan's
+  row takes its own figure (``anira_plan_info.budget_ms``: the maximum of its last four
+  inferences, unrounded, without a margin) and the session runs the slowest plan's, the Hard
+  promise being the worst case across the plans. The session is then sized again for it, which
+  starts the stream over, so nothing of the pass reaches the stream or a declared state; when
+  that changes the entry count, the registered engines and the processor are unprepared and
+  prepared again with the final record. A measured latency depends on the machine and on its
+  load at the prepare; an explicit budget gives a reproducible one. A model too slow for the
+  stream is not refused: the session is sized for one host block's burst, as for an explicit
+  budget the pool cannot keep up with, and the stream misses blocks under the miss policy. The
+  pass needs an inference thread inside its loop: a context without a pool needs a host thread
+  in ``anira_inference_thread_run_loop`` (``ANIRA_ERROR_INVALID_STATE`` otherwise); an inference
+  of the pass that fails fails the prepare with ``ANIRA_ERROR_ENGINE``. Apart from the pass,
+  every executor of a built-in engine runs one inference over its own scratch when it is made.
 - **Miss policy.** What a Hard entry delivers for a block whose inference has not completed
   when the block is popped (the entry returns ``ANIRA_MISSED``, a success, with a delivered
   count of ``0`` under every policy, so the miss is visible; the policy decides what the
@@ -1695,24 +1717,24 @@ may then be destroyed by its creator; the handler keeps what it needs) and copie
 ``anira_handler_prepare(h, contract, &err)`` is the blocking quiescence point, never from the
 driver thread and never overlapped by another handler entry: it validates the configuration
 against the Hard contract (the rules of section 1.1 and the contract's own: the host blocks, an
-explicit budget, a fixed or no warmup, the miss policy against the anchor, the ring dtypes
+budget against the warm-up, the miss policy against the anchor, the ring dtypes
 and the host domains by canonical name, the processor's real-time promise against its placement),
 loads the model of every candidate that has an entry (once per loaded model anira pools: a
 second handler on an equal model configuration resolved to equal tensors shares it, the pool
-rule above), sizes the rings for the block range and the latency, selects the plan of the
+rule above), sizes the rings for the block range and the budget, selects the plan of the
 variant's default engine (else plan 0), builds the plan report, prepares every registered
-engine's plan for this handler on its loaded model and, last, calls the processor's init (at the
+engine's plan for this handler on its loaded model, calls the processor's init (at the
 first prepare of a handler of the pipeline) and its prepare function when the pipeline has a
-processor with one (a status other than ``ANIRA_OK`` from any of them fails the prepare with it);
-a second prepare replaces the session whole, a failed one leaves the handler unprepared.
+processor with one (a status other than ``ANIRA_OK`` from any of them fails the prepare with it)
+and, last, runs the contract's warm-up pass and sizes the session again for what it measured
+(section 1.3); a second prepare replaces the session whole, a failed one leaves the handler
+unprepared.
 ``anira_handler_num_entries(h)`` then says how many chunks may be in flight at once, the size
 of a processor's per-entry scratch (section 2). ``anira_handler_destroy`` releases the session and, with the last
 handler in this copy of anira, joins the inference thread pool; a handler counts as a user of
 the core, so ``anira_shutdown`` is refused while one lives. What this pre-release refuses at
-prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, ``ANIRA_BUDGET_MEASURED`` and
-``ANIRA_WARMUP_UNTIL_STABLE`` (the defaults of a fresh contract: set an explicit budget and a
-fixed warmup, as every bundled contract file does), a Buffer spec (section 1.1) and a host
-domain other than ``ANIRA_DOMAIN_HOST`` (section 1.3).
+prepare, with ``ANIRA_ERROR_NOT_SUPPORTED``: an Async contract, a Buffer spec (section 1.1)
+and a host domain other than ``ANIRA_DOMAIN_HOST`` (section 1.3).
 
 .. code-block:: c
 
@@ -2340,8 +2362,10 @@ the new stream with what it wrote (section 5.5). A model with a pair runs as
 time and in submission order, on what its own prepare built (section 3.2), which is what
 makes the feedback well defined, and what lets the two buffers go without a latch (only the
 inference thread touches them).
-The contract file's fixed warm-up runs inside the adapter when the model loads and reaches
-neither the state nor the stream.
+The contract's warm-up pass runs through the session and feeds the pair like any inference;
+the session sized again after it zeroes both buffers and starts a new generation (the exclusive
+engine is reset at the stream's first inference), so the pass reaches neither the state nor the
+stream.
 
 **What the host sees.** A State spec may stand anywhere in its list, so the two lists follow
 the model file's own tensor order (the accumulator's state is first in, last out), and it has

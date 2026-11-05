@@ -529,9 +529,14 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_host_blocks(anira_cont
                                                                       double host_rate) ANIRA_NOEXCEPT;
 
 /**
- * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT).
+ * @brief The per-inference budget of a Hard contract (v2's max_inference_time when EXPLICIT):
+ * the inference time the session's latency and entries are sized for. The warm-up pass
+ * also measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. A MEASURED budget
+ * makes the latency depend on the machine; an explicit one gives a reproducible latency.
  * @param contract A Hard contract.
- * @param kind MEASURED (default) derives the budget during warmup; EXPLICIT reads explicit_ms.
+ * @param kind MEASURED (default) is what the warm-up pass measures at prepare; EXPLICIT reads
+ *        explicit_ms.
  * @param explicit_ms Per-inference budget in milliseconds, read for EXPLICIT only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown kind or, with EXPLICIT, explicit_ms <= 0.
@@ -544,10 +549,13 @@ ANIRA_API anira_status ANIRA_CALL anira_contract_hard_set_budget(anira_contract*
                                                                  double explicit_ms) ANIRA_NOEXCEPT;
 
 /**
- * @brief The warmup policy of a Hard contract (v2's warm_up when FIXED).
+ * @brief The warm-up pass of a Hard contract at prepare (anira_warmup_mode; v2's warm_up when
+ * FIXED, which ran per instance at load, now per plan through the session). The warm-up
+ * pass also measures the inference time; a measured budget is the maximum of its last
+ * four inferences; under an explicit budget the timings are only reported.
  * @param contract A Hard contract.
- * @param mode UNTIL_STABLE (default), FIXED, or NONE (legal only with an EXPLICIT budget,
- *        checked at prepare).
+ * @param mode UNTIL_STABLE (default), FIXED, or NONE. A MEASURED budget needs a pass of at
+ *        least one inference: NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
  * @param iterations Iterations for FIXED only.
  * @return ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract;
  *         ANIRA_ERROR_INVALID_ARGUMENT for an unknown mode.

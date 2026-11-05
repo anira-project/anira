@@ -28,7 +28,8 @@ struct HardContract;
  *   stream's samples per inference (the hop of the model config's anchor, which the
  *   validator resolves). @f$\rho@f$ is stored as a reduced fraction
  *   @f$p / q@f$ (see rationalize()).
- * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the contract's budget @f$T@f$ (ms)
+ * - @f$\kappa = T \cdot f_s / (1000 \cdot R)@f$, the inference time @f$T@f$ (ms: the
+ *   contract's explicit budget, or what a warm-up pass measured under a MEASURED one)
  *   measured in hop periods (@f$f_s@f$ is the contract's host_rate, in samples of the reference
  *   stream per second).
  * - @f$\beta@f$, the contract's wait ratio: the driving thread waits @f$\beta@f$ host block
@@ -128,6 +129,24 @@ public:
     LatencyCalculator(const capi::Derived& derived,
                       const capi::HardContract& hard,
                       uint32_t num_instances);
+
+    /**
+     * @brief Computes every quantity for one Hard contract at a resolved inference time
+     *
+     * The constructor above with @p budget_ms in place of the contract's own budget: what a
+     * session is sized for (SessionElement::m_budget_ms), the measured figure of a warm-up pass
+     * under a MEASURED budget, which the contract does not hold.
+     *
+     * @param derived As above
+     * @param hard As above; its budget is not read
+     * @param num_instances As above
+     * @param budget_ms The inference time @f$T@f$ in ms
+     * @throws std::invalid_argument as above
+     */
+    LatencyCalculator(const capi::Derived& derived,
+                      const capi::HardContract& hard,
+                      uint32_t num_instances,
+                      double budget_ms);
 
     /**
      * @brief The worst-case latency in hops, @f$\Lambda@f$ (fixed host block)

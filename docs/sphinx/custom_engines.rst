@@ -259,10 +259,12 @@ what it keeps and never keeps the pointers):
   of the two a handler is follows from its model, so every handler of one loaded model is of
   one kind.
 
-The record carries no warm-up count: the contract's fixed warm-up is what the built-in
-adapters run over every executor they make, and an engine that wants a warm inference runs it
+The record carries no warm-up count: the contract's warm-up pass runs at
+``anira_handler_prepare``, through the handler's session, and reaches a registered engine as
+ordinary ``process`` calls, which it times like every engine's (:doc:`usage` section 1.3). An
+engine that wants its first-run cost out of the way before the pass runs a warm inference
 itself, over the shared slots here and over an exclusive handler's own executor at its
-``prepare``. A status other than ``ANIRA_OK`` fails ``anira_handler_prepare`` with it, the
+``prepare``, as the built-in adapters do over every executor they make. A status other than ``ANIRA_OK`` fails ``anira_handler_prepare`` with it, the
 message naming the engine (``the engine 'com.example.myengine' refused load: it returned N``),
 and no ``unload`` follows for that load. What the call hands back through ``out_loaded``
 (which starts ``NULL``; ``NULL`` is a legal value) is the ``loaded`` pointer every
@@ -301,8 +303,8 @@ draw the line so (``src/engines/``, internal):
 
 Each of them makes the executors of the shared slots at load and one more for an exclusive
 handler at its ``prepare`` (a model without a shared slot keeps the executor its load probed
-the binding with, for the first exclusive handler), and runs the fixed warm-up on every one of
-them where it is made.
+the binding with, for the first exclusive handler), and runs one inference over its own
+scratch on every one of them where it is made (no executor is handed out cold).
 
 **prepare(info, loaded, user_data, &prepared)** runs on the caller of
 ``anira_handler_prepare``, once per handler and loaded model the handler runs on, after the
@@ -519,7 +521,7 @@ shared slots, and ``load`` runs once for both, when
   (:doc:`usage` section 3.1): a provider is part of the loaded model, so two providers of one
   model are two loads, each its own ``loaded``, and
 - their tensors **resolve to the same shapes** (two handlers with different resolved windows
-  never share), with the same shared-slot count and the same fixed warm-up.
+  never share), with the same shared-slot count (the contract's warm-up is no part of it).
 
 Whether a handler is exclusive is the handler's property, not the loaded model's, and no part
 of the pool's key: a model declared ``ANIRA_MODEL_STATEFUL`` or with a declared State pair is

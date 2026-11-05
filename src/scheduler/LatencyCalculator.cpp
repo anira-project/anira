@@ -254,6 +254,12 @@ void LatencyCalculator::smaller_buffers_worst_case(int64_t max_block,
 LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
                                      const capi::HardContract& hard,
                                      uint32_t num_instances)
+    : LatencyCalculator(derived, hard, num_instances, hard.m_budget_ms) {}
+
+LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
+                                     const capi::HardContract& hard,
+                                     uint32_t num_instances,
+                                     double budget_ms)
     : m_allow_smaller_buffers(hard.m_host_block_min < hard.m_host_block_max) {
     // The hop of every tensor: its samples per inference, 0 for a tensor without a stream.
     m_input_sizes.reserve(derived.m_inputs.size());
@@ -305,7 +311,7 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
     if (m_rho.m_numerator <= 0) {
         throw std::invalid_argument("contract: host_block_max is too small to represent.");
     }
-    m_kappa = hard.m_budget_ms * hard.m_host_rate / (1000.0 * reference_size);
+    m_kappa = budget_ms * hard.m_host_rate / (1000.0 * reference_size);
     m_beta = std::max(hard.m_wait_ratio, 0.0);
     m_n = std::max<int64_t>(num_instances, 1);
     m_feasible = m_kappa < static_cast<double>(m_n);
@@ -316,7 +322,7 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
                           "inference slots are sized for one host block on an idle pool; the "
                           "stream will underrun.",
                           m_kappa,
-                          hard.m_budget_ms,
+                          budget_ms,
                           static_cast<long long>(m_n));
     }
 

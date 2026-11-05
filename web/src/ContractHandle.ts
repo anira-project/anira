@@ -22,14 +22,12 @@ export type HardContractOptions = {
   hostRate: number
   /**
    * The inference budget in milliseconds (`ANIRA_BUDGET_EXPLICIT`): how long an inference may
-   * take before its block is late. Required in this pre-release, whose prepare refuses the
-   * measured default.
+   * take before its block is late.
    */
   budgetMs: number
   /**
-   * Fixed warm-up iterations at prepare (`ANIRA_WARMUP_FIXED`, `anira::Hard::warmup_iterations`);
-   * default 0, none (this pre-release refuses the library's `ANIRA_WARMUP_UNTIL_STABLE`
-   * default).
+   * Fixed warm-up iterations at prepare (`ANIRA_WARMUP_FIXED`, `anira::Hard::warmup_iterations`:
+   * that many inferences of every plan through the session, timed); default 0, none.
    */
   warmupIterations?: number
   /**

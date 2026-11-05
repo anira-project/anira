@@ -132,6 +132,14 @@ struct HardContract {
     /// Resolved at prepare (validate), where a name that is no Streamed output and a figure
     /// below the spec's latency are ANIRA_ERROR_CONFIG; at most INT32_MAX.
     std::map<std::string, uint32_t> m_latencies;
+
+    /// Whether the contract's warm-up runs a pass at prepare (Core::warm_up_plan):
+    /// UNTIL_STABLE, or FIXED with at least one inference. NONE and FIXED 0 run none, which a
+    /// MEASURED budget refuses (validate): the pass is what measures it.
+    bool warms_up() const noexcept {
+        return m_warmup == ANIRA_WARMUP_UNTIL_STABLE ||
+               (m_warmup == ANIRA_WARMUP_FIXED && m_warmup_iterations > 0);
+    }
 };
 
 /// The host-block rules of anira_contract_create_hard, shared by the two C setters, the JSON

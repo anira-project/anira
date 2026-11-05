@@ -686,6 +686,12 @@ public:
     /// inferences of the session run at once (LatencyCalculator's n), and the pending dispatch
     /// queue of an exclusive session is sized by it.
     const uint32_t m_num_instances;
+    /// The inference time the next prepare() sizes the session for, in ms (LatencyCalculator's
+    /// T): the contract's explicit budget from the construction on; a 3.x handler sets it before
+    /// each prepare (one clock step for its warm-up pass under a MEASURED budget, then the
+    /// slowest plan's figure). The contract keeps what the user set. Control thread only, while
+    /// no chunk of the session exists.
+    double m_budget_ms;
 
     RtLatch m_rt_own;  ///< The session's own real-time latch: what m_rt points at when the
                        ///< constructor received no latch (a 2.x session); nothing reads its

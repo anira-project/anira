@@ -160,6 +160,7 @@ anira_add_test_binary(test_scheduler WHITE_BOX
 	scheduler/test_SessionElement.cpp
 	scheduler/test_StatefulOrdering.cpp
 	scheduler/test_TensorStems.cpp
+	scheduler/test_Warmup.cpp
 )
 # The C handler's body (src/capi/handler.h: the session a handler prepared, its ports) and the
 # engine room (src/engines/Adapter.h) the suites read white-box.

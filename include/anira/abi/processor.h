@@ -603,11 +603,15 @@ typedef anira_status (ANIRA_CALL* anira_processor_init_fn)(const anira_init_info
 /**
  * @brief The prepare function of a processor: called by anira_handler_prepare on its caller's
  * thread, once per prepare, after the plan report is built and while the handler already
- * counts as prepared (its getters answer). It may allocate: this is where a processor
- * sizes its per-chunk scratch, one slot per entry of info->num_entries, indexed at run
- * time by anira_processor_ctx.entry, and hands it back through out_prepared, never
- * through user_data, which every handler of the pipeline shares. Of anira it may call
- * the [callback-safe] entries, the handler's getters and the two Static entries, never
+ * counts as prepared (its getters answer); before the contract's warm-up pass, whose
+ * inferences run its before_inference and after_inference. When the session sized again
+ * after the pass has another entry count, it is unprepared and called once more with the
+ * final record, inside the same anira_handler_prepare (under a MEASURED budget whose
+ * figure crosses an entry boundary). It may allocate: this is where a processor sizes
+ * its per-chunk scratch, one slot per entry of info->num_entries, indexed at run time by
+ * anira_processor_ctx.entry, and hands it back through out_prepared, never through
+ * user_data, which every handler of the pipeline shares. Of anira it may call the
+ * [callback-safe] entries, the handler's getters and the two Static entries, never
  * prepare, destroy or a Hard entry. A status other than ANIRA_OK fails
  * anira_handler_prepare with that status ("the processor refused prepare") and leaves
  * the handler unprepared; unprepare is not called then.
@@ -677,8 +681,9 @@ typedef void (ANIRA_CALL* anira_processor_reset_fn)(const anira_processor_ctx* c
  * @brief The unprepare function of a processor: called once per successful prepare, at the next
  * anira_handler_prepare (once the previous session is released, before the new prepare;
  * a later prepare that fails earlier unprepares the previous one all the same, since the
- * handler is unprepared afterwards) and at anira_handler_destroy, after the last phase
- * call of this handler. NULL: none.
+ * handler is unprepared afterwards), inside a prepare whose warm-up pass moved the entry
+ * count (before the prepare with the final record) and at anira_handler_destroy, after
+ * the last phase call of this handler. NULL: none.
  * @param prepared What the matching prepare handed back.
  * @param user_data The descriptor's user_data.
  * @par Thread contract

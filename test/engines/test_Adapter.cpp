@@ -621,9 +621,6 @@ TEST(Adapter, ModelsCompareByWhatAnAdapterReads) {
     b = gain_model(2);
     b.m_entry = "encode";
     EXPECT_NE(a, b) << "the entry is";
-    b = gain_model(2);
-    b.m_warm_up = 3;
-    EXPECT_NE(a, b) << "the warm-up is";
     b = gain_model(0);
     EXPECT_NE(a, b) << "a record without a shared slot (an exclusive session's) is another";
     b = gain_model(2);
@@ -1048,7 +1045,7 @@ std::string accumulator_onnx() {
 
 // The bundled gain model as gain.model.json describes it: the canonical names, no records.
 // The graph's names are data / gain / processed_data / peak.
-Model onnx_gain_model(uint32_t warm_up = 1) {
+Model onnx_gain_model() {
     Model model;
     model.m_engine = ANIRA_ENGINE_ONNXRUNTIME;
     model.m_path = gain_onnx();
@@ -1056,7 +1053,6 @@ Model onnx_gain_model(uint32_t warm_up = 1) {
     model.m_inputs.push_back(f32_tensor("gain", {1}));
     model.m_outputs.push_back(f32_tensor("audio_out", {1, 1, k_block}));
     model.m_outputs.push_back(f32_tensor("gain_out", {1}));
-    model.m_warm_up = warm_up;
     return model;
 }
 
@@ -1070,7 +1066,6 @@ Model onnx_accumulator_model() {
     model.m_inputs.push_back(f32_tensor("data", {1, 2, 64}));
     model.m_outputs.push_back(f32_tensor("processed_data", {1, 2, 64}));
     model.m_outputs.push_back(f32_tensor("state_out", {1, 2, 2}));
-    model.m_warm_up = 1;
     return model;
 }
 
@@ -1268,7 +1263,7 @@ TEST(AdapterOnnxRuntime, PrepareRefusals) {
 // nothing is written; a shorter or a foreign-typed block are the cases.
 TEST(AdapterOnnxRuntime, ADescriptorTheAdapterCannotBindFailsTheCall) {
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_ONNXRUNTIME);
-    adapter->prepare(onnx_gain_model(0));
+    adapter->prepare(onnx_gain_model());
     std::vector<float> audio_in(k_block, 0.25F);
     std::vector<float> gain{0.5F};
     std::vector<float> audio_out(k_block, -1.F);
@@ -1322,7 +1317,7 @@ std::string guitarlstm_tflite() {
 // The bundled gain export as gain.model.json describes it for its TensorFlow rows: the static
 // gain re-viewed to the export's rank 3 by the row's layout (the engine dims here), no names.
 // The signature's keys are args_0 / args_0_1 / output_0 / output_1.
-Model tensorflow_gain_model(anira_engine engine, uint32_t warm_up = 1) {
+Model tensorflow_gain_model(anira_engine engine) {
     Model model;
     model.m_engine = engine;
     model.m_path = gain_tflite();
@@ -1330,7 +1325,6 @@ Model tensorflow_gain_model(anira_engine engine, uint32_t warm_up = 1) {
     model.m_inputs.push_back(f32_tensor("gain", {1, 1, 1}));
     model.m_outputs.push_back(f32_tensor("audio_out", {1, 1, k_block}));
     model.m_outputs.push_back(f32_tensor("gain_out", {1}));
-    model.m_warm_up = warm_up;
     return model;
 }
 
@@ -1345,7 +1339,6 @@ Model tensorflow_accumulator_model(anira_engine engine) {
     model.m_inputs.push_back(f32_tensor("data", {1, 2, 64}));
     model.m_outputs.push_back(f32_tensor("processed_data", {1, 2, 64}));
     model.m_outputs.push_back(f32_tensor("state_out", {1, 2, 2}));
-    model.m_warm_up = 1;
     return model;
 }
 
@@ -1563,7 +1556,6 @@ TEST(AdapterTFLite, AFileWithoutASignatureRunsThroughTheInterpreter) {
     model.m_path = guitarlstm_tflite();
     model.m_inputs.push_back(f32_tensor("audio_in", {256, 150, 1}));
     model.m_outputs.push_back(f32_tensor("audio_out", {256, 1}));
-    model.m_warm_up = 1;
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_TFLITE);
     adapter->prepare(model);
     EXPECT_EQ(adapter->bindings().m_inputs, (std::vector<anira_binding>{ANIRA_BINDING_POSITION}));
@@ -1736,8 +1728,8 @@ TEST(AdapterLiteRt, AnAlignedSlotIsBoundInPlaceAndAnotherCopied) {
 // itself: over a record whose device memory is unified (lavapipe's, as the handler's context
 // would give it), the report says ANIRA_EDGE_UNIFIED_TRANSFER moved by the engine, with the
 // reason naming the memory, and anira counts no copy. The
-// record's warm-up runs over the managed buffers first, then the runs go in place, off the
-// boundary (the managed buffers again) and in place once more: a compiled model refuses a run
+// executor's creation warm-up runs over the managed buffers first, then the runs go in place, off
+// the boundary (the managed buffers again) and in place once more: a compiled model refuses a run
 // over another buffer type than its first run's (P2g), so every buffer the adapter hands it is of
 // LiteRT's host-memory type, and this order runs through. Skipped where no GPU accelerator is
 // registered (the pinned CPU package, the CI legs).
@@ -1748,7 +1740,7 @@ TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
         })) {
         GTEST_SKIP() << "no GPU accelerator is registered here";
     }
-    Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT, /*warm_up=*/2);
+    Model gpu = tensorflow_gain_model(ANIRA_ENGINE_LITERT);
     gpu.m_outputs[0].m_export_name = "output_0";
     gpu.m_outputs[1].m_export_name = "output_1";
     gpu.m_provider = ANIRA_PROVIDER_CUSTOM;
@@ -1760,7 +1752,7 @@ TEST(AdapterLiteRt, AnAcceleratorBindsTheSlotsInPlace) {
             "host-visible"};
     const std::shared_ptr<Rig> adapter = builtin_rig(ANIRA_ENGINE_LITERT);
     ASSERT_NE(adapter, nullptr);
-    adapter->prepare(gpu);  // the warm-up: two runs over the managed host buffers
+    adapter->prepare(gpu);  // the creation warm-up: a run over the managed host buffers
     // The accelerator computes the float32 export in float16 (its default precision): two
     // roundings of 2^-11 each.
     expect_bound_on_the_boundary(*adapter,

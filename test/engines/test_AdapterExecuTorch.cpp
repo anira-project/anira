@@ -117,8 +117,7 @@ TEST(AdapterExecuTorch, TheMemoryPlanDecidesWhatIsBoundInPlace) {
                 "/model-pool/example-models/TypedGainNetwork/models/typed_gain_network_int16") +
                 (unplanned ? "_unplanned.pte" : ".pte"),
             {{1, 1, 512}, {1}},
-            {{1, 1, 512}, {1}},
-            1);
+            {{1, 1, 512}, {1}});
         for (auto* side : {&model.m_inputs, &model.m_outputs}) {
             for (anira::engine::TensorInfo& tensor : *side) { tensor.m_dtype = ANIRA_DTYPE_I16; }
         }
@@ -199,7 +198,6 @@ TEST(AdapterExecuTorch, BinaryModelDataLoadsFromMemory) {
                                                 "",
                                                 {{1, 1, static_cast<int64_t>(k_size)}},
                                                 {{1, 1, static_cast<int64_t>(k_size)}},
-                                                1,
                                                 "gain2"),
                                    bytes);
     ASSERT_NE(model.m_bytes, nullptr);
@@ -257,7 +255,6 @@ TEST(AdapterExecuTorch, TheProviderIsTheExportsDelegate) {
                                        multifunction_model_path(),
                                        {{1, 1, static_cast<int64_t>(k_size)}},
                                        {{1, 1, static_cast<int64_t>(k_size)}},
-                                       1,
                                        "gain2");
     ASSERT_EQ(neutral.m_entry, "gain2");
     adapter->prepare(neutral);
@@ -310,7 +307,6 @@ TEST(AdapterExecuTorch, UnknownModelFunctionThrowsRuntimeError) {
                                       multifunction_model_path(),
                                       {{1, 1, static_cast<int64_t>(k_size)}},
                                       {{1, 1, static_cast<int64_t>(k_size)}},
-                                      0,
                                       "no_such_method"));
         FAIL() << "a missing method loaded";
     } catch (const anira::StatusError& error) {

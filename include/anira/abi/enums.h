@@ -355,7 +355,12 @@ typedef enum anira_contract_kind {
  * @brief How a Hard contract's per-inference budget is set.
  */
 typedef enum anira_budget_kind {
-    ANIRA_BUDGET_MEASURED = 0,  /**< Derived during warmup (default). */
+    /**
+     * What the warm-up pass measures at prepare (default): the slowest plan's figure, each
+     * plan's the maximum of its last four inferences, without a margin. Needs a pass of at
+     * least one inference: ANIRA_WARMUP_NONE and FIXED 0 are ANIRA_ERROR_CONFIG at prepare.
+     */
+    ANIRA_BUDGET_MEASURED = 0,
     /**
      * The explicit_ms of anira_contract_hard_set_budget; the v2 max_inference_time.
      */
@@ -364,12 +369,31 @@ typedef enum anira_budget_kind {
 } anira_budget_kind;
 
 /**
- * @brief Warmup policy of a Hard contract.
+ * @brief The warm-up pass of a Hard contract, at anira_handler_prepare: ordinary inferences of
+ * every plan, in table order, through the handler's session on the inference threads,
+ * each timed on the thread that runs it (the declared state's feed and capture, the
+ * processor's before_inference and after_inference, the engine call; never pre_process
+ * or post_process, never the wait for a thread or an instance). The warm-up pass also
+ * measures the inference time; a measured budget is the maximum of its last four
+ * inferences; under an explicit budget the timings are only reported. The session is
+ * sized again after the pass, which starts the stream over: nothing of the pass reaches
+ * the stream or a declared state. Apart from the pass, every executor of a built-in
+ * engine runs one inference over its own scratch when it is made (at load, or at an
+ * exclusive handler's prepare).
  */
 typedef enum anira_warmup_mode {
-    ANIRA_WARMUP_NONE = 0,  /**< No warmup; legal only with an explicit budget. */
-    ANIRA_WARMUP_FIXED = 1,  /**< A fixed number of iterations; the v2 warm_up. */
-    ANIRA_WARMUP_UNTIL_STABLE = 2,  /**< Until the measured time stabilises (default). */
+    ANIRA_WARMUP_NONE = 0,  /**< No pass; legal only with an explicit budget. */
+    /**
+     * n inferences per plan at prepare (the v2 warm_up, which ran per instance at load). With
+     * fewer than four the figure is the maximum of all n, the cold start included; UNTIL_STABLE
+     * or n >= 5 leaves it out. FIXED 0 is NONE.
+     */
+    ANIRA_WARMUP_FIXED = 1,
+    /**
+     * Until the last four inference times all lie within 20 % of their median, or within one
+     * step of the clock that took them when that is more, at most 32 inferences (default).
+     */
+    ANIRA_WARMUP_UNTIL_STABLE = 2,
     ANIRA_WARMUP_MODE_FORCE32 = 0x7fffffff
 } anira_warmup_mode;
 

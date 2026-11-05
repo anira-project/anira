@@ -6,10 +6,12 @@
 
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <vector>
 
 #include "Core.h"
 #include "InferenceThread.h"
+#include "Warmup.h"
 
 /// The context config the 3.x constructor takes (its body is src/capi/handles.h).
 struct anira_context_config;
@@ -110,6 +112,29 @@ public:
      * not named)
      */
     void prepare(const CustomLatencies& custom_latencies = {}, const RingDtypes& ring_dtypes = {});
+
+    /**
+     * @brief The inference time the next prepare() sizes the session for
+     *
+     * The contract's explicit budget until it is set (SessionElement::m_budget_ms): a handler
+     * sets it before each prepare, the provisional figure of its warm-up pass and then the
+     * pass's result. Control thread, while no chunk of the session exists.
+     *
+     * @param budget_ms The inference time in ms (LatencyCalculator's T)
+     */
+    void set_budget(double budget_ms) noexcept;
+
+    /**
+     * @brief One plan's warm-up pass through the prepared session (Core::warm_up_plan())
+     *
+     * Control thread, after prepare() and before any chunk of the session exists; a
+     * prepare() again clears what the pass left.
+     *
+     * @param plan The plan's dense index
+     * @return What the pass measured
+     * @throws StatusError as Core::warm_up_plan()
+     */
+    WarmupFigure warm_up_plan(uint32_t plan);
 
     /**
      * @name The tensor stems

@@ -1198,9 +1198,17 @@ TEST(AbiProcessor, CtxPerPhase) {
                                          ANIRA_PHASE_BEFORE_INFERENCE,
                                          ANIRA_PHASE_AFTER_INFERENCE,
                                          ANIRA_PHASE_POST_PROCESS};
+    // The contract file's warm-up (FIXED 1) ran every plan at prepare, through the session: the
+    // inference hooks once per plan and inference, pre_process and post_process never (they are
+    // the stream's alone).
+    const int pass =
+        static_cast<int>(h->m_report.m_plans.size() * h->m_contract.hard()->m_warmup_iterations);
+    ASSERT_GT(pass, 0);
     for (const uint32_t phase : phases) {
         SCOPED_TRACE("phase " + std::to_string(phase));
-        EXPECT_EQ(probe.m_calls.at(phase).load(), 3);
+        const bool hook =
+            phase == ANIRA_PHASE_BEFORE_INFERENCE || phase == ANIRA_PHASE_AFTER_INFERENCE;
+        EXPECT_EQ(probe.m_calls.at(phase).load(), 3 + (hook ? pass : 0));
         const anira_processor_ctx& ctx = probe.m_ctx.at(phase);
         EXPECT_EQ(ctx.phase, phase);
         EXPECT_EQ(ctx.engine, info.engine);

@@ -6,9 +6,11 @@
 #include <anira/abi/config.h>
 #include <anira/abi/context.h>
 #include <anira/abi/core.h>
+#include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
+#include <anira/abi/lifecycle.h>
 #include <anira/abi/log.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
@@ -18,26 +20,36 @@
 #include <algorithm>
 #include <anira/anira.hpp>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <ios>
+#include <memory>
 #include <optional>
+#include <ratio>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
+#include "capi/handles.h"
 #include "capi/words.h"
 #include "fixtures.h"
 #include "float_face.h"
 #include "handler_support.h"
 #include "scheduler/Core.h"
+#include "scheduler/LatencyCalculator.h"
+#include "scheduler/SessionElement.h"
+#include "scheduler/Warmup.h"
 
 namespace {
 
@@ -167,30 +179,38 @@ TEST(AbiPrepare, AnAsyncContractIsNotSupported) {
     expect_unprepared(handler.m_handler);
 }
 
-TEST(AbiPrepare, MeasuredBudgetAndUntilStableWarmupAreNotSupportedUntilTheEstimator) {
+// The create-time defaults (MEASURED, UNTIL_STABLE) prepare: the warm-up pass measures the
+// budget. A MEASURED budget without a warm-up inference (NONE, FIXED 0) is CONFIG naming the
+// warm-up; an explicit budget takes every warm-up, UNTIL_STABLE and NONE included.
+TEST(AbiPrepare, AMeasuredBudgetNeedsAWarmUpInference) {
     const Context context;
     const ModelConfig model = gain_with_custom();
     const std::vector<anira_backend_id> candidates = custom_candidates();
     Handler handler(context, model, candidates);
     anira_error err = ANIRA_ERROR_INIT;
 
-    // The create-time defaults: MEASURED, UNTIL_STABLE.
     const Hard defaults{.host_block_min = 512,
                         .host_block_max = 512,
                         .host_rate = 48000.0,
                         .budget = anira::Budget::measured()};
-    EXPECT_EQ(handler.prepare(ContractHandle(defaults), &err), ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(err.message, "contract: a MEASURED budget");
+    EXPECT_EQ(handler.prepare(ContractHandle(defaults), &err), ANIRA_OK) << err.message;
+
+    Hard none = defaults;
+    none.warmup = ANIRA_WARMUP_NONE;
+    EXPECT_EQ(handler.prepare(ContractHandle(none), &err), ANIRA_ERROR_CONFIG);
+    expect_contains(err.message, "contract: a MEASURED budget needs at least one warm-up");
+    Hard fixed_zero = defaults;
+    fixed_zero.warmup = ANIRA_WARMUP_FIXED;
+    fixed_zero.warmup_iterations = 0;
+    EXPECT_EQ(handler.prepare(ContractHandle(fixed_zero), &err), ANIRA_ERROR_CONFIG);
+    expect_contains(err.message, "contract: a MEASURED budget needs at least one warm-up");
 
     Hard until_stable = defaults;
     until_stable.budget = std::chrono::milliseconds(5);
-    until_stable.warmup = ANIRA_WARMUP_UNTIL_STABLE;
-    EXPECT_EQ(handler.prepare(ContractHandle(until_stable), &err), ANIRA_ERROR_NOT_SUPPORTED);
-    expect_contains(err.message, "contract: UNTIL_STABLE warmup");
-
-    Hard none = until_stable;
-    none.warmup = ANIRA_WARMUP_NONE;
-    EXPECT_EQ(handler.prepare(ContractHandle(none), &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(handler.prepare(ContractHandle(until_stable), &err), ANIRA_OK) << err.message;
+    Hard explicit_none = until_stable;
+    explicit_none.warmup = ANIRA_WARMUP_NONE;
+    EXPECT_EQ(handler.prepare(ContractHandle(explicit_none), &err), ANIRA_OK) << err.message;
 }
 
 TEST(AbiPrepare, MissingHostBlocksAreConfig) {
@@ -1478,4 +1498,316 @@ TEST(AbiPrepare, TheContextOutlivesItsDestroyWhileAHandlerLives) {
     EXPECT_EQ(anira_shutdown(), ANIRA_OK);
     EXPECT_EQ(anira::Core::get_num_contexts(), 0U);
     EXPECT_EQ(anira::Core::get_num_handlers(), 0U);
+}
+
+// ============================================================================================
+// The warm-up pass
+// ============================================================================================
+
+namespace {
+
+/// How a ScriptedEngine takes its time: a busy-wait bounds it from above as well (the case
+/// asserts an upper bound), a sleep from below alone.
+enum class Wait : uint8_t { Busy, Sleep };
+
+/// A registered engine under anira.v2.custom whose call k takes `figure_ms(k)` and then passes
+/// through; it counts its calls, its prepares and unprepares, and keeps the entry count of its
+/// last prepare's record. Declared before the Handler that adds it.
+class ScriptedEngine {
+public:
+    ScriptedEngine(std::function<double(int)> figure_ms, Wait wait)
+        : m_figure_ms(std::move(figure_ms)), m_wait(wait) {
+        anira_engine_desc desc = ANIRA_ENGINE_DESC_INIT;
+        desc.user_data = this;
+        desc.process = &process_slot;
+        desc.prepare = &prepare_slot;
+        desc.unprepare = &unprepare_slot;
+        anira_error err = ANIRA_ERROR_INIT;
+        EXPECT_EQ(anira_custom_engine_create(k_custom, &desc, &m_engine, &err), ANIRA_OK)
+            << err.message;
+    }
+    ~ScriptedEngine() { anira_custom_engine_destroy(m_engine); }
+    ScriptedEngine(const ScriptedEngine&) = delete;
+    ScriptedEngine& operator=(const ScriptedEngine&) = delete;
+    ScriptedEngine(ScriptedEngine&&) = delete;
+    ScriptedEngine& operator=(ScriptedEngine&&) = delete;
+
+    const anira_custom_engine* engine() const noexcept { return m_engine; }
+
+    std::atomic<int> m_calls{0};
+    std::atomic<int> m_prepares{0};
+    std::atomic<int> m_unprepares{0};
+    std::atomic<uint32_t> m_last_entries{0};
+
+private:
+    static anira_status ANIRA_CALL process_slot(const anira_engine_ctx* ctx,
+                                                void* /*prepared*/,
+                                                void* user_data) noexcept {
+        auto* self = static_cast<ScriptedEngine*>(user_data);
+        const int call = self->m_calls.fetch_add(1);
+        const auto take = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+            std::chrono::duration<double, std::milli>(self->m_figure_ms(call)));
+        if (self->m_wait == Wait::Sleep) {
+            std::this_thread::sleep_for(take);
+        } else {
+            const auto until = std::chrono::steady_clock::now() + take;
+            while (std::chrono::steady_clock::now() < until) {}
+        }
+        return anira_test::passthrough(*ctx);
+    }
+    static anira_status ANIRA_CALL prepare_slot(const anira_prepare_info* info,
+                                                void* /*loaded*/,
+                                                void* user_data,
+                                                void** out_prepared) {
+        auto* self = static_cast<ScriptedEngine*>(user_data);
+        self->m_prepares.fetch_add(1);
+        self->m_last_entries.store(info->num_entries);
+        *out_prepared = nullptr;
+        return ANIRA_OK;
+    }
+    static void ANIRA_CALL unprepare_slot(void* /*prepared*/, void* user_data) {
+        static_cast<ScriptedEngine*>(user_data)->m_unprepares.fetch_add(1);
+    }
+
+    std::function<double(int)> m_figure_ms;
+    Wait m_wait;
+    anira_custom_engine* m_engine = nullptr;
+};
+
+/// The create-time defaults, a MEASURED budget and the UNTIL_STABLE warm-up, at host blocks of
+/// `block` at k_rate.
+ContractHandle measured_contract(uint32_t block = k_block) {
+    return ContractHandle(Hard{.host_block_min = static_cast<double>(block),
+                               .host_block_max = static_cast<double>(block),
+                               .host_rate = k_rate,
+                               .budget = anira::Budget::measured()});
+}
+
+/// The plan row `plan` of a prepared handler's report.
+const anira_plan_info& plan_row(const Handler& handler, uint32_t plan = 0) {
+    return handler.m_handler->m_report.m_plans.at(plan);
+}
+
+/// `blocks` ramp blocks through a prepared mono handler, each waited for its inference: the
+/// stream, a pure function of the calls.
+std::vector<float> waited_stream(anira_handler* handler, size_t blocks) {
+    std::vector<float> stream;
+    for (size_t index = 0; index < blocks; ++index) {
+        std::vector<float> block = ramp(index);
+        const std::array<float*, 1> ptrs{block.data()};
+        const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+        EXPECT_EQ(anira_handler_process_wait(handler, &io, 0, &io, 0, nullptr, ANIRA_WAIT_FOREVER),
+                  ANIRA_OK)
+            << "block " << index;
+        stream.insert(stream.end(), block.begin(), block.end());
+    }
+    return stream;
+}
+
+}  // namespace
+
+// UNTIL_STABLE leaves the cold start out: a first inference of 10 ms and 1 ms after it stop no
+// earlier than the fifth (the first is in no window of four that agrees), and the plan's budget,
+// the window's maximum, is not the first time. The engine runs nothing else at prepare.
+TEST(AbiWarmup, UntilStableLeavesTheColdStartOut) {
+    const Context context;
+    const ScriptedEngine engine([](int call) { return call == 0 ? 10.0 : 1.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_GE(engine.m_calls.load(), 5);
+    EXPECT_LE(engine.m_calls.load(), 32);
+    EXPECT_GE(plan_row(handler).budget_ms, 1.0);
+    EXPECT_LT(plan_row(handler).budget_ms, 10.0) << "the cold start is in no window";
+}
+
+// Times that never agree within 20 % (1 and 5 ms alternating) stop the pass at its cap of 32,
+// and the budget is the last four's maximum, a 5 ms one.
+TEST(AbiWarmup, AnUnsettledPassStopsAtItsCap) {
+    const Context context;
+    const ScriptedEngine engine([](int call) { return call % 2 == 0 ? 1.0 : 5.0; }, Wait::Busy);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), 32);
+    EXPECT_GE(plan_row(handler).budget_ms, 5.0);
+}
+
+// FIXED n runs n inferences of every plan, whatever their times, under either budget: the
+// custom plan of the gain model among the built-in ones runs its own n, and nothing at load.
+TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 0.0; }, Wait::Busy);
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, gain_with_custom(), candidates, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0, 3)),
+              ANIRA_OK)
+        << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), 3);
+    EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 5.0) << "an explicit budget stays";
+
+    ContractHandle measured = measured_contract();
+    measured.hard_warmup(ANIRA_WARMUP_FIXED, 4);
+    ASSERT_EQ(handler.prepare(measured), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), 3 + 4);
+    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+        EXPECT_GT(row.budget_ms, 0.0) << "every plan was measured";
+    }
+}
+
+// A MEASURED budget is the slowest plan's: the session is sized for the maximum of the plans'
+// figures, and each plan's row carries its own.
+TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 0.0; }, Wait::Busy);
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, gain_with_custom(), candidates, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    double slowest = 0.0;
+    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+        EXPECT_GT(row.budget_ms, 0.0);
+        slowest = std::max(slowest, row.budget_ms);
+    }
+    const std::shared_ptr<anira::SessionElement> session =
+        anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    EXPECT_DOUBLE_EQ(session->m_budget_ms, slowest);
+    EXPECT_GE(engine.m_calls.load(), 4) << "UNTIL_STABLE runs four at least";
+}
+
+// A model too slow for the stream prepares: an inference of 30 ms at a hop of 512 at 48 kHz
+// (10.7 ms) on one instance is sized as an infeasible explicit budget is (for one host block's
+// burst), its budget what the pass measured; a Hard prepare never answers ANIRA_ERROR_BUDGET.
+// The stream runs, its misses filled under on_miss.
+TEST(AbiWarmup, AModelTooSlowForTheStreamStillPrepares) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_GE(plan_row(handler).budget_ms, 30.0);
+    const std::shared_ptr<anira::SessionElement> session =
+        anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    EXPECT_DOUBLE_EQ(session->m_budget_ms, plan_row(handler).budget_ms);
+    std::vector<float> block(k_block, 0.5F);
+    const std::array<float*, 1> ptrs{block.data()};
+    const anira_tensor io = anira_test::planar_f32(ptrs.data(), 1, k_block);
+    const anira_status status = anira_handler_process(handler.m_handler, &io, 0, &io, 0, nullptr);
+    EXPECT_TRUE(status == ANIRA_OK || status == ANIRA_MISSED) << status;
+}
+
+// Under an explicit budget the pass's timings are only reported: the session is sized for the
+// declared figure, which the plan's row keeps, however slow the pass was.
+TEST(AbiWarmup, AnExplicitBudgetIsNotReplacedByTheMeasurement) {
+    const Context context;
+    const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0, 4)),
+              ANIRA_OK)
+        << handler.m_err.message;
+    EXPECT_EQ(engine.m_calls.load(), 4);
+    EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 1.0);
+    const std::shared_ptr<anira::SessionElement> session =
+        anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    EXPECT_DOUBLE_EQ(session->m_budget_ms, 1.0);
+}
+
+// The pass's jobs are ordinary jobs: a context without a pool whose host runs no inference thread
+// refuses a prepare that warms up (INVALID_STATE naming the running thread it needs) and takes
+// one that does not (an explicit budget without a warm-up).
+TEST(AbiWarmup, AWarmUpWithoutARunningThreadIsInvalidState) {
+    const Context context(0);
+    Handler handler(context, anira_test::mono_stream_model());
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(handler.prepare(measured_contract(), &err), ANIRA_ERROR_INVALID_STATE);
+    expect_contains(err.message, "a warm-up needs a running inference thread");
+    expect_unprepared(handler.m_handler);
+    EXPECT_EQ(handler.prepare(explicit_contract(), &err), ANIRA_OK) << err.message;
+}
+
+// A failing inference of the pass fails the prepare with ENGINE naming the plan, and the handler
+// is unprepared.
+TEST(AbiWarmup, AFailedWarmUpInferenceFailsThePrepare) {
+    const Context context;
+    GateEngine engine;
+    engine.m_fail.store(true);
+    Handler handler(context, anira_test::mono_stream_model(), {}, {}, engine.engine());
+    anira_error err = ANIRA_ERROR_INIT;
+    EXPECT_EQ(handler.prepare(measured_contract(), &err), ANIRA_ERROR_ENGINE);
+    expect_contains(err.message, "the warm-up inference of plan 0 failed");
+    expect_unprepared(handler.m_handler);
+    engine.m_fail.store(false);
+    EXPECT_EQ(handler.prepare(measured_contract(), &err), ANIRA_OK) << err.message;
+}
+
+// The user code a prepare runs sees the record of the pass's sizing. A figure that keeps the
+// entry count leaves it prepared once; one that moves it (an inference of 20 ms on four instances
+// at a hop of 512 at 48 kHz needs more structs than one clock step) unprepares it and prepares it
+// again with the final record.
+TEST(AbiWarmup, AnEntryCountThatMovesPreparesTheUserCodeAgain) {
+    const Context context(4);
+    {
+        const ScriptedEngine fast([](int /*call*/) { return 0.0; }, Wait::Busy);
+        Handler handler(context, anira_test::mono_stream_model(k_block, 4), {}, {}, fast.engine());
+        ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+        EXPECT_EQ(fast.m_prepares.load(), 1);
+        EXPECT_EQ(fast.m_unprepares.load(), 0);
+        EXPECT_EQ(fast.m_last_entries.load(), anira_handler_num_entries(handler.m_handler));
+    }
+    const ScriptedEngine slow([](int /*call*/) { return 20.0; }, Wait::Sleep);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 4), {}, {}, slow.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira::capi::HardContract& hard = *handler.m_handler->m_contract.hard();
+    const std::shared_ptr<anira::SessionElement> session =
+        anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    const anira::LatencyCalculator at_pass(handler.m_handler->m_derived,
+                                           hard,
+                                           session->m_num_instances,
+                                           static_cast<double>(anira::clock_step_ns()) / 1e6);
+    const anira::LatencyCalculator at_figure(handler.m_handler->m_derived,
+                                             hard,
+                                             session->m_num_instances,
+                                             session->m_budget_ms);
+    ASSERT_NE(at_pass.get_num_structs(), at_figure.get_num_structs())
+        << "the geometry no longer moves the entry count";
+    EXPECT_EQ(slow.m_prepares.load(), 2);
+    EXPECT_EQ(slow.m_unprepares.load(), 1);
+    EXPECT_EQ(slow.m_last_entries.load(), anira_handler_num_entries(handler.m_handler));
+}
+
+// The pass leaves no trace in the stream: after a FIXED 3 prepare the stream equals, sample for
+// sample, that of a twin prepared without a warm-up, on the custom pass-through and on the
+// built-in gain of the first engine of this build.
+TEST(AbiWarmup, ThePassLeavesNoTraceInTheStream) {
+    const Context context;
+    const ContractHandle warmed = explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0, 3);
+    const ContractHandle unwarmed =
+        explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 5.0, 0);
+    {
+        Handler twin_a(context, anira_test::mono_stream_model());
+        Handler twin_b(context, anira_test::mono_stream_model());
+        ASSERT_EQ(twin_a.prepare(warmed), ANIRA_OK) << twin_a.m_err.message;
+        ASSERT_EQ(twin_b.prepare(unwarmed), ANIRA_OK) << twin_b.m_err.message;
+        EXPECT_EQ(waited_stream(twin_a.m_handler, 8), waited_stream(twin_b.m_handler, 8));
+    }
+    const std::vector<anira_engine> engines = anira_test::oracle_engines();
+    if (engines.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    const std::vector<anira_backend_id> candidates{
+        {.struct_size = sizeof(anira_backend_id),
+         .engine = static_cast<uint32_t>(engines.front()),
+         .provider = ANIRA_PROVIDER_CPU,
+         .engine_id = nullptr}};
+    Handler twin_a(context, gain_with_custom(false), candidates);
+    Handler twin_b(context, gain_with_custom(false), candidates);
+    ASSERT_EQ(twin_a.prepare(warmed), ANIRA_OK) << twin_a.m_err.message;
+    ASSERT_EQ(twin_b.prepare(unwarmed), ANIRA_OK) << twin_b.m_err.message;
+    float gain_value = 0.5F;
+    const std::array<int64_t, 1> gain_shape{1};
+    anira_tensor gain_tensor{};
+    anira_tensor_init_host(&gain_tensor, &gain_value, ANIRA_DTYPE_F32, 1, gain_shape.data());
+    ASSERT_EQ(anira_handler_set_static_input(twin_a.m_handler, 1, &gain_tensor), ANIRA_OK);
+    ASSERT_EQ(anira_handler_set_static_input(twin_b.m_handler, 1, &gain_tensor), ANIRA_OK);
+    const std::vector<float> stream = waited_stream(twin_a.m_handler, 8);
+    EXPECT_EQ(stream, waited_stream(twin_b.m_handler, 8));
+    EXPECT_TRUE(std::ranges::any_of(stream, [](float x) { return x != 0.0F; }));
 }
