@@ -1272,7 +1272,7 @@ TEST(AbiProcessor, CtxPerPhase) {
     EXPECT_EQ(audio.shape[2], static_cast<int64_t>(k_hop));
     bool input_is_a_struct_buffer = false;
     bool output_is_a_struct_buffer = false;
-    for (const auto& chunk : session->m_inference_queue) {
+    for (const auto& chunk : session->m_struct_pool) {
         input_is_a_struct_buffer =
             input_is_a_struct_buffer ||
             audio.handle.host.ptr == chunk->m_input_tensors.at(0).handle.host.ptr;
@@ -2864,7 +2864,7 @@ TEST(AbiProcessor, TensorsKeepTheStructsMemoryAcrossLibTorchInferences) {
     ASSERT_NO_FATAL_FAILURE(set_gain(h, 1.0F));  // the identity: the stream oracle applies
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
     ASSERT_NE(session, nullptr);
-    const auto& queue = session->m_inference_queue;
+    const auto& queue = session->m_struct_pool;
     const size_t structs = queue.size();
     ASSERT_GT(structs, 0U);
     const size_t chunks = (2 * structs) + 2;  // every struct that runs comes round again

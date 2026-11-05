@@ -407,7 +407,7 @@ public:
         // output into the receive rings, ahead of every later chunk. Driving thread only (set
         // by the submission, moved out by Core::post_process); Core::pre_process resets it.
         size_t m_fills_after{0};
-        // The struct's position in SessionElement::m_inference_queue: the chunk's entry
+        // The struct's position in SessionElement::m_struct_pool: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
         // One descriptor per slot of either side over the chunk's storage (built by the
@@ -433,9 +433,12 @@ public:
         std::vector<std::span<std::byte>> m_output_bytes;
     };
 
-    std::vector<std::shared_ptr<ThreadSafeStruct>> m_inference_queue;  ///< Pool of thread-safe
-                                                                       ///< structures for
-                                                                       ///< concurrent processing
+    /// The session's chunks, built by prepare: m_num_structs of them (twice the steady-state
+    /// bound, see prepare), each a chunk's storage and descriptors, free or held by one chunk
+    /// from its submission to its collection. An index into it is the chunk's entry
+    /// (ThreadSafeStruct::m_entry). What the inference queue carries is a pointer to one of
+    /// them, so a session never has more jobs in the queue than this pool has structs.
+    std::vector<std::shared_ptr<ThreadSafeStruct>> m_struct_pool;
 
     /// No chunk carries this dispatch stamp: what a plan's m_engine_generation holds after
     /// prepare, so that the plan's first inference of the session is its first of a new stream.
@@ -525,7 +528,7 @@ public:
     /// Selects a plan: one relaxed store. False, and nothing stored, for an index out of range.
     bool select_plan(uint32_t plan) noexcept;
 
-    unsigned long m_current_queue = 0;         ///< Current position in the inference queue
+    unsigned long m_current_queue = 0;         ///< The time stamp of the next submitted chunk
     std::vector<unsigned long> m_time_stamps;  ///< Vector of timestamps for performance monitoring
     size_t m_pending_pull_samples = 0;  ///< Generator sessions only (!m_input_driven): samples of
                                         ///< the reference output the driving thread has demanded

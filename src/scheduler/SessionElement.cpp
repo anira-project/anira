@@ -228,7 +228,7 @@ void SessionElement::clear() {
     m_pending_pull_samples = 0;
     m_pending_fills = 0;
 
-    for (auto& inference : m_inference_queue) {
+    for (auto& inference : m_struct_pool) {
         // Only a free struct is exclusively ours to reset; skip anything a worker may
         // still be reading/writing.
         if (!inference->m_free.load(std::memory_order_acquire)) { continue; }
@@ -511,10 +511,10 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // any gate token a laggard worker may still hold from before the drain.
     force_reset_dispatch_chain();
 
-    // Create the thread-safe structs for the inference queue, each with its storage and the
+    // Create the session's struct pool, each struct with its storage and the
     // descriptors of its tensors over it, and its position in the pool, the chunk's entry. A
     // State slot gets no storage: its port's pair is bound per inference.
-    m_inference_queue.clear();
+    m_struct_pool.clear();
 
     const auto state_slots = [](const capi::Ports& ports) {
         std::vector<bool> state(ports.size(), false);
@@ -535,13 +535,13 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
         }
     }
     for (size_t i = 0; i < m_num_structs; ++i) {
-        m_inference_queue.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
-                                                                          m_derived.m_outputs,
-                                                                          input_state,
-                                                                          output_state,
-                                                                          host_chunk_storage(),
-                                                                          alignment));
-        m_inference_queue.back()->m_entry = static_cast<uint32_t>(i);
+        m_struct_pool.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
+                                                                      m_derived.m_outputs,
+                                                                      input_state,
+                                                                      output_state,
+                                                                      host_chunk_storage(),
+                                                                      alignment));
+        m_struct_pool.back()->m_entry = static_cast<uint32_t>(i);
     }
 
     // The first inference of the new session is the first of a new stream: the engine of each
@@ -577,7 +577,7 @@ void SessionElement::owe_fills(size_t hops) {
     // front); every struct that holds one is of the current generation (a reset clears the
     // list).
     if (!m_time_stamps.empty()) {
-        for (const auto& chunk : m_inference_queue) {
+        for (const auto& chunk : m_struct_pool) {
             if (!chunk->m_free.load(std::memory_order::relaxed) &&
                 chunk->m_time_stamp == m_time_stamps.front()) {
                 chunk->m_fills_after += hops;

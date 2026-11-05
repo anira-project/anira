@@ -1361,25 +1361,25 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
         if (!session->place_pending_fills()) { return false; }
         if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
-        for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            if (session->m_inference_queue[i]->m_time_stamp != session->m_time_stamps.back() ||
-                session->m_inference_queue[i]->m_dispatch_generation != generation) {
+        for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+            if (session->m_struct_pool[i]->m_time_stamp != session->m_time_stamps.back() ||
+                session->m_struct_pool[i]->m_dispatch_generation != generation) {
                 continue;
             }
             if (!session->receive_rings_have_room()) { return false; }
             if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
                 wait_for_completion(session, i);
             } else if (session->uses_semaphore()) {
-                if (!session->m_inference_queue[i]->m_done_semaphore.try_acquire()) { return true; }
+                if (!session->m_struct_pool[i]->m_done_semaphore.try_acquire()) { return true; }
             } else {
-                if (!session->m_inference_queue[i]->m_done_atomic.exchange(
+                if (!session->m_struct_pool[i]->m_done_atomic.exchange(
                         false,
                         std::memory_order::acquire)) {
                     return true;
                 }
             }
             session->m_time_stamps.pop_back();
-            post_process(session, session->m_inference_queue[i]);
+            post_process(session, session->m_struct_pool[i]);
             collected = true;
             break;
         }
@@ -1411,8 +1411,8 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
         if (!session->place_pending_fills()) { return WaitOutcome::Done; }
         if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
-        for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            SessionElement::ThreadSafeStruct& next = *session->m_inference_queue[i];
+        for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+            SessionElement::ThreadSafeStruct& next = *session->m_struct_pool[i];
             // See the generation-guard rationale in collect_completed().
             if (next.m_time_stamp != session->m_time_stamps.back() ||
                 next.m_dispatch_generation != generation) {
@@ -1453,7 +1453,7 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
             }
             if (!done) { return WaitOutcome::Deadline; }
             session->m_time_stamps.pop_back();
-            post_process(session, session->m_inference_queue[i]);
+            post_process(session, session->m_struct_pool[i]);
             collected = true;
             break;
         }
@@ -1474,11 +1474,10 @@ void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, s
     // it before blocking.
     try_dispatch_stateful(session);
     if (session->uses_semaphore()) {
-        session->m_inference_queue[index]->m_done_semaphore.acquire();
+        session->m_struct_pool[index]->m_done_semaphore.acquire();
     } else {
-        while (!session->m_inference_queue[index]->m_done_atomic.exchange(
-            false,
-            std::memory_order::acquire)) {
+        while (!session->m_struct_pool[index]->m_done_atomic.exchange(false,
+                                                                      std::memory_order::acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -1494,48 +1493,48 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
 }
 
 bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
-    for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-        if (session->m_inference_queue[i]->m_free.exchange(false)) {
+    for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+        if (session->m_struct_pool[i]->m_free.exchange(false)) {
             // The one load of the session's selection for this chunk: the plan index is
             // stamped on the struct and resolved from there by the hooks, the engine call
             // and post_process, so a select_plan() that lands later applies from the next
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
-            session->m_inference_queue[i]->m_plan = plan;
-            session->m_inference_queue[i]->m_completed_as_zeros = false;
-            session->m_inference_queue[i]->m_fills_after = 0;
+            session->m_struct_pool[i]->m_plan = plan;
+            session->m_struct_pool[i]->m_completed_as_zeros = false;
+            session->m_struct_pool[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
             // chunk's pre_process, on this thread: the processor runner reads it there to tell
             // the first chunk of a new stream, its reset boundary (capi/processor.h).
-            session->m_inference_queue[i]->m_dispatch_generation =
+            session->m_struct_pool[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
             const anira_status formed =
-                session->m_processor.pre_process(*session->m_inference_queue[i]);
+                session->m_processor.pre_process(*session->m_struct_pool[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
-            session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
+            session->m_struct_pool[i]->m_time_stamp = session->m_current_queue;
             if (formed != ANIRA_OK) {
                 // A processor's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct
                 // and timestamp and completes as zeros at its stream position without being
                 // enqueued, the path a full queue takes, so exactly one chunk was consumed and
                 // exactly one (silent) chunk will be produced.
-                session->complete_with_zeros(session->m_inference_queue[i]);
+                session->complete_with_zeros(session->m_struct_pool[i]);
             } else if (session->exclusive()) {
                 // A session-exclusive processor carries its state across calls, so
                 // its tasks must execute strictly in order and never concurrently.
                 // Defer dispatch so at most one of this session's tasks is ever in
                 // the global queue; the rest wait in submission order and are
                 // released one at a time as each completes.
-                session->enqueue_pending_dispatch(session->m_inference_queue[i]);
+                session->enqueue_pending_dispatch(session->m_struct_pool[i]);
                 // If the global queue is full, the claimed task (possibly an
                 // older chunk) is dropped and completes as zeros at its stream
                 // position — either way this submission stands, so fall through
                 // to return true.
                 try_dispatch_stateful(session);
             } else {
-                enqueue_inference_or_drop(session, session->m_inference_queue[i]);
+                enqueue_inference_or_drop(session, session->m_struct_pool[i]);
             }
             if (session->m_current_queue >= UINT16_MAX) {
                 session->m_current_queue = 0;
@@ -1723,7 +1722,7 @@ void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
 
 void Core::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session) {
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    for (const auto& s : session->m_inference_queue) {
+    for (const auto& s : session->m_struct_pool) {
         // Skip free structs (nothing to reclaim) and current-generation structs (live).
         if (s->m_free.load(std::memory_order::relaxed)) { continue; }
         if (s->m_dispatch_generation == generation) { continue; }

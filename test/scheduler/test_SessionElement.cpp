@@ -469,7 +469,7 @@ TEST(SessionElementClearTest, ClearWithBlockingRatioDoesNotFreeze) {
     // wait — a blind acquire() on a count-0 semaphore blocks forever, since
     // the callers' drain_inference_queue() guarantees no inference thread will
     // signal this session again.
-    session->m_inference_queue[0]->m_done_semaphore.release();
+    session->m_struct_pool[0]->m_done_semaphore.release();
 
     ClearDeadlockFixture* const raw = fixture.get();
     std::thread([raw, session] {

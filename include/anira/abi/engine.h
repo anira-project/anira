@@ -202,8 +202,8 @@ typedef struct anira_engine_ctx {
      */
     uint32_t instance;
     /**
-     * The chunk's position in the handler's inference queue (anira_processor_ctx.entry of the
-     * same chunk).
+     * The chunk's position in the handler's chunk pool (anira_processor_ctx.entry of the same
+     * chunk).
      */
     uint32_t entry;
     /**

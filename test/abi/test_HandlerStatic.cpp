@@ -258,7 +258,7 @@ TEST(AbiHandlerStatic, AvailableSamplesOnAStaticSlotCollectsFirst) {
     rig.gate().m_open.store(true);
     const auto start = std::chrono::steady_clock::now();
     const auto done = [&session] {
-        return std::ranges::all_of(session.m_inference_queue, [](const auto& entry) {
+        return std::ranges::all_of(session.m_struct_pool, [](const auto& entry) {
             return entry->m_free.load() || entry->m_done_atomic.load();
         });
     };

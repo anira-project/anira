@@ -177,8 +177,7 @@ public:
     /// The entries of the bound session: the size of its pool, what anira_handler_num_entries
     /// answers. 0 before bind().
     uint32_t num_entries() const noexcept {
-        return m_session != nullptr ? static_cast<uint32_t>(m_session->m_inference_queue.size())
-                                    : 0U;
+        return m_session != nullptr ? static_cast<uint32_t>(m_session->m_struct_pool.size()) : 0U;
     }
 
     /// The handler's ports, indexed by slot; the session reads the rings of its Streamed slots

@@ -337,7 +337,7 @@ TEST(AbiRtError, SiteLatchesLogOncePerPrepareAndSummarise) {
     EXPECT_EQ(count_records(collector, "Missing samples", "rt"), 2U);
 #endif
     // Once every slot is busy the hops are dropped, which rt_error records.
-    const size_t slots = anira_test::session_of(h)->m_inference_queue.size();
+    const size_t slots = anira_test::session_of(h)->m_struct_pool.size();
     for (size_t i = 0; i < slots; ++i) { starved_call(); }
     gate.m_open.store(true);
     EXPECT_EQ(anira_handler_rt_error(h), ANIRA_ERROR_CAPACITY) << "a dropped hop is recorded";

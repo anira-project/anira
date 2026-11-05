@@ -343,7 +343,7 @@ TEST(PlanSwitch, TwoPlansOnOneEngineStayDistinct) {
     const std::shared_ptr<SessionElement> session = anira_test::session_of(rig.handler());
     ASSERT_NE(session, nullptr);
     size_t stamped = 0;
-    for (const auto& chunk : session->m_inference_queue) {
+    for (const auto& chunk : session->m_struct_pool) {
         if (chunk->m_plan == 1U) { ++stamped; }
     }
     EXPECT_EQ(stamped, 1U) << "exactly the submitted chunk carries plan 1";

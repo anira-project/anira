@@ -84,7 +84,7 @@ typedef struct anira_prepare_info {
     /**
      * anira_handler_num_entries of this prepare: the chunks that can be in flight at once, one
      * scratch slot per entry (anira_processor_ctx.entry and anira_engine_ctx.entry, the chunk's
-     * position in the handler's inference queue).
+     * position in the handler's chunk pool).
      */
     uint32_t num_entries;
     /**

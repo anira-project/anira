@@ -356,8 +356,8 @@ typedef struct anira_processor_ctx {
      */
     uint32_t ticket;
     /**
-     * The chunk's position in the handler's inference queue: 0 .. anira_handler_num_entries() -
-     * 1 (anira_prepare_info.num_entries), the same value in every phase of the chunk, its reset
+     * The chunk's position in the handler's chunk pool: 0 .. anira_handler_num_entries() - 1
+     * (anira_prepare_info.num_entries), the same value in every phase of the chunk, its reset
      * included, reused by a later chunk once this one has completed (under an Async contract
      * the slot part of the ticket). Chunks of one handler may be in flight on several inference
      * threads at once, and one entry holds one chunk at a time: the index of a per-chunk

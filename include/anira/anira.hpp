@@ -3041,7 +3041,7 @@ public:
     /// - 1; never two calls at once on one instance. 0 for an exclusive call, which claimed no
     /// slot.
     uint32_t instance() const noexcept { return m_ctx->instance; }
-    /// The chunk's position in the handler's inference queue (ProcessorContext::entry of the same
+    /// The chunk's position in the handler's chunk pool (ProcessorContext::entry of the same
     /// chunk).
     uint32_t entry() const noexcept { return m_ctx->entry; }
     /// ANIRA_TICKET_INVALID under a Hard contract; the job's ticket under an Async one.
