@@ -132,7 +132,7 @@ clock).
 The Memory and Its Views
 ------------------------
 
-The memory grows (:ref:`the memory <web-memory>`: 256 MiB to begin with, up to 2 GiB), and any
+The memory grows (:ref:`the memory <web-memory>`: 128 MiB to begin with, up to 2 GiB), and any
 thread's malloc may grow it: in practice the main thread's, where handlers are created and
 prepared; the audio path in C allocates nothing, so the audio thread never grows it. A growth
 gives the shared memory a new, longer ``SharedArrayBuffer``, and every realm reads the heap

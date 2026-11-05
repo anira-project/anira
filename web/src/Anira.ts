@@ -6,7 +6,10 @@ import { scopeRegistry, type LogRecord } from './registry'
 
 /** The module's shared memory, in bytes (rounded up to 64 KiB WebAssembly pages). */
 export type AniraMemory = {
-  /** What it starts with; default and least 256 MiB (the module's own data and stack in it). */
+  /**
+   * What it starts with; default 128 MiB, least 64 MiB (the module's own data and stack, the core,
+   * a first Worker and handler).
+   */
   initial?: number
   /**
    * What it may grow to; default 2 GiB, the most the module grows to (2 GiB, the module's
@@ -18,7 +21,7 @@ export type AniraMemory = {
 }
 
 export type AniraOptions = {
-  /** The memory's sizes; default 256 MiB growing to 2 GiB. */
+  /** The memory's sizes; default 128 MiB growing to 2 GiB. */
   memory?: AniraMemory
   /** The module binary, when it is not fetched from the package's URL. */
   wasmBinary?: ArrayBuffer
@@ -36,9 +39,14 @@ const wasmUrl = () => new URL('../wasm/AniraWeb.wasm', import.meta.url).href
 
 const PAGE = 65536
 const MIB = 1024 * 1024
-// The module's INITIAL_MEMORY and MAXIMUM_MEMORY (cmake/build-wasm.cmake).
-const MODULE_INITIAL = 256 * MIB
+// The module's INITIAL_MEMORY and MAXIMUM_MEMORY (cmake/build-wasm.cmake): the least it starts on
+// and the most it grows to.
+const MODULE_INITIAL = 64 * MIB
 const MODULE_MAXIMUM = 2048 * MIB
+// What Anira.create starts with by default: the bundled model-file example (the gain model on a
+// context of ANIRA_THREADS_AUTO Workers, each with a 4 MiB stack) took 103 MiB of heap with 16
+// Workers, plus a quarter of headroom. A larger pool or model grows the memory from there.
+const DEFAULT_INITIAL = 128 * MIB
 
 /**
  * The module's shared memory at `sizes`. Refused with an AniraError: an initial size below the
@@ -46,7 +54,7 @@ const MODULE_MAXIMUM = 2048 * MIB
  * reserve (a 32-bit or a constrained device), naming it and the way to a smaller one.
  */
 const sharedMemory = (sizes: AniraMemory = {}): WebAssembly.Memory => {
-  const initial = Math.ceil((sizes.initial ?? MODULE_INITIAL) / PAGE)
+  const initial = Math.ceil((sizes.initial ?? DEFAULT_INITIAL) / PAGE)
   const maximum = Math.ceil((sizes.maximum ?? MODULE_MAXIMUM) / PAGE)
   const mib = (pages: number) => `${(pages * PAGE) / MIB} MiB`
   if (
@@ -108,7 +116,7 @@ export class Anira {
   }
 
   /**
-   * Instantiate the module on a shared memory (`options.memory`: 256 MiB growing to 2 GiB by
+   * Instantiate the module on a shared memory (`options.memory`: 128 MiB growing to 2 GiB by
    * default) and boot the main thread's registry.
    */
   static async create(options: AniraOptions = {}): Promise<Anira> {

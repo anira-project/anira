@@ -90,10 +90,16 @@ The Memory
 ----------
 
 The module runs on one shared ``WebAssembly.Memory`` that :js:meth:`Anira.create` makes and that
-grows: 256 MiB to begin with (the module's data and stack, the core and a small handler), growing
-as malloc needs up to 2 GiB. ``Anira.create({ memory: { initial, maximum } })`` sets the two
-sizes in bytes (256 MiB or more to begin with, 2 GiB at most); ``initial === maximum`` fixes the
-size, the way to opt out of growth.
+grows: 128 MiB to begin with, growing as malloc needs up to 2 GiB.
+``Anira.create({ memory: { initial, maximum } })`` sets the two sizes in bytes (64 MiB or more to
+begin with, 2 GiB at most); ``initial === maximum`` fixes the size, the way to opt out of growth.
+The heap ends at 34 MiB after ``Anira.create`` (the module's data and its 32 MiB main stack), at
+42 MiB with a context of one Worker and a handler of the bundled gain model, and every further
+Worker adds its 4 MiB stack: 46 MiB with two, 71 MiB with eight, 103 MiB with the 16 Workers
+``ANIRA_THREADS_AUTO`` makes on a machine of 32 hardware threads (the model-file example there).
+64 MiB, the least, holds the core with a first Worker and handler; 128 MiB, the default, holds the
+model-file example's 16 Workers with about a quarter to spare; a larger pool or model grows the
+memory from there (Chromium 156 and Firefox 157, ``test/browser/memory.html``).
 
 What the maximum costs
    A shared memory cannot move once other threads see it, so the browser reserves its maximum as
@@ -120,7 +126,7 @@ What the browsers accept
    device is asked for half the address space. A memory the browser cannot create (its
    reservation refused) fails ``Anira.create`` with an :js:class:`AniraError`
    (``ANIRA_ERROR_OUT_OF_MEMORY``) that names the sizes asked for and the way to a smaller
-   maximum; sizes the module cannot run on (below 256 MiB, a maximum below the initial size or
+   maximum; sizes the module cannot run on (below 64 MiB, a maximum below the initial size or
    above 2 GiB) with ``ANIRA_ERROR_INVALID_ARGUMENT``.
 It never shrinks
    WebAssembly memory grows and never gives pages back: after a large load (many model
@@ -156,7 +162,7 @@ The fixed opt-out of the growing build (``initial === maximum``) keeps the glue'
 and 47.7 ms for the first.
 
 A module of your own that links ``libanira.a`` keeps its own memory settings: the growth is
-AniraWeb's link (``-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=268435456
+AniraWeb's link (``-sALLOW_MEMORY_GROWTH=1 -sINITIAL_MEMORY=67108864
 -sMAXIMUM_MEMORY=2147483648``, ``cmake/build-wasm.cmake``), not the library's. If it grows with
 ``-pthread`` and its own JavaScript reads the heap, it needs the same care: views rebuilt after a
 growth.
@@ -268,10 +274,12 @@ it, so ``malloc`` returns NULL and ``operator new`` throws ``std::bad_alloc`` wh
 cannot grow further (AniraWeb's at its maximum, a module's of fixed size at once), and every C
 entry turns that into the status. A failed handler creation or prepare leaves nothing behind. A
 module of your own that prefers the abort passes ``-sABORTING_MALLOC=1`` after anira's options:
-the last ``-s`` wins. For sizing the memory: the core takes about 170 MiB once the first context
-exists, a handler about 1.5 MiB beside its
-model's instances (each loaded model instance holds its own copy of the model's weights: about
-16.5 MiB per instance of a 16 MB RAVE export), and every inference thread a 4 MiB stack. The
+the last ``-s`` wins. For sizing the memory: the core takes 0.2 MiB once the first context
+exists (its queue of inference jobs holds what the handlers reserve, a few KiB each), a handler
+from about 40 KiB (the gain model at a 5 ms budget) to 1.7 MiB (at a 1 s budget, whose pool of
+chunks is large) beside its model's instances (each loaded model instance holds its own copy of
+the model's weights: about 16.5 MiB per instance of a 16 MB RAVE export), and every inference
+thread a 4 MiB stack. The
 defaults (``ANIRA_THREADS_AUTO``, AUTO instances) stay: an AUTO pool of 16 Workers with two
 RAVE models (about 530 MiB of instances beside the core) did not fit the former fixed 512 MiB
 (issue #218) and fits the growing memory.
