@@ -522,3 +522,33 @@ TEST(InferenceQueue, AStatefulSessionParksEveryChunkOfALargeCall) {
     EXPECT_EQ(anira_test::count_records(collector, "Could not enqueue pending", "rt"), 0U);
 #endif
 }
+
+// ---- a dropped chunk ---------------------------------------------------------------------------
+
+// A chunk a queue has no room for completes as zeros at its stream position and is a dropped
+// hop: rt_error says ANIRA_ERROR_CAPACITY, as for a hop with no free struct. Forced white-box on
+// an exclusive session's pending queue, its one consumer never asked: the same struct parked
+// past the room its prepare reserved, which holds the whole struct pool first.
+TEST(InferenceQueue, AChunkAQueueHasNoRoomForIsADroppedHop) {
+    const anira_test::Context context(0);
+    anira_test::Handler handler(context, hop_model(64, 1, /*stateful=*/true));
+    ASSERT_EQ(handler.prepare(anira_test::explicit_contract(2048,
+                                                            anira_test::k_rate,
+                                                            ANIRA_MISS_ZEROS,
+                                                            0.0,
+                                                            /*budget_ms=*/0.5)),
+              ANIRA_OK)
+        << handler.m_err.message;
+    ASSERT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_OK);
+    const std::shared_ptr<SessionElement> session = anira_test::session_of(handler.m_handler);
+    ASSERT_NE(session, nullptr);
+    const size_t pool = session->m_struct_pool.size();
+    const std::shared_ptr<SessionElement::ThreadSafeStruct> chunk = session->m_struct_pool[0];
+    size_t parked = 0;
+    while (anira_handler_rt_error(handler.m_handler) == ANIRA_OK && parked <= 2 * pool + 64) {
+        session->enqueue_pending_dispatch(chunk);
+        ++parked;
+    }
+    EXPECT_EQ(anira_handler_rt_error(handler.m_handler), ANIRA_ERROR_CAPACITY);
+    EXPECT_GT(parked, pool) << "the pending queue held fewer entries than the struct pool";
+}

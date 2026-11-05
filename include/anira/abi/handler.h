@@ -1293,8 +1293,11 @@ ANIRA_API void ANIRA_CALL anira_handler_reset(anira_handler* handler)
  * ANIRA_ERROR_INVALID_ARGUMENT, ANIRA_ERROR_NOT_SUPPORTED for a host tensor with a flag
  * this library does not know) or ANIRA_ERROR_ENGINE after a failed inference (its output
  * is zeros), or ANIRA_ERROR_CAPACITY after a hop the scheduler dropped because no
- * inference slot was free (its output is the miss policy's fill, at its stream
- * position). An entry's ANIRA_ERROR_CAPACITY return is back-pressure and never lands
+ * inference slot was free (its output is the miss policy's fill, at its stream position)
+ * or because a queue of the core had no room for its chunk (its output is zeros at its
+ * stream position: an inference thread stalled inside its dequeue while the handler's
+ * other chunks went round the room its prepare reserved, or no memory for a drain's
+ * requeue). An entry's ANIRA_ERROR_CAPACITY return is back-pressure and never lands
  * here. Last-wins; cleared by prepare and reset. Each kind is logged once per prepare or
  * reset through the real-time queue (a violation flagged
  * ANIRA_LOG_RECORD_CONTRACT_VIOLATION), later occurrences are counted and the drain

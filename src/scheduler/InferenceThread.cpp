@@ -586,8 +586,10 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
                 session->m_producer_token,
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
             // The task completes as zeros at its stream position, keeping
-            // the output time-aligned instead of stalling the session.
+            // the output time-aligned instead of stalling the session: a dropped hop,
+            // ANIRA_ERROR_CAPACITY in the handler's rt_error.
             session->m_active_inferences->fetch_sub(1, std::memory_order::release);
+            static_cast<void>(session->m_rt->record_drop());
             ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
                                     log_group::k_scheduler,
                                     "Could not enqueue next inference! "

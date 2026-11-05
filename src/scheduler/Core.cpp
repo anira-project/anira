@@ -1583,7 +1583,9 @@ bool Core::enqueue_inference_or_drop(
         session->m_active_inferences->fetch_sub(1, std::memory_order::release);
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
-        // was consumed and exactly one (silent) chunk will be produced.
+        // was consumed and exactly one (silent) chunk will be produced. A dropped hop: the
+        // handler's rt_error says ANIRA_ERROR_CAPACITY, as for a hop with no free struct.
+        static_cast<void>(session->m_rt->record_drop());
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::EnqueueDropped,
                                 log_group::k_core,
                                 "Could not enqueue next inference to global core job queue! "
@@ -1683,6 +1685,8 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
                                         "Could not requeue inference data! Dropping the "
                                         "inference and zero-filling its output.");
                 if (other.m_thread_safe_struct != nullptr) {
+                    // A dropped hop of the other handler: its rt_error says so.
+                    static_cast<void>(other.m_session->m_rt->record_drop());
                     other.m_session->complete_with_zeros(other.m_thread_safe_struct);
                     if (other.m_session->exclusive()) {
                         other.m_session->release_dispatch(

@@ -267,7 +267,8 @@ void SessionElement::enqueue_pending_dispatch(
         // Unreachable while the reservation holds: pending entries are distinct
         // ThreadSafeStructs, and the queue's one consumer at a time (the gate holder) cannot
         // fall behind a lap of the ring without the entries it would let through. Handled like
-        // any other queue-full drop.
+        // any other queue-full drop: a dropped hop, ANIRA_ERROR_CAPACITY in rt_error.
+        static_cast<void>(m_rt->record_drop());
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::PendingDispatchDropped,
                                 log_group::k_scheduler,
                                 "Could not enqueue pending stateful dispatch! Dropping the "
