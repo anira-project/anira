@@ -71,21 +71,30 @@ handler copies the pipeline.
 ``edge`` states how the engine passes the slots to its runtime, for the plan report's slot rows
 and the contract's edge cost (``anira::Engine::Loaded::edge``, the native descriptor's ``edge``,
 :doc:`../custom_engines`): the engine runs in the inference Workers, so the main thread gives the
-statement here, once for every slot. Without one the rows follow the provider rule, zero-copy on
+statements here, ``{ inputs, outputs }`` (``EngineEdges``), one for every input slot and one for
+every output slot. That is per direction where C++ states per slot: the main thread adds the
+engine before the model is known. A direction left out, and an engine without ``edge``, follows
+the provider rule of that direction, zero-copy on
 the CPU path; on a device provider ``ANIRA_EDGE_UNKNOWN``, since a browser exposes no device's memory kind
 (``PlanInfo.memoryKind`` reads ``ANIRA_MEMORY_UNKNOWN``, the reason "memory kind not probed:
 the web exposes no memory kind"), which every limit of the edge cost refuses. An engine that
-copies the slots into host memory of its own says
-so:
+copies the slots into host memory of its own says so, for both directions or for one:
 
 .. code-block:: ts
 
    pipeline.addEngine('org.example.copying', {
-     edge: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies into its own tensors' },
+     edge: {
+       inputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies into its own tensors' },
+       outputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies its results out' },
+     },
+   })
+   // reads its inputs in place, copies its outputs: the inputs keep the provider rule
+   pipeline.addEngine('org.example.outputs-copied', {
+     edge: { outputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies its results out' } },
    })
 
 Its rows then read ``ANIRA_EDGE_COPY`` (a copy within one domain) moved by the engine
-(``PlanSlot.movedBy``, ``ANIRA_MOVER_ENGINE``), with the reason.
+(``PlanSlot.movedBy``, ``ANIRA_MOVER_ENGINE``), with the reason of their direction.
 
 ONNX Runtime Web
 ----------------
@@ -118,10 +127,11 @@ each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({
 (a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
 The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import {
 ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)``).
-Under that id ``addEngine`` states the engine's edge by default, a copy of every slot within host
-memory by the engine (``ANIRA_EDGE_COPY``: the two wasm memories), so its plan rows say so; an engine defined under another id
-states it with ``addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })``. The id and the statement
-are a module of their own, so the page does not bundle onnxruntime-web; only the worker module
+Under that id ``addEngine`` states the engine's edges by default, a copy of every slot within host
+memory by the engine (``ANIRA_EDGE_COPY``: the two wasm memories), each input "copied into ORT's
+heap" and each output "copied out of ORT's heap", so its plan rows say so; an engine defined
+under another id states them with ``addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGES })``. The
+id and the statements are a module of their own, so the page does not bundle onnxruntime-web; only the worker module
 that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.
 

@@ -6,8 +6,9 @@
 // from the page by the Hard process entry over int16 tensors in the module's heap, and waited
 // for. The stream comes out doubled after the handler's latency, exactly, and the plan report
 // names int16 on both sides of the stream and each engine's edge: zero-copy for the module's
-// own ONNX Runtime, a copy by the engine for the ONNX Runtime Web engine (its statement,
-// which addEngine states by default under the engine's id). Then an audio node, which streams float32, is refused
+// own ONNX Runtime, a copy by the engine for the ONNX Runtime Web engine (its statements, which
+// addEngine states by default under the engine's id, one per direction: the input copied into
+// ORT's heap, the output copied out of it). Then an audio node, which streams float32, is refused
 // for the int16 handler, and its message names the remedy. The verdict is
 // window.anira_test_result.
 import {
@@ -134,18 +135,23 @@ const run = async () => {
     workerModule: new URL('./ort-worker.js', import.meta.url),
   })
 
-  for (const [label, file, engineId, edge] of [
+  for (const [label, file, engineId, edge, reasons] of [
     [
       "the module's own ONNX Runtime",
       './dtypes-int16.model.json',
       undefined,
       [anira_edge_class.ANIRA_EDGE_ZERO_COPY, anira_mover_flags.ANIRA_MOVER_NONE],
+      [null, null],
     ],
     [
       'the ONNX Runtime Web engine',
       './dtypes-ort-web-int16.model.json',
       ONNXRUNTIME_WEB_ENGINE_ID,
       [anira_edge_class.ANIRA_EDGE_COPY, anira_mover_flags.ANIRA_MOVER_ENGINE],
+      [
+        "onnxruntime-web: copied into ORT's heap",
+        "onnxruntime-web: copied out of ORT's heap",
+      ],
     ],
   ]) {
     const model = await ModelConfig.fromUrl(anira, new URL(file, import.meta.url))
@@ -162,6 +168,11 @@ const run = async () => {
       result.rows.every((row) => row.edgeClass === edge[0] && row.movedBy === edge[1]),
       `${label}: the plan report says edge class ${edge[0]}, moved by ${edge[1]}, on both sides ` +
         `(${result.rows.map((row) => `${row.edgeClass}/${row.movedBy}`).join(', ')})`
+    )
+    check(
+      result.rows.every((row, side) => row.reason === reasons[side]),
+      `${label}: each side's reason is its direction's ` +
+        `(${result.rows.map((row) => JSON.stringify(row.reason)).join(', ')})`
     )
     check(
       result.wrong < 0,

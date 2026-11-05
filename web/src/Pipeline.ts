@@ -16,6 +16,19 @@ export type EngineEdge = {
   reason?: string
 }
 
+/**
+ * A JavaScript engine's edge statements per direction (`EngineOptions.edge`): `inputs` for
+ * every input slot, `outputs` for every output slot; a direction left out keeps the provider
+ * rule of that direction (zero-copy on the CPU path). Per direction where the C++
+ * `anira::Engine::Loaded::edge(is_input, slot, provider_rule)` is per slot: the web's
+ * difference, since the main thread states it at `addEngine`, before the model is known (the
+ * engine itself runs in the inference Workers).
+ */
+export type EngineEdges = {
+  inputs?: EngineEdge
+  outputs?: EngineEdge
+}
+
 /** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_add_js_engine`). */
 export type EngineOptions = {
   /**
@@ -26,14 +39,17 @@ export type EngineOptions = {
   /** `ANIRA_EM_ENGINE_HOOK_*` beyond process (`ANIRA_EM_ENGINE_HOOK_RESET`). Default none. */
   hooks?: number
   /**
-   * How the engine passes every slot to its runtime (`anira::Engine::Loaded::edge`, the
-   * descriptor's `edge`): the engine runs in the inference Workers, so the main thread states it
-   * here, once for every slot, where the plan report is built. An engine that copies the slots
-   * into host memory of its own says `ANIRA_EDGE_COPY`. Default: the statement of an engine the
-   * package ships, by its id (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGE`, a copy
-   * within host memory), else none, the provider rule (zero-copy on the CPU path).
+   * How the engine passes its slots to its runtime (`anira::Engine::Loaded::edge`, the
+   * descriptor's `edge`), per direction (`EngineEdges`): the engine runs in the inference
+   * Workers, so the main thread states it here, once for every input and once for every
+   * output, where the plan report is built. An engine that copies the slots into host memory of
+   * its own says `ANIRA_EDGE_COPY`; one that reads its inputs in place but copies its outputs
+   * says so per direction. Default: the statements of an engine the package ships, by its id
+   * (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGES`, a copy within host memory each
+   * way), else none, the provider rule (zero-copy on the CPU path). A given `edge` replaces the
+   * default whole: a direction it leaves out is the provider rule's.
    */
-  edge?: EngineEdge
+  edge?: EngineEdges
 }
 
 // anira_engine_edge on wasm32 (anira/abi/engine.h): struct_size, edge_class, reason.
@@ -108,23 +124,27 @@ export class Pipeline {
     const sp = m.stackSave()
     try {
       const stated = options.edge ?? BUNDLED_ENGINE_EDGES[id]
-      let edge = 0
-      if (stated !== undefined) {
-        const reason =
-          stated.reason === undefined ? 0 : m.stringToUTF8OnStack(stated.reason)
-        edge = m.stackAlloc(ENGINE_EDGE.size)
+      // One anira_engine_edge record on the stack per stated direction, NULL for none.
+      const record = (edge: EngineEdge | undefined): number => {
+        if (edge === undefined) return 0
+        const reason = edge.reason === undefined ? 0 : m.stringToUTF8OnStack(edge.reason)
+        const at = m.stackAlloc(ENGINE_EDGE.size)
         const u32 = heap(m).HEAPU32
-        u32[edge >>> 2] = ENGINE_EDGE.size
-        u32[(edge + ENGINE_EDGE.edgeClass) >>> 2] = stated.edgeClass
-        u32[(edge + ENGINE_EDGE.reason) >>> 2] = reason
+        u32[at >>> 2] = ENGINE_EDGE.size
+        u32[(at + ENGINE_EDGE.edgeClass) >>> 2] = edge.edgeClass
+        u32[(at + ENGINE_EDGE.reason) >>> 2] = reason
+        return at
       }
+      const inputs = record(stated?.inputs)
+      const outputs = record(stated?.outputs)
       this.abi.anira_em_pipeline_add_js_engine(
         this.pipeline,
         id,
         keyOf(id),
         options.hooks ?? 0,
         options.flags ?? 0,
-        edge
+        inputs,
+        outputs
       )
     } finally {
       m.stackRestore(sp)

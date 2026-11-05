@@ -1,21 +1,24 @@
-// A JavaScript engine's edge statement on the web (src/Pipeline.ts addEngine): the main thread
-// states it, since the engine runs in the inference Workers. With `edge`, the
-// anira_engine_edge record anira_em_pipeline_add_js_engine reads (the wasm32 layout of
-// anira/abi/engine.h) carries the class and the reason; without, the entry gets NULL, the
-// provider rule, except for an engine the package ships: added under its id the plain way, the
-// ONNX Runtime Web engine states its copy by default, and an explicit `edge` overrides it.
+// A JavaScript engine's edge statements on the web (src/Pipeline.ts addEngine): the main thread
+// states them, since the engine runs in the inference Workers, one per direction. With `edge`,
+// each stated direction becomes an anira_engine_edge record anira_em_pipeline_add_js_engine
+// reads (the wasm32 layout of anira/abi/engine.h) with the class and the reason; a direction
+// left out, and an engine without `edge`, passes NULL, the provider rule of that direction.
+// An engine the package ships is the exception: added under its id the plain way, the ONNX
+// Runtime Web engine states its copies by default (into ORT's heap for the inputs, out of it for
+// the outputs), and an explicit `edge` replaces them whole.
 // A stand-in module.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { AniraBindings, type AbiModule } from '../src/abi/bindings'
 import { anira_edge_class, anira_status } from '../src/abi/enums'
 import {
-  ONNXRUNTIME_WEB_ENGINE_EDGE,
+  ONNXRUNTIME_WEB_ENGINE_EDGES,
   ONNXRUNTIME_WEB_ENGINE_ID,
 } from '../src/engines/ids'
 import { Pipeline } from '../src/Pipeline'
 
-type Stated = { structSize: number; edgeClass: number; reason: string | null } | null
+type EdgeRecord = { structSize: number; edgeClass: number; reason: string | null } | null
+type Stated = { inputs: EdgeRecord; outputs: EdgeRecord }
 
 const fakes = () => {
   const buffer = new ArrayBuffer(1 << 16)
@@ -28,6 +31,14 @@ const fakes = () => {
     while (u8[end] !== 0) end++
     return new TextDecoder().decode(u8.subarray(ptr, end))
   }
+  const read = (edge: number): EdgeRecord =>
+    edge === 0
+      ? null
+      : {
+          structSize: u32[edge >>> 2],
+          edgeClass: u32[(edge + 4) >>> 2],
+          reason: text(u32[(edge + 8) >>> 2]),
+        }
   const stated: Stated[] = []
   const module = {
     HEAPU8: u8,
@@ -56,17 +67,10 @@ const fakes = () => {
       _key: number,
       _hooks: number,
       _flags: number,
-      edge: number
+      inputs: number,
+      outputs: number
     ) => {
-      stated.push(
-        edge === 0
-          ? null
-          : {
-              structSize: u32[edge >>> 2],
-              edgeClass: u32[(edge + 4) >>> 2],
-              reason: text(u32[(edge + 8) >>> 2]),
-            }
-      )
+      stated.push({ inputs: read(inputs), outputs: read(outputs) })
       return anira_status.ANIRA_OK
     },
   }
@@ -77,37 +81,54 @@ const fakes = () => {
   }
 }
 
-test("addEngine states the edge record, the bundled engine's by default, or NULL", () => {
+test("addEngine states an edge record per direction, the bundled engine's by default, or NULL", () => {
   const { abi, stated, stack } = fakes()
   const pipeline = Pipeline.create({ abi })
   const before = stack()
   pipeline.addEngine('org.example.double')
   pipeline.addEngine('org.example.copying', {
     edge: {
-      edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
-      reason: 'copies its slots',
+      inputs: {
+        edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
+        reason: 'copies its inputs',
+      },
+      outputs: {
+        edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
+        reason: 'copies its outputs',
+      },
     },
+  })
+  pipeline.addEngine('org.example.outputs-copied', {
+    edge: { outputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY } },
   })
   pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)
   pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID, {
-    edge: { edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY },
+    edge: { inputs: { edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY } },
   })
-  pipeline.addEngine('org.example.ort', { edge: ONNXRUNTIME_WEB_ENGINE_EDGE })
+  pipeline.addEngine('org.example.ort', { edge: ONNXRUNTIME_WEB_ENGINE_EDGES })
   assert.equal(stack(), before, 'the stack is restored')
-  const ort = {
+  const copy = (reason: string | null) => ({
     structSize: 12,
     edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
-    reason: "onnxruntime-web: copied between the module's heap and ORT's heap",
+    reason,
+  })
+  const ort = {
+    inputs: copy("onnxruntime-web: copied into ORT's heap"),
+    outputs: copy("onnxruntime-web: copied out of ORT's heap"),
   }
   assert.deepEqual(stated, [
-    null,
-    {
-      structSize: 12,
-      edgeClass: anira_edge_class.ANIRA_EDGE_COPY,
-      reason: 'copies its slots',
-    },
+    { inputs: null, outputs: null },
+    { inputs: copy('copies its inputs'), outputs: copy('copies its outputs') },
+    { inputs: null, outputs: copy(null) },
     ort,
-    { structSize: 12, edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY, reason: null },
+    {
+      inputs: {
+        structSize: 12,
+        edgeClass: anira_edge_class.ANIRA_EDGE_ZERO_COPY,
+        reason: null,
+      },
+      outputs: null,
+    },
     ort,
   ])
 })

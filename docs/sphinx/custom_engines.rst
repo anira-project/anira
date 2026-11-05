@@ -643,7 +643,9 @@ provider_rule)``, whose base returns the rule:
     }
 
 On the web a JavaScript engine runs in the inference Workers, so the main thread states its
-edge once for every slot, in ``Pipeline.addEngine``'s ``EngineOptions.edge``
+edges per direction, once for every input slot and once for every output slot, in
+``Pipeline.addEngine``'s ``EngineOptions.edge`` (``{ inputs, outputs }``; per direction since the
+engine is added before the model is known), and a direction left out keeps the provider rule's
 (:doc:`web-api/custom_inference_backends`).
 
 Sharing an engine across plugin instances

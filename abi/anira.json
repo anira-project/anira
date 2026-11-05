@@ -10781,15 +10781,20 @@
             },
             {
               "type": "const anira_engine_edge*",
-              "name": "edge",
-              "doc": "The engine's edge statement for every slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. NULL: no statement, the provider rule (zero-copy on the CPU path)."
+              "name": "input_edge",
+              "doc": "The engine's edge statement for every input slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. Per direction, not per slot: the engine is added before the model is known. NULL: no statement for the inputs, the provider rule of an input (zero-copy on the CPU path)."
+            },
+            {
+              "type": "const anira_engine_edge*",
+              "name": "output_edge",
+              "doc": "As input_edge, for every output slot; NULL: the provider rule of an output."
             }
           ],
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. edge answers the statement for every slot where one was given, and stays NULL without one. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record.",
-          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not define, or an edge whose struct_size is below its edge_class or whose edge_class anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
+          "doc": "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. edge answers the statement of the slot's direction where one was given and leaves the provider rule of that direction where none was, and stays NULL when neither was given. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record.",
+          "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not define, or an input_edge or output_edge whose struct_size is below its edge_class or whose edge_class anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
         },
         {
           "kind": "function",
@@ -10823,8 +10828,13 @@
             },
             {
               "type": "const anira_engine_edge*",
-              "name": "edge",
-              "doc": "The engine's edge statement for every slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. NULL: no statement, the provider rule (zero-copy on the CPU path)."
+              "name": "input_edge",
+              "doc": "The engine's edge statement for every input slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. Per direction, not per slot: the engine is added before the model is known. NULL: no statement for the inputs, the provider rule of an input (zero-copy on the CPU path)."
+            },
+            {
+              "type": "const anira_engine_edge*",
+              "name": "output_edge",
+              "doc": "As input_edge, for every output slot; NULL: the provider rule of an output."
             },
             {
               "type": "anira_error*",
@@ -10835,7 +10845,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "anira_em_engine_desc_init with engine_flags and edge, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it.",
+          "doc": "anira_em_engine_desc_init with engine_flags, input_edge and output_edge, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it.",
           "return_doc": "As anira_em_engine_desc_init, then as anira_custom_engine_create (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix \"anira.\" or a flags bit the header does not define), then as anira_pipeline_add_engine (ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine under the id)."
         },
         {
