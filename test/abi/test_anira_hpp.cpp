@@ -2621,11 +2621,11 @@ TEST(AbiCxx, AddEngineRefusesANullEngineABadIdAndAnUnknownFlag) {
 
 // available() is the engine's query: the bitmask over providers() that says which are usable
 // here. A Pipeline's capabilities on a context list the context's rows and then the engine's
-// rows for the providers the mask keeps, in list order; an edge to a device provider is a
-// dedicated transfer on a device of its own memory (a fake machine's), to the CPU path zero-copy; a
-// candidate on a declared
-// provider the mask clears is refused at create, the message saying so; a throwing
-// available() fails the entry with its status.
+// rows for the providers the mask keeps, in list order; an edge to or from a device provider
+// (edge's two overloads) is a dedicated transfer on a device of its own memory (a fake
+// machine's), to or from the CPU path zero-copy; a candidate on a declared provider the mask
+// clears is refused at create, the message saying so; a throwing available() fails the entry
+// with its status.
 TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
     anira_test::FakeMachine machine;
     machine.set(
@@ -2658,16 +2658,43 @@ TEST(AbiCxx, AvailableIsTheEnginesQueryAndThePipelinesCapabilitiesListIt) {
               static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
     EXPECT_EQ(caps.edge(ANIRA_DOMAIN_HOST, on_coreml).memory_kind,
               static_cast<uint32_t>(ANIRA_MEMORY_DEDICATED));
-    const Thrown unreachable = thrown_by([&] {
-        const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
-                                      .engine = ANIRA_ENGINE_CUSTOM,
-                                      .provider = ANIRA_PROVIDER_CUSTOM,
-                                      .engine_id = k_cxx_engine_id,
-                                      .provider_id = "com.example.npu"};
-        static_cast<void>(caps.edge(ANIRA_DOMAIN_HOST, on_npu));
-    });
+    // The way back, the other overload: from the engine to the host, the same facts.
+    const anira_edge_info coreml_back = caps.edge(on_coreml, ANIRA_DOMAIN_HOST);
+    EXPECT_EQ(coreml_back.from_engine, static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM));
+    EXPECT_STREQ(coreml_back.from_engine_id, k_cxx_engine_id);
+    EXPECT_EQ(coreml_back.from_provider, static_cast<uint32_t>(ANIRA_PROVIDER_COREML));
+    EXPECT_EQ(coreml_back.to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+    EXPECT_EQ(coreml_back.to_engine, static_cast<uint32_t>(ANIRA_ENGINE_NONE));
+    EXPECT_EQ(coreml_back.edge_class, static_cast<uint32_t>(ANIRA_EDGE_DEDICATED_TRANSFER));
+    EXPECT_EQ(coreml_back.moved_by, static_cast<uint32_t>(ANIRA_MOVER_ENGINE));
+    EXPECT_EQ(caps.edge(on_cpu, ANIRA_DOMAIN_HOST).edge_class,
+              static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+    // A built-in backend through the context's Capabilities, both overloads.
+    if (!context_rows.empty()) {
+        const anira::Capabilities context_caps(anira_context_capabilities(context.m_context));
+        const anira::BackendId& builtin = context_rows.front();
+        const anira_edge_info input = context_caps.edge(ANIRA_DOMAIN_HOST, builtin);
+        const anira_edge_info output = context_caps.edge(builtin, ANIRA_DOMAIN_HOST);
+        EXPECT_EQ(input.from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(input.to_engine, builtin.engine);
+        EXPECT_EQ(output.from_engine, builtin.engine);
+        EXPECT_EQ(output.to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(output.edge_class, input.edge_class);
+        EXPECT_EQ(output.moved_by, input.moved_by);
+    }
+    const anira::BackendId cleared{.struct_size = sizeof(anira::BackendId),
+                                   .engine = ANIRA_ENGINE_CUSTOM,
+                                   .provider = ANIRA_PROVIDER_CUSTOM,
+                                   .engine_id = k_cxx_engine_id,
+                                   .provider_id = "com.example.npu"};
+    const Thrown unreachable =
+        thrown_by([&] { static_cast<void>(caps.edge(ANIRA_DOMAIN_HOST, cleared)); });
     EXPECT_TRUE(unreachable.m_thrown);
     EXPECT_EQ(unreachable.m_status, ANIRA_ERROR_EDGE_UNREACHABLE);
+    const Thrown unreachable_back =
+        thrown_by([&] { static_cast<void>(caps.edge(cleared, ANIRA_DOMAIN_HOST)); });
+    EXPECT_TRUE(unreachable_back.m_thrown);
+    EXPECT_EQ(unreachable_back.m_status, ANIRA_ERROR_EDGE_UNREACHABLE);
 
     const anira::BackendId on_npu{.struct_size = sizeof(anira::BackendId),
                                   .engine = ANIRA_ENGINE_CUSTOM,

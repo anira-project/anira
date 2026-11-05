@@ -162,7 +162,7 @@ export interface AbiModule {
   _anira_capabilities_domains(_0: number, _1: number, _2: number): number
   _anira_capabilities_ext_kinds(_0: number, _1: number, _2: number): number
   _anira_capabilities_edges(_0: number, _1: number, _2: number, _3: number): number
-  _anira_capabilities_edge(_0: number, _1: number, _2: number, _3: number): number
+  _anira_capabilities_edge(_0: number, _1: number): number
   _anira_enabled_engines(_0: number, _1: number, _2: number): number
   _anira_context_byte_image_bytes(_0: number, _1: bigint, _2: number): bigint
   _anira_now_ms(): number
@@ -208,7 +208,7 @@ export interface AbiModule {
   _anira_custom_engine_detach(_0: number): void
   _anira_pipeline_add_engine(_0: number, _1: number, _2: number): number
   _anira_pipeline_capabilities_backends(_0: number, _1: number, _2: number, _3: number, _4: number): number
-  _anira_pipeline_capabilities_edge(_0: number, _1: number, _2: number, _3: number, _4: number): number
+  _anira_pipeline_capabilities_edge(_0: number, _1: number, _2: number): number
   _anira_pipeline_destroy(_0: number): void
   _anira_handler_create(_0: number, _1: number, _2: number, _3: number): number
   _anira_handler_destroy(_0: number): void
@@ -4140,10 +4140,10 @@ export class AniraBindings {
   /**
    * Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in
    * engines on the providers their runtimes report usable now
-   * (anira_capabilities_backends), one host edge per backend row, the host domain. The
-   * memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or
-   * prepare that needs a device provider's kind asks its device's API again. Nothing else
-   * is cached in this pre-release, so force changes nothing.
+   * (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges),
+   * the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten
+   * too: the next row or prepare that needs a device provider's kind asks its device's
+   * API again. Nothing else is cached in this pre-release, so force changes nothing.
    *
    * @param context The handle.
    * @param force Nonzero re-runs every rung even where a cached answer exists.
@@ -4260,17 +4260,22 @@ export class AniraBindings {
   }
 
   /**
-   * Every row of the edge registry, available or not; one host edge to each backend row
-   * of this pre-release: zero-copy to a provider that runs over host memory; to a device
-   * provider a move the engine's runtime makes itself, whose class follows the device's
-   * memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
-   * memory). The first read of a device provider's row asks its device's API (the
-   * unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per
-   * API, never at the context's creation) and the context keeps the answer.
-   * Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason)
-   * are the context's: to_provider_id valid until its next anira_context_probe replaces
-   * it, reason until the context is destroyed.
+   * Every row of the edge registry, available or not: two rows per backend row of
+   * anira_capabilities_backends, in its order, so that rows 2i and 2i + 1 belong to
+   * backend i: first the edge from ANIRA_DOMAIN_HOST to the backend (the way an input
+   * goes), then the edge from the backend back to ANIRA_DOMAIN_HOST (the way an output
+   * goes), with the same facts in this pre-release: zero-copy to and from a provider that
+   * runs over host memory; to and from a device provider a move the engine's runtime
+   * makes itself, whose class follows the device's memory kind (memory_kind:
+   * ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on
+   * dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory). The first read of a device
+   * provider's rows asks its device's API (the unified-memory probe, run lazily, on a
+   * thread of its own, waited for 5 s at most per API, never at the context's creation)
+   * and the context keeps the answer; this entry finishes every such row before it counts
+   * or copies, so a count and the fill after it read the same rows. Stride-explicit
+   * enumeration. The strings the rows point to (from_provider_id, to_provider_id, reason)
+   * are the context's: the provider ids valid until its next anira_context_probe replaces
+   * them, reason until the context is destroyed.
    *
    * @param capabilities The capabilities.
    * @param element_size sizeof(anira_edge_info) of the caller's header, the stride of
@@ -4298,32 +4303,35 @@ export class AniraBindings {
   }
 
   /**
-   * One row of the edge registry, by domain and backend: the engine on the provider, a
-   * custom provider (ANIRA_PROVIDER_CUSTOM) by its provider_id (read when the caller's
-   * record has the slot). A custom engine (ANIRA_ENGINE_CUSTOM) has no row here: its rows
-   * are its pipeline's (anira_pipeline_capabilities_edge). A device provider's row asks
-   * its memory kind as anira_capabilities_edges does, for this row alone.
+   * One row of the edge registry, by its two ends: the caller sets the ends of an
+   * anira_edge_info and anira fills in the facts. A domain end (engine ANIRA_ENGINE_NONE)
+   * matches a row's end by its domain; a backend end by its engine, its provider and a
+   * custom provider's name (provider ANIRA_PROVIDER_CUSTOM beside its provider id), its
+   * domain field not read. A custom engine (ANIRA_ENGINE_CUSTOM beside an engine id) has
+   * no row here: its rows are its pipeline's (anira_pipeline_capabilities_edge). On a
+   * match the backend's rows are finished (a device provider's memory kind, asked as
+   * anira_capabilities_edges asks it, for this backend alone) and the row is copied into
+   * *edge, min(edge->struct_size, the library's record size) bytes, as the enumerators
+   * write a row. The baseline record ends with to_provider_id: a struct_size below it is
+   * refused, and a newer header's tail fields beyond the library's record stay as the
+   * caller set them.
    *
    * @param capabilities The capabilities.
-   * @param from The tensor's domain.
-   * @param to The backend; read within its struct_size.
-   * @param out Receives the row, read and written within its struct_size (set it before
-   *   the call).
+   * @param edge In: the two ends of the edge asked for (ANIRA_EDGE_INFO_INIT, then the
+   *   from_* and to_* fields of each end); out: the row, written within the caller's
+   *   struct_size.
    * @returns ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no
-   *   row for the pair (out untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or
-   *   a struct_size below the fixed fields. A failed status throws an AniraError.
+   *   row with those ends (*edge untouched: two domain ends, two backend ends, a backend
+   *   the capabilities do not list, a domain other than the host's);
+   *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the baseline
+   *   record. A failed status throws an AniraError.
    * Thread: [thread-safe]
    */
-  anira_capabilities_edge(
-    capabilities: number,
-    from: number,
-    to: number,
-    out: number
-  ): number {
+  anira_capabilities_edge(capabilities: number, edge: number): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_capabilities_edge(capabilities, from, to, out),
+      m._anira_capabilities_edge(capabilities, edge),
       'anira_capabilities_edge'
     )
   }
@@ -5471,47 +5479,47 @@ export class AniraBindings {
   }
 
   /**
-   * One row of the edge registry a handler of this pipeline sees on this context: for a
-   * built-in engine the context's row (anira_capabilities_edge); for a custom engine
-   * added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider
-   * usable here (its query runs, as anira_pipeline_capabilities_backends runs it):
-   * zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches
-   * without a copy; to every other provider a move the engine makes itself
-   * (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the provider's device as
-   * the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-   * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
-   * memory), the reason saying the engine declared the provider and its query reported it
-   * usable, and the memory kind with what the probe saw. Only the row asked is probed.
-   * The strings' lifetime is anira_pipeline_capabilities_backends's, the reason's the
-   * context's.
+   * One row of the edge registry a handler of this pipeline sees on this context, by its
+   * two ends: where no end names an engine id, the context's row
+   * (anira_capabilities_edge); where one does, the pipeline's rows of its custom engines:
+   * for a custom engine added to the pipeline, on a provider usable here (its query runs,
+   * as anira_pipeline_capabilities_backends runs it), the edge from ANIRA_DOMAIN_HOST to
+   * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, with the same
+   * facts: zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
+   * memory reaches without a copy; to and from every other provider a move the engine
+   * makes itself (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the
+   * provider's device as the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER
+   * on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory,
+   * ANIRA_EDGE_UNKNOWN on unknown memory), the reason saying the engine declared the
+   * provider and its query reported it usable, and the memory kind with what the probe
+   * saw. Only the row asked is probed. The row is copied as anira_capabilities_edge
+   * copies it. The strings' lifetime is anira_pipeline_capabilities_backends's, the
+   * reason's the context's.
    *
    * @param pipeline The pipeline whose custom engines are asked.
    * @param context The context whose edge registry answers for a built-in engine.
-   * @param from The tensor's domain.
-   * @param to The backend; read within its struct_size. A custom engine by its engine_id
-   *   (engine ANIRA_ENGINE_CUSTOM), a custom provider by its provider_id (provider
-   *   ANIRA_PROVIDER_CUSTOM).
-   * @param out Receives the row, read and written within its struct_size (set it before
-   *   the call).
+   * @param edge In: the two ends of the edge asked for, as anira_capabilities_edge takes
+   *   them (a custom engine by its engine id beside ANIRA_ENGINE_CUSTOM, a custom provider
+   *   by its provider id beside ANIRA_PROVIDER_CUSTOM); out: the row, written within the
+   *   caller's struct_size.
    * @returns ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry
-   *   has a row for the pair (out untouched: a custom engine the pipeline does not add, a
-   *   provider it does not declare or its query cleared, a domain other than the host's);
-   *   ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed
-   *   fields; or the status a custom engine's query returned when it failed. A failed
-   *   status throws an AniraError.
+   *   has a row with those ends (*edge untouched: a custom engine the pipeline does not
+   *   add, a provider it does not declare or its query cleared, a domain other than the
+   *   host's, two domain ends, two backend ends); ANIRA_ERROR_INVALID_ARGUMENT for a NULL
+   *   argument or a struct_size below the baseline record (anira_capabilities_edge); or the
+   *   status a custom engine's query returned when it failed. A failed status throws an
+   *   AniraError.
    * Thread: [main-thread]
    */
   anira_pipeline_capabilities_edge(
     pipeline: number,
     context: number,
-    from: number,
-    to: number,
-    out: number
+    edge: number
   ): number {
     const m = this.module
     return checkStatus(
       m,
-      m._anira_pipeline_capabilities_edge(pipeline, context, from, to, out),
+      m._anira_pipeline_capabilities_edge(pipeline, context, edge),
       'anira_pipeline_capabilities_edge'
     )
   }

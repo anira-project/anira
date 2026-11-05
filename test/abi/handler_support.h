@@ -146,6 +146,29 @@ inline SlotEdge gain_edge(uint32_t engine, bool is_input) {
     return {};
 }
 
+/// The query of a capability edge lookup (anira_capabilities_edge,
+/// anira_pipeline_capabilities_edge) from the host domain to `backend`, the way an input goes.
+inline anira_edge_info host_to(const anira_backend_id& backend) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+    query.to_engine = backend.engine;
+    query.to_provider = backend.provider;
+    query.to_engine_id = backend.engine_id;
+    query.to_provider_id = backend.provider_id;
+    return query;
+}
+
+/// The query from `backend` back to the host domain, the way an output goes.
+inline anira_edge_info to_host(const anira_backend_id& backend) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_engine = backend.engine;
+    query.from_provider = backend.provider;
+    query.from_engine_id = backend.engine_id;
+    query.from_provider_id = backend.provider_id;
+    query.to_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+    return query;
+}
+
 /// One candidate per engine of oracle_engines() plus the custom engine anira.v2.custom (k_custom,
 /// ANIRA_ENGINE_CUSTOM with its id): the shape of the default set anira_pipeline_add_inference
 /// builds for a NULL list.

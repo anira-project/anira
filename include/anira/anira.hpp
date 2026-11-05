@@ -1995,6 +1995,31 @@ std::vector<T> enumerate(Call&& call, const char* entry) {
     return rows;
 }
 
+/// The query record of an edge lookup (anira_capabilities_edge,
+/// anira_pipeline_capabilities_edge): ANIRA_EDGE_INFO_INIT with a domain from end and a backend
+/// to end, the way an input goes.
+inline anira_edge_info edge_query(Domain from, const BackendId& to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_domain = static_cast<uint32_t>(from);
+    query.to_engine = to.engine;
+    query.to_provider = to.provider;
+    query.to_engine_id = to.engine_id;
+    query.to_provider_id = to.provider_id;
+    return query;
+}
+
+/// The query record of an edge lookup with a backend from end and a domain to end, the way an
+/// output goes.
+inline anira_edge_info edge_query(const BackendId& from, Domain to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_engine = from.engine;
+    query.from_provider = from.provider;
+    query.from_engine_id = from.engine_id;
+    query.from_provider_id = from.provider_id;
+    query.to_domain = static_cast<uint32_t>(to);
+    return query;
+}
+
 }  // namespace detail
 
 /**
@@ -2031,9 +2056,11 @@ public:
             "anira_capabilities_ext_kinds");
         return {kinds.begin(), kinds.end()};
     }
-    /// Every row of the edge registry, available or not. The first read of a device
-    /// provider's row asks its device's memory kind (anira_edge_info.memory_kind; the
-    /// unified-memory probe, bounded, kept by the context), so call it off the audio thread.
+    /// Every row of the edge registry, available or not: two per backend of backends(), in
+    /// its order, edges()[2 * i] from the host domain to backends()[i] and
+    /// edges()[2 * i + 1] back. The first read of a device provider's rows asks its device's
+    /// memory kind (anira_edge_info.memory_kind; the unified-memory probe, bounded, kept by the
+    /// context), so call it off the audio thread.
     std::vector<anira_edge_info> edges() const {
         return detail::enumerate<anira_edge_info>(
             [this](uint32_t* count, anira_edge_info* out) {
@@ -2044,13 +2071,19 @@ public:
             },
             "anira_capabilities_edges");
     }
-    /// One row, by domain and backend (a device provider's asks its memory kind as edges()
-    /// does, for this row alone).
+    /// The row from domain `from` to backend `to`, the way an input goes (a device provider's
+    /// asks its memory kind as edges() does, for this backend alone).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_capabilities_edge(m_capabilities, from, &to, &row),
-                      "anira_capabilities_edge");
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
         return row;
     }
 
@@ -3581,12 +3614,21 @@ public:
             },
             "anira_pipeline_capabilities_backends");
     }
-    /// One row, by domain and backend: the context's registry for a built-in engine, the
-    /// pipeline's for a custom one (engine_id set).
+    /// The row from domain `from` to backend `to`, the way an input goes: the context's
+    /// registry for a built-in engine, the pipeline's for a custom one (engine_id set).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, from, &to, &row),
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
+                      "anira_pipeline_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes, from the same
+    /// registries.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
                       "anira_pipeline_capabilities_edge");
         return row;
     }

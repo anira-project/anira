@@ -561,41 +561,41 @@ ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const ani
                                                                        anira_backend_id* out) ANIRA_NOEXCEPT;
 
 /**
- * @brief One row of the edge registry a handler of this pipeline sees on this context: for a
- * built-in engine the context's row (anira_capabilities_edge); for a custom engine added
- * to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable
- * here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to
- * ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a
- * copy; to every other provider a move the engine makes itself (ANIRA_MOVER_ENGINE)
- * whose class follows the memory kind of the provider's device as the context probes it
- * (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
- * ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown
- * memory), the reason saying the engine declared the provider and its query reported it
- * usable, and the memory kind with what the probe saw. Only the row asked is probed. The
- * strings' lifetime is anira_pipeline_capabilities_backends's, the reason's the
+ * @brief One row of the edge registry a handler of this pipeline sees on this context, by its
+ * two ends: where no end names an engine id, the context's row
+ * (anira_capabilities_edge); where one does, the pipeline's rows of its custom engines:
+ * for a custom engine added to the pipeline, on a provider usable here (its query runs,
+ * as anira_pipeline_capabilities_backends runs it), the edge from ANIRA_DOMAIN_HOST to
+ * the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, with the same
+ * facts: zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host
+ * memory reaches without a copy; to and from every other provider a move the engine
+ * makes itself (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the
+ * provider's device as the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER
+ * on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory,
+ * ANIRA_EDGE_UNKNOWN on unknown memory), the reason saying the engine declared the
+ * provider and its query reported it usable, and the memory kind with what the probe
+ * saw. Only the row asked is probed. The row is copied as anira_capabilities_edge copies
+ * it. The strings' lifetime is anira_pipeline_capabilities_backends's, the reason's the
  * context's.
  * @param pipeline The pipeline whose custom engines are asked.
  * @param context The context whose edge registry answers for a built-in engine.
- * @param from The tensor's domain.
- * @param to The backend; read within its struct_size. A custom engine by its engine_id (engine
- *        ANIRA_ENGINE_CUSTOM), a custom provider by its provider_id (provider
- *        ANIRA_PROVIDER_CUSTOM).
- * @param out Receives the row, read and written within its struct_size (set it before the
- *        call).
+ * @param edge In: the two ends of the edge asked for, as anira_capabilities_edge takes them (a
+ *        custom engine by its engine id beside ANIRA_ENGINE_CUSTOM, a custom provider by
+ *        its provider id beside ANIRA_PROVIDER_CUSTOM); out: the row, written within the
+ *        caller's struct_size.
  * @return ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row
- *         for the pair (out untouched: a custom engine the pipeline does not add, a provider it
- *         does not declare or its query cleared, a domain other than the host's);
- *         ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed
- *         fields; or the status a custom engine's query returned when it failed.
+ *         with those ends (*edge untouched: a custom engine the pipeline does not add, a
+ *         provider it does not declare or its query cleared, a domain other than the host's,
+ *         two domain ends, two backend ends); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument
+ *         or a struct_size below the baseline record (anira_capabilities_edge); or the status a
+ *         custom engine's query returned when it failed.
  * @par Thread contract
  * [main-thread]
  * @since ABI 0.2
  */
 ANIRA_API anira_status ANIRA_CALL anira_pipeline_capabilities_edge(const anira_pipeline* pipeline,
                                                                    const anira_context* context,
-                                                                   anira_domain from,
-                                                                   const anira_backend_id* to,
-                                                                   anira_edge_info* out) ANIRA_NOEXCEPT;
+                                                                   anira_edge_info* edge) ANIRA_NOEXCEPT;
 
 /**
  * @brief Destroys a pipeline; handlers created from it keep their copy. The release function of

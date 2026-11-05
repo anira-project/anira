@@ -24,14 +24,16 @@
 
 /// What the last probe established. Every enumerator reads under the mutex; a probe
 /// replaces the rows under it, so a reader on another thread sees one probe or the other.
-/// The edge of a device provider's row is completed on its first read (its memory kind,
-/// asked then and kept in m_memory: memory.h), so the readers write it under the mutex.
+/// The two edge rows of a device provider's backend are completed on the first read of either
+/// (its memory kind, one fact per backend, asked then and kept in m_memory: memory.h), so the
+/// readers write them under the mutex.
 struct anira_capabilities {
-    /// A row of m_edges whose device memory kind is not asked yet: the row's index and the
-    /// options the context's provider option set gives its backend (an ONNX Runtime
-    /// device_id).
-    struct PendingEdge {
-        size_t m_row = 0;
+    /// A device provider's backend whose memory kind is not asked yet: the indices of its two
+    /// rows in m_edges and the options the context's provider option set gives the backend (an
+    /// ONNX Runtime device_id).
+    struct PendingBackend {
+        size_t m_input_row = 0;   ///< from the host to the backend
+        size_t m_output_row = 0;  ///< from the backend back to the host
         std::vector<std::pair<std::string, std::string>> m_options;
     };
 
@@ -39,8 +41,9 @@ struct anira_capabilities {
     std::vector<anira_backend_id> m_backends;  ///< one per (engine, provider) the probe found
     std::vector<anira_domain> m_domains;
     std::vector<const char*> m_ext_kinds;
-    mutable std::vector<anira_edge_info> m_edges;  ///< one host edge per backend row
-    mutable std::vector<PendingEdge> m_pending;    ///< the device rows not completed yet
+    /// Two per backend row: m_edges[2i] from the host to m_backends[i], m_edges[2i + 1] back.
+    mutable std::vector<anira_edge_info> m_edges;
+    mutable std::vector<PendingBackend> m_pending;  ///< the device backends not completed yet
     std::deque<std::string> m_strings;  ///< the custom provider names the rows point into
                                         ///< (a deque keeps the pointers stable)
     /// The memory kinds of the context's device providers, asked on first need, and the

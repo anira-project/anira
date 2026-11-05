@@ -9,6 +9,7 @@
 #include <anira/abi/status.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -90,15 +91,16 @@ std::vector<std::pair<std::string, std::string>> options_of(
 // The Host-only capability report of this pre-release: every compiled-in engine on the
 // providers its runtime reports usable here (the CPU path first; ONNX Runtime's available
 // execution providers, LiteRT's registered accelerators; the other engines the CPU path
-// alone), the host domain, the registered extension kinds, and one edge from host memory to
-// each backend row (providers.h set_provider_edge): zero-copy to a CPU provider; to a device
-// one a move the engine's runtime makes itself, completed with its device's memory kind on
-// the row's first read (complete_edge), never here. The runtimes are asked at every probe, and
-// the memory kinds the context kept are forgotten.
+// alone), the host domain, the registered extension kinds, and two edge rows per backend row,
+// from host memory to the backend and back (providers.h backend_rows, set_provider_edge):
+// zero-copy to and from a CPU provider; to and from a device one a move the engine's runtime
+// makes itself, both rows completed with its device's memory kind on the first read of either
+// (complete_backend), never here. The runtimes are asked at every probe, and the memory kinds
+// the context kept are forgotten.
 void probe(anira_capabilities& capabilities, const anira_context_config& config) {
     std::vector<anira_backend_id> backends;
     std::vector<anira_edge_info> edges;
-    std::vector<anira_capabilities::PendingEdge> pending;
+    std::vector<anira_capabilities::PendingBackend> pending;
     std::deque<std::string> strings;
     for (const anira_engine engine : anira::capi::enabled_engines()) {
         // The core's engine object of the engine: the one its loaded models hold, or one made
@@ -117,26 +119,24 @@ void probe(anira_capabilities& capabilities, const anira_context_config& config)
             id.provider = static_cast<uint32_t>(provider.m_provider);
             id.provider_id = provider_id;
             backends.push_back(id);
-            anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
-            edge.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
-            edge.to_engine = static_cast<uint32_t>(engine);
-            edge.to_provider = static_cast<uint32_t>(provider.m_provider);
-            edge.to_provider_id = provider_id;
-            edge.available = 1;
+            std::array<anira_edge_info, 2> rows = anira::capi::backend_rows(id);
             if (anira::engine::host_memory_provider(provider.m_provider, provider.m_provider_id)) {
-                anira::capi::set_provider_edge(edge,
-                                               provider.m_provider,
-                                               provider.m_provider_id,
-                                               anira::capi::host_memory(),
-                                               k_host_reason,
-                                               k_device_reason,
-                                               capabilities.m_memory);
+                for (anira_edge_info& row : rows) {
+                    anira::capi::set_provider_edge(row,
+                                                   provider.m_provider,
+                                                   provider.m_provider_id,
+                                                   anira::capi::host_memory(),
+                                                   k_host_reason,
+                                                   k_device_reason,
+                                                   capabilities.m_memory);
+                }
             } else {
-                pending.push_back(anira_capabilities::PendingEdge{
-                    .m_row = edges.size(),
+                pending.push_back(anira_capabilities::PendingBackend{
+                    .m_input_row = edges.size(),
+                    .m_output_row = edges.size() + 1,
                     .m_options = options_of(config, engine, provider)});
             }
-            edges.push_back(edge);
+            edges.insert(edges.end(), rows.begin(), rows.end());
         }
     }
     std::vector<anira_domain> domains{ANIRA_DOMAIN_HOST};
@@ -151,37 +151,36 @@ void probe(anira_capabilities& capabilities, const anira_context_config& config)
     capabilities.m_memory.forget();
 }
 
-// Completes the edge of a device provider's row on its first read, under the capabilities'
-// mutex: its device's memory kind (the context's kept answer, or its API's asked now) and the
-// class, mover and reason the provider rule gives it. Nothing for a row completed before.
-void complete_edge(const anira_capabilities& capabilities, size_t row) {
+// Completes both edge rows of a device provider's backend on the first read of either (`row`
+// is one of the two), under the capabilities' mutex: its device's memory kind, one fact per
+// backend (the context's kept answer, or its API's asked now, once), and the class, mover and
+// reason the provider rule gives each row. Nothing for a backend completed before.
+void complete_backend(const anira_capabilities& capabilities, size_t row) {
     for (auto it = capabilities.m_pending.begin(); it != capabilities.m_pending.end(); ++it) {
-        if (it->m_row != row) { continue; }
-        anira_edge_info& edge = capabilities.m_edges[row];
-        const auto provider = static_cast<anira_provider>(edge.to_provider);
+        if (it->m_input_row != row && it->m_output_row != row) { continue; }
+        const anira_backend_id backend =
+            anira::capi::backend_end(capabilities.m_edges[it->m_input_row]);
+        const auto provider = static_cast<anira_provider>(backend.provider);
         const std::string_view provider_id =
-            edge.to_provider_id != nullptr ? std::string_view(edge.to_provider_id) : "";
+            backend.provider_id != nullptr ? std::string_view(backend.provider_id) : "";
         const anira::engine::DeviceMemory memory =
-            capabilities.m_memory.memory_of(static_cast<anira_engine>(edge.to_engine),
+            capabilities.m_memory.memory_of(static_cast<anira_engine>(backend.engine),
                                             provider,
                                             provider_id,
                                             it->m_options);
-        anira::capi::set_provider_edge(edge,
-                                       provider,
-                                       provider_id,
-                                       memory,
-                                       k_host_reason,
-                                       k_device_reason,
-                                       capabilities.m_memory);
+        for (const size_t index : {it->m_input_row, it->m_output_row}) {
+            anira::capi::set_provider_edge(capabilities.m_edges[index],
+                                           provider,
+                                           provider_id,
+                                           memory,
+                                           k_host_reason,
+                                           k_device_reason,
+                                           capabilities.m_memory);
+        }
         capabilities.m_pending.erase(it);
         return;
     }
 }
-
-// The fixed head of anira_backend_id: struct_size, engine, provider.
-constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
-// The fixed fields of anira_edge_info before its pointer: seven uint32_t.
-constexpr uint32_t k_edge_info_head = 7 * sizeof(uint32_t);
 
 }  // namespace
 
@@ -312,47 +311,29 @@ anira_status ANIRA_CALL anira_capabilities_edges(const anira_capabilities* capab
                                                  anira_edge_info* out) ANIRA_NOEXCEPT try {
     if (capabilities == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
-    // The rows go out whole: every device row's memory kind is asked first (count calls too,
-    // so a count and the fill that follows read the same rows).
+    // The rows go out whole: every device backend's memory kind is asked first (count calls
+    // too, so a count and the fill that follows read the same rows).
     while (!capabilities->m_pending.empty()) {
-        complete_edge(*capabilities, capabilities->m_pending.front().m_row);
+        complete_backend(*capabilities, capabilities->m_pending.front().m_input_row);
     }
     return anira::capi::enumerate_records(capabilities->m_edges, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
 
 anira_status ANIRA_CALL anira_capabilities_edge(const anira_capabilities* capabilities,
-                                                anira_domain from,
-                                                const anira_backend_id* to,
-                                                anira_edge_info* out) ANIRA_NOEXCEPT try {
-    if (capabilities == nullptr || to == nullptr || out == nullptr) {
+                                                anira_edge_info* edge) ANIRA_NOEXCEPT try {
+    if (capabilities == nullptr || edge == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+    if (edge->struct_size < anira::capi::k_edge_info_baseline) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    if (to->struct_size < k_backend_id_head || out->struct_size < k_edge_info_head) {
-        return ANIRA_ERROR_INVALID_ARGUMENT;
-    }
-    // A custom engine (engine_id set, readable only when the caller's record has the slot)
-    // has no row in this pre-release; a custom provider is matched by its name, read when the
-    // caller's record has the slot (a shorter record names the enum's providers alone).
-    const bool has_engine_id =
-        to->struct_size >= offsetof(anira_backend_id, engine_id) + sizeof(const char*);
-    const bool custom = has_engine_id && to->engine_id != nullptr;
-    const std::string_view provider_id =
-        to->struct_size >= sizeof(anira_backend_id) && to->provider_id != nullptr
-            ? std::string_view(to->provider_id)
-            : std::string_view();
+    // Matched by both ends (providers.h same_ends): a custom engine end (engine_id set) never
+    // matches, since the context has no custom engine's rows.
     const std::scoped_lock<std::mutex> lock(capabilities->m_mutex);
     for (size_t row = 0; row < capabilities->m_edges.size(); ++row) {
-        const anira_edge_info& edge = capabilities->m_edges[row];
-        const std::string_view listed = edge.to_provider_id != nullptr
-                                            ? std::string_view(edge.to_provider_id)
-                                            : std::string_view();
-        if (!custom && edge.from_domain == static_cast<uint32_t>(from) &&
-            edge.to_engine == to->engine && edge.to_provider == to->provider &&
-            listed == provider_id) {
-            complete_edge(*capabilities, row);  // this row's memory kind alone
-            std::memcpy(out, &edge, std::min<size_t>(out->struct_size, sizeof(anira_edge_info)));
-            return ANIRA_OK;
-        }
+        const anira_edge_info& listed = capabilities->m_edges[row];
+        if (!anira::capi::same_ends(listed, *edge)) { continue; }
+        complete_backend(*capabilities, row);  // this backend's memory kind alone
+        std::memcpy(edge, &listed, std::min<size_t>(edge->struct_size, sizeof(anira_edge_info)));
+        return ANIRA_OK;
     }
     return ANIRA_ERROR_EDGE_UNREACHABLE;
 } catch (...) { return translate_exception(nullptr, __func__); }

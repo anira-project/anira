@@ -2516,42 +2516,27 @@ anira_status ANIRA_CALL anira_pipeline_capabilities_backends(const anira_pipelin
 
 anira_status ANIRA_CALL anira_pipeline_capabilities_edge(const anira_pipeline* pipeline,
                                                          const anira_context* context,
-                                                         anira_domain from,
-                                                         const anira_backend_id* to,
-                                                         anira_edge_info* out) ANIRA_NOEXCEPT try {
-    if (pipeline == nullptr || context == nullptr || to == nullptr || out == nullptr) {
+                                                         anira_edge_info* edge) ANIRA_NOEXCEPT try {
+    if (pipeline == nullptr || context == nullptr || edge == nullptr) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    if (to->struct_size < k_backend_id_head || out->struct_size < 7 * sizeof(uint32_t)) {
+    if (edge->struct_size < anira::capi::k_edge_info_baseline) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    const bool has_engine_id =
-        to->struct_size >= offsetof(anira_backend_id, engine_id) + sizeof(const char*);
-    if (!has_engine_id || to->engine_id == nullptr) {
-        // A built-in engine: the context's registry answers.
-        return anira_capabilities_edge(anira_context_capabilities(context), from, to, out);
+    if (edge->from_engine_id == nullptr && edge->to_engine_id == nullptr) {
+        // No custom engine end: the context's registry answers.
+        return anira_capabilities_edge(anira_context_capabilities(context), edge);
     }
-    const std::string_view provider_id =
-        to->struct_size >= sizeof(anira_backend_id) && to->provider_id != nullptr
-            ? std::string_view(to->provider_id)
-            : std::string_view();
-    // A custom engine of the pipeline on a provider usable here, from host memory: the edge
-    // custom_rows builds (the engines' queries run here); anything else has no row.
-    if (from != ANIRA_DOMAIN_HOST) { return ANIRA_ERROR_EDGE_UNREACHABLE; }
-    const std::string_view wanted_engine(to->engine_id);
+    // A custom engine end: the pipeline's rows, two per custom engine on a provider usable here
+    // (custom_rows; the engines' queries run here), matched by both ends; anything else has no
+    // row.
     anira::capi::CustomRows rows = anira::capi::custom_rows(*context, *pipeline);
-    for (size_t i = 0; i < rows.m_backends.size(); ++i) {
-        const anira_backend_id& row = rows.m_backends[i];
-        const std::string_view listed = row.provider_id != nullptr ? row.provider_id : "";
-        if (std::string_view(row.engine_id) == wanted_engine && row.provider == to->provider &&
-            listed == provider_id) {
-            // This row's memory kind alone (a device provider's, the context's kept answer).
-            anira::capi::complete_custom_edge(*context, rows.m_edges[i]);
-            std::memcpy(out,
-                        &rows.m_edges[i],
-                        std::min<size_t>(out->struct_size, sizeof(anira_edge_info)));
-            return ANIRA_OK;
-        }
+    for (anira_edge_info& listed : rows.m_edges) {
+        if (!anira::capi::same_ends(listed, *edge)) { continue; }
+        // This row's memory kind alone (a device provider's, the context's kept answer).
+        anira::capi::complete_custom_edge(*context, listed);
+        std::memcpy(edge, &listed, std::min<size_t>(edge->struct_size, sizeof(anira_edge_info)));
+        return ANIRA_OK;
     }
     return ANIRA_ERROR_EDGE_UNREACHABLE;
 } catch (...) { return translate_exception(nullptr, __func__); }

@@ -709,11 +709,12 @@ int anira_header_cxx20_probe() {
         // one.
         const std::shared_ptr<anira::Engine> probe_engine = std::make_shared<ProbeEngine>();
         other.add_engine(probe_engine);
-        // The pipeline's capabilities on a context: the rows, an edge.
+        // The pipeline's capabilities on a context: the rows, an edge each way.
         const anira::PipelineCapabilities caps =
             other.capabilities(static_cast<const anira_context*>(nullptr));
         checks += caps.backends().empty() ? 0 : 1;
         checks += caps.edge(ANIRA_DOMAIN_HOST, caps.backends().front()).available == 1U ? 1 : 0;
+        checks += caps.edge(caps.backends().front(), ANIRA_DOMAIN_HOST).available == 1U ? 1 : 0;
         anira::Pipeline with_engine;
         with_engine.add_engine(probe_engine);
         with_engine.add_inference(model);
@@ -765,11 +766,12 @@ int anira_header_cxx20_probe() {
                                         report.slots(0, true).size() + report.extensions(0).size();
         checks += report_rows > 0 ? 1 : 0;
         const anira_edge_info edge = capabilities.edge(ANIRA_DOMAIN_HOST, first);
+        const anira_edge_info back = capabilities.edge(first, ANIRA_DOMAIN_HOST);
         running.probe(true);
         const std::size_t rows = capabilities.domains().size() + capabilities.ext_kinds().size() +
                                  capabilities.edges().size() + anira::enabled_engines().size() +
                                  anira::drain_log();
-        const uint64_t numbers = anira::num_inference_threads() + edge.available +
+        const uint64_t numbers = anira::num_inference_threads() + edge.available + back.available +
                                  running.byte_image_bytes(1, ANIRA_DTYPE_F32) + anira::now_ns();
         checks += rows > 0 ? 1 : 0;
         checks += numbers > 0 ? 1 : 0;

@@ -462,7 +462,8 @@ the id and the plan's provider beside it (``provider``, or ``ANIRA_PROVIDER_CUST
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
 ``anira_processor_ctx.engine`` and ``provider`` in the processor's phases, both pairs whole through
 ``anira_processor_engine`` and ``anira_processor_provider``, ``anira_edge_info.to_engine``
-with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
+with ``to_engine_id`` (the row from the host) and ``from_engine`` with ``from_engine_id`` (the
+row back) among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
 ``ANIRA_ENGINE_CUSTOM``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
 extension rows name the engine by its id.
@@ -561,22 +562,30 @@ times) and a **visible report**, the pipeline's capabilities:
     anira_backend_id* rows = malloc(count * sizeof *rows);
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
 
-    /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
-       XNNPACK; to every other a move the engine makes itself, ANIRA_MOVER_ENGINE, whose class is
-       the memory kind's: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory,
-       ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory,
-       edge.memory_kind; Core ML's device is the Metal default device). */
-    anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-    to.engine = ANIRA_ENGINE_CUSTOM;
-    to.engine_id = "com.example.myengine";
-    to.provider = ANIRA_PROVIDER_COREML;
+    /* One edge, by its two ends: host memory to the engine on a provider (zero-copy to
+       ANIRA_PROVIDER_CPU and XNNPACK; to every other a move the engine makes itself,
+       ANIRA_MOVER_ENGINE, whose class is the memory kind's: ANIRA_EDGE_UNIFIED_TRANSFER on
+       unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on
+       unknown memory, edge.memory_kind; Core ML's device is the Metal default device). */
     anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
-    anira_pipeline_capabilities_edge(pipe, context, ANIRA_DOMAIN_HOST, &to, &edge);
+    edge.from_domain = ANIRA_DOMAIN_HOST;
+    edge.to_engine = ANIRA_ENGINE_CUSTOM;
+    edge.to_engine_id = "com.example.myengine";
+    edge.to_provider = ANIRA_PROVIDER_COREML;
+    anira_pipeline_capabilities_edge(pipe, context, &edge);
+
+    /* The way back, from the engine to host memory: the same facts in this pre-release. */
+    anira_edge_info back = ANIRA_EDGE_INFO_INIT;
+    back.from_engine = ANIRA_ENGINE_CUSTOM;
+    back.from_engine_id = "com.example.myengine";
+    back.from_provider = ANIRA_PROVIDER_COREML;
+    back.to_domain = ANIRA_DOMAIN_HOST;
+    anira_pipeline_capabilities_edge(pipe, context, &back);
 
 The rows' strings point into the pipeline's engines and the context's store: valid until the
 pipeline is destroyed and until the context's next probe, a reason while the context lives. The
 backends list asks no device's memory kind; the edge entry asks it for the row it reads, once per
-device API, and the context keeps the answer. ``anira_handler_create`` asks the
+device API, and the context keeps the answer, so the backend's other row asks nothing more. ``anira_handler_create`` asks the
 same question for every candidate's provider of the engine, so what the report lists is what a
 handler runs on. In C++ the query is ``Engine::query(const InitInfo&)`` (the base answers
 every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``

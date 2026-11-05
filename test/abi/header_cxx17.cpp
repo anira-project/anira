@@ -235,8 +235,7 @@ static_assert(noexcept(anira_custom_engine_detach(nullptr)));
 static_assert(noexcept(anira_pipeline_add_engine(nullptr, nullptr, nullptr)));
 static_assert(
     noexcept(anira_pipeline_capabilities_backends(nullptr, nullptr, 0, nullptr, nullptr)));
-static_assert(noexcept(
-    anira_pipeline_capabilities_edge(nullptr, nullptr, ANIRA_DOMAIN_HOST, nullptr, nullptr)));
+static_assert(noexcept(anira_pipeline_capabilities_edge(nullptr, nullptr, nullptr)));
 static_assert(noexcept(anira_handler_num_entries(nullptr)));
 static_assert(noexcept(anira_contract_set_host_domain(nullptr, nullptr, ANIRA_DOMAIN_HOST)));
 // The read-back of anira/abi/config.h: one pin per shape (a string, a count, an enum, a spec

@@ -17,6 +17,8 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 
+#include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -30,14 +32,36 @@
 
 namespace anira::capi {
 
-/// The edge of a capability row to a backend on `provider`, whose device computes in `memory`,
+/// The smallest anira_edge_info the two lookups (anira_capabilities_edge,
+/// anira_pipeline_capabilities_edge) read and write: every field through to_provider_id, the
+/// baseline record. Spelled as the end of that field rather than sizeof, so that a tail field a
+/// later release appends leaves a caller of this one valid.
+inline constexpr uint32_t k_edge_info_baseline =
+    static_cast<uint32_t>(offsetof(anira_edge_info, to_provider_id) + sizeof(const char*));
+
+/// The two capability rows of one backend, from ANIRA_EDGE_INFO_INIT, available: the input row
+/// from ANIRA_DOMAIN_HOST to `backend`, then the output row from `backend` back to it
+/// (anira_capabilities_edges' order). Their facts are set_provider_edge's, per row.
+std::array<anira_edge_info, 2> backend_rows(const anira_backend_id& backend) noexcept;
+
+/// The backend end of a capability row: its to end where to_engine is set, else its from end
+/// (every row of this pre-release has one Host end and one backend end).
+anira_backend_id backend_end(const anira_edge_info& row) noexcept;
+
+/// Whether a registry row has the two ends a lookup names: a domain end (engine
+/// ANIRA_ENGINE_NONE) by its domain; a backend end by its engine, its provider and both ids
+/// (NULL equal to ""), its domain field not read.
+bool same_ends(const anira_edge_info& row, const anira_edge_info& query) noexcept;
+
+/// The facts of a capability row of a backend on `provider`, whose device computes in `memory`,
 /// by the plan rows' rule (engine::provider_rule), for the context's rows and a pipeline's
-/// alike: the class, the mover and the memory kind; to a provider that runs over host memory
-/// zero-copy, moved by nobody, from compiled-in knowledge (ANIRA_RUNG_STATIC) with
-/// `host_reason`; to every other one the move the engine's runtime makes itself, its class the
-/// memory kind's, as sure as the report that lists the provider (ANIRA_RUNG_IDENTITY), the
-/// reason `device_reason` and then the rule's (the memory kind and what the probe saw), kept in
-/// `texts`. The two given reasons are static storage.
+/// alike and for both directions of a backend: the class, the mover and the memory kind; to and
+/// from a provider that runs over host memory zero-copy, moved by nobody, from compiled-in
+/// knowledge (ANIRA_RUNG_STATIC) with `host_reason`; to and from every other one the move the
+/// engine's runtime makes itself, its class the memory kind's, as sure as the report that lists
+/// the provider (ANIRA_RUNG_IDENTITY), the reason `device_reason` and then the rule's (the
+/// memory kind and what the probe saw), kept in `texts`. The ends are the caller's
+/// (backend_rows). The two given reasons are static storage.
 void set_provider_edge(anira_edge_info& edge,
                        anira_provider provider,
                        std::string_view provider_id,
@@ -111,22 +135,24 @@ std::string unserved_message(const ServedProviders& served,
                              anira_provider provider,
                              std::string_view provider_id);
 
-/// The rows and the host edges of a pipeline's custom engines on a context, in the order the
-/// engines were added: per engine the CPU path alone for an engine without a list, else every
-/// declared provider its query reports usable; the strings point into the carriers. The queries
-/// run here, on the caller's thread (the capabilities entries are [main-thread]). A device
-/// provider's edge is not complete: complete_custom_edge asks its memory kind, for the row a
-/// caller reads alone. Throws as query_engine does.
+/// The backend rows and the edge rows of a pipeline's custom engines on a context, in the order
+/// the engines were added: per engine the CPU path alone for an engine without a list, else
+/// every declared provider its query reports usable; two edge rows per backend row
+/// (backend_rows: m_edges[2i] from the host to m_backends[i], m_edges[2i + 1] back); the
+/// strings point into the carriers. The queries run here, on the caller's thread (the
+/// capabilities entries are [main-thread]). A device provider's edge rows are not complete:
+/// complete_custom_edge asks its memory kind, for the row a caller reads alone. Throws as
+/// query_engine does.
 struct CustomRows {
     std::vector<anira_backend_id> m_backends;
     std::vector<anira_edge_info> m_edges;
 };
 CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipeline);
 
-/// Completes the edge of a custom row (custom_rows) on a device provider: its device's memory
-/// kind as the context keeps it (asked now when it has none) and the provider rule's class,
-/// mover and reason, kept by the context. Nothing for a host-memory provider's row, which
-/// custom_rows completed.
+/// Completes an edge row of a custom backend (custom_rows) on a device provider, either
+/// direction: its device's memory kind as the context keeps it (asked now when it has none) and
+/// the provider rule's class, mover and reason, kept by the context. Nothing for a host-memory
+/// provider's row, which custom_rows completed.
 void complete_custom_edge(const anira_context& context, anira_edge_info& edge);
 
 }  // namespace anira::capi
