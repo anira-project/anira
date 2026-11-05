@@ -412,6 +412,12 @@ public:
         // output into the receive rings, ahead of every later chunk. Driving thread only (set
         // by the submission, moved out by Core::post_process); Core::pre_process resets it.
         size_t m_fills_after{0};
+        // How long the inference thread spent on this chunk's job, in nanoseconds of
+        // steady_clock: from its before_inference to its after_inference (the declared state's
+        // feed and capture, the processor's hooks and the engine call; the wait for an instance
+        // lies before it). Written by the inference thread before the done signal, read after it
+        // (the warm-up pass of a prepare reads it); 0 until the chunk's first job ran.
+        int64_t m_inference_ns{0};
         // The struct's position in SessionElement::m_struct_pool: the chunk's entry
         // (anira_engine_ctx::entry, anira_processor_ctx::entry), set by prepare with the pool.
         uint32_t m_entry{0};
