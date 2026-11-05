@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <new>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,7 @@
 #include "ChunkStorage.h"
 #include "InstanceWaitList.h"  // IWYU pragma: keep (the complete wait list of PlanSlot)
 #include "LatencyCalculator.h"
+#include "QueueCapacity.h"
 #include "TensorRun.h"
 
 namespace anira {
@@ -55,11 +57,9 @@ SessionElement::SessionElement(int new_session_id,
                                anira::RtLatch* rt_latch)
     : m_session_id(new_session_id)
     , m_producer_token(std::move(producer_token))
-    // One slot per ThreadSafeStruct plus this queue's single explicit producer,
-    // so enqueue_pending_dispatch() never allocates after construction.
-    , m_dispatch_pending(num_instances,
-                         /*maxExplicitProducers=*/1,
-                         /*maxImplicitProducers=*/0)
+    // No blocks: an exclusive session's prepare reserves them for its struct pool through the
+    // token (reserve_pending_dispatch), so enqueue_pending_dispatch() never allocates.
+    , m_dispatch_pending(0)
     , m_dispatch_producer_token(m_dispatch_pending)
     , m_processor(processor)
     , m_model(model)
@@ -203,6 +203,10 @@ bool SessionElement::exclusive() const noexcept {
     return m_derived.m_exclusive;
 }
 
+size_t SessionElement::queue_capacity() const noexcept {
+    return exclusive() ? 1 : m_num_structs;
+}
+
 size_t SessionElement::output_model_latency(size_t slot) const noexcept {
     return static_cast<size_t>(m_model.m_outputs[slot].m_latency);
 }
@@ -228,7 +232,7 @@ void SessionElement::clear() {
     m_pending_pull_samples = 0;
     m_pending_fills = 0;
 
-    for (auto& inference : m_inference_queue) {
+    for (auto& inference : m_struct_pool) {
         // Only a free struct is exclusively ours to reset; skip anything a worker may
         // still be reading/writing.
         if (!inference->m_free.load(std::memory_order_acquire)) { continue; }
@@ -256,12 +260,15 @@ void SessionElement::clear() {
 void SessionElement::enqueue_pending_dispatch(
     std::shared_ptr<ThreadSafeStruct> thread_safe_struct) {
     // Single producer (the audio thread for this session), so insertion order
-    // equals submission order. The explicit token plus the capacity reserved in
-    // the constructor keep this allocation-free; try_enqueue leaves the argument
-    // untouched when it fails, so the fallback below may still use it.
+    // equals submission order. The explicit token plus the capacity reserved at
+    // prepare (reserve_pending_dispatch) keep this allocation-free; try_enqueue leaves
+    // the argument untouched when it fails, so the fallback below may still use it.
     if (!m_dispatch_pending.try_enqueue(m_dispatch_producer_token, std::move(thread_safe_struct))) {
-        // Unreachable while the capacity bound holds (pending entries are
-        // distinct ThreadSafeStructs); handled like any other queue-full drop.
+        // Unreachable while the reservation holds: pending entries are distinct
+        // ThreadSafeStructs, and the queue's one consumer at a time (the gate holder) cannot
+        // fall behind a lap of the ring without the entries it would let through. Handled like
+        // any other queue-full drop: a dropped hop, ANIRA_ERROR_CAPACITY in rt_error.
+        static_cast<void>(m_rt->record_drop());
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::PendingDispatchDropped,
                                 log_group::k_scheduler,
                                 "Could not enqueue pending stateful dispatch! Dropping the "
@@ -382,6 +389,36 @@ void SessionElement::force_reset_dispatch_chain() {
     // entries reference structs the caller is about to rebuild or wipe.
     std::shared_ptr<ThreadSafeStruct> drained;
     while (m_dispatch_pending.try_dequeue(drained)) {}
+}
+
+void SessionElement::reserve_pending_dispatch() {
+    // The gate, busy under the current epoch, for the whole reservation: a laggard worker
+    // waits it out as in force_reset_dispatch_chain, and only a holder dequeues.
+    uint64_t gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    while ((gate & k_dispatch_busy) != 0 ||
+           !m_stateful_dispatch_gate.compare_exchange_weak(gate,
+                                                           gate | k_dispatch_busy,
+                                                           std::memory_order_acq_rel,
+                                                           std::memory_order_acquire)) {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        gate = m_stateful_dispatch_gate.load(std::memory_order_acquire);
+    }
+    const uint64_t token = gate | k_dispatch_busy;
+    bool reserved = false;
+    try {
+        reserved = detail::reserve_capacity(
+            m_dispatch_pending,
+            m_dispatch_producer_token,
+            detail::reservation_size<decltype(m_dispatch_pending)>(m_num_structs),
+            std::shared_ptr<ThreadSafeStruct>{});
+    } catch (...) {
+        release_dispatch(token);
+        throw;
+    }
+    std::shared_ptr<ThreadSafeStruct> placeholder;
+    while (m_dispatch_pending.try_dequeue(placeholder)) {}
+    release_dispatch(token);
+    if (!reserved) { throw std::bad_alloc(); }
 }
 
 void SessionElement::complete_with_zeros(
@@ -510,11 +547,15 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
     // into the rebuilt session. Also opens a new dispatch epoch, invalidating
     // any gate token a laggard worker may still hold from before the drain.
     force_reset_dispatch_chain();
+    // An exclusive session parks its chunks in the pending queue until the gate lets one go:
+    // room for every struct of the pool there, as the inference queue gets (Core::
+    // reserve_inference_capacity).
+    if (exclusive()) { reserve_pending_dispatch(); }
 
-    // Create the thread-safe structs for the inference queue, each with its storage and the
+    // Create the session's struct pool, each struct with its storage and the
     // descriptors of its tensors over it, and its position in the pool, the chunk's entry. A
     // State slot gets no storage: its port's pair is bound per inference.
-    m_inference_queue.clear();
+    m_struct_pool.clear();
 
     const auto state_slots = [](const capi::Ports& ports) {
         std::vector<bool> state(ports.size(), false);
@@ -535,13 +576,13 @@ void SessionElement::prepare(const CustomLatencies& custom_latencies,
         }
     }
     for (size_t i = 0; i < m_num_structs; ++i) {
-        m_inference_queue.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
-                                                                          m_derived.m_outputs,
-                                                                          input_state,
-                                                                          output_state,
-                                                                          host_chunk_storage(),
-                                                                          alignment));
-        m_inference_queue.back()->m_entry = static_cast<uint32_t>(i);
+        m_struct_pool.emplace_back(std::make_shared<ThreadSafeStruct>(m_derived.m_inputs,
+                                                                      m_derived.m_outputs,
+                                                                      input_state,
+                                                                      output_state,
+                                                                      host_chunk_storage(),
+                                                                      alignment));
+        m_struct_pool.back()->m_entry = static_cast<uint32_t>(i);
     }
 
     // The first inference of the new session is the first of a new stream: the engine of each
@@ -577,7 +618,7 @@ void SessionElement::owe_fills(size_t hops) {
     // front); every struct that holds one is of the current generation (a reset clears the
     // list).
     if (!m_time_stamps.empty()) {
-        for (const auto& chunk : m_inference_queue) {
+        for (const auto& chunk : m_struct_pool) {
             if (!chunk->m_free.load(std::memory_order::relaxed) &&
                 chunk->m_time_stamp == m_time_stamps.front()) {
                 chunk->m_fills_after += hops;

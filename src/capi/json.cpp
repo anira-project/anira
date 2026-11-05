@@ -1343,7 +1343,10 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
         axes.push_back(axis);
     }
     object["axes"] = axes;
-    if (spec.m_role == ANIRA_ROLE_STREAMED) {
+    // A window is written back exactly when the spec declares one: the window a validation
+    // derives lives in the derived form alone. An overlap without a window (which validation
+    // refuses) is kept as it is.
+    if (spec.m_role == ANIRA_ROLE_STREAMED && spec.window_declared()) {
         Json window = Json::object();
         window["min"] = spec.m_window_min;
         if (spec.m_window_max == ANIRA_UNBOUNDED) {
@@ -1352,6 +1355,8 @@ Json spec_to_json(const anira_tensor_spec& spec, bool is_output) {
             window["max"] = spec.m_window_max;
         }
         object["window"] = window;
+        object["overlap"] = spec.m_overlap;
+    } else if (spec.m_role == ANIRA_ROLE_STREAMED && spec.m_overlap != 0) {
         object["overlap"] = spec.m_overlap;
     }
     if (is_output && spec.m_latency != 0) { object["latency"] = spec.m_latency; }

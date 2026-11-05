@@ -351,7 +351,7 @@ for the duration of the call, like the processor's ``anira_processor_ctx``):
 - ``instance``: the shared slot of the loaded model this call runs on, ``0 .. instances - 1``;
   never two calls at once on one instance. ``0`` under ``ANIRA_ENGINE_CALL_EXCLUSIVE``, where
   no slot was claimed.
-- ``entry``: the chunk's position in the handler's inference queue, the processor context's
+- ``entry``: the chunk's position in the handler's chunk pool, the processor context's
   ``entry`` of the same chunk (:doc:`usage` section 2).
 - ``inputs`` / ``num_inputs`` and ``outputs`` / ``num_outputs``: one descriptor per slot of
   either side in slot order, State tensors included, over the memory the engine reads and

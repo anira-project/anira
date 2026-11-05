@@ -356,8 +356,8 @@ typedef struct anira_processor_ctx {
      */
     uint32_t ticket;
     /**
-     * The chunk's position in the handler's inference queue: 0 .. anira_handler_num_entries() -
-     * 1 (anira_prepare_info.num_entries), the same value in every phase of the chunk, its reset
+     * The chunk's position in the handler's chunk pool: 0 .. anira_handler_num_entries() - 1
+     * (anira_prepare_info.num_entries), the same value in every phase of the chunk, its reset
      * included, reused by a later chunk once this one has completed (under an Async contract
      * the slot part of the ticket). Chunks of one handler may be in flight on several inference
      * threads at once, and one entry holds one chunk at a time: the index of a per-chunk
@@ -828,10 +828,14 @@ ANIRA_API anira_status ANIRA_CALL anira_processor_default_pre_process(const anir
 /**
  * @brief The default post_process, for a processor that wants it ("call super"): for every
  * Streamed output it pushes one hop per channel from the model tensor, read as packed
- * row-major memory, into the ring: channel c from element c * hop. It never touches a
- * tensor of another role. Real-time by construction. anira runs it itself, once per
- * chunk, when the processor's post_process slot is NULL (or the pipeline has no
- * processor).
+ * row-major memory, into the ring, in the layout anira_processor_default_pre_process
+ * gives an input: channel c's window starts at element c * window (the tensor's elements
+ * per channel) and its newest hop is the window's tail, so the last hop of each
+ * channel's window is pushed. An output without an overlap is a window of one hop,
+ * pushed whole; with an overlap the head of the window answers older positions of the
+ * stream and is not pushed. It never touches a tensor of another role. Real-time by
+ * construction. anira runs it itself, once per chunk, when the processor's post_process
+ * slot is NULL (or the pipeline has no processor).
  * @param ctx The context the processor's post_process received.
  * @return ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another phase than
  *         ANIRA_PHASE_POST_PROCESS; ANIRA_ERROR_CONFIG when the ring dtype of a Streamed output

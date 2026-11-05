@@ -81,8 +81,9 @@ InferenceManagerTestParams multi_tensor_param() {
         .m_outputs = {{.m_elements = 512}, {.m_elements = 192}},
         .m_budget_ms = 50.0,
         // 50 ms per 23 ms hop on two processors exceeds the pool's capacity
-        // (LatencyCalculator::is_feasible): sized for one host block on an idle pool.
-        .m_expected_latency = {7680, 2880}};
+        // (LatencyCalculator::is_feasible): sized for one host block on an idle pool,
+        // 461/32 hops. The hops 512 and 192 (g = 64) are coherent there already.
+        .m_expected_latency = {7376, 2766}};
 }
 
 InferenceManagerTestParams non_streamable_mix_param() {
@@ -285,7 +286,8 @@ INSTANTIATE_TEST_SUITE_P(
             .m_inputs = {{.m_elements = 16, .m_channels = 16}},
             .m_outputs = {{.m_elements = 2048}, {.m_elements = 512, .m_channels = 2}},
             .m_budget_ms = 40.0,
-            .m_expected_latency = {6144, 768}},
+            // 5885/2048 hops: 5885 and 735, met on the grid of 1/256 hops (hops 2048 and 256)
+            .m_expected_latency = {5888, 736}},
         InferenceManagerTestParams{
             .m_host_blocks = anira_test::sizing_host_blocks(256.,
                                                             48000. / 8,
@@ -303,7 +305,8 @@ INSTANTIATE_TEST_SUITE_P(
                          {.m_elements = 512, .m_channels = 2}},
             .m_outputs = {{.m_elements = 2048}, {.m_elements = 384, .m_channels = 3}},
             .m_budget_ms = 40.0,
-            .m_expected_latency = {6144, 384}},
+            // 4924/2048 hops: 4924 and 307, met on the grid of 1/128 hops (hops 2048 and 128)
+            .m_expected_latency = {4928, 308}},
         InferenceManagerTestParams{
             .m_host_blocks =
                 anira_test::sizing_host_blocks(128., 48000. / 8, true, anira_test::input_anchor(1)),
@@ -338,7 +341,9 @@ INSTANTIATE_TEST_SUITE_P(
                          {.m_elements = 2}},
             .m_outputs = {{.m_elements = 512}, {.m_elements = 192}},
             .m_budget_ms = 50.0,
-            .m_expected_latency = {7680, 2880}},  // infeasible, see multi_tensor_param()
+            // Infeasible, see multi_tensor_param(); the smaller blocks need 7439/512 hops: 7439
+            // and 2789, met on the grid of 1/64 hops.
+            .m_expected_latency = {7440, 2790}},
         non_streamable_mix_param()),
     build_test_name);
 

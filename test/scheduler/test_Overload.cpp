@@ -128,7 +128,7 @@ struct Recording {
 
 // Every slot of the session completed (free, or done and waiting for its collection).
 bool settled(const anira::SessionElement& session) {
-    return std::ranges::all_of(session.m_inference_queue, [](const auto& chunk) {
+    return std::ranges::all_of(session.m_struct_pool, [](const auto& chunk) {
         return chunk->m_free.load() || chunk->m_done_atomic.load();
     });
 }

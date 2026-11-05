@@ -162,6 +162,8 @@ struct anira_tensor_spec {
     anira_role m_role = ANIRA_ROLE_STREAMED;
     std::array<anira::capi::Axis, ANIRA_MAX_RANK> m_axes{};
     uint32_t m_ndim = 0;
+    /// The window as declared (anira_tensor_spec_set_window, the JSON key "window"); (0, 0) is
+    /// no window, which the validator derives from the Time axis (window_declared()).
     int64_t m_window_min = 0;
     int64_t m_window_max = 0;
     int64_t m_overlap = 0;
@@ -172,6 +174,11 @@ struct anira_tensor_spec {
     /// the canonical name of the state output it is fed from. Copied, resolved by validate.
     std::string m_state_source;
     anira::capi::ExtBag m_ext;
+
+    /// Whether the spec declares a window: anything but (0, 0) as its bounds (a declared window
+    /// has window_min > 0, the validator refuses another). A Streamed spec without one has its
+    /// window derived at validation and written back to a model file without one.
+    bool window_declared() const noexcept { return m_window_min != 0 || m_window_max != 0; }
 };
 
 struct anira_contract {

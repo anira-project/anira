@@ -1,14 +1,15 @@
-// The module's memory grows (256 MiB to begin with, up to 2 GiB), and a growth gives the shared
-// memory a new, longer buffer: views made before it cover the old length only. Every scope reads
+// The module's memory grows (128 MiB to begin with by default, 64 MiB at least, up to 2 GiB), and
+// a growth gives the shared memory a new, longer buffer: views made before it cover the old length
+// only. Every scope reads
 // the heap through anira's heap(), which rebuilds them, the trampolines before each processor and
 // engine call. The pipeline of test.js: a JavaScript engine on a pool of two Wasm Workers
 // (pool-worker.js: its input times 2 * the Static gain) and a JavaScript processor in the worklet
 // (worklet-processor.js: halves the input), so the output is the input times the gain after the
 // latency, exactly. Checked:
 // - offline: a node streams on a context whose worklet and Workers started before the growth;
-//   then the main thread creates handlers on the bundled gain config until the memory is far
-//   beyond its initial size, and a second handler made after the growth (its tensors above the
-//   old end) renders beside the first, both exact;
+//   then the main thread's malloc grows the memory far beyond its initial size (blocks kept to
+//   the end: a handler takes too little to grow it fast), and a second handler made after the
+//   growth (its tensors above the old end) renders beside the first, both exact;
 // - offline, mid-stream: the render suspends halfway, the main thread grows the memory and
 //   re-prepares the node (its tensors made anew, above the old end), and the render resumes:
 //   exact before and after;
@@ -30,7 +31,6 @@ import {
   measureRenderGeometry,
 } from '../../dist/index.js'
 
-const MODELS = '../../extras/models/model-pool/'
 const MIB = 1024 * 1024
 const RATE = 48000
 const QUANTUM = 128
@@ -53,7 +53,7 @@ const run = async () => {
   // Sizes the module cannot run on are refused before anything is created.
   const refusals = []
   for (const memory of [
-    { initial: 128 * MIB },
+    { initial: 32 * MIB },
     { initial: 512 * MIB, maximum: 256 * MIB },
     { maximum: 4096 * MIB },
   ]) {
@@ -71,14 +71,14 @@ const run = async () => {
   }
   check(
     refusals.every((r) => r === 'refused'),
-    `Anira.create refuses a memory below 256 MiB, a maximum below the initial size and one ` +
+    `Anira.create refuses a memory below 64 MiB, a maximum below the initial size and one ` +
       `above 2 GiB with an AniraError (${refusals.join(', ')})`
   )
   const anira = await Anira.create()
   anira.setLogSink(() => {})
   const bytes = () => anira.memory.buffer.byteLength
   const initial = bytes()
-  check(initial === 256 * MIB, `the memory starts at ${initial / MIB} MiB`)
+  check(initial === 128 * MIB, `the memory starts at ${initial / MIB} MiB`)
 
   const context = Context.create(anira, {
     threads: 2,
@@ -151,27 +151,16 @@ const run = async () => {
     return worst
   }
 
-  // Grows the memory from the main thread: handlers on the bundled gain config (the built-in
-  // ONNX Runtime engine), until the memory is `beyond` past its size now.
-  const gainModel = await ModelConfig.fromUrl(
-    anira,
-    new URL(`${MODELS}gain.model.json`, import.meta.url)
-  )
-  const gainContract = (
-    await ContractHandle.fromUrl(
-      anira,
-      new URL(`${MODELS}gain.contract.json`, import.meta.url)
-    )
-  ).hardHostBlocks(QUANTUM, QUANTUM, RATE)
+  // Grows the memory from the main thread, where a handler's prepare grows it: blocks of 16 MiB
+  // the module's malloc takes and keeps until the end, until the memory is `beyond` past its size
+  // now. (A handler takes a few hundred KiB at most, its share of the inference queue a few KiB.)
   const fillers = []
   const grow = (beyond) => {
     const target = bytes() + beyond
-    while (bytes() < target && fillers.length < 2000) {
-      const pipeline = Pipeline.create(anira).addInference(gainModel)
-      const handler = InferenceHandler.create(context, pipeline)
-      handler.prepare(gainContract)
-      fillers.push(handler)
-      pipeline.destroy()
+    while (bytes() < target && fillers.length < 128) {
+      const block = anira.module._malloc(16 * MIB)
+      if (block === 0) break
+      fillers.push(block)
     }
   }
   await context.ready()
@@ -188,7 +177,7 @@ const run = async () => {
     check(
       bytes() >= startedAt + 256 * MIB && after.native() >= startedAt,
       `the memory grew from ${startedAt / MIB} to ${bytes() / MIB} MiB through ` +
-        `${fillers.length} handlers; the handler made after it lies above the old end ` +
+        `${fillers.length} blocks of 16 MiB; the handler made after it lies above the old end ` +
         `(at ${(after.native() / MIB).toFixed(0)} MiB)`
     )
     const second = await node(after, audio, 500)
@@ -317,9 +306,7 @@ const run = async () => {
   }
   await live.close()
 
-  fillers.forEach((h) => h.destroy())
-  gainContract.destroy()
-  gainModel.destroy()
+  fillers.forEach((block) => anira.module._free(block))
   jsModel.destroy()
   context.destroy()
   return { checks }

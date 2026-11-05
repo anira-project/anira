@@ -861,9 +861,17 @@ TEST(AbiValidate, WindowRules) {
         model.output(streamed("out"));
         return derive(model);
     };
+    // No window (0, 0) is derived; an overlap needs one; a declared window_min is positive.
     Outcome outcome = with_window(0, 0, 0);
+    EXPECT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+    outcome = with_window(0, 0, 128);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
-    expect_contains(outcome.m_message, "tensor 'in': window_min must be positive");
+    expect_contains(outcome.m_message,
+                    "tensor 'in': overlap 128 without a window: declare the window it belongs to "
+                    "(window_min, window_max)");
+    outcome = with_window(0, 512, 0);
+    EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(outcome.m_message, "tensor 'in': window_min must be positive (got 0)");
     outcome = with_window(512, 256, 0);
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': window_max 256 is below window_min 512");
@@ -871,6 +879,119 @@ TEST(AbiValidate, WindowRules) {
     EXPECT_EQ(outcome.m_status, ANIRA_ERROR_CONFIG);
     expect_contains(outcome.m_message, "tensor 'in': overlap 512 must be below window_min 512");
     EXPECT_EQ(with_window(512, ANIRA_UNBOUNDED, 511).m_status, ANIRA_OK);
+}
+
+namespace {
+/// A streamed float32 spec [batch 1, channel 2, time <time>] that declares no window.
+TensorSpec unwindowed(std::string_view name, int64_t time) {
+    TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    spec.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_CHANNEL, 2).axis(2, ANIRA_AXIS_TIME, time);
+    return spec;
+}
+
+/// The window a derived spec runs at: {min, max, overlap, used, hop}, and whether it was derived.
+struct Window {
+    std::array<int64_t, 5> m_values{};
+    bool m_derived = false;
+    bool operator==(const Window&) const = default;
+};
+Window window_of(const anira::capi::DerivedSpec& spec) {
+    return Window{.m_values = {spec.m_window_min,
+                               spec.m_window_max,
+                               spec.m_overlap,
+                               spec.m_window_used,
+                               spec.m_hop},
+                  .m_derived = spec.m_window_derived};
+}
+}  // namespace
+
+// A Streamed tensor's window is optional: one the spec does not declare is derived at
+// validation, never refused. A fixed Time extent is the window, overlap 0; a dynamic Time axis
+// makes it flexible, [1, unbounded], pinned with the anchor hop like a declared flexible window;
+// a declared window wins. The spec is never written: it still has no window afterwards, so a
+// model file written back declares none (AbiJsonModel.AWindowIsWrittenBackExactlyWhenDeclared).
+TEST(AbiValidate, AnOmittedWindowIsDerivedFromTheTimeAxis) {
+    // A fixed Time extent: the window of that extent, whatever the host blocks.
+    ModelConfig fixed;
+    fixed.add_model_path(k_custom, "model.custom");
+    fixed.input(unwindowed("in", 512));
+    fixed.output(unwindowed("out", 512));
+    for (const double block : {128.0, 512.0, 3000.0}) {
+        SCOPED_TRACE(block);
+        const Outcome outcome = derive(fixed, host_blocks(block));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        for (const anira::capi::DerivedSpec& spec :
+             {outcome.m_derived.m_inputs[0], outcome.m_derived.m_outputs[0]}) {
+            EXPECT_EQ(window_of(spec),
+                      (Window{.m_values = {512, 512, 0, 512, 512}, .m_derived = true}));
+            EXPECT_EQ(spec.m_dims, (std::vector<int64_t>{1, 2, 512}));
+            EXPECT_EQ(spec.m_channels, 2);
+        }
+    }
+    for (const anira_tensor_spec* spec :
+         {&fixed.native()->m_inputs[0], &fixed.native()->m_outputs[0]}) {
+        EXPECT_FALSE(spec->window_declared()) << "the derivation never writes into the spec";
+        EXPECT_EQ(spec->m_window_min, 0);
+        EXPECT_EQ(spec->m_window_max, 0);
+    }
+
+    // A dynamic Time axis: a flexible window, pinned to the anchor hop from the host blocks (the
+    // largest at or below the block: the block itself, with no other bound), else the smallest.
+    ModelConfig dynamic;
+    dynamic.add_model_path(k_custom, "model.custom");
+    dynamic.input(unwindowed("in", ANIRA_DYNAMIC));
+    dynamic.output(unwindowed("out", ANIRA_DYNAMIC));
+    for (const int64_t block : {int64_t{256}, int64_t{2048}}) {
+        SCOPED_TRACE(block);
+        const Outcome outcome = derive(dynamic, host_blocks(static_cast<double>(block)));
+        ASSERT_EQ(outcome.m_status, ANIRA_OK) << outcome.m_message;
+        for (const anira::capi::DerivedSpec& spec :
+             {outcome.m_derived.m_inputs[0], outcome.m_derived.m_outputs[0]}) {
+            EXPECT_EQ(
+                window_of(spec),
+                (Window{.m_values = {1, ANIRA_UNBOUNDED, 0, block, block}, .m_derived = true}));
+            EXPECT_EQ(spec.m_dims, (std::vector<int64_t>{1, 2, block}));
+        }
+    }
+    const Outcome smallest = derive(dynamic);
+    ASSERT_EQ(smallest.m_status, ANIRA_OK) << smallest.m_message;
+    EXPECT_EQ(hops(smallest.m_derived.m_inputs), (std::vector<size_t>{1}));
+
+    // Beside a declared fixed anchor, a derived flexible output follows the anchor's hop, and a
+    // derived fixed one keeps its own (its ratio derived from it).
+    ModelConfig mixed;
+    mixed.add_model_path(k_custom, "model.custom");
+    mixed.input(streamed("in", 2048));
+    mixed.output(unwindowed("follows", ANIRA_DYNAMIC));
+    mixed.output(unwindowed("own", 1024));
+    const Outcome anchored = derive(mixed, host_blocks(512));
+    ASSERT_EQ(anchored.m_status, ANIRA_OK) << anchored.m_message;
+    EXPECT_FALSE(anchored.m_derived.m_inputs[0].m_window_derived);
+    EXPECT_EQ(window_of(anchored.m_derived.m_outputs[0]),
+              (Window{.m_values = {1, ANIRA_UNBOUNDED, 0, 2048, 2048}, .m_derived = true}));
+    EXPECT_EQ(window_of(anchored.m_derived.m_outputs[1]),
+              (Window{.m_values = {1024, 1024, 0, 1024, 1024}, .m_derived = true}));
+
+    // A declared window wins over the Time extent.
+    ModelConfig declared;
+    declared.add_model_path(k_custom, "model.custom");
+    declared.input(unwindowed("in", 512).window(512, 512, 384));
+    declared.output(unwindowed("out", 128));
+    const Outcome kept = derive(declared, host_blocks(128));
+    ASSERT_EQ(kept.m_status, ANIRA_OK) << kept.m_message;
+    EXPECT_EQ(window_of(kept.m_derived.m_inputs[0]),
+              (Window{.m_values = {512, 512, 384, 512, 128}, .m_derived = false}));
+    EXPECT_EQ(window_of(kept.m_derived.m_outputs[0]),
+              (Window{.m_values = {128, 128, 0, 128, 128}, .m_derived = true}));
+
+    // What no anchor hop satisfies names the derived window.
+    ModelConfig apart;
+    apart.add_model_path(k_custom, "model.custom");
+    apart.input(streamed("in", 512));
+    apart.output(unwindowed("out", 100).time_ratio(1, 3));
+    const Outcome refused = derive(apart, host_blocks(512));
+    EXPECT_EQ(refused.m_status, ANIRA_ERROR_CONFIG);
+    expect_contains(refused.m_message, "window 100 (derived from the Time extent)");
 }
 
 TEST(AbiValidate, StaticAndBufferRules) {

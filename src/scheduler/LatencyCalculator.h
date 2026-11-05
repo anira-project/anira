@@ -71,7 +71,9 @@ struct HardContract;
  * @f$\kappa < n@f$ (the pool keeps up with the stream); only
  * @f$m < \rho / (n - \kappa)@f$ can contribute, so the search is finite. The latency of
  * output tensor @f$i@f$ in its own samples is @f$P_i \Lambda@f$ (see
- * get_output_latencies()), rounded down because the host pops whole samples only.
+ * get_output_latencies()), rounded down because the host pops whole samples only. Several
+ * streamed outputs are then raised to the least delay they share in whole samples, a multiple
+ * of @f$1/\gcd_i P_i@f$ hops (sync_latencies()), so that they stay coherent.
  *
  * @par Inference slots
  * By the same recursion the number of inferences submitted but not yet collected right
@@ -157,11 +159,14 @@ public:
     /**
      * @brief Per-output integer latency, synchronized across outputs
      *
-     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one output tensor
-     * the latencies are then raised to a common whole number of hops
-     * (see sync_latencies()). Non-streamable outputs report 0. This is what
-     * SessionElement primes its receive rings with, before the internal model latency
-     * and any custom latency are applied.
+     * @f$\lfloor P_i \Lambda \rfloor@f$ per streamable output; with more than one streamed
+     * output the latencies are then raised to the least common delay on the grid of
+     * @f$1/g@f$ hops, @f$g@f$ the gcd of their hops (see sync_latencies()). With smaller host
+     * blocks allowed, the fixed block and the smaller-block grid are each synchronized and the
+     * larger of the two is taken per output, which stays coherent. Non-streamable outputs
+     * (Static values, the output half of a State pair) report 0 and never trigger that
+     * rounding. This is what SessionElement primes its receive rings with, before the internal
+     * model latency and any custom latency are applied.
      *
      * @return Latency values in samples, one per output tensor
      */
@@ -287,9 +292,21 @@ public:
     /**
      * @brief Synchronizes integer latencies across several output tensors
      *
-     * With one output the value is kept. With several, every streamable output is raised
-     * to the same whole number of hops, @f$\lceil \max_i L_i / P_i \rceil \cdot P_i@f$;
-     * non-streamable outputs stay at 0. Same rule as before this class existed.
+     * Raises the streamed outputs (@f$P_i > 0@f$) to the least coherent latencies at or
+     * above their own: every streamed output is delayed by the same number of hops, so that
+     * the outputs stay aligned. The delays that are a whole number of samples of every
+     * streamed output are exactly the multiples of @f$1/g@f$ hops, @f$g = \gcd_i P_i@f$
+     * (Bezout), so the result is
+     * @f[
+     *   k = \max_i \left\lceil \frac{g L_i}{P_i} \right\rceil, \qquad
+     *   \text{result}_i = \frac{P_i}{g} k,
+     * @f]
+     * in exact integer arithmetic (64-bit for @f$g L_i@f$). Equal hops keep their values
+     * (@f$g = P@f$); coprime hops meet at a whole number of hops (@f$g = 1@f$). The one
+     * formula covers the edge cases: one streamed output: @f$g = P@f$, @f$k = L@f$, so its
+     * floor passes unchanged; no streamed output: every entry 0. A non-streamable output (a
+     * Static value, the output half of a State pair) reports 0, takes no part in @f$g@f$ and
+     * @f$k@f$, and the result has one entry per output tensor.
      *
      * @param latencies Integer latencies in samples, one per output tensor
      * @param output_sizes Postprocess output sizes (hops), one per output tensor

@@ -73,7 +73,7 @@ public:
         // The struct's own handle, by its position in its session's pool (ThreadSafeStruct::
         // m_entry): the pool is rebuilt only by a prepare, after a drain that waited for this
         // job.
-        job.m_thread_safe_struct = job.m_session->m_inference_queue[node->m_entry];
+        job.m_thread_safe_struct = job.m_session->m_struct_pool[node->m_entry];
         return true;
     }
 

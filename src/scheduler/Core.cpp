@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -41,6 +42,7 @@
 #include "../utils/StatusError.h"
 #include "InstanceWaitList.h"
 #include "LogDrainLoop.h"
+#include "QueueCapacity.h"
 
 namespace anira {
 
@@ -156,18 +158,18 @@ struct Core::State {
     std::atomic<int> m_next_id{-1};  ///< Counter for generating unique session IDs
 
     /**
-     * @brief Thread-safe concurrent queue for inference requests
+     * @brief The queue of inference jobs of every session, which the inference threads take
      *
-     * Lock-free concurrent queue that manages inference requests from all sessions.
-     * The queue is initialized with minimum capacity and pre-allocation hints for
-     * explicit and implicit producers (moodycamel signature: minCapacity,
-     * maxExplicitProducers, maxImplicitProducers).
-     * See InferenceQueue for the type choice per platform and the wait strategy
-     * (anira_wait_strategy) interaction.
+     * Built with no blocks: what it holds belongs to the sessions that exist. A session's
+     * prepare gives its producer token (SessionElement::m_producer_token) the blocks for every
+     * job the session can have queued at once (reserve_inference_capacity: its struct pool, one
+     * job for an exclusive session), so the audio thread's try_enqueue neither allocates nor
+     * runs out of room; a released session's producer, its blocks with it, goes to the next
+     * session's token. The drain's requeue allocates its own (drain_inference_queue). Nothing
+     * of it goes back to the system before the core is freed. See InferenceQueue for the type
+     * per platform and the wait strategy (anira_wait_strategy).
      */
-    InferenceQueue m_next_inference{k_min_capacity_inference_queue,
-                                    k_max_num_instances,
-                                    k_max_num_implicit_producers};
+    InferenceQueue m_next_inference{0};
 
     /**
      * @brief One loaded model of the pool: the record it was loaded from, the carrier of a
@@ -1249,8 +1251,12 @@ void Core::prepare_session(const std::shared_ptr<SessionElement>& session,
 
     session->prepare(custom_latencies, ring_dtypes);
 
+    // The session's room in the inference queue, now that its struct pool exists: before the
+    // session is initialised, so nothing of it is queued, and before the pool starts.
+    reserve_inference_capacity(session);
+
     {
-        // Only the pool start touches shared state; the drain and the
+        // Only the pool start touches shared state; the drain, the reservation and the
         // session's own prepare above are session-local and stay unlocked.
         State& state = get_state();
         const std::scoped_lock<detail::LifecycleMutex> lifecycle_lock(state.m_lifecycle_mutex);
@@ -1361,25 +1367,25 @@ bool Core::collect_completed(const std::shared_ptr<SessionElement>& session) {
         if (!session->place_pending_fills()) { return false; }
         if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
-        for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            if (session->m_inference_queue[i]->m_time_stamp != session->m_time_stamps.back() ||
-                session->m_inference_queue[i]->m_dispatch_generation != generation) {
+        for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+            if (session->m_struct_pool[i]->m_time_stamp != session->m_time_stamps.back() ||
+                session->m_struct_pool[i]->m_dispatch_generation != generation) {
                 continue;
             }
             if (!session->receive_rings_have_room()) { return false; }
             if (session->m_is_non_real_time.load(std::memory_order::acquire)) {
                 wait_for_completion(session, i);
             } else if (session->uses_semaphore()) {
-                if (!session->m_inference_queue[i]->m_done_semaphore.try_acquire()) { return true; }
+                if (!session->m_struct_pool[i]->m_done_semaphore.try_acquire()) { return true; }
             } else {
-                if (!session->m_inference_queue[i]->m_done_atomic.exchange(
+                if (!session->m_struct_pool[i]->m_done_atomic.exchange(
                         false,
                         std::memory_order::acquire)) {
                     return true;
                 }
             }
             session->m_time_stamps.pop_back();
-            post_process(session, session->m_inference_queue[i]);
+            post_process(session, session->m_struct_pool[i]);
             collected = true;
             break;
         }
@@ -1411,8 +1417,8 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
         if (!session->place_pending_fills()) { return WaitOutcome::Done; }
         if (session->m_time_stamps.empty()) { break; }
         bool collected = false;
-        for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-            SessionElement::ThreadSafeStruct& next = *session->m_inference_queue[i];
+        for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+            SessionElement::ThreadSafeStruct& next = *session->m_struct_pool[i];
             // See the generation-guard rationale in collect_completed().
             if (next.m_time_stamp != session->m_time_stamps.back() ||
                 next.m_dispatch_generation != generation) {
@@ -1453,7 +1459,7 @@ Core::WaitOutcome Core::new_data_request(const std::shared_ptr<SessionElement>& 
             }
             if (!done) { return WaitOutcome::Deadline; }
             session->m_time_stamps.pop_back();
-            post_process(session, session->m_inference_queue[i]);
+            post_process(session, session->m_struct_pool[i]);
             collected = true;
             break;
         }
@@ -1474,11 +1480,10 @@ void Core::wait_for_completion(const std::shared_ptr<SessionElement>& session, s
     // it before blocking.
     try_dispatch_stateful(session);
     if (session->uses_semaphore()) {
-        session->m_inference_queue[index]->m_done_semaphore.acquire();
+        session->m_struct_pool[index]->m_done_semaphore.acquire();
     } else {
-        while (!session->m_inference_queue[index]->m_done_atomic.exchange(
-            false,
-            std::memory_order::acquire)) {
+        while (!session->m_struct_pool[index]->m_done_atomic.exchange(false,
+                                                                      std::memory_order::acquire)) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
@@ -1494,48 +1499,48 @@ std::vector<std::shared_ptr<SessionElement>> Core::get_sessions() {
 }
 
 bool Core::pre_process(const std::shared_ptr<SessionElement>& session) {
-    for (size_t i = 0; i < session->m_inference_queue.size(); ++i) {
-        if (session->m_inference_queue[i]->m_free.exchange(false)) {
+    for (size_t i = 0; i < session->m_struct_pool.size(); ++i) {
+        if (session->m_struct_pool[i]->m_free.exchange(false)) {
             // The one load of the session's selection for this chunk: the plan index is
             // stamped on the struct and resolved from there by the hooks, the engine call
             // and post_process, so a select_plan() that lands later applies from the next
             // chunk on and never inside this one.
             const uint32_t plan = session->m_current_plan.load(std::memory_order_relaxed);
-            session->m_inference_queue[i]->m_plan = plan;
-            session->m_inference_queue[i]->m_completed_as_zeros = false;
-            session->m_inference_queue[i]->m_fills_after = 0;
+            session->m_struct_pool[i]->m_plan = plan;
+            session->m_struct_pool[i]->m_completed_as_zeros = false;
+            session->m_struct_pool[i]->m_fills_after = 0;
             // Stamp the generation this dispatch belongs to, so a wait-free reset that
             // bumps the generation afterwards can identify and discard it (see
             // reset_session / new_data_request generation guard). Stamped ahead of the
             // chunk's pre_process, on this thread: the processor runner reads it there to tell
             // the first chunk of a new stream, its reset boundary (capi/processor.h).
-            session->m_inference_queue[i]->m_dispatch_generation =
+            session->m_struct_pool[i]->m_dispatch_generation =
                 session->m_generation.load(std::memory_order::relaxed);
             const anira_status formed =
-                session->m_processor.pre_process(*session->m_inference_queue[i]);
+                session->m_processor.pre_process(*session->m_struct_pool[i]);
             session->m_time_stamps.insert(session->m_time_stamps.begin(), session->m_current_queue);
-            session->m_inference_queue[i]->m_time_stamp = session->m_current_queue;
+            session->m_struct_pool[i]->m_time_stamp = session->m_current_queue;
             if (formed != ANIRA_OK) {
                 // A processor's pre_process failed (the chain recorded it and kept the input
                 // rings aligned): no model input exists for this chunk. It keeps its struct
                 // and timestamp and completes as zeros at its stream position without being
                 // enqueued, the path a full queue takes, so exactly one chunk was consumed and
                 // exactly one (silent) chunk will be produced.
-                session->complete_with_zeros(session->m_inference_queue[i]);
+                session->complete_with_zeros(session->m_struct_pool[i]);
             } else if (session->exclusive()) {
                 // A session-exclusive processor carries its state across calls, so
                 // its tasks must execute strictly in order and never concurrently.
                 // Defer dispatch so at most one of this session's tasks is ever in
                 // the global queue; the rest wait in submission order and are
                 // released one at a time as each completes.
-                session->enqueue_pending_dispatch(session->m_inference_queue[i]);
+                session->enqueue_pending_dispatch(session->m_struct_pool[i]);
                 // If the global queue is full, the claimed task (possibly an
                 // older chunk) is dropped and completes as zeros at its stream
                 // position — either way this submission stands, so fall through
                 // to return true.
                 try_dispatch_stateful(session);
             } else {
-                enqueue_inference_or_drop(session, session->m_inference_queue[i]);
+                enqueue_inference_or_drop(session, session->m_struct_pool[i]);
             }
             if (session->m_current_queue >= UINT16_MAX) {
                 session->m_current_queue = 0;
@@ -1564,8 +1569,11 @@ bool Core::enqueue_inference_or_drop(
                                           .m_thread_safe_struct = thread_safe_struct};
     // The session's own producer token keeps this allocation-free and safe:
     // per-session enqueues are serialized (single driving thread, and the
-    // stateful path additionally holds the dispatch gate). existing_state(): this is
-    // a real-time path, reached only through a registered session.
+    // stateful path additionally holds the dispatch gate), and the token's producer holds the
+    // blocks for every job the session can have queued (reserve_inference_capacity): a
+    // failure takes an inference thread stalled inside its dequeue while the session's other
+    // jobs lap the producer's blocks. existing_state(): this is a real-time path, reached only
+    // through a registered session.
     // Counted before it is in the queue: the drain waits for every counted job, one a worker
     // dequeued before the drain looked included; a drop gives the count back.
     session->m_active_inferences->fetch_add(1, std::memory_order::seq_cst);
@@ -1575,7 +1583,9 @@ bool Core::enqueue_inference_or_drop(
         session->m_active_inferences->fetch_sub(1, std::memory_order::release);
         // The task keeps its struct and timestamp and completes as zeros at its
         // stream position, so the output stays time-aligned: exactly one chunk
-        // was consumed and exactly one (silent) chunk will be produced.
+        // was consumed and exactly one (silent) chunk will be produced. A dropped hop: the
+        // handler's rt_error says ANIRA_ERROR_CAPACITY, as for a hop with no free struct.
+        static_cast<void>(session->m_rt->record_drop());
         ANIRA_LOG_RT_ERROR_ONCE(RtSite::EnqueueDropped,
                                 log_group::k_core,
                                 "Could not enqueue next inference to global core job queue! "
@@ -1643,14 +1653,17 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
         while (next_inference.try_dequeue(inference_data)) {
             if (inference_data.m_session == session) {
                 found_own = true;
-                // Complete the never-started task as silence at its stream
-                // position (kept time-aligned for callers that continue after
-                // the drain) and end its turn on the stateful dispatch chain so
-                // the gate cannot stay wedged.
-                session->complete_with_zeros(inference_data.m_thread_safe_struct);
-                if (session->exclusive()) {
-                    session->release_dispatch(
-                        inference_data.m_thread_safe_struct->m_dispatch_epoch);
+                // A placeholder of the session's reservation (a job without a chunk,
+                // reserve_inference_capacity) only gives its count back. A task: complete it,
+                // never started, as silence at its stream position (kept time-aligned for
+                // callers that continue after the drain) and end its turn on the stateful
+                // dispatch chain so the gate cannot stay wedged.
+                if (inference_data.m_thread_safe_struct != nullptr) {
+                    session->complete_with_zeros(inference_data.m_thread_safe_struct);
+                    if (session->exclusive()) {
+                        session->release_dispatch(
+                            inference_data.m_thread_safe_struct->m_dispatch_epoch);
+                    }
                 }
                 session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             } else {
@@ -1658,18 +1671,27 @@ void Core::drain_inference_queue(const std::shared_ptr<SessionElement>& session)
             }
         }
 
+        // The other sessions' jobs (placeholders included) go back with the allocating
+        // enqueue, into this thread's implicit producer: its blocks come from the free list or
+        // are allocated, and are freed again once emptied, and its block index grows as needed
+        // (a try_enqueue stopped at the index's 32 blocks, 1,024 jobs). This is a control
+        // thread.
         for (auto& other : inference_stack) {
-            if (!next_inference.try_enqueue(other)) {
-                // Requeue failed: complete the other session's task as silence so
-                // its stream stays time-aligned (previously it was silently lost),
-                // unwedge its dispatch chain and give its count back.
+            if (!next_inference.enqueue(other)) {
+                // Out of memory: complete the other session's task as silence so its stream
+                // stays time-aligned, unwedge its dispatch chain and give its count back.
                 ANIRA_LOG_RT_ERROR_ONCE(RtSite::RequeueDropped,
                                         log_group::k_core,
                                         "Could not requeue inference data! Dropping the "
                                         "inference and zero-filling its output.");
-                other.m_session->complete_with_zeros(other.m_thread_safe_struct);
-                if (other.m_session->exclusive()) {
-                    other.m_session->release_dispatch(other.m_thread_safe_struct->m_dispatch_epoch);
+                if (other.m_thread_safe_struct != nullptr) {
+                    // A dropped hop of the other handler: its rt_error says so.
+                    static_cast<void>(other.m_session->m_rt->record_drop());
+                    other.m_session->complete_with_zeros(other.m_thread_safe_struct);
+                    if (other.m_session->exclusive()) {
+                        other.m_session->release_dispatch(
+                            other.m_thread_safe_struct->m_dispatch_epoch);
+                    }
                 }
                 other.m_session->m_active_inferences->fetch_sub(1, std::memory_order::release);
             }
@@ -1723,7 +1745,7 @@ void Core::reset_session(const std::shared_ptr<SessionElement>& session) {
 
 void Core::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session) {
     const uint64_t generation = session->m_generation.load(std::memory_order::relaxed);
-    for (const auto& s : session->m_inference_queue) {
+    for (const auto& s : session->m_struct_pool) {
         // Skip free structs (nothing to reclaim) and current-generation structs (live).
         if (s->m_free.load(std::memory_order::relaxed)) { continue; }
         if (s->m_dispatch_generation == generation) { continue; }
@@ -1752,8 +1774,37 @@ void Core::reclaim_stale_structs(const std::shared_ptr<SessionElement>& session)
     }
 }
 
-InferenceQueue& Core::get_static_inference_queue() {
-    return get_state().m_next_inference;
+void Core::reserve_inference_capacity(const std::shared_ptr<SessionElement>& session) {
+    InferenceQueue& next_inference = get_state().m_next_inference;
+    const size_t count = detail::reservation_size<InferenceQueue>(session->queue_capacity());
+    // The placeholders are jobs without a chunk, counted like jobs before they are in the
+    // queue (the drain's rule). An inference thread that dequeues one gives its count back after
+    // its dequeue returned, the slot flagged empty; the drain below takes the others back and
+    // waits for the count. When it returns, the blocks of the reservation are the token's
+    // producer's and every slot of them is empty.
+    // Nothing was enqueued when the reservation fails (its vector of placeholders or a block
+    // could not be allocated): the count goes back on either path, or the session's drain at
+    // its release would wait for jobs that do not exist.
+    session->m_active_inferences->fetch_add(static_cast<int>(count), std::memory_order::seq_cst);
+    bool reserved = false;
+    try {
+        reserved = detail::reserve_capacity(
+            next_inference,
+            session->m_producer_token,
+            count,
+            InferenceData{.m_session = session, .m_thread_safe_struct = nullptr});
+    } catch (...) {
+        session->m_active_inferences->fetch_sub(static_cast<int>(count),
+                                                std::memory_order::release);
+        throw;
+    }
+    if (!reserved) {
+        session->m_active_inferences->fetch_sub(static_cast<int>(count),
+                                                std::memory_order::release);
+        throw std::bad_alloc();
+    }
+    scheduler::InferenceThread::notify_work();
+    drain_inference_queue(session);
 }
 
 std::unique_ptr<scheduler::InferenceThread> Core::make_inference_thread() {

@@ -27,7 +27,8 @@ When you need a processor
 Without a processor anira runs its default bodies: ahead of every inference it pops one hop per
 channel of every Streamed input from its ring into the model tensor (with the ring's history
 ahead of it where the window is longer than the hop), behind it it pushes one hop per channel
-of every Streamed output from the model tensor into its ring; a Static input is the handler's
+of every Streamed output from the model tensor into its ring (the newest hop, the tail of the
+window where an output's window is longer than its hop); a Static input is the handler's
 stored value (``anira_handler_set_static_input``), a Static output is captured into the store
 (``anira_handler_get_static_output``), and declared state (``ANIRA_ROLE_STATE``, :doc:`usage`
 section 3.4) is fed and captured by anira itself. That covers a time-domain model whose

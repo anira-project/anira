@@ -9,8 +9,10 @@
 // own ONNX Runtime, a copy by the engine for the ONNX Runtime Web engine (its statements, which
 // addEngine states by default under the engine's id, one per direction: the input copied into
 // ORT's heap, the output copied out of it). Then an audio node, which streams float32, is refused
-// for the int16 handler, and its message names the remedy. The verdict is
-// window.anira_test_result.
+// for the int16 handler, and its message names the remedy. The output declares no window in
+// either model file: the plan report's rows carry the window and hop of both sides (512), the
+// output's derived from its Time extent, which reads the tail of the wasm32 anira_plan_slot.
+// The verdict is window.anira_test_result.
 import {
   ANIRA_DTYPE_I16,
   Anira,
@@ -168,6 +170,13 @@ const run = async () => {
       result.rows.every((row) => row.edgeClass === edge[0] && row.movedBy === edge[1]),
       `${label}: the plan report says edge class ${edge[0]}, moved by ${edge[1]}, on both sides ` +
         `(${result.rows.map((row) => `${row.edgeClass}/${row.movedBy}`).join(', ')})`
+    )
+    check(
+      result.rows.every((row) => row.window === BLOCK && row.hop === BLOCK) &&
+        !result.rows[0].windowDerived &&
+        result.rows[1].windowDerived,
+      `${label}: the plan report names the window and hop of both sides, the output's derived ` +
+        `from its Time extent (${result.rows.map((row) => `${row.window}/${row.hop}/${row.windowDerived}`).join(', ')})`
     )
     check(
       result.rows.every((row, side) => row.reason === reasons[side]),

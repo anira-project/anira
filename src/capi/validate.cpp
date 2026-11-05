@@ -181,17 +181,34 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
     }
 
     if (streamed) {
-        if (spec.m_window_min <= 0) {
-            config_error(where + "window_min must be positive (got " +
-                         std::to_string(spec.m_window_min) + ")");
-        }
-        if (spec.m_window_max != ANIRA_UNBOUNDED && spec.m_window_max < spec.m_window_min) {
-            config_error(where + "window_max " + std::to_string(spec.m_window_max) +
-                         " is below window_min " + std::to_string(spec.m_window_min));
-        }
-        if (spec.m_overlap >= spec.m_window_min) {
-            config_error(where + "overlap " + std::to_string(spec.m_overlap) +
-                         " must be below window_min " + std::to_string(spec.m_window_min));
+        if (!spec.window_declared()) {
+            // An omitted window is derived from the Time axis: its fixed extent is the window,
+            // a dynamic one makes it flexible, pinned with the anchor hop (pin_anchor_hop).
+            if (spec.m_overlap != 0) {
+                config_error(where + "overlap " + std::to_string(spec.m_overlap) +
+                             " without a window: declare the window it belongs to "
+                             "(window_min, window_max)");
+            }
+            const int64_t extent = out.m_dims[*time_axis];
+            out.m_window_derived = true;
+            out.m_window_min = extent == ANIRA_DYNAMIC ? 1 : extent;
+            out.m_window_max = extent == ANIRA_DYNAMIC ? ANIRA_UNBOUNDED : extent;
+        } else {
+            if (spec.m_window_min <= 0) {
+                config_error(where + "window_min must be positive (got " +
+                             std::to_string(spec.m_window_min) + ")");
+            }
+            if (spec.m_window_max != ANIRA_UNBOUNDED && spec.m_window_max < spec.m_window_min) {
+                config_error(where + "window_max " + std::to_string(spec.m_window_max) +
+                             " is below window_min " + std::to_string(spec.m_window_min));
+            }
+            if (spec.m_overlap >= spec.m_window_min) {
+                config_error(where + "overlap " + std::to_string(spec.m_overlap) +
+                             " must be below window_min " + std::to_string(spec.m_window_min));
+            }
+            out.m_window_min = spec.m_window_min;
+            out.m_window_max = spec.m_window_max;
+            out.m_overlap = spec.m_overlap;
         }
         if (spec.m_ratio_den != 0 && spec.m_ratio_num == 0) {
             config_error(where + "time ratio 0/" + std::to_string(spec.m_ratio_den) +
@@ -231,9 +248,9 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
 
     // A fixed window is used as it is; a flexible one is pinned with the anchor hop of the whole
     // model (pin_anchor_hop), which resolves its dynamic Time extent there.
-    if (streamed && spec.m_window_min == spec.m_window_max) {
-        out.m_window_used = spec.m_window_min;
-        out.m_hop = spec.m_window_min - spec.m_overlap;
+    if (streamed && out.m_window_min == out.m_window_max) {
+        out.m_window_used = out.m_window_min;
+        out.m_hop = out.m_window_min - out.m_overlap;
         if (out.m_dims[*time_axis] == ANIRA_DYNAMIC) { out.m_dims[*time_axis] = out.m_window_used; }
     }
 }
@@ -540,6 +557,7 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
     HopRange range;
     const auto fold = [&](bool is_input, size_t index) {
         const anira_tensor_spec& spec = spec_of(is_input, index);
+        const DerivedSpec& resolved = derived_of(is_input, index);  // the window in effect
         const bool anchor = is_input == out.m_anchor_is_input && index == out.m_anchor_index;
         HopNeed need{.m_is_input = is_input, .m_index = index};
         if (!anchor && spec.m_ratio_den != 0) {
@@ -549,19 +567,24 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
         }
         need.m_range.m_step = need.m_den;
         need.m_range.m_low =
-            ceil_div(product(spec.m_window_min - spec.m_overlap, need.m_den, spec), need.m_num);
-        if (spec.m_window_max != ANIRA_UNBOUNDED) {
+            ceil_div(product(resolved.m_window_min - resolved.m_overlap, need.m_den, spec),
+                     need.m_num);
+        if (resolved.m_window_max != ANIRA_UNBOUNDED) {
             need.m_range.m_high =
-                product(spec.m_window_max - spec.m_overlap, need.m_den, spec) / need.m_num;
+                product(resolved.m_window_max - resolved.m_overlap, need.m_den, spec) / need.m_num;
         }
 
-        const std::string window =
-            spec.m_window_min == spec.m_window_max
-                ? "window " + std::to_string(spec.m_window_min)
-                : "window [" + std::to_string(spec.m_window_min) + ", " +
-                      (spec.m_window_max == ANIRA_UNBOUNDED ? std::string("unbounded")
-                                                            : std::to_string(spec.m_window_max)) +
-                      "]";
+        const bool fixed = resolved.m_window_min == resolved.m_window_max;
+        std::string window = fixed ? "window " + std::to_string(resolved.m_window_min)
+                                   : "window [" + std::to_string(resolved.m_window_min) + ", " +
+                                         (resolved.m_window_max == ANIRA_UNBOUNDED
+                                              ? std::string("unbounded")
+                                              : std::to_string(resolved.m_window_max)) +
+                                         "]";
+        if (resolved.m_window_derived) {
+            window +=
+                fixed ? " (derived from the Time extent)" : " (derived: the Time axis is dynamic)";
+        }
         const std::string ratio =
             spec.m_ratio_den == 0
                 ? std::string("1/1 (a flexible window's default)")
@@ -602,7 +625,9 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
         for (size_t i = 0; i < specs.size(); ++i) {
             const anira_tensor_spec& spec = specs[i];
             const bool anchor = is_input == out.m_anchor_is_input && i == out.m_anchor_index;
-            const bool follows = spec.m_ratio_den != 0 || spec.m_window_min != spec.m_window_max;
+            const DerivedSpec& resolved = derived_of(is_input, i);
+            const bool follows =
+                spec.m_ratio_den != 0 || resolved.m_window_min != resolved.m_window_max;
             if (spec.m_role == ANIRA_ROLE_STREAMED && !anchor && follows) { fold(is_input, i); }
         }
     };
@@ -620,10 +645,11 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
 
     for (const HopNeed& need : needs) {
         const anira_tensor_spec& spec = spec_of(need.m_is_input, need.m_index);
-        if (spec.m_window_min == spec.m_window_max) { continue; }  // check_spec's, kept by range
         DerivedSpec& derived = derived_of(need.m_is_input, need.m_index);
+        // A fixed window is check_spec's, kept by the range.
+        if (derived.m_window_min == derived.m_window_max) { continue; }
         derived.m_hop = product(hop / need.m_den, need.m_num, spec);
-        derived.m_window_used = sum(derived.m_hop, spec.m_overlap, spec);
+        derived.m_window_used = sum(derived.m_hop, derived.m_overlap, spec);
         const std::optional<size_t> time_axis = derived.m_time_axis;  // a Streamed tensor's
         if (time_axis.has_value() && derived.m_dims[*time_axis] == ANIRA_DYNAMIC) {
             derived.m_dims[*time_axis] = derived.m_window_used;

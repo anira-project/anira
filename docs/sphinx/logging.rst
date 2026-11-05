@@ -153,7 +153,11 @@ back-pressure, not a violation: return value only, no ``rt_error``, no record. A
 scheduler drops because every inference slot of the handler is busy is recorded, though: it
 sets ``rt_error`` to ``ANIRA_ERROR_CAPACITY`` (the hop is filled under the miss policy at its
 stream position), latched under its own kind, and the operational site "no free inference
-queue" logs it once per prepare.
+queue" logs it once per prepare. So does a chunk that a queue of the core has no room for (its
+output is zeros at its stream position, and its site logs it once per prepare): a handler's
+prepare reserves the room for every chunk of its pool, so that takes an inference thread stalled
+inside its dequeue while the handler's other chunks go round that room, or no memory for a
+drain's requeue.
 
 The record is **latched** per handler and per kind of status: the first occurrence after
 ``prepare`` or ``reset`` is logged, later ones increment a suppressed counter with one relaxed

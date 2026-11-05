@@ -258,7 +258,7 @@ TEST(AbiHandlerStatic, AvailableSamplesOnAStaticSlotCollectsFirst) {
     rig.gate().m_open.store(true);
     const auto start = std::chrono::steady_clock::now();
     const auto done = [&session] {
-        return std::ranges::all_of(session.m_inference_queue, [](const auto& entry) {
+        return std::ranges::all_of(session.m_struct_pool, [](const auto& entry) {
             return entry->m_free.load() || entry->m_done_atomic.load();
         });
     };
@@ -698,10 +698,14 @@ TEST(AbiHandlerStatic, AnElementWithAnExtentOfZeroLeavesItsSlotOut) {
 
 // ---- a missed block ----------------------------------------------------------------------------
 
-/// Two delivered blocks empty the ring while their inferences wait at the closed gate (the
-/// latency is two hops); the third block starves. Returns the status of the third.
+/// Two delivered blocks empty the ring, the first settled and the second's inference waiting at
+/// the closed gate (the latency is 15: the buffer adaptation of blocks of 1 to 8 samples and one
+/// hop); the third block starves. Returns the status of the third.
 anira_status starve(GateRig& rig, Block& third, std::array<size_t, 3>& delivered) {
-    for (size_t k = 0; k < 2; ++k) { EXPECT_EQ(rig.stream_block(), ANIRA_OK) << "block " << k; }
+    for (size_t k = 0; k < 2; ++k) {
+        EXPECT_EQ(rig.stream_block(), ANIRA_OK) << "block " << k;
+        if (k == 0) { rig.settle(); }
+    }
     const std::array<anira_tensor, 3> in = third.inputs();
     const std::array<anira_tensor, 3> out = third.outputs();
     return anira_handler_process_multi(rig.get(), in.data(), 3, out.data(), 3, delivered.data());
@@ -713,7 +717,8 @@ TEST(AbiHandlerStatic, TheStaticOutputOfAMissedBlockIsTheStoredValueUnderEveryPo
         SCOPED_TRACE("policy " + std::to_string(static_cast<int>(policy)));
         GateRig rig(policy);
         ASSERT_TRUE(rig.ready());
-        ASSERT_EQ(anira_handler_get_latency(rig.get(), 0), 2U * k_hop);
+        // The Static output beside the stream aligns nothing: no whole hops (#235).
+        ASSERT_EQ(anira_handler_get_latency(rig.get(), 0), (2U * k_hop) - 1);
         run_through(rig, values_of(110.0F));
         anira_handler_reset(rig.get());  // a fresh stream, the store untouched
         Block third(3);

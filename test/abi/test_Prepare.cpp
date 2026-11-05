@@ -1191,6 +1191,88 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
 #endif
 }
 
+// The window a slot runs at, in the plan report's rows and the prepare log's slot lines, the same
+// in every plan: a window derived from the Time extent ("in"), one derived on a dynamic Time
+// axis and pinned to the anchor hop ("out"), a declared flexible one pinned likewise ("env"),
+// and no window on a Static slot ("gain").
+TEST(AbiPrepare, ThePlanReportShowsTheWindowInUseAndWhetherItWasDerived) {
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);
+    RecordCollector collector;
+    const auto stream = [](std::string_view name, int64_t time) {
+        TensorSpec spec(name, ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+        spec.axis(0, ANIRA_AXIS_CHANNEL, 1).axis(1, ANIRA_AXIS_TIME, time);
+        return spec;
+    };
+    ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    model.input(stream("in", static_cast<int64_t>(k_block)));
+    model.input(anira_test::static_tensor("gain", {1}));
+    model.output(stream("out", ANIRA_DYNAMIC));
+    model.output(stream("env", ANIRA_DYNAMIC).window(1, ANIRA_UNBOUNDED, 0));
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    const uint32_t num_plans = anira_plan_report_num_plans(report);
+    ASSERT_GE(num_plans, 1U);
+
+    struct Expected {
+        const char* m_name;
+        uint32_t m_derived;
+        int64_t m_window;
+        const char* m_log;  ///< what the slot line says between the ring and the binding
+    };
+    constexpr auto k_block_size = static_cast<int64_t>(k_block);
+    const std::array<Expected, 2> inputs{
+        {{.m_name = "in",
+          .m_derived = 1U,
+          .m_window = k_block_size,
+          .m_log = ", window 512 (derived from the Time extent), hop 512, bound"},
+         {.m_name = "gain", .m_derived = 0U, .m_window = 0, .m_log = "ring none, bound"}}};
+    const std::array<Expected, 2> outputs{
+        {{.m_name = "out",
+          .m_derived = 1U,
+          .m_window = k_block_size,
+          .m_log = ", window 512 (derived, flexible, pinned to the anchor hop), hop 512, bound"},
+         {.m_name = "env",
+          .m_derived = 0U,
+          .m_window = k_block_size,
+          .m_log = ", window 512 (flexible, pinned to the anchor hop), hop 512, bound"}}};
+    for (uint32_t plan = 0; plan < num_plans; ++plan) {
+        for (const bool is_input : {true, false}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              plan,
+                                              is_input ? 1U : 0U,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            ASSERT_EQ(count, 2U);
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                const Expected& expected = (is_input ? inputs : outputs).at(slot);
+                SCOPED_TRACE(expected.m_name);
+                const anira_plan_slot& row = rows.at(slot);
+                EXPECT_EQ(row.window_derived, expected.m_derived);
+                EXPECT_EQ(row.window, expected.m_window);
+                EXPECT_EQ(row.hop, expected.m_window) << "no overlap: the hop is the window";
+#ifdef ENABLE_LOGGING
+                const std::string head = "plan " + std::to_string(plan) + ": " +
+                                         (is_input ? "input " : "output ") + std::to_string(slot) +
+                                         " '" + expected.m_name + "': ";
+                const std::string line = find_record(collector, head.c_str(), "native").m_message;
+                EXPECT_NE(line.find(expected.m_log), std::string::npos) << line;
+#endif
+            }
+        }
+    }
+    // The derivation left the specs alone: the model config still declares no window there.
+    const anira::SpecView in = model.input_spec(0);
+    EXPECT_EQ(in.window().min, 0);
+    EXPECT_EQ(in.window().max, 0);
+}
+
 // Every slot row names the spec's dtype and its ring's (0 for a Static slot, which has none),
 // and the edge the plan's engine takes with the slot's buffer and who moves its bytes:
 // zero-copy, moved by nobody, where it binds the buffer in place (ONNX Runtime, LiteRT and

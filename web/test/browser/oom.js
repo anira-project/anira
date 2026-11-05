@@ -7,8 +7,9 @@
 // config (the built-in ONNX Runtime engine): an AniraError with ANIRA_ERROR_OUT_OF_MEMORY,
 // whichever allocation runs out first (the pool's Worker region, the session, its rings). It frees
 // the filler, and a handler prepares as before. The same filler measures what the first context's
-// core takes. The verdict is window.anira_test_result; run.mjs fails the page on any uncaught
-// exception.
+// core takes, and that the refused handler left nothing behind: the free memory after the refusal
+// and a handler prepared and destroyed is the free memory before it, within one block of the fill.
+// The verdict is window.anira_test_result; run.mjs fails the page on any uncaught exception.
 import {
   Anira,
   AniraError,
@@ -22,12 +23,15 @@ import {
 
 const MODELS = '../../extras/models/model-pool/'
 const MIB = 1024 * 1024
+// The fill's smallest block: what it counts is free memory in blocks of 64 KiB and up, so the
+// same free memory split at another boundary can count one block less.
+const FILL_BLOCK = 64 * 1024
 
 // Allocates blocks of halving sizes until not even 64 KiB is left; returns them and their sum.
 const fill = (module) => {
   const blocks = []
   let total = 0
-  for (let size = 64 * MIB; size >= 64 * 1024; size /= 2) {
+  for (let size = 64 * MIB; size >= FILL_BLOCK; size /= 2) {
     for (;;) {
       const ptr = module._malloc(size)
       if (ptr === 0) break
@@ -39,16 +43,32 @@ const fill = (module) => {
 }
 const release = (module, filler) => filler.blocks.forEach((ptr) => module._free(ptr))
 
-// A handler on the model; everything it needs is made before the heap is filled.
+// A handler on the model; everything it needs is made before the heap is filled. A handler whose
+// prepare throws is destroyed here: the caller never gets it, and it would keep its ports and its
+// configuration for the rest of the page.
 const handlerOn = (anira, context, model, contract) => {
   const pipeline = Pipeline.create(anira).addInference(model)
+  let handler = null
   try {
-    const handler = InferenceHandler.create(context, pipeline)
+    handler = InferenceHandler.create(context, pipeline)
     handler.prepare(contract)
     return handler
+  } catch (error) {
+    handler?.destroy()
+    throw error
   } finally {
     pipeline.destroy()
   }
+}
+
+// A prepared handler is destroyed once its pool's Worker has entered its loop, so that the stop
+// frees the Worker's 4 MiB region at once. A Worker stopped while it still boots (its module
+// import, its engines' init) is cancelled instead, and its region is freed by a main-thread timer
+// that looks every 100 ms (the reaper, src/platform/emscripten/em_worker.cpp), which a page that
+// never yields never runs: every measurement after it would miss the region.
+const destroyBooted = async (context, handler) => {
+  await context.ready(30000)
+  handler.destroy()
 }
 
 const run = async () => {
@@ -73,7 +93,7 @@ const run = async () => {
     )
   ).hardHostBlocks(128, 128, 48000)
   const first = handlerOn(anira, context, model, contract)
-  first.destroy()
+  await destroyBooted(context, first)
   const withCore = fill(m)
   release(m, withCore)
   check(
@@ -106,12 +126,15 @@ const run = async () => {
     again.getLatency() > 0,
     `with the memory freed a handler prepares (latency ${again.getLatency()})`
   )
-  again.destroy()
+  await destroyBooted(context, again)
   const after = fill(m)
   release(m, after)
   check(
-    after.total >= withCore.total - 4 * MIB,
-    `the refused handler left nothing behind: ${(after.total / MIB).toFixed(0)} MiB free again`
+    after.total >= withCore.total - FILL_BLOCK,
+    `the refused handler left nothing behind: ${(after.total / MIB).toFixed(3)} MiB free ` +
+      `again, ${(withCore.total / MIB).toFixed(3)} MiB before the refusal (within one ` +
+      `${FILL_BLOCK / 1024} KiB block of the fill, which counts free memory in blocks of ` +
+      `${FILL_BLOCK / 1024} KiB and up)`
   )
 
   contract.destroy()

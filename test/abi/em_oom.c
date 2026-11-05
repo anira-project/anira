@@ -6,7 +6,10 @@
  * ANIRA_ERROR_OUT_OF_MEMORY. With the heap filled, a handler on the model config of argv[1] (the
  * built-in ONNX Runtime engine; NODERAWFS reads it and its model file) must be refused with a
  * status, not abort the module; with the heap freed it prepares, and the heap is as free as
- * before. On the way it reports what the context and one instance of the model take.
+ * before. On the way it reports what the context and one instance of the model take, and checks
+ * that the core keeps no inference queue of its own (under 8 MiB with the config; 169 MiB before
+ * issue #200's fix) and that a second handler beside a first takes under 3 MiB (its own session,
+ * about 1.7 MiB, where its producer token added a 4 MiB block index before).
  * Exit code 0 on success.
  */
 #include <anira/abi/config.h>
@@ -141,6 +144,31 @@ int main(int argc, char** argv) {
         handler_takes[1] / OOM_MIB,
         handler_takes[2] / OOM_MIB,
         (handler_takes[2] - handler_takes[1]) / OOM_MIB);
+
+    /* The core's inference queue holds what the handlers reserve (issue #200): it preallocated
+     * 169 MiB at the first context, and every handler's producer token held a 4 MiB block index
+     * sized from that pool. A second handler beside a first one of the same model (whose loaded
+     * model and Workers it shares) takes its session's own memory, about 1.7 MiB, its queue
+     * reservation a few KiB of it (5.7 MiB with the index). */
+    check(before_context - with_context < ((size_t)8 << 20),
+          "the core and the config take less than 8 MiB");
+    {
+        anira_model_config_set_max_instances(model, 1);
+        anira_handler* first = NULL;
+        check(handler_on(context, model, contract, &first, &err) == ANIRA_OK, err.message);
+        const size_t base = free_heap();
+        anira_handler* second = NULL;
+        check(handler_on(context, model, contract, &second, &err) == ANIRA_OK, err.message);
+        const double second_takes = (double)base - (double)free_heap();
+        printf("a second handler of %s beside the first takes %.0f KiB\n",
+               argv[1],
+               second_takes / 1024.0);
+        check(second_takes < (double)((size_t)3 << 20),
+              "a second handler beside the first takes less than 3 MiB");
+        anira_handler_destroy(second);
+        anira_handler_destroy(first);
+        anira_model_config_set_max_instances(model, 2);
+    }
 
     /* The heap full on the pool's context: refused with the status whichever allocation runs
      * out first (its pool stopped with its last handler, so a prepare that gets that far starts

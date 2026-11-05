@@ -771,7 +771,8 @@ public:
         if (anira_tensor_spec_axis(m_spec, i, &out.tag, &out.extent) != ANIRA_OK) { return {}; }
         return out;
     }
-    /// 0, 0, 0 until TensorSpec::window ran.
+    /// 0, 0, 0 until TensorSpec::window ran; never the window a validation derives for a
+    /// streamed spec without one (PlanReport::slots carries the window in use).
     Window window() const noexcept {
         Window out;
         if (anira_tensor_spec_window(m_spec, &out.min, &out.max, &out.overlap) != ANIRA_OK) {
@@ -831,7 +832,9 @@ public:
                       "anira_tensor_spec_set_axis");
         return *this;
     }
-    /// Streamed only: elements along the Time axis per inference and the overlap kept.
+    /// Streamed only: elements along the Time axis per inference and the overlap kept. Optional:
+    /// without it the window is derived at validation (the fixed Time extent, or a flexible
+    /// window pinned to the anchor hop on a dynamic Time axis); an overlap needs a window.
     TensorSpec& window(int64_t window_min, int64_t window_max, int64_t overlap) {
         detail::check(anira_tensor_spec_set_window(m_spec, window_min, window_max, overlap),
                       "anira_tensor_spec_set_window");
@@ -3041,7 +3044,7 @@ public:
     /// - 1; never two calls at once on one instance. 0 for an exclusive call, which claimed no
     /// slot.
     uint32_t instance() const noexcept { return m_ctx->instance; }
-    /// The chunk's position in the handler's inference queue (ProcessorContext::entry of the same
+    /// The chunk's position in the handler's chunk pool (ProcessorContext::entry of the same
     /// chunk).
     uint32_t entry() const noexcept { return m_ctx->entry; }
     /// ANIRA_TICKET_INVALID under a Hard contract; the job's ticket under an Async one.

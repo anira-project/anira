@@ -1032,14 +1032,26 @@ export class AniraBindings {
 
   /**
    * The window of a Streamed spec, in elements along the Time axis; the fixed case is
-   * window_min == window_max. Defaults 0, 0, 0. Cross-field legality (context <
-   * window_min, window_max >= window_min) is checked at prepare.
+   * window_min == window_max. Optional: a Streamed spec without a window (this setter
+   * never called, or called with (0, 0)) has one derived at validation, the fixed window
+   * of its Time extent, or, on a dynamic Time axis, the flexible window [1,
+   * ANIRA_UNBOUNDED] that the anchor hop pins like any flexible window; the overlap is 0
+   * then. A declared window always wins. The derivation never writes into the spec:
+   * anira_tensor_spec_window reads (0, 0, 0), anira_model_config_to_json writes no window
+   * back, and the window in use is the plan report's (anira_plan_slot.window,
+   * window_derived). An overlap without a window is not derived: ANIRA_ERROR_CONFIG,
+   * naming the tensor. Defaults 0, 0, 0. Cross-field legality (overlap < window_min,
+   * window_max >= window_min) is checked at prepare.
    *
    * @param spec The spec.
-   * @param window_min The model's smallest legal Time extent, in elements.
+   * @param window_min The model's smallest legal Time extent, in elements; 0 with a
+   *   window_max of 0: no window.
    * @param window_max The largest, or ANIRA_UNBOUNDED.
    * @param overlap Overlap of consecutive windows: the elements kept from the previous
-   *   window. The advance per inference, the hop, is window_used - overlap.
+   *   window. The advance per inference, the hop, is window_used - overlap. An output's
+   *   window is aligned like an input's: the model writes the whole window, its newest hop
+   *   at the tail, and the default post_process pushes that hop; the head answers older
+   *   positions and is not pushed (an overlap-add is the model's or a processor's own).
    * @returns ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than
    *   ANIRA_UNBOUNDED as window_max. A failed status throws an AniraError.
    * Thread: [main-thread]
@@ -3418,7 +3430,8 @@ export class AniraBindings {
 
   /**
    * The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every
-   * role.
+   * role. Never the window a validation derives for a Streamed spec without one: that one
+   * is the plan report's (anira_plan_slot.window).
    *
    * @param spec The spec.
    * @returns What the entry writes to window_min, window_max, overlap. A failed status
@@ -5139,10 +5152,14 @@ export class AniraBindings {
   /**
    * The default post_process, for a processor that wants it ("call super"): for every
    * Streamed output it pushes one hop per channel from the model tensor, read as packed
-   * row-major memory, into the ring: channel c from element c * hop. It never touches a
-   * tensor of another role. Real-time by construction. anira runs it itself, once per
-   * chunk, when the processor's post_process slot is NULL (or the pipeline has no
-   * processor).
+   * row-major memory, into the ring, in the layout anira_processor_default_pre_process
+   * gives an input: channel c's window starts at element c * window (the tensor's
+   * elements per channel) and its newest hop is the window's tail, so the last hop of
+   * each channel's window is pushed. An output without an overlap is a window of one hop,
+   * pushed whole; with an overlap the head of the window answers older positions of the
+   * stream and is not pushed. It never touches a tensor of another role. Real-time by
+   * construction. anira runs it itself, once per chunk, when the processor's post_process
+   * slot is NULL (or the pipeline has no processor).
    *
    * @param ctx The context the processor's post_process received.
    * @returns ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL ctx or a ctx of another
@@ -6339,9 +6356,12 @@ export class AniraBindings {
    * this library does not know) or ANIRA_ERROR_ENGINE after a failed inference (its
    * output is zeros), or ANIRA_ERROR_CAPACITY after a hop the scheduler dropped because
    * no inference slot was free (its output is the miss policy's fill, at its stream
-   * position). An entry's ANIRA_ERROR_CAPACITY return is back-pressure and never lands
-   * here. Last-wins; cleared by prepare and reset. Each kind is logged once per prepare
-   * or reset through the real-time queue (a violation flagged
+   * position) or because a queue of the core had no room for its chunk (its output is
+   * zeros at its stream position: an inference thread stalled inside its dequeue while
+   * the handler's other chunks went round the room its prepare reserved, or no memory for
+   * a drain's requeue). An entry's ANIRA_ERROR_CAPACITY return is back-pressure and never
+   * lands here. Last-wins; cleared by prepare and reset. Each kind is logged once per
+   * prepare or reset through the real-time queue (a violation flagged
    * ANIRA_LOG_RECORD_CONTRACT_VIOLATION), later occurrences are counted and the drain
    * reports a persisting condition at most every 10 seconds. One relaxed load: readable
    * from any thread, a callback, a crash handler.

@@ -366,6 +366,17 @@ void InferenceThread::process_dequeued_inference() {
     } const in_flight;
     InferenceData job = std::move(m_inference_data);
 
+    // A placeholder of a session's reservation (a job without a chunk,
+    // Core::reserve_inference_capacity): nothing to run. Its count goes back once the job's
+    // references are dropped, as process_job's guard does it, so the session never dies here;
+    // the dequeue flagged its slot empty before it returned.
+    if (job.m_thread_safe_struct == nullptr) {
+        const std::shared_ptr<std::atomic<int>> active = job.m_session->m_active_inferences;
+        job = InferenceData{};
+        active->fetch_sub(1, std::memory_order::release);
+        return;
+    }
+
     // Instance-aware dispatch: a job whose plan runs on a claimed shared instance is run only
     // with one claimed. When every instance of the model is busy the job goes on the model's
     // wait list and this thread returns to the queue: it never waits with a job in hand, so
@@ -575,8 +586,10 @@ void InferenceThread::dispatch_next_pending(const std::shared_ptr<SessionElement
                 session->m_producer_token,
                 InferenceData{.m_session = session, .m_thread_safe_struct = next})) {
             // The task completes as zeros at its stream position, keeping
-            // the output time-aligned instead of stalling the session.
+            // the output time-aligned instead of stalling the session: a dropped hop,
+            // ANIRA_ERROR_CAPACITY in the handler's rt_error.
             session->m_active_inferences->fetch_sub(1, std::memory_order::release);
+            static_cast<void>(session->m_rt->record_drop());
             ANIRA_LOG_RT_ERROR_ONCE(RtSite::NextDispatchDropped,
                                     log_group::k_scheduler,
                                     "Could not enqueue next inference! "

@@ -314,13 +314,26 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_set_axis(anira_tensor_spec* 
 
 /**
  * @brief The window of a Streamed spec, in elements along the Time axis; the fixed case is
- * window_min == window_max. Defaults 0, 0, 0. Cross-field legality (context <
- * window_min, window_max >= window_min) is checked at prepare.
+ * window_min == window_max. Optional: a Streamed spec without a window (this setter
+ * never called, or called with (0, 0)) has one derived at validation, the fixed window
+ * of its Time extent, or, on a dynamic Time axis, the flexible window [1,
+ * ANIRA_UNBOUNDED] that the anchor hop pins like any flexible window; the overlap is 0
+ * then. A declared window always wins. The derivation never writes into the spec:
+ * anira_tensor_spec_window reads (0, 0, 0), anira_model_config_to_json writes no window
+ * back, and the window in use is the plan report's (anira_plan_slot.window,
+ * window_derived). An overlap without a window is not derived: ANIRA_ERROR_CONFIG,
+ * naming the tensor. Defaults 0, 0, 0. Cross-field legality (overlap < window_min,
+ * window_max >= window_min) is checked at prepare.
  * @param spec The spec.
- * @param window_min The model's smallest legal Time extent, in elements.
+ * @param window_min The model's smallest legal Time extent, in elements; 0 with a window_max of
+ *        0: no window.
  * @param window_max The largest, or ANIRA_UNBOUNDED.
  * @param overlap Overlap of consecutive windows: the elements kept from the previous window.
- *        The advance per inference, the hop, is window_used - overlap.
+ *        The advance per inference, the hop, is window_used - overlap. An output's
+ *        window is aligned like an input's: the model writes the whole window, its
+ *        newest hop at the tail, and the default post_process pushes that hop; the head
+ *        answers older positions and is not pushed (an overlap-add is the model's or a
+ *        processor's own).
  * @return ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than
  *         ANIRA_UNBOUNDED as window_max.
  * @par Thread contract
@@ -1893,7 +1906,8 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_spec_axis(const anira_tensor_spec
 
 /**
  * @brief The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every
- * role.
+ * role. Never the window a validation derives for a Streamed spec without one: that one
+ * is the plan report's (anira_plan_slot.window).
  * @param spec The spec.
  * @param window_min Receives the smallest legal Time extent.
  * @param window_max Receives the largest, or ANIRA_UNBOUNDED.

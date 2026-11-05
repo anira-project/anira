@@ -1272,7 +1272,7 @@ TEST(AbiProcessor, CtxPerPhase) {
     EXPECT_EQ(audio.shape[2], static_cast<int64_t>(k_hop));
     bool input_is_a_struct_buffer = false;
     bool output_is_a_struct_buffer = false;
-    for (const auto& chunk : session->m_inference_queue) {
+    for (const auto& chunk : session->m_struct_pool) {
         input_is_a_struct_buffer =
             input_is_a_struct_buffer ||
             audio.handle.host.ptr == chunk->m_input_tensors.at(0).handle.host.ptr;
@@ -1973,6 +1973,149 @@ TEST(AbiProcessor, DefaultPreProcessTreatsAMultichannelTensorAsChannels) {
     }
     EXPECT_EQ(anira_processor_default_pre_process(&built.m_ctx), ANIRA_OK);
     for (size_t n = 0; n < 4; ++n) { EXPECT_EQ(built.data()[n], static_cast<float>(n + 1)); }
+}
+
+// anira_processor_default_post_process reads an output like the pre-process lays out an input:
+// channel c's window at c * window, its newest hop the window's tail. A window of 8 over a hop
+// of 4 (an overlap of 4) pushes elements 4..7 of each channel's window; without an overlap the
+// window is the hop and everything of it is pushed.
+TEST(AbiProcessor, DefaultPostProcessPushesTheTailOfEachChannelsWindow) {
+    constexpr size_t k_step = 4;
+    for (const auto& [channels, window] : {std::pair<size_t, size_t>{2, 8},
+                                           std::pair<size_t, size_t>{1, 8},
+                                           std::pair<size_t, size_t>{2, 4}}) {
+        SCOPED_TRACE(std::to_string(channels) + " channels, window " + std::to_string(window));
+        anira::RingBuffer seed;
+        ASSERT_TRUE(seed.initialize_with_positions(channels, 32, ANIRA_DTYPE_F32));
+        seed.set_owner(k_step, nullptr);
+        HandBuiltCtx built(ANIRA_PHASE_POST_PROCESS,
+                           seed,
+                           {1, static_cast<int64_t>(channels), static_cast<int64_t>(window)});
+        // The model's output: 100 c + i at window position i of channel c.
+        for (size_t channel = 0; channel < channels; ++channel) {
+            for (size_t i = 0; i < window; ++i) {
+                built.data()[(channel * window) + i] = static_cast<float>((100 * channel) + i);
+            }
+        }
+        EXPECT_EQ(anira_processor_default_post_process(&built.m_ctx), ANIRA_OK);
+        anira::RingBuffer& ring = built.ring();
+        for (size_t channel = 0; channel < channels; ++channel) {
+            std::array<float, k_step> pushed{};
+            ASSERT_EQ(ring.pop_block(channel, pushed.data(), ANIRA_DTYPE_F32, k_step), k_step);
+            for (size_t n = 0; n < k_step; ++n) {
+                EXPECT_EQ(pushed.at(n), static_cast<float>((100 * channel) + window - k_step + n))
+                    << "channel " << channel << ", sample " << n;
+            }
+            EXPECT_EQ(ring.available(channel), 0U) << "one hop per channel";
+        }
+    }
+}
+
+namespace {
+
+/// An engine whose output window says where each of its samples belongs: output channel c at
+/// window position i is the block's number (the first sample of its input) times 1000, plus
+/// 100 c, plus i. Whatever is pushed of it names the channel and the window positions.
+class WindowRampEngine : public anira_test::GateEngine {
+public:
+    explicit WindowRampEngine(size_t window) : m_window(window) {}
+
+    anira_status run(const anira_engine_ctx& ctx) noexcept override {
+        const float* in = anira_tensor_data_f32(&ctx.inputs[0]);
+        float* out = anira_tensor_data_f32(&ctx.outputs[0]);
+        if (in == nullptr || out == nullptr) { return ANIRA_ERROR_INVALID_ARGUMENT; }
+        const size_t channels = anira_test::elements_of(ctx.outputs[0]) / m_window;
+        for (size_t channel = 0; channel < channels; ++channel) {
+            for (size_t i = 0; i < m_window; ++i) {
+                out[(channel * m_window) + i] =
+                    (in[0] * 1000.0F) + static_cast<float>((100 * channel) + i);
+            }
+        }
+        return ANIRA_OK;
+    }
+
+private:
+    size_t m_window;
+};
+
+/// A mono stream of `hop` in, and `channels` channels out over a window of hop + overlap:
+/// [1, channels, hop + overlap] with that overlap, so the output's hop is the input's.
+ModelConfig overlapping_output_model(int64_t channels, int64_t hop, int64_t overlap) {
+    ModelConfig model;
+    model.add_model_path(k_custom, "custom-processor");
+    TensorSpec in("in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    in.axis(0, ANIRA_AXIS_BATCH, 1).axis(1, ANIRA_AXIS_CHANNEL, 1).axis(2, ANIRA_AXIS_TIME, hop);
+    model.input(in);
+    TensorSpec out("out", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
+    out.axis(0, ANIRA_AXIS_BATCH, 1)
+        .axis(1, ANIRA_AXIS_CHANNEL, channels)
+        .axis(2, ANIRA_AXIS_TIME, hop + overlap)
+        .window(hop + overlap, hop + overlap, overlap);
+    model.output(out);
+    return model;
+}
+
+}  // namespace
+
+// An output with an overlap, end to end with no processor: each ring channel receives exactly
+// that channel's newest hop, the tail of its window, block after block, after the latency's
+// silence. With two channels the default once read channel 1 from inside channel 0's window and
+// pushed channel 0's head (an extra delay of the overlap the latency does not count); one channel
+// and no overlap are the controls.
+TEST(AbiProcessor, AnOutputWithAnOverlapStreamsTheNewestHopOfEveryChannel) {
+    constexpr size_t k_step = 8;
+    for (const auto& [channels, overlap] : {std::pair<size_t, size_t>{2, 8},
+                                            std::pair<size_t, size_t>{1, 8},
+                                            std::pair<size_t, size_t>{2, 0}}) {
+        SCOPED_TRACE(std::to_string(channels) + " channels, overlap " + std::to_string(overlap));
+        const Context context;
+        const ModelConfig model = overlapping_output_model(static_cast<int64_t>(channels),
+                                                           static_cast<int64_t>(k_step),
+                                                           static_cast<int64_t>(overlap));
+        WindowRampEngine engine(k_step + overlap);
+        Handler handler(context, model, {}, {}, engine.engine());
+        const anira_test::DestroyFirst guard(handler, &engine);
+        ASSERT_EQ(handler.prepare(zeros_contract(static_cast<uint32_t>(k_step))), ANIRA_OK)
+            << handler.m_err.message;
+        anira_handler* h = handler.m_handler;
+        const size_t latency = anira_handler_get_latency(h, 0);
+        const size_t blocks = (latency / k_step) + 4;  // the latency's silence and four more
+
+        std::vector<std::vector<float>> stream(channels);
+        for (size_t k = 1; k <= blocks; ++k) {
+            std::vector<float> in(k_step, static_cast<float>(k));
+            std::vector<float> out(channels * k_step, -1.0F);
+            const anira_tensor in_tensor = anira_test::whole_f32(in.data(), {1, k_step});
+            const anira_tensor out_tensor =
+                anira_test::whole_f32(out.data(), {static_cast<int64_t>(channels), k_step});
+            const size_t prev = anira_test::available(h);
+            size_t delivered = 0;
+            ASSERT_EQ(anira_handler_process(h, &in_tensor, 0, &out_tensor, 0, &delivered),
+                      ANIRA_OK);
+            ASSERT_EQ(delivered, k_step) << "block " << k;
+            anira_test::wait_for_block(h, prev);
+            for (size_t channel = 0; channel < channels; ++channel) {
+                const auto first = out.begin() + static_cast<std::ptrdiff_t>(channel * k_step);
+                stream[channel].insert(stream[channel].end(),
+                                       first,
+                                       first + static_cast<std::ptrdiff_t>(k_step));
+            }
+        }
+        for (size_t channel = 0; channel < channels; ++channel) {
+            for (size_t n = 0; n < stream[channel].size(); ++n) {
+                float expected = 0.0F;
+                if (n >= latency) {
+                    const size_t block = ((n - latency) / k_step) + 1;
+                    const size_t i = overlap + ((n - latency) % k_step);
+                    expected = static_cast<float>((block * 1000) + (100 * channel) + i);
+                }
+                ASSERT_EQ(stream[channel][n], expected)
+                    << "channel " << channel << ", sample " << n << ", latency " << latency;
+            }
+        }
+        EXPECT_GT(stream[0].size(), latency + k_step) << "the run shows a pushed block";
+        EXPECT_EQ(anira_handler_rt_error(h), ANIRA_OK);
+    }
 }
 
 // A ring of another dtype than its tensor: that slot stays untouched, the status is CONFIG,
@@ -2864,7 +3007,7 @@ TEST(AbiProcessor, TensorsKeepTheStructsMemoryAcrossLibTorchInferences) {
     ASSERT_NO_FATAL_FAILURE(set_gain(h, 1.0F));  // the identity: the stream oracle applies
     const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(h);
     ASSERT_NE(session, nullptr);
-    const auto& queue = session->m_inference_queue;
+    const auto& queue = session->m_struct_pool;
     const size_t structs = queue.size();
     ASSERT_GT(structs, 0U);
     const size_t chunks = (2 * structs) + 2;  // every struct that runs comes round again
