@@ -151,6 +151,7 @@ anira_add_test_binary(test_scheduler WHITE_BOX
 	scheduler/test_CreateSessionFailure.cpp
 	scheduler/test_FallbackPaths.cpp
 	scheduler/test_InferenceManager.cpp
+	scheduler/test_InferenceQueue.cpp
 	scheduler/test_InferenceThread.cpp
 	scheduler/test_LatencyCalculator.cpp
 	scheduler/test_OneSidedStreamingInternals.cpp

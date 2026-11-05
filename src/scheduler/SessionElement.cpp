@@ -203,6 +203,10 @@ bool SessionElement::exclusive() const noexcept {
     return m_derived.m_exclusive;
 }
 
+size_t SessionElement::queue_capacity() const noexcept {
+    return exclusive() ? 1 : m_num_structs;
+}
+
 size_t SessionElement::output_model_latency(size_t slot) const noexcept {
     return static_cast<size_t>(m_model.m_outputs[slot].m_latency);
 }

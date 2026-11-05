@@ -299,6 +299,11 @@ public:
     /// Whether the session runs one inference at a time and in order (capi::Derived::
     /// m_exclusive: a stateful model or a declared State pair): the dispatch gate.
     bool exclusive() const noexcept;
+    /// The most jobs of the session the inference queue can hold at once, what prepare reserves
+    /// for it there (Core::reserve_inference_capacity): one for an exclusive session (its
+    /// dispatch gate lets one job be queued or running), else the struct pool (a queued job
+    /// holds a struct that is not free until its chunk is collected). Valid after prepare.
+    size_t queue_capacity() const noexcept;
     /** @} */
 
     /**
@@ -570,13 +575,17 @@ public:
     // This session's explicit producer token for the global inference queue.
     // Pinning one token per session keeps enqueue allocation-free on the audio
     // thread (no implicit-producer registration) and gives the token RAII
-    // lifetime: the underlying producer slot is recycled when the session is
-    // destroyed. A ProducerToken must never be used by two threads at once —
+    // lifetime: the underlying producer slot, its blocks with it, is recycled by the
+    // next session's token when the session is destroyed. Its blocks are reserved at
+    // prepare (Core::reserve_inference_capacity, queue_capacity() of them), so the
+    // try_enqueue through it neither allocates nor runs out of room. A ProducerToken must
+    // never be used by two threads at once —
     // this holds here because all enqueues of a session are serialized: the
     // non-stateful path enqueues only from the session's single driving thread,
     // and the stateful path enqueues only while holding the
     // m_stateful_dispatch_gate (whose acquire/release ordering also makes
-    // the token's state visible when ownership migrates between threads).
+    // the token's state visible when ownership migrates between threads); the
+    // reservation runs on the control thread while nothing of the session is queued.
     moodycamel::ProducerToken m_producer_token;  ///< Per-session producer token for the global
                                                  ///< inference queue
 

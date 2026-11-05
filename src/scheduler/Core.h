@@ -531,21 +531,6 @@ public:
     static void reset_session(const std::shared_ptr<SessionElement>& session);
 
     /**
-     * @brief Get a reference to the global inference queue
-     *
-     * Returns a reference to the global concurrent queue used for inference requests.
-     * This is used to construct InferenceThreads (user-managed or WASM
-     * worker-driven) that consume from the global queue; dequeueing is
-     * non-tokenized and allocation-free.
-     *
-     * The queue lives in the immortal core, so the reference stays valid for as
-     * long as the library is loaded — in particular after all sessions were released.
-     *
-     * @return Reference to the global inference queue
-     */
-    static InferenceQueue& get_static_inference_queue();
-
-    /**
      * @brief Factory for a user-owned InferenceThread bound to the global inference queue.
      *
      * Returns a new InferenceThread whose lifecycle is fully managed by the caller.
@@ -862,13 +847,14 @@ private:
     /**
      * @brief Enqueues a prepared task into the global inference queue, dropping it on failure
      *
-     * If the queue is momentarily full, the inference is dropped: the task completes
-     * with zeroed output at its stream position (its struct and timestamp stay claimed
-     * until the output side consumes it), so the output remains time-aligned.
-     *
      * The enqueue always uses the session's own producer token
      * (SessionElement::m_producer_token), which keeps it allocation-free and
-     * real-time safe on the calling (audio) thread.
+     * real-time safe on the calling (audio) thread; the token's producer holds the blocks for
+     * every job the session can have queued (reserve_inference_capacity). If it still finds no
+     * room (an inference thread stalled inside its dequeue while the session's other jobs
+     * lapped those blocks), the inference is dropped: the task completes with zeroed output at
+     * its stream position (its struct and timestamp stay claimed until the output side consumes
+     * it), so the output remains time-aligned.
      *
      * @param session Shared pointer to the session that owns the task
      * @param thread_safe_struct The prepared task to enqueue
@@ -901,8 +887,10 @@ private:
      * dequeues the session's never-started tasks from the global queue and
      * completes them as silence at their stream positions, and repeats until a
      * full pass finds nothing (a worker mid-continuation can enqueue into a
-     * single pass's window). Other sessions' tasks are requeued; if requeueing
-     * fails they are completed as silence instead of being silently lost.
+     * single pass's window). The session's placeholders (reserve_inference_capacity) only give
+     * their count back. Other sessions' tasks and placeholders are requeued with the
+     * allocating enqueue, however many; only if that allocation fails is a task completed as
+     * silence instead of being silently lost.
      *
      * @param session Shared pointer to the session whose queue to drain
      *
@@ -913,6 +901,28 @@ private:
      * @warning Make sure to uninitialize the session before calling this method.
      */
     static void drain_inference_queue(const std::shared_ptr<SessionElement>& session)
+        ANIRA_BLOCKING;
+
+    /**
+     * @brief Gives the session's producer token the blocks for every job the session can have
+     * in the inference queue at once
+     *
+     * prepare_session's step after the session's prepare built its struct pool: one
+     * allocating enqueue_bulk through SessionElement::m_producer_token of
+     * detail::reservation_size(SessionElement::queue_capacity()) placeholders (QueueCapacity.h:
+     * the bulk form links every block before a consumer can take one), each a job without a
+     * chunk, counted in the session's in-flight count like a job; an inference thread that
+     * dequeues one gives its count back and runs nothing, and drain_inference_queue takes the
+     * rest back and waits for the count. Afterwards the audio thread's try_enqueue through the
+     * token finds room for every chunk of the pool at every position of the producer's blocks,
+     * without allocating. A producer keeps its blocks, so a re-reservation through a token that
+     * took a released session's producer only adds what the new pool needs beyond them.
+     *
+     * @param session The session, prepared and not initialised (nothing of it queued)
+     * @throws std::bad_alloc when the blocks cannot be allocated (the prepare fails with
+     * ANIRA_ERROR_OUT_OF_MEMORY)
+     */
+    static void reserve_inference_capacity(const std::shared_ptr<SessionElement>& session)
         ANIRA_BLOCKING;
 
     /**
@@ -970,19 +980,6 @@ private:
      */
     static std::shared_ptr<engine::BuiltinEngine> find_or_make_builtin_engine(State& state,
                                                                               anira_engine engine);
-
-    static constexpr size_t k_min_capacity_inference_queue = 10000;  ///< Minimum pre-allocated
-                                                                     ///< capacity of the inference
-                                                                     ///< queue
-    static constexpr size_t k_max_num_instances = 1000;  ///< Pre-allocation hint for explicit
-                                                         ///< producers (one per concurrently
-                                                         ///< live session, see
-                                                         ///< SessionElement::m_producer_token)
-    static constexpr size_t k_max_num_implicit_producers = 8;  ///< Pre-allocation hint for
-                                                               ///< implicit producers (tokenless
-                                                               ///< enqueues from off-RT control
-                                                               ///< threads, e.g. requeueing in
-                                                               ///< drain_inference_queue)
 
 #if DOXYGEN
     // Since Doxygen does not find classes structures nested in std::shared_ptr
