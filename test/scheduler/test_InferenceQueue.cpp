@@ -16,13 +16,11 @@
 #include <cstdint>
 #include <cstdio>
 #include <memory>
-#include <string>
 #include <thread>
 #include <vector>
 
 #include "../abi/handler_support.h"
 #include "../support/log_record_collector.h"
-#include "capi/handles.h"
 #include "gtest/gtest.h"
 #include "scheduler/Core.h"
 #include "scheduler/QueueCapacity.h"
@@ -218,6 +216,7 @@ TEST(InferenceQueue, AReservedProducerTakesItsCapacityAtEveryTailOffset) {
         std::atomic<bool> stop{false};
         std::atomic<size_t> taken{0};
         std::vector<std::thread> consumers;
+        consumers.reserve(2);
         for (int i = 0; i < 2; ++i) {
             consumers.emplace_back([&queue, &stop, &taken] {
                 InferenceData data;
