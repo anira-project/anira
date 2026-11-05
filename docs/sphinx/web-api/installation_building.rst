@@ -274,19 +274,52 @@ it, so ``malloc`` returns NULL and ``operator new`` throws ``std::bad_alloc`` wh
 cannot grow further (AniraWeb's at its maximum, a module's of fixed size at once), and every C
 entry turns that into the status. A failed handler creation or prepare leaves nothing behind. A
 module of your own that prefers the abort passes ``-sABORTING_MALLOC=1`` after anira's options:
-the last ``-s`` wins. For sizing the memory: the core takes 0.2 MiB once the first context
-exists, a handler from about 40 KiB (the gain model at a 5 ms budget) to 1.7 MiB (at a 1 s
-budget, whose pool of chunks is large) beside its model's instances (each loaded model instance
-holds its own copy of the model's weights: about 16.5 MiB per instance of a 16 MB RAVE export),
-and every inference thread a 4 MiB stack. The core's queue of inference jobs owns nothing of its
-own: each handler reserves its room there when it is prepared, its producer (368 bytes) and one
-block of 564 bytes per 32 chunks of its pool beyond the first, so about 1.5 KiB up to 33 chunks
-and 0.9 KiB for a stateful handler, which has one chunk in the queue at a time. The room stays
-with the queue once the handler is gone, for the next handler to take. (Issue #207: the queue
-preallocated 169 MiB at the first context, and every live handler added 4 MiB.) The
-defaults (``ANIRA_THREADS_AUTO``, AUTO instances) stay: an AUTO pool of 16 Workers with two
-RAVE models (about 530 MiB of instances beside the core) did not fit the former fixed 512 MiB
-(issue #218) and fits the growing memory.
+the last ``-s`` wins.
+
+For sizing the memory: the core takes 0.2 MiB once the first context exists, and every
+inference thread a 4 MiB stack (the Worker's, whichever handlers it serves). A handler takes
+what its prepare builds, which its getters tell (``anira_handler_num_entries`` and
+``anira_handler_get_latency``; :js:meth:`InferenceHandler.numEntries` and ``getLatency`` here):
+
+- **its pool of chunks:** P chunks, P = ``anira_handler_num_entries``, twice the most chunks the
+  stream keeps in flight at the contract's host blocks, budget and instance count (the latency's
+  closed form, :doc:`../latency`; a stateful handler's pool is computed the same way). Each chunk
+  holds every input and output tensor that is not a State tensor, its elements times its dtype's
+  size rounded up to 64 bytes: P × Σ ⌈elements × dtype size⌉\ :sub:`64`;
+- **its rings,** one per Streamed tensor, channels × capacity elements of the ring's dtype. An
+  input's capacity is one host block on its stream, plus its window's past samples
+  (window − hop), plus less than one hop of leftover when the host block is no multiple of the
+  hop. An output's capacity is P × hop plus its latency;
+- **its Static values, and its State pairs:** two buffers of every State tensor;
+- **its room in the core's queue of inference jobs,** which owns nothing of its own. Each handler
+  reserves its room when it is prepared: its producer (368 bytes) and one block of 564 bytes per
+  32 chunks of its pool beyond the first, about 1.5 KiB up to 33 chunks. A stateful handler has
+  one chunk in the queue at a time: 0.9 KiB. The room stays with the queue once the handler is
+  gone, for the next handler to take.
+
+For example, the bundled gain model (``audio_in`` and ``audio_out`` [1, 1, 512] float32, the Static
+``gain`` and ``gain_out`` [1]) at a host block of 512 at 48 kHz, a 5 ms budget and two instances
+(the handler of ``test/browser/memory.html``):
+
+- P = 4 chunks of 2048 + 64 + 2048 + 64 = 4224 bytes: 16.5 KiB;
+- a send ring of 512 samples (2 KiB), the host block being one hop;
+- a receive ring of 4 × 512 + 512 = 2560 samples (10 KiB), its latency being one hop;
+- 1.5 KiB of queue room;
+- about 30 KiB in all, beside the handler's fixed objects.
+
+The same handler at a block of 128 with a 1 s budget keeps far more chunks in flight and takes
+1.7 MiB (``anira_em_oom``).
+
+Beside its handlers, the model keeps memory of its own, depending on the engine. ONNX Runtime
+builds a session per executor (one per shared instance, and one per stateful handler) from the
+config's bytes, and each session holds its own copy of the weights. So an ONNX Runtime model costs
+its file size once in the config and once more per executor: about 16.5 MiB per instance of a
+16 MB RAVE export. TFLite, LiteRT and ExecuTorch reference the bytes the config holds.
+
+(Issue #207: the core's queue preallocated 169 MiB at the first context, and every live handler
+added 4 MiB.) The defaults (``ANIRA_THREADS_AUTO``, AUTO instances) stay: an AUTO pool of 16
+Workers with two RAVE models (about 530 MiB of instances beside the core) did not fit the former
+fixed 512 MiB (issue #218) and fits the growing memory.
 
 .. code-block:: bash
 
