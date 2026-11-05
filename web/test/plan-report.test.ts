@@ -10,7 +10,9 @@ import {
   anira_engine,
   anira_memory_kind,
   anira_provider,
+  anira_rt_verdict,
   anira_status,
+  anira_warmup_outcome,
 } from '../src/abi/enums'
 import { AniraError } from '../src/AniraError'
 import { PlanReport } from '../src/PlanReport'
@@ -217,10 +219,26 @@ test('a plan row reads the memory kind in its tail, at the wasm32 offset of anir
       u32[count >>> 2] = 1
       if (out === 0) return anira_status.ANIRA_OK
       u32[(out + 44) >>> 2] = anira_memory_kind.ANIRA_MEMORY_DEDICATED
+      // The warm-up and real-time fields of the tail, at their wasm32 offsets.
+      const f64 = new Float64Array(buffer)
+      u32[(out + 48) >>> 2] = 6
+      f64[(out + 56) >>> 3] = 1.842
+      f64[(out + 64) >>> 3] = 1.701
+      u32[(out + 72) >>> 2] = anira_warmup_outcome.ANIRA_WARMUP_OUTCOME_STABLE
+      u32[(out + 76) >>> 2] = 4
+      f64[(out + 80) >>> 3] = 0.17
+      u32[(out + 88) >>> 2] = anira_rt_verdict.ANIRA_RT_COMFORTABLE
       return anira_status.ANIRA_OK
     },
   } as unknown as AniraBindings
   const [plan] = new PlanReport(abi, 1024).plans()
-  assert.deepEqual(strides, [48, 48], 'the caller passes its sizeof as the stride')
+  assert.deepEqual(strides, [96, 96], 'the caller passes its sizeof as the stride')
   assert.equal(plan.memoryKind, anira_memory_kind.ANIRA_MEMORY_DEDICATED)
+  assert.equal(plan.warmupIterations, 6)
+  assert.equal(plan.measuredMs, 1.842)
+  assert.equal(plan.medianMs, 1.701)
+  assert.equal(plan.warmupOutcome, anira_warmup_outcome.ANIRA_WARMUP_OUTCOME_STABLE)
+  assert.equal(plan.rtParallel, 4)
+  assert.equal(plan.rtFactor, 0.17)
+  assert.equal(plan.rtVerdict, anira_rt_verdict.ANIRA_RT_COMFORTABLE)
 })

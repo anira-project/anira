@@ -51,8 +51,10 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -1698,12 +1700,13 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
         ANIRA_LOG_INFO(
             anira::log_group::k_capi,
             "anira_handler_prepare: plan %u: variant %u, engine %s, provider %s, "
-            "budget %.3f ms, memory %s",
+            "budget %.3f ms (%s), memory %s",
             i,
             info.variant,
             engine.c_str(),
             provider.c_str(),
             info.budget_ms,
+            handler.m_contract.hard()->m_budget == ANIRA_BUDGET_MEASURED ? "measured" : "explicit",
             anira::platform::memory_kind_word(static_cast<anira_memory_kind>(info.memory_kind)));
         log_slots(i, report.m_inputs[i], model.m_inputs, handler.m_derived.m_inputs, "input");
         log_slots(i, report.m_outputs[i], model.m_outputs, handler.m_derived.m_outputs, "output");
@@ -1720,6 +1723,216 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
 #else
     static_cast<void>(handler);
     static_cast<void>(model);
+#endif
+}
+
+// The load (rt_factor / rt_parallel) from which a plan is no longer comfortable: the figure is
+// the maximum of a window the criterion accepts within 20 % of its median, and the rest covers
+// what one measurement at prepare cannot see (other handlers starting later, other applications,
+// the clock speed): a quarter of headroom absorbs a third more inference time.
+constexpr double k_marginal_load = 0.75;
+
+// The verdict of a measured plan: its load over the thresholds of anira_rt_verdict.
+anira_rt_verdict rt_verdict_of(double rt_factor, uint32_t rt_parallel) noexcept {
+    const double load = rt_factor / static_cast<double>(std::max<uint32_t>(rt_parallel, 1));
+    if (load >= 1.0) { return ANIRA_RT_NOT_REALTIME; }
+    if (load >= k_marginal_load) { return ANIRA_RT_MARGINAL; }
+    return ANIRA_RT_COMFORTABLE;
+}
+
+// The warm-up and real-time fields of one plan row: what the pass measured (nothing without
+// one), the real-time factor of the plan's inference time (the measurement, else the row's
+// budget) over the anchor's hop period (LatencyCalculator::hop_periods, the latency model's
+// kappa), the session's parallel inferences and the verdict (UNMEASURED without a measurement).
+void set_real_time(anira_plan_info& info,
+                   const anira::WarmupFigure* figure,
+                   const anira::capi::Derived& derived,
+                   const anira::capi::HardContract& hard,
+                   uint32_t parallel) noexcept {
+    info.rt_parallel = std::max<uint32_t>(parallel, 1);
+    if (figure == nullptr) {
+        info.warmup_iterations = 0;
+        info.warmup_outcome = ANIRA_WARMUP_OUTCOME_NONE;
+        info.measured_ms = 0.0;
+        info.median_ms = 0.0;
+        info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, info.budget_ms);
+        info.rt_verdict = ANIRA_RT_UNMEASURED;
+        return;
+    }
+    info.warmup_iterations = figure->m_iterations;
+    info.warmup_outcome = static_cast<uint32_t>(figure->m_outcome);
+    info.measured_ms = figure->m_measured_ms;
+    info.median_ms = figure->m_median_ms;
+    info.rt_factor = anira::LatencyCalculator::hop_periods(derived, hard, figure->m_measured_ms);
+    info.rt_verdict = static_cast<uint32_t>(rt_verdict_of(info.rt_factor, info.rt_parallel));
+}
+
+#ifdef ENABLE_LOGGING
+const char* rt_verdict_word(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return "comfortable";
+        case ANIRA_RT_MARGINAL: return "marginal";
+        case ANIRA_RT_NOT_REALTIME: return "not real-time";
+        default: return "unmeasured";
+    }
+}
+
+// How much worse a verdict is: unmeasured below comfortable below marginal below not real-time.
+int verdict_rank(uint32_t verdict) {
+    switch (verdict) {
+        case ANIRA_RT_COMFORTABLE: return 1;
+        case ANIRA_RT_MARGINAL: return 2;
+        case ANIRA_RT_NOT_REALTIME: return 3;
+        default: return 0;
+    }
+}
+#endif
+
+// What prepare measured, as records of the group anira.capi, after the session's final sizing
+// and before the report's records. One per plan: the pass (its mode, its inferences, how it
+// ended), the figure and its median, the real-time factor of the session's parallel inferences,
+// its load and the verdict; Info, and Warning for a marginal or not real-time plan, so that a
+// default run (log level Warning) shows the problem without reading the report. A pass that did
+// not settle and an explicit budget below the plan's measurement are a Warning each. Then one
+// record for the session: its budget (the slowest plan's under MEASURED), the worst verdict, the
+// latency of every Streamed output and the entries; Warning when the pool cannot keep up with the
+// budget the session is sized for (one host block's burst, so the stream misses blocks).
+void log_measurement([[maybe_unused]] const anira_handler& handler,
+                     [[maybe_unused]] const std::vector<anira::WarmupFigure>& figures) {
+#ifdef ENABLE_LOGGING
+    const anira::capi::HardContract& hard = *handler.m_contract.hard();
+    const bool measured = hard.m_budget == ANIRA_BUDGET_MEASURED;
+    const anira::SessionElement& session = handler.m_manager->session();
+    uint32_t worst = ANIRA_RT_UNMEASURED;
+    for (uint32_t i = 0; i < handler.m_report.m_plans.size(); ++i) {
+        const anira_plan_info& info = handler.m_report.m_plans[i];
+        if (verdict_rank(info.rt_verdict) > verdict_rank(worst)) { worst = info.rt_verdict; }
+        const std::string engine =
+            anira::capi::engine_label(static_cast<anira_engine>(info.engine),
+                                      info.engine_id != nullptr ? info.engine_id : "");
+        const std::string provider =
+            anira::capi::provider_label(static_cast<anira_provider>(info.provider),
+                                        info.provider_id != nullptr ? info.provider_id : "");
+        const double load = info.rt_factor / static_cast<double>(info.rt_parallel);
+        const char* parallel = info.rt_parallel == 1 ? "parallel inference" : "parallel inferences";
+        if (info.rt_verdict == ANIRA_RT_UNMEASURED) {
+            ANIRA_LOG_INFO(anira::log_group::k_capi,
+                           "anira_handler_prepare: plan %u (%s, %s): no warm-up; real-time factor "
+                           "%.2f of %u %s (load %.2f) from the explicit budget %.3f ms: unmeasured",
+                           i,
+                           engine.c_str(),
+                           provider.c_str(),
+                           info.rt_factor,
+                           info.rt_parallel,
+                           parallel,
+                           load,
+                           info.budget_ms);
+            continue;
+        }
+        const bool fixed = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_FIXED;
+        const char* ended = info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED ? ", capped"
+                            : fixed                                            ? ""
+                                                                               : ", stable";
+        const int headroom = static_cast<int>(std::lround(std::max(0.0, 1.0 - load) * 100.0));
+        std::string verdict = rt_verdict_word(info.rt_verdict);
+        if (info.rt_verdict == ANIRA_RT_COMFORTABLE) {
+            verdict += " (" + std::to_string(headroom) + " % headroom)";
+        } else if (info.rt_verdict == ANIRA_RT_MARGINAL) {
+            verdict += " (" + std::to_string(headroom) +
+                       " % headroom); the stream may miss blocks under load";
+        } else {
+            verdict =
+                "NOT real-time on this machine; the stream will miss blocks, which on_miss "
+                "fills";
+        }
+        const bool warn =
+            info.rt_verdict == ANIRA_RT_MARGINAL || info.rt_verdict == ANIRA_RT_NOT_REALTIME;
+        std::array<char, 512> line{};
+        static_cast<void>(std::snprintf(line.data(),
+                                        line.size(),
+                                        "anira_handler_prepare: plan %u (%s, %s): warm-up %s, %u "
+                                        "inferences%s; measured %.3f ms (median %.3f ms) on the "
+                                        "inference threads; real-time factor %.2f of %u %s (load "
+                                        "%.2f): %s",
+                                        i,
+                                        engine.c_str(),
+                                        provider.c_str(),
+                                        fixed ? "fixed" : "until_stable",
+                                        info.warmup_iterations,
+                                        ended,
+                                        info.measured_ms,
+                                        info.median_ms,
+                                        info.rt_factor,
+                                        info.rt_parallel,
+                                        parallel,
+                                        load,
+                                        verdict.c_str()));
+        if (warn) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi, "%s", line.data());
+        } else {
+            ANIRA_LOG_INFO(anira::log_group::k_capi, "%s", line.data());
+        }
+        if (info.warmup_outcome == ANIRA_WARMUP_OUTCOME_CAPPED && i < figures.size()) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                              "anira_handler_prepare: plan %u (%s, %s): the warm-up did not settle "
+                              "in %u inferences (the last four %.3f-%.3f ms); %s their maximum, "
+                              "%.3f ms",
+                              i,
+                              engine.c_str(),
+                              provider.c_str(),
+                              info.warmup_iterations,
+                              figures[i].m_fastest_ms,
+                              info.measured_ms,
+                              measured ? "the budget is" : "the measurement is",
+                              info.measured_ms);
+        }
+        if (!measured && info.measured_ms > info.budget_ms) {
+            ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                              "anira_handler_prepare: plan %u (%s, %s): measured %.3f ms per "
+                              "inference, above the explicit budget %.3f ms; the latency is sized "
+                              "for %.3f ms",
+                              i,
+                              engine.c_str(),
+                              provider.c_str(),
+                              info.measured_ms,
+                              info.budget_ms,
+                              info.budget_ms);
+        }
+    }
+    std::string latency;
+    for (size_t i = 0; i < session.num_outputs(); ++i) {
+        if (session.output_hop(i) == 0) { continue; }
+        latency += (latency.empty() ? "" : ", ") + std::to_string(session.m_latency[i]);
+    }
+    const std::string budget =
+        measured ? "measured (the slowest of " + std::to_string(handler.m_report.m_plans.size()) +
+                       (handler.m_report.m_plans.size() == 1 ? " plan)" : " plans)")
+                 : std::string("explicit");
+    const double kappa =
+        anira::LatencyCalculator::hop_periods(handler.m_derived, hard, session.m_budget_ms);
+    if (kappa >= static_cast<double>(std::max<uint32_t>(session.m_num_instances, 1))) {
+        ANIRA_LOG_WARNING(anira::log_group::k_capi,
+                          "anira_handler_prepare: budget %.3f ms, %s: %s; the pool cannot keep "
+                          "up (every hop brings %.2f hop periods of inference for %u parallel "
+                          "inference%s): latency %s samples and %u entries are sized for one "
+                          "host block's burst, and the stream will miss blocks",
+                          session.m_budget_ms,
+                          budget.c_str(),
+                          rt_verdict_word(worst),
+                          kappa,
+                          session.m_num_instances,
+                          session.m_num_instances == 1 ? "" : "s",
+                          latency.c_str(),
+                          handler.m_num_entries);
+        return;
+    }
+    ANIRA_LOG_INFO(anira::log_group::k_capi,
+                   "anira_handler_prepare: budget %.3f ms, %s: %s; latency %s samples, %u entries",
+                   session.m_budget_ms,
+                   budget.c_str(),
+                   rt_verdict_word(worst),
+                   latency.c_str(),
+                   handler.m_num_entries);
 #endif
 }
 
@@ -1973,7 +2186,11 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         state->m_value->set_domain(host_domains.m_inputs[slot]);
     }
     // The report: its plan rows carry the budget of the contract, which reads 0 under a MEASURED
-    // budget until the pass measured it.
+    // budget until the pass measured it, and no measurement yet (the real-time factor of the
+    // declared budget, UNMEASURED: a prepare without a pass keeps that).
+    for (anira::capi::Plan& plan : handler.m_plans) {
+        set_real_time(plan.m_info, nullptr, prepared, prepared_hard, session.m_num_instances);
+    }
     build_report(handler,
                  model,
                  prepared_contract,
@@ -2042,19 +2259,22 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     };
     prepare_user_code();
 
+    std::vector<anira::WarmupFigure> figures;
     if (warms) {
         // The pass, plan by plan in table order: every plan runs, the selected one or not, so
         // that a plan selected later runs at the budget the session is sized for. A failed
         // inference or one that never completes fails the prepare (Core::warm_up_plan).
         double slowest_ms = 0.0;
         for (uint32_t plan = 0; plan < handler.m_plans.size(); ++plan) {
-            const anira::WarmupFigure figure = handler.m_manager->warm_up_plan(plan);
+            figures.push_back(handler.m_manager->warm_up_plan(plan));
+            const anira::WarmupFigure& figure = figures.back();
             slowest_ms = std::max(slowest_ms, figure.m_measured_ms);
-            // A MEASURED plan's budget is its figure; the session runs the slowest plan's.
-            if (measured) {
-                handler.m_plans[plan].m_info.budget_ms = figure.m_measured_ms;
-                handler.m_report.m_plans[plan].budget_ms = figure.m_measured_ms;
-            }
+            // A MEASURED plan's budget is its figure; the session runs the slowest plan's. The
+            // row takes what the pass measured, its real-time factor and its verdict.
+            anira_plan_info& row = handler.m_plans[plan].m_info;
+            if (measured) { row.budget_ms = figure.m_measured_ms; }
+            set_real_time(row, &figure, prepared, prepared_hard, session.m_num_instances);
+            handler.m_report.m_plans[plan] = row;
         }
         // The session again, sized for what the pass measured (an explicit budget sizes it as
         // before: the timings are only reported). This is the same session: its plan table and
@@ -2080,6 +2300,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
         zero_state_ports(handler);
     }
 
+    log_measurement(handler, figures);
     log_report(handler, model);
     const uint32_t suppressed = handler.m_rt.rearm();
     if (suppressed > 0) {

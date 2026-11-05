@@ -250,6 +250,10 @@ int anira_header_c_probe(void) {
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
         checks += info.provider_id == NULL && info.engine_flags == 0u ? 1 : 0;
+        checks += info.warmup_iterations == 0u && info.measured_ms == 0.0 ? 1 : 0;
+        checks +=
+            info.warmup_outcome == ANIRA_WARMUP_OUTCOME_NONE && info.rt_parallel == 0u ? 1 : 0;
+        checks += info.rt_factor == 0.0 && info.rt_verdict == ANIRA_RT_UNMEASURED ? 1 : 0;
         if (checks < 0) { /* never true: keeps the calls out of the probe's own result */
             const double now = anira_now_ms();
             const anira_status status =

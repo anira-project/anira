@@ -1588,6 +1588,29 @@ const anira_plan_info& plan_row(const Handler& handler, uint32_t plan = 0) {
     return handler.m_handler->m_report.m_plans.at(plan);
 }
 
+/// Every row of a prepared handler: a positive real-time factor over at least one parallel
+/// inference, the verdict the thresholds give its load (0.75, 1), or UNMEASURED with no pass; a
+/// measured row's median at or below its figure.
+void expect_rows_follow_the_thresholds(const Handler& handler) {
+    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+        EXPECT_GT(row.rt_factor, 0.0);
+        EXPECT_GE(row.rt_parallel, 1U);
+        if (row.rt_verdict == ANIRA_RT_UNMEASURED) {
+            EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_NONE));
+            EXPECT_EQ(row.warmup_iterations, 0U);
+            continue;
+        }
+        const double load = row.rt_factor / static_cast<double>(row.rt_parallel);
+        const anira_rt_verdict verdict = load >= 1.0    ? ANIRA_RT_NOT_REALTIME
+                                         : load >= 0.75 ? ANIRA_RT_MARGINAL
+                                                        : ANIRA_RT_COMFORTABLE;
+        EXPECT_EQ(row.rt_verdict, static_cast<uint32_t>(verdict)) << "load " << load;
+        EXPECT_GT(row.measured_ms, 0.0);
+        EXPECT_LE(row.median_ms, row.measured_ms);
+        EXPECT_GT(row.warmup_iterations, 0U);
+    }
+}
+
 /// `blocks` ramp blocks through a prepared mono handler, each waited for its inference: the
 /// stream, a pure function of the calls.
 std::vector<float> waited_stream(anira_handler* handler, size_t blocks) {
@@ -1618,17 +1641,30 @@ TEST(AbiWarmup, UntilStableLeavesTheColdStartOut) {
     EXPECT_LE(engine.m_calls.load(), 32);
     EXPECT_GE(plan_row(handler).budget_ms, 1.0);
     EXPECT_LT(plan_row(handler).budget_ms, 10.0) << "the cold start is in no window";
+    EXPECT_EQ(plan_row(handler).warmup_iterations, static_cast<uint32_t>(engine.m_calls.load()));
+    EXPECT_DOUBLE_EQ(plan_row(handler).measured_ms, plan_row(handler).budget_ms);
+    expect_rows_follow_the_thresholds(handler);
 }
 
 // Times that never agree within 20 % (1 and 5 ms alternating) stop the pass at its cap of 32,
 // and the budget is the last four's maximum, a 5 ms one.
 TEST(AbiWarmup, AnUnsettledPassStopsAtItsCap) {
-    const Context context;
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
+    RecordCollector collector;
     const ScriptedEngine engine([](int call) { return call % 2 == 0 ? 1.0 : 5.0; }, Wait::Busy);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
     ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 32);
     EXPECT_GE(plan_row(handler).budget_ms, 5.0);
+    EXPECT_EQ(plan_row(handler).warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_CAPPED));
+    EXPECT_EQ(plan_row(handler).warmup_iterations, 32U);
+    expect_rows_follow_the_thresholds(handler);
+#ifdef ENABLE_LOGGING
+    const char* capped = "the warm-up did not settle in 32 inferences";
+    EXPECT_EQ(count_records(collector, capped, "native"), 1U);
+    EXPECT_EQ(find_record(collector, capped, "native").m_level,
+              static_cast<uint32_t>(ANIRA_LOG_WARNING));
+#endif
 }
 
 // FIXED n runs n inferences of every plan, whatever their times, under either budget: the
@@ -1643,6 +1679,11 @@ TEST(AbiWarmup, FixedRunsItsCountPerPlan) {
         << handler.m_err.message;
     EXPECT_EQ(engine.m_calls.load(), 3);
     EXPECT_DOUBLE_EQ(plan_row(handler).budget_ms, 5.0) << "an explicit budget stays";
+    for (const anira_plan_info& row : handler.m_handler->m_report.m_plans) {
+        EXPECT_EQ(row.warmup_iterations, 3U);
+        EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_FIXED));
+    }
+    expect_rows_follow_the_thresholds(handler);
 
     ContractHandle measured = measured_contract();
     measured.hard_warmup(ANIRA_WARMUP_FIXED, 4);
@@ -1678,11 +1719,25 @@ TEST(AbiWarmup, TheSessionRunsTheSlowestPlansFigure) {
 // burst), its budget what the pass measured; a Hard prepare never answers ANIRA_ERROR_BUDGET.
 // The stream runs, its misses filled under on_miss.
 TEST(AbiWarmup, AModelTooSlowForTheStreamStillPrepares) {
-    const Context context;
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
+    RecordCollector collector;
     const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
     ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
     EXPECT_GE(plan_row(handler).budget_ms, 30.0);
+    // 30 ms over a hop period of 512 / 48 kHz = 10.67 ms: 2.8 hop periods at least, on the one
+    // instance the model allows.
+    EXPECT_EQ(plan_row(handler).rt_verdict, static_cast<uint32_t>(ANIRA_RT_NOT_REALTIME));
+    EXPECT_GE(plan_row(handler).rt_factor, 2.8);
+    EXPECT_EQ(plan_row(handler).rt_parallel, 1U);
+    expect_rows_follow_the_thresholds(handler);
+#ifdef ENABLE_LOGGING
+    const char* verdict = "NOT real-time on this machine";
+    EXPECT_EQ(count_records(collector, verdict, "native"), 1U);
+    EXPECT_EQ(find_record(collector, verdict, "native").m_level,
+              static_cast<uint32_t>(ANIRA_LOG_WARNING));
+    EXPECT_EQ(count_records(collector, "the pool cannot keep up", "native"), 1U);
+#endif
     const std::shared_ptr<anira::SessionElement> session =
         anira_test::session_of(handler.m_handler);
     ASSERT_NE(session, nullptr);
@@ -1697,7 +1752,8 @@ TEST(AbiWarmup, AModelTooSlowForTheStreamStillPrepares) {
 // Under an explicit budget the pass's timings are only reported: the session is sized for the
 // declared figure, which the plan's row keeps, however slow the pass was.
 TEST(AbiWarmup, AnExplicitBudgetIsNotReplacedByTheMeasurement) {
-    const Context context;
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_WARNING);
+    RecordCollector collector;
     const ScriptedEngine engine([](int /*call*/) { return 30.0; }, Wait::Sleep);
     Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
     ASSERT_EQ(handler.prepare(explicit_contract(k_block, k_rate, ANIRA_MISS_ZEROS, 0.0, 1.0, 4)),
@@ -1709,6 +1765,58 @@ TEST(AbiWarmup, AnExplicitBudgetIsNotReplacedByTheMeasurement) {
         anira_test::session_of(handler.m_handler);
     ASSERT_NE(session, nullptr);
     EXPECT_DOUBLE_EQ(session->m_budget_ms, 1.0);
+    // The factor and the verdict are the measurement's, not the declared budget's.
+    EXPECT_GE(plan_row(handler).measured_ms, 30.0);
+    EXPECT_GE(plan_row(handler).rt_factor, 2.8);
+    EXPECT_EQ(plan_row(handler).rt_verdict, static_cast<uint32_t>(ANIRA_RT_NOT_REALTIME));
+    expect_rows_follow_the_thresholds(handler);
+#ifdef ENABLE_LOGGING
+    const char* above = "above the explicit budget 1.000 ms; the latency is sized for 1.000 ms";
+    EXPECT_EQ(count_records(collector, above, "native"), 1U);
+    EXPECT_EQ(find_record(collector, above, "native").m_level,
+              static_cast<uint32_t>(ANIRA_LOG_WARNING));
+#endif
+}
+
+// An inference of 0.85 hop periods on one instance is above the comfortable load by
+// construction: marginal, or not real-time when the machine adds to it, never comfortable.
+TEST(AbiWarmup, AMarginalLoadIsNeverComfortable) {
+    const Context context;
+    constexpr double k_hop_period_ms = 1000.0 * k_block / k_rate;
+    const ScriptedEngine engine([](int /*call*/) { return 0.85 * k_hop_period_ms; }, Wait::Sleep);
+    Handler handler(context, anira_test::mono_stream_model(k_block, 1), {}, {}, engine.engine());
+    ASSERT_EQ(handler.prepare(measured_contract()), ANIRA_OK) << handler.m_err.message;
+    EXPECT_GE(plan_row(handler).rt_factor, 0.85);
+    EXPECT_NE(plan_row(handler).rt_verdict, static_cast<uint32_t>(ANIRA_RT_COMFORTABLE));
+    EXPECT_NE(plan_row(handler).rt_verdict, static_cast<uint32_t>(ANIRA_RT_UNMEASURED));
+    expect_rows_follow_the_thresholds(handler);
+}
+
+// An explicit budget without a warm-up measures nothing: the row is UNMEASURED, its pass fields
+// zero, its real-time factor the declared budget's (5 ms over a hop period of 512 / 48 kHz on
+// the model's two instances), and the prepare logs it at Info.
+TEST(AbiWarmup, AnExplicitBudgetWithoutAWarmUpIsUnmeasured) {
+    const Context context(2, ANIRA_WAIT_SPIN_BACKOFF, ANIRA_LOG_INFO);
+    RecordCollector collector;
+    Handler handler(context, anira_test::mono_stream_model());
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_plan_info& row = plan_row(handler);
+    EXPECT_EQ(row.rt_verdict, static_cast<uint32_t>(ANIRA_RT_UNMEASURED));
+    EXPECT_EQ(row.warmup_outcome, static_cast<uint32_t>(ANIRA_WARMUP_OUTCOME_NONE));
+    EXPECT_EQ(row.warmup_iterations, 0U);
+    EXPECT_DOUBLE_EQ(row.measured_ms, 0.0);
+    EXPECT_DOUBLE_EQ(row.median_ms, 0.0);
+    EXPECT_DOUBLE_EQ(row.rt_factor, 5.0 * k_rate / (1000.0 * k_block));
+    EXPECT_EQ(row.rt_parallel, 2U);
+    expect_rows_follow_the_thresholds(handler);
+#ifdef ENABLE_LOGGING
+    const char* unmeasured = "no warm-up; real-time factor 0.47 of 2 parallel inferences";
+    EXPECT_EQ(count_records(collector, unmeasured, "native"), 1U);
+    EXPECT_EQ(find_record(collector, unmeasured, "native").m_level,
+              static_cast<uint32_t>(ANIRA_LOG_INFO));
+    EXPECT_EQ(count_records(collector, "budget 5.000 ms, explicit: unmeasured; latency ", "native"),
+              1U);
+#endif
 }
 
 // The pass's jobs are ordinary jobs: a context without a pool whose host runs no inference thread

@@ -10,11 +10,20 @@
 
 #include "../capi/handles.h"
 #include "../capi/validate.h"
-#include "../utils/Logger.h"
 
 namespace anira {
 
 namespace {
+
+/// The reference stream's hop: the anchor's samples per inference, as the validator resolved
+/// it; 0 for an anchor without a stream.
+double anchor_hop(const capi::Derived& derived) noexcept {
+    const std::vector<capi::DerivedSpec>& anchor_side =
+        derived.m_anchor_is_input ? derived.m_inputs : derived.m_outputs;
+    return derived.m_anchor_index < anchor_side.size()
+               ? static_cast<double>(anchor_side[derived.m_anchor_index].m_hop)
+               : 0.0;
+}
 
 // Absolute tolerance for the ceilings of times measured in host blocks or hops. The
 // inputs are float milliseconds and sample rates, so anything closer to an integer than
@@ -271,11 +280,7 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
         m_output_sizes.push_back(static_cast<size_t>(spec.m_hop));
     }
     // The reference stream: the model config's anchor, as the validator resolved it.
-    const std::vector<capi::DerivedSpec>& anchor_side =
-        derived.m_anchor_is_input ? derived.m_inputs : derived.m_outputs;
-    auto const reference_size = derived.m_anchor_index < anchor_side.size()
-                                    ? static_cast<double>(anchor_side[derived.m_anchor_index].m_hop)
-                                    : 0.0;
+    auto const reference_size = anchor_hop(derived);
     if (!(reference_size > 0.0)) {
         throw std::invalid_argument(
             "LatencyCalculator: the anchor has no stream; the reference stream needs a "
@@ -311,20 +316,12 @@ LatencyCalculator::LatencyCalculator(const capi::Derived& derived,
     if (m_rho.m_numerator <= 0) {
         throw std::invalid_argument("contract: host_block_max is too small to represent.");
     }
-    m_kappa = budget_ms * hard.m_host_rate / (1000.0 * reference_size);
+    m_kappa = hop_periods(derived, hard, budget_ms);
     m_beta = std::max(hard.m_wait_ratio, 0.0);
     m_n = std::max<int64_t>(num_instances, 1);
+    // An infeasible configuration is sized for one host block's burst below; the handler's
+    // prepare says so (the session's record and the plans' real-time verdicts).
     m_feasible = m_kappa < static_cast<double>(m_n);
-    if (!m_feasible) {
-        ANIRA_LOG_WARNING(log_group::k_scheduler,
-                          "The inference pool cannot keep up: every hop brings %.3f hop periods "
-                          "of inference work (budget %.3f ms) for %lld instances. Latency and "
-                          "inference slots are sized for one host block on an idle pool; the "
-                          "stream will underrun.",
-                          m_kappa,
-                          budget_ms,
-                          static_cast<long long>(m_n));
-    }
 
     Timing const timing{.m_p = m_rho.m_numerator,
                         .m_q = m_rho.m_denominator,
@@ -430,6 +427,14 @@ size_t LatencyCalculator::get_num_structs() const {
 
 std::vector<size_t> LatencyCalculator::get_send_buffer_sizes() const {
     return m_send_buffer_sizes;
+}
+
+double LatencyCalculator::hop_periods(const capi::Derived& derived,
+                                      const capi::HardContract& hard,
+                                      double time_ms) noexcept {
+    const double hop = anchor_hop(derived);
+    if (!(hop > 0.0)) { return 0.0; }
+    return time_ms * hard.m_host_rate / (1000.0 * hop);
 }
 
 bool LatencyCalculator::is_feasible() const {

@@ -191,6 +191,25 @@ export const anira_warmup_mode = {
 /** @internal */
 export type anira_warmup_mode = (typeof anira_warmup_mode)[keyof typeof anira_warmup_mode]
 
+export const anira_warmup_outcome = {
+  ANIRA_WARMUP_OUTCOME_NONE: 0,
+  ANIRA_WARMUP_OUTCOME_FIXED: 1,
+  ANIRA_WARMUP_OUTCOME_STABLE: 2,
+  ANIRA_WARMUP_OUTCOME_CAPPED: 3,
+  ANIRA_WARMUP_OUTCOME_REUSED: 4,
+} as const
+/** @internal */
+export type anira_warmup_outcome = (typeof anira_warmup_outcome)[keyof typeof anira_warmup_outcome]
+
+export const anira_rt_verdict = {
+  ANIRA_RT_UNMEASURED: 0,
+  ANIRA_RT_COMFORTABLE: 1,
+  ANIRA_RT_MARGINAL: 2,
+  ANIRA_RT_NOT_REALTIME: 3,
+} as const
+/** @internal */
+export type anira_rt_verdict = (typeof anira_rt_verdict)[keyof typeof anira_rt_verdict]
+
 export const anira_miss_policy = {
   ANIRA_MISS_BYPASS: 0,
   ANIRA_MISS_HOLD_LAST: 1,

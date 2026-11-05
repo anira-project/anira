@@ -398,6 +398,67 @@ typedef enum anira_warmup_mode {
 } anira_warmup_mode;
 
 /**
+ * @brief How a plan's warm-up pass ended at the prepare (anira_plan_info.warmup_outcome).
+ */
+typedef enum anira_warmup_outcome {
+    /**
+     * No pass: ANIRA_WARMUP_NONE or FIXED 0 under an explicit budget. warmup_iterations,
+     * measured_ms and median_ms are 0.
+     */
+    ANIRA_WARMUP_OUTCOME_NONE = 0,
+    ANIRA_WARMUP_OUTCOME_FIXED = 1,  /**< ANIRA_WARMUP_FIXED ran its n inferences. */
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped when the last four times agreed.
+     */
+    ANIRA_WARMUP_OUTCOME_STABLE = 2,
+    /**
+     * ANIRA_WARMUP_UNTIL_STABLE stopped at its 32nd inference without that; the figure is the
+     * last four's maximum all the same, and the prepare logs a Warning.
+     */
+    ANIRA_WARMUP_OUTCOME_CAPPED = 3,
+    /**
+     * No pass at this prepare: the plan took the model's figure from an earlier prepare;
+     * warmup_iterations, measured_ms and median_ms are that measurement's.
+     */
+    ANIRA_WARMUP_OUTCOME_REUSED = 4,
+    ANIRA_WARMUP_OUTCOME_FORCE32 = 0x7fffffff
+} anira_warmup_outcome;
+
+/**
+ * @brief Whether a plan keeps up with the stream on this machine (anira_plan_info.rt_verdict),
+ * from its real-time factor over the inferences that run at once: the load, rt_factor /
+ * rt_parallel, the share of the session's parallel capacity one hop's inference takes.
+ * An estimate at prepare, measured under that moment's load: below the limit a
+ * likelihood, above it a certainty. anira owns the thresholds, so every host applies the
+ * same rule; an offline render, which does not run against the clock, is never gated by
+ * it.
+ */
+typedef enum anira_rt_verdict {
+    /**
+     * No pass and no measured figure (an explicit budget with ANIRA_WARMUP_NONE or FIXED 0):
+     * rt_factor is the declared budget's, a statement about the contract, not the machine.
+     */
+    ANIRA_RT_UNMEASURED = 0,
+    /**
+     * Load below 0.75: misses are unlikely while the machine stays as it was at the prepare.
+     */
+    ANIRA_RT_COMFORTABLE = 1,
+    /**
+     * Load from 0.75 to below 1: the stream keeps up on average, but load the measurement could
+     * not see (other handlers, other applications, the clock speed) can push it over: misses
+     * are likely under load.
+     */
+    ANIRA_RT_MARGINAL = 2,
+    /**
+     * Load 1 or more: the pool cannot finish the inferences the stream submits, so misses are
+     * certain; the miss policy fills them. The session is sized for one host block's burst; the
+     * prepare does not fail.
+     */
+    ANIRA_RT_NOT_REALTIME = 3,
+    ANIRA_RT_VERDICT_FORCE32 = 0x7fffffff
+} anira_rt_verdict;
+
+/**
  * @brief What a Hard contract delivers when an inference misses its deadline.
  */
 typedef enum anira_miss_policy {

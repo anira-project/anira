@@ -5667,20 +5667,25 @@ export class AniraBindings {
    * generation: every exclusive engine is reset at the stream's first inference) and
    * zeroes every declared State pair, so nothing of the pass reaches the stream; when
    * that changes the entry count, the registered engines and the processor are unprepared
-   * and prepared again with the final record. Last it logs the report (Info records of
-   * the group anira.capi: the counts and the selected plan, then one record per plan, per
-   * slot and per consumed extension) and re-arms the real-time latches, logging the count
-   * of failures suppressed since the last prepare or reset. A second prepare replaces the
-   * previous session whole: the processor's unprepare of the previous prepare runs once
-   * the old session is released, before the new prepare. A failed prepare leaves the
-   * handler unprepared, the previous prepare's unprepare called all the same. A model too
-   * slow for the stream is not refused: the session is sized as for an infeasible
-   * explicit budget (for one host block's burst), and the plan rows carry what was
-   * measured. A prepare that warms up needs an inference thread inside its loop (a
-   * context without a pool needs a host thread in anira_inference_thread_run_loop; on
-   * WebAssembly the pool's Workers must have started) and fails with
-   * ANIRA_ERROR_INVALID_STATE without one or when an inference of the pass has not
-   * completed within 10 s; an inference of the pass that fails fails it with
+   * and prepared again with the final record. Each plan row then carries what the pass
+   * measured and the plan's real-time factor and verdict (anira_plan_info.warmup_outcome,
+   * measured_ms, rt_factor, rt_verdict). Last it logs the measurement (one record per
+   * plan of the group anira.capi, at Warning for a marginal or not real-time plan, a pass
+   * that did not settle and an explicit budget below its measurement, then one record for
+   * the session: its budget, the worst verdict, the latency and the entries, at Warning
+   * when the pool cannot keep up), the report (Info records: the counts and the selected
+   * plan, then one record per plan, per slot and per consumed extension) and re-arms the
+   * real-time latches, logging the count of failures suppressed since the last prepare or
+   * reset. A second prepare replaces the previous session whole: the processor's
+   * unprepare of the previous prepare runs once the old session is released, before the
+   * new prepare. A failed prepare leaves the handler unprepared, the previous prepare's
+   * unprepare called all the same. A model too slow for the stream is not refused: the
+   * session is sized as for an infeasible explicit budget (for one host block's burst),
+   * and the plan rows carry what was measured. A prepare that warms up needs an inference
+   * thread inside its loop (a context without a pool needs a host thread in
+   * anira_inference_thread_run_loop; on WebAssembly the pool's Workers must have started)
+   * and fails with ANIRA_ERROR_INVALID_STATE without one or when an inference of the pass
+   * has not completed within 10 s; an inference of the pass that fails fails it with
    * ANIRA_ERROR_ENGINE naming the plan. Refused in this pre-release: an Async contract
    * (ANIRA_ERROR_NOT_SUPPORTED), a MEASURED budget whose warm-up runs no inference
    * (ANIRA_WARMUP_NONE, FIXED 0; ANIRA_ERROR_CONFIG naming the warm-up),

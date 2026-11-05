@@ -349,7 +349,10 @@ scanning for a terminator.
 Android tag and the Apple subsystem and category are ``anira``, and every line reads
 ``[<source>][<group>] <message>`` with ``source`` = ``native`` or ``rt`` and ``group`` =
 ``anira.<component>`` (``anira.core``, ``anira.scheduler``, ``anira.config``,
-``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``). A host that also
+``anira.system``, ``anira.engine.<engine>``, ``anira.web``, ``anira.capi``; a prepare's
+measurement, one record per plan and one for the session, is ``anira.capi``'s, at Warning for a
+marginal or not real-time plan, a warm-up that did not settle, an explicit budget below the
+measurement and a pool that cannot keep up). A host that also
 uses tanh-lib has a second logger under ``thl``, which anira never touches, with a shared or a
 static anira on every platform (anira's own copy lives in ``thl::anira``: :ref:`host-tanh-lib`).
 

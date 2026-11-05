@@ -13,7 +13,6 @@
 
 using anira::WarmupEstimator;
 using anira::WarmupFigure;
-using anira::WarmupOutcome;
 
 namespace {
 
@@ -49,7 +48,7 @@ TEST(Warmup, UntilStableStopsAtTheFourthOfFourEqualTimes) {
     ASSERT_TRUE(estimator.done());
     const WarmupFigure figure = estimator.figure();
     EXPECT_EQ(figure.m_iterations, 4U);
-    EXPECT_EQ(figure.m_outcome, WarmupOutcome::Stable);
+    EXPECT_EQ(figure.m_outcome, ANIRA_WARMUP_OUTCOME_STABLE);
     EXPECT_DOUBLE_EQ(figure.m_measured_ms, 2.0);
     EXPECT_DOUBLE_EQ(figure.m_median_ms, 2.0);
 }
@@ -62,7 +61,7 @@ TEST(Warmup, UntilStableLeavesTheColdStartOut) {
     for (int i = 0; i < 31; ++i) { times.push_back(k_ms); }
     EXPECT_EQ(feed(estimator, times), 5U);
     const WarmupFigure figure = estimator.figure();
-    EXPECT_EQ(figure.m_outcome, WarmupOutcome::Stable);
+    EXPECT_EQ(figure.m_outcome, ANIRA_WARMUP_OUTCOME_STABLE);
     EXPECT_DOUBLE_EQ(figure.m_measured_ms, 1.0);
 }
 
@@ -71,7 +70,7 @@ TEST(Warmup, UntilStableLeavesTheColdStartOut) {
 TEST(Warmup, TheSpreadIsTwentyPercentOfTheMedian) {
     WarmupEstimator inside(ANIRA_WARMUP_UNTIL_STABLE, 0, k_fine_step);
     EXPECT_EQ(feed(inside, {k_ms, 1150 * k_us, 850 * k_us, k_ms}), 4U);
-    EXPECT_EQ(inside.figure().m_outcome, WarmupOutcome::Stable);
+    EXPECT_EQ(inside.figure().m_outcome, ANIRA_WARMUP_OUTCOME_STABLE);
     EXPECT_DOUBLE_EQ(inside.figure().m_measured_ms, 1.15);
     EXPECT_DOUBLE_EQ(inside.figure().m_median_ms, 1.0);
 
@@ -86,9 +85,10 @@ TEST(Warmup, AnUnsettledPassStopsAtTheCap) {
     EXPECT_EQ(feed(estimator, repeat({k_ms, 5 * k_ms}, 100)), WarmupEstimator::k_cap);
     const WarmupFigure figure = estimator.figure();
     EXPECT_EQ(figure.m_iterations, WarmupEstimator::k_cap);
-    EXPECT_EQ(figure.m_outcome, WarmupOutcome::Capped);
+    EXPECT_EQ(figure.m_outcome, ANIRA_WARMUP_OUTCOME_CAPPED);
     EXPECT_DOUBLE_EQ(figure.m_measured_ms, 5.0);
     EXPECT_DOUBLE_EQ(figure.m_median_ms, 3.0);
+    EXPECT_DOUBLE_EQ(figure.m_fastest_ms, 1.0) << "what the CAPPED record spans";
 }
 
 // A model of microseconds on a clock of 5 us: 5, 10, 10, 15 us never lie within 20 % of their
@@ -97,11 +97,11 @@ TEST(Warmup, TheClockStepFloorsTheSpread) {
     const std::vector<int64_t> coarse = repeat({5 * k_us, 10 * k_us, 10 * k_us, 15 * k_us}, 100);
     WarmupEstimator fine_clock(ANIRA_WARMUP_UNTIL_STABLE, 0, k_fine_step);
     EXPECT_EQ(feed(fine_clock, coarse), WarmupEstimator::k_cap);
-    EXPECT_EQ(fine_clock.figure().m_outcome, WarmupOutcome::Capped);
+    EXPECT_EQ(fine_clock.figure().m_outcome, ANIRA_WARMUP_OUTCOME_CAPPED);
 
     WarmupEstimator coarse_clock(ANIRA_WARMUP_UNTIL_STABLE, 0, 5 * k_us);
     EXPECT_EQ(feed(coarse_clock, coarse), 4U);
-    EXPECT_EQ(coarse_clock.figure().m_outcome, WarmupOutcome::Stable);
+    EXPECT_EQ(coarse_clock.figure().m_outcome, ANIRA_WARMUP_OUTCOME_STABLE);
     EXPECT_DOUBLE_EQ(coarse_clock.figure().m_measured_ms, 0.015);
 }
 
@@ -118,14 +118,14 @@ TEST(Warmup, EveryTimeIsAtLeastOneClockStep) {
 TEST(Warmup, FixedRunsItsCountAndTakesTheLastFour) {
     WarmupEstimator three(ANIRA_WARMUP_FIXED, 3, k_fine_step);
     EXPECT_EQ(feed(three, {10 * k_ms, 3 * k_ms, 2 * k_ms, k_ms}), 3U);
-    EXPECT_EQ(three.figure().m_outcome, WarmupOutcome::Fixed);
+    EXPECT_EQ(three.figure().m_outcome, ANIRA_WARMUP_OUTCOME_FIXED);
     EXPECT_EQ(three.figure().m_iterations, 3U);
     EXPECT_DOUBLE_EQ(three.figure().m_measured_ms, 10.0);
     EXPECT_DOUBLE_EQ(three.figure().m_median_ms, 3.0);
 
     WarmupEstimator six(ANIRA_WARMUP_FIXED, 6, k_fine_step);
     EXPECT_EQ(feed(six, {10 * k_ms, k_ms, k_ms, k_ms, k_ms, 2 * k_ms, k_ms}), 6U);
-    EXPECT_EQ(six.figure().m_outcome, WarmupOutcome::Fixed);
+    EXPECT_EQ(six.figure().m_outcome, ANIRA_WARMUP_OUTCOME_FIXED);
     EXPECT_DOUBLE_EQ(six.figure().m_measured_ms, 2.0) << "the last four, not the first time";
     EXPECT_DOUBLE_EQ(six.figure().m_median_ms, 1.0);
 }

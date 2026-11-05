@@ -29,19 +29,15 @@
 
 namespace anira {
 
-/// How one plan's warm-up pass ended.
-enum class WarmupOutcome : uint8_t {
-    Fixed,   ///< FIXED n: the n inferences ran
-    Stable,  ///< UNTIL_STABLE: the last four times agreed
-    Capped,  ///< UNTIL_STABLE: WarmupEstimator::k_cap inferences without that
-};
-
 /// What one plan's warm-up pass measured.
 struct WarmupFigure {
     uint32_t m_iterations = 0;  ///< the inferences the pass ran
-    WarmupOutcome m_outcome = WarmupOutcome::Fixed;
+    /// How it ended: ANIRA_WARMUP_OUTCOME_FIXED, _STABLE or _CAPPED (a pass never ends NONE or
+    /// REUSED, which are the plan row's words for no pass at all).
+    anira_warmup_outcome m_outcome = ANIRA_WARMUP_OUTCOME_FIXED;
     double m_measured_ms = 0.0;  ///< the maximum of the last min(4, m_iterations) times, in ms
     double m_median_ms = 0.0;    ///< their median, in ms
+    double m_fastest_ms = 0.0;   ///< their minimum, in ms (what a CAPPED pass's record spans)
 };
 
 /**
@@ -92,7 +88,7 @@ private:
     std::array<int64_t, k_window> m_last{};  ///< a ring of the last k_window times
     uint32_t m_count = 0;
     bool m_done;
-    WarmupOutcome m_outcome;
+    anira_warmup_outcome m_outcome;
 };
 
 /**

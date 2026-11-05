@@ -228,6 +228,23 @@ public:
     bool is_feasible() const;
 
     /**
+     * @brief An inference time in hop periods of the reference stream, @f$\kappa = T \cdot f_s /
+     * (1000 \cdot R)@f$
+     *
+     * The one formula of @f$\kappa@f$: what the constructor sizes for, and the real-time factor of
+     * a plan row (anira_plan_info.rt_factor), its inference time over the anchor's hop period. A
+     * configuration keeps up while it stays below the instance count @f$n@f$ (is_feasible()).
+     *
+     * @param derived What the validator derived (the anchor and its hop)
+     * @param hard The contract's Hard half (its host_rate)
+     * @param time_ms The inference time @f$T@f$ in ms
+     * @return @f$\kappa@f$; 0 for an anchor without a stream
+     */
+    static double hop_periods(const capi::Derived& derived,
+                              const capi::HardContract& hard,
+                              double time_ms) noexcept;
+
+    /**
      * @brief The host block in hops, @f$\rho = B/R@f$ as a reduced fraction
      */
     Rational get_block_hops() const;

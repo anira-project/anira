@@ -49,7 +49,8 @@ WarmupEstimator::WarmupEstimator(anira_warmup_mode mode,
     , m_iterations(iterations)
     , m_clock_step_ns(std::max<int64_t>(clock_step_ns, 1))
     , m_done(mode == ANIRA_WARMUP_FIXED && iterations == 0)
-    , m_outcome(mode == ANIRA_WARMUP_FIXED ? WarmupOutcome::Fixed : WarmupOutcome::Stable) {}
+    , m_outcome(mode == ANIRA_WARMUP_FIXED ? ANIRA_WARMUP_OUTCOME_FIXED
+                                           : ANIRA_WARMUP_OUTCOME_STABLE) {}
 
 uint32_t WarmupEstimator::window(std::array<int64_t, k_window>& window) const noexcept {
     const uint32_t count = std::min(m_count, k_window);
@@ -74,10 +75,10 @@ bool WarmupEstimator::add(int64_t inference_ns) noexcept {
             return std::abs(static_cast<double>(time) - median) <= spread;
         });
         if (stable) {
-            m_outcome = WarmupOutcome::Stable;
+            m_outcome = ANIRA_WARMUP_OUTCOME_STABLE;
             m_done = true;
         } else if (m_count >= k_cap) {
-            m_outcome = WarmupOutcome::Capped;
+            m_outcome = ANIRA_WARMUP_OUTCOME_CAPPED;
             m_done = true;
         }
     }
@@ -93,6 +94,8 @@ WarmupFigure WarmupEstimator::figure() const noexcept {
     if (count == 0) { return figure; }
     figure.m_measured_ms =
         static_cast<double>(*std::max_element(times.begin(), times.begin() + count)) / k_ns_per_ms;
+    figure.m_fastest_ms =
+        static_cast<double>(*std::min_element(times.begin(), times.begin() + count)) / k_ns_per_ms;
     figure.m_median_ms = median_of(times, count) / k_ns_per_ms;
     return figure;
 }

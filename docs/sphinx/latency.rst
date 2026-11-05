@@ -31,7 +31,7 @@ For a session with reference stream size :math:`R` (the hop of the model's ancho
      - the host block measured in hops, as a reduced fraction
    * - :math:`\kappa`
      - :math:`T f_s / (1000 R)`
-     - the contract's budget :math:`T` (ms) measured in hop periods
+     - the inference time :math:`T` (ms: the contract's explicit budget, or under a measured budget the slowest plan's warm-up figure) measured in hop periods
    * - :math:`\tau`
      - :math:`\kappa / \rho`
      - the inference time measured in host blocks
@@ -80,7 +80,7 @@ and since :math:`(k+1)\rho - \lfloor \rho (k+1-d_m) \rfloor = \rho\, d_m + \math
 
    \Lambda \;=\; \frac{q - 1}{q} \;+\; \max_{m \ge 0} \left[ \rho\, d_m - m n \right].
 
-The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (``LatencyCalculator::is_feasible`` is false, ``prepare()`` logs a warning, and the values describe one host block processed by an idle pool). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
+The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (``LatencyCalculator::is_feasible`` is false, the handler's prepare logs a Warning, and the values describe one host block processed by an idle pool). :math:`\kappa` is also the **real-time factor** a plan row reports (``anira_plan_info.rt_factor``, :doc:`usage` section 3.2), from the plan's own inference time, and :math:`\kappa / n` its load: below 0.75 comfortable, below 1 marginal, at 1 or more not real-time (the infeasible case here). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
 
 The latency of output tensor :math:`i` in its own samples is :math:`P_i \Lambda`. It is the same number of hops for every output, and it is rounded down because the host pops whole samples only (``LatencyCalculator::get_output_latencies`` returns the unrounded value).
 

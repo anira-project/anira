@@ -1786,7 +1786,8 @@ convention of 3.1 (``out == NULL`` asks for the count, a short buffer returns
 ``anira_plan_info`` per model entry and candidate that names its engine and a provider the
 entry accepts (the engine, the provider, ``provider_id`` for a custom one, the custom engine's
 id, a registered engine's ``engine_flags``, the budget of that
-plan), and per plan the ``anira_plan_slot`` rows of its inputs and outputs (host rows in this
+plan, what the warm-up pass measured for it and whether it keeps up on this machine, below),
+and per plan the ``anira_plan_slot`` rows of its inputs and outputs (host rows in this
 pre-release: host to host, recipe ``"host"``, the edge the plan's engine takes and who moves
 its bytes (section 1.7), the wait strategy the core runs;
 ``role`` is the ``anira_role`` of the tensor's spec, the same in every plan; ``binding`` says
@@ -1820,6 +1821,46 @@ not fix it: ``derived from the Time extent``, ``derived, flexible, pinned to the
     anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge copy (allocate copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, window 2048 (derived from the Time extent), hop 2048, bound by position, reason: libtorch: the method returns tensors of its own
     anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider cpu, budget 5.000 ms, memory unified
     ...
+
+**What the warm-up measured, and whether the plan keeps up.** Every plan row carries the
+warm-up pass's result (section 1.3): ``warmup_iterations``, ``warmup_outcome``
+(``anira_warmup_outcome``: ``FIXED``, ``STABLE``, ``CAPPED`` for a pass that did not settle in
+32 inferences, ``NONE`` without a pass), ``measured_ms`` (the maximum of its last four inference
+times) and ``median_ms``. Beside it, the plan's **real-time factor** ``rt_factor``: its
+inference time (``measured_ms``, or ``budget_ms`` without a measurement) over the anchor's hop
+period, the latency model's :math:`\kappa` (:doc:`latency`); 1.0 is an inference as long as the
+audio it produces. ``rt_parallel`` is the session's parallel inferences (1 for an exclusive
+session), and the **load** ``rt_factor / rt_parallel`` the share of the session's capacity one
+hop's inference takes. ``rt_verdict`` (``anira_rt_verdict``) applies anira's thresholds to it:
+
+- ``ANIRA_RT_COMFORTABLE``: a load below 0.75. Misses are unlikely while the machine stays as
+  it was at the prepare.
+- ``ANIRA_RT_MARGINAL``: from 0.75 to below 1. The stream keeps up on average, but load the
+  measurement could not see (other handlers, other applications, the clock speed) can push it
+  over: misses are likely under load.
+- ``ANIRA_RT_NOT_REALTIME``: 1 or more. The pool cannot finish the inferences the stream submits,
+  so misses are certain, and the miss policy fills them; the session is sized for one host
+  block's burst, and the prepare succeeds.
+- ``ANIRA_RT_UNMEASURED``: no pass (an explicit budget with ``ANIRA_WARMUP_NONE``); the factor
+  is the declared budget's, a statement about the contract, not the machine.
+
+The verdict is an estimate at prepare: below the limit a likelihood, above it a certainty. The
+rows are read at any time after the prepare. A host that plays live acts on the row of the plan
+it runs: it holds a ``NOT_REALTIME`` plan (bypassed, or silent) and asks its user, "Try
+nonetheless", before it runs it, notes a ``MARGINAL`` one, and plays a ``COMFORTABLE`` one. It
+never gates an offline render (a bounce, an ``OfflineAudioContext``), which does not run
+against the clock. After a re-prepare (a new device, block size or sample rate) it asks again
+only when the verdict got worse than the one its user accepted. The prepare logs the
+measurement before the report: one record per plan (Info, Warning for a marginal or not
+real-time plan, and a Warning for a pass that did not settle and for an explicit budget below its
+measurement), then one for the session (its budget, the worst verdict, the latency and the
+entries; Warning when the pool cannot keep up):
+
+.. code-block:: text
+
+    anira_handler_prepare: plan 0 (onnxruntime, cpu): warm-up until_stable, 6 inferences, stable; measured 1.842 ms (median 1.701 ms) on the inference threads; real-time factor 0.17 of 4 parallel inferences (load 0.04): comfortable (96 % headroom)
+    anira_handler_prepare: plan 1 (libtorch, cpu): warm-up until_stable, 4 inferences, stable; measured 30.070 ms (median 30.057 ms) on the inference threads; real-time factor 2.82 of 1 parallel inference (load 2.82): NOT real-time on this machine; the stream will miss blocks, which on_miss fills
+    anira_handler_prepare: budget 30.070 ms, measured (the slowest of 2 plans): not real-time; latency 1536 samples, 8 entries
 
 A plan is a dense index
 ``0..num_plans-1``, and ``anira_handler_set_plan(h, plan)`` / ``anira_handler_get_plan(h)`` are
