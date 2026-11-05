@@ -7,6 +7,7 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
