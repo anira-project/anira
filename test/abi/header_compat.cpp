@@ -70,7 +70,7 @@ static_assert(std::is_same_v<decltype(std::declval<v2::JsonConfigLoader&>().get_
 static_assert(v2::default_log_drain() == v2::LogDrain::Thread ||
               v2::default_log_drain() == v2::LogDrain::Manual);
 
-// The runtime half: views, the processor, the stage and the engine.
+// The runtime half: views, the processor, the processor and the engine.
 static_assert(std::is_nothrow_default_constructible_v<v2::RingBuffer>);
 static_assert(std::is_trivially_copyable_v<v2::RingBuffer>);
 static_assert(std::is_nothrow_default_constructible_v<v2::BufferF>);
@@ -78,8 +78,8 @@ static_assert(std::is_trivially_copyable_v<v2::BufferF>);
 static_assert(!std::is_default_constructible_v<v2::PrePostProcessor>);
 static_assert(!std::is_copy_constructible_v<v2::PrePostProcessor>);
 static_assert(std::has_virtual_destructor_v<v2::PrePostProcessor>);
-static_assert(std::is_base_of_v<anira::Stage, v2::LegacyProcessorStage>);
-static_assert(std::is_base_of_v<anira::Stage::Prepared, v2::LegacyProcessorStage::Prepared>);
+static_assert(std::is_base_of_v<anira::Processor, v2::LegacyProcessor>);
+static_assert(std::is_base_of_v<anira::Processor::Prepared, v2::LegacyProcessor::Prepared>);
 static_assert(std::is_base_of_v<anira::Engine, v2::PassthroughEngine>);
 static_assert(std::is_default_constructible_v<v2::PassthroughEngine>);
 static_assert(noexcept(std::declval<v2::PrePostProcessor&>().set_input(0.F, 0, 0)));
@@ -259,15 +259,15 @@ int anira_header_compat_probe() {
         ProbeProcessor processor(mutable_config);
         checks += static_cast<int>(nonblocking_probe(nullptr, nullptr, processor));
         checks += &processor.config() == &mutable_config ? 1 : 0;
-        const std::shared_ptr<v2::LegacyProcessorStage> stage =
-            std::make_shared<v2::LegacyProcessorStage>(processor);
-        checks += static_cast<int>(stage->phases() + stage->flags());
+        const std::shared_ptr<v2::LegacyProcessor> legacy =
+            std::make_shared<v2::LegacyProcessor>(processor);
+        checks += static_cast<int>(legacy->phases() + legacy->flags());
         const std::shared_ptr<anira::Engine> engine = std::make_shared<v2::PassthroughEngine>();
         checks += static_cast<int>(engine->flags() + engine->id().size());
         anira::Pipeline pipeline;
-        pipeline.register_engine(engine);
-        pipeline.inference(config.model_config());
-        pipeline.add(anira::stage::Custom(stage));
+        pipeline.add_engine(engine);
+        pipeline.add_inference(config.model_config());
+        pipeline.add_processor(legacy);
         checks += v2::Context::shutdown() == ANIRA_OK ? 1 : 0;
         checks += v2::Context::release_core_if_idle() && v2::Context::has_core() ? 1 : 0;
         checks +=

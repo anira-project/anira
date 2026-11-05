@@ -3,12 +3,13 @@
 
 #include <anira/abi/enums.h>
 #include <anira/abi/log.h>
-#include <anira/utils/Logger.h>
 #include <emscripten/em_js.h>
 #include <tanh/core/Logger.h>
 
 #include <mutex>
 #include <string>
+
+#include "../../utils/Logger.h"
 
 namespace {
 

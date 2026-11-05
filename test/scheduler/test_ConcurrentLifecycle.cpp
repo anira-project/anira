@@ -1,17 +1,10 @@
-#include <anira/CoreConfig.h>
-#include <anira/InferenceConfig.h>
-#include <anira/InferenceHandler.h>
-#include <anira/PrePostProcessor.h>
-#include <anira/scheduler/Core.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
-
 #include <atomic>
 #include <memory>
 #include <thread>
-#include <vector>
 
+#include "../abi/handler_support.h"
 #include "gtest/gtest.h"
+#include "scheduler/Core.h"
 
 using namespace anira;
 
@@ -35,26 +28,9 @@ using namespace anira;
 
 namespace {
 
-InferenceConfig make_inference_config() {
-    return InferenceConfig(
-        std::vector<ModelData>{ModelData("placeholder", InferenceBackend::CUSTOM)},
-        std::vector<TensorShape>{TensorShape({{1, 1, 512}}, {{1, 1, 512}})},
-        1.f,
-        0,
-        false,
-        0.f,
-        2);
-}
-
-// One "plugin instance": config + processor + handler, prepared on
-// construction so the session is registered with the shared core.
-struct Instance {
-    Instance() { m_handler.prepare(HostConfig(512, 48000)); }
-
-    InferenceConfig m_inference_config = make_inference_config();
-    PrePostProcessor m_pp_processor{m_inference_config};
-    InferenceHandler m_handler{m_pp_processor, m_inference_config, CoreConfig(2)};
-};
+// One "plugin instance": a context of two threads and a handler over the mono pass-through,
+// prepared on construction so the session is registered with the shared core.
+using anira_test::Instance;
 
 // Spin gate so two threads hit their critical action as close to
 // simultaneously as the scheduler allows.

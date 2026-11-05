@@ -10,7 +10,6 @@
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/InferenceThread.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -24,6 +23,7 @@
 #include "../support/log_record_collector.h"
 #include "float_face.h"
 #include "handler_support.h"
+#include "scheduler/InferenceThread.h"
 
 namespace {
 
@@ -349,7 +349,7 @@ TEST(AbiHandlerWait, AnExplicitTimeoutIsAMissNotARefusal) {
         EXPECT_GE(huge.m_elapsed, std::chrono::milliseconds(100)) << "it waited for the stall";
     }
     {
-        // ANIRA_WAIT_CONTRACT on the pop twin is wait_ratio x block_max / rate: about the
+        // ANIRA_WAIT_CONTRACT on the pop twin is wait_ratio x host_block_max / host_rate: about the
         // block's duration on a stalled block.
         SleepingParamFillEngine generator;
         generator.m_first_sleep_us = 1000000;
@@ -449,12 +449,12 @@ TEST_P(AbiHandlerWaitRatio, InvalidStateWithoutAnActiveThread) {
     // The twins read the count of threads inside run_loop, which the started thread enters
     // asynchronously: poll that count, not only the flag.
     while ((anira_inference_thread_is_running(thread) == 0U ||
-            anira::InferenceThread::get_num_loop_active() == 0) &&
+            anira::scheduler::InferenceThread::get_num_loop_active() == 0) &&
            std::chrono::steady_clock::now() < deadline) {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     ASSERT_NE(anira_inference_thread_is_running(thread), 0U);
-    ASSERT_GT(anira::InferenceThread::get_num_loop_active(), 0U);
+    ASSERT_GT(anira::scheduler::InferenceThread::get_num_loop_active(), 0U);
     const Pull served = pull(h, 3.0F, out, ANIRA_WAIT_FOREVER);
     EXPECT_EQ(served.m_status, ANIRA_OK);
     EXPECT_EQ(served.m_received, k_hop);

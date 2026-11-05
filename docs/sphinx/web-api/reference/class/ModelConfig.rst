@@ -8,4 +8,4 @@ attaching it as bytes. See :doc:`../../basic_usage`.
 
 .. js:autoclass:: ModelConfig.ModelConfig
    :short-name:
-   :members: fromUrl, fromJson, adopt, attachBytes, toJson, destroy, ptr
+   :members: fromUrl, fromJson, adopt, setModelBytes, toJson, native, destroy

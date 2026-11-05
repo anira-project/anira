@@ -23,6 +23,67 @@ Installation
    :start-after: ## Installation
    :end-before: ## Examples
 
+The installed package
+~~~~~~~~~~~~~~~~~~~~~
+
+An installed anira (``cmake --install``, or a release zip) carries the library and its public
+headers, and nothing of its private dependencies:
+
+.. code-block:: text
+
+    include/anira/anira.h            the C umbrella (every header of anira/abi/)
+    include/anira/anira_all.h        the C umbrella plus the platform companions
+    include/anira/anira_em.h         the WebAssembly companion (empty on every other target)
+    include/anira/anira.hpp          the C++20 face, header-only over the C entries
+    include/anira/compat/v2.hpp      the 2.x source-compatible face, header-only
+    include/anira/abi/*.h            the C ABI, one header per area; abi/draft/ the draft entries
+    lib/libanira.so.0 (libanira.0.dylib, bin/anira-0.dll + lib/anira-0.lib; static: lib/libanira.a, lib/anira.lib)
+    include/anira-engines/<engine>/  and the engine libraries, for code that calls an engine itself
+    lib/cmake/anira/                 the CMake package: find_package(anira) → anira::anira
+
+The shared library is named after the ABI major (``0`` through the 3.0.0 pre-releases, ``3`` from
+v3.0.0 on), exports the ``anira_*`` C entries and nothing else, and carries tanh-lib's core
+inside it; the queue and the JSON library are header-only and private. No C++ header of anira's
+core is installed. The engines the build was made with are installed beside it: their libraries
+(the shared ones anira loads at run time, the static ones a static anira's consumers link) and
+their headers, under ``include/anira-engines/<engine>/``, which only the ``anira::<engine>``
+target carries, for code that calls an engine itself; ``anira::anira`` reaches none of them.
+``find_package(anira)`` looks up nothing but ``Threads`` and those engines.
+
+Linking anira from C
+~~~~~~~~~~~~~~~~~~~~
+
+The C ABI is C11. A C project links ``anira::anira`` like a C++ one; with a static anira, which
+is C++ inside, the executable links through the C++ driver:
+
+.. code-block:: cmake
+
+    project(my_host LANGUAGES C CXX)
+    find_package(anira REQUIRED)
+    add_executable(my_host main.c)
+    target_link_libraries(my_host PRIVATE anira::anira)
+    set_target_properties(my_host PROPERTIES LINKER_LANGUAGE CXX)  # static anira only
+
+.. code-block:: c
+
+    #include <anira/anira.h>
+
+    int main(void) {
+        anira_error err = ANIRA_ERROR_INIT;
+        if (ANIRA_FAILED(anira_check_abi(ANIRA_ABI_VERSION))) { return 1; }  /* header == library */
+        anira_context_config* config = NULL;
+        anira_context* context = NULL;
+        anira_context_config_create(&config, &err);
+        if (ANIRA_FAILED(anira_context_create(config, &context, &err))) { return 1; }
+        /* ... a model config, a pipeline, a handler, prepared with a Hard contract ... */
+        anira_context_destroy(context);
+        anira_context_config_destroy(config);
+        return ANIRA_FAILED(anira_shutdown()) ? 1 : 0;
+    }
+
+``test/contracts/install/main_c.c`` is a complete one: a registered engine, a handler prepared
+under a Hard contract and one block through ``anira_handler_process``.
+
 Basic Usage Example
 -------------------
 
@@ -34,30 +95,27 @@ Basic Usage Example
 Using Different Backends
 ------------------------
 
-Anira supports multiple backends that can be selected at runtime. Use the :cpp:func:`anira::InferenceHandler::set_inference_backend` method to switch between them:
+Anira supports multiple engines; which ones a build carries depends on its options
+(``anira::enabled_engines()`` lists them). ``prepare`` returns the plan report, one plan per
+model entry the build can run, and :cpp:func:`anira::InferenceHandler::set_plan` switches between
+them at runtime, also while audio runs:
 
 .. code-block:: cpp
     :linenos:
 
-    // Set the inference backend to ONNX
-    inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
+    const anira::PlanReport report = inference_handler.prepare(contract);
 
-    // Set the inference backend to LibTorch (PyTorch)
-    inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
+    // The plan on ONNX Runtime; the other engines are ANIRA_ENGINE_LIBTORCH (PyTorch),
+    // ANIRA_ENGINE_LITERT (the default TensorFlow Lite family backend), ANIRA_ENGINE_TFLITE
+    // (the legacy TensorFlow Lite backend, -DANIRA_WITH_TFLITE=ON, mutually exclusive with
+    // LiteRT) and ANIRA_ENGINE_EXECUTORCH (.pte programs exported with torch.export)
+    if (auto plan = report.find({.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}})) {
+        inference_handler.set_plan(*plan);
+    }
 
-    // Set the inference backend to LiteRT (default TensorFlow Lite family backend)
-    inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
-
-    // Set the inference backend to the legacy TensorFlow Lite backend
-    // (only available when built with -DANIRA_WITH_TFLITE=ON; mutually exclusive with LiteRT)
-    inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
-
-    // Set the inference backend to ExecuTorch (.pte programs exported with torch.export)
-    inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
-
-    // A custom engine is registered on the pipeline under its id (see "Custom Engines"); the
-    // 2.x handler of this pre-release selects the BackendBase it was constructed with as CUSTOM
-    inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
+    // A custom engine is added to the pipeline under its id (see "Custom Engines"), and its
+    // plan is found by that id: report.find({.backend = {.engine = ANIRA_ENGINE_CUSTOM,
+    // .engine_id = "com.example.engine"}})
 
 Multi Tensor Processing Example
 -------------------------------
@@ -109,8 +167,8 @@ role; the two streamed tensors carry a window:
 A tensor is addressed by its **slot**: its position in the model file's ``inputs`` list or
 ``outputs`` list, counted from 0, whatever its role. Here ``audio_in`` is input slot 0,
 ``control`` input slot 1, ``audio_out`` output slot 0 and ``confidence`` output slot 1. The
-configuration is built with the C++ builders of ``anira/anira.hpp`` and the model runs on the C
-handler of ``anira/abi/handler.h``, the 3.x runtime of this pre-release:
+configuration is built with the C++ builders of ``anira/anira.hpp``, and the model runs on
+:cpp:class:`anira::InferenceHandler`, the C++ face of the C handler of ``anira/abi/handler.h``:
 
 .. code-block:: cpp
     :linenos:
@@ -119,59 +177,66 @@ handler of ``anira/abi/handler.h``, the 3.x runtime of this pre-release:
 
     #include <chrono>
 
-    // The model file, a Hard contract with a 10 ms budget, the context and the pipeline
-    anira::ModelConfig model_config = anira::ModelConfig::from_file("multi_tensor.model.json");
-    anira::ContractHandle contract{anira::Hard{
-        .budget = ANIRA_BUDGET_EXPLICIT, .budget_value = std::chrono::milliseconds(10),
-        .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2}};
-    anira::ContextConfig context_config;
-    anira::Context context(context_config);
-    anira::Pipeline pipeline{anira::stage::Inference(model_config)};   // the default candidate set
+    using namespace std::chrono_literals;
 
-    // The handler, prepared with the host geometry: block size and sample rate complete the contract
-    anira_handler* handler = nullptr;
-    anira_error err = ANIRA_ERROR_INIT;
-    if (ANIRA_FAILED(anira_handler_create(context.native(), pipeline.native(), &handler, &err))) {
-        /* err.message says why */
-    }
-    contract.hard_geometry(buffer_size, buffer_size, sample_rate);
-    if (ANIRA_FAILED(anira_handler_prepare(handler, contract.native(), &err))) {
-        /* err.message names the tensor and the rule */
-    }
+    // The model file, the context and the pipeline (the default candidate set)
+    anira::ModelConfig model_config = anira::ModelConfig::from_file("multi_tensor.model.json");
+    anira::Context context{anira::ContextConfig{}};
+    anira::Pipeline pipeline;
+    pipeline.add_inference(model_config);
+    anira::InferenceHandler inference_handler(context, pipeline);
+
+    // Prepared with a Hard contract: the host's block size and sample rate, a 10 ms budget
+    inference_handler.prepare(anira::Hard{.host_block_min = static_cast<double>(buffer_size),
+                                          .host_block_max = static_cast<double>(buffer_size),
+                                          .host_rate = sample_rate,
+                                          .budget = 10ms,
+                                          .warmup = ANIRA_WARMUP_FIXED,
+                                          .warmup_iterations = 2});
 
     // Optionally the latency of the stream in samples (a Static output reports 0)
-    const uint32_t latency = anira_handler_get_latency(handler, 0);
+    const uint32_t latency = inference_handler.get_latency(0);
 
-In the real-time callback every value crosses as an ``anira_tensor``, a plain descriptor of
-your memory: the audio blocks as planar tensors over the host's channel pointers, the Static
-values whole, in the spec's shape. With ``audio_input`` and ``audio_output`` as ``float**``
-arrays of ``num_channels`` pointers, ``control_params`` as four floats and ``confidence`` as one:
+Both throw ``anira::Error`` with the status and the reason (``what()`` names the tensor and the
+rule). In the real-time callback every value crosses as an :cpp:class:`anira::Tensor`, a plain
+descriptor of your memory: the audio blocks as planar tensors over the host's channel pointers,
+the Static values whole, in the spec's shape. With ``audio_input`` and ``audio_output`` as
+``float**`` arrays of ``num_channels`` pointers, ``control_params`` as four floats and
+``confidence_value`` as one, the tensors are built once at prepare:
 
 .. code-block:: cpp
     :linenos:
 
-    // Step 1: the control vector, whole, in the spec's shape [1][1][4]. Every inference
-    // submitted from now on sees it; set it again whenever it changes.
-    const int64_t control_shape[3] = {1, 1, 4};
-    anira_tensor control;
-    anira_tensor_init_host(&control, control_params, ANIRA_DTYPE_F32, 3, control_shape);
-    anira_handler_set_static_input(handler, 1, &control);
+    // The audio blocks: [channels][samples], planar over the pointer arrays
+    const std::array<int64_t, 2> block_shape{static_cast<int64_t>(num_channels),
+                                             static_cast<int64_t>(max_block)};
+    anira::Tensor in_block = anira::Tensor::from_host_planar<float>(
+        std::span<float* const>(audio_input, num_channels), block_shape);
+    anira::Tensor out_block = anira::Tensor::from_host_planar<float>(
+        std::span<float* const>(audio_output, num_channels), block_shape);
+    // The Static values, whole, in the specs' shapes [1][1][4] and [1][1][1]
+    const anira::Tensor control = anira::Tensor::from_host(
+        control_params, ANIRA_DTYPE_F32, std::array<int64_t, 3>{1, 1, 4});
+    const anira::Tensor confidence = anira::Tensor::from_host(
+        &confidence_value, ANIRA_DTYPE_F32, std::array<int64_t, 3>{1, 1, 1});
 
-    // Step 2: the audio block in and out of slot 0: [channels][samples], planar
-    const int64_t block_shape[2] = {static_cast<int64_t>(num_channels), static_cast<int64_t>(num_samples)};
-    anira_tensor in_block;
-    anira_tensor out_block;
-    anira_tensor_init_host_planar(&in_block, audio_input, num_channels, ANIRA_DTYPE_F32, 2, block_shape);
-    anira_tensor_init_host_planar(&out_block, audio_output, num_channels, ANIRA_DTYPE_F32, 2, block_shape);
+and every block runs through them:
+
+.. code-block:: cpp
+    :linenos:
+
+    // Step 1: the control vector. Every inference submitted from now on sees it; set it
+    // again whenever it changes.
+    inference_handler.set_static_input(1, control);
+
+    // Step 2: the audio block in and out of slot 0
+    in_block.shape[1] = out_block.shape[1] = static_cast<int64_t>(num_samples);
     size_t delivered = 0;
-    anira_handler_process(handler, &in_block, 0, &out_block, 0, &delivered);
+    inference_handler.process(in_block, 0, out_block, 0, &delivered);
     // audio_output holds delivered samples per channel (zeros for the first latency samples)
 
-    // Step 3: the confidence the latest completed inference produced, whole, shape [1][1][1]
-    const int64_t confidence_shape[3] = {1, 1, 1};
-    anira_tensor confidence;
-    anira_tensor_init_host(&confidence, &confidence_value, ANIRA_DTYPE_F32, 3, confidence_shape);
-    anira_handler_get_static_output(handler, 1, &confidence);
+    // Step 3: the confidence the latest completed inference produced
+    inference_handler.get_static_output(1, confidence);
 
 Key Points for Multi-Tensor Processing
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -185,30 +250,30 @@ Key Points for Multi-Tensor Processing
 
 **Streamed tensors**
 
-- ``anira_handler_process(h, &in, in_slot, &out, out_slot, &delivered)`` moves one block in
-  and one block out, any block size, one Streamed slot per side; ``anira_handler_push_data`` and
-  ``anira_handler_pop_data`` split the two halves for hosts that produce and consume at
-  different rates; the ``_multi`` forms take one tensor per slot of a side in one call.
+- ``process(in, in_slot, out, out_slot, &delivered)`` moves one block in and one block out,
+  any block size, one Streamed slot per side; ``push_data`` and ``pop_data`` split the two
+  halves for hosts that produce and consume at different rates; the forms over every slot take
+  one tensor per slot of a side in one call.
 - A block is ``[channels][samples]``, planar over the host's channel pointers or one packed
   block; the dtype is the ring's, float32 unless the contract declares another.
 
 **Static tensors**
 
-- ``anira_handler_set_static_input(h, slot, &tensor)`` and
-  ``anira_handler_get_static_output(h, slot, &tensor)`` take the whole tensor in the spec's
-  shape and dtype; "fits" is a check, never a clamp. Both are real-time safe and legal from
-  create on, so a value can be set before prepare.
+- ``set_static_input(slot, tensor)`` and ``get_static_output(slot, tensor)`` take the whole
+  tensor in the spec's shape and dtype; "fits" is a check, never a clamp. Both are real-time
+  safe and legal from create on, so a value can be set before prepare.
 - A Static tensor reports a latency of 0: it is not time-varying.
 
 **State tensors**
 
 - Declared in the model file, run by anira: fed ahead of the inference, captured behind it, kept
-  across a plan switch, re-initialised by ``anira_handler_reset``. Nothing to call.
+  across a plan switch, re-initialised by ``reset()``. Nothing to call.
 
 .. note::
-    The 2.x handler of the sections above addresses a non-streamable tensor as channel 0 of a
-    ``float***`` block; the C handler takes it whole, in the spec's shape (:doc:`usage`
-    section 3.2, *Static tensors*). The :doc:`migration` page maps the 2.x calls onto the C entries.
+    Every member above is one C entry of ``anira/abi/handler.h`` (``anira_handler_process``,
+    ``anira_handler_set_static_input``, ...; :doc:`usage` section 3.2) for a host in C or
+    another language. A 2.x handler addressed a non-streamable tensor as channel 0 of a
+    ``float***`` block; the :doc:`migration` page maps the 2.x calls onto the 3.x members.
 
 Next Steps
 ----------

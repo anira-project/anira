@@ -8,4 +8,4 @@ the same memory. See :doc:`../../basic_usage`.
 
 .. js:autoclass:: Anira.Anira
    :short-name:
-   :members: create, abi, module, memory, version, setLogHook, drainLog, startLogPump
+   :members: create, abi, module, memory, version, setLogSink, drainLog, startLogPump

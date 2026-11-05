@@ -1,30 +1,58 @@
 #include "anira-clap-demo.h"
 
+#include <algorithm>
+#include <array>
 #include <clap/helpers/host-proxy.hh>
 #include <clap/helpers/host-proxy.hxx>
 #include <clap/helpers/plugin.hh>
 #include <clap/helpers/plugin.hxx>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
-#include <iomanip>
 #include <iostream>
+#include <memory>
+#include <optional>
+#include <span>
+#include <sstream>
+#include <string>
 
 namespace clap_plugin_example {
+
+namespace {
+
+/// The Backend choices: their names and the plans they stand for.
+constexpr std::array<const char*, 6> k_backend_names{"OnnxRuntime",
+                                                     "LibTorch",
+                                                     "TensorFlowLite",
+                                                     "Bypassed",
+                                                     "LiteRt",
+                                                     "ExecuTorch"};
+constexpr std::array<anira::PlanQuery, 6> k_backend_queries{{
+    {.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}},
+    {.backend = {.engine = ANIRA_ENGINE_LIBTORCH}},
+    {.backend = {.engine = ANIRA_ENGINE_TFLITE}},
+    {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}},
+    {.backend = {.engine = ANIRA_ENGINE_LITERT}},
+    {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}},
+}};
+
+}  // namespace
 
 AniraClapPluginExample::AniraClapPluginExample(const clap_host* host)
     : clap::helpers::Plugin<clap::helpers::MisbehaviourHandler::Terminate,
                             clap::helpers::CheckingLevel::Maximal>(&m_desc, host)
     , m_plugin_latency(0)
-    , m_model_config(anira::ModelConfig::from_file(k_hybridnn_model_json))
+    , m_model_config([] {
+        anira::ModelConfig config = anira::ModelConfig::from_file(k_hybridnn_model_json);
+        config.add_model(k_bypass_engine_id);  // the entry of the bypass engine: no model file
+        return config;
+    }())
     , m_contract(anira::ContractHandle::from_file(k_hybridnn_contract_json))
-    , m_inference_config(anira::v3compat::to_inference_config(m_model_config,
-                                                              m_contract,
-                                                              anira::v3compat::enabled_engines()))
-    , m_pp_processor(m_inference_config)
-    , m_bypass_processor(m_inference_config)
-    // No CoreConfig is passed: the library default (half the hardware threads for
-    // inference) is what this plugin wants; section 3.1 of the usage guide shows how to change it.
-    , m_inference_handler(m_pp_processor, m_inference_config, m_bypass_processor) {
+    , m_inference_handler(m_context,
+                          anira::Pipeline()
+                              .add_engine(std::make_shared<BypassEngine>())
+                              .add_inference(m_model_config)
+                              .add_processor(std::make_shared<HybridNNProcessor>())) {
     m_param_to_value[pmDryWet] = &m_param_dry_wet;
     m_param_to_value[pmBackend] = &m_param_backend;
 }
@@ -87,48 +115,7 @@ bool AniraClapPluginExample::paramsValueToText(clap_id paramId,
 
     switch (pid) {
         case pmDryWet: sValue = n2s(value) + " %"; break;
-        case pmBackend: {
-            auto newBackend = (Backend) static_cast<int>(value);
-            switch (newBackend) {
-                case OnnxRuntime:
-#if USE_ONNXRUNTIME
-                    sValue = "OnnxRuntime";
-#else
-                    sValue = "OnnxRuntime (not available)";
-#endif
-                    break;
-                case LibTorch:
-#if USE_LIBTORCH
-                    sValue = "LibTorch";
-#else
-                    sValue = "LibTorch (not available)";
-#endif
-                    break;
-                case TensorFlowLite:
-#if USE_LIBTORCH
-                    sValue = "TensorFlowLite";
-#else
-                    sValue = "TensorFlowLite (not available)";
-#endif
-                    break;
-                case Bypassed: sValue = "Bypassed"; break;
-                case LiteRt:
-#if USE_LITERT
-                    sValue = "LiteRt";
-#else
-                    sValue = "LiteRt (not available)";
-#endif
-                    break;
-                case ExecuTorch:
-#if USE_EXECUTORCH
-                    sValue = "ExecuTorch";
-#else
-                    sValue = "ExecuTorch (not available)";
-#endif
-                    break;
-            }
-            break;
-        }
+        case pmBackend: sValue = k_backend_names.at(static_cast<size_t>(value)); break;
     }
 
     strncpy(display, sValue.c_str(), size);
@@ -142,22 +129,13 @@ bool AniraClapPluginExample::paramsTextToValue(clap_id paramId,
     switch (paramId) {
         case pmDryWet: *value = std::clamp(std::atof(display), 0., 100.); return true;
         case pmBackend:
-            if (strcmp(display, "OnnxRuntime") == 0) {
-                *value = static_cast<double>(OnnxRuntime);
-                return true;
-            } else if (strcmp(display, "LibTorch") == 0) {
-                *value = static_cast<double>(LibTorch);
-                return true;
-            } else if (strcmp(display, "TensorFlowLite") == 0) {
-                *value = static_cast<double>(TensorFlowLite);
-                return true;
-            } else if (strcmp(display, "Bypassed") == 0) {
-                *value = static_cast<double>(Bypassed);
-                return true;
-            } else if (strcmp(display, "LiteRt") == 0) {
-                *value = static_cast<double>(LiteRt);
-                return true;
+            for (size_t i = 0; i < k_backend_names.size(); ++i) {
+                if (strcmp(display, k_backend_names[i]) == 0) {
+                    *value = static_cast<double>(i);
+                    return true;
+                }
             }
+            return false;
         default: return false;
     }
 }
@@ -178,16 +156,25 @@ bool AniraClapPluginExample::audioPortsInfo(uint32_t index,
 bool AniraClapPluginExample::activate(double sampleRate,
                                       uint32_t minFrameCount,
                                       uint32_t maxFrameCount) noexcept {
-    // The host geometry completes the contract: a fixed block of maxFrameCount samples at
-    // sampleRate. Passing minFrameCount as block_min would allow smaller blocks, at the price
-    // of more latency.
+    // The host blocks complete the contract: the host's real block range at sampleRate,
+    // which CLAP's activate names on both ends (at least one sample). The latency anira reports
+    // covers every block size of that range, and latencyGet() hands it to the host, which
+    // compensates it. Each process call carries its own block (the tensor's extent is set per
+    // call).
     try {
-        m_contract.hard_geometry(maxFrameCount, maxFrameCount, sampleRate);
-        m_inference_handler.prepare(anira::v3compat::to_host_config(m_contract, m_model_config));
+        m_contract.hard_host_blocks(std::max(1U, minFrameCount), maxFrameCount, sampleRate);
+        m_plan_report = m_inference_handler.prepare(m_contract);
     } catch (const anira::Error& error) {
         std::cerr << "anira: " << error.what() << std::endl;
         return false;
     }
+    // The handler starts on the model's default plan; the Backend choice the host shows (its
+    // default "Bypassed", or what it set before this activate) is applied over the new report.
+    apply_backend();
+
+    m_audio = anira::Tensor::from_host_planar<float>(
+        std::span<float* const>(m_channels),
+        std::array<int64_t, 2>{1, static_cast<int64_t>(maxFrameCount)});
 
     m_plugin_latency = (uint32_t)m_inference_handler.get_latency();
     m_dry_wet_mixer.prepare(sampleRate, maxFrameCount, (size_t)m_plugin_latency);
@@ -207,7 +194,9 @@ clap_process_status AniraClapPluginExample::process(const clap_process* process)
         }
     }
 
-    m_inference_handler.process(in, (size_t)process->frames_count);
+    m_channels[0] = in[0];
+    m_audio.shape[1] = static_cast<int64_t>(process->frames_count);
+    m_inference_handler.process(m_audio, 0, m_audio, 0);  // in place
 
     for (int channel = 0; channel < 1; ++channel) {
         for (int sample = 0; sample < process->frames_count; ++sample) {
@@ -247,46 +236,7 @@ void AniraClapPluginExample::handleInboundEvent(const clap_event_header_t* evt) 
         *m_param_to_value[v->param_id] = v->value;
 
         if (m_param_to_value[v->param_id] == &m_param_backend) {
-            switch ((Backend)m_param_backend) {
-                case OnnxRuntime:
-#if USE_ONNXRUNTIME
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case LibTorch:
-#if USE_LIBTORCH
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case TensorFlowLite:
-#if USE_TENSORFLOW
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case LiteRt:
-#if USE_LITERT
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                case ExecuTorch:
-#if USE_EXECUTORCH
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
-#else
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-#endif
-                    break;
-                default:
-                    m_inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-                    break;
-            }
+            apply_backend();
         } else if (m_param_to_value[v->param_id] == &m_param_dry_wet) {
             auto new_mix = static_cast<float>(m_param_dry_wet / 100.0);
             m_dry_wet_mixer.set_mix(new_mix);
@@ -301,6 +251,14 @@ void AniraClapPluginExample::paramsFlush(const clap_input_events* in,
     for (auto e = 0U; e < sz; ++e) {
         auto nextEvent = in->get(in, e);
         handleInboundEvent(nextEvent);
+    }
+}
+
+void AniraClapPluginExample::apply_backend() noexcept {
+    const auto choice = static_cast<size_t>(m_param_backend);
+    if (choice >= k_backend_queries.size()) { return; }
+    if (const std::optional<uint32_t> plan = m_plan_report.find(k_backend_queries[choice])) {
+        m_inference_handler.set_plan(*plan);
     }
 }
 

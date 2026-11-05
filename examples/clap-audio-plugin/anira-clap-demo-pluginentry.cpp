@@ -1,4 +1,6 @@
 #include <anira/abi/core.h>
+#include <anira/abi/status.h>
+#include <anira/abi/version.h>
 
 #include <cmath>
 #include <cstring>
@@ -39,7 +41,9 @@ static const void* get_factory(const char* factory_id) {
 }
 
 bool clap_init(const char* p) {
-    return true;
+    // The anira this plugin loads must be the ABI its headers describe; refuse to load
+    // otherwise.
+    return anira_check_abi(ANIRA_ABI_VERSION) == ANIRA_OK;
 }
 void clap_deinit() {
     // The host calls this before it unloads the plugin library, outside any loader

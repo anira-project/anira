@@ -16,7 +16,6 @@
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/lifecycle.h>
-#include <anira/system/Exports.h>
 
 #include <cstdint>
 #include <string>
@@ -35,15 +34,15 @@ namespace anira::capi {
 /// CPU path (ANIRA_PROVIDER_CPU) and XNNPACK; every other provider of the enum, and every custom
 /// one, is a device or an accelerator the engine moves host memory to itself. The edge registry's
 /// rule, for the context's rows and a pipeline's alike.
-ANIRA_API bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept;
+bool cpu_provider(anira_provider provider, std::string_view provider_id) noexcept;
 
 /// The facts of the core a query receives: the level in effect, the thread count the
 /// context's config asks for (ANIRA_THREADS_AUTO resolved; 0 for a caller's own threads), the
 /// context asking.
-ANIRA_API anira_init_info query_info(const anira_context& context);
+anira_init_info query_info(const anira_context& context);
 
 /// What one engine serves here.
-struct ANIRA_API ServedProviders {
+struct ServedProviders {
     enum class Kind : uint8_t { BuiltIn, Custom };
     Kind m_kind = Kind::BuiltIn;
     std::string m_label;  ///< the engine's word, or a custom engine's id, for a message
@@ -59,17 +58,17 @@ struct ANIRA_API ServedProviders {
 };
 
 /// What a built-in engine serves on this context: its probed rows, the CPU path first.
-ANIRA_API ServedProviders served_by_builtin(const anira_context& context, anira_engine engine);
+ServedProviders served_by_builtin(const anira_context& context, anira_engine engine);
 
 /// A custom engine's query, run now with query_info(context): the bitmask over its declared
 /// list. Throws anira::StatusError with the query's status when it fails, naming the engine
 /// ("the engine 'x' refused query: it returned N (...)"). Main thread only (the slot's
 /// contract).
-ANIRA_API uint64_t query_engine(const anira_context& context, const EngineCarrier& engine);
+uint64_t query_engine(const anira_context& context, const EngineCarrier& engine);
 
 /// What a custom engine serves given its query's answer `available`: its declared list
 /// filtered by the answer (the CPU path alone for an engine without a list).
-ANIRA_API ServedProviders served_by_custom(const EngineCarrier& engine, uint64_t available);
+ServedProviders served_by_custom(const EngineCarrier& engine, uint64_t available);
 
 /// How served_providers learns a custom engine's answer.
 enum class QueryUse : uint8_t {
@@ -85,22 +84,22 @@ enum class QueryUse : uint8_t {
 /// query's answer (`answers`, asked or reused per `use`) and served_by_custom, a built-in
 /// engine through served_by_builtin. Throws as query_engine does, and ANIRA_ERROR_INTERNAL for
 /// a custom row no engine of the pipeline has (validate refused it first).
-ANIRA_API ServedProviders served_providers(const anira_context& context,
-                                           const anira_pipeline& pipeline,
-                                           const ModelEntry& row,
-                                           QueryAnswers& answers,
-                                           QueryUse use);
+ServedProviders served_providers(const anira_context& context,
+                                 const anira_pipeline& pipeline,
+                                 const ModelEntry& row,
+                                 QueryAnswers& answers,
+                                 QueryUse use);
 
 /// A custom engine's answer under QueryUse::Ask: the kept one, else query_engine's, kept.
-ANIRA_API uint64_t ask_query(const anira_context& context,
-                             const EngineCarrier& engine,
-                             QueryAnswers& answers);
+uint64_t ask_query(const anira_context& context,
+                   const EngineCarrier& engine,
+                   QueryAnswers& answers);
 
 /// The text of a refusal: why `served`'s engine does not serve the provider, naming what it
 /// does serve (a custom engine's declared but unavailable provider says so).
-ANIRA_API std::string unserved_message(const ServedProviders& served,
-                                       anira_provider provider,
-                                       std::string_view provider_id);
+std::string unserved_message(const ServedProviders& served,
+                             anira_provider provider,
+                             std::string_view provider_id);
 
 /// The rows and the host edges of a pipeline's custom engines on a context, in the order the
 /// engines were added: per engine the CPU path alone for an engine without a list, else every
@@ -111,7 +110,7 @@ struct CustomRows {
     std::vector<anira_backend_id> m_backends;
     std::vector<anira_edge_info> m_edges;
 };
-ANIRA_API CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipeline);
+CustomRows custom_rows(const anira_context& context, const anira_pipeline& pipeline);
 
 }  // namespace anira::capi
 

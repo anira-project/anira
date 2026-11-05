@@ -45,7 +45,7 @@ inline constexpr const char* k_context_v3 = R"({
 })";
 
 inline constexpr const char* k_contract_hard_v3 = R"({ "hard": {
-    "block_min": 512, "block_max": 512, "rate": 48000,
+    "host_block_min": 512, "host_block_max": 512, "host_rate": 48000,
     "budget": "measured", "warmup": "until_stable", "on_miss": "bypass", "wait_ratio": 0
 } })";
 

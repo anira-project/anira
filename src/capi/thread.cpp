@@ -4,20 +4,20 @@
 #include <anira/abi/export.h>
 #include <anira/abi/status.h>
 #include <anira/abi/thread.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/utils/Logger.h>  // IWYU pragma: keep - the WebAssembly refusal logs
 
 #include <cstdint>
 #include <memory>
 
+#include "../scheduler/Core.h"
+#include "../scheduler/InferenceThread.h"
+#include "../utils/Logger.h"  // IWYU pragma: keep - the WebAssembly refusal logs
 #include "capi_internal.h"
 
 using anira::capi::translate_exception;
 
 // NOLINTNEXTLINE(readability-identifier-naming) C tag
 struct anira_inference_thread {
-    std::unique_ptr<anira::InferenceThread> m_thread;
+    std::unique_ptr<anira::scheduler::InferenceThread> m_thread;
 };
 
 anira_status ANIRA_CALL anira_inference_thread_create(anira_context* context,

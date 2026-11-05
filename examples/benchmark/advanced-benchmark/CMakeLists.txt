@@ -32,7 +32,7 @@ target_sources(${PROJECT_NAME} PRIVATE
 	defineTestAdvancedBenchmark.cpp
 )
 
-target_link_libraries(${PROJECT_NAME} anira::anira)
+target_link_libraries(${PROJECT_NAME} anira::anira anira_benchmark_fixture)
 
 # gtest_discover_tests will register a CTest test for each gtest and run them all in parallel with the rest of the Test.
 gtest_discover_tests(${PROJECT_NAME} DISCOVERY_TIMEOUT 90)

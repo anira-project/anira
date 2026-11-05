@@ -1,6 +1,6 @@
 // The scope registry (src/registry.ts): the keys names cross the C ABI as, the dispatch of the
-// trampolines' calls to the stages and engines a scope defined, and the boot an inference Worker
-// awaits. The module instance is a stand-in with the few exports the registry reads.
+// trampolines' calls to the processors and engines a scope defined, and the boot an inference
+// Worker awaits. The module instance is a stand-in with the few exports the registry reads.
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import type { AbiModule } from '../src/abi/bindings'
@@ -15,8 +15,8 @@ import {
 
 const fakeModule = () =>
   ({
-    _anira_stage_default_pre_process: () => 41,
-    _anira_stage_default_post_process: () => 42,
+    _anira_processor_default_pre_process: () => 41,
+    _anira_processor_default_post_process: () => 42,
     UTF8ToString: () => 'org.example.missing',
   }) as unknown as AbiModule
 
@@ -29,14 +29,15 @@ test('keyOf is FNV-1a over the name, unsigned, the same in every scope', () => {
 })
 
 test('two names with one key are refused; the same name may be defined again', () => {
-  // An FNV-1a 32 collision, found by a brute-force search over 'org.example.stage-<n>'.
+  // An FNV-1a 32 collision, found by a brute-force search over 'org.example.stage-<n>' (the
+  // names are only strings: a collision is what the test needs).
   const first = 'org.example.stage-241438'
   const second = 'org.example.stage-2235000'
   assert.equal(keyOf(first), keyOf(second))
   const registry = new Registry()
-  const key = registry.defineStage(first, () => ({}))
+  const key = registry.defineProcessor(first, () => ({}))
   assert.throws(
-    () => registry.defineStage(second, () => ({})),
+    () => registry.defineProcessor(second, () => ({})),
     (error: Error) => error.message.includes(first) && error.message.includes(second)
   )
   assert.throws(
@@ -47,17 +48,17 @@ test('two names with one key are refused; the same name may be defined again', (
     (error: Error) => error.message.includes(first) && error.message.includes(second)
   )
   assert.equal(
-    registry.defineStage(first, () => ({})),
+    registry.defineProcessor(first, () => ({})),
     key
   )
 })
 
-test('a stage is built once per scope and runs the phases it has', () => {
+test('a processor is built once per scope and runs the phases it has', () => {
   const registry = new Registry()
   const module = fakeModule()
   let built = 0
   const calls: string[] = []
-  const key = registry.defineStage('org.example.stage', () => {
+  const key = registry.defineProcessor('org.example.processor', () => {
     built++
     return {
       prepare: () => {
@@ -71,24 +72,24 @@ test('a stage is built once per scope and runs the phases it has', () => {
   })
   const p = anira_phase
   assert.equal(
-    registry.stage(module, key, p.ANIRA_PHASE_PREPARE, 0, 0),
+    registry.processor(module, key, p.ANIRA_PHASE_PREPARE, 0, 0),
     anira_status.ANIRA_OK
   )
   // No preProcess / postProcess: anira's default bodies.
-  assert.equal(registry.stage(module, key, p.ANIRA_PHASE_PRE_PROCESS, 0, 0), 41)
-  assert.equal(registry.stage(module, key, p.ANIRA_PHASE_POST_PROCESS, 0, 0), 42)
+  assert.equal(registry.processor(module, key, p.ANIRA_PHASE_PRE_PROCESS, 0, 0), 41)
+  assert.equal(registry.processor(module, key, p.ANIRA_PHASE_POST_PROCESS, 0, 0), 42)
   assert.equal(
-    registry.stage(module, key, p.ANIRA_PHASE_BEFORE_INFERENCE, 0, 0),
+    registry.processor(module, key, p.ANIRA_PHASE_BEFORE_INFERENCE, 0, 0),
     anira_status.ANIRA_ERROR_ENGINE
   )
   assert.equal(
-    registry.stage(module, key, p.ANIRA_PHASE_RELEASE, 0, 0),
+    registry.processor(module, key, p.ANIRA_PHASE_RELEASE, 0, 0),
     anira_status.ANIRA_OK
   )
   assert.deepEqual(calls, ['prepare', 'release'])
   assert.equal(built, 1)
-  // After its release the next call builds the stage anew.
-  registry.stage(module, key, p.ANIRA_PHASE_PREPARE, 0, 0)
+  // After its release the next call builds the processor anew.
+  registry.processor(module, key, p.ANIRA_PHASE_PREPARE, 0, 0)
   assert.equal(built, 2)
 })
 
@@ -158,9 +159,9 @@ test('a key nobody defined, and two names of one key, are refused', () => {
     /org\.example\.missing/
   )
   assert.throws(() =>
-    registry.stage(fakeModule(), 7, anira_phase.ANIRA_PHASE_PREPARE, 0, 0)
+    registry.processor(fakeModule(), 7, anira_phase.ANIRA_PHASE_PREPARE, 0, 0)
   )
-  registry.defineStage('org.example.same', () => ({}))
+  registry.defineProcessor('org.example.same', () => ({}))
   // Defining the same name again replaces the factory.
-  registry.defineStage('org.example.same', () => ({}))
+  registry.defineProcessor('org.example.same', () => ({}))
 })

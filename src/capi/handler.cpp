@@ -12,7 +12,7 @@
 // One face over the copy path (InferenceManager's tensor stems): the Hard entries take host
 // tensors, one per slot. They validate every descriptor (anira::tensor_run::check_host_tensor,
 // src/scheduler/TensorRun.h) and its count against the declared block (one host block of
-// block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
+// host_block_max on the slot's stream, StreamPort::m_max_samples: a larger block is refused, never
 // cut to its tail), hand the arrays to the stems as they are and report the counts the stems
 // return. A host that holds float channel pointers presents them itself, as one planar tensor
 // over its pointer array (anira_tensor_init_host_planar).
@@ -26,7 +26,7 @@
 // One slot space. A slot is the tensor's position in the model config's list of its side, and
 // that one number is what the host names (`slot`, `in_slot`, `out_slot`, the
 // positions of the multi forms' arrays and of `delivered`, the latency vector, the report's
-// slot rows) and what the session, the stems, the handler's two port vectors and the stage
+// slot rows) and what the session, the stems, the handler's two port vectors and the processor
 // chain index by. The ROLE of the tensor decides the port's arm and with it which entries take a
 // slot: a Streamed one the block calls, a
 // Static one the two Static entries or a multi form's element, a State one no Hard entry at
@@ -35,30 +35,21 @@
 // tensor. The caller's arrays reach the stems as they are, and the miss function receives them.
 #include "handler.h"
 
-#include <anira/InferenceConfig.h>
 #include <anira/abi/context.h>
 #include <anira/abi/engine.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/export.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/lifecycle.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/version.h>
-#include <anira/scheduler/Core.h>
-#include <anira/scheduler/InferenceManager.h>
-#include <anira/scheduler/InferenceThread.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/HostConfig.h>
-#include <anira/utils/InferenceBackend.h>
-#include <anira/utils/Logger.h>
-#include <anira/utils/RtLatch.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -76,7 +67,14 @@
 #include "../engines/Adapter.h"
 #include "../engines/Adapters.h"
 #include "../engines/DescriptorAdapter.h"
+#include "../scheduler/Core.h"
+#include "../scheduler/InferenceManager.h"
+#include "../scheduler/InferenceThread.h"
+#include "../scheduler/LatencyCalculator.h"
+#include "../scheduler/SessionElement.h"
 #include "../scheduler/TensorRun.h"
+#include "../utils/Logger.h"
+#include "../utils/RtLatch.h"
 #include "capi_internal.h"
 #include "context.h"
 #include "engine.h"
@@ -84,9 +82,8 @@
 #include "ext_registry.h"
 #include "handles.h"
 #include "port.h"
+#include "processor.h"
 #include "providers.h"
-#include "stage.h"
-#include "v3_to_v2.h"
 #include "validate.h"
 #include "words.h"
 
@@ -103,12 +100,70 @@ constexpr uint32_t k_plan_slot_head = 8 * sizeof(uint32_t);
 constexpr uint32_t k_plan_ext_head = 2 * sizeof(uint32_t);
 // The fixed head of anira_backend_id: struct_size, engine, provider.
 constexpr uint32_t k_backend_id_head = 3 * sizeof(uint32_t);
+// The fixed head of anira_plan_query: struct_size, variant.
+constexpr uint32_t k_plan_query_head = 2 * sizeof(uint32_t);
+
+/// The query as the caller's header holds it: every field its record (or its backend record)
+/// ends before reads as ANIRA_PLAN_QUERY_INIT holds it.
+anira_plan_query readable_query(const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
+    anira_plan_query read = ANIRA_PLAN_QUERY_INIT;
+    read.variant = query.variant;
+    const size_t backend_at = offsetof(anira_plan_query, backend);
+    if (query.struct_size < backend_at + k_backend_id_head) { return read; }
+    const anira_backend_id& backend = query.backend;
+    // The backend record carries its own struct_size; the readable part is what both the
+    // query's and the backend's sizes cover.
+    const size_t readable = std::min<size_t>(query.struct_size - backend_at, backend.struct_size);
+    if (readable < k_backend_id_head) { return read; }
+    read.backend.engine = backend.engine;
+    read.backend.provider = backend.provider;
+    if (readable >= offsetof(anira_backend_id, engine_id) + sizeof(const char*)) {
+        read.backend.engine_id = backend.engine_id;
+    }
+    if (readable >= offsetof(anira_backend_id, provider_id) + sizeof(const char*)) {
+        read.backend.provider_id = backend.provider_id;
+    }
+    return read;
+}
+
+/// Two NUL-terminated names are equal (NULL equals nothing).
+bool same_name(const char* a, const char* b) noexcept ANIRA_NONBLOCKING {
+    if (a == nullptr || b == nullptr) { return false; }
+    while (*a != '\0' && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+/// Whether a plan has every property the (readable) query names.
+bool matches(const anira_plan_info& plan,
+             const anira_plan_query& query) noexcept ANIRA_NONBLOCKING {
+    if (query.variant != ANIRA_VARIANT_ANY && plan.variant != query.variant) { return false; }
+    const anira_backend_id& backend = query.backend;
+    if (backend.engine != ANIRA_ENGINE_NONE) {
+        if (plan.engine != backend.engine) { return false; }
+        if (backend.engine == ANIRA_ENGINE_CUSTOM &&
+            !same_name(plan.engine_id, backend.engine_id)) {
+            return false;
+        }
+    }
+    if (backend.provider != ANIRA_PROVIDER_NONE) {
+        if (plan.provider != backend.provider) { return false; }
+        if (backend.provider == ANIRA_PROVIDER_CUSTOM &&
+            !same_name(plan.provider_id, backend.provider_id)) {
+            return false;
+        }
+    }
+    return true;
+}
 // The three leading slots of a callback descriptor: struct_size, abi_version, user_data.
-constexpr uint32_t k_stage_desc_head = offsetof(anira_stage_desc, user_data) + sizeof(void*);
+constexpr uint32_t k_processor_desc_head =
+    offsetof(anira_processor_desc, user_data) + sizeof(void*);
 constexpr uint32_t k_engine_desc_head = offsetof(anira_engine_desc, user_data) + sizeof(void*);
-/// Every flags bit anira/abi/stage.h defines: a stage's real-time promise.
-constexpr uint32_t k_stage_flags =
-    ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS;
+/// Every flags bit anira/abi/processor.h defines: a processor's real-time promise.
+constexpr uint32_t k_processor_flags =
+    ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS;
 /// Every flags bit anira/abi/engine.h defines: an engine's promises.
 constexpr uint32_t k_engine_flags = ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL |
                                     ANIRA_ENGINE_FLAG_REALTIME_SAFE |
@@ -153,11 +208,24 @@ bool has_arguments(anira_handler& handler, bool ok, const char* entry) noexcept 
 
 // ==== the slots ===============================================================================
 
+// The invariant of create and prepare (anira::capi::stream_port_refusal): asserted in a debug
+// build and refused (ANIRA_ERROR_INTERNAL) in every build, before anything reads a ring.
+void check_stream_ports(const anira::capi::Derived& derived,
+                        const anira_handler& handler,
+                        const char* entry) {
+    const std::string refusal =
+        anira::capi::stream_port_refusal(derived, handler.m_input_ports, handler.m_output_ports);
+    assert(refusal.empty() && "a tensor with a stream has no stream port");
+    if (!refusal.empty()) {
+        throw StatusError(ANIRA_ERROR_INTERNAL, std::string(entry) + ": " + refusal);
+    }
+}
+
 // The port of a slot answers what the tensor is in here (port.h): anira_handler_create fixed
 // the arm from the spec's role, and nothing changes it. Every question below is a plain read
 // of the handler's port vector (std::get_if), a slot at or beyond the side's count included.
-const std::vector<anira::capi::Port>& side_ports(const anira_handler& handler,
-                                                 bool input) noexcept ANIRA_NONBLOCKING {
+const anira::capi::Ports& side_ports(const anira_handler& handler,
+                                     bool input) noexcept ANIRA_NONBLOCKING {
     return input ? handler.m_input_ports : handler.m_output_ports;
 }
 
@@ -199,10 +267,10 @@ bool both_slots(const anira_handler& handler,
 // ==== the host tensors ========================================================================
 
 // The count of a well-formed host block against its slot's stream port: one host block of the
-// geometry's block_max at most (StreamPort::m_max_samples, prepare's), what the latency and the
-// rings were sized for. A larger block is refused before anything moves, never cut to its
-// tail. A compare against prepare's figure: no allocation, no lock. Recorded and logged like
-// every other refusal, naming the slot and the bound.
+// contract's host_block_max at most (StreamPort::m_max_samples, prepare's), what the latency and
+// the rings were sized for. A larger block is refused before anything moves, never cut to its tail.
+// A compare against prepare's figure: no allocation, no lock. Recorded and logged like every other
+// refusal, naming the slot and the bound.
 anira_status block_count_status(anira_handler& handler,
                                 const anira::capi::StreamPort& port,
                                 const anira_tensor& tensor,
@@ -211,16 +279,17 @@ anira_status block_count_status(anira_handler& handler,
                                 [[maybe_unused]] const char* entry) noexcept ANIRA_NONBLOCKING {
     if (std::cmp_less_equal(tensor.shape[1], port.m_max_samples)) { return ANIRA_OK; }
     if (!handler.m_rt.record(ANIRA_ERROR_INVALID_ARGUMENT)) { return ANIRA_ERROR_INVALID_ARGUMENT; }
-    ANIRA_LOG_RT_VIOLATION(anira::log_group::k_capi,
-                           "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
-                           "host block of the geometry's block_max (%zu on this stream); nothing "
-                           "moved. Declare the largest block the host passes as block_max",
-                           entry,
-                           input ? "input" : "output",
-                           slot,
-                           slot_name(handler, input, slot),
-                           static_cast<long long>(tensor.shape[1]),
-                           port.m_max_samples);
+    ANIRA_LOG_RT_VIOLATION(
+        anira::log_group::k_capi,
+        "%s: the tensor of %s slot %u '%s' carries %lld samples, more than one "
+        "host block of the contract's host_block_max (%zu on this stream); nothing "
+        "moved. Declare the largest block the host passes as host_block_max",
+        entry,
+        input ? "input" : "output",
+        slot,
+        slot_name(handler, input, slot),
+        static_cast<long long>(tensor.shape[1]),
+        port.m_max_samples);
     return ANIRA_ERROR_INVALID_ARGUMENT;
 }
 
@@ -395,7 +464,7 @@ anira_status side_tensors_status(anira_handler& handler,
                                  const anira_tensor* tensors,
                                  bool input,
                                  const char* entry) noexcept ANIRA_NONBLOCKING {
-    const std::vector<anira::capi::Port>& ports = side_ports(handler, input);
+    const anira::capi::Ports& ports = side_ports(handler, input);
     for (uint32_t slot = 0; slot < ports.size(); ++slot) {
         const anira::capi::Port& port = ports[slot];
         anira_status status = ANIRA_OK;
@@ -588,7 +657,7 @@ anira_status process_tensors_wait_body(anira_handler& handler,
                                        double timeout_ms,
                                        const char* entry,
                                        const size_t*& counts) noexcept {
-    if (!anira::InferenceThread::any_loop_active()) {
+    if (!anira::scheduler::InferenceThread::any_loop_active()) {
         counts = handler.m_manager->process_nowait(inputs, outputs);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
@@ -610,7 +679,7 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
                                    double timeout_ms,
                                    const char* entry,
                                    const size_t*& counts) noexcept {
-    if (!anira::InferenceThread::any_loop_active()) {
+    if (!anira::scheduler::InferenceThread::any_loop_active()) {
         counts = handler.m_manager->pop_data(outputs);
         rt_refuse(handler, ANIRA_ERROR_INVALID_STATE, entry);
         return ANIRA_ERROR_INVALID_STATE;
@@ -627,25 +696,6 @@ anira_status pop_tensors_wait_body(anira_handler& handler,
 }
 
 // ==== prepare's pieces ========================================================================
-
-// The host block in hops, rho = B / R, as the latency calculation takes it
-// (LatencyCalculator's constructor): the geometry's block_max over the reference stream's
-// samples per hop, the reduced fraction rationalize() recovers from the float.
-anira::LatencyCalculator::Rational block_in_hops(const anira::HostConfig& host,
-                                                 const anira::InferenceConfig& config) {
-    const auto reference_size = static_cast<double>(host.get_reference_size(config));
-    return anira::LatencyCalculator::rationalize(static_cast<double>(host.m_buffer_size) /
-                                                 reference_size);
-}
-
-// One host block in samples of a stream with `hop` samples per hop: ceil(rho * hop), the
-// block the send ring holds besides the adaptation leftover (LatencyCalculator), so floor(b)
-// and ceil(b) of a fractional block b both fit. 0 for a slot without a stream.
-size_t host_block_samples(const anira::LatencyCalculator::Rational& block_hops, size_t hop) {
-    const int64_t numerator = block_hops.m_numerator * static_cast<int64_t>(hop);
-    return static_cast<size_t>((numerator + block_hops.m_denominator - 1) /
-                               block_hops.m_denominator);
-}
 
 // What the manager calls once per missed block under ANIRA_MISS_CALLBACK, on the thread that
 // drives the call: it forwards the arrays the copy path was handed, as they are, to the host's
@@ -673,6 +723,23 @@ bool miss_hook(void* ctx,
                               handler->m_miss_user_data) == ANIRA_OK;
 }
 
+// ANIRA_MISS_CALLBACK for a dropped hop: the host's function with the hop's tensors. A hop
+// carries no Static slot and fills nothing of the running call, so neither the Static outputs nor
+// m_miss_fn_ran are touched.
+bool drop_hook(void* ctx,
+               const anira_tensor* inputs,
+               uint32_t num_inputs,
+               const anira_tensor* outputs,
+               uint32_t num_outputs) noexcept ANIRA_NONBLOCKING {
+    auto* handler = static_cast<anira_handler*>(ctx);
+    return handler->m_miss_fn(handler,
+                              inputs,
+                              num_inputs,
+                              outputs,
+                              num_outputs,
+                              handler->m_miss_user_data) == ANIRA_OK;
+}
+
 void clear_report(anira_plan_report& report) noexcept {
     report.m_plans.clear();
     report.m_inputs.clear();
@@ -683,40 +750,48 @@ void clear_report(anira_plan_report& report) noexcept {
 
 // Releases the session and everything prepare built; the handler is unprepared afterwards.
 // The session goes first (Core::release_session drains the in-flight work and joins the pool
-// with the last session), then the processor, the stage's unprepare, the report and the plan
-// table; the InferenceConfig stays until the next prepare replaces it or destroy frees it. The
-// rings die with the session: no stream port names one while the handler is unprepared.
+// with the last session), then the processor, the processor's unprepare, the report and the plan
+// table; the contract snapshot and the derivation stay until the next prepare replaces them or
+// destroy frees them. The rings stay in their stream ports, which the next prepare re-sizes.
 void unprepare(anira_handler& handler) noexcept {
     handler.m_runnable.store(false, std::memory_order_release);
     handler.m_prepared.store(false, std::memory_order_release);
     handler.m_manager.reset();
     handler.m_pp.reset();
-    // The stage's unprepare, once per successful prepare, now that no phase call of this
+    // The processor's unprepare, once per successful prepare, now that no phase call of this
     // handler can run any more: what its prepare handed back for this handler goes back to it.
-    if (handler.m_stage_unprepare_owed) {
-        handler.m_stage_unprepare_owed = false;
-        const anira::capi::StageCarrier* const stage = handler.m_pipeline.m_stage.get();
-        if (stage != nullptr && stage->desc().unprepare != nullptr) {
-            stage->desc().unprepare(handler.m_stage_prepared, stage->desc().user_data);
+    if (handler.m_processor_unprepare_owed) {
+        handler.m_processor_unprepare_owed = false;
+        const anira::capi::ProcessorCarrier* const processor = handler.m_pipeline.m_processor.get();
+        if (processor != nullptr && processor->desc().unprepare != nullptr) {
+            processor->desc().unprepare(handler.m_processor_prepared, processor->desc().user_data);
         }
-        handler.m_stage_prepared = nullptr;
-    }
-    for (auto* ports : {&handler.m_input_ports, &handler.m_output_ports}) {
-        for (anira::capi::Port& port : *ports) {
-            if (auto* stream = std::get_if<anira::capi::StreamPort>(&port)) {
-                stream->m_ring = nullptr;
-            }
-        }
+        handler.m_processor_prepared = nullptr;
     }
     clear_report(handler.m_report);
     handler.m_plans.clear();
     handler.m_num_entries = 0;
 }
 
+// The host-block rule of prepare: the session is sized for the contract's host_block_max at its
+// host_rate, so both must be set. A contract without host blocks is legal at create and to the
+// validator (a flexible window then takes the smallest anchor hop); prepare is where it is first
+// needed.
+void check_host_blocks(const anira::capi::HardContract& hard) {
+    if (!(hard.m_host_block_max > 0.0) || !(hard.m_host_rate > 0.0)) {
+        throw StatusError(
+            ANIRA_ERROR_CONFIG,
+            "contract: Hard host blocks missing (host_block_max " +
+                std::to_string(hard.m_host_block_max) + ", host_rate " +
+                std::to_string(hard.m_host_rate) +
+                "); set it with anira_contract_hard_set_host_blocks before preparing");
+    }
+}
+
 // The CALLBACK rule of prepare: the policy needs its function (the two setters work in either
 // order, and a contract file cannot carry one, so the question is asked here).
-// The BYPASS rules of prepare, after validate (the bridge never implemented on_miss, so the
-// rule lives here and not in capi::validate): the anchor must be an input, and every
+// The BYPASS rules of prepare, after validate (the rule is the Hard driver's, so it lives here
+// and not in capi::validate): the anchor must be an input, and every
 // streamed output must have the anchored input's channel count and its ring dtype (the block
 // is copied from host memory to host memory, and nothing converts; every ring is float32 in
 // this pre-release, so the dtype rule cannot fire yet).
@@ -771,9 +846,8 @@ void check_miss_policy(const anira::capi::HardContract& hard,
 // blocks and has no job to attach it to, so the handler refuses the model here, where the
 // contract is first known. The spec itself stays valid (create and the model files take it),
 // and the rule lives here and not in capi::validate, like the miss policy's: validate also
-// serves the 2.x bridge (anira::v3compat::to_inference_config), which carries a Buffer tensor
-// as a 2.x non-streamable tensor and keeps doing so. A persistent side input under a Hard
-// contract is the Static role.
+// runs at create, with no contract, where a Buffer spec is legal. A persistent side input under
+// a Hard contract is the Static role.
 void check_buffer_specs(const anira_model_config& model) {
     const auto first_buffer =
         [](const std::vector<anira_tensor_spec>& specs) -> const anira_tensor_spec* {
@@ -796,29 +870,31 @@ void check_buffer_specs(const anira_model_config& model) {
                           side + " under a Hard contract");
 }
 
-// The real-time rule of prepare: the stage's flags are its promise, checked against where its
+// The real-time rule of prepare: the processor's flags are its promise, checked against where its
 // phases run. Under a Hard contract (the only contract of this pre-release) a filled
 // pre_process, post_process or reset runs on the driving thread (the reset right before the
-// first pre_process of a new stream), so the stage must promise
-// ANIRA_STAGE_FLAG_REALTIME_PRE_POST for any of the three; the two hooks run on an inference
+// first pre_process of a new stream), so the processor must promise
+// ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST for any of the three; the two hooks run on an inference
 // thread and need no promise here (a later contract option that puts them on the driving
-// thread requires ANIRA_STAGE_FLAG_REALTIME_HOOKS too). The default bodies are real-time by
+// thread requires ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS too). The default bodies are real-time by
 // construction, so a NULL slot needs nothing. anira's own side stays real-time whatever the
 // flags say.
-void check_stage_flags(const anira::capi::StageCarrier* stage) {
-    if (stage == nullptr) { return; }
-    const anira_stage_desc& desc = stage->desc();
+void check_processor_flags(const anira::capi::ProcessorCarrier* processor) {
+    if (processor == nullptr) { return; }
+    const anira_processor_desc& desc = processor->desc();
     const bool on_driving_thread =
         desc.pre_process != nullptr || desc.post_process != nullptr || desc.reset != nullptr;
-    if (!on_driving_thread || (desc.flags & ANIRA_STAGE_FLAG_REALTIME_PRE_POST) != 0) { return; }
+    if (!on_driving_thread || (desc.flags & ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST) != 0) {
+        return;
+    }
     const anira_phase filled = desc.pre_process != nullptr    ? ANIRA_PHASE_PRE_PROCESS
                                : desc.post_process != nullptr ? ANIRA_PHASE_POST_PROCESS
                                                               : ANIRA_PHASE_RESET;
     throw StatusError(ANIRA_ERROR_CONFIG,
-                      std::string("the stage: ") + anira::capi::phase_word(filled) +
+                      std::string("the processor: ") + anira::capi::phase_word(filled) +
                           " is filled and runs on the driving thread under a Hard contract, "
-                          "which requires ANIRA_STAGE_FLAG_REALTIME_PRE_POST in "
-                          "anira_stage_desc.flags (the stage's promise that pre_process, "
+                          "which requires ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in "
+                          "anira_processor_desc.flags (the processor's promise that pre_process, "
                           "post_process and reset allocate nothing, lock nothing and block on "
                           "nothing)");
 }
@@ -884,18 +960,6 @@ void warn_default_fallback([[maybe_unused]] const anira_model_config& model,
                       asked.c_str(),
                       static_cast<unsigned int>(initial),
                       starts.c_str());
-}
-
-// The 2.x backend of a surviving row. validate kept the rows this build has an adapter for; a
-// row without one here is a defect of that check, not of the configuration.
-anira::InferenceBackend backend_of_row(const anira::capi::ModelEntry& row, size_t row_index) {
-    const std::optional<anira::InferenceBackend> backend = anira::capi::backend_of(row);
-    if (!backend.has_value()) {
-        throw StatusError(ANIRA_ERROR_INTERNAL,
-                          "handler: model entry " + std::to_string(row_index) +
-                              " passed validate without a 2.x adapter");
-    }
-    return *backend;
 }
 
 // The engine of the pipeline a custom row names by its id, or null for a built-in row
@@ -1076,12 +1140,12 @@ void check_providers(const anira_context& context,
 // canonical name; the export's name where the row's tensors record names the slot, else
 // empty, so that the load binds by the canonical name where its engine has one and by
 // position otherwise; the engine's extents under the row's layout; the spec's dtype), the
-// shared slots and the warm-up of the 2.x configuration. Everything copied: a pooled loaded
-// model never aliases this handler's configuration.
+// shared slots and the contract's warm-up. Everything copied: a pooled loaded model never
+// aliases this handler's configuration.
 anira::engine::Model model_of_row(const anira_model_config& model,
                                   const anira::capi::ModelEntry& row,
                                   const anira::capi::Derived& derived,
-                                  const anira::InferenceConfig& config) {
+                                  const anira::capi::HardContract& hard) {
     anira::engine::Model record;
     record.m_engine = row.m_engine;
     record.m_engine_id = row.m_engine_id;
@@ -1129,9 +1193,8 @@ anira::engine::Model model_of_row(const anira_model_config& model,
     // model config says whether its handlers are exclusive (a stateful model, a declared State
     // pair), so every handler of one variant is of one kind and the pool shares one loaded
     // model between them, prepared per handler.
-    record.m_instances =
-        config.m_session_exclusive_processor ? 0U : config.m_num_parallel_processors;
-    record.m_warm_up = config.m_warm_up;
+    record.m_instances = derived.m_exclusive ? 0U : model.m_max_instances;
+    record.m_warm_up = hard.m_warmup == ANIRA_WARMUP_FIXED ? hard.m_warmup_iterations : 0U;
     return record;
 }
 
@@ -1145,7 +1208,7 @@ anira::engine::Model model_of_row(const anira_model_config& model,
 // refused one without); the engine-free roundtrip is the 2.x class's alone.
 std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handler,
                                                       const anira::capi::Derived& derived,
-                                                      const anira::InferenceConfig& config) {
+                                                      const anira::capi::HardContract& hard) {
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
     // The variant a registered engine's load reads (the load record names it): anira's own
     // copy, shared by the registered rows of this prepare and kept alive by their loaded
@@ -1158,8 +1221,7 @@ std::vector<anira::engine::PlanRequest> plan_requests(const anira_handler& handl
         const size_t row_index = key.m_row;
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::engine::PlanRequest request;
-        request.m_legacy_backend = backend_of_row(row, row_index);
-        request.m_model = model_of_row(model, row, derived, config);
+        request.m_model = model_of_row(model, row, derived, hard);
         // The provider is the plan's, part of the pool key: two providers of one row are two
         // loaded models, and so are two option sets of the context for one backend (the
         // "provider_options" extension of the handler's context config).
@@ -1225,7 +1287,6 @@ void build_plans(anira_handler& handler,
         const anira::capi::ModelEntry& row = model.m_models[row_index];
         anira::capi::Plan plan;
         plan.m_row = row_index;
-        plan.m_backend = backend_of_row(row, row_index);
         plan.m_info.variant = 0;
         plan.m_info.engine = static_cast<uint32_t>(row.m_engine);
         plan.m_info.provider = static_cast<uint32_t>(key.m_provider);
@@ -1320,7 +1381,7 @@ anira_binding binding_of(const anira::SessionElement& session,
 
 // The plan report: the plan rows, the slots of every plan (their binding read off the
 // session's loaded models, under the same dense index) and the extensions each plan's
-// candidate consumes (`consumers` are the pipeline's: its stage and its registered engines,
+// candidate consumes (`consumers` are the pipeline's: its processor and its registered engines,
 // whose rows read the engine's id); every string the rows point at is copied into the
 // report's store.
 void build_report(anira_handler& handler,
@@ -1492,7 +1553,7 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
 // memory, no pointer. The channel count and the dtype are the stream port's; a slot without a
 // host block has 1 channel and the spec's dtype (a static port) or the resolved ring dtype of
 // its position (`ring_dtypes`, float32 where the contract names none).
-std::vector<anira_tensor> empty_tensors(const std::vector<anira::capi::Port>& ports,
+std::vector<anira_tensor> empty_tensors(const anira::capi::Ports& ports,
                                         const std::vector<anira_dtype>& ring_dtypes) {
     std::vector<anira_tensor> tensors(ports.size());
     for (size_t i = 0; i < ports.size(); ++i) {
@@ -1510,18 +1571,18 @@ std::vector<anira_tensor> empty_tensors(const std::vector<anira::capi::Port>& po
     return tensors;
 }
 
-// The template of the model end of every slot of one side, for the stage's prepare record: the
-// spec's dtype and the shape the InferenceConfig pinned (what anira_stage_input_tensor fills at
+// The template of the model end of every slot of one side, for the processor's prepare record: the
+// spec's dtype and the extents the validator pinned (what anira_processor_input_tensor fills at
 // run time, over the struct's memory), all-zero strides, the slot's declared host domain, no
 // memory. State slots included: one template per tensor of the list.
-std::vector<anira_tensor> model_end_templates(const std::vector<std::vector<int64_t>>& shapes,
+std::vector<anira_tensor> model_end_templates(const std::vector<anira::capi::DerivedSpec>& derived,
                                               const std::vector<anira_tensor_spec>& specs,
                                               const std::vector<anira_domain>& domains) {
     std::vector<anira_tensor> templates(specs.size());
     for (size_t slot = 0; slot < specs.size(); ++slot) {
-        const bool has_shape = slot < shapes.size();
-        const uint32_t ndim = has_shape ? static_cast<uint32_t>(shapes[slot].size()) : 0U;
-        const int64_t* extents = has_shape ? shapes[slot].data() : nullptr;
+        const bool has_shape = slot < derived.size();
+        const uint32_t ndim = has_shape ? static_cast<uint32_t>(derived[slot].m_dims.size()) : 0U;
+        const int64_t* extents = has_shape ? derived[slot].m_dims.data() : nullptr;
         anira_tensor_init_host(&templates[slot], nullptr, specs[slot].m_dtype, ndim, extents);
         if (slot < domains.size()) {
             templates[slot].domain = static_cast<uint32_t>(domains[slot]);
@@ -1543,19 +1604,19 @@ std::vector<const char*> canonical_names(const std::vector<anira_tensor_spec>& s
 // unprepares the handler.
 void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The snapshot: the handle may be destroyed when the call returns; the handler keeps it
-    // (moved into handler.m_contract below, after the last use of hard).
+    // (moved into handler.m_contract below, once the previous session is released).
     anira_contract snapshot = contract;
     const anira_model_config& model = handler.m_pipeline.m_variants[0];
     const std::vector<anira_backend_id> ids = handler.m_pipeline.candidate_ids();
     const auto num_ids = static_cast<uint32_t>(ids.size());
 
     // Every rule (the contract's, the structural ones again, the extension walk with the
-    // contract's bag), the miss policy against the anchor, then the 2.x configuration. The
-    // stage relaxes the ring dtype rule for a side whose phase it fills, and its consumed
+    // contract's bag), then the miss policy against the anchor. The
+    // processor relaxes the ring dtype rule for a side whose phase it fills, and its consumed
     // kinds join the walk; a registered engine's row is a plan, and its consumed kinds join
     // the walk too.
-    const anira::capi::StageCarrier* const stage = handler.m_pipeline.m_stage.get();
-    const anira::capi::StageFacts stages = anira::capi::stage_facts(stage);
+    const anira::capi::ProcessorCarrier* const processor = handler.m_pipeline.m_processor.get();
+    const anira::capi::ProcessorFacts processors = anira::capi::processor_facts(processor);
     const anira::capi::EngineFacts engines =
         anira::capi::engine_facts(handler.m_pipeline.m_engines);
     anira::capi::Derived derived;
@@ -1564,13 +1625,14 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                           candidates_of(ids),
                           num_ids,
                           derived,
-                          &stages,
+                          &processors,
                           &engines,
                           handler.m_pipeline.m_default_set);
     const anira::capi::HardContract& hard = *snapshot.hard();  // validate refused Async
     check_buffer_specs(model);
-    check_stage_flags(stage);
+    check_processor_flags(processor);
     const anira::RingDtypes ring_dtypes = anira::capi::ring_dtypes_of(snapshot, model);
+    check_host_blocks(hard);
     check_miss_policy(hard, model, derived, ring_dtypes);
     // The plans' providers against what their engines serve, as at create: a built-in
     // engine's runtime as the context reports it now (a context probed again since is seen
@@ -1581,30 +1643,27 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
                     derived,
                     handler.m_query_answers,
                     anira::capi::QueryUse::Reuse);
-    // The stage's init, once per registration, at the first prepare of a handler of the
+    // The processor's init, once per registration, at the first prepare of a handler of the
     // pipeline that survives validation, before any model loads (a refused init throws none of
     // that work away and is tried again by the next prepare), with the facts of the core in
     // effect: the level, the pool this session will run on, this handler's context.
-    if (stage != nullptr) {
+    if (processor != nullptr) {
         anira_init_info init = ANIRA_INIT_INFO_INIT;
         init.log_level = static_cast<uint32_t>(anira::get_log_level());
         init.num_threads = static_cast<uint32_t>(
             anira::Core::prospective_thread_pool_size(handler.m_context->m_config));
         init.context = handler.m_context;
-        const anira_status init_status = stage->ensure_init(init);
+        const anira_status init_status = processor->ensure_init(init);
         if (init_status != ANIRA_OK) {
             throw StatusError(init_status,
-                              std::string("the stage refused ") +
+                              std::string("the processor refused ") +
                                   anira::capi::phase_word(ANIRA_PHASE_INIT) + ": it returned " +
                                   std::to_string(static_cast<int>(init_status)) + " (" +
                                   anira_status_string(init_status) + ")");
         }
     }
-    // The 2.x configuration of the validated variant (validated once, above).
-    anira::InferenceConfig config = anira::capi::make_inference_config(model, snapshot, derived);
-    const anira::HostConfig host = anira::capi::make_host_config(snapshot, model);
-
-    // Quiescence: the previous session is released before the new one is built.
+    // Quiescence: the previous session is released before the new one is built, and with it
+    // the last reader of the previous snapshot and derivation.
     unprepare(handler);
     // Declared state: the port survives the re-prepare, its value does not. Both buffers of
     // every pair start the new session at zeros, and the port forgets the generation it was
@@ -1620,80 +1679,93 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     // The session: Core::create_session loads every surviving row's model (the FIXED warm-up
     // runs there) and throws NO_SUCH_FILE / MODEL_LOAD / ENGINE,
     // which the firewall classifies. The session records into the handler's latch from its
-    // construction. The one processor the session sees is the stage processor, whether the
-    // pipeline has a stage or not: without one it runs the default bodies, which are the 2.x
-    // default processor's. The plan table is the session's from its construction: one plan
-    // per surviving row, in entry order, what build_plans reports under the same indices.
-    handler.m_inference_config = std::move(config);
+    // construction. The one processor the session runs every chunk on is the processor runner,
+    // whether the pipeline has a processor or not: without one it runs the default bodies, which
+    // are the 2.x default processor's. The plan table is the session's from its construction: one
+    // plan per surviving row, in entry order, what build_plans reports under the same indices.
+    // The session reads the configuration by reference: the snapshot's Hard half and the
+    // derivation are the handler's from here on, beside the variant.
+    check_stream_ports(derived, handler, "anira_handler_prepare");
+    handler.m_contract = std::move(snapshot);
+    handler.m_derived = std::move(derived);
+    const anira_contract& prepared_contract = handler.m_contract;
+    const anira::capi::HardContract& prepared_hard = *prepared_contract.hard();
+    const anira::capi::Derived& prepared = handler.m_derived;
     std::vector<anira::engine::PlanRequest> requests =
-        plan_requests(handler, derived, handler.m_inference_config);
-    auto processor = std::make_unique<anira::capi::StageProcessor>(handler.m_inference_config,
-                                                                   stage,
-                                                                   handler.m_input_ports,
-                                                                   handler.m_output_ports);
-    anira::capi::StageProcessor* const stage_processor = processor.get();
-    handler.m_pp = std::move(processor);
+        plan_requests(handler, prepared, prepared_hard);
+    handler.m_pp = std::make_unique<anira::capi::ProcessorRunner>(processor,
+                                                                  handler.m_input_ports,
+                                                                  handler.m_output_ports);
+    anira::capi::ProcessorRunner* const processor_runner = handler.m_pp.get();
     handler.m_manager = std::make_unique<anira::InferenceManager>(*handler.m_pp,
-                                                                  handler.m_inference_config,
+                                                                  model,
+                                                                  prepared,
+                                                                  prepared_hard,
                                                                   std::move(requests),
                                                                   handler.m_context->m_config,
                                                                   &handler.m_rt);
-    handler.m_manager->set_miss_policy(hard.m_on_miss);
-    handler.m_miss_fn = hard.m_miss_fn;
-    handler.m_miss_user_data = hard.m_miss_user_data;
-    handler.m_manager->set_miss_hook(hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
-                                     &handler);
+    handler.m_manager->set_miss_policy(prepared_hard.m_on_miss);
+    handler.m_miss_fn = prepared_hard.m_miss_fn;
+    handler.m_miss_user_data = prepared_hard.m_miss_user_data;
+    handler.m_manager->set_miss_hook(
+        prepared_hard.m_on_miss == ANIRA_MISS_CALLBACK ? &miss_hook : nullptr,
+        &handler);
+    handler.m_manager->set_drop_hook(
+        prepared_hard.m_on_miss == ANIRA_MISS_CALLBACK ? &drop_hook : nullptr,
+        &handler);
     // The report's plan rows and the initial selection, on the session before it is prepared.
-    build_plans(handler, model, derived, hard);
-    handler.m_manager->prepare(host, anira::capi::latencies_of(snapshot, model), ring_dtypes);
-    // The session's structs and rings exist now, and no chunk does: the processor binds to
-    // them (the plan table included: what a ctx reports for a chunk is the engine and the
-    // provider of the plan it was stamped with), and every stream port gets its ring.
-    stage_processor->bind(handler.m_manager->session());
-    // The entries of the session, what anira_stage_ctx.entry indexes and
-    // anira_handler_num_entries answers: the stage's prepare (below) sizes its scratch by it.
-    handler.m_num_entries = stage_processor->num_entries();
+    build_plans(handler, model, prepared, prepared_hard);
+    handler.m_manager->prepare(anira::capi::latencies_of(prepared_contract, model), ring_dtypes);
+    // The session's structs exist now, and its rings are sized in their stream ports, and no
+    // chunk exists: the processor binds to the session (the plan table included: what a ctx
+    // reports for a chunk is the engine and the provider of the plan it was stamped with).
+    processor_runner->bind(handler.m_manager->session());
+    // The entries of the session, what anira_processor_ctx.entry indexes and
+    // anira_handler_num_entries answers: the processor's prepare (below) sizes its scratch by it.
+    handler.m_num_entries = processor_runner->num_entries();
 
     // What the driver thread knows per Streamed slot, on its stream port: the dtype a host
     // block must carry (the resolved ring dtype), the channel count of a host block and the
-    // most samples it may carry (one host block of block_max on the slot's stream); then the
+    // most samples it may carry (one host block of host_block_max on the slot's stream, from the
+    // block in hops the session's prepare computed); then the
     // empty tensors of the single-tensor forms. A Static slot has no ring and no host block:
     // its entry of either array stays the empty tensor, and its tensors are checked against the
     // static port's value. A State slot has neither a ring nor a value: its entry is an empty
     // tensor nothing ever replaces.
-    const anira::InferenceConfig& prepared = handler.m_inference_config;
-    const anira::LatencyCalculator::Rational block_hops = block_in_hops(host, prepared);
+    const anira::LatencyCalculator::Rational block_hops = handler.m_manager->session().m_block_hops;
+    const auto stream_of = [&block_hops](anira::capi::StreamPort& stream,
+                                         const anira::capi::DerivedSpec& spec,
+                                         anira_dtype ring_dtype) {
+        const auto hop = static_cast<size_t>(spec.m_hop);
+        stream.m_ring_dtype = ring_dtype;
+        stream.m_channels = hop > 0 ? static_cast<uint32_t>(spec.m_channels) : 1U;
+        stream.m_max_samples = anira::LatencyCalculator::block_samples(block_hops, hop);
+    };
     for (uint32_t slot = 0; slot < handler.m_num_inputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_input_ports[slot]);
         if (stream == nullptr) { continue; }
-        const size_t hop = prepared.get_preprocess_input_size()[slot];
-        stream->m_ring_dtype = ring_dtypes.m_inputs[slot];
-        stream->m_channels =
-            hop > 0 ? static_cast<uint32_t>(prepared.get_preprocess_input_channels()[slot]) : 1U;
-        stream->m_max_samples = host_block_samples(block_hops, hop);
+        stream_of(*stream, prepared.m_inputs[slot], ring_dtypes.m_inputs[slot]);
     }
     for (uint32_t slot = 0; slot < handler.m_num_outputs; ++slot) {
         auto* stream = std::get_if<anira::capi::StreamPort>(&handler.m_output_ports[slot]);
         if (stream == nullptr) { continue; }
-        const size_t hop = prepared.get_postprocess_output_size()[slot];
-        stream->m_ring_dtype = ring_dtypes.m_outputs[slot];
-        stream->m_channels =
-            hop > 0 ? static_cast<uint32_t>(prepared.get_postprocess_output_channels()[slot]) : 1U;
-        stream->m_max_samples = host_block_samples(block_hops, hop);
+        stream_of(*stream, prepared.m_outputs[slot], ring_dtypes.m_outputs[slot]);
     }
     handler.m_input_tensors = empty_tensors(handler.m_input_ports, ring_dtypes.m_inputs);
     handler.m_output_tensors = empty_tensors(handler.m_output_ports, ring_dtypes.m_outputs);
-    // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x block_max / rate, the block a pop
-    // has no input to measure by.
+    // ANIRA_WAIT_CONTRACT of the pop twins: wait_ratio x host_block_max / host_rate, the block a
+    // pop has no input to measure by.
     handler.m_contract_wait = std::chrono::microseconds(static_cast<std::chrono::microseconds::rep>(
-        hard.m_block_max / hard.m_rate * 1e6 * hard.m_wait_ratio));
+        prepared_hard.m_host_block_max / prepared_hard.m_host_rate * 1e6 *
+        prepared_hard.m_wait_ratio));
 
     // The declared host-end domain per slot (validate refused a name that is no tensor's and,
     // in this pre-release, any domain but host memory): what the slot rows report, and the
     // domain of every declared State pair (the pair is the model's, in the engine domain of the
     // plans that run it, host memory for every engine of this pre-release; the declared domain
     // of the slot overrides it), set while no chunk exists.
-    const anira::capi::HostDomains host_domains = anira::capi::host_domains_of(snapshot, model);
+    const anira::capi::HostDomains host_domains =
+        anira::capi::host_domains_of(prepared_contract, model);
     for (size_t slot = 0;
          slot < handler.m_input_ports.size() && slot < host_domains.m_inputs.size();
          ++slot) {
@@ -1703,13 +1775,11 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     }
     build_report(handler,
                  model,
-                 snapshot,
-                 anira::capi::pipeline_consumers(&stages, &engines),
+                 prepared_contract,
+                 anira::capi::pipeline_consumers(&processors, &engines),
                  host_domains);
     log_report(handler, model);
 
-    handler.m_contract = std::move(snapshot);
-    handler.m_host_config = host;
     const uint32_t suppressed = handler.m_rt.rearm();
     if (suppressed > 0) {
         ANIRA_LOG_WARNING(anira::log_group::k_capi,
@@ -1720,19 +1790,15 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     handler.m_prepared.store(true, std::memory_order_release);
 
     // The shared prepare record (anira/abi/lifecycle.h), the same for every registered engine
-    // of the plan table and for the stage: the handler, the report that now exists, the entry
+    // of the plan table and for the processor: the handler, the report that now exists, the entry
     // count, a template of the model end of every slot, the canonical names and the flags of
     // this prepare, valid for the duration of the calls below. The handler counts as prepared
     // while they run, so its getters answer (the entry count among them); no driver thread
     // runs (prepare overlaps no other entry).
     const std::vector<anira_tensor> input_templates =
-        model_end_templates(prepared.get_tensor_input_shape(),
-                            model.m_inputs,
-                            host_domains.m_inputs);
+        model_end_templates(prepared.m_inputs, model.m_inputs, host_domains.m_inputs);
     const std::vector<anira_tensor> output_templates =
-        model_end_templates(prepared.get_tensor_output_shape(),
-                            model.m_outputs,
-                            host_domains.m_outputs);
+        model_end_templates(prepared.m_outputs, model.m_outputs, host_domains.m_outputs);
     const std::vector<const char*> input_names = canonical_names(model.m_inputs);
     const std::vector<const char*> output_names = canonical_names(model.m_outputs);
     anira_prepare_info info = ANIRA_PREPARE_INFO_INIT;
@@ -1745,7 +1811,7 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     info.output_names = output_names.data();
     info.num_inputs = static_cast<uint32_t>(input_templates.size());
     info.num_outputs = static_cast<uint32_t>(output_templates.size());
-    info.flags = prepared.m_session_exclusive_processor ? ANIRA_PREPARE_EXCLUSIVE : 0U;
+    info.flags = prepared.m_exclusive ? ANIRA_PREPARE_EXCLUSIVE : 0U;
 
     // Every registered engine's plan gets this session's prepared handle now, with the record
     // and the loaded pointer (the core made the other plans' at the session's create): the
@@ -1756,31 +1822,30 @@ void prepare_handler(anira_handler& handler, const anira_contract& contract) {
     for (anira::SessionElement::PlanSlot& slot : session.m_plans) {
         if (!slot.m_registered || slot.m_prepared != nullptr) { continue; }
         slot.m_prepared = slot.m_loaded->prepare(
-            anira::engine::PrepareRequest{.m_exclusive = prepared.m_session_exclusive_processor,
-                                          .m_info = &info});
+            anira::engine::PrepareRequest{.m_exclusive = prepared.m_exclusive, .m_info = &info});
     }
 
-    // Last, the stage's prepare function, when it has one, with the record (its init ran above,
+    // Last, the processor's prepare function, when it has one, with the record (its init ran above,
     // before the models loaded). A status other than ANIRA_OK fails this prepare with it, and
-    // the caller unprepares the handler; the stage's unprepare is not owed for a refused
+    // the caller unprepares the handler; the processor's unprepare is not owed for a refused
     // prepare.
-    if (stage != nullptr && stage->desc().prepare != nullptr) {
-        const anira_stage_desc& desc = stage->desc();
-        void* stage_prepared = nullptr;
-        const anira_status status = desc.prepare(&info, desc.user_data, &stage_prepared);
+    if (processor != nullptr && processor->desc().prepare != nullptr) {
+        const anira_processor_desc& desc = processor->desc();
+        void* processor_prepared = nullptr;
+        const anira_status status = desc.prepare(&info, desc.user_data, &processor_prepared);
         if (status != ANIRA_OK) {
             throw StatusError(status,
-                              std::string("the stage refused ") +
+                              std::string("the processor refused ") +
                                   anira::capi::phase_word(ANIRA_PHASE_PREPARE) + ": it returned " +
                                   std::to_string(static_cast<int>(status)) + " (" +
                                   anira_status_string(status) + ")");
         }
-        // What the stage handed back for this handler: every phase call and the reset receive
+        // What the processor handed back for this handler: every phase call and the reset receive
         // it beside user_data from here on, and the unprepare gets it back once, when the
         // session is released.
-        handler.m_stage_prepared = stage_prepared;
-        handler.m_stage_unprepare_owed = true;
-        stage_processor->set_prepared(stage_prepared);
+        handler.m_processor_prepared = processor_prepared;
+        handler.m_processor_unprepare_owed = true;
+        processor_runner->set_prepared(processor_prepared);
     }
     // Every callback of this prepare returned and every plan has its prepared handle: the
     // Hard entries and reset run from here on (the getters answered since m_prepared above,
@@ -1850,6 +1915,28 @@ anira_model_config clone_model_config(const anira_model_config& model) {
     return copy;
 }
 
+std::string stream_port_refusal(const Derived& derived, const Ports& inputs, const Ports& outputs) {
+    const auto side = [](const std::vector<DerivedSpec>& rows,
+                         const Ports& ports,
+                         const char* word) -> std::string {
+        if (rows.size() != ports.size()) {
+            return std::string("the ") + word + " side has " + std::to_string(ports.size()) +
+                   " ports for " + std::to_string(rows.size()) + " tensors";
+        }
+        for (size_t slot = 0; slot < rows.size(); ++slot) {
+            if (rows[slot].m_hop > 0 && !std::holds_alternative<StreamPort>(ports[slot])) {
+                return std::string(word) + " slot " + std::to_string(slot) +
+                       " has a stream (a hop of " + std::to_string(rows[slot].m_hop) +
+                       ") but no stream port";
+            }
+        }
+        return {};
+    };
+    std::string refusal = side(derived.m_inputs, inputs, "input");
+    if (refusal.empty()) { refusal = side(derived.m_outputs, outputs, "output"); }
+    return refusal;
+}
+
 }  // namespace anira::capi
 
 std::vector<anira_backend_id> anira_pipeline::candidate_ids() const {
@@ -1869,7 +1956,7 @@ anira_pipeline::anira_pipeline(const anira_pipeline& other)
     : m_candidates(other.m_candidates)
     , m_default_set(other.m_default_set)
     , m_has_inference(other.m_has_inference)
-    , m_stage(other.m_stage)  // the carriers are shared, never cloned
+    , m_processor(other.m_processor)  // the carriers are shared, never cloned
     , m_engines(other.m_engines) {
     m_variants.reserve(other.m_variants.size());
     for (const anira_model_config& variant : other.m_variants) {
@@ -2018,7 +2105,7 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
         }
         for (const anira::capi::ModelEntry& row : variants[0]->m_models) {
             if (!row.is_pinned()) { continue; }
-            if (!row.is_custom() && !anira::capi::backend_of(row).has_value()) { continue; }
+            if (!row.is_custom() && !anira::capi::engine_enabled(row.m_engine)) { continue; }
             anira::capi::Candidate pinned;
             pinned.m_id.engine = static_cast<uint32_t>(row.m_engine);
             pinned.m_id.provider = static_cast<uint32_t>(row.m_provider);
@@ -2063,61 +2150,62 @@ anira_status ANIRA_CALL anira_pipeline_add_inference(anira_pipeline* pipeline,
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
-anira_status ANIRA_CALL anira_pipeline_add_stage(anira_pipeline* pipeline,
-                                                 const anira_stage_desc* desc,
-                                                 anira_error* err) ANIRA_NOEXCEPT try {
+anira_status ANIRA_CALL anira_pipeline_add_processor(anira_pipeline* pipeline,
+                                                     const anira_processor_desc* desc,
+                                                     anira_error* err) ANIRA_NOEXCEPT try {
     ANIRA_CAPI_REQUIRE(pipeline != nullptr,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
                        "pipeline: NULL pipeline");
     ANIRA_CAPI_REQUIRE(desc != nullptr, err, ANIRA_ERROR_INVALID_ARGUMENT, "pipeline: NULL desc");
-    ANIRA_CAPI_REQUIRE(desc->struct_size >= k_stage_desc_head,
+    ANIRA_CAPI_REQUIRE(desc->struct_size >= k_processor_desc_head,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: the stage's struct_size %u is below the three leading slots "
+                       "pipeline: the processor's struct_size %u is below the three leading slots "
                        "{struct_size, abi_version, user_data}",
                        desc->struct_size);
     // Within the caller's struct_size, over the defaults: a slot an older header lacks reads
-    // as in ANIRA_STAGE_DESC_INIT.
-    anira_stage_desc value = ANIRA_STAGE_DESC_INIT;
-    std::memcpy(&value, desc, std::min<size_t>(desc->struct_size, sizeof(anira_stage_desc)));
-    value.struct_size = sizeof(anira_stage_desc);
-    ANIRA_CAPI_REQUIRE(!ANIRA_FAILED(anira_check_abi(value.abi_version)),
-                       err,
-                       ANIRA_ERROR_ABI_VERSION,
-                       "pipeline: the stage was compiled against ABI 0x%08x, which this library "
-                       "does not serve",
-                       value.abi_version);
+    // as in ANIRA_PROCESSOR_DESC_INIT.
+    anira_processor_desc value = ANIRA_PROCESSOR_DESC_INIT;
+    std::memcpy(&value, desc, std::min<size_t>(desc->struct_size, sizeof(anira_processor_desc)));
+    value.struct_size = sizeof(anira_processor_desc);
     ANIRA_CAPI_REQUIRE(
-        (value.flags & ~k_stage_flags) == 0,
+        !ANIRA_FAILED(anira_check_abi(value.abi_version)),
         err,
-        ANIRA_ERROR_INVALID_ARGUMENT,
-        "pipeline: the stage's flags 0x%x carry a bit this library does not "
-        "define (ANIRA_STAGE_FLAG_REALTIME_PRE_POST | ANIRA_STAGE_FLAG_REALTIME_HOOKS is 0x%x)",
-        value.flags,
-        k_stage_flags);
+        ANIRA_ERROR_ABI_VERSION,
+        "pipeline: the processor was compiled against ABI 0x%08x, which this library "
+        "does not serve",
+        value.abi_version);
+    ANIRA_CAPI_REQUIRE((value.flags & ~k_processor_flags) == 0,
+                       err,
+                       ANIRA_ERROR_INVALID_ARGUMENT,
+                       "pipeline: the processor's flags 0x%x carry a bit this library does not "
+                       "define (ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST | "
+                       "ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS is 0x%x)",
+                       value.flags,
+                       k_processor_flags);
     ANIRA_CAPI_REQUIRE(value.consumed_kinds != nullptr || value.num_consumed_kinds == 0,
                        err,
                        ANIRA_ERROR_INVALID_ARGUMENT,
-                       "pipeline: the stage's consumed_kinds is NULL with a count of %u",
+                       "pipeline: the processor's consumed_kinds is NULL with a count of %u",
                        value.num_consumed_kinds);
     for (uint32_t i = 0; i < value.num_consumed_kinds; ++i) {
         ANIRA_CAPI_REQUIRE(value.consumed_kinds[i] != nullptr,
                            err,
                            ANIRA_ERROR_INVALID_ARGUMENT,
-                           "pipeline: the stage's consumed_kinds[%u] is NULL",
+                           "pipeline: the processor's consumed_kinds[%u] is NULL",
                            i);
     }
-    // One stage per pipeline: the stage owns every phase it fills for every slot, and composes
-    // what it does not handle itself by calling the default bodies. Checked last, so that a
-    // malformed descriptor is reported as such whatever the pipeline holds.
-    ANIRA_CAPI_REQUIRE(pipeline->m_stage == nullptr,
+    // One processor per pipeline: the processor owns every phase it fills for every slot, and
+    // composes what it does not handle itself by calling the default bodies. Checked last, so that
+    // a malformed descriptor is reported as such whatever the pipeline holds.
+    ANIRA_CAPI_REQUIRE(pipeline->m_processor == nullptr,
                        err,
                        ANIRA_ERROR_INVALID_STATE,
-                       "pipeline: the pipeline already has a stage; a pipeline holds at most "
+                       "pipeline: the pipeline already has a processor; a pipeline holds at most "
                        "one, which composes the default bodies itself");
     // The carrier copies the kinds.
-    pipeline->m_stage = std::make_shared<anira::capi::StageCarrier>(value);
+    pipeline->m_processor = std::make_shared<anira::capi::ProcessorCarrier>(value);
     return ANIRA_OK;
 } catch (...) { return translate_exception(err, __func__); }
 
@@ -2353,9 +2441,10 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     // The structural check with no contract: the tensors, the axes, the layouts, the named
     // candidates against this build and the pipeline's registrations, the extension walk
     // over the model and its specs; a variant no candidate matches is CONFIG here. Nothing
-    // loads: the models load at prepare, where the InferenceConfig needs the contract.
+    // loads: the models load at prepare, where the session needs the contract.
     const std::vector<anira_backend_id> ids = pipeline->candidate_ids();
-    const anira::capi::StageFacts stages = anira::capi::stage_facts(pipeline->m_stage.get());
+    const anira::capi::ProcessorFacts processors =
+        anira::capi::processor_facts(pipeline->m_processor.get());
     const anira::capi::EngineFacts engines = anira::capi::engine_facts(pipeline->m_engines);
     anira::capi::Derived derived;
     anira::capi::validate(pipeline->m_variants[0],
@@ -2363,7 +2452,7 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
                           candidates_of(ids),
                           static_cast<uint32_t>(ids.size()),
                           derived,
-                          &stages,
+                          &processors,
                           &engines,
                           pipeline->m_default_set);
     // The custom engines' queries run here, on the main thread, and the handler keeps their
@@ -2372,14 +2461,17 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     check_providers(*context, *pipeline, derived, answers, anira::capi::QueryUse::Ask);
     check_option_sets(*context, *pipeline, answers);
 
-    auto handler = std::make_unique<anira_handler>();
+    // The ports, one per tensor of either list of the variant (the copy below has the same
+    // lists), made with the handler.
+    auto handler = std::make_unique<anira_handler>(pipeline->m_variants[0].m_inputs.size(),
+                                                   pipeline->m_variants[0].m_outputs.size());
     handler->m_pipeline = anira_pipeline(*pipeline);
     handler->m_query_answers = std::move(answers);
-    // The ports: one per tensor of either list, the arm by the spec's role (the copy fixes the
-    // specs, so the vectors are never resized and no arm ever changes). A static port holds
-    // its zeroed value in the spec's shape and dtype, built in place (an atomic does not
-    // move): from here on the two Static entries work, prepared or not. A stream port gets
-    // its fields at prepare. A State input holds the state's two buffers, which the stage
+    // The ports: one per tensor of either list, made with the handler (capi::Ports never
+    // resizes), the arm by the spec's role (the copy fixes the specs, so no arm ever changes). A
+    // static port holds its zeroed value in the spec's shape and dtype, built in place (an atomic
+    // does not move): from here on the two Static entries work, prepared or not. A stream port gets
+    // its fields at prepare. A State input holds the state's two buffers, which the processor
     // processor binds the pair's model tensors to and flips on the inference thread, and a
     // State output names the input it feeds; no entry of the handler carries either. A Buffer
     // tensor is a per-job
@@ -2389,9 +2481,8 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
     const auto build_side = [](const std::vector<anira_tensor_spec>& specs,
                                const std::vector<anira::capi::DerivedSpec>& rows,
                                bool inputs,
-                               std::vector<anira::capi::Port>& side) {
-        side = std::vector<anira::capi::Port>(specs.size());  // stream ports
-        for (size_t i = 0; i < specs.size(); ++i) {
+                               anira::capi::Ports& side) {
+        for (size_t i = 0; i < specs.size(); ++i) {  // stream ports until here
             switch (specs[i].m_role) {
                 case ANIRA_ROLE_STATIC:
                     side[i].emplace<anira::capi::StaticPort>(rows[i].m_dims, specs[i].m_dtype);
@@ -2418,6 +2509,7 @@ anira_status ANIRA_CALL anira_handler_create(anira_context* context,
         if (input != nullptr) { input->m_partner = static_cast<uint32_t>(link.m_output); }
         if (output != nullptr) { output->m_partner = static_cast<uint32_t>(link.m_input); }
     }
+    check_stream_ports(derived, *handler, "anira_handler_create");
     // The slot counts, the lengths of the model config's two lists: the bound of every entry
     // that names a slot, the two Static entries on an unprepared handler included.
     handler->m_num_inputs = static_cast<uint32_t>(model.m_inputs.size());
@@ -2435,7 +2527,7 @@ void ANIRA_CALL anira_handler_destroy(anira_handler* handler) ANIRA_NOEXCEPT try
     if (handler == nullptr) { return; }
     // The session goes first: in-flight work drains, the pool joins with the last session of
     // this copy (the !loader-lock tag). Then the processor, the report and the plan table;
-    // the InferenceConfig goes with the handler.
+    // the contract snapshot and the derivation go with the handler.
     unprepare(*handler);
     // create registers the handler with the core and add-refs the context together.
     if (handler->m_context != nullptr) {
@@ -2516,6 +2608,30 @@ anira_status ANIRA_CALL anira_plan_report_exts(const anira_plan_report* report,
     }
     return enumerate_rows(report->m_exts[plan], k_plan_ext_head, element_size, count, out);
 } catch (...) { return translate_exception(nullptr, __func__); }
+
+anira_status ANIRA_CALL anira_plan_report_find(const anira_plan_report* report,
+                                               const anira_plan_query* query,
+                                               uint32_t* plan) ANIRA_NOEXCEPT ANIRA_NONBLOCKING {
+    if (report == nullptr || query == nullptr || plan == nullptr ||
+        query->struct_size < k_plan_query_head) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const anira_plan_query read = readable_query(*query);
+    // The pair rule of each axis: an id exactly beside its CUSTOM value.
+    const anira_backend_id& backend = read.backend;
+    if ((backend.engine == ANIRA_ENGINE_CUSTOM) != (backend.engine_id != nullptr) ||
+        (backend.provider == ANIRA_PROVIDER_CUSTOM) != (backend.provider_id != nullptr)) {
+        return ANIRA_ERROR_INVALID_ARGUMENT;
+    }
+    const std::vector<anira_plan_info>& plans = report->m_plans;
+    for (size_t i = 0; i < plans.size(); ++i) {
+        if (matches(plans[i], read)) {
+            *plan = static_cast<uint32_t>(i);
+            return ANIRA_OK;
+        }
+    }
+    return ANIRA_ERROR_NOT_FOUND;
+}
 
 // ==== the plan selection ======================================================================
 
@@ -2748,18 +2864,16 @@ anira_status ANIRA_CALL anira_handler_get_available_samples(anira_handler* handl
     if (!has_arguments(*handler, out != nullptr && slot < handler->m_num_outputs, __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
-    const anira::InferenceConfig& config = handler->m_inference_config;
+    const anira::capi::DerivedSpec& spec = handler->m_derived.m_outputs[slot];
     // An output without a ring (Static, State): 0, nothing recorded, and the completed
     // inferences collected all the same (the manager's call collects before it answers 0), so a
     // Static output's stored value is the latest collected one after this call too.
-    if (config.get_postprocess_output_size()[slot] == 0) {
+    if (spec.m_hop == 0) {
         static_cast<void>(handler->m_manager->get_available_samples(slot, 0));
         return ANIRA_OK;
     }
     // The ring's own accessor is unbounded on the channel.
-    if (!has_arguments(*handler,
-                       channel < config.get_postprocess_output_channels()[slot],
-                       __func__)) {
+    if (!has_arguments(*handler, std::cmp_less(channel, spec.m_channels), __func__)) {
         return ANIRA_ERROR_INVALID_ARGUMENT;
     }
     *out = handler->m_manager->get_available_samples(slot, channel);

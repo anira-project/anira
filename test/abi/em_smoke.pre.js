@@ -1,7 +1,7 @@
 // The registry of em_smoke.c's scope (globalThis[Symbol.for('anira.registry')], what the
-// package's defineStage and defineEngine install), installed before main runs. It counts every
-// crossing in Module.smoke.counts; the stage composes anira's default bodies, the engine doubles
-// its input into its output, and the stage key em_smoke.c calls with 99 throws. Offsets come from
+// package's defineProcessor and defineEngine install), installed before main runs. It counts every
+// crossing in Module.smoke.counts; the processor composes anira's default bodies, the engine doubles
+// its input into its output, and the processor key em_smoke.c calls with 99 throws. Offsets come from
 // em_smoke.c (offsetof), set into Module.smoke.layout before the first crossing.
 Module.smoke = {
   layout: null,
@@ -47,7 +47,7 @@ const THROWING_KEY = 99;
 globalThis[Symbol.for('anira.registry')] = {
   version: 1,
   boot() {},
-  stage(module, key, phase, a, b) {
+  processor(module, key, phase, a, b) {
     const counts = Module.smoke.counts;
     if (key === THROWING_KEY) {
       counts.thrown += 1;
@@ -56,10 +56,10 @@ globalThis[Symbol.for('anira.registry')] = {
     switch (phase) {
       case PHASE.PRE_PROCESS:
         counts.pre += 1;
-        return Module._anira_stage_default_pre_process(a);
+        return Module._anira_processor_default_pre_process(a);
       case PHASE.POST_PROCESS:
         counts.post += 1;
-        return Module._anira_stage_default_post_process(a);
+        return Module._anira_processor_default_post_process(a);
       case PHASE.RESET:
         counts.reset += 1;
         return 0;

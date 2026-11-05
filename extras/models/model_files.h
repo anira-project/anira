@@ -3,7 +3,7 @@
 
 // The configuration files of the bundled models: one model file (section 1.5 of the usage
 // guide: the model entries with paths relative to the file, the tensor specs, the state) and
-// one contract file (the budget and the warm-up; the host geometry is patched in at prepare)
+// one contract file (the budget and the warm-up; the host blocks are patched in at prepare)
 // per model, next to the model directories they name. ANIRA_EXTRAS_MODELS_DIR is the root of
 // that tree at run time (extras/CMakeLists.txt; the one compile definition of the tests and
 // examples).
@@ -12,12 +12,14 @@
 //
 //     anira::ModelConfig model = anira::ModelConfig::from_file(k_cnn_model_json);
 //     anira::ContractHandle contract = anira::ContractHandle::from_file(k_cnn_contract_json);
-//     anira::InferenceConfig config = anira::v3compat::to_inference_config(
-//         model, contract, anira::v3compat::enabled_engines());
+//     anira::Pipeline pipeline;
+//     pipeline.add_inference(model);
+//     anira::InferenceHandler handler(context, pipeline);
+//     handler.prepare(contract.hard_host_blocks(block, block, host_rate));
 //
 // (or anira_model_config_from_json_file / anira_contract_from_json from C). The files set no
-// instance ceiling, so one processor per engine runs; a config that wants parallel instances
-// says so with max_instances.
+// instance ceiling, so the count is the inference pool's (ANIRA_INSTANCES_AUTO); a config that
+// wants fewer parallel instances says so with max_instances.
 
 #define ANIRA_EXTRAS_MODEL_FILE(relative) ANIRA_EXTRAS_MODELS_DIR "/" relative
 

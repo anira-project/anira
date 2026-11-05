@@ -69,7 +69,7 @@ if (graph(engine).every((file) => ortIn(file).length === 0)) {
   )
 }
 
-for (const example of ['stage-and-engine', 'model-file']) {
+for (const example of ['processor-and-engine', 'model-file']) {
   const assets = path.join(root, 'examples', example, 'dist', 'assets')
   if (!fs.existsSync(assets)) {
     failures.push(`examples/${example} is not built (npm run examples)`)

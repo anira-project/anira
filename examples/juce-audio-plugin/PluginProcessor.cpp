@@ -1,5 +1,23 @@
 #include "PluginProcessor.h"
 
+#include <array>
+#include <cstdint>
+#include <span>
+
+namespace {
+
+/// The plan a "Backend Type" choice names (PluginParameters::backendTypes).
+anira::PlanQuery backend_query(const juce::String& choice) {
+    if (choice == "LIBTORCH") { return {.backend = {.engine = ANIRA_ENGINE_LIBTORCH}}; }
+    if (choice == "ONNX") { return {.backend = {.engine = ANIRA_ENGINE_ONNXRUNTIME}}; }
+    if (choice == "TFLITE") { return {.backend = {.engine = ANIRA_ENGINE_TFLITE}}; }
+    if (choice == "LITERT") { return {.backend = {.engine = ANIRA_ENGINE_LITERT}}; }
+    if (choice == "EXECUTORCH") { return {.backend = {.engine = ANIRA_ENGINE_EXECUTORCH}}; }
+    return {.backend = {.engine = ANIRA_ENGINE_CUSTOM, .engine_id = k_bypass_engine_id}};
+}
+
+}  // namespace
+
 //==============================================================================
 AudioPluginAudioProcessor::AudioPluginAudioProcessor()
     : AudioProcessor(BusesProperties()
@@ -15,25 +33,18 @@ AudioPluginAudioProcessor::AudioPluginAudioProcessor()
                  nullptr,
                  juce::Identifier(getName()),
                  PluginParameters::createParameterLayout())
-// model_config, contract and inference_config are initialised in the header, from the files.
-// No CoreConfig is passed: the library default (half the hardware threads for inference)
-// is what this plugin wants; section 3.1 of the usage guide shows how to change it.
-#if MODEL_TO_USE != 7
-    , pp_processor(inference_config)
-#if MODEL_TO_USE <= 2
-    , bypass_processor(inference_config)
-    , inference_handler(pp_processor, inference_config, bypass_processor)
-#else
-    , inference_handler(pp_processor, inference_config)
+    , dry_wet_mixer(k_max_dry_latency) {
+    for (const juce::String& choice : PluginParameters::backendTypes) {
+        backend_queries.push_back(backend_query(choice));
+    }
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+    gain_tensor = anira::Tensor::from_host(&gain_value, ANIRA_DTYPE_F32, std::array<int64_t, 1>{1});
 #endif
-#else
-    , pp_processor_encoder(inference_config_encoder)
-    , inference_handler_encoder(pp_processor_encoder, inference_config_encoder)
-    , pp_processor_decoder(inference_config_decoder)
-    , inference_handler_decoder(pp_processor_decoder, inference_config_decoder)
+#if MODEL_TO_USE == 7
+    for (size_t i = 0; i < latent_space.size(); ++i) { latent_space_ptrs[i] = &latent_space[i]; }
+    latent = anira::Tensor::from_host_planar<float>(std::span<float* const>(latent_space_ptrs),
+                                                    std::array<int64_t, 2>{4, 1});
 #endif
-    , dry_wet_mixer(32768)  // 32768 samples of max latency compensation for the dry-wet mixer
-{
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
         parameters.addParameterListener(parameterID, this);
     }
@@ -108,39 +119,39 @@ void AudioPluginAudioProcessor::prepareToPlay(double sampleRate, int samplesPerB
 
     dry_wet_mixer.prepare(spec);
 
-    // The host geometry completes the contract: a fixed block of samplesPerBlock samples at
-    // sampleRate (a block_min of 1 would allow smaller blocks, at the price of more latency),
-    // and the bridge turns the contract and the model config into the 2.x HostConfig.
-    const auto block = static_cast<uint32_t>(samplesPerBlock);
+    // The host blocks complete the contract: the host's real block range at sampleRate.
+    // samplesPerBlock is the largest block JUCE promises, not a fixed one (a host may pass
+    // smaller blocks, splitting at an automation point, say), and JUCE names no minimum, so the
+    // range starts at one sample. The latency anira reports covers every block size of that
+    // range, and setLatencySamples below hands it to the host, which compensates it. Each
+    // processBlock carries its own block (the tensor's extent is set per call). The decoder of
+    // variant 7 anchors on its audio output, so it takes the same host blocks.
+    const auto host_block_max = static_cast<double>(samplesPerBlock);
 #if MODEL_TO_USE != 7
-    contract.hard_geometry(block, block, sampleRate);
-    inference_handler.prepare(anira::v3compat::to_host_config(contract, model_config));
+    model.prepare(host_block_max, sampleRate);
 #else
-    contract_encoder.hard_geometry(block, block, sampleRate);
-    inference_handler_encoder.prepare(
-        anira::v3compat::to_host_config(contract_encoder, model_config_encoder));
-    // The decoder anchors on its audio output (rave_funk_drum_decoder.model.json), so its
-    // geometry is the same block and rate; its latent input follows at one frame per 2048
-    // samples.
-    contract_decoder.hard_geometry(block, block, sampleRate);
-    inference_handler_decoder.prepare(
-        anira::v3compat::to_host_config(contract_decoder, model_config_decoder));
+    encoder.prepare(host_block_max, sampleRate);
+    decoder.prepare(host_block_max, sampleRate);
+    // A new stream on both handlers: the count of input samples towards the next latent frame
+    // starts over with it, so the frames are popped in step with the encoder's new stream.
+    m_count_input_samples = 0;
 #endif
 
+    const auto num_channels = static_cast<size_t>(getTotalNumInputChannels());
+    audio = anira::Tensor::from_host_planar<float>(
+        std::span<float* const>(channels.data(), num_channels),
+        std::array<int64_t, 2>{static_cast<int64_t>(num_channels), samplesPerBlock});
+
 #if MODEL_TO_USE != 7
-    int new_latency = (int)inference_handler.get_latency();  // The 0th tensor is the audio data
-                                                             // tensor, so we only need the first
-                                                             // element of the latency vector
+    const int new_latency = static_cast<int>(model.handler.get_latency());
 #else
-    // Encoder latency must be multiplied by 2048, because the encoder compresses the audio data by
-    // a factor of 2048 in the time domain.
-    int new_latency_encoder = (int)inference_handler_encoder.get_latency() * 2048;
-    int new_latency_decoder = (int)inference_handler_decoder.get_latency();
-    int new_latency = new_latency_encoder + new_latency_decoder;  // The total latency is the sum of
-                                                                  // the latencies of both encoders
+    // The encoder's latency is in latent frames of 2048 samples.
+    const int new_latency =
+        static_cast<int>(encoder.handler.get_latency() * 2048 + decoder.handler.get_latency());
 #endif
 
     setLatencySamples(new_latency);
+    jassert(new_latency <= k_max_dry_latency);  // the dry path's delay covers it
     dry_wet_mixer.setWetLatency((float)new_latency);
 
     for (auto& parameterID : PluginParameters::getPluginParameterList()) {
@@ -178,48 +189,51 @@ void AudioPluginAudioProcessor::processBlock(juce::AudioBuffer<float>& buffer,
 
     dry_wet_mixer.pushDrySamples(buffer);
 
-#if MODEL_TO_USE != 7
-    inference_handler.process(buffer.getArrayOfWritePointers(), (size_t)buffer.getNumSamples());
-#else
-    // For the RAVE model, we need to process the encoder and decoder separately.
-    float latent_space[4][1];
-    float* latent_space_ptrs[4];
-    for (int i = 0; i < 4; ++i) { latent_space_ptrs[i] = latent_space[i]; }
-    m_count_input_samples += buffer.getNumSamples();
-    inference_handler_encoder.push_data(buffer.getArrayOfWritePointers(),
-                                        (size_t)buffer.getNumSamples());
-    // Only pop data from the encoder when we have enough samples needed for one time step in the
-    // latent space vector (2048 samples).
-    while (m_count_input_samples >= 2048) {
-        size_t received_samples = inference_handler_encoder.pop_data(latent_space_ptrs, 1);
-        if (received_samples == 0) {
-            std::cout << "No data received from encoder!" << std::endl;
-            break;
-        } else {
-            m_count_input_samples -= 2048;
-        }
-        // Make some latent space modulation :)
-        latent_space[0][0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_0_ID.getParamID()).getValue());
-        latent_space[1][0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_1_ID.getParamID()).getValue());
-        latent_space[2][0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_2_ID.getParamID()).getValue());
-        latent_space[3][0] += static_cast<float>(
-            parameters.getParameterAsValue(PluginParameters::LATENT_3_ID.getParamID()).getValue());
-        inference_handler_decoder.push_data(latent_space_ptrs, received_samples);
+    for (int c = 0; c < buffer.getNumChannels(); ++c) {
+        channels[static_cast<size_t>(c)] = buffer.getWritePointer(c);
     }
-    inference_handler_decoder.pop_data(buffer.getArrayOfWritePointers(),
-                                       (size_t)buffer.getNumSamples());
+    audio.shape[1] = buffer.getNumSamples();
+
+    // The backend choice: the plan of the report that runs it (an engine this build or the
+    // model lacks has none, and the choice changes nothing). The report is the last prepare's,
+    // and prepareToPlay never runs beside this callback.
+    const anira::PlanQuery& query = backend_queries[static_cast<size_t>(backend.load())];
+#if MODEL_TO_USE != 7
+    model.select(query);
+#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
+    gain_value = gain.load();
+    model.handler.set_static_input(1, gain_tensor);
+#endif
+    model.handler.process(audio, 0, audio, 0);  // in place
+#else
+    encoder.select(query);
+    decoder.select(query);
+    // The encoder takes the audio and gives one latent frame per 2048 samples, which the
+    // decoder turns back into audio.
+    m_count_input_samples += buffer.getNumSamples();
+    encoder.handler.push_data(audio, 0);
+    while (m_count_input_samples >= 2048) {
+        // A missed frame still takes its place in the stream: anira keeps the stream
+        // time-aligned (the miss policy filled the frame, with zeros here, and the late frame
+        // is dropped when it arrives), so it is counted and passed on like any other. Waiting
+        // for it instead would leave the count ahead of the encoder's stream from then on:
+        // every later pop too early, the decoder fed out of step, misses on every block.
+        const anira_status popped = encoder.handler.pop_data(latent, 0);
+        if (popped != ANIRA_OK && popped != ANIRA_MISSED) { break; }
+        m_count_input_samples -= 2048;
+        // Make some latent space modulation :) The offsets are the parameter listener's atomics:
+        // reading the parameters' ValueTree here (getParameterAsValue) would allocate and
+        // register a ValueTree listener on the audio thread, beside the message thread's use.
+        for (size_t i = 0; i < latent_space.size(); ++i) {
+            latent_space[i] += latent_offsets[i].load();
+        }
+        decoder.handler.push_data(latent, 0);
+    }
+    decoder.handler.pop_data(audio, 0);
 #endif
 
     dry_wet_mixer.mixWetSamples(buffer);
 
-#if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
-    // For the simple-gain and simple-stereo-gain models, we can retrieve the peak gain value from
-    // the post-processor. float peak_gain = pp_processor.get_output(1, 0); std::cout << "peak_gain:
-    // " << peak_gain << std::endl;
-#endif
     if (isNonRealtime()) { processesNonRealtime(buffer); }
 }
 
@@ -250,61 +264,20 @@ void AudioPluginAudioProcessor::parameterChanged(const juce::String& parameterID
     if (parameterID == PluginParameters::DRY_WET_ID.getParamID()) {
         dry_wet_mixer.setWetMixProportion(newValue);
     } else if (parameterID == PluginParameters::BACKEND_TYPE_ID.getParamID()) {
-        int paramInt = (int)newValue;
-        auto paramString = PluginParameters::backendTypes[paramInt];
-#if MODEL_TO_USE != 6 && MODEL_TO_USE != 7
-#ifdef USE_TFLITE
-        if (paramString == "TFLITE") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::TFLITE);
-        }
-#endif
-#ifdef USE_LITERT
-        if (paramString == "LITERT") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::LITERT);
-        }
-#endif
-#ifdef USE_EXECUTORCH
-        if (paramString == "EXECUTORCH") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::EXECUTORCH);
-        }
-#endif
-#ifdef USE_ONNXRUNTIME
-        if (paramString == "ONNX") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::ONNX);
-        }
-#endif
-#ifdef USE_LIBTORCH
-        if (paramString == "LIBTORCH") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-        }
-#endif
-        if (paramString == "BYPASS") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-        }
-#elif MODEL_TO_USE == 6
-#ifdef USE_LIBTORCH
-        if (paramString == "LIBTORCH") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-        }
-#endif
-        if (paramString == "BYPASS") {
-            inference_handler.set_inference_backend(anira::InferenceBackend::CUSTOM);
-        }
-#else
-#ifdef USE_LIBTORCH
-        if (paramString == "LIBTORCH") {
-            inference_handler_encoder.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-            inference_handler_decoder.set_inference_backend(anira::InferenceBackend::LIBTORCH);
-        }
-#endif
-        if (paramString == "BYPASS") {
-            inference_handler_encoder.set_inference_backend(anira::InferenceBackend::CUSTOM);
-            inference_handler_decoder.set_inference_backend(anira::InferenceBackend::CUSTOM);
-        }
-#endif
+        backend.store(static_cast<int>(newValue));
 #if MODEL_TO_USE == 4 || MODEL_TO_USE == 5
     } else if (parameterID == PluginParameters::GAIN_ID.getParamID()) {
-        pp_processor.set_input(newValue, 1, 0);
+        gain.store(newValue);
+#endif
+#if MODEL_TO_USE == 7
+    } else if (parameterID == PluginParameters::LATENT_0_ID.getParamID()) {
+        latent_offsets[0].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_1_ID.getParamID()) {
+        latent_offsets[1].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_2_ID.getParamID()) {
+        latent_offsets[2].store(newValue);
+    } else if (parameterID == PluginParameters::LATENT_3_ID.getParamID()) {
+        latent_offsets[3].store(newValue);
 #endif
     }
 }

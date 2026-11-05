@@ -6,7 +6,6 @@
  */
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
-#include <anira/utils/Logger.h>
 
 #include <atomic>
 #include <cstdint>
@@ -15,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "../utils/Logger.h"
 #include "handles.h"
 
 // NOLINTBEGIN(readability-identifier-naming) C tags

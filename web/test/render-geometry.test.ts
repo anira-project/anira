@@ -98,7 +98,8 @@ test('a loaded audio thread: the runs stay whole, never shorter than the callbac
       `${renderMs}`
     )
   }
-  // Late once per callback, at a fixed place in it (a stage's pre_process): the run stays whole.
+  // Late once per callback, at a fixed place in it (a processor's pre_process): the run stays
+  // whole.
   for (const late of [3, 6, 12]) {
     const times = loaded([16], periodMs, 0.5, 40, 16, late)
     assert.equal(longestRun(times, quantumMs), 16, `late ${late} ms every 16th call`)

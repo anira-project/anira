@@ -7,4 +7,4 @@ resolves once every Worker is inside its loop.
 
 .. js:autoclass:: Context.Context
    :short-name:
-   :members: create, ptr, threads, ready, destroy
+   :members: create, numInferenceThreads, ready, native, destroy

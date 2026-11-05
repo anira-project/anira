@@ -8,18 +8,25 @@
 #                         terminator and every Tier-1 sizeof/offsetof with _Static_assert;
 #                         its printed table is diffed against abi/layout-<major>.txt
 #   anira_header_c11      gate 4: every header of _abi_headers, alone and together, as C11
-#                         under the strict flags with no anira define at all
+#                         under the strict flags with no anira define at all; the platform
+#                         companions and the generated umbrellas alone
 #   anira_header_cxx17    gate 4: the same as C++17
+#   anira_header_isolation
+#                         gate 4 (strict): every public header, compiled with exactly the usage
+#                         requirements of anira::anira, where no private header (src/, an engine,
+#                         tanh-lib, the queue, the JSON library, gtest, benchmark) is reachable
 #   anira_header_cxx20    gate 4: anira.hpp alone as C++20 under the strict flags, the
 #                         wrapper's API exercised at compile time (nothing runs)
-#   anira_header_coexist  the v2 C++ umbrella and the C headers in one TU, both orders
-#   anira_header_cxx20_with_v2
-#                         the v2 C++ umbrella and anira.hpp in one TU, both orders
 #   anira_header_compat   anira/compat/v2.hpp alone as C++20 under the strict flags, the
 #                         shim's API exercised at compile time (nothing runs)
-#   anira_header_compat_with_v2
-#                         the v2 C++ umbrella, anira.hpp and the shim in one TU, both orders
-#   anira_abi_rt_contract gate 6 (seed): test_rt_contract.c, ANIRA_NONBLOCKING functions
+#   anira_header_compat_with_hpp
+#                         the C umbrella, anira.hpp and the shim in one TU, both orders, under
+#                         the strict flags
+#   anira_header_scheduler_coexist
+#                         internal: the library's private scheduler classes (src/scheduler/Core.h,
+#                         src/scheduler/InferenceThread.h) beside anira.hpp: no class of namespace
+#                         anira in both
+#   anira_abi_rt_contract gate 6: test_rt_contract.c, ANIRA_NONBLOCKING functions
 #                         calling every [callback-safe] tensor entry and the nonblocking Hard
 #                         entries over host tensors, under -Werror=function-effects on clang
 #                         20 or later
@@ -29,6 +36,10 @@
 #                         static library the only presence check there is)
 #   anira_symbol_baseline presence: every promised and draft entry point is in the shared
 #                         library's real export table (cmake/abi-symbols.cmake)
+#   anira_abi_namespaces  the private copies keep their names: every thl symbol of libanira
+#                         (archive members, a shared library's full symbol table, a DLL's
+#                         objects) lies in thl::anira, and none names moodycamel instead of
+#                         anira_moodycamel (cmake/abi-namespaces.cmake)
 #
 # On desktop the compile gates are EXCLUDE_FROM_ALL objects driven by a CTest (a
 # regression shows up as a failed test with the compiler's error); on Android/iOS they
@@ -37,7 +48,7 @@
 # On WebAssembly (ANIRA_WITH_ABI_TESTS, the wasm-abi preset; no CTest there) the gates are
 # members of ALL and run under node (CMAKE_CROSSCOMPILING_EMULATOR, which Emscripten's
 # toolchain file sets), through the target anira_abi_wasm_gates that build_web runs:
-#   anira_header_c11 / anira_header_cxx17
+#   anira_header_c11 / anira_header_cxx17 / anira_header_isolation
 #                         gate 4 as above, anira/anira_em.h with its declarations compiled
 #   anira_abi_layout      gate 3: the printer as a node executable, its table diffed against
 #                         abi/layout-<major>.txt (the wasm32 column of the layout identity)
@@ -50,10 +61,14 @@
 #                         and thread-local block, inside anira_inference_thread_run_loop
 #                         (the park on the wake word, the notify, the has_exited stop)
 
-set(_abi_headers export status version enums log tensor config context core thread lifecycle stage engine handler draft/tensor_platform)
-# The platform headers of the registry (`platform:`), beside the umbrellas: empty on every
-# other target, so the per-file wrappers include them everywhere.
-set(_abi_platform_headers anira_em)
+# The public header set, one list for the gates and the install rule (cmake/public-headers.cmake):
+# the C ABI headers, the platform headers of the registry (`platform:`, beside the umbrellas:
+# empty on every other target, so the per-file wrappers include them everywhere) and the
+# umbrellas the registry generates (`umbrellas:`).
+include("${anira_SOURCE_DIR}/cmake/public-headers.cmake")
+set(_abi_headers ${ANIRA_PUBLIC_ABI})
+set(_abi_platform_headers ${ANIRA_PUBLIC_PLATFORM})
+set(_abi_umbrella_headers ${ANIRA_PUBLIC_UMBRELLAS})
 set(_abi_include_dirs "${anira_SOURCE_DIR}/include" "${ANIRA_GENERATED_INCLUDE_DIR}")
 if(TANH_OPERATING_SYSTEM MATCHES "^(Android|iOS)$")
     set(_abi_on_device TRUE)
@@ -112,21 +127,15 @@ function(anira_abi_consumer_target target lang)
     endif()
 endfunction()
 
-# A target holding the v2 C++ umbrella: the include and define set anira_header_isolation
-# (test/CMakeLists.txt) uses for it, C++20 (the umbrella's floor), and only the default
-# warnings, as errors, since the v2 headers are not held to -Wall -Wextra.
-function(anira_abi_umbrella_target target)
+# A target holding the library's private C++ headers (src/): the usage requirements the library's
+# own sources compile with (anira_objects; an OBJECT target takes no objects from another), the
+# white-box include and define set (src/, ANIRA_STATIC), C++20 (their floor), and only the default
+# warnings, as errors, since those headers are not held to -Wall -Wextra.
+function(anira_abi_internal_target target)
     set_target_properties(${target} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_include_directories(${target} PRIVATE
-        ${_abi_include_dirs}
-        $<TARGET_PROPERTY:concurrentqueue,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_INCLUDE_DIRECTORIES>)
-    set_property(TARGET ${target} PROPERTY COMPILE_DEFINITIONS "")
-    target_compile_definitions(${target} PRIVATE
-        ${ANIRA_COMPILE_DEFINITIONS}
-        $<TARGET_PROPERTY:tanh::Core,INTERFACE_COMPILE_DEFINITIONS>
-        $<$<NOT:$<BOOL:${BUILD_SHARED_LIBS}>>:ANIRA_STATIC>)
+    target_link_libraries(${target} PRIVATE anira_objects)
+    target_include_directories(${target} PRIVATE "${anira_SOURCE_DIR}/src")
+    target_compile_definitions(${target} PRIVATE ANIRA_STATIC)
     target_compile_options(${target} PRIVATE ${_abi_werror})
 endfunction()
 
@@ -152,7 +161,7 @@ foreach(_h IN LISTS _abi_headers)
     list(APPEND _gate4_c "${_gate4_dir}/only_${_id}.c")
     list(APPEND _gate4_cxx "${_gate4_dir}/only_${_id}.cpp")
 endforeach()
-foreach(_h IN LISTS _abi_platform_headers)
+foreach(_h IN LISTS _abi_platform_headers _abi_umbrella_headers)
     anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.c"
         "#include <anira/${_h}.h>\nint anira_gate4_${_h}_c(void);\nint anira_gate4_${_h}_c(void) { return 0; }\n")
     anira_abi_write_if_changed("${_gate4_dir}/only_${_h}.cpp"
@@ -172,6 +181,37 @@ endif()
 anira_abi_consumer_target(anira_header_c11 C)
 anira_abi_consumer_target(anira_header_cxx17 CXX)
 
+# Gate 6, the compile-time half: clang's function-effects analysis as an error on the C gates
+# (consumer-shaped, so a nonblocking function a consumer writes that calls a blocking entry or
+# allocates is the error the consumer would see). The compilers that have the analysis: upstream
+# clang 20 or later behind the GNU front end (gcc rejects the flag; an older clang such as an NDK
+# one, and AppleClang, whose version numbers are its own, may not know the warning group, which
+# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it).
+function(anira_abi_function_effects target)
+    if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
+            AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
+            AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
+        target_compile_options(${target} PRIVATE -Werror=function-effects)
+    endif()
+endfunction()
+anira_abi_function_effects(anira_header_c11)
+
+# ---- gate 4 (strict): nothing private reachable through anira::anira --------------------------
+# header_isolation.cpp links anira::anira and nothing else, so it is compiled with exactly the
+# include directories and definitions a consumer gets; its probes fail the compile when a private
+# header resolves. A build-driving CTest on desktop, a member of ALL on Android, iOS and Wasm.
+if(_abi_on_device OR _abi_on_wasm)
+    add_library(anira_header_isolation OBJECT header_isolation.cpp)
+else()
+    add_library(anira_header_isolation OBJECT EXCLUDE_FROM_ALL header_isolation.cpp)
+    anira_abi_build_test(anira_header_isolation)
+endif()
+set_property(TARGET anira_header_isolation PROPERTY COMPILE_DEFINITIONS "")
+set_target_properties(anira_header_isolation PROPERTIES
+    CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_link_libraries(anira_header_isolation PRIVATE anira::anira)
+target_compile_options(anira_header_isolation PRIVATE ${_abi_strict_flags})
+
 # ---- the WebAssembly arm: gate 3 and the anira_em.h smoke under node -------------------------
 if(_abi_on_wasm)
     if(NOT CMAKE_CROSSCOMPILING_EMULATOR)
@@ -186,8 +226,12 @@ if(_abi_on_wasm)
     # The smoke: C over the hook object em_smoke.pre.js installs, linked against the library
     # the way AniraWeb is (shared memory, the C ABI's export list, the runtime methods the hook
     # object reads the heap with).
+    # The list is read here, at configure time: a changed list (gen.py rewrites it from
+    # abi/anira.yml) re-runs configure, so a warm tree never links on a stale copy.
     set(_smoke_exports "${CMAKE_CURRENT_BINARY_DIR}/em_smoke_exports.txt")
-    file(READ "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt" _wasm_exports)
+    set(_wasm_exports_file "${anira_SOURCE_DIR}/web/src/abi/exports_wasm.txt")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_wasm_exports_file}")
+    file(READ "${_wasm_exports_file}" _wasm_exports)
     anira_abi_write_if_changed("${_smoke_exports}" "${_wasm_exports}_main\n")
     add_executable(anira_em_smoke em_smoke.c)
     anira_abi_consumer_target(anira_em_smoke C)
@@ -387,7 +431,7 @@ if(NOT _abi_strict_flags MATCHES "/W4")
         target_compile_options(anira_header_cxx20 PRIVATE -Wshadow-field)
     endif()
 endif()
-# What a phase callback of an anira::Stage reaches (RingView, StageContext, the Tensor reads)
+# What a phase callback of an anira::Processor reaches (RingView, ProcessorContext, the Tensor reads)
 # must be nonblocking: header_cxx20.cpp calls all of it from an ANIRA_NONBLOCKING function, and
 # clang's function-effects analysis turns a method that allocates, locks or calls a function
 # that is not nonblocking into a compiler error. The compilers that have the analysis are those
@@ -424,14 +468,12 @@ if(CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
     target_compile_options(anira_header_compat PRIVATE -Werror=function-effects)
 endif()
 
-# ---- gate 6 (seed): the real-time contract in a consumer's compiler -------------------------
+# ---- gate 6: the real-time contract in a consumer's compiler --------------------------------
 # test_rt_contract.c holds ANIRA_NONBLOCKING functions calling every [callback-safe] entry of
-# the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the header gates (C11, the strict flags, no anira
-# define), plus -Werror=function-effects where the compiler has the analysis: upstream clang
-# 20 or later behind the GNU front end. gcc rejects the flag outright; an older clang (an NDK)
-# and AppleClang, whose version numbers are its own, may not know the warning group, which
-# the strict -Werror would turn fatal; clang-cl is left out until a leg proves it. There the
-# file is plain C11. Nothing links it: a regression is a compiler error.
+# the tensor headers and the nonblocking Hard entries over host tensors. Consumer-shaped like the
+# header gates (C11, the strict flags, no anira define), plus -Werror=function-effects where the
+# compiler has the analysis (anira_abi_function_effects above); elsewhere the file is plain C11.
+# Nothing links it: a regression is a compiler error.
 if(_abi_on_device)
     add_library(anira_abi_rt_contract OBJECT test_rt_contract.c)
 else()
@@ -439,30 +481,24 @@ else()
     anira_abi_build_test(anira_abi_rt_contract)
 endif()
 anira_abi_consumer_target(anira_abi_rt_contract C)
-if(CMAKE_C_COMPILER_ID STREQUAL "Clang"
-        AND CMAKE_C_COMPILER_VERSION VERSION_GREATER_EQUAL 20
-        AND NOT CMAKE_C_COMPILER_FRONTEND_VARIANT STREQUAL "MSVC")
-    target_compile_options(anira_abi_rt_contract PRIVATE -Werror=function-effects)
-endif()
+anira_abi_function_effects(anira_abi_rt_contract)
 
 # ---- the umbrellas in one TU -------------------------------------------------------------
-# header_coexist.inc includes <anira/anira.h> and the C headers in the order its two
-# drivers select; header_cxx20_with_v2.inc does the same for <anira/anira.h> and
-# <anira/anira.hpp>, header_compat_with_v2.inc for <anira/anira.h> and the compat shim. A macro redefined between the umbrellas (C4005 / -Wmacro-redefined /
-# GCC's "redefined") or a name both declare in namespace anira is what these gates are for.
+# header_compat_with_hpp.inc includes the C umbrella, <anira/anira.hpp> and the compat shim in the
+# order its two drivers select, consumer-shaped (the strict flags, C++20). A macro redefined
+# between the headers (C4005 / -Wmacro-redefined / GCC's "redefined") or a name both declare in
+# namespace anira is what it is for. header_scheduler_coexist.cpp is the internal twin: the
+# library's private scheduler headers beside anira.hpp, as the library's own sources and the
+# white-box tests compile them.
 if(NOT _abi_on_device)
-    add_library(anira_header_coexist OBJECT EXCLUDE_FROM_ALL
-        header_coexist_v2_first.cpp header_coexist_abi_first.cpp)
-    anira_abi_umbrella_target(anira_header_coexist)
-    anira_abi_build_test(anira_header_coexist)
-    add_library(anira_header_cxx20_with_v2 OBJECT EXCLUDE_FROM_ALL
-        header_cxx20_with_v2.cpp header_cxx20_with_v2_reverse.cpp)
-    anira_abi_umbrella_target(anira_header_cxx20_with_v2)
-    anira_abi_build_test(anira_header_cxx20_with_v2)
-    add_library(anira_header_compat_with_v2 OBJECT EXCLUDE_FROM_ALL
-        header_compat_with_v2.cpp header_compat_with_v2_reverse.cpp)
-    anira_abi_umbrella_target(anira_header_compat_with_v2)
-    anira_abi_build_test(anira_header_compat_with_v2)
+    add_library(anira_header_compat_with_hpp OBJECT EXCLUDE_FROM_ALL
+        header_compat_with_hpp.cpp header_compat_with_hpp_reverse.cpp)
+    anira_abi_consumer_target(anira_header_compat_with_hpp CXX 20)
+    anira_abi_build_test(anira_header_compat_with_hpp)
+    add_library(anira_header_scheduler_coexist OBJECT EXCLUDE_FROM_ALL
+        header_scheduler_coexist.cpp)
+    anira_abi_internal_target(anira_header_scheduler_coexist)
+    anira_abi_build_test(anira_header_scheduler_coexist)
 endif()
 
 # ---- gate 3: the Tier-1 layout table -----------------------------------------------------
@@ -495,6 +531,7 @@ anira_abi_consumer_target(anira_abi_layout C)
 add_executable(anira_abi_link generated/link_probe.c)
 target_link_libraries(anira_abi_link PRIVATE anira::anira)
 anira_abi_consumer_target(anira_abi_link C)
+anira_abi_function_effects(anira_abi_link)
 if(ANIRA_WITH_UBSAN)
     # The probe is C, so the C driver links it, and that driver leaves out the C++ half of
     # the UBSan runtime. libanira's -fsanitize=vptr checks live there
@@ -507,7 +544,7 @@ endif()
 if(NOT _abi_on_device)
     add_test(NAME anira_abi_link COMMAND anira_abi_link)
     if(MSVC AND ANIRA_SHARED_LIBS_WIN)
-        # Windows: anira.dll and the runtime DLLs are searched next to the executable.
+        # Windows: anira's DLL and the runtime DLLs are searched next to the executable.
         add_custom_command(TARGET anira_abi_link PRE_BUILD
             COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${ANIRA_SHARED_LIBS_WIN} $<TARGET_FILE_DIR:anira_abi_link>)
@@ -516,6 +553,9 @@ if(NOT _abi_on_device)
     anira_add_symbol_baseline(NAME anira_symbol_baseline LIBRARY anira
         SYMBOLS "${anira_SOURCE_DIR}/abi/symbols-${ANIRA_ABI_MAJOR}.txt"
                 "${anira_SOURCE_DIR}/abi/symbols-draft.txt")
+    include("${anira_SOURCE_DIR}/cmake/abi-namespaces.cmake")
+    anira_add_namespace_check(NAME anira_abi_namespaces LIBRARY anira
+        OBJECTS anira_objects anira_tanh_core)
 endif()
 
 # ---- the registry check ------------------------------------------------------------------

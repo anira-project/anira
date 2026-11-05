@@ -101,14 +101,14 @@ int main(int argc, char** argv) {
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, NULL, 0, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check_status(anira_em_pipeline_register_js_engine(pipeline,
-                                                      POOL_ENGINE_ID,
-                                                      key_of(POOL_ENGINE_ID),
-                                                      0,
-                                                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-                                                      &err),
+    check_status(anira_em_pipeline_add_js_engine(pipeline,
+                                                 POOL_ENGINE_ID,
+                                                 key_of(POOL_ENGINE_ID),
+                                                 0,
+                                                 ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 &err),
                  &err,
-                 "anira_em_pipeline_register_js_engine");
+                 "anira_em_pipeline_add_js_engine");
     check_status(anira_handler_create(context, pipeline, &handler, &err),
                  &err,
                  "anira_handler_create");

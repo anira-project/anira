@@ -1,7 +1,7 @@
 /*
  * The node smoke test of anira/anira_em.h (WebAssembly only): one thread, no Worker.
  * em_smoke.pre.js installs the scope's registry before main runs; this file runs a JavaScript
- * stage (pre_process, post_process, reset, init, prepare, unprepare, release) and a JavaScript
+ * processor (pre_process, post_process, reset, init, prepare, unprepare, release) and a JavaScript
  * engine (process, query) on one Hard handler, driving the inference queue itself with
  * anira_inference_thread_execute, catches a throwing hook in the trampoline, and receives a log
  * record through the JavaScript log hook. Exit code 0 on success; every failed check prints one
@@ -13,7 +13,7 @@
 #include <anira/abi/enums.h>
 #include <anira/abi/handler.h>
 #include <anira/abi/log.h>
-#include <anira/abi/stage.h>
+#include <anira/abi/processor.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
 #include <anira/abi/thread.h>
@@ -27,7 +27,7 @@
 
 #define SMOKE_BLOCK 128u
 #define SMOKE_BLOCKS 16u
-#define SMOKE_STAGE_KEY 3u
+#define SMOKE_PROCESSOR_KEY 3u
 #define SMOKE_THROWING_KEY 99u
 #define SMOKE_ENGINE_KEY 7u
 #define SMOKE_ENGINE_ID "org.anira-test.js-double"
@@ -71,32 +71,39 @@ static void check_status(anira_status status, const anira_error* err, const char
 
 /* A throwing hook is caught in the trampoline and fails the call; nothing unwinds into C. */
 static void check_throwing_hook(void) {
-    anira_stage_desc desc = ANIRA_STAGE_DESC_INIT;
-    check(anira_em_stage_desc_init(NULL, 0, ANIRA_EM_HOOK_PRE, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
-          "anira_em_stage_desc_init refuses a NULL desc");
-    check(anira_em_stage_desc_init(&desc, 0, 512u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
-          "anira_em_stage_desc_init refuses an undefined bit");
-    check_status(anira_em_stage_desc_init(&desc, SMOKE_THROWING_KEY, ANIRA_EM_HOOK_PRE, 0),
-                 NULL,
-                 "anira_em_stage_desc_init");
+    anira_processor_desc desc = ANIRA_PROCESSOR_DESC_INIT;
+    check(anira_em_processor_desc_init(NULL, 0, ANIRA_EM_PROCESSOR_HOOK_PRE, 0) ==
+              ANIRA_ERROR_INVALID_ARGUMENT,
+          "anira_em_processor_desc_init refuses a NULL desc");
+    /* The bits are 1u << ANIRA_PHASE_*: the inference phase (bit 3) is no processor phase, and
+       nothing lies above init (bit 9). */
+    check(anira_em_processor_desc_init(&desc, 0, 1u << ANIRA_PHASE_INFERENCE, 0) ==
+              ANIRA_ERROR_INVALID_ARGUMENT,
+          "anira_em_processor_desc_init refuses the inference phase's bit");
+    check(anira_em_processor_desc_init(&desc, 0, 1024u, 0) == ANIRA_ERROR_INVALID_ARGUMENT,
+          "anira_em_processor_desc_init refuses an undefined bit");
+    check_status(
+        anira_em_processor_desc_init(&desc, SMOKE_THROWING_KEY, ANIRA_EM_PROCESSOR_HOOK_PRE, 0),
+        NULL,
+        "anira_em_processor_desc_init");
     check(desc.pre_process != NULL && desc.post_process == NULL && desc.release != NULL,
           "one slot per bit, the release slot always");
     check(desc.flags == 0u, "no promise unless one is stated");
     desc.release(desc.user_data);
-    check_status(anira_em_stage_desc_init(&desc,
-                                          SMOKE_THROWING_KEY,
-                                          ANIRA_EM_HOOK_PRE,
-                                          ANIRA_STAGE_FLAG_REALTIME_PRE_POST),
+    check_status(anira_em_processor_desc_init(&desc,
+                                              SMOKE_THROWING_KEY,
+                                              ANIRA_EM_PROCESSOR_HOOK_PRE,
+                                              ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST),
                  NULL,
-                 "anira_em_stage_desc_init with a promise");
-    check(desc.flags == ANIRA_STAGE_FLAG_REALTIME_PRE_POST, "the stated promise, as given");
-    anira_stage_ctx ctx;
+                 "anira_em_processor_desc_init with a promise");
+    check(desc.flags == ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST, "the stated promise, as given");
+    anira_processor_ctx ctx;
     memset(&ctx, 0, sizeof ctx);
     /* Three throws within a second: three failed calls, one console line (the report is
        rate-limited; the log of this test shows it). */
     for (int i = 0; i < 3; ++i) {
         check(desc.pre_process(&ctx, NULL, desc.user_data) == ANIRA_ERROR_UNKNOWN,
-              "a throwing stage hook fails its call with ANIRA_ERROR_UNKNOWN");
+              "a throwing processor hook fails its call with ANIRA_ERROR_UNKNOWN");
     }
     desc.release(desc.user_data);
     check(smoke_count("thrown") == 3u, "the throwing hook ran three times");
@@ -176,9 +183,10 @@ static void check_query_engine(anira_pipeline* pipeline, const anira_context* co
     check(smoke_count("query") >= 1u, "the engine's query crossed at the capabilities call");
 }
 
-/* A pre_process hook without ANIRA_STAGE_FLAG_REALTIME_PRE_POST: under a Hard contract it runs
-   on the driving thread, so prepare refuses the stage instead of trusting a promise nobody made. */
-static void check_unpromised_stage(anira_context* context, const anira_contract* contract) {
+/* A pre_process hook without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST: under a Hard contract it runs
+   on the driving thread, so prepare refuses the processor instead of trusting a promise nobody
+   made. */
+static void check_unpromised_processor(anira_context* context, const anira_contract* contract) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_model_config* model = smoke_model(&err);
     anira_pipeline* pipeline = NULL;
@@ -193,31 +201,35 @@ static void check_unpromised_stage(anira_context* context, const anira_contract*
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check_status(anira_em_pipeline_register_js_engine(pipeline,
-                                                      SMOKE_ENGINE_ID,
-                                                      SMOKE_ENGINE_KEY,
-                                                      0,
-                                                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
-                                                      &err),
+    check_status(anira_em_pipeline_add_js_engine(pipeline,
+                                                 SMOKE_ENGINE_ID,
+                                                 SMOKE_ENGINE_KEY,
+                                                 0,
+                                                 ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL,
+                                                 &err),
                  &err,
-                 "anira_em_pipeline_register_js_engine");
-    check_status(
-        anira_em_pipeline_add_js_stage(pipeline, SMOKE_STAGE_KEY, ANIRA_EM_HOOK_PRE, 0, &err),
-        &err,
-        "anira_em_pipeline_add_js_stage without a promise");
+                 "anira_em_pipeline_add_js_engine");
+    check_status(anira_em_pipeline_add_js_processor(pipeline,
+                                                    SMOKE_PROCESSOR_KEY,
+                                                    ANIRA_EM_PROCESSOR_HOOK_PRE,
+                                                    0,
+                                                    &err),
+                 &err,
+                 "anira_em_pipeline_add_js_processor without a promise");
     anira_handler* handler = NULL;
     check_status(anira_handler_create(context, pipeline, &handler, &err),
                  &err,
                  "anira_handler_create");
     err = ANIRA_ERROR_INIT;
-    check(anira_handler_prepare(handler, contract, &err) == ANIRA_ERROR_CONFIG,
-          "a Hard prepare refuses a pre_process hook without ANIRA_STAGE_FLAG_REALTIME_PRE_POST");
+    check(
+        anira_handler_prepare(handler, contract, &err) == ANIRA_ERROR_CONFIG,
+        "a Hard prepare refuses a pre_process hook without ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST");
     anira_handler_destroy(handler);
     anira_pipeline_destroy(pipeline);
     anira_model_config_destroy(model);
 }
 
-/* A JavaScript stage and a JavaScript engine (output = 2 x input) on one Hard handler. */
+/* A JavaScript processor and a JavaScript engine (output = 2 x input) on one Hard handler. */
 static void check_pipeline(void) {
     anira_error err = ANIRA_ERROR_INIT;
     anira_context_config* config = NULL;
@@ -245,10 +257,10 @@ static void check_pipeline(void) {
     check_status(anira_pipeline_add_inference(pipeline, variants, 1, &candidate, 1, &err),
                  &err,
                  "anira_pipeline_add_inference");
-    check(anira_em_pipeline_register_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
+    check(anira_em_pipeline_add_js_engine(pipeline, "no-dot", SMOKE_ENGINE_KEY, 0, 0, &err) ==
               ANIRA_ERROR_INVALID_ARGUMENT,
-          "anira_em_pipeline_register_js_engine refuses an id without a '.'");
-    check_status(anira_em_pipeline_register_js_engine(
+          "anira_em_pipeline_add_js_engine refuses an id without a '.'");
+    check_status(anira_em_pipeline_add_js_engine(
                      pipeline,
                      SMOKE_ENGINE_ID,
                      SMOKE_ENGINE_KEY,
@@ -256,23 +268,24 @@ static void check_pipeline(void) {
                      ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL | ANIRA_ENGINE_FLAG_REALTIME_SAFE,
                      &err),
                  &err,
-                 "anira_em_pipeline_register_js_engine");
-    check_status(anira_em_pipeline_add_js_stage(pipeline,
-                                                SMOKE_STAGE_KEY,
-                                                ANIRA_EM_HOOK_PRE | ANIRA_EM_HOOK_POST |
-                                                    ANIRA_EM_HOOK_RESET | ANIRA_EM_HOOK_INIT |
-                                                    ANIRA_EM_HOOK_PREPARE |
-                                                    ANIRA_EM_HOOK_UNPREPARE | ANIRA_EM_HOOK_RELEASE,
-                                                ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
-                                                &err),
+                 "anira_em_pipeline_add_js_engine");
+    check_status(anira_em_pipeline_add_js_processor(
+                     pipeline,
+                     SMOKE_PROCESSOR_KEY,
+                     ANIRA_EM_PROCESSOR_HOOK_PRE | ANIRA_EM_PROCESSOR_HOOK_POST |
+                         ANIRA_EM_PROCESSOR_HOOK_RESET | ANIRA_EM_PROCESSOR_HOOK_INIT |
+                         ANIRA_EM_PROCESSOR_HOOK_PREPARE | ANIRA_EM_PROCESSOR_HOOK_UNPREPARE |
+                         ANIRA_EM_PROCESSOR_HOOK_RELEASE,
+                     ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST,
+                     &err),
                  &err,
-                 "anira_em_pipeline_add_js_stage");
-    check(anira_em_pipeline_add_js_stage(pipeline,
-                                         SMOKE_STAGE_KEY,
-                                         ANIRA_EM_HOOK_PRE,
-                                         ANIRA_STAGE_FLAG_REALTIME_PRE_POST,
-                                         &err) == ANIRA_ERROR_INVALID_STATE,
-          "a second JavaScript stage is refused");
+                 "anira_em_pipeline_add_js_processor");
+    check(anira_em_pipeline_add_js_processor(pipeline,
+                                             SMOKE_PROCESSOR_KEY,
+                                             ANIRA_EM_PROCESSOR_HOOK_PRE,
+                                             ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST,
+                                             &err) == ANIRA_ERROR_INVALID_STATE,
+          "a second JavaScript processor is refused");
     check_query_engine(pipeline, context);
 
     anira_handler* handler = NULL;
@@ -290,8 +303,8 @@ static void check_pipeline(void) {
                  NULL,
                  "anira_contract_hard_set_warmup");
     check_status(anira_handler_prepare(handler, contract, &err), &err, "anira_handler_prepare");
-    check(smoke_count("init") == 1u, "the stage's init crossed once");
-    check(smoke_count("prepare") == 1u, "the stage's prepare crossed once");
+    check(smoke_count("init") == 1u, "the processor's init crossed once");
+    check(smoke_count("prepare") == 1u, "the processor's prepare crossed once");
 
     anira_inference_thread* thread = NULL;
     check_status(anira_inference_thread_create(context, &thread, &err),
@@ -328,16 +341,18 @@ static void check_pipeline(void) {
         matched >= (int)(SMOKE_BLOCKS - lag),
         "every block from the handler's latency on is the input doubled by the JavaScript engine");
     check(smoke_count("process") >= SMOKE_BLOCKS - 1u, "the engine's process crossed per block");
-    check(smoke_count("pre") >= SMOKE_BLOCKS - 1u, "the stage's pre_process crossed per block");
-    check(smoke_count("post") >= SMOKE_BLOCKS - 2u, "the stage's post_process crossed per block");
-    check(smoke_count("reset") == 1u, "the stage's reset crossed once, for the first chunk");
+    check(smoke_count("pre") >= SMOKE_BLOCKS - 1u, "the processor's pre_process crossed per block");
+    check(smoke_count("post") >= SMOKE_BLOCKS - 2u,
+          "the processor's post_process crossed per block");
+    check(smoke_count("reset") == 1u, "the processor's reset crossed once, for the first chunk");
 
     anira_inference_thread_destroy(thread);
     anira_handler_destroy(handler);
-    check(smoke_count("unprepare") == 1u, "the stage's unprepare crossed at anira_handler_destroy");
+    check(smoke_count("unprepare") == 1u,
+          "the processor's unprepare crossed at anira_handler_destroy");
     anira_pipeline_destroy(pipeline);
-    check(smoke_count("release") == 1u, "the stage's release crossed with the last carrier");
-    check_unpromised_stage(context, contract);
+    check(smoke_count("release") == 1u, "the processor's release crossed with the last carrier");
+    check_unpromised_processor(context, contract);
     anira_contract_destroy(contract);
     anira_model_config_destroy(model);
     anira_context_destroy(context);

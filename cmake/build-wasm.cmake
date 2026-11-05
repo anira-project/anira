@@ -88,9 +88,11 @@ add_executable(${ANIRA_WASM_TARGET_NAME} "${CMAKE_CURRENT_BINARY_DIR}/aniraweb_s
 target_link_libraries(${ANIRA_WASM_TARGET_NAME} PRIVATE anira::anira)
 target_compile_features(${ANIRA_WASM_TARGET_NAME} PRIVATE cxx_std_20)
 
+# The link reads the export list itself (@file), so a changed list relinks the module.
 set_target_properties(${ANIRA_WASM_TARGET_NAME} PROPERTIES
   OUTPUT_NAME ${ANIRA_WASM_TARGET_NAME}
   LINK_FLAGS "${ANIRA_WASM_DEBUG_FLAGS} ${ANIRA_WASM_LINK_FLAGS}"
+  LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/web/src/abi/exports_wasm.txt"
   RUNTIME_OUTPUT_DIRECTORY ${ANIRA_WASM_OUTPUT_FOLDER}
   JOB_POOL_LINK anira_wasm_link
 )

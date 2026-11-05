@@ -1,9 +1,8 @@
 
-#include <anira/utils/Semaphore.h>
-
 #include <chrono>
 
 #include "gtest/gtest.h"
+#include "utils/Semaphore.h"
 
 using namespace anira;
 

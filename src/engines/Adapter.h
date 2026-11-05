@@ -28,8 +28,7 @@
  *             shared session it runs every call on a claimed slot of the loaded model.
  *   Executor  one call slot of a loaded model: the engine's executor (a session, an
  *             interpreter, a method), what one process call runs on, never two at once. The
- *             built-in engines make them (ExecutorLoaded); a registered engine and a 2.x backend
- *             size their own.
+ *             built-in engines make them (ExecutorLoaded); a registered engine sizes its own.
  *
  * The adapter rule of anira/abi/engine.h binds here too: process reads every extent and every
  * memory handle from the context's tensors on every call, keeps nothing of them, and assumes
@@ -40,8 +39,6 @@
 #include <anira/abi/lifecycle.h>
 #include <anira/abi/status.h>
 #include <anira/abi/tensor.h>
-#include <anira/system/Exports.h>
-#include <anira/utils/Buffer.h>
 
 #include <atomic>
 #include <cstddef>
@@ -57,8 +54,8 @@ namespace anira::engine {
 
 /// One tensor of a loaded model as its engine is handed it: the canonical name, the export's
 /// name where the entry's tensors record names the slot (empty otherwise: the slot then binds
-/// by its canonical name where the engine's side has one, else by its position; every name is
-/// empty on the 2.x path), the engine's extents (the entry's layout applied to the spec's) at
+/// by its canonical name where the engine's side has one, else by its position), the engine's
+/// extents (the entry's layout applied to the spec's) at
 /// the pinned window, the spec's dtype and the element count.
 struct TensorInfo {
     std::string m_name;
@@ -71,8 +68,8 @@ struct TensorInfo {
 };
 
 /// The record of one loaded model: everything an engine reads at load, copied out of the
-/// configuration it came from (a model entry and the validator's derived quantities on the C
-/// path, an InferenceConfig on the 2.x path), so that a pooled model never aliases a session's
+/// configuration it came from (a model entry and the validator's derived quantities), so that
+/// a pooled model never aliases a session's
 /// configuration (issue #76). Two records compare equal when they describe the same model for
 /// the same engine on the same provider with the same tensors, shared slots, warm-up and
 /// entry, and, for a custom engine, the same variant: the pool's key, beside the carrier of a
@@ -82,9 +79,9 @@ struct TensorInfo {
 /// the core reconciles one level for the process). Whether a session runs the model exclusively
 /// is the session's property (PrepareRequest), not the record's: a stateful model is loaded once
 /// for every session that runs it, with no shared slot.
-struct ANIRA_API Model {
-    /// The built-in engine; ANIRA_ENGINE_CUSTOM with m_engine_id for a registered one and for
-    /// the 2.x CUSTOM backend (anira.v2.custom), under the pair rule.
+struct Model {
+    /// The built-in engine; ANIRA_ENGINE_CUSTOM with m_engine_id for a registered one (the
+    /// shim's anira.v2.custom included), under the pair rule.
     anira_engine m_engine = ANIRA_ENGINE_NONE;
     /// A custom engine's id (m_engine ANIRA_ENGINE_CUSTOM), else empty: what the messages name
     /// the engine by. No part of the key: the carrier beside the record is, and the id is the
@@ -94,7 +91,7 @@ struct ANIRA_API Model {
     const void* m_bytes = nullptr;  ///< the model bytes; NULL for a path
     size_t m_num_bytes = 0;
     /// Keeps the bytes alive while the loaded model lives: an aliasing shared_ptr over the
-    /// row's carrier on the C path; empty on the 2.x path, whose caller owns the bytes.
+    /// row's carrier.
     std::shared_ptr<const void> m_bytes_owner;
     std::string m_entry;  ///< the method or function of the file to run; empty for its default
     /// A custom engine's variant as canonical JSON text (anira::capi::model_config_json): its
@@ -123,16 +120,6 @@ struct ANIRA_API Model {
     bool operator==(const Model& other) const;
 };
 
-/// The two 2.x buffer vectors of the chunk's struct, what the legacy adapter's 2.x virtual
-/// takes; an executor of the descriptor shape (a built-in engine of this line, a registered
-/// engine) reads the context's tensors alone and never looks here. Non-const: the 2.x virtual
-/// takes the inputs by non-const reference (two 2.x processors swap their memory), and the
-/// legacy adapter copies a foreign input into them ahead of the call.
-struct ChunkBuffers {
-    std::vector<anira::BufferF>* m_inputs = nullptr;
-    std::vector<anira::BufferF>* m_outputs = nullptr;
-};
-
 /// How load bound every slot of a loaded model to the engine's tensors
 /// (anira_plan_slot.binding of the plan report): one anira_binding per slot of either side.
 struct Bindings {
@@ -144,7 +131,7 @@ struct Bindings {
 /// is exclusive (ANIRA_PREPARE_EXCLUSIVE: its inferences run one at a time and in order under
 /// the dispatch gate, with a reset at every stream start, so its calls claim no shared slot
 /// and run on an executor of the session's own), and the C record of the prepare for a
-/// registered engine (NULL on the 2.x path, which registers no engine).
+/// registered engine (NULL for a built-in engine, which reads none).
 struct PrepareRequest {
     bool m_exclusive = false;
     const anira_prepare_info* m_info = nullptr;
@@ -185,7 +172,7 @@ private:
     std::atomic<bool> m_failed{false};
 };
 
-class ANIRA_API Executor {
+class Executor {
 public:
     Executor() = default;
     virtual ~Executor() = default;
@@ -196,7 +183,7 @@ public:
 
     /// One inference over the context's tensors; any status but ANIRA_OK fails the chunk in the
     /// scheduler, nothing is cleared or recorded here.
-    virtual anira_status process(const anira_engine_ctx& ctx, ChunkBuffers* chunk) noexcept = 0;
+    virtual anira_status process(const anira_engine_ctx& ctx) noexcept = 0;
     /// Re-initialises the state the engine keeps inside this executor, right before the
     /// process of the first inference of a new stream (an exclusive session's executor alone
     /// is ever reset); nothing by default.
@@ -235,7 +222,7 @@ struct ProviderInfo {
 /// which holds it: the object lives while a loaded model of its engine (or a probe) holds it,
 /// the last holder frees it on its own thread, and the next load makes a new one whose init
 /// runs again.
-class ANIRA_API BuiltinEngine {
+class BuiltinEngine {
 public:
     explicit BuiltinEngine(anira_engine engine) noexcept : m_engine(engine) {}
     virtual ~BuiltinEngine() = default;
@@ -289,7 +276,7 @@ class Prepared;
 /// thread under the core's lifecycle lock (the core pools loaded models by record and carrier),
 /// prepare once per session that runs the model (the Prepared the session's plan slot holds),
 /// the destructor frees what load loaded, when the pool lets the model go.
-class ANIRA_API Loaded {
+class Loaded {
 public:
     Loaded() = default;
     virtual ~Loaded() = default;
@@ -302,8 +289,8 @@ public:
     /// once per engine object, with the facts of the core in effect (a built-in engine's
     /// object, ExecutorLoaded; a custom engine's init slot through its carrier,
     /// DescriptorLoaded; the object remembers, so a second loaded model of it calls nothing).
-    /// Nothing by default (the 2.x adapters). Throws anira::StatusError with the status a
-    /// refused init returned, naming the engine.
+    /// Nothing by default. Throws anira::StatusError with the status a refused init returned,
+    /// naming the engine.
     virtual void init(const anira_init_info& info) { static_cast<void>(info); }
 
     /// Control thread, once, under the core's lifecycle lock: keeps a copy of the record, loads
@@ -371,8 +358,7 @@ public:
     void release(uint32_t instance) noexcept;
 
     /// How load bound every slot: ANIRA_BINDING_POSITION for every slot of the record unless
-    /// do_load said otherwise (set_bindings); the legacy adapter's 2.x backend binds by
-    /// position. Sized to the record after load, empty before.
+    /// do_load said otherwise (set_bindings). Sized to the record after load, empty before.
     const Bindings& bindings() const noexcept { return m_bindings; }
 
     /// What the C descriptor's load handed back, the loaded pointer every call sees in
@@ -386,14 +372,10 @@ protected:
     virtual void do_load(const Model& model) = 0;
     /// One session's Prepared over this loaded model, per the request.
     virtual std::unique_ptr<Prepared> do_prepare(const PrepareRequest& request) = 0;
-    /// Whether a shared call claims a slot (the default). The legacy adapter answers false: a
-    /// 2.x BackendBase takes no instance index and is called as concurrently as the scheduler
-    /// dispatches, as it always was.
-    virtual bool claims_instances() const noexcept { return true; }
     /// The first check of load: that the engine's init ran (ExecutorLoaded: its engine
     /// object's; DescriptorLoaded: its carrier's), since what load builds runs over what init
     /// built. Throws anira::StatusError(ANIRA_ERROR_INVALID_STATE) naming the engine when it
-    /// has not; nothing by default (the 2.x adapters have no init).
+    /// has not; nothing by default.
     virtual void require_initialised() const {}
     /// What do_load reports for the slots it bound (bind_slots): one entry per slot of either
     /// side of the record.
@@ -410,12 +392,10 @@ private:
     /// with the backoff of the inference thread's loop (src/utils/Backoff.h: spins, pause
     /// hints, then a yield and a 100 us sleep per pass), and gives up once `stop` says the
     /// thread is being stopped, so a pool's join never waits on a thread that waits for a
-    /// slot another thread holds. Without a claim (claims_instances() false) the call runs at
-    /// once with instance 0. ANIRA_ERROR_INVALID_STATE, and no engine call, on a model without
-    /// a shared slot and when it gave up.
+    /// slot another thread holds. ANIRA_ERROR_INVALID_STATE, and no engine call, on a model
+    /// without a shared slot and when it gave up.
     anira_status claim_and_run(Prepared& prepared,
                                anira_engine_ctx& call,
-                               ChunkBuffers* chunk,
                                StopSignal stop) noexcept;
 
     Model m_model;
@@ -430,7 +410,7 @@ private:
 /// Made by Loaded::prepare on the control thread, run per inference on an inference thread, the
 /// destructor gives back what the session kept (before the loaded model is released: the
 /// session's plan slot holds the two in that order).
-class ANIRA_API Prepared {
+class Prepared {
 public:
     virtual ~Prepared() = default;
     Prepared(const Prepared&) = delete;
@@ -446,10 +426,7 @@ public:
     /// slot's index into the call, and gives up waiting for one once `stop` says the thread is
     /// being stopped. Returns process's status; ANIRA_ERROR_INVALID_STATE, and no engine call,
     /// over a model that was never loaded and for a shared call that gave up.
-    anira_status run(const anira_engine_ctx& ctx,
-                     ChunkBuffers* chunk,
-                     bool reset_first,
-                     StopSignal stop = {}) noexcept;
+    anira_status run(const anira_engine_ctx& ctx, bool reset_first, StopSignal stop = {}) noexcept;
 
     /// Inference thread: one shared call of this session on a slot the caller claimed
     /// (Loaded::try_claim) and gives back (Loaded::release) itself: copies the context, writes
@@ -457,16 +434,12 @@ public:
     /// loop. For a session whose calls claim a slot (claims_instance()). Returns process's
     /// status; ANIRA_ERROR_INVALID_STATE, and no engine call, over a model that was never
     /// loaded.
-    anira_status run_claimed(const anira_engine_ctx& ctx,
-                             ChunkBuffers* chunk,
-                             uint32_t instance) noexcept;
+    anira_status run_claimed(const anira_engine_ctx& ctx, uint32_t instance) noexcept;
 
     /// Whether this session's calls run on a claimed shared slot of the loaded model: a shared
-    /// session over a model that claims slots (not a 2.x backend, which takes no index) and has
-    /// at least one. False for an exclusive session, whose calls run on what it keeps.
-    bool claims_instance() const noexcept {
-        return !m_exclusive && m_loaded->claims_instances() && m_loaded->num_instances() > 0;
-    }
+    /// session over a model with at least one. False for an exclusive session, whose calls run
+    /// on what it keeps.
+    bool claims_instance() const noexcept { return !m_exclusive && m_loaded->num_instances() > 0; }
 
     /// Whether this session's calls run exclusively (ANIRA_PREPARE_EXCLUSIVE at its prepare).
     bool exclusive() const noexcept { return m_exclusive; }
@@ -481,7 +454,7 @@ protected:
     /// by the loaded model) or, under ANIRA_ENGINE_CALL_EXCLUSIVE, on what this session keeps.
     /// Any status but ANIRA_OK fails the chunk in the scheduler; nothing is cleared or recorded
     /// here.
-    virtual anira_status process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept = 0;
+    virtual anira_status process(const anira_engine_ctx& call) noexcept = 0;
     /// Re-initialises what this session keeps per stream, right before the process of the
     /// first inference of a new stream (exclusive sessions alone); nothing by default.
     virtual void reset(const anira_engine_ctx& call) noexcept { static_cast<void>(call); }
@@ -500,7 +473,7 @@ private:
 /// no shared slot, and warms every one of them up; make_executor makes one more for an
 /// exclusive session at its prepare. The Prepared of such a model (ExecutorPrepared) runs a
 /// shared call on the executor of the claimed slot and an exclusive call on the session's own.
-class ANIRA_API ExecutorLoaded : public Loaded {
+class ExecutorLoaded : public Loaded {
 public:
     /// Over the engine object of the engine (the core's one per built-in engine,
     /// Core::builtin_engine), which the loaded model holds for its life: what load builds runs
@@ -544,7 +517,7 @@ private:
 
 /// The Prepared of an ExecutorLoaded: an exclusive session's own executor, or the routing of a
 /// shared session's calls to the executor of the claimed slot.
-class ANIRA_API ExecutorPrepared final : public Prepared {
+class ExecutorPrepared final : public Prepared {
 public:
     ExecutorPrepared(ExecutorLoaded& loaded, bool exclusive, std::unique_ptr<Executor> own) noexcept
         : Prepared(loaded, exclusive), m_loaded(&loaded), m_own(std::move(own)) {}
@@ -553,7 +526,7 @@ public:
     Executor* own() const noexcept { return m_own.get(); }
 
 protected:
-    anira_status process(const anira_engine_ctx& call, ChunkBuffers* chunk) noexcept override;
+    anira_status process(const anira_engine_ctx& call) noexcept override;
     void reset(const anira_engine_ctx& call) noexcept override;
 
 private:
@@ -580,11 +553,11 @@ struct SlotBinding {
 /// with a default value). Throws anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the
 /// side, the slot and the engine's names for a record name the engine lacks, a slot whose
 /// position the engine has no tensor at, a duplicate or an unbound engine tensor. Logs nothing.
-ANIRA_API std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
-                                              const std::vector<std::string>& export_names,
-                                              size_t required,
-                                              const char* engine,
-                                              const char* side);
+std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
+                                    const std::vector<std::string>& export_names,
+                                    size_t required,
+                                    const char* engine,
+                                    const char* side);
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an
@@ -609,40 +582,40 @@ enum class ExtentRule : uint8_t {
 /// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
 /// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
 /// tensor, with both shapes.
-ANIRA_API void check_engine_tensor(const TensorInfo& slot,
-                                   const EngineTensor& engine_tensor,
-                                   ExtentRule rule,
-                                   const char* engine,
-                                   const char* side);
+void check_engine_tensor(const TensorInfo& slot,
+                         const EngineTensor& engine_tensor,
+                         ExtentRule rule,
+                         const char* engine,
+                         const char* side);
 
 /// The names of `engine_tensors`, in their order: what bind_slots takes.
-ANIRA_API std::vector<std::string> names_of(const std::vector<EngineTensor>& engine_tensors);
+std::vector<std::string> names_of(const std::vector<EngineTensor>& engine_tensors);
 
 /// One side at load, as every built-in adapter does it: bind_slots over the names of
 /// `engine_tensors`, then check_engine_tensor for every slot against the engine tensor it
 /// bound. Throws what they throw.
-ANIRA_API std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
-                                             const std::vector<EngineTensor>& engine_tensors,
-                                             size_t required,
-                                             ExtentRule rule,
-                                             const char* engine,
-                                             const char* side);
+std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
+                                   const std::vector<EngineTensor>& engine_tensors,
+                                   size_t required,
+                                   ExtentRule rule,
+                                   const char* engine,
+                                   const char* side);
 
 /// The report of two bound sides: what set_bindings takes.
-ANIRA_API Bindings bindings_of(const std::vector<SlotBinding>& inputs,
-                               const std::vector<SlotBinding>& outputs);
+Bindings bindings_of(const std::vector<SlotBinding>& inputs,
+                     const std::vector<SlotBinding>& outputs);
 
 /// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
 /// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`
 /// elements, and packed row-major strides (all zero, or the row-major strides themselves; the
 /// stride of an axis of extent 1 is never stepped and may be anything), at byte_offset from
 /// the base. NULL for anything else, a NULL base included.
-ANIRA_API float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
+float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
 
 /// The float32 rule of the built-in adapters: throws anira::StatusError(ANIRA_ERROR_CONFIG)
 /// naming `engine` and the first tensor of the record (inputs, then outputs) whose dtype is
 /// not float32.
-ANIRA_API void require_f32(const Model& model, const char* engine);
+void require_f32(const Model& model, const char* engine);
 
 }  // namespace anira::engine
 

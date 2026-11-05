@@ -1,6 +1,6 @@
 // The Wasm Workers anira starts on WebAssembly (InferenceThread::start): a worker on the module's
 // shared memory with a stack and thread-local block of its own, which first imports the
-// configured ES module (the JavaScript engines and stages it defines on the scope's registry),
+// configured ES module (the JavaScript engines and processors it defines on the scope's registry),
 // awaits the registry's boot, then calls the entry. Compiled on the Wasm binary format only.
 #ifndef ANIRA_PLATFORM_EMSCRIPTEN_EM_WORKER_H
 #define ANIRA_PLATFORM_EMSCRIPTEN_EM_WORKER_H

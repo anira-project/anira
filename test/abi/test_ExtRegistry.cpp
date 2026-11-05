@@ -405,9 +405,10 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     model.m_inputs.push_back(spec);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(err.message,
-                 "extension 'entry' on tensor 'audio_in' is consumed by no engine or stage of this "
-                 "pipeline");
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on tensor 'audio_in' is consumed by no engine or processor of this "
+        "pipeline");
     model.m_inputs.clear();
 
     anira::capi::ModelEntry libtorch;
@@ -435,8 +436,9 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
 #else
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_libtorch, 1, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 0 is consumed by no engine or stage of this pipeline");
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on model 0 is consumed by no engine or processor of this pipeline");
 #endif
 
     // The same kind on an engine that has no adapter reading it fails by name.
@@ -447,8 +449,9 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
     model.m_models.push_back(onnx);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 1 is consumed by no engine or stage of this pipeline");
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on model 1 is consumed by no engine or processor of this pipeline");
 
     // Context and contract hosts are walked when given.
     model.m_models.clear();
@@ -466,7 +469,7 @@ TEST(AbiExtRegistry, ConsumedOrFailWalkNamesTheOffender) {
 
 // A pipeline's registered engine joins the walk as a consumer keyed by its id: its "model:"
 // kinds read the entries of its own id alone (the rule of the build's adapters, keyed by the
-// engine), its other kinds any host, and only while it is a candidate; the stage's consumer
+// engine), its other kinds any host, and only while it is a candidate; the processor's consumer
 // stays unfiltered. The plan rows name the engine by its id.
 TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     anira_model_config model;
@@ -495,8 +498,9 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     std::vector<anira::capi::ExtConsumer> pipeline{first_engine};
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(err.message,
-                 "extension 'entry' on model 1 is consumed by no engine or stage of this pipeline");
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on model 1 is consumed by no engine or processor of this pipeline");
     // Both engines: every entry has its consumer.
     pipeline.push_back(second_engine);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
@@ -523,16 +527,17 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     EXPECT_TRUE(anira::capi::ext_consumed_rows(model, nullptr, &only_onnx, 1, &pipeline).empty());
 
     // A kind on another host than the entry ("tensor_spec:entry") is read from any spec by an
-    // engine that declares it, and by the stage, which reads a slot wherever it sits.
+    // engine that declares it, and by the processor, which reads a slot wherever it sits.
     anira_tensor_spec spec;
     spec.m_name = "audio_in";
     ASSERT_EQ(spec.m_ext.set(&entry.header, &err), ANIRA_OK);
     model.m_inputs.push_back(spec);
     EXPECT_EQ(anira::capi::ext_check_consumed(model, nullptr, nullptr, nullptr, 0, &err, &pipeline),
               ANIRA_ERROR_EXTENSION_UNCONSUMED);
-    EXPECT_STREQ(err.message,
-                 "extension 'entry' on tensor 'audio_in' is consumed by no engine or stage of this "
-                 "pipeline");
+    EXPECT_STREQ(
+        err.message,
+        "extension 'entry' on tensor 'audio_in' is consumed by no engine or processor of this "
+        "pipeline");
     const anira::capi::ExtConsumer spec_reader{.m_name = "org.example.second",
                                                .m_engine = ANIRA_ENGINE_CUSTOM,
                                                .m_engine_id = "org.example.second",
@@ -547,13 +552,20 @@ TEST(AbiExtRegistry, AnEngineConsumerKeyedByIdReadsItsOwnEntriesOnly) {
     EXPECT_EQ(spec_rows[0].m_host, "tensor 'audio_in'");
     EXPECT_EQ(spec_rows[0].m_consumer, "org.example.second");
     EXPECT_EQ(spec_rows[1].m_host, "model 1");
-    const anira::capi::ExtConsumer stage{.m_name = "stage",
-                                         .m_engine = ANIRA_ENGINE_NONE,
-                                         .m_engine_id = "",
-                                         .m_consumed = {"tensor_spec:entry"}};
-    const std::vector<anira::capi::ExtConsumer> stage_only{stage, first_engine, second_engine};
-    EXPECT_EQ(
-        anira::capi::ext_check_consumed(model, nullptr, nullptr, &only_onnx, 1, &err, &stage_only),
-        ANIRA_OK)
-        << "the stage reads the spec's slot whatever the candidates: " << err.message;
+    const anira::capi::ExtConsumer processor{.m_name = "processor",
+                                             .m_engine = ANIRA_ENGINE_NONE,
+                                             .m_engine_id = "",
+                                             .m_consumed = {"tensor_spec:entry"}};
+    const std::vector<anira::capi::ExtConsumer> processor_only{processor,
+                                                               first_engine,
+                                                               second_engine};
+    EXPECT_EQ(anira::capi::ext_check_consumed(model,
+                                              nullptr,
+                                              nullptr,
+                                              &only_onnx,
+                                              1,
+                                              &err,
+                                              &processor_only),
+              ANIRA_OK)
+        << "the processor reads the spec's slot whatever the candidates: " << err.message;
 }

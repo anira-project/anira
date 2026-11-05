@@ -23,8 +23,8 @@
  * per plane of axis 0 instead of one block) is a boundary representation of host memory: an
  * entry accepts a planar tensor only where its own documentation says so, which is where it
  * copies a host block; every other consumer refuses the flag with ANIRA_ERROR_NOT_SUPPORTED, as
- * does every domain but the two host domains, and anira never hands a planar tensor to a stage,
- * an engine or JavaScript. The factories of the unmeasured platform arms live in
+ * does every domain but the two host domains, and anira never hands a planar tensor to a
+ * processor, an engine or JavaScript. The factories of the unmeasured platform arms live in
  * anira/abi/draft/tensor_platform.h.
  */
 
@@ -235,7 +235,7 @@ struct anira_tensor {
  * filled: anira_tensor_init_host(&t, p, t.dtype, t.ndim, t.shape) re-points a tensor.
  * The previous content is overwritten, never released: end an owning acquire token with
  * anira_sync_token_reset and call a non-NULL release before re-initialising a record. A
- * field fill: legal from a render thread and from inside a stage callback.
+ * field fill: legal from a render thread and from inside a processor callback.
  * @param tensor The caller's record; NULL is a no-op.
  * @param data The first byte of pageable host memory; borrowed.
  * @param dtype The element type.
@@ -502,7 +502,7 @@ ANIRA_API anira_status ANIRA_CALL anira_tensor_init_dlpack(anira_tensor* tensor,
  * @brief The first element of a host float tensor: handle.host.ptr plus byte_offset. NULL for
  * every domain but ANIRA_DOMAIN_HOST and ANIRA_DOMAIN_HOST_PINNED, for every dtype but
  * ANIRA_DTYPE_F32, for a planar tensor (ANIRA_TENSOR_PLANAR: anira_tensor_plane reads
- * it) and for a NULL base pointer: a stage that receives a device tensor or a uint8
+ * it) and for a NULL base pointer: a processor that receives a device tensor or a uint8
  * tensor learns so from the NULL, not from a crash. It never converts and never looks at
  * strides: they are returned as declared, the caller reads by them (all-zero = packed
  * row-major).

@@ -4,12 +4,12 @@ Latency
 Overview
 --------
 
-Latency is a critical factor in real-time audio processing applications. anira computes the latency of every session in closed form, together with the number of inference slots the session allocates and the sizes of its ring buffers. The calculation lives in :cpp:class:`anira::LatencyCalculator`; :cpp:class:`anira::SessionElement` applies its result in ``prepare()``.
+Latency is a critical factor in real-time audio processing applications. anira computes the latency of every session in closed form, together with the number of inference slots the session allocates and the sizes of its ring buffers. The calculation lives in ``anira::LatencyCalculator``; ``anira::SessionElement`` applies its result in ``prepare()`` (both private classes of the scheduler, ``src/scheduler/``).
 
 The model behind the formulas is the scheduler's actual worst case:
 
-* every inference takes exactly ``max_inference_time``,
-* at most ``num_parallel_processors`` inferences run at once, in submission order,
+* every inference takes exactly the Hard contract's budget,
+* at most :math:`n` inferences run at once (the session's instances), in submission order,
 * an inference is submitted by the host callback that completes its hop of input,
 * results are collected once per callback; a ``_wait`` entry collects after its wait of ``wait_ratio`` block periods (``ANIRA_WAIT_CONTRACT``), the ``ANIRA_NONBLOCKING`` entries collect what has completed,
 * the host pushes and pops a sample only once a whole one has accumulated in its block, so that a block may be a fractional number of samples on a stream (see the note below).
@@ -17,7 +17,7 @@ The model behind the formulas is the scheduler's actual worst case:
 Quantities
 ----------
 
-For a session with reference stream size :math:`R` (see the usage guide, section 4.1), host buffer size :math:`B` and host sample rate :math:`f_s`, both stated in samples of the reference stream, the calculator derives:
+For a session with reference stream size :math:`R` (the hop of the model's anchor, see the usage guide, section 4.1), host block :math:`B` (the contract's ``host_block_max``) and host rate :math:`f_s` (the contract's ``host_rate``), both stated in samples of the reference stream, the calculator derives:
 
 .. list-table::
    :header-rows: 1
@@ -31,7 +31,7 @@ For a session with reference stream size :math:`R` (see the usage guide, section
      - the host block measured in hops, as a reduced fraction
    * - :math:`\kappa`
      - :math:`T f_s / (1000 R)`
-     - the maximum inference time :math:`T` (ms) measured in hop periods
+     - the contract's budget :math:`T` (ms) measured in hop periods
    * - :math:`\tau`
      - :math:`\kappa / \rho`
      - the inference time measured in host blocks
@@ -39,11 +39,11 @@ For a session with reference stream size :math:`R` (see the usage guide, section
      - ``wait_ratio`` (the 2.x ``blocking_ratio``)
      - the fraction of a host block a ``_wait`` entry waits for results; the credit applies to the latency whether or not the host calls one
    * - :math:`n`
-     - ``num_parallel_processors``
-     - the parallelism of the session: ``max_instances``, by default the inference pool's thread count
+     - the session's instances
+     - the parallelism of the session: ``max_instances``, by default the inference pool's thread count, and 1 for an exclusive (stateful) session
    * - :math:`H`
      - largest streamable hop
-     - the stream on which the host block is finest; the unit of the ``allow_smaller_buffers`` grid
+     - the stream on which the host block is finest; the unit of the smaller-block grid (``host_block_min`` below ``host_block_max``)
    * - :math:`d_m`
      - :math:`\max(0, \lceil (m+1)\tau - \beta \rceil)`
      - callbacks after submission at which the :math:`(m+1)`-th batch of :math:`n` inferences submitted together is collected
@@ -57,7 +57,7 @@ Repackaging a stream from host blocks of :math:`b` samples into model blocks of 
 
    \Delta = P - \gcd(b, P),
 
-which replaces the PortAudio-style loop over every multiple of :math:`b` below :math:`\mathrm{lcm}(b, P)` that anira used before. In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``allow_smaller_buffers``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
+which replaces the PortAudio-style loop over every multiple of :math:`b` below :math:`\mathrm{lcm}(b, P)` that anira used before. In hop units the adaptation is :math:`1 - 1/q` for every stream at once, because :math:`\gcd(\rho P, P) = P / q` whenever the block :math:`\rho P` is a whole number of samples. If the host block may vary in size (``host_block_min`` below ``host_block_max``) or is a fractional number of samples on a stream, the worst case is :math:`P - 1` samples [RG26]_, section 5.
 
 Inference-caused latency
 ------------------------
@@ -80,12 +80,12 @@ and since :math:`(k+1)\rho - \lfloor \rho (k+1-d_m) \rfloor = \rho\, d_m + \math
 
    \Lambda \;=\; \frac{q - 1}{q} \;+\; \max_{m \ge 0} \left[ \rho\, d_m - m n \right].
 
-The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (:cpp:func:`anira::LatencyCalculator::is_feasible` is false, ``prepare()`` logs a warning, and the values describe one host block processed by an idle pool). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
+The first term is the buffer adaptation, the second the inference queue. The maximum exists if and only if :math:`\kappa < n`: every hop of audio brings :math:`\kappa` hop periods of inference work for :math:`n` processors, and beyond that the queue grows without bound (``LatencyCalculator::is_feasible`` is false, ``prepare()`` logs a warning, and the values describe one host block processed by an idle pool). Only batches with :math:`m < \rho / (n - \kappa)` can contribute, so the search is finite; in the common case :math:`\rho \lceil \tau \rceil \le n` the maximum is the first term, :math:`\rho \lceil \tau - \beta \rceil`.
 
-The latency of output tensor :math:`i` in its own samples is :math:`P_i \Lambda`. It is the same number of hops for every output, and it is rounded down because the host pops whole samples only (:cpp:func:`anira::LatencyCalculator::get_output_latencies` returns the unrounded value).
+The latency of output tensor :math:`i` in its own samples is :math:`P_i \Lambda`. It is the same number of hops for every output, and it is rounded down because the host pops whole samples only (``LatencyCalculator::get_output_latencies`` returns the unrounded value).
 
 .. note::
-    The Hard contract's geometry may be fractional (``block_min`` and ``block_max`` are doubles, e.g. ``contract.hard_geometry(samples_per_block / 2048.0, samples_per_block / 2048.0, sample_rate / 2048.0)`` for a model whose anchor stream runs at one sample per 2048 host samples; the rate is in anchor samples per second as well). The host and that stream then exchange samples at a non-integer ratio, and anira assumes the worst case: after its :math:`k`-th call the host has moved (pushed, or popped) :math:`\lfloor k b \rfloor` samples of every stream whose block is :math:`b`, so one call carries :math:`\lfloor b \rfloor` or :math:`\lceil b \rceil` of them. For example, with a block of 0.25 samples of a control-rate stream, the handler receives one sample every four host calls, and the latency is calculated as if the sample is delivered during the fourth call. If your system always sends the sample at the first call, a lower latency is possible; declare it with ``anira_contract_hard_set_latency`` (the ``latencies`` of ``anira::Hard``). :math:`B` is the geometry's ``block_max``, and :math:`\rho` the rational :cpp:func:`anira::LatencyCalculator::rationalize` recovers from it (a relative tolerance of :math:`10^{-6}` and a denominator of at most :math:`2^{20}`: 1/3 and 1/4 exactly). :math:`\lceil b \rceil` is also the most one call may carry: a Hard entry handed more on a stream, pushed or popped, is refused with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves, and a pop within it that the stream cannot cover is a miss (``ANIRA_MISSED``).
+    The Hard contract's host blocks may be fractional (``host_block_min`` and ``host_block_max`` are doubles, e.g. ``contract.hard_host_blocks(samples_per_block / 2048.0, samples_per_block / 2048.0, sample_rate / 2048.0)`` for a model whose anchor stream runs at one sample per 2048 host samples; the rate is in anchor samples per second as well). The host and that stream then exchange samples at a non-integer ratio, and anira assumes the worst case: after its :math:`k`-th call the host has moved (pushed, or popped) :math:`\lfloor k b \rfloor` samples of every stream whose block is :math:`b`, so one call carries :math:`\lfloor b \rfloor` or :math:`\lceil b \rceil` of them. For example, with a block of 0.25 samples of a control-rate stream, the handler receives one sample every four host calls, and the latency is calculated as if the sample is delivered during the fourth call. If your system always sends the sample at the first call, a lower latency is possible; declare it with ``anira_contract_hard_set_latency`` (the ``latencies`` of ``anira::Hard``). :math:`B` is the contract's ``host_block_max``, and :math:`\rho` the rational ``LatencyCalculator::rationalize`` recovers from it (a relative tolerance of :math:`10^{-6}` and a denominator of at most :math:`2^{20}`: 1/3 and 1/4 exactly). :math:`\lceil b \rceil` is also the most one call may carry: a Hard entry handed more on a stream, pushed or popped, is refused with ``ANIRA_ERROR_INVALID_ARGUMENT`` before anything moves, and a pop within it that the stream cannot cover is a miss (``ANIRA_MISSED``).
 
 Inference slots
 ---------------
@@ -100,36 +100,46 @@ With a wait ratio that covers the inference time this is 1: a ``_wait`` entry co
 
 The session allocates twice this many structures. :cpp:func:`anira::InferenceHandler::reset` is wait-free: it does not wait for in-flight inferences but marks them stale, and each keeps its structure until its worker publishes completion. Meanwhile the fresh schedule needs :math:`S` structures of its own, so one pool drains while the other serves and a reset never drops a hop.
 
+When the inference does not keep up
+-----------------------------------
+
+The latency holds while the inferences take at most the budget the contract states. When one runs far over it (a stalled machine, a model slower than declared), two things happen, and neither moves the stream:
+
+- A block whose inference has not been collected when the host pops it is a **miss**: the entry returns ``ANIRA_MISSED`` with a count of ``0`` and the miss policy fills the block (usage guide, section 1.3). The late result is discarded when it arrives, and so is every other late sample: a delivered block is the stream at its latency, never late.
+- A hop that finds every inference slot busy is **dropped**: it gets no inference and costs exactly one hop of the miss policy's fill at its own stream position, behind the inferences submitted before it; every other hop of the call is dropped the same way, so the input stays on its hop grid. ``rt_error`` reports ``ANIRA_ERROR_CAPACITY``.
+
+Every hop of input therefore yields exactly one hop of output, in order: the model's result, or a fill. Once the late inferences are collected, the output is the model's at exactly the reported latency again.
+
 Adaptive buffer handling
 ------------------------
 
-For hosts that may use smaller buffers than the configured maximum (``allow_smaller_buffers``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated; the former countdown over every block size, which stalled for blocks above :math:`2^{24}` samples, is gone.
+For hosts that may use smaller blocks than the contract's maximum (``host_block_min`` below ``host_block_max``), the host block may be any whole number :math:`j` of samples of the finest stream, :math:`1 \le j \le \lfloor \rho H \rfloor`, i.e. :math:`\rho' = j / H` hops with :math:`\tau' = \kappa / \rho'`. The calculator takes the worst case over that grid: the flexible-host adaptation :math:`(H-1)/H` plus the maximum over :math:`j` of the inference term and of the slot count. Both are increasing in :math:`j` on every interval where :math:`\lceil (m+1)\tau' - \beta \rceil` is a constant :math:`c`, so the maximum is attained at the last grid point of each interval, :math:`j_c = \lceil (m+1)\kappa H / (c - 1 + \beta) \rceil - 1`, and the remaining intervals are bounded by :math:`(m+1)\kappa\, c / (c - 1 + \beta)`. Only these breakpoints are evaluated; the former countdown over every block size, which stalled for blocks above :math:`2^{24}` samples, is gone.
 
 Note that a smaller host block can require *more* latency and more slots than the maximum block: a block slightly shorter than one inference time means that results arrive two callbacks after their submission instead of one.
 
 Internal model latency
 ----------------------
 
-Additional latency inherent to the model itself, such as look-ahead requirements or internal buffering (``internal_model_latency``), is added to every streamable output after the calculation above.
+Additional latency inherent to the model itself, such as look-ahead requirements or internal buffering (the output spec's ``latency``, ``TensorSpec::latency`` / ``anira_tensor_spec_set_latency``, in samples of that output), is added to every Streamed output after the calculation above.
 
 Latency synchronization
 -----------------------
 
 When several output tensors are present, the integer latencies are raised to a common whole number of hops, :math:`\lceil \max_i L_i / P_i \rceil \cdot P_i`, so that the outputs stay coherent.
 
-The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latency_vector` is index-aligned with the output tensor list. Non-streamable outputs (``postprocess_output_size == 0``) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, one entry per output tensor of the model config's list (``0`` for a Static or a State output), and ``anira_handler_get_latency(h, slot)`` one entry of it.
+The latency vector returned by :cpp:func:`anira::InferenceHandler::get_latencies` is index-aligned with the output tensor list. Outputs without a stream (a Static or a State output) carry no stream latency and always report ``0``. ``anira_handler_get_latencies`` is the same vector as a C array indexed by slot, one entry per output tensor of the model config's list (``0`` for a Static or a State output), and ``anira_handler_get_latency(h, slot)`` one entry of it.
 
 Declaring the figure
 --------------------
 
-A host that needs another figure than the computed one declares it on the Hard contract, per streamed output and in samples of that output: ``anira_contract_hard_set_latency(contract, "audio_out", 4096)``, or ``"latencies": {"audio_out": 4096}`` in the contract file. The declared figure *replaces* everything above for that output (the buffer adaptation, the inference queue, the wait credit and the internal model latency): ``anira_handler_get_latency`` reports it, and the receive ring is primed to it: with the figure less the internal model latency in zeros, the model's own delay supplying the rest. Every output never named keeps its computed figure, and the synchronization above does not raise a declared one. A figure below the model's internal latency cannot be delivered and is ``ANIRA_ERROR_CONFIG`` at prepare, as is a name that is no streamed output. Declaring the same figure for every block size, or the figure of another stream, is how a host keeps its reported latency constant or aligns two streams. It is the custom latency of the two 2.x ``InferenceHandler::prepare`` overloads that take one, which the 2.x runtime clamps up to the internal latency with a warning instead of refusing.
+A host that needs another figure than the computed one declares it on the Hard contract, per streamed output and in samples of that output: ``anira_contract_hard_set_latency(contract, "audio_out", 4096)``, or ``"latencies": {"audio_out": 4096}`` in the contract file. The declared figure *replaces* everything above for that output (the buffer adaptation, the inference queue, the wait credit and the internal model latency): ``anira_handler_get_latency`` reports it, and the receive ring is primed to it: with the figure less the internal model latency in zeros, the model's own delay supplying the rest. Every output never named keeps its computed figure, and the synchronization above does not raise a declared one. A figure below the model's internal latency cannot be delivered and is ``ANIRA_ERROR_CONFIG`` at prepare, as is a name that is no streamed output. Declaring the same figure for every block size, or the figure of another stream, is how a host keeps its reported latency constant or aligns two streams.
 
 Ring buffer sizes
 -----------------
 
 A send ring holds one host block plus the largest leftover the adaptation can leave behind, :math:`\lceil b \rceil + P - \gcd(\lceil b \rceil, P)` for a constant whole-sample block and :math:`\lceil b \rceil + P - 1` for a fractional or variable one, plus the history a receptive-field model peeks at. A receive ring holds one result per inference slot plus the latency priming, :math:`S P_i + L_i`.
 
-These calculations count buffer sizes in samples of the *reference stream* selected by the :cpp:struct:`anira::HostConfig` — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (see the usage guide, section 4.1).
+These calculations count buffer sizes in samples of the *anchor tensor* of the model configuration — a streamable input for effects and analysers, the streamable output for a generator model with no streamable input (see the usage guide, section 4.1).
 
 Output Behavior
 ---------------

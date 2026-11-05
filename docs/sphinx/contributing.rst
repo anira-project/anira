@@ -139,7 +139,7 @@ Fix only what the branch changes. ``<base>`` here and below is the branch your p
 
 Never run ``clang-format -i`` over the whole tree. It rewrites files the branch does not own, and the generated ABI files are not clang-format's: ``tools/abi/gen.py`` is their formatter (see `The C ABI registry`_).
 
-**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
+**clang-tidy.** It reads the compile database of the ``clang-tidy`` preset's tree, which enables the tests, the benchmark examples (the fixture of ``examples/benchmark/fixture/``) and every engine so each analysed file has a compile command; build it once, since the sources include headers the build generates:
 
 .. code-block:: bash
 
@@ -157,8 +157,8 @@ The merge queue sweeps ``SOURCES`` of ``.github/workflows/clang_tidy.yml`` (keep
 
 .. code-block:: bash
 
-    find src/engines/ src/benchmark/ src/capi/ src/scheduler/ src/utils/ src/InferenceConfig.cpp \
-         src/InferenceHandler.cpp src/PrePostProcessor.cpp test/engines/ test/scheduler/ test/utils/ \
+    find src/engines/ src/capi/ src/scheduler/ src/utils/ examples/benchmark/fixture/ \
+         test/engines/ test/scheduler/ test/utils/ \
          test/system/ test/support/ test/contracts/unload/ test/abi/ test/contracts/header_isolation.cpp \
          test/contracts/test_EngineLinkage.cpp test/*.cpp -name '*.cpp' -type f \
         | xargs -P "$(nproc)" -n 1 clang-tidy -p build/clang-tidy --warnings-as-errors='*'
@@ -184,24 +184,33 @@ Testing
 Test layout
 ~~~~~~~~~~~
 
-``test/`` mirrors ``include/anira/``: a test file lives in the directory of the unit
-it covers, and the directory decides which ``test_*`` binary compiles it (see
-``test/CMakeLists.txt``).
+``test/`` mirrors ``src/``: a test file lives in the directory of the unit it covers, and the
+directory decides which ``test_*`` binary compiles it (see ``test/CMakeLists.txt``).
 
-- ``test/<dir>/test_<Unit>.cpp`` covers ``include/anira/<dir>/<Unit>.h`` — so
-  ``scheduler/``, ``system/`` and ``utils/`` each map one to one; ``test/engines/`` mostly
-  covers ``src/engines/`` (the engine adapters), since ``include/anira/backends/`` holds
-  only ``BackendBase.h``.
-- Root-level units (``InferenceHandler``, ``InferenceConfig``, ``CoreConfig``,
-  ``PrePostProcessor``) are covered by root-level ``test_*.cpp`` files, alongside the
-  cross-unit integration suites (``test_OneSidedStreaming``). For the 3.x cut-over a test
-  file's binary follows the API it targets, which the comment above the binaries in
-  ``test/CMakeLists.txt`` partitions: ``test_InferenceConfig.cpp`` and ``test_CoreConfig.cpp``
-  compile into ``test_utils`` with the other white-box suites, and the struct-pool cases of
-  ``test_OneSidedStreaming`` are ``scheduler/test_OneSidedStreamingInternals.cpp``.
+- ``test/<dir>/test_<Unit>.cpp`` covers ``src/<dir>/<Unit>.h`` — so ``scheduler/``, ``utils/``
+  and ``engines/`` (the engine adapters) each map one to one, and ``test/abi/`` covers the C ABI
+  (``include/anira/abi/``, implemented under ``src/capi/``). The core's C++ headers are private:
+  they live next to their sources under ``src/`` and are never installed; what anira installs
+  is the public header set of ``cmake/public-headers.cmake`` (the C umbrellas, ``anira/abi/``,
+  ``anira.hpp`` and ``compat/v2.hpp``), and a header under ``include/anira`` that is not listed
+  there fails the configure.
+- The ``anira.hpp`` handler (``test_InferenceHandler``) and the 2.x face
+  (``test_InferenceHandlerApi``) are covered by root-level ``test_*.cpp`` files, alongside the
+  cross-unit integration suites (``test_OneSidedStreaming``). A test file's binary follows the
+  API it targets, which the comment above the binaries in ``test/CMakeLists.txt`` partitions:
+  the struct-pool cases of ``test_OneSidedStreaming`` are
+  ``scheduler/test_OneSidedStreamingInternals.cpp``, in ``test_scheduler`` with the other
+  white-box suites.
 - ``test/contracts/`` holds checks of the build, link and packaging contracts rather
-  than of any one unit: header isolation, engine linkage, the library-unload harness,
-  the installed-package consumer.
+  than of any one unit: engine linkage, the library-unload harness, the installed-package
+  consumers. The header gates, header isolation among them, live with the other ABI gates in
+  ``test/abi/``.
+- A binary is white-box or black-box (``anira_add_test_binary(<target> [WHITE_BOX] ...)``).
+  The white-box binaries (``test_utils``, ``test_scheduler``, ``test_engines``, ``test_abi``)
+  read anira's private classes, so they link the library's objects (``anira_objects``) with
+  ``src/`` on their include path and ``ANIRA_STATIC`` defined; everything else (``test_handler``,
+  the ABI gates, the unload harness, the install consumers, the examples) links ``anira::anira``
+  and sees only what a consumer sees.
 - ``test/support/`` is shared test infrastructure, not tests.
 
 CI tiers
@@ -329,35 +338,35 @@ architecture document (``main-thread``, ``driver-thread``, ``inference-thread``,
 tag, a 64-bit argument or an ``anira_error*`` on a nonblocking entry, and writes the tag as the
 ``@par Thread contract`` line of the generated Doxygen. The vocabulary has one dual tag,
 ``driver-thread | inference-thread``, for a callback that runs on the driving thread in some
-phases or contracts and on an inference thread in others (a stage callback, the six context
+phases or contracts and on an inference thread in others (a processor callback, the six context
 accessors and the two default bodies it may call). For an entry under it the generator
 requires ``nonblocking: true`` exactly as it does for ``driver-thread``, since anira's side is
-real-time on both threads; for a callback typedef under it (``anira_stage_fn``) it requires
-no attribute, since whether a stage body is real-time is the stage's own promise
-(``anira_stage_desc.flags``), stated per stage and checked at prepare. An
+real-time on both threads; for a callback typedef under it (``anira_processor_fn``) it requires
+no attribute, since whether a processor body is real-time is the processor's own promise
+(``anira_processor_desc.flags``), stated per processor and checked at prepare. An
 ``inference-thread`` callback typedef (``anira_engine_process_fn``) carries no
 ``nonblocking`` for the same reason: whether an engine's body is real-time is the engine's
 promise, the flag ``ANIRA_ENGINE_FLAG_REALTIME_SAFE``. The two descriptors of the registry
-follow one naming scheme and one shape, which every later descriptor keeps: ``stage`` /
-``engine`` on every level that belongs to one side (``anira_stage_desc`` /
-``anira_engine_desc``, ``anira_stage_ctx`` / ``anira_engine_ctx``, the ``anira_stage_*_fn`` /
-``anira_engine_*_fn`` typedefs, ``anira::Stage`` / ``anira::Engine`` with ``StageContext`` /
+follow one naming scheme and one shape, which every later descriptor keeps: ``processor`` /
+``engine`` on every level that belongs to one side (``anira_processor_desc`` /
+``anira_engine_desc``, ``anira_processor_ctx`` / ``anira_engine_ctx``, the ``anira_processor_*_fn`` /
+``anira_engine_*_fn`` typedefs, ``anira::Processor`` / ``anira::Engine`` with ``ProcessorContext`` /
 ``EngineContext``), no side on what the two lifecycles share (the records ``anira_init_info``
 and ``anira_prepare_info`` of ``anira/abi/lifecycle.h``, what the ``init`` and the ``prepare``
 slot of either descriptor receive, ``anira::InitInfo`` / ``anira::PrepareInfo``, and the enum
 ``anira_phase``, which names the phases of both), the verb on
 the record of a level one side alone has (``anira_engine_load_info``,
-``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_STAGE_FLAG_*``,
+``anira::EngineLoadInfo``), ``FLAG`` in every flag define (``ANIRA_PROCESSOR_FLAG_*``,
 ``ANIRA_ENGINE_FLAG_*``, so that no flag reads like a value of an enum), ``Prepared`` for what
 ``prepare`` hands back and ``Loaded`` for what ``load`` hands back (the C ``prepared`` and
-``loaded`` pointers; the nested classes ``Stage::Prepared``, ``Engine::Loaded`` and
+``loaded`` pointers; the nested classes ``Processor::Prepared``, ``Engine::Loaded`` and
 ``Engine::Prepared``), and one callback shape, from the outermost level in:
 ``init(info, user_data)`` and ``release(user_data)`` once per carrier;
 ``load(info, user_data, &loaded)`` and ``unload(loaded, user_data)`` once per loaded model,
-the engine's level alone; ``prepare(info, user_data, &prepared)`` for the stage,
+the engine's level alone; ``prepare(info, user_data, &prepared)`` for the processor,
 ``prepare(info, loaded, user_data, &prepared)`` for the engine and
 ``unprepare(prepared, user_data)`` once per handler; every per-chunk callback
-``(ctx, prepared, user_data)``, the four phases and ``reset`` of the stage, ``process`` and
+``(ctx, prepared, user_data)``, the four phases and ``reset`` of the processor, ``process`` and
 ``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
 travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
 (``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
@@ -375,7 +384,9 @@ handles and byte sizes at their wire width; the rationale is that nothing which 
 handle runs in JavaScript, and a seventh name needs the same argument, not a convenience. The
 C-side tests and gates live in ``test/abi/`` (the ``test_abi`` binary, ``anira_abi_layout``,
 ``anira_header_c11`` / ``anira_header_cxx17`` / ``anira_header_cxx20``,
-``anira_header_coexist`` / ``anira_header_cxx20_with_v2`` and ``anira_abi_rt_contract``:
+``anira_header_compat_with_hpp`` (the C umbrella, ``anira.hpp`` and the shim in one TU, both
+orders), the internal ``anira_header_scheduler_coexist`` (the private scheduler classes beside
+``anira.hpp``) and ``anira_abi_rt_contract``:
 nonblocking C functions calling every ``[callback-safe]`` tensor entry and the nonblocking
 Hard entries over host tensors, and a backup function of ``ANIRA_MISS_CALLBACK`` handed to
 its setter, compiled with ``-Werror=function-effects`` on clang 20 or later). While ``ANIRA_ABI_MAJOR`` is 0 the Tier-1
@@ -395,7 +406,7 @@ the one test option WebAssembly allows), whose gates run under node:
 ``cmake --build --preset wasm-abi --target anira_abi_wasm_gates`` runs ``anira_abi_layout``
 as a node executable and diffs its table against ``abi/layout-0.txt`` (the wasm32 column of
 the layout identity) and runs ``anira_em_smoke`` (``test/abi/em_smoke.c`` with the registry of
-``test/abi/em_smoke.pre.js``), which drives a JavaScript stage and a JavaScript engine through
+``test/abi/em_smoke.pre.js``), which drives a JavaScript processor and a JavaScript engine through
 the trampolines of ``anira/anira_em.h``, ``anira_em_smoke_thread`` (``test/abi/em_smoke_thread.c``),
 a loop the host drives: a Wasm Worker the test creates runs ``anira_inference_thread_run_loop``
 (the park on the wake word, the notify, the ``has_exited`` stop), and ``anira_em_mutex`` (``test/abi/em_mutex.c``, issue #212), in which the main thread and
@@ -416,6 +427,65 @@ the workflow then checks that ``web/wasm/AniraWeb.d.ts`` exports exactly the nam
 ``_malloc`` and ``_free``), no more and no fewer. Locally: ``cmake --preset wasm-abi``, then the build and the
 target above (``tsc`` on the ``PATH``, since ``--emit-tsd`` needs it).
 
+The ABI gates
+~~~~~~~~~~~~~
+
+Six gates own the C ABI's contract (``docs/anira-v3-architecture.md``, section 6a); five run
+today, the sixth (an ``abidiff`` against the last tag) comes with the freeze.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 6 24 70
+
+   * - gate
+     - target
+     - what it proves
+   * - 1
+     - ``anira_symbol_baseline``
+     - The shared library's real export table (``nm`` or ``dumpbin``) is exactly
+       ``abi/symbols-0.txt`` ∪ ``abi/symbols-draft.txt``: a promised or draft name that is missing
+       fails, and so does any other exported name (a C++ symbol, an internal function, a
+       third-party one); only what the linker defines itself and, on PE, the exports the engine
+       archives force are tolerated. ``anira_abi_link`` is the presence check of the static legs,
+       the ``-sEXPORTED_FUNCTIONS`` link of AniraWeb that of WebAssembly. ``anira_exports``
+       (``test/contracts/unload``) forbids every engine runtime and every private dependency
+       (``thl``, ``moodycamel``, ``nlohmann``) in the library's and a plugin-shaped module's table.
+       ``anira_abi_namespaces`` (``cmake/abi-namespaces.cmake``) reads every symbol of the library,
+       the local ones included (a static archive's members, a shared library's full table, a
+       DLL's objects), and fails on any ``thl`` symbol outside ``thl::anira`` and on any
+       ``moodycamel`` one (anira's copies are ``thl::anira`` and ``anira_moodycamel``).
+   * - 3
+     - ``anira_abi_layout``
+     - Every Tier-1 ``sizeof`` / ``offsetof`` and enum width, natively and under node, against
+       ``abi/layout-0.txt``.
+   * - 4
+     - ``anira_header_c11``, ``anira_header_cxx17``, ``anira_header_cxx20``,
+       ``anira_header_compat``, ``anira_header_compat_with_hpp``, ``anira_header_isolation``
+     - Every public header alone and the umbrellas together, as C11 and C++17 with no anira define
+       under the strict flags, ``anira.hpp`` and the shim as C++20; ``anira_header_isolation``
+       compiles every public header with exactly the usage requirements of ``anira::anira`` and
+       fails when anything private resolves through them (``src/``, an engine, tanh-lib, the
+       queue, the JSON library, gtest, benchmark). On every preset: a build-driving CTest on
+       desktop, a member of ALL on Android, iOS and WebAssembly.
+   * - 5
+     - ``InstallConsumer`` (``test/contracts/install``), ``build_install``
+     - The installed package, shared and static: ``consumer`` (``anira.hpp``), ``consumer_c`` (pure
+       C11, the raw-C sequence of section 9 over a registered engine, plus gate 4's probes on the
+       installed include directories), ``consumer_compat`` (the 2.x shim), ``consumer_engine``
+       (an engine called through ``anira::onnxruntime``, and the negative check that its header
+       needs that target), ``consumer_tanh_first`` (every leg, shared and static: a host's own shared
+       tanh-lib, in its default namespace, linked before anira, whose logger never sees anira's
+       records; a shared libanira names no ``thl`` symbol) and the plugin-shaped module that exports no engine symbol and no
+       ``anira_*`` entry.
+   * - 6
+     - the RTSan leg, ``anira_abi_rt_contract``
+     - At run time the whole suite under RealtimeSanitizer (``desktop-tests-rtsan``; the unload
+       harness alone is left out, since an uninstrumented host cannot load an instrumented
+       module); at compile time ``-Werror=function-effects`` on the consumer-shaped C targets
+       (``anira_abi_rt_contract``, ``anira_header_c11``, ``anira_abi_link``, ``consumer_c``) and
+       on ``anira_header_cxx20`` / ``anira_header_compat``, where the compiler has the analysis
+       (upstream clang 20 or later).
+
 Reproducing CI locally
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -424,9 +494,9 @@ reproduces what CI runs; the tiers differ only in which legs (configurations)
 build. Select a component with ``ctest -L test_scheduler`` (the label is the
 binary name).
 
-Do not re-test what tanh-lib already covers upstream: ``anira::Buffer``,
-``MemoryBlock`` and the threading primitives are thin aliases over ``thl::core``, which
-has its own suite, and ``anira::RingBuffer`` (``anira_ring``) holds one
+Do not re-test what tanh-lib already covers upstream: the threading primitives are thin
+aliases over ``thl::core``, which has its own suite, and ``anira::RingBuffer`` (``anira_ring``)
+holds one
 ``thl::core::RingBuffer<T>`` per ring dtype. anira keeps only tests of its own contract on
 top of them (the ring's dtype tag, its refusals and its window pop; not the storage);
 coverage that belongs to the underlying container goes to tanh-lib.

@@ -141,15 +141,18 @@ export class Anira {
 
   /**
    * Route the log of the main thread to `onRecord` (the console when omitted; `null` removes the
-   * hook): the records logged here and those `drainLog` delivers here, the real-time records of
-   * every thread among them (`anira_em_set_log_hook`). Records a Worker logs itself reach that
-   * scope's registry, which writes them to the console unless the Worker's module sets
-   * `scopeRegistry().logHook`. While a hook is set it replaces the module's platform sink (the
+   * sink): the records logged here and those `drainLog` delivers here, the real-time records of
+   * every thread among them (`anira_em_set_log_hook`). The web twin of
+   * `anira::ContextConfig::log_sink`, set on the module rather than a context config (the sink
+   * is the scope's registry, one per realm, called with a record object instead of the C
+   * function and its `user_data`). Records a Worker logs itself reach that scope's registry,
+   * which writes them to the console unless the Worker's module sets
+   * `scopeRegistry().logSink`. While a sink is set it replaces the module's platform sink (the
    * console by level), so each record reaches the console once; `null` restores the platform
    * sink.
    */
-  setLogHook(onRecord: ((record: LogRecord) => void) | null = consoleLogSink): void {
-    scopeRegistry().logHook = onRecord
+  setLogSink(onRecord: ((record: LogRecord) => void) | null = consoleLogSink): void {
+    scopeRegistry().logSink = onRecord
     this.abi.anira_em_set_log_hook(onRecord !== null)
   }
 

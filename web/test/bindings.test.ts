@@ -82,7 +82,7 @@ test("a failed status throws an AniraError with the entry's message", () => {
     () => abi.anira_model_config_from_json('{ not json', null),
     (error: unknown) =>
       error instanceof AniraError &&
-      error.code === anira_status.ANIRA_ERROR_JSON &&
+      error.status === anira_status.ANIRA_ERROR_JSON &&
       error.message === 'anira_model_config_from_json: malformed'
   )
 })

@@ -3,9 +3,6 @@
 #include <anira/abi/context.h>
 #include <anira/abi/enums.h>
 #include <anira/abi/status.h>
-#include <anira/scheduler/LatencyCalculator.h>
-#include <anira/scheduler/SessionElement.h>
-#include <anira/utils/InferenceBackend.h>
 
 #include <algorithm>
 #include <cstddef>
@@ -19,6 +16,8 @@
 #include <utility>
 #include <vector>
 
+#include "../scheduler/LatencyCalculator.h"
+#include "../scheduler/SessionElement.h"
 #include "../utils/StatusError.h"
 #include "ext_registry.h"
 #include "handles.h"
@@ -251,7 +250,7 @@ void check_spec(const anira_tensor_spec& spec, bool is_input, DerivedSpec& out) 
 
 void check_contract(const anira_contract& contract,
                     const anira_model_config& model,
-                    const StageFacts* stages) {
+                    const ProcessorFacts* processors) {
     const HardContract* hard = contract.hard();
     if (hard == nullptr) {
         not_supported(
@@ -259,7 +258,7 @@ void check_contract(const anira_contract& contract,
             "the 3.x runtime");
     }
     const std::string refusal =
-        geometry_refusal(hard->m_block_min, hard->m_block_max, hard->m_rate);
+        host_blocks_refusal(hard->m_host_block_min, hard->m_host_block_max, hard->m_host_rate);
     if (!refusal.empty()) { config_error("contract: " + refusal); }
     if (hard->m_budget == ANIRA_BUDGET_EXPLICIT && !(hard->m_budget_ms > 0.0)) {
         config_error("contract: an explicit budget must be positive (got " +
@@ -281,7 +280,7 @@ void check_contract(const anira_contract& contract,
                      std::to_string(hard->m_wait_ratio) + ")");
     }
     // The ring dtype rules: a ring exists on a Streamed tensor only, and it holds the
-    // spec's dtype as is (nothing in anira converts), unless a stage of the pipeline fills the
+    // spec's dtype as is (nothing in anira converts), unless a processor of the pipeline fills the
     // phase that moves that ring (pre_process pops the input rings, post_process pushes the
     // output rings) and so takes the difference on itself. The default bodies still refuse
     // such a slot at run time.
@@ -295,14 +294,15 @@ void check_contract(const anira_contract& contract,
             config_error("contract: the ring dtype of '" + name + "' is set on a " +
                          role_word(spec->m_role) + " tensor; only a Streamed tensor has a ring");
         }
-        const bool stage_moves_ring =
-            stages != nullptr && (is_input ? stages->m_fills_pre : stages->m_fills_post);
-        if (dtype != spec->m_dtype && !stage_moves_ring) {
+        const bool processor_moves_ring =
+            processors != nullptr &&
+            (is_input ? processors->m_fills_pre : processors->m_fills_post);
+        if (dtype != spec->m_dtype && !processor_moves_ring) {
             config_error("contract: the ring dtype of '" + name + "' is " + hex_dtype(dtype) +
                          " but its spec's dtype is " + hex_dtype(spec->m_dtype) +
-                         "; nothing converts (add a stage that fills " +
+                         "; nothing converts (add a processor that fills " +
                          phase_word(is_input ? ANIRA_PHASE_PRE_PROCESS : ANIRA_PHASE_POST_PROCESS) +
-                         " and converts, anira_pipeline_add_stage)");
+                         " and converts, anira_pipeline_add_processor)");
         }
     }
     // The declared stream latency rules: the figure replaces the computed one for a stream,
@@ -332,7 +332,7 @@ void check_contract(const anira_contract& contract,
     // The host-end domain rules: every tensor of either side, whatever its role, has one
     // declared host-end domain (anira_contract_set_host_domain, absent = host memory), the
     // domain anira allocates the ring, the model tensor, the Static store and the state buffers
-    // of the slot in and every stage phase works in. The name must be a tensor's. The 2.x
+    // of the slot in and every processor phase works in. The name must be a tensor's. The 2.x
     // runtime allocates in host memory only, so in this pre-release any other domain is refused
     // here, where the declaration meets the runtime; the declaration itself is data.
     for (const auto& [name, domain] : contract.m_host_domains) {
@@ -534,8 +534,8 @@ struct HopNeed {
 // keeps its own hop, its ratio derived from it. Of the hops every such tensor allows, the largest
 // at or below the host block (one inference per block when the block is one, several per block
 // when it is above the hop) or else the smallest (one inference every few blocks: a block below
-// the step, a fractional block); without a geometry the smallest. A fractional block_max counts
-// as the rational the latency calculation recovers from it.
+// the step, a fractional block); without host blocks the smallest. A fractional host_block_max
+// counts as the rational the latency calculation recovers from it.
 void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, Derived& out) {
     const auto spec_of = [&](bool is_input, size_t index) -> const anira_tensor_spec& {
         return is_input ? model.m_inputs[index] : model.m_outputs[index];
@@ -619,9 +619,9 @@ void pin_anchor_hop(const anira_model_config& model, const HardContract* hard, D
     fold_side(false);
 
     int64_t block = 0;
-    if (hard != nullptr && hard->m_block_max > 0.0) {
+    if (hard != nullptr && hard->m_host_block_max > 0.0) {
         const anira::LatencyCalculator::Rational rational =
-            anira::LatencyCalculator::rationalize(hard->m_block_max);
+            anira::LatencyCalculator::rationalize(hard->m_host_block_max);
         block = rational.m_numerator / rational.m_denominator;
     }
     const int64_t below = std::min(block, range.m_high) / range.m_step * range.m_step;
@@ -692,7 +692,7 @@ void check_rows(const anira_model_config& model,
                               "' is not added to this pipeline "
                               "(anira_pipeline_add_engine)");
             }
-        } else if (!backend_of(row).has_value()) {
+        } else if (!engine_enabled(row.m_engine)) {
             not_supported(
                 at_row(i) + "engine '" + engine_word(row.m_engine) +
                 "' is not in this build (its engines: " + engines_list(enabled_engines()) +
@@ -924,40 +924,18 @@ bool row_is_candidate(const ModelEntry& row,
     return !matching_plans(0, row, candidates, num_candidates).empty();
 }
 
-std::vector<ExtConsumer> pipeline_consumers(const StageFacts* stages, const EngineFacts* engines) {
+std::vector<ExtConsumer> pipeline_consumers(const ProcessorFacts* processors,
+                                            const EngineFacts* engines) {
     std::vector<ExtConsumer> consumers;
-    if (stages != nullptr) {
-        consumers.insert(consumers.end(), stages->m_consumers.begin(), stages->m_consumers.end());
+    if (processors != nullptr) {
+        consumers.insert(consumers.end(),
+                         processors->m_consumers.begin(),
+                         processors->m_consumers.end());
     }
     if (engines != nullptr) {
         consumers.insert(consumers.end(), engines->m_consumers.begin(), engines->m_consumers.end());
     }
     return consumers;
-}
-
-std::optional<anira::InferenceBackend> backend_of(const ModelEntry& row) noexcept {
-    // Every custom row is a plan on the 2.x CUSTOM backend, resolved by row in the plan
-    // table: a registered engine, or the bridge's pass-through of anira.v2.custom (check_rows
-    // refuses an id that neither serves).
-    if (row.is_custom()) { return anira::InferenceBackend::CUSTOM; }
-    switch (row.m_engine) {
-#ifdef USE_ONNXRUNTIME
-        case ANIRA_ENGINE_ONNXRUNTIME: return anira::InferenceBackend::ONNX;
-#endif
-#ifdef USE_LIBTORCH
-        case ANIRA_ENGINE_LIBTORCH: return anira::InferenceBackend::LIBTORCH;
-#endif
-#ifdef USE_TFLITE
-        case ANIRA_ENGINE_TFLITE: return anira::InferenceBackend::TFLITE;
-#endif
-#ifdef USE_LITERT
-        case ANIRA_ENGINE_LITERT: return anira::InferenceBackend::LITERT;
-#endif
-#ifdef USE_EXECUTORCH
-        case ANIRA_ENGINE_EXECUTORCH: return anira::InferenceBackend::EXECUTORCH;
-#endif
-        default: return std::nullopt;
-    }
 }
 
 std::vector<int64_t> engine_dims_of(const anira_tensor_spec& spec,
@@ -991,18 +969,23 @@ std::vector<anira_engine> enabled_engines() {
     return engines;
 }
 
+bool engine_enabled(anira_engine engine) {
+    const std::vector<anira_engine> engines = enabled_engines();
+    return std::ranges::find(engines, engine) != engines.end();
+}
+
 void validate(const anira_model_config& model,
               const anira_contract* contract,
               const anira_backend_id* candidates,
               uint32_t num_candidates,
               Derived& out,
-              const StageFacts* stages,
+              const ProcessorFacts* processors,
               const EngineFacts* engines,
               bool default_set) {
     out = Derived{};
     if (model.m_inputs.empty()) { config_error("no input tensor"); }
     if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    if (contract != nullptr) { check_contract(*contract, model, stages); }
+    if (contract != nullptr) { check_contract(*contract, model, processors); }
     const HardContract* hard = contract != nullptr ? contract->hard() : nullptr;
     check_state(model);
     out.m_inputs.resize(model.m_inputs.size());
@@ -1015,9 +998,13 @@ void validate(const anira_model_config& model,
     }
     resolve_anchor(model, out);
     pin_anchor_hop(model, hard, out);
+    out.m_exclusive = model.m_state == ANIRA_MODEL_STATEFUL ||
+                      std::ranges::any_of(model.m_inputs, [](const anira_tensor_spec& spec) {
+                          return spec.m_role == ANIRA_ROLE_STATE;
+                      });
     check_rows(model, candidates, num_candidates, engines, out, default_set);
     check_layouts(model, out);
-    const std::vector<ExtConsumer> consumers = pipeline_consumers(stages, engines);
+    const std::vector<ExtConsumer> consumers = pipeline_consumers(processors, engines);
     check_extensions(model,
                      nullptr,
                      contract,
@@ -1097,24 +1084,6 @@ std::vector<StateLink> state_links(const anira_model_config& model) {
 void check_context_extensions(const anira_context_config& config) {
     const anira_model_config no_model;
     check_extensions(no_model, &config, nullptr, nullptr, 0);
-}
-
-Anchor anchor_of(const anira_model_config& model) {
-    if (model.m_inputs.empty()) { config_error("no input tensor"); }
-    if (model.m_outputs.empty()) { config_error("no output tensor"); }
-    Derived derived;
-    derived.m_inputs.resize(model.m_inputs.size());
-    derived.m_outputs.resize(model.m_outputs.size());
-    for (size_t i = 0; i < model.m_inputs.size(); ++i) {
-        check_spec(model.m_inputs[i], true, derived.m_inputs[i]);
-    }
-    for (size_t i = 0; i < model.m_outputs.size(); ++i) {
-        check_spec(model.m_outputs[i], false, derived.m_outputs[i]);
-    }
-    resolve_anchor(model, derived);
-    return {.m_named = derived.m_anchor_named,
-            .m_is_input = derived.m_anchor_is_input,
-            .m_index = derived.m_anchor_index};
 }
 
 }  // namespace anira::capi

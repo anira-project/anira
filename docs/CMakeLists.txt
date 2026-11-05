@@ -58,29 +58,29 @@ add_custom_target(breathe-apidocs
     COMMAND ${DOCS_VENV_DIR}/bin/breathe-apidoc -o ${SPHINX_SOURCE_DIR}/api
     ${CMAKE_CURRENT_BINARY_DIR}/doxygen/xml
     -g class,struct,union -f
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_thread_safe_struct.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_session_element_1_1_plan_slot.rst
-    # anira::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_inference_thread_1_1_instance_hold.rst
-    # anira::Stage::Prepared, anira::Engine::Loaded, anira::Engine::Prepared and
+    # anira::scheduler::InferenceThread::InstanceHold, the dispatch's private record of a claimed instance (#197), likewise.
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1scheduler_1_1_inference_thread_1_1_instance_hold.rst
+    # anira::Processor::Prepared, anira::Engine::Loaded, anira::Engine::Prepared and
     # anira::ext::ProviderOptions::Set are documented inside their outer class's page (breathe
     # lists the nested class there); a page of their own would declare every member twice.
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_stage_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_processor_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_loaded.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1_engine_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1ext_1_1_provider_options_1_1_set.rst
-    # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessorStage::Prepared, the
+    # The nested classes of anira/compat/v2.hpp likewise: LegacyProcessor::Prepared, the
     # private Loaded and Prepared of PassthroughEngine (EXTRACT_PRIVATE lists them), the
-    # Defaults of anira::v2::InferenceConfig (as the 2.x one's above), and the three aggregates
+    # Defaults of anira::v2::InferenceConfig, and the three aggregates
     # of anira::SpecView (Axis, Window, TimeRatio).
-    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_stage_1_1_prepared.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_legacy_processor_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_loaded.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/class/classanira_1_1v2_1_1_passthrough_engine_1_1_prepared.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1v2_1_1_inference_config_1_1_defaults.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_axis.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_window.rst
     COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_spec_view_1_1_time_ratio.rst
+    COMMAND ${CMAKE_COMMAND} -E remove -f ${SPHINX_SOURCE_DIR}/api/struct/structanira_1_1_plan_query_1_1_backend.rst
     # Add :allow-dot-graphs: directive to all class and struct files.
     # Using perl -i for portability (BSD sed on macOS uses different -i syntax than GNU sed).
     COMMAND bash -c "find ${SPHINX_SOURCE_DIR}/api/class -name '*.rst' -exec perl -i -pe 's{^(\\.\\.\\s+doxygenclass::.*\\n)}{$1    :allow-dot-graphs:\\n}' {} +"
@@ -136,8 +136,9 @@ endif()
 # Configure the Sphinx configuration file
 configure_file(${SPHINX_SOURCE_DIR}/conf.py.in ${SPHINX_BUILD_DIR}/conf.py @ONLY)
 
-# Collect all files in SPHINX_SOURCE_DIR as dependencies
-file(GLOB_RECURSE SPHINX_SOURCE_FILES "${SPHINX_SOURCE_DIR}/*")
+# Collect all files in SPHINX_SOURCE_DIR as dependencies; an added or deleted file re-runs
+# configure, so the list never names a file that is gone or misses a new one.
+file(GLOB_RECURSE SPHINX_SOURCE_FILES CONFIGURE_DEPENDS "${SPHINX_SOURCE_DIR}/*")
 
 # sphinx-js shells out to `typedoc`, so the locally-installed binary in the
 # docs/typedoc node_modules must be on PATH when sphinx-build runs.
