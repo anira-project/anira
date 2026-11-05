@@ -239,8 +239,13 @@ int anira_header_c_probe(void) {
             backend.struct_size == sizeof(anira_backend_id) && backend.engine_id == NULL ? 1 : 0;
         checks += backend.provider == ANIRA_PROVIDER_NONE && backend.provider_id == NULL ? 1 : 0;
         checks += edge.struct_size == sizeof(anira_edge_info) && edge.available == 0u ? 1 : 0;
-        checks += edge.reason == NULL && edge.to_provider_id == NULL ? 1 : 0;
-        checks += edge.to_engine_id == NULL ? 1 : 0;
+        checks +=
+            edge.from_engine == ANIRA_ENGINE_NONE && edge.to_engine == ANIRA_ENGINE_NONE ? 1 : 0;
+        checks +=
+            edge.from_domain == ANIRA_DOMAIN_HOST && edge.to_domain == ANIRA_DOMAIN_HOST ? 1 : 0;
+        checks += edge.edge_class == ANIRA_EDGE_UNKNOWN && edge.reason == NULL ? 1 : 0;
+        checks += edge.from_engine_id == NULL && edge.from_provider_id == NULL ? 1 : 0;
+        checks += edge.to_engine_id == NULL && edge.to_provider_id == NULL ? 1 : 0;
         checks += slot.struct_size == sizeof(anira_plan_slot) && slot.recipe == NULL ? 1 : 0;
         checks += ext.struct_size == sizeof(anira_plan_ext) && ext.host == NULL ? 1 : 0;
         checks += info.struct_size == sizeof(anira_plan_info) && info.budget_ms == 0.0 ? 1 : 0;
@@ -341,7 +346,7 @@ int anira_header_c_probe(void) {
                               ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_COST_PERMISSIVE ? 1 : 0;
+            checks += anira_contract_edge_cost(NULL) == ANIRA_EDGE_UNKNOWN ? 1 : 0;
             /* The declared stream latency: the setter, the count and the enumeration. */
             checks += anira_contract_hard_set_latency(NULL, "audio_out", 1024u) ==
                               ANIRA_ERROR_INVALID_ARGUMENT
@@ -614,10 +619,10 @@ int anira_header_c_probe(void) {
                                                            NULL) == ANIRA_ERROR_INVALID_ARGUMENT
                           ? 1
                           : 0;
-            checks += anira_pipeline_capabilities_edge(NULL, NULL, ANIRA_DOMAIN_HOST, NULL, NULL) ==
-                              ANIRA_ERROR_INVALID_ARGUMENT
-                          ? 1
-                          : 0;
+            checks +=
+                anira_pipeline_capabilities_edge(NULL, NULL, NULL) == ANIRA_ERROR_INVALID_ARGUMENT
+                    ? 1
+                    : 0;
             {
                 uint64_t available = 0u;
                 checks += engine.query(&init_info, NULL, &available) == ANIRA_OK ? 1 : 0;

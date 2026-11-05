@@ -372,7 +372,7 @@ headers:
         value: "((d) >> 16)"
         ts: "(d: number): number => d >>> 16"
         doc: "The lane count of a packed dtype."
-      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor never set on a Hard contract and the only one anira_tensor_data_f32 returns."}
+      - {kind: define, name: ANIRA_DTYPE_F32, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)", ts: "0x00012002", doc: "32-bit float, one lane: the type of every 2.x stream and the only one anira_tensor_data_f32 returns."}
       - {kind: define, name: ANIRA_DTYPE_F64, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 64, 1)", ts: "0x00014002", doc: "64-bit float, one lane."}
       - {kind: define, name: ANIRA_DTYPE_F16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 16, 1)", ts: "0x00011002", doc: "16-bit float."}
       - {kind: define, name: ANIRA_DTYPE_BF16, value: "ANIRA_MAKE_DTYPE(ANIRA_DTYPE_BFLOAT, 16, 1)", ts: "0x00011004", doc: "bfloat16."}
@@ -531,7 +531,7 @@ headers:
           - {name: ANIRA_ROLE_STREAMED, value: 0, doc: "Has a Time axis consumed window-wise (inputs and outputs)."}
           - {name: ANIRA_ROLE_BUFFER, value: 1, doc: "The whole submitted buffer is one model tensor, no Time axis (frames, images): a per-job payload, which arrives with the Async contract. The spec is valid in a model config and a model file; anira_handler_prepare refuses it under a Hard contract with ANIRA_ERROR_NOT_SUPPORTED (a persistent side input under a Hard contract is ANIRA_ROLE_STATIC)."}
           - {name: ANIRA_ROLE_STATIC, value: 2, doc: "No time semantics: conditioning in, scalar or embedding out; one value per job."}
-          - {name: ANIRA_ROLE_STATE, value: 3, doc: "Declared state: one half of a pair of a state input and a state output with equal dtype and shape, paired by anira_tensor_spec_set_state_source on the input. anira keeps the state in the handler, on the port of the state input, in the spec's shape and dtype (the store of a Static tensor with another life), feeds it into the model input ahead of the processor's before_inference and captures the model output into it behind the processor's after_inference, on the inference thread; the value is zeroed at create and at prepare and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list and has a slot like every other tensor, its position in the model config's list, but no Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT, and its position in an array of a _multi form must be the empty tensor (a rank of 1 or more with an extent of 0). A processor sees it at the same slot. No Time axis, window, time ratio or latency; the value takes the spec's dtype, float32 in this pre-release like every model tensor."}
+          - {name: ANIRA_ROLE_STATE, value: 3, doc: "Declared state: one half of a pair of a state input and a state output with equal dtype and shape, paired by anira_tensor_spec_set_state_source on the input. anira keeps the state in the handler, on the port of the state input, in the spec's shape and dtype (the store of a Static tensor with another life), feeds it into the model input ahead of the processor's before_inference and captures the model output into it behind the processor's after_inference, on the inference thread; the value is zeroed at create and at prepare and re-initialised by anira_handler_reset. A State spec may stand anywhere in its list and has a slot like every other tensor, its position in the model config's list, but no Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT, and its position in an array of a _multi form must be the empty tensor (a rank of 1 or more with an extent of 0). A processor sees it at the same slot. No Time axis, window, time ratio or latency; the value takes the spec's dtype, like every model tensor."}
           - {name: ANIRA_ROLE_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_contract_kind
@@ -593,14 +593,6 @@ headers:
           - {name: ANIRA_DELIVERY_POLLED, value: 0, doc: "In the caller of anira_handler_poll / ticket_wait (default)."}
           - {name: ANIRA_DELIVERY_IMMEDIATE, value: 1, doc: "On the inference thread."}
           - {name: ANIRA_DELIVERY_FORCE32, value: "0x7fffffff"}
-      - kind: enum
-        name: anira_edge_cost
-        terminator: ANIRA_EDGE_COST_FORCE32
-        doc: "Plan validation policy for the edges a pipeline uses (section 7); not scheduling."
-        values:
-          - {name: ANIRA_EDGE_COST_PERMISSIVE, value: 0, doc: "Any available edge (default)."}
-          - {name: ANIRA_EDGE_COST_STRICT, value: 1, doc: "Zero-copy edges only."}
-          - {name: ANIRA_EDGE_COST_FORCE32, value: "0x7fffffff"}
       - kind: define
         name: ANIRA_WAIT_FOREVER
         value: "(-1.0)"
@@ -662,13 +654,23 @@ headers:
       - kind: enum
         name: anira_edge_class
         terminator: ANIRA_EDGE_CLASS_FORCE32
-        doc: "Cost class of an edge between a domain and a backend (section 7)."
+        doc: "Where an edge takes a tensor's bytes (section 7). ANIRA_EDGE_ZERO_COPY to ANIRA_EDGE_DEDICATED_TRANSFER are the cost scale, ordered by cost, so the worst edge of a chain is the largest value and an edge of several moves has the class of its worst. ANIRA_EDGE_UNKNOWN stands outside the scale and above it (the values between are room for classes to come), so a chain or a plan with an unknown edge is unknown and the worst-of-chain maximum still holds. The class covers the bytes from the slot's memory until the engine computes on them, and back for outputs; layout transforms inside a runtime's graph are not edges. Who executes the moves is the row's anira_mover_flags bits, whether the edge exists its available flag (anira_edge_info)."
         values:
-          - {name: ANIRA_EDGE_ZERO_COPY, value: 0, doc: "No copy."}
-          - {name: ANIRA_EDGE_DEVICE_COPY, value: 1, doc: "A device-side copy."}
-          - {name: ANIRA_EDGE_HOST_COPY, value: 2, doc: "A copy through host memory."}
-          - {name: ANIRA_EDGE_UNAVAILABLE, value: 3, doc: "No edge."}
+          - {name: ANIRA_EDGE_ZERO_COPY, value: 0, doc: "Nothing moves: the engine computes on the slot's own memory, a device on unified memory included where its runtime wraps the slot's buffer."}
+          - {name: ANIRA_EDGE_COPY, value: 1, doc: "A copy or pass within one domain, the CPU's or one device's, with no hand-over between processors: a memcpy in host memory, a relayout or copy inside a device's memory."}
+          - {name: ANIRA_EDGE_UNIFIED_TRANSFER, value: 2, doc: "The bytes cross between the CPU's domain and a device's within one unified physical memory (an Apple silicon GPU, an integrated GPU, a CPU device: ANIRA_MEMORY_UNIFIED): a copy plus a hand-over between the processors (a submission, a fence, possibly cache maintenance or a relayout), and no bus."}
+          - {name: ANIRA_EDGE_DEDICATED_TRANSFER, value: 3, doc: "The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory (a discrete GPU's VRAM, ANIRA_MEMORY_DEDICATED), a discrete device reading mapped host memory, a copy between two devices."}
+          - {name: ANIRA_EDGE_UNKNOWN, value: 255, doc: "A crossing whose memory kind no probe could establish (ANIRA_MEMORY_UNKNOWN: the device's API is missing or failed, the provider maps to no API anira can ask, the adapters a self-choosing runtime picks among disagree), the reason saying \"memory kind not probed\" and why. Outside the cost scale: every limit of the contract's edge cost refuses it, and as the limit itself (anira_contract_set_edge_cost) it means no limit, even unknown edges allowed."}
           - {name: ANIRA_EDGE_CLASS_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_mover_flags
+        terminator: ANIRA_MOVER_FLAGS_FORCE32
+        doc: "Bit flags of anira_plan_slot::moved_by and anira_edge_info::moved_by: who executes an edge's moves (section 7). The field holds an OR of them, ANIRA_MOVER_NONE when nothing moves, both bits when anira and the runtime each move the bytes (the edge's class is then the worse of the two moves)."
+        values:
+          - {name: ANIRA_MOVER_NONE, value: 0, doc: "No bit: nothing moves (ANIRA_EDGE_ZERO_COPY)."}
+          - {name: ANIRA_MOVER_ANIRA, value: 1, doc: "anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are exactly the copies anira makes, the ones it counts and could remove."}
+          - {name: ANIRA_MOVER_ENGINE, value: 2, doc: "The engine's runtime moves the bytes: a copy its own API makes (a memory-planned ExecuTorch input), the upload and readback of a device provider over host memory, or a registered engine's code."}
+          - {name: ANIRA_MOVER_FLAGS_FORCE32, value: "0x7fffffff"}
       - kind: enum
         name: anira_probe_rung
         terminator: ANIRA_RUNG_FORCE32
@@ -678,6 +680,15 @@ headers:
           - {name: ANIRA_RUNG_IDENTITY, value: 1, doc: "The device identified itself."}
           - {name: ANIRA_RUNG_FUNCTIONAL, value: 2, doc: "A round trip succeeded."}
           - {name: ANIRA_RUNG_FORCE32, value: "0x7fffffff"}
+      - kind: enum
+        name: anira_memory_kind
+        terminator: ANIRA_MEMORY_FORCE32
+        doc: "The physical memory a provider's device computes in, against the host's (section 7): the fact a device provider's edge over host memory takes its class from. Asked of the device's own API at run time, never inferred from a platform's name: Metal's hasUnifiedMemory, the Vulkan device type cross-checked with its memory heaps, the CUDA driver's CU_DEVICE_ATTRIBUTE_INTEGRATED, HIP's hipDeviceAttributeIntegrated, OpenCL's CL_DEVICE_HOST_UNIFIED_MEMORY, D3D12's ARCHITECTURE.UMA; a browser exposes none."
+        values:
+          - {name: ANIRA_MEMORY_UNKNOWN, value: 0, doc: "No probe established it: the device's API is missing or failed, the provider maps to no API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing runtime picks among disagree. The edge is ANIRA_EDGE_UNKNOWN, which every limit of the edge cost refuses."}
+          - {name: ANIRA_MEMORY_UNIFIED, value: 1, doc: "The host's own physical memory: the CPU path, an integrated GPU, a CPU device. A crossing between the CPU's domain and the device's is a unified transfer: a copy plus a hand-over between the processors, no bus."}
+          - {name: ANIRA_MEMORY_DEDICATED, value: 2, doc: "Memory of the device's own across a bus (a discrete GPU's VRAM): a crossing to or from it is a dedicated transfer over the bus."}
+          - {name: ANIRA_MEMORY_FORCE32, value: "0x7fffffff"}
       - kind: define
         name: ANIRA_THREADS_AUTO
         value: "0xffffffffu"
@@ -1501,7 +1512,7 @@ headers:
         status: promised
         since: "0.1"
         doc: "Creates a tensor spec: no axes yet, window 0/0/0, time ratio (0, 0) = derive, latency 0."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role, or a NULL out."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL or empty name, an unknown role, a dtype of 0, or a NULL out. A dtype anira does not name is refused where the spec is used (ANIRA_ERROR_NOT_SUPPORTED at anira_handler_create)."
       - kind: function
         name: anira_tensor_spec_set_axis
         returns: anira_status
@@ -1560,7 +1571,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Declared state passing: pairs a state input with the state output it is fed from on the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on the input (JSON: \"state_source\" on the input spec). anira holds the pair in the handler, two buffers on the port of the state input in the spec's shape and dtype (zeroed at create and at prepare), and copies nothing: as the first step of every inference, ahead of the processor's before_inference, the model's state input is bound to the read buffer (the last state) and the state output to the write buffer, and as the last step, behind the processor's after_inference, the two flip; under a plan whose engine sets ANIRA_ENGINE_FLAG_STATE_ALIAS both halves are bound to the read buffer and nothing flips. A failed inference (an engine failure, a non-OK processor) does not flip, so the state keeps its last good value. anira_handler_reset re-initialises the state at the first inference of the new stream; the state survives anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input names exactly one state output and every state output is named by exactly one state input; the two halves have equal dtype and shape; a state spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the anchor may name it. A state pair may have any dtype, unlike every other model tensor of this pre-release, which is float32: its buffers take the spec's dtype and a custom engine binds what its load accepts, while a built-in engine refuses a non-float32 tensor at load (ANIRA_ERROR_CONFIG). ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second call replaces the name."
+        doc: "Declared state passing: pairs a state input with the state output it is fed from on the next inference. Both halves carry ANIRA_ROLE_STATE; the pairing is stated once, on the input (JSON: \"state_source\" on the input spec). anira holds the pair in the handler, two buffers on the port of the state input in the spec's shape and dtype (zeroed at create and at prepare), and copies nothing: as the first step of every inference, ahead of the processor's before_inference, the model's state input is bound to the read buffer (the last state) and the state output to the write buffer, and as the last step, behind the processor's after_inference, the two flip; under a plan whose engine sets ANIRA_ENGINE_FLAG_STATE_ALIAS both halves are bound to the read buffer and nothing flips. A failed inference (an engine failure, a non-OK processor) does not flip, so the state keeps its last good value. anira_handler_reset re-initialises the state at the first inference of the new stream; the state survives anira_handler_set_plan. A model with a pair runs as ANIRA_MODEL_STATEFUL whatever its state says. Validation (ANIRA_ERROR_CONFIG naming the tensor, at create and at prepare): every state input names exactly one state output and every state output is named by exactly one state input; the two halves have equal dtype and shape; a state spec has no Time axis, window, time ratio or latency, and neither a ring dtype nor the anchor may name it. Its buffers take the spec's dtype, as every model tensor does: a custom engine binds what its load accepts, and a built-in engine refuses at load (ANIRA_ERROR_NOT_SUPPORTED) what its runtime cannot carry. ANIRA_ERROR_NOT_SUPPORTED: a state tensor with a transposed layout. A second call replaces the name."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec, a NULL or empty name, or a spec whose role is not ANIRA_ROLE_STATE."
       - kind: function
         name: anira_tensor_spec_set_ext
@@ -1713,11 +1724,11 @@ headers:
         params:
           - {type: anira_contract*, name: contract, doc: "A Hard contract."}
           - {type: const char*, name: canonical, doc: "The tensor's canonical name (the one its spec was created with)."}
-          - {type: anira_dtype, name: dtype, doc: "The element type of the host's samples for that tensor; ANIRA_DTYPE_F32 for every tensor that was never set."}
+          - {type: anira_dtype, name: dtype, doc: "The element type of the host's samples for that tensor; the spec's dtype for every tensor that was never set."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/processor.h still refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; ANIRA_DTYPE_F32 for every tensor never set. A name that matches no Streamed tensor is checked at prepare, not here."
+        doc: "The ring dtype of one tensor under a Hard contract: the element type the tensor forms of the Hard entries carry across the ABI and anira_ring_dtype reports, held by the ring as is. Nothing in anira converts: the Hard entries copy between the host and the ring, a ring dtype that differs from the spec's dtype (the model's) is ANIRA_ERROR_CONFIG at prepare, unless a processor of the pipeline fills the phase that moves that ring (pre_process for an input, post_process for an output) and so takes the difference on itself; the default bodies of anira/abi/processor.h refuse such a slot at run time. Set per tensor by canonical name, so an input and an output may differ; a tensor never set streams its spec's dtype, so a host whose samples are the model's sets nothing, and one of another sample type sets its type here and adds the converting processor. A name that matches no Streamed tensor is checked at prepare, not here."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a dtype of 0."
       - kind: function
         name: anira_contract_hard_set_latency
@@ -1762,12 +1773,12 @@ headers:
         returns: anira_status
         params:
           - {type: anira_contract*, name: contract, doc: "Either contract kind."}
-          - {type: anira_edge_cost, name: cost, doc: "PERMISSIVE (default) or STRICT."}
+          - {type: anira_edge_class, name: worst_allowed, doc: "The worst class a plan may take for any of its slots, a limit of the cost scale or none: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge, ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified memory only (no bus), ANIRA_EDGE_COPY no crossing between domains, ANIRA_EDGE_ZERO_COPY no copy at all; under each of them an ANIRA_EDGE_UNKNOWN edge is refused. ANIRA_EDGE_UNKNOWN, the default, is no limit: every edge allowed, even unknown ones."}
         thread: main-thread
         status: promised
         since: "0.1"
-        doc: "Plan validation policy for the edges a pipeline uses (section 7); not scheduling."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for an unknown value."
+        doc: "The edge cost of the plans (section 7), plan validation, not scheduling: at anira_handler_prepare a plan with a slot whose edge_class is above worst_allowed is not eligible (an ANIRA_EDGE_UNKNOWN edge is above every class of the scale, so any limit refuses it; with no limit nothing is checked): it is dropped from the plans, under the default candidate set and named candidates alike, with an Info record of the group anira.capi naming each such slot, its class, who moves its bytes and why; the report and the plan indices hold the eligible plans alone. The session is then made again over the remaining plans while the first still holds their loaded models, so no model loads twice; an exclusive session's own executor is made, and warmed up, a second time. The edge is the plan engine's (anira_plan_slot.edge_class), known once its model has loaded."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract or a value anira_edge_class does not name."
       - kind: function
         name: anira_contract_set_host_domain
         returns: anira_status
@@ -1778,7 +1789,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The host-end domain of one tensor, common to both contract kinds like anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor and the Static store of the slot in, and the domain all four phases of a processor, the feed and the capture work in; for a State input it overrides the domain of the pair's two buffers, which is the backend's domain of the plans that run the pair otherwise (host memory for every backend of this pre-release), the domain the bound State descriptors report; the planner joins it to the backend's domain per slot with the edge of the registry's rows (anira_plan_slot.domain_in / domain_out / edge_class / recipe). A tensor declared in the backend's own domain has no edge to cross. The ring, the model tensor and the tensors the context accessors fill share the declared domain, readable from the domain field of any tensor an accessor fills or from the plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the declaration is data; anira's runtime allocates in host memory only). In a contract file the key is a top-level \"host_domains\": {\"<name>\": \"<domain word>\"}, the words the lower-case suffixes of anira_domain (\"host\", \"host_pinned\", \"cuda\", ...)."
+        doc: "The host-end domain of one tensor, common to both contract kinds like anira_contract_set_edge_cost: the domain anira allocates the ring, the model tensor and the Static store of the slot in, and the domain all four phases of a processor, the feed and the capture work in; for a State input it overrides the domain of the pair's two buffers, which is the backend's domain of the plans that run the pair otherwise (host memory for every backend of this pre-release), the domain the bound State descriptors report; the planner joins it to the backend's domain per slot with the edge of the registry's rows (anira_plan_slot.from_domain / to_domain / edge_class / recipe). A tensor declared in the backend's own domain has no edge to cross. The ring, the model tensor and the tensors the context accessors fill share the declared domain, readable from the domain field of any tensor an accessor fills or from the plan row. Set per tensor by canonical name, resolved at anira_handler_prepare: a name that matches no tensor is ANIRA_ERROR_CONFIG there, and in this pre-release any domain but ANIRA_DOMAIN_HOST is ANIRA_ERROR_NOT_SUPPORTED there, naming the tensor (the declaration is data; anira's runtime allocates in host memory only). In a contract file the key is a top-level \"host_domains\": {\"<name>\": \"<domain word>\"}, the words the lower-case suffixes of anira_domain (\"host\", \"host_pinned\", \"cuda\", ...)."
         return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL or empty name, or a domain that is no anira_domain value."
       - kind: function
         name: anira_contract_set_ext
@@ -2149,7 +2160,7 @@ headers:
         status: promised
         since: "0.1"
         doc: "The entry's model path."
-        return_doc: "Object-owned; NULL for a bytes entry or an index out of range."
+        return_doc: "Object-owned; NULL for a NULL config, an index out of range, a bytes entry and an entry without a source (anira_model_config_add_model_path with a NULL path: a custom engine's entry that names no model file)."
       - kind: function
         name: anira_model_config_model_bytes
         returns: anira_status
@@ -2451,7 +2462,7 @@ headers:
         status: promised
         since: "0.1"
         doc: "Writes the config in v3 spelling (section 8.1), fixed key order; reading a v2 file and writing it out is the migration tool. Bytes entries keep the path they were loaded with."
-        return_doc: "ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len."
+        return_doc: "ANIRA_OK, or ANIRA_ERROR_BUFFER_TOO_SMALL (out_len holds the required length) or ANIRA_ERROR_INVALID_ARGUMENT for a NULL config or out_len; ANIRA_ERROR_NOT_SUPPORTED for a tensor of a dtype that has no word in a model file (one anira does not name)."
       - kind: function
         name: anira_model_config_take_legacy_contract
         returns: anira_status
@@ -2493,7 +2504,7 @@ headers:
         name: anira_contract_from_json
         returns: anira_status
         params:
-          - {type: const char*, name: utf8, doc: "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost and an optional top-level host_domains ({\"<name>\": \"<domain word>\"}, anira_contract_set_host_domain), or a v2 document."}
+          - {type: const char*, name: utf8, doc: "The document text: {\"hard\": {...}} or {\"async\": {...}} with an optional top-level edge_cost (the worst edge class allowed, by its word: \"zero_copy\", \"copy\", \"unified_transfer\" or \"dedicated_transfer\"; anira_contract_set_edge_cost; without the key no limit) and an optional top-level host_domains ({\"<name>\": \"<domain word>\"}, anira_contract_set_host_domain), or a v2 document."}
           - {type: size_t, name: len, doc: "Length of utf8 in bytes."}
           - {type: anira_contract**, name: out, doc: "Receives the handle on success."}
           - {type: anira_error*, name: err, doc: "Nullable."}
@@ -2819,7 +2830,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's ring_dtypes) named; every other tensor's ring dtype is ANIRA_DTYPE_F32."
+        doc: "The number of tensors anira_contract_hard_set_ring_dtype (or a contract file's ring_dtypes) named; every other tensor's ring dtype is its spec's dtype."
         return_doc: "The count; 0 on an Async contract and for NULL."
       - kind: function
         name: anira_contract_hard_ring_dtype
@@ -2832,7 +2843,7 @@ headers:
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "One ring dtype the contract names, enumerated by index in bytewise order of the canonical names: what lists what was set, which a lookup by name could not (it would answer ANIRA_DTYPE_F32 for a name never set and for one set to it alike)."
+        doc: "One ring dtype the contract names, enumerated by index in bytewise order of the canonical names: what lists what was set. A name it does not list streams its spec's dtype, which the contract does not know (a contract has no model), so a lookup by name could not answer it."
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
       - kind: function
         name: anira_contract_hard_num_latencies
@@ -2859,14 +2870,14 @@ headers:
         return_doc: "ANIRA_OK; ANIRA_ERROR_WRONG_CONTRACT on an Async contract; ANIRA_ERROR_INVALID_ARGUMENT for a NULL contract, a NULL out-parameter or an index out of range."
       - kind: function
         name: anira_contract_edge_cost
-        returns: anira_edge_cost
+        returns: anira_edge_class
         params:
           - {type: const anira_contract*, name: contract, doc: "Either contract kind."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "The edge cost policy anira_contract_set_edge_cost stored."
-        return_doc: "The policy; ANIRA_EDGE_COST_PERMISSIVE, the default, for NULL."
+        doc: "The edge cost anira_contract_set_edge_cost stored: the worst edge class a plan may take, ANIRA_EDGE_UNKNOWN for no limit (even unknown edges allowed)."
+        return_doc: "The class; ANIRA_EDGE_UNKNOWN, the default (no limit), for NULL."
       - kind: function
         name: anira_context_config_threads
         returns: anira_status
@@ -2911,8 +2922,8 @@ headers:
       the enum's
       value where one fits and ANIRA_PROVIDER_CUSTOM with the runtime's own name in provider_id
       else; LiteRT's registered
-      accelerators by hardware, "gpu", "npu", "webnn"), and one host edge per backend row; a
-      device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
+      accelerators by hardware, "gpu", "npu", "webnn"), and two edges per backend row, from the
+      host domain to the backend and from the backend back to it; a device block on the config is ANIRA_ERROR_NOT_SUPPORTED at create.
     includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h"]
     entities:
       - kind: struct
@@ -2934,22 +2945,29 @@ headers:
         name: anira_edge_info
         tier: 2
         struct_id: ANIRA_STRUCT_EDGE_INFO
-        doc: "One row of the edge registry: whether a tensor in domain from_domain can reach the backend (to_engine, ANIRA_ENGINE_CUSTOM beside to_engine_id for a custom engine; to_provider, ANIRA_PROVIDER_CUSTOM beside to_provider_id for a provider the enum does not name), how (edge_class), how sure the probe is (rung), and why not (reason). Valid for the duration of the enumerating call."
+        doc: "One directed edge of the edge registry, from one end to the other, each end a domain or a backend: whether the edge can be used here (available), where it takes a tensor's bytes (edge_class) and who moves them (moved_by), the memory kind of the backend's device (memory_kind), how sure the probe is (rung), and why (reason). An end is a backend when its engine is set (from_engine, to_engine: an engine on a provider, under the pair rule of anira_backend_id: ANIRA_ENGINE_CUSTOM beside an engine id, ANIRA_PROVIDER_CUSTOM beside a provider id), else its domain (from_domain, to_domain). In this pre-release every row has a Host end and a backend end: two rows per backend, from ANIRA_DOMAIN_HOST to the backend (the way an input goes) and from the backend to ANIRA_DOMAIN_HOST (the way an output goes), with the same class, mover and memory kind and each its direction's reason (an input's upload, an output's readback). A row is the provider's edge, by the provider rule for its direction, before any model exists: the best a plan on that backend can do. What a plan's engine does with each tensor (an engine that copies its outputs, say) is that plan's anira_plan_slot rows. Tier 2, struct_size first; looked up by its two ends (anira_capabilities_edge) and enumerated at the caller's stride (anira_capabilities_edges)."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_edge_info) of the caller's header."}
-          - {name: from_domain, type: uint32_t, doc: "anira_domain of the tensor."}
-          - {name: to_engine, type: uint32_t, doc: "anira_engine of the backend; ANIRA_ENGINE_CUSTOM beside a to_engine_id."}
-          - {name: to_provider, type: uint32_t, doc: "anira_provider of the backend; ANIRA_PROVIDER_CUSTOM beside a to_provider_id."}
-          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: the cost class of the edge, ANIRA_EDGE_UNAVAILABLE when there is none."}
-          - {name: rung, type: uint32_t, doc: "anira_rung: how the availability was established."}
+          - {name: from_domain, type: uint32_t, doc: "anira_domain of the from end when from_engine is ANIRA_ENGINE_NONE; ANIRA_DOMAIN_HOST, and not read, on a backend end."}
+          - {name: from_engine, type: uint32_t, doc: "anira_engine of a backend from end (ANIRA_ENGINE_CUSTOM beside from_engine_id); ANIRA_ENGINE_NONE on a domain end."}
+          - {name: from_provider, type: uint32_t, doc: "anira_provider of a backend from end (ANIRA_PROVIDER_CUSTOM beside from_provider_id); ANIRA_PROVIDER_NONE on a domain end."}
+          - {name: to_domain, type: uint32_t, doc: "As from_domain, for the to end."}
+          - {name: to_engine, type: uint32_t, doc: "As from_engine, for the to end (ANIRA_ENGINE_CUSTOM beside to_engine_id)."}
+          - {name: to_provider, type: uint32_t, doc: "As from_provider, for the to end (ANIRA_PROVIDER_CUSTOM beside to_provider_id)."}
           - {name: available, type: uint32_t, doc: "1 when the edge can be used here, else 0."}
-          - {name: reason, type: const char*, doc: "Why the edge is unavailable, or what makes it available; static storage of the library, NULL when there is nothing to say."}
-          - {name: to_provider_id, type: const char*, doc: "NULL for a provider the enum names; the name of a custom provider of the backend (to_provider ANIRA_PROVIDER_CUSTOM), in the engine's own vocabulary (anira_provider), valid while the capabilities are. A tail field: a caller whose header ends before it reads the rows without it."}
-          - {name: to_engine_id, type: const char*, doc: "NULL for a built-in engine; the id of a custom engine of the pipeline (to_engine ANIRA_ENGINE_CUSTOM; anira_pipeline_capabilities_edge), the engine's own string, valid while the pipeline holds the engine. A tail field: a caller whose header ends before it reads the rows without it."}
+          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: where the edge takes the tensor's bytes; on a row with available 0, the edge the row would provide."}
+          - {name: moved_by, type: uint32_t, doc: "anira_mover_flags bits: who executes the edge's moves: ANIRA_MOVER_NONE on a zero-copy edge, ANIRA_MOVER_ENGINE where the engine's runtime moves host memory to its device and back itself."}
+          - {name: memory_kind, type: uint32_t, doc: "anira_memory_kind: the physical memory the backend's provider computes in, the fact a device provider's class follows: ANIRA_MEMORY_UNIFIED for a provider that runs over host memory (nothing probed) and for a device of unified memory (ANIRA_EDGE_UNIFIED_TRANSFER), ANIRA_MEMORY_DEDICATED for a device of its own memory (ANIRA_EDGE_DEDICATED_TRANSFER), ANIRA_MEMORY_UNKNOWN where no probe established it (ANIRA_EDGE_UNKNOWN). A device provider's kind is asked of its device's API the first time a row of its backend is read, for both rows of the backend, and kept by the context."}
+          - {name: rung, type: uint32_t, doc: "anira_probe_rung: how the row was established."}
+          - {name: reason, type: const char*, doc: "Why the edge is unavailable, or why it is available and of its class (a device provider's names its memory kind and what the probe saw); valid while the context is, NULL when there is nothing to say."}
+          - {name: from_engine_id, type: const char*, doc: "The id of a custom engine of the pipeline on a backend from end (from_engine ANIRA_ENGINE_CUSTOM; anira_pipeline_capabilities_edge), the engine's own string, valid while the pipeline holds the engine; NULL for a built-in engine and on a domain end."}
+          - {name: from_provider_id, type: const char*, doc: "The name of a custom provider on a backend from end (from_provider ANIRA_PROVIDER_CUSTOM), in the engine's own vocabulary (anira_provider), valid while the capabilities are; NULL for a provider the enum names and on a domain end."}
+          - {name: to_engine_id, type: const char*, doc: "As from_engine_id, for the to end."}
+          - {name: to_provider_id, type: const char*, doc: "As from_provider_id, for the to end."}
         init:
           name: ANIRA_EDGE_INFO_INIT
-          value: "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_EDGE_UNAVAILABLE, ANIRA_RUNG_STATIC, 0u, NULL, NULL, NULL"
-          doc: "No edge."
+          value: "sizeof(anira_edge_info), ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, ANIRA_DOMAIN_HOST, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, 0u, ANIRA_EDGE_UNKNOWN, ANIRA_MOVER_NONE, ANIRA_MEMORY_UNKNOWN, ANIRA_RUNG_STATIC, NULL, NULL, NULL, NULL, NULL"
+          doc: "No edge: both ends unset, unavailable, class unknown."
       - kind: function
         name: anira_context_create
         returns: anira_status
@@ -2976,12 +2994,11 @@ headers:
         returns: anira_status
         params:
           - {type: anira_context*, name: context, doc: "The handle."}
-          - {type: anira_bool, name: force, doc: "Nonzero re-runs every rung even where a cached answer exists."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Re-runs the probe and refreshes the capabilities the handle reports: the compiled-in engines on the providers their runtimes report usable now (anira_capabilities_backends), one host edge per backend row, the host domain. Nothing is cached in this pre-release, so force changes nothing."
+        doc: "Re-runs the probe in full and refreshes the capabilities the handle reports: the compiled-in engines on the providers their runtimes report usable now, asked anew (anira_capabilities_backends), two edges per backend row (anira_capabilities_edges), the host domain. The memory kinds the context kept (anira_memory_kind) are forgotten too: the next row or prepare that needs a device provider's kind asks its device's API again. Nothing else is cached, so every probe is a full one."
         return_doc: "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a NULL context."
       - kind: function
         name: anira_context_capabilities
@@ -3041,21 +3058,19 @@ headers:
         thread: thread-safe
         status: promised
         since: "0.2"
-        doc: "Every row of the edge registry, available or not; one host edge to each backend row of this pre-release (zero-copy to a CPU provider, a host copy to any other). Stride-explicit enumeration. The strings the rows point to (to_provider_id, reason) are the context's, valid until its next anira_context_probe replaces them or the context is destroyed."
+        doc: "Every row of the edge registry, available or not: two rows per backend row of anira_capabilities_backends, in its order, so that rows 2i and 2i + 1 belong to backend i: first the edge from ANIRA_DOMAIN_HOST to the backend (the way an input goes), then the edge from the backend back to ANIRA_DOMAIN_HOST (the way an output goes), each by the provider rule for its direction, with the same class, mover and memory kind in this pre-release and each its direction's reason: zero-copy to and from a provider that runs over host memory; to and from a device provider a move the engine's runtime makes itself, whose class follows the device's memory kind (memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory). The first read of a device provider's rows asks its device's API (the unified-memory probe, run lazily, on a thread of its own, waited for 5 s at most per API, never at the context's creation) and the context keeps the answer; this entry finishes every such row before it counts or copies, so a count and the fill after it read the same rows. Stride-explicit enumeration. The strings the rows point to (from_provider_id, to_provider_id, reason) are the context's: the provider ids valid until its next anira_context_probe replaces them, reason until the context is destroyed."
         return_doc: "ANIRA_OK, ANIRA_INCOMPLETE for a short buffer, or ANIRA_ERROR_INVALID_ARGUMENT for NULL capabilities or count or an element_size below the struct_size slot."
       - kind: function
         name: anira_capabilities_edge
         returns: anira_status
         params:
           - {type: const anira_capabilities*, name: capabilities, doc: "The capabilities."}
-          - {type: anira_domain, name: from, doc: "The tensor's domain."}
-          - {type: const anira_backend_id*, name: to, doc: "The backend; read within its struct_size."}
-          - {type: anira_edge_info*, name: out, doc: "Receives the row, read and written within its struct_size (set it before the call)."}
+          - {type: anira_edge_info*, name: edge, doc: "In: the two ends of the edge asked for (ANIRA_EDGE_INFO_INIT, then the from_* and to_* fields of each end); out: the row, written within the caller's struct_size."}
         thread: thread-safe
         status: promised
         since: "0.2"
-        doc: "One row of the edge registry, by domain and backend: the engine on the provider, a custom provider (ANIRA_PROVIDER_CUSTOM) by its provider_id (read when the caller's record has the slot). A custom engine (ANIRA_ENGINE_CUSTOM) has no row here: its rows are its pipeline's (anira_pipeline_capabilities_edge)."
-        return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no row for the pair (out untouched); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields."
+        doc: "One row of the edge registry, by its two ends: the caller sets the ends of an anira_edge_info and anira fills in the facts. A domain end (engine ANIRA_ENGINE_NONE) matches a row's end by its domain; a backend end by its engine, its provider and a custom provider's name (provider ANIRA_PROVIDER_CUSTOM beside its provider id), its domain field not read. A custom engine (ANIRA_ENGINE_CUSTOM beside an engine id) has no row here: its rows are its pipeline's (anira_pipeline_capabilities_edge). On a match the backend's rows are finished (a device provider's memory kind, asked as anira_capabilities_edges asks it, for this backend alone) and the row is copied into *edge, min(edge->struct_size, the library's record size) bytes, as the enumerators write a row. The baseline record ends with to_provider_id: a struct_size below it is refused, and a newer header's tail fields beyond the library's record stay as the caller set them."
+        return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no row with those ends (*edge untouched: two domain ends, two backend ends, a backend the capabilities do not list, a domain other than the host's); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the baseline record."
       - kind: function
         name: anira_enabled_engines
         returns: anira_status
@@ -3374,7 +3389,7 @@ headers:
       The edge sits directly before and after the engine and is anira's: a processor never
       crosses a domain, and in this pre-release every host end and every model tensor is
       host memory (ANIRA_DOMAIN_HOST, the host domain a contract declares per tensor with
-      anira_contract_set_host_domain), the model tensors of ANIRA_DTYPE_F32. One pre_process
+      anira_contract_set_host_domain), each model tensor in its spec's dtype. One pre_process
       call forms exactly one chunk; a host block that holds several hops forms several
       chunks, one call each.
 
@@ -3452,7 +3467,7 @@ headers:
         nonblocking: true
         status: promised
         since: "0.2"
-        doc: "The element type the ring stores: the ring dtype the host declared for the slot on the Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was declared. It is never inferred from the tensor spec's dtype, which may differ when the processor converts; every data accessor states the dtype it believes it is reading or writing."
+        doc: "The element type the ring stores: the ring dtype the host declared for the slot on the Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing was declared. The two differ only where the contract names another dtype, which a processor that converts goes with; every data accessor states the dtype it believes it is reading or writing."
         return_doc: "The ring's dtype; 0, which is no dtype, for a NULL ring."
       - kind: function
         name: anira_ring_num_channels
@@ -4065,11 +4080,35 @@ headers:
         thread: main-thread
         doc: "The query function of an engine, its own GetAvailableProviders: which of the providers its descriptor declares it can serve here, now (a device present, a library loaded). Called before init and any number of times, on the main thread only: at anira_handler_create, where every candidate's provider of the engine is checked against the answer, and at anira_pipeline_capabilities_backends / _edge, which report the engine's rows. anira_handler_prepare, which may run on another thread, never calls it: the handler keeps the answer its create got and checks the plans against that again. It must not take the core's lifecycle lock (no context, handler or thread entry) and may log. A status other than ANIRA_OK fails the calling entry with it, naming the engine (ANIRA_PHASE_QUERY). NULL: every declared provider is usable, the rule for an engine without a query."
       - kind: struct
+        name: anira_engine_edge
+        tier: 2
+        padding_free: true
+        doc: "How a custom engine passes one slot to its runtime, as the plan report states it (anira_plan_slot.edge_class and reason): what anira_engine_edge_fn writes. Tier 2, struct_size first, no implicit padding (LP64 16 bytes, ILP32 12). The mover follows from the class: a registered engine is handed the chunk's buffer itself, so whatever moves the bytes is the engine's code, ANIRA_MOVER_ENGINE for any class but ANIRA_EDGE_ZERO_COPY and ANIRA_MOVER_NONE for that."
+        fields:
+          - {name: struct_size, type: uint32_t, doc: "sizeof(anira_engine_edge) of the library, as anira hands the record over; the engine writes within it."}
+          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until it computes on them and back for an output. Arrives as the provider rule's for the slot's direction (the same class both ways): ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has its own memory and ANIRA_EDGE_UNKNOWN where no probe established which (the plan's anira_plan_info.memory_kind). An engine that leaves it states that."}
+          - {name: reason, type: const char*, doc: "Why the edge is what it is; NULL with nothing to say (arrives as the provider rule's for the slot's direction: a device provider's names the upload of an input or the readback of an output). Copied before the callback returns."}
+        init:
+          name: ANIRA_ENGINE_EDGE_INIT
+          value: "sizeof(anira_engine_edge), ANIRA_EDGE_ZERO_COPY, NULL"
+          doc: "Zero-copy, nothing to say."
+      - kind: callback
+        name: anira_engine_edge_fn
+        returns: anira_status
+        params:
+          - {type: void*, name: loaded, doc: "What the load handed back (NULL for a descriptor without a load)."}
+          - {type: uint32_t, name: is_input, doc: "1 for an input slot, 0 for an output slot."}
+          - {type: uint32_t, name: slot, doc: "The slot: the tensor's position in the model config's input or output list."}
+          - {type: anira_engine_edge*, name: out, doc: "Arrives filled with the provider rule's edge for the load's provider in the slot's direction (is_input); the engine overwrites what differs, within out->struct_size."}
+          - {type: void*, name: user_data, doc: "The descriptor's user_data."}
+        thread: main-thread
+        doc: "The edge statement of an engine, the built-in engines' Loaded::slot_edge for a custom one: how it passes each slot to its runtime, for the plan report's slot rows and the contract's edge cost (anira_contract_set_edge_cost). Called on the thread of anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot of each loaded model right after its load succeeded, inputs first, in slot order; anira keeps the answers for the loaded model's life. An engine that copies a slot into host memory of its own says ANIRA_EDGE_COPY; one whose device computes on the slot's memory as it is (a runtime that wraps the buffer on unified memory) says ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the load's unload is called."
+      - kind: struct
         name: anira_engine_desc
         tier: 2
         callback_descriptor: true
         padding_free: true
-        doc: "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 120 bytes, ILP32 72), growth at the tail. The slots are listed as the processor's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves and the query that says which of them are usable here. process is required; every other slot may be NULL."
+        doc: "A custom engine, handed once to anira_custom_engine_create and copied within struct_size into the refcounted anira_custom_engine, which every pipeline it is added to and every handler created from them share. Tier 2: struct_size first, user_data third (its offset never moves), no implicit padding (LP64 128 bytes, ILP32 76), growth at the tail. The slots are listed as the processor's, from the innermost level out: the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the providers the engine serves and the query that says which of them are usable here; then the edge statement, how the engine passes each slot to its runtime. process is required; every other slot may be NULL."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_engine_desc) of the caller's header."}
           - {name: abi_version, type: uint32_t, doc: "ANIRA_ABI_VERSION the caller compiled against."}
@@ -4089,9 +4128,10 @@ headers:
           - {name: num_providers, type: uint32_t, doc: "The length of providers."}
           - {name: reserved, type: uint32_t, doc: "0."}
           - {name: query, type: anira_engine_query_fn, doc: "ANIRA_PHASE_QUERY: which of providers are usable here, now, as a bitmask over the list; called on the main thread, at anira_handler_create and by the capabilities entries (anira_pipeline_capabilities_backends / _edge), before init and any number of times; anira_handler_prepare uses the answer create got. NULL: every listed provider. A tail field: a caller whose header ends before it has no query."}
+          - {name: edge, type: anira_engine_edge_fn, doc: "How the engine passes each slot to its runtime (anira_engine_edge_fn), asked once per slot after each load; NULL: the provider rule for each slot's direction, zero-copy on ANIRA_PROVIDER_CPU and XNNPACK and a transfer the engine makes itself on every other provider, an input's upload or an output's readback (anira_pipeline_capabilities_edge). A tail field: a caller whose header ends before it has no edge statement."}
         init:
           name: ANIRA_ENGINE_DESC_INIT
-          value: "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL"
+          value: "sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL"
           doc: "An engine without a callback and without a promise (flags 0): process must be filled before anira_custom_engine_create."
 
   # ----------------------------------------------------------------------------
@@ -4165,16 +4205,15 @@ headers:
       pre-release every handler is Host-only (every backend's domain is the host's), its plans are
       one per model entry of one variant and candidate naming that entry's engine and a
       provider it accepts (anira_pipeline_add_inference), an
-      Async contract is refused at prepare, and every model tensor is ANIRA_DTYPE_F32: a ring
-      dtype that differs from its spec's dtype is refused at prepare unless the pipeline's
-      processor fills the phase that moves that ring (pre_process for an input, post_process for
-      an output), since nothing in anira converts. Every tensor of either side has one
+      Async contract is refused at prepare, and a ring dtype that differs from its spec's dtype
+      is refused at prepare unless the pipeline's processor fills the phase that moves that ring
+      (pre_process for an input, post_process for an output), since nothing in anira converts. Every tensor of either side has one
       declared host-end domain (anira_contract_set_host_domain, default ANIRA_DOMAIN_HOST):
       the domain anira allocates the ring, the model tensor, the Static store and, overriding
       the backend's domain of the plans that run the pair (host memory for every backend of this
       pre-release), the state
       buffers of the slot in, and the domain all four processor phases work in; the plan report's
-      slot rows carry it as domain_in of an input and domain_out of an output, against the
+      slot rows carry it as from_domain of an input and to_domain of an output, against the
       backend's domain on the other side. Anything but ANIRA_DOMAIN_HOST is
       ANIRA_ERROR_NOT_SUPPORTED at prepare in this pre-release.
     includes: ["<stddef.h>", "<stdint.h>", "export.h", "status.h", "enums.h", "tensor.h", "context.h", "processor.h", "engine.h"]
@@ -4184,24 +4223,27 @@ headers:
         name: anira_plan_slot
         tier: 2
         struct_id: ANIRA_STRUCT_PLAN_SLOT
-        doc: "One tensor slot of one plan: the edge the plan takes for it, its cost class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, and why, and the role of the tensor, which decides the entries that take the slot. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride (a caller whose header ends before a tail field gets its rows without it). In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, ANIRA_EDGE_ZERO_COPY, recipe \"host\", no reason."
+        doc: "One tensor slot of one plan: the edge the plan takes for it, its class, the class an allocate_* handle would have gotten, how a completion on that edge is waited for, why the edge is what it is and who moves the bytes, and the role of the tensor, which decides the entries that take the slot. Tier 2, struct_size first; enumerated by anira_plan_report_slots at the caller's stride (a caller whose header ends before a tail field gets its rows without it). In this pre-release every slot is in host memory: ANIRA_DOMAIN_HOST on both sides, recipe \"host\"; the edge is ANIRA_EDGE_ZERO_COPY, moved by nobody, where the plan's engine binds the slot's buffer in place on a provider that runs over host memory (the CPU path, XNNPACK, ONNX Runtime's CPU-side execution providers); ANIRA_EDGE_COPY with the reason where the slot is copied inside host memory, by the engine's adapter (ANIRA_MOVER_ANIRA: LibTorch's outputs, a memory-planned ExecuTorch output) or by the runtime's own API (ANIRA_MOVER_ENGINE: a memory-planned ExecuTorch input); and, moved by the engine (ANIRA_MOVER_ENGINE), where a device provider's runtime moves the slot's host memory to its device and reads the results back itself (a GPU execution provider, a LiteRT accelerator), the class the memory kind of its device gives (anira_plan_info.memory_kind: ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory, the reason saying which, what the probe saw and the slot's move: an input's upload, an output's readback), the class, mover and reason the capability row of the slot's direction gives that edge."
         fields:
           - {name: struct_size, type: uint32_t, doc: "sizeof(anira_plan_slot) of the caller's header."}
           - {name: slot, type: uint32_t, doc: "The slot: the tensor's position in the model config's input list (is_input) or output list. One row per tensor of each list, whatever its role."}
           - {name: is_input, type: uint32_t, doc: "1 for an input slot, 0 for an output slot."}
-          - {name: domain_in, type: uint32_t, doc: "anira_domain: where the data enters the edge (the host's side for an input)."}
-          - {name: domain_out, type: uint32_t, doc: "anira_domain: where the data leaves the edge (the backend's side for an input)."}
-          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: the cost class of the edge taken."}
-          - {name: allocate_class, type: uint32_t, doc: "anira_edge_class: the class a handle from anira's own allocator would get for this slot; equal to edge_class on a slot in host memory."}
+          - {name: from_domain, type: uint32_t, doc: "anira_domain: where the data enters the edge, its from end as anira_edge_info names it (the host's side for an input, the backend's for an output)."}
+          - {name: to_domain, type: uint32_t, doc: "anira_domain: where the data leaves the edge, its to end (the backend's side for an input, the host's for an output)."}
+          - {name: edge_class, type: uint32_t, doc: "anira_edge_class: where the edge taken moves the slot's bytes."}
+          - {name: allocate_class, type: uint32_t, doc: "anira_edge_class: the class a handle from anira's own allocator would get for this slot; equal to edge_class on a slot in host memory, every slot of this pre-release."}
           - {name: wait_strategy, type: uint32_t, doc: "anira_wait_strategy: how a completion on this edge is waited for; on a host edge the strategy the core runs, which is the first context's or session's (see the file comment of anira/abi/context.h), not necessarily this handler's context's request."}
           - {name: recipe, type: const char*, doc: "The chain of domains the edge crosses, \"host\" for a slot in host memory; static storage of the library, valid while the report is."}
-          - {name: reason, type: const char*, doc: "Why the edge is what it is, or NULL when there is nothing to say; valid while the report is."}
+          - {name: reason, type: const char*, doc: "Why the edge is what it is (who moves the bytes is moved_by), or NULL when there is nothing to say; valid while the report is."}
           - {name: role, type: uint32_t, doc: "anira_role of the slot's spec: what the tensor is to the handler and which entries take the slot. ANIRA_ROLE_STREAMED: the block calls (process, push_data, pop_data, their _multi and _wait forms); ANIRA_ROLE_STATIC: anira_handler_set_static_input / anira_handler_get_static_output or an element of a _multi form; ANIRA_ROLE_STATE: no Hard entry (its position in a _multi array is the empty tensor); ANIRA_ROLE_BUFFER never appears under a Hard contract, which refuses the spec at prepare. The same in every plan of the report: the role is the model config's, not the plan's."}
           - {name: binding, type: uint32_t, doc: "anira_binding: how this plan bound the slot to the engine's tensor, by name where the engine's side has names (the entry's tensors record, else the canonical name) and by position otherwise, checked against the spec's shape and dtype at prepare either way; ANIRA_BINDING_ENGINE for a custom engine, which received the names in its load record and bound itself. A tail field: a caller whose header ends before it gets its rows without it."}
+          - {name: dtype, type: anira_dtype, doc: "The slot's spec's dtype: the model tensor's, what the engine binds and the chunk stores. A tail field: a caller whose header ends before it gets its rows without it."}
+          - {name: ring_dtype, type: anira_dtype, doc: "The dtype the slot's ring holds, the host end of a Streamed tensor: the spec's unless the contract names another (anira_contract_hard_set_ring_dtype), which a converting processor goes with; 0 for a slot without a ring (Static, State). A host tensor of another dtype is refused per call. A tail field: a caller whose header ends before it gets its rows without it."}
+          - {name: moved_by, type: uint32_t, doc: "anira_mover_flags bits: who executes the slot's moves, an OR of ANIRA_MOVER_ANIRA where anira's own code copies the slot (an engine adapter's copy, what anira counts) and ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a device provider's upload and readback, a registered engine's code); ANIRA_MOVER_NONE on a zero-copy edge. A tail field: a caller whose header ends before it gets its rows without it."}
         init:
           name: ANIRA_PLAN_SLOT_INIT
-          value: "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_UNAVAILABLE, ANIRA_EDGE_UNAVAILABLE, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION"
-          doc: "No edge."
+          value: "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE"
+          doc: "Output slot 0 in host memory, zero-copy, nothing moved: the defaults the enumerator overwrites."
 
       - kind: struct
         name: anira_plan_ext
@@ -4234,9 +4276,10 @@ headers:
           - {name: engine_flags, type: uint32_t, doc: "The flags of a custom engine's descriptor (anira_engine_desc.flags: the ANIRA_ENGINE_FLAG_* promises); 0 for a built-in engine. A tail field: a caller whose header ends before it gets its rows without it."}
           - {name: reserved, type: uint32_t, doc: "0."}
           - {name: provider_id, type: const char*, doc: "NULL for a provider the enum names; the name of the plan's custom provider (anira_provider), valid while the report is. A tail field: a caller whose header ends before it gets its rows without it."}
+          - {name: memory_kind, type: uint32_t, doc: "anira_memory_kind: the physical memory the plan's provider computes in, as the handler's context probed it at the prepare that loaded the plan's model (anira_edge_info.memory_kind): the fact a device provider's slot classes follow. ANIRA_MEMORY_UNIFIED on a provider that runs over host memory. A tail field: a caller whose header ends before it gets its rows without it."}
         init:
           name: ANIRA_PLAN_INFO_INIT
-          value: "sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL"
+          value: "sizeof(anira_plan_info), 0u, ANIRA_ENGINE_NONE, ANIRA_PROVIDER_NONE, NULL, 0.0, 0u, 0u, NULL, ANIRA_MEMORY_UNKNOWN"
           doc: "No plan."
 
       - kind: define
@@ -4368,14 +4411,12 @@ headers:
         params:
           - {type: const anira_pipeline*, name: pipeline, doc: "The pipeline whose custom engines are asked."}
           - {type: const anira_context*, name: context, doc: "The context whose edge registry answers for a built-in engine."}
-          - {type: anira_domain, name: from, doc: "The tensor's domain."}
-          - {type: const anira_backend_id*, name: to, doc: "The backend; read within its struct_size. A custom engine by its engine_id (engine ANIRA_ENGINE_CUSTOM), a custom provider by its provider_id (provider ANIRA_PROVIDER_CUSTOM)."}
-          - {type: anira_edge_info*, name: out, doc: "Receives the row, read and written within its struct_size (set it before the call)."}
+          - {type: anira_edge_info*, name: edge, doc: "In: the two ends of the edge asked for, as anira_capabilities_edge takes them (a custom engine by its engine id beside ANIRA_ENGINE_CUSTOM, a custom provider by its provider id beside ANIRA_PROVIDER_CUSTOM); out: the row, written within the caller's struct_size."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "One row of the edge registry a handler of this pipeline sees on this context: for a built-in engine the context's row (anira_capabilities_edge); for a custom engine added to the pipeline, the edge from ANIRA_DOMAIN_HOST to the engine on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it): zero-copy to ANIRA_PROVIDER_CPU and to XNNPACK, the CPU providers host memory reaches without a copy, a host copy the engine makes for itself to every other provider, the reason saying the engine declared the provider and its query reported it usable. The strings' lifetime is anira_pipeline_capabilities_backends's."
-        return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row for the pair (out untouched: a custom engine the pipeline does not add, a provider it does not declare or its query cleared, a domain other than the host's); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the fixed fields; or the status a custom engine's query returned when it failed."
+        doc: "One row of the edge registry a handler of this pipeline sees on this context, by its two ends: where no end names an engine id, the context's row (anira_capabilities_edge); where one does, the pipeline's rows of its custom engines: for a custom engine added to the pipeline, on a provider usable here (its query runs, as anira_pipeline_capabilities_backends runs it), the edge from ANIRA_DOMAIN_HOST to the engine and the edge from the engine back to ANIRA_DOMAIN_HOST, each by the provider rule for its direction (the same class and mover, each its direction's reason): zero-copy to and from ANIRA_PROVIDER_CPU and XNNPACK, the CPU providers host memory reaches without a copy; to and from every other provider a move the engine makes itself (ANIRA_MOVER_ENGINE) whose class follows the memory kind of the provider's device as the context probes it (memory_kind; ANIRA_EDGE_UNIFIED_TRANSFER on unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on unknown memory), the reason saying the engine declared the provider and its query reported it usable, and the memory kind with what the probe saw. Only the row asked is probed. The row is copied as anira_capabilities_edge copies it. The strings' lifetime is anira_pipeline_capabilities_backends's, the reason's the context's."
+        return_doc: "ANIRA_OK with the row; ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has a row with those ends (*edge untouched: a custom engine the pipeline does not add, a provider it does not declare or its query cleared, a domain other than the host's, two domain ends, two backend ends); ANIRA_ERROR_INVALID_ARGUMENT for a NULL argument or a struct_size below the baseline record (anira_capabilities_edge); or the status a custom engine's query returned when it failed."
       - kind: function
         name: anira_pipeline_destroy
         returns: void
@@ -4422,8 +4463,8 @@ headers:
         thread: main-thread & !processing
         status: promised
         since: "0.2"
-        doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (the host blocks, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), checks every plan's provider against what its engine serves (a built-in engine's runtime as the context reports it now, so a context probed again since the create is seen; a custom engine's query as it answered at anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at anira_handler_create), runs the processor's init when it has not run yet (once per registration, before any model loads), loads the model of every candidate with an entry, warms up as the contract says, sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the processor's prepare function, when the pipeline has a processor with one, with an anira_prepare_info (the handler, the report, the entry count, a template of the model end of every slot and the canonical names) and keeps the prepared pointer it hands back for this handler (a status other than ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare). A second prepare replaces the previous session whole: the processor's unprepare of the previous prepare runs once the old session is released, before the new prepare. A failed prepare leaves the handler unprepared, the previous prepare's unprepare called all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while the processor does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a processor whose filled pre_process, post_process or reset carries no ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag)."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; the status a processor's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler (WebAssembly: its render callback may be inside a process call; re-prepare through anira_em_audio_node_prepare)."
+        doc: "The blocking quiescence point, and the one call no other handler entry may overlap: validates the variant against the contract (the host blocks, the explicit budget, the warm-up mode, the miss policy against the anchor, the ring dtypes by canonical name, the contract's extensions), checks every plan's provider against what its engine serves (a built-in engine's runtime as the context reports it now, so a context probed again since the create is seen; a custom engine's query as it answered at anira_handler_create, which prepare never calls again; ANIRA_ERROR_NOT_SUPPORTED as at anira_handler_create), runs the processor's init when it has not run yet (once per registration, before any model loads), loads the model of every candidate with an entry (a device provider's with the memory kind of its device, the context's kept answer or its device API's asked now, which its slot classes follow: anira_plan_info.memory_kind), warms up as the contract says, drops every plan with a slot whose edge is above the contract's edge cost (anira_contract_set_edge_cost: an ANIRA_EDGE_UNKNOWN edge is above every limit; an Info record per dropped plan names the slots, their class, mover and reason), sizes the rings for the contract's block range and the latency, builds the plan report, selects the plan of the variant's default engine when that engine has a plan (else plan 0), logs the report (Info records of the group anira.capi: the counts and the selected plan, then one record per plan, per slot and per consumed extension) re-arms the real-time latches, logging the count of failures suppressed since the last prepare or reset, and last calls the processor's prepare function, when the pipeline has a processor with one, with an anira_prepare_info (the handler, the report, the entry count, a template of the model end of every slot and the canonical names) and keeps the prepared pointer it hands back for this handler (a status other than ANIRA_OK fails this call with it, and unprepare is not called for a refused prepare). A second prepare replaces the previous session whole: the processor's unprepare of the previous prepare runs once the old session is released, before the new prepare. A failed prepare leaves the handler unprepared, the previous prepare's unprepare called all the same. Refused in this pre-release: an Async contract, ANIRA_BUDGET_MEASURED and ANIRA_WARMUP_UNTIL_STABLE (ANIRA_ERROR_NOT_SUPPORTED; set an explicit budget and FIXED or NONE warm-up), ANIRA_MISS_BYPASS when the anchor is an output or when a streamed output's channel count or ring dtype differs from the anchored input's, ANIRA_MISS_CALLBACK without a function (anira_contract_hard_set_miss_fn), a ring dtype that names no Streamed tensor, or one that differs from its spec's dtype while the processor does not fill the phase that moves that ring (ANIRA_ERROR_CONFIG naming the field), and a processor whose filled pre_process, post_process or reset carries no ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST in its flags, since under a Hard contract those three phases run on the driving thread (ANIRA_ERROR_CONFIG naming the flag)."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or contract; ANIRA_ERROR_CONFIG for a rule the configuration breaks, with the offending field named in the message; ANIRA_ERROR_NOT_SUPPORTED for what this pre-release cannot do, a Buffer spec under a Hard contract included (Buffer tensors arrive with the Async contract; the message names the tensor); ANIRA_ERROR_EXTENSION_UNKNOWN or ANIRA_ERROR_EXTENSION_UNCONSUMED for an extension on the contract, the model or a spec that this build does not know or nothing consumes; ANIRA_ERROR_NO_SUCH_FILE, ANIRA_ERROR_MODEL_LOAD or ANIRA_ERROR_ENGINE when a model does not load; ANIRA_ERROR_EDGE_UNREACHABLE when no plan is within the contract's edge cost, every dropped plan's slots named in the message; the status a processor's prepare function returned; ANIRA_ERROR_INVALID_STATE while an audio node streams through the handler (WebAssembly: its render callback may be inside a process call; re-prepare through anira_em_audio_node_prepare)."
 
       - kind: function
         name: anira_handler_plan_report
@@ -5007,11 +5048,13 @@ headers:
           - {type: uint32_t, name: js_key, doc: "The key the hook receives, the engine's entry in the instance's registry."}
           - {type: uint32_t, name: hook_mask, doc: "An OR of the ANIRA_EM_ENGINE_HOOK_* bits; process crosses without one."}
           - {type: uint32_t, name: engine_flags, doc: "The descriptor's flags, the engine's promises, which JavaScript cannot write into the descriptor itself: an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, or 0 for none. Stored as given: a bit the header does not define is refused by anira_custom_engine_create."}
+          - {type: const anira_engine_edge*, name: input_edge, doc: "The engine's edge statement for every input slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. Per direction, not per slot: the engine is added before the model is known. NULL: no statement for the inputs, the provider rule of an input (zero-copy on the CPU path)."}
+          - {type: const anira_engine_edge*, name: output_edge, doc: "As input_edge, for every output slot; NULL: the provider rule of an output."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
-        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc or a bit hook_mask does not define; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
+        doc: "Fills an engine descriptor whose process (always), reset and query (per bit) are trampolines into the scope registry's engine, and whose release frees the record behind user_data without crossing into JavaScript. The init slot stays NULL: a JavaScript engine is ready when its Worker's registry booted (its init resolved), before the Worker enters its loop. load, unload, prepare and unprepare are C trampolines that never cross into JavaScript: load reads the entry's model record once on the control thread (its row, its path copied, its bytes borrowed), unload frees it, prepare hands it to every process and reset call as their prepared pointer (what the package's engineModel reads), and unprepare does nothing. edge answers the statement of the slot's direction where one was given and leaves the provider rule of that direction where none was, and stays NULL when neither was given. flags is engine_flags; providers stay empty (the CPU path alone), for a C caller to fill before anira_custom_engine_create. A descriptor that is never created keeps its record."
+        return_doc: "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL desc, a bit hook_mask does not define, or an input_edge or output_edge whose struct_size is below its edge_class or whose edge_class anira_edge_class does not name; ANIRA_ERROR_OUT_OF_MEMORY when the record cannot be allocated."
       - kind: function
         name: anira_em_pipeline_add_js_engine
         returns: anira_status
@@ -5021,11 +5064,13 @@ headers:
           - {type: uint32_t, name: js_key, doc: "As in anira_em_engine_desc_init."}
           - {type: uint32_t, name: hook_mask, doc: "As in anira_em_engine_desc_init."}
           - {type: uint32_t, name: engine_flags, doc: "The descriptor's flags: an OR of ANIRA_ENGINE_FLAG_NEEDS_NO_MODEL, ANIRA_ENGINE_FLAG_REALTIME_SAFE, ANIRA_ENGINE_FLAG_DYNAMIC_TIME and ANIRA_ENGINE_FLAG_STATE_ALIAS, which JavaScript cannot write into the descriptor itself."}
+          - {type: const anira_engine_edge*, name: input_edge, doc: "The engine's edge statement for every input slot, read within its struct_size and copied (the reason too): a JavaScript engine runs in the inference Workers, so the main thread states it here, where the plan report is built; the descriptor's edge answers it without crossing into JavaScript. Per direction, not per slot: the engine is added before the model is known. NULL: no statement for the inputs, the provider rule of an input (zero-copy on the CPU path)."}
+          - {type: const anira_engine_edge*, name: output_edge, doc: "As input_edge, for every output slot; NULL: the provider rule of an output."}
           - {type: anira_error*, name: err, doc: "Nullable."}
         thread: main-thread
         status: promised
         since: "0.2"
-        doc: "anira_em_engine_desc_init with engine_flags, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it."
+        doc: "anira_em_engine_desc_init with engine_flags, input_edge and output_edge, anira_custom_engine_create under engine_id, anira_pipeline_add_engine and anira_custom_engine_destroy of the handle: the pipeline holds the JavaScript engine, and model entries name it as ANIRA_ENGINE_CUSTOM with engine_id. The descriptor has no providers list, so the engine serves ANIRA_PROVIDER_CPU alone and a query bit has nothing to answer; an engine with providers is built with anira_em_engine_desc_init. A refused create frees the record; a refused addition destroys the handle, which releases the engine and frees it."
         return_doc: "As anira_em_engine_desc_init, then as anira_custom_engine_create (ANIRA_ERROR_INVALID_ARGUMENT for an id without a '.', with the prefix \"anira.\" or a flags bit the header does not define), then as anira_pipeline_add_engine (ANIRA_ERROR_INVALID_STATE when the pipeline already has an engine under the id)."
       - kind: function
         name: anira_em_set_log_hook
@@ -5081,7 +5126,7 @@ headers:
         status: promised
         since: "0.2"
         doc: "Creates a Wasm Audio Worklet node that streams through the handler, asynchronously: the first node of a context starts the context's worklet thread (once; its stack stays the context's), a node of n AudioParams registers the processor anira-node-n once per context, and the node is created after both, from the main thread's event loop; out_status turns from ANIRA_INCOMPLETE to the result. Per render quantum, on the audio thread, the C render callback hands the node's buffers to the handler as planar host tensors (no copy: the output tensor is the node's output), pushes an AudioParam's value to its Static input when it changed and a tensor slot's value the main thread wrote since the last push, and calls anira_handler_process_multi (or anira_handler_process_multi_wait) once for every Streamed slot it serves, an empty tensor at every other position, so a model with several streams keeps every guarantee of the multi form (ANIRA_MISS_BYPASS passes the anchored input through to every output, the wait credit of ANIRA_WAIT_CONTRACT, one anira_miss_fn call per block); the miss rule: ANIRA_MISSED keeps the miss policy's fill, a failure is silence, a success silences what an output was not delivered. Every Streamed slot of the model is served by exactly one input or output of the node, unless ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS leaves some out (their positions stay empty). Driving one handler from several nodes, one slot each, is not the supported form: the streams stay aligned, but a non-anchored call loses BYPASS (zeros on a miss), the wait credit and the miss callback's view of the block. A quantum other than the declared one is silence. A JavaScript processor of the handler runs its worklet phases on the worklet scope's registry, which the caller fills before (audioWorklet.addModule of a module that calls defineProcessor) and anira boots over the worklet's instance at every create. The render callback allocates nothing and locks nothing; nodes are at most 256 at once."
-        return_doc: "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a slot list longer than 32 or without its pointer, a slot listed twice, a slot that is not a Streamed slot of its side with a float32 ring, a Streamed slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
+        return_doc: "ANIRA_OK when the creation is under way; ANIRA_ERROR_INVALID_ARGUMENT for a NULL handler or out word, a slot list longer than 32 or without its pointer, a slot listed twice, a slot that is not a Streamed slot of its side, a Streamed slot no input or output serves (without ANIRA_EM_AUDIO_NODE_FLAG_PARTIAL_STREAMS), a node without any input or output, a slot of more than 64 channels; ANIRA_ERROR_INVALID_STATE for an unprepared handler; ANIRA_ERROR_CONFIG for a contract that is not Hard or whose block range excludes the quantum, a Streamed slot whose ring dtype is not float32, a parameter slot that is not a float32 Static scalar, a tensor slot that is not Static or has a dynamic extent; ANIRA_ERROR_NOT_SUPPORTED when the context's worklet thread failed to start (later failures land in out_status: ANIRA_ERROR_NOT_SUPPORTED for a thread or processor that failed, ANIRA_ERROR_UNKNOWN for a node the browser refused); ANIRA_ERROR_OUT_OF_MEMORY."
       - kind: function
         name: anira_em_audio_node_set_static_input
         returns: anira_status

@@ -1,6 +1,7 @@
 import { AniraBindings, type AbiModule, heap } from './abi/bindings'
 import { anira_phase, anira_status } from './abi/enums'
 import { anira_engine_ctx, anira_log_record, anira_tensor } from './abi/layout'
+import { type TypedArray, typedView } from './dtype'
 
 /**
  * What a processor or an engine is constructed with, in the scope that runs it (the main thread, an
@@ -292,11 +293,23 @@ export const defineProcessor = (name: string, factory: ProcessorFactory): number
 export const defineEngine = (id: string, factory: EngineFactory): number =>
   scopeRegistry().defineEngine(id, factory)
 
-/** A model tensor of one engine call: its record, its element count and its float32 data. */
+/**
+ * A model tensor of one engine call: its record, its element count, its dtype (the spec's) and
+ * its data, a typed array of the dtype's element type.
+ */
 export type EngineTensorView = {
   ptr: number
   elements: number
-  /** A view of the data when the tensor is host float32, else null. */
+  /** The tensor's `anira_dtype` (`ANIRA_DTYPE_*`): its spec's, whatever the host streams. */
+  dtype: number
+  /**
+   * A view of the data when the tensor is a packed host block: `Float32Array` for float32,
+   * `Float64Array`, `Int8Array`, `Uint8Array`, `Int16Array`, `Int32Array`, `BigInt64Array` for
+   * the others with a JavaScript element type, `Uint16Array` (the 16-bit words) for float16 and
+   * bfloat16, `Uint8Array` (0 or 1) for bool8; else null.
+   */
+  data: TypedArray | null
+  /** `data` when the tensor is host float32, else null. */
   f32: Float32Array | null
 }
 
@@ -311,12 +324,17 @@ export const engineTensors = (
     const out: EngineTensorView[] = []
     for (let i = 0; i < count; i++) {
       const ptr = array + i * anira_tensor.size
-      const data = abi.anira_tensor_data_f32(ptr)
+      const dtype = heap(m).HEAPU32[(ptr + anira_tensor.fields.dtype.offset) >>> 2]
+      const address = abi.anira_tensor_data(ptr, dtype)
       const elements = abi.anira_tensor_num_elements(ptr)
+      const data =
+        address === 0 ? null : typedView(heap(m).HEAPU8.buffer, address, dtype, elements)
       out.push({
         ptr,
         elements,
-        f32: data === 0 ? null : new Float32Array(heap(m).HEAPF32.buffer, data, elements),
+        dtype,
+        data,
+        f32: data instanceof Float32Array ? data : null,
       })
     }
     return out

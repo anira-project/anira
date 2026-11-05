@@ -7,7 +7,6 @@
 #include <anira/abi/tensor.h>
 
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -62,6 +62,10 @@ void Loaded::load(const Model& model) {
     m_num_instances = 0;
     m_busy.clear();
     m_model = model;
+    m_input_rule =
+        provider_rule(true, m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
+    m_output_rule =
+        provider_rule(false, m_model.m_provider, m_model.m_provider_id, m_model.m_device_memory);
     // The provider is checked once more at the door of every adapter (the handler checked
     // the plan's against the capabilities or the descriptor's list): an adapter that does not
     // serve it never sees the record.
@@ -215,12 +219,12 @@ void ExecutorPrepared::reset(const anira_engine_ctx& call) noexcept {
     if (m_own != nullptr) { m_own->reset(call); }
 }
 
-float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept {
+void* host_packed(const anira_tensor& tensor, anira_dtype dtype, size_t expected) noexcept {
     if (tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST) &&
         tensor.domain != static_cast<uint32_t>(ANIRA_DOMAIN_HOST_PINNED)) {
         return nullptr;
     }
-    if (tensor.dtype != ANIRA_DTYPE_F32) { return nullptr; }
+    if (tensor.dtype != dtype) { return nullptr; }
     if ((tensor.flags & static_cast<uint32_t>(ANIRA_TENSOR_PLANAR)) != 0U) { return nullptr; }
     if (tensor.ndim > ANIRA_MAX_RANK) { return nullptr; }
     size_t elements = 1;
@@ -243,28 +247,28 @@ float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept {
         }
     }
     if (tensor.handle.host.ptr == nullptr) { return nullptr; }
-    auto* base = static_cast<unsigned char*>(tensor.handle.host.ptr);
-    return reinterpret_cast<float*>(  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
-        base + static_cast<size_t>(tensor.byte_offset));
+    return static_cast<unsigned char*>(tensor.handle.host.ptr) +
+           static_cast<size_t>(tensor.byte_offset);
 }
 
-void require_f32(const Model& model, const char* engine) {
-    const auto check = [engine](const std::vector<TensorInfo>& tensors, const char* side) {
+void require_dtypes(const Model& model, const char* engine, bool (*carries)(anira_dtype) noexcept) {
+    const auto check = [engine, carries](const std::vector<TensorInfo>& tensors, const char* side) {
         for (const TensorInfo& tensor : tensors) {
-            if (tensor.m_dtype == ANIRA_DTYPE_F32) { continue; }
-            std::array<char, 16> code{};
-            static_cast<void>(std::snprintf(code.data(),
-                                            code.size(),
-                                            "0x%x",
-                                            static_cast<unsigned int>(tensor.m_dtype)));
-            throw StatusError(ANIRA_ERROR_CONFIG,
+            if (carries(tensor.m_dtype)) { continue; }
+            throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
                               std::string(engine) + ": " + side + " tensor '" + tensor.m_name +
-                                  "' has dtype " + code.data() + "; the " + engine +
-                                  " adapter binds float32 tensors alone in this pre-release");
+                                  "' is " + capi::dtype_label(tensor.m_dtype) + ", which the " +
+                                  engine + " engine does not carry");
         }
     };
     check(model.m_inputs, "input");
     check(model.m_outputs, "output");
+}
+
+void require_f32(const Model& model, const char* engine) {
+    require_dtypes(model, engine, [](anira_dtype dtype) noexcept {
+        return dtype == ANIRA_DTYPE_F32;
+    });
 }
 
 namespace {
@@ -291,13 +295,6 @@ std::string shape_text(const std::vector<int64_t>& dims) {
         text += std::to_string(dims[i]);
     }
     return text + "]";
-}
-
-std::string hex_dtype(anira_dtype dtype) {
-    std::array<char, 16> code{};
-    static_cast<void>(
-        std::snprintf(code.data(), code.size(), "0x%x", static_cast<unsigned int>(dtype)));
-    return code.data();
 }
 
 // "onnxruntime: input slot 0 'audio_in': ".
@@ -372,6 +369,54 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
     return bindings;
 }
 
+bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept {
+    if (provider_id.empty()) {
+        return provider == ANIRA_PROVIDER_CPU || provider == ANIRA_PROVIDER_XNNPACK;
+    }
+    return provider == ANIRA_PROVIDER_CUSTOM &&
+           (provider_id == "DnnlExecutionProvider" || provider_id == "ACLExecutionProvider" ||
+            provider_id == "ArmNNExecutionProvider");
+}
+
+ProviderRule provider_rule(bool is_input,
+                           anira_provider provider,
+                           std::string_view provider_id,
+                           const DeviceMemory& memory) {
+    if (host_memory_provider(provider, provider_id)) { return ProviderRule{}; }
+    ProviderRule rule;
+    rule.m_moved_by = ANIRA_MOVER_ENGINE;
+    switch (memory.m_kind) {
+        case ANIRA_MEMORY_UNIFIED:
+            rule.m_class = ANIRA_EDGE_UNIFIED_TRANSFER;
+            rule.m_reason = "the provider's device computes in the host's memory (" + memory.m_why +
+                            (is_input ? "): its runtime hands the slot over to the device within "
+                                        "that memory, no bus, per call"
+                                      : "): its runtime hands the results back within that "
+                                        "memory, no bus, per call");
+            break;
+        case ANIRA_MEMORY_DEDICATED:
+            rule.m_class = ANIRA_EDGE_DEDICATED_TRANSFER;
+            rule.m_reason = "the provider's device computes in memory of its own (" + memory.m_why +
+                            (is_input ? "): its runtime moves the slot across the bus to the "
+                                        "device, per call"
+                                      : "): its runtime reads the results back across the bus, "
+                                        "per call");
+            break;
+        default:
+            rule.m_class = ANIRA_EDGE_UNKNOWN;
+            rule.m_reason = "memory kind not probed: " + memory.m_why;
+            break;
+    }
+    return rule;
+}
+
+Loaded::SlotEdge Loaded::provider_edge(bool is_input) const noexcept {
+    const ProviderRule& rule = is_input ? m_input_rule : m_output_rule;
+    return SlotEdge{.m_class = rule.m_class,
+                    .m_moved_by = rule.m_moved_by,
+                    .m_reason = rule.m_reason.empty() ? nullptr : rule.m_reason.c_str()};
+}
+
 void check_engine_tensor(const TensorInfo& slot,
                          const EngineTensor& engine_tensor,
                          ExtentRule rule,
@@ -382,10 +427,15 @@ void check_engine_tensor(const TensorInfo& slot,
                               (engine_tensor.m_name.empty() ? std::string("unnamed ") + side
                                                             : "'" + engine_tensor.m_name + "'") +
                               ": ";
+    if (engine_tensor.m_quantised) {
+        throw StatusError(ANIRA_ERROR_NOT_SUPPORTED,
+                          where + "the model's tensor is quantised (" + engine_tensor.m_type_word +
+                              " with a scale and a zero point); quantised I/O is not supported");
+    }
     if (engine_tensor.m_dtype != slot.m_dtype) {
         throw StatusError(ANIRA_ERROR_CONFIG,
                           where + "the model's element type is " + engine_tensor.m_type_word +
-                              ", the spec's dtype " + hex_dtype(slot.m_dtype));
+                              ", the spec's dtype " + capi::dtype_label(slot.m_dtype));
     }
     const std::string shapes = "the model's tensor is " + shape_text(engine_tensor.m_dims) +
                                ", the spec's engine dims are " + shape_text(slot.m_dims);

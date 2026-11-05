@@ -5,6 +5,7 @@
  * custom provider's name in the engine's own vocabulary. The built-in engines: the "engine"
  * word of a model entry, the adapters' message prefix and every message that names one. The
  * domains: the "host_domains" words of a contract file and the plan report's log lines. The
+ * edge classes: the "edge_cost" word of a contract file and the plan report's log lines. The
  * phases: how every message about a slot names its phase. The labels (engine_label,
  * provider_label, backend_label) are the one spelling of a value or a custom name in a
  * message.
@@ -15,6 +16,7 @@
 #include <anira/abi/export.h>
 
 #include <array>
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -196,6 +198,93 @@ inline std::string backend_label(anira_engine engine,
         label += provider_label(provider, provider_id);
     }
     return label;
+}
+
+/// The words of the four classes of the cost scale, ordered by cost as the enum is: the
+/// "edge_cost" word of a contract file (the worst class a plan may take; a file without the key
+/// sets no limit, so ANIRA_EDGE_UNKNOWN has no word here), the plan report's log lines, and the
+/// messages about a plan dropped for its edges.
+inline constexpr std::array<std::pair<const char*, anira_edge_class>, 4> k_edge_class_words{{
+    {"zero_copy", ANIRA_EDGE_ZERO_COPY},
+    {"copy", ANIRA_EDGE_COPY},
+    {"unified_transfer", ANIRA_EDGE_UNIFIED_TRANSFER},
+    {"dedicated_transfer", ANIRA_EDGE_DEDICATED_TRANSFER},
+}};
+
+/// The word of an edge class in a log line or a message: a scale class's word, "unknown" for
+/// ANIRA_EDGE_UNKNOWN, "unnamed" for a value the enum does not name.
+inline constexpr const char* edge_class_word(anira_edge_class edge_class) noexcept {
+    if (edge_class == ANIRA_EDGE_UNKNOWN) { return "unknown"; }
+    for (const auto& [name, value] : k_edge_class_words) {
+        if (value == edge_class) { return name; }
+    }
+    return "unnamed";
+}
+
+/// Whether a value is an edge class the enum names: a class of the cost scale or
+/// ANIRA_EDGE_UNKNOWN.
+inline constexpr bool known_edge_class(anira_edge_class edge_class) noexcept {
+    if (edge_class == ANIRA_EDGE_UNKNOWN) { return true; }
+    for (const auto& [name, value] : k_edge_class_words) {
+        if (value == edge_class) { return true; }
+    }
+    return false;
+}
+
+/// Who moves an edge's bytes, an OR of anira_mover_flags bits, as the plan report's log lines and
+/// the messages about a dropped plan say it ("moved by the engine"); "unknown" for a bit
+/// anira_mover_flags does not name.
+inline constexpr const char* movers_word(uint32_t moved_by) noexcept {
+    switch (moved_by) {
+        case ANIRA_MOVER_NONE: return "none";
+        case ANIRA_MOVER_ANIRA: return "anira";
+        case ANIRA_MOVER_ENGINE: return "the engine";
+        case ANIRA_MOVER_ANIRA | ANIRA_MOVER_ENGINE: return "anira and the engine";
+        default: return "unknown";
+    }
+}
+
+/// The ten dtypes anira names (each has an ANIRA_DTYPE_* constant and a ring arm): the "dtype"
+/// and "ring_dtypes" words of a model and a contract file, and how every message names one.
+inline constexpr std::array<std::pair<const char*, anira_dtype>, 10> k_dtype_words{{
+    {"float32", ANIRA_DTYPE_F32},
+    {"float64", ANIRA_DTYPE_F64},
+    {"float16", ANIRA_DTYPE_F16},
+    {"bfloat16", ANIRA_DTYPE_BF16},
+    {"int8", ANIRA_DTYPE_I8},
+    {"uint8", ANIRA_DTYPE_U8},
+    {"int16", ANIRA_DTYPE_I16},
+    {"int32", ANIRA_DTYPE_I32},
+    {"int64", ANIRA_DTYPE_I64},
+    {"bool", ANIRA_DTYPE_BOOL8},
+}};
+
+/// The word of a dtype anira names; "an unnamed dtype" for any other (a real-time message
+/// spells no number).
+inline const char* dtype_word(anira_dtype dtype) noexcept ANIRA_NONBLOCKING {
+    for (const auto& [name, value] : k_dtype_words) {
+        if (value == dtype) { return name; }
+    }
+    return "an unnamed dtype";
+}
+
+/// Whether anira names the dtype (k_dtype_words).
+inline bool known_dtype(anira_dtype dtype) noexcept {
+    for (const auto& [name, value] : k_dtype_words) {
+        if (value == dtype) { return true; }
+    }
+    return false;
+}
+
+/// A dtype in a message: its word, or its hexadecimal code for one anira does not name.
+inline std::string dtype_label(anira_dtype dtype) {
+    if (known_dtype(dtype)) { return dtype_word(dtype); }
+    constexpr std::string_view k_digits = "0123456789abcdef";
+    std::string text = "0x";
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        text += k_digits[(dtype >> static_cast<unsigned>(shift)) & 0xfU];
+    }
+    return text;
 }
 
 /// The words of anira_phase, the lower-case names of its values: how every message anira writes

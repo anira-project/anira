@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "../support/log_record_collector.h"
@@ -594,15 +595,39 @@ bool names(const anira_backend_id& row, const anira::engine::ProviderInfo& provi
            id == provider.m_provider_id;
 }
 
+/// A lookup's answer is the listed row: every field, the strings by their pointers.
+void expect_same_row(const anira_edge_info& found, const anira_edge_info& listed) {
+    EXPECT_EQ(found.struct_size, listed.struct_size);
+    EXPECT_EQ(found.from_domain, listed.from_domain);
+    EXPECT_EQ(found.from_engine, listed.from_engine);
+    EXPECT_EQ(found.from_provider, listed.from_provider);
+    EXPECT_EQ(found.to_domain, listed.to_domain);
+    EXPECT_EQ(found.to_engine, listed.to_engine);
+    EXPECT_EQ(found.to_provider, listed.to_provider);
+    EXPECT_EQ(found.available, listed.available);
+    EXPECT_EQ(found.edge_class, listed.edge_class);
+    EXPECT_EQ(found.moved_by, listed.moved_by);
+    EXPECT_EQ(found.memory_kind, listed.memory_kind);
+    EXPECT_EQ(found.rung, listed.rung);
+    EXPECT_EQ(found.reason, listed.reason);
+    EXPECT_EQ(found.from_engine_id, listed.from_engine_id);
+    EXPECT_EQ(found.from_provider_id, listed.from_provider_id);
+    EXPECT_EQ(found.to_engine_id, listed.to_engine_id);
+    EXPECT_EQ(found.to_provider_id, listed.to_provider_id);
+}
+
 }  // namespace
 
 // The capabilities of a context: one backend row per compiled-in engine and provider its
 // runtime reports usable here (the CPU path first, then the runtime's list, the adapters' own
 // query being the oracle), a custom provider carried by its name beside ANIRA_PROVIDER_CUSTOM;
-// the host domain; the registered extension kinds; one host edge per
-// backend row, zero-copy to a CPU provider and a host copy to a device one, found by engine
-// and provider (a custom one by its name); a probe asks the runtimes again and answers the
-// same. The enumeration convention throughout: the count, a short buffer, the caller's stride.
+// the host domain; the registered extension kinds; two edge rows per backend row, from the
+// host domain to the backend and back with the same class and mover (a device's reason names
+// each direction's move), zero-copy to and from a CPU provider
+// and to and from a device one the engine's move whose class is the memory kind's (whatever
+// this machine's devices answer), found by both ends in either direction (a custom provider by
+// its name); a probe asks the runtimes again and answers the same. The enumeration convention
+// throughout: the count, a short buffer, the caller's stride.
 TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     const Config config;
     anira_context* context = create(config);
@@ -669,97 +694,167 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     for (const char* kind : kinds) { has_entry = has_entry || std::strcmp(kind, "entry") == 0; }
     EXPECT_TRUE(has_entry);
 
-    // One host edge per backend row, in row order.
+    // Two edge rows per backend row, in row order: edges[2i] from the host domain to
+    // backends[i], edges[2i + 1] from backends[i] back, each by the provider rule for its
+    // direction.
     count = 0;
     EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, nullptr), ANIRA_OK);
-    EXPECT_EQ(count, backends.size()) << "one host edge per backend row";
+    EXPECT_EQ(count, 2 * backends.size()) << "two edge rows per backend row";
     std::vector<anira_edge_info> edges(count + 1);
     count = static_cast<uint32_t>(edges.size());
     EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, edges.data()),
               ANIRA_OK);
     edges.resize(count);
-    ASSERT_EQ(edges.size(), backends.size());
-    for (size_t i = 0; i < edges.size(); ++i) {
+    ASSERT_EQ(edges.size(), 2 * backends.size());
+    constexpr auto k_host = static_cast<uint32_t>(ANIRA_DOMAIN_HOST);
+    constexpr auto k_no_engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
+    constexpr auto k_no_provider = static_cast<uint32_t>(ANIRA_PROVIDER_NONE);
+    for (size_t i = 0; i < backends.size(); ++i) {
         SCOPED_TRACE(i);
-        EXPECT_EQ(edges[i].struct_size, sizeof(anira_edge_info));
-        EXPECT_EQ(edges[i].from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-        EXPECT_EQ(edges[i].to_engine, backends[i].engine);
-        EXPECT_EQ(edges[i].to_provider, backends[i].provider);
-        EXPECT_EQ(edges[i].to_provider_id, backends[i].provider_id) << "the row's own pointer";
-        EXPECT_EQ(edges[i].to_engine_id, nullptr) << "a built-in engine has no id";
-        EXPECT_EQ(edges[i].available, 1U);
-        EXPECT_NE(edges[i].reason, nullptr);
+        const anira_edge_info& input = edges[2 * i];
+        const anira_edge_info& output = edges[2 * i + 1];
+        // The ends: the host domain on one side, the backend (the backend row's own pointers)
+        // on the other, whose domain field reads ANIRA_DOMAIN_HOST.
+        EXPECT_EQ(input.from_domain, k_host);
+        EXPECT_EQ(input.from_engine, k_no_engine);
+        EXPECT_EQ(input.from_provider, k_no_provider);
+        EXPECT_EQ(input.from_engine_id, nullptr);
+        EXPECT_EQ(input.from_provider_id, nullptr);
+        EXPECT_EQ(input.to_domain, k_host);
+        EXPECT_EQ(input.to_engine, backends[i].engine);
+        EXPECT_EQ(input.to_provider, backends[i].provider);
+        EXPECT_EQ(input.to_engine_id, nullptr) << "a built-in engine has no id";
+        EXPECT_EQ(input.to_provider_id, backends[i].provider_id) << "the row's own pointer";
+        EXPECT_EQ(output.from_domain, k_host);
+        EXPECT_EQ(output.from_engine, backends[i].engine);
+        EXPECT_EQ(output.from_provider, backends[i].provider);
+        EXPECT_EQ(output.from_engine_id, nullptr);
+        EXPECT_EQ(output.from_provider_id, backends[i].provider_id);
+        EXPECT_EQ(output.to_domain, k_host);
+        EXPECT_EQ(output.to_engine, k_no_engine);
+        EXPECT_EQ(output.to_provider, k_no_provider);
+        EXPECT_EQ(output.to_engine_id, nullptr);
+        EXPECT_EQ(output.to_provider_id, nullptr);
+        // The facts: the provider's edge, the same class and mover both ways.
         const bool cpu = backends[i].provider_id == nullptr &&
                          (backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_CPU) ||
                           backends[i].provider == static_cast<uint32_t>(ANIRA_PROVIDER_XNNPACK));
-        EXPECT_EQ(edges[i].edge_class,
-                  static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : ANIRA_EDGE_HOST_COPY));
-        EXPECT_EQ(edges[i].rung,
-                  static_cast<uint32_t>(cpu ? ANIRA_RUNG_STATIC : ANIRA_RUNG_IDENTITY));
+        EXPECT_EQ(input.struct_size, sizeof(anira_edge_info));
+        EXPECT_EQ(input.available, 1U);
+        EXPECT_NE(input.reason, nullptr);
+        const bool unified = input.memory_kind == ANIRA_MEMORY_UNIFIED;
+        EXPECT_TRUE(!cpu || unified) << "a CPU provider computes in host memory";
+        const anira_edge_class device_class = unified ? ANIRA_EDGE_UNIFIED_TRANSFER
+                                              : input.memory_kind == ANIRA_MEMORY_DEDICATED
+                                                  ? ANIRA_EDGE_DEDICATED_TRANSFER
+                                                  : ANIRA_EDGE_UNKNOWN;
+        EXPECT_EQ(input.edge_class,
+                  static_cast<uint32_t>(cpu ? ANIRA_EDGE_ZERO_COPY : device_class));
+        EXPECT_EQ(input.moved_by,
+                  static_cast<uint32_t>(cpu ? ANIRA_MOVER_NONE : ANIRA_MOVER_ENGINE));
+        EXPECT_EQ(input.rung, static_cast<uint32_t>(cpu ? ANIRA_RUNG_STATIC : ANIRA_RUNG_IDENTITY));
+        EXPECT_EQ(output.struct_size, input.struct_size);
+        EXPECT_EQ(output.available, input.available);
+        EXPECT_EQ(output.edge_class, input.edge_class);
+        EXPECT_EQ(output.moved_by, input.moved_by);
+        EXPECT_EQ(output.memory_kind, input.memory_kind);
+        EXPECT_EQ(output.rung, input.rung);
+        ASSERT_NE(output.reason, nullptr);
+        if (cpu || input.memory_kind == ANIRA_MEMORY_UNKNOWN) {
+            EXPECT_EQ(output.reason, input.reason) << "one reason for both rows";
+        } else {
+            EXPECT_STRNE(output.reason, input.reason)
+                << "a device's input row names the upload, its output row the readback";
+        }
     }
 
-    // The lookup: by engine and provider, a custom provider by its name; a provider the rows
-    // lack, another domain, a custom engine and no engine are unreachable.
-    anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-    anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+    // The lookup by both ends, in either direction: each listed row whole, a custom provider by
+    // its name (not its pointer); two domain ends, two backend ends, another domain, and a
+    // custom engine, a custom provider the rows lack and a provider no built-in engine serves in
+    // either direction are unreachable, the record untouched.
+    const auto lookup = [&](anira_edge_info query) {
+        const anira_status status = anira_capabilities_edge(caps, &query);
+        return std::pair<anira_status, anira_edge_info>{status, query};
+    };
+    for (size_t i = 0; i < backends.size(); ++i) {
+        SCOPED_TRACE(i);
+        const auto [input_status, input] = lookup(anira_test::host_to(backends[i]));
+        ASSERT_EQ(input_status, ANIRA_OK);
+        expect_same_row(input, edges[2 * i]);
+        const auto [output_status, output] = lookup(anira_test::to_host(backends[i]));
+        ASSERT_EQ(output_status, ANIRA_OK);
+        expect_same_row(output, edges[2 * i + 1]);
+        if (backends[i].provider_id == nullptr) { continue; }
+        const std::string name = backends[i].provider_id;
+        anira_backend_id by_name = backends[i];
+        by_name.provider_id = name.c_str();
+        const auto [named_status, named] = lookup(anira_test::to_host(by_name));
+        ASSERT_EQ(named_status, ANIRA_OK) << name;
+        EXPECT_EQ(named.from_provider_id, backends[i].provider_id) << "the context's string";
+    }
     if (!expected.empty()) {
-        to.engine = static_cast<uint32_t>(expected[0]);
-        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row), ANIRA_OK);
-        EXPECT_EQ(row.to_engine, static_cast<uint32_t>(expected[0]));
-        EXPECT_EQ(row.available, 1U);
-        EXPECT_EQ(row.to_provider_id, nullptr);
-        row = ANIRA_EDGE_INFO_INIT;
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_CUDA, &to, &row),
-                  ANIRA_ERROR_EDGE_UNREACHABLE);
-        EXPECT_EQ(row.available, 0U) << "untouched";
-        to.engine_id = "com.example.custom";
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
-                  ANIRA_ERROR_EDGE_UNREACHABLE);
-        to.engine_id = nullptr;
-        to.provider_id = "com.example.nobody";
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
-                  ANIRA_ERROR_EDGE_UNREACHABLE)
-            << "a custom provider the rows lack";
-        to.provider_id = nullptr;
-        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_VULKAN);
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
-                  ANIRA_ERROR_EDGE_UNREACHABLE)
-            << "no built-in engine serves Vulkan in this pre-release";
-        to.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
+        anira_backend_id cpu = ANIRA_BACKEND_ID_INIT;
+        cpu.engine = static_cast<uint32_t>(expected[0]);
+        cpu.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CPU);
+        anira_edge_info query = anira_test::host_to(cpu);
+        query.from_domain = static_cast<uint32_t>(ANIRA_DOMAIN_CUDA);
+        const auto [cuda_status, cuda_row] = lookup(query);
+        EXPECT_EQ(cuda_status, ANIRA_ERROR_EDGE_UNREACHABLE) << "another domain";
+        EXPECT_EQ(cuda_row.available, 0U) << "untouched";
+        EXPECT_EQ(cuda_row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_UNKNOWN)) << "untouched";
+        query = anira_test::to_host(cpu);
+        query.to_domain = static_cast<uint32_t>(ANIRA_DOMAIN_CUDA);
+        EXPECT_EQ(lookup(query).first, ANIRA_ERROR_EDGE_UNREACHABLE) << "another domain";
+        EXPECT_EQ(lookup(ANIRA_EDGE_INFO_INIT).first, ANIRA_ERROR_EDGE_UNREACHABLE)
+            << "Host -> Host: two domain ends";
+        query = anira_test::host_to(cpu);
+        query.from_engine = cpu.engine;
+        query.from_provider = cpu.provider;
+        EXPECT_EQ(lookup(query).first, ANIRA_ERROR_EDGE_UNREACHABLE) << "two backend ends";
+        anira_backend_id custom = cpu;
+        custom.engine = static_cast<uint32_t>(ANIRA_ENGINE_CUSTOM);
+        custom.engine_id = "com.example.custom";
+        anira_backend_id nobody = cpu;
+        nobody.provider = static_cast<uint32_t>(ANIRA_PROVIDER_CUSTOM);
+        nobody.provider_id = "com.example.nobody";
+        anira_backend_id vulkan = cpu;
+        vulkan.provider = static_cast<uint32_t>(ANIRA_PROVIDER_VULKAN);
+        for (const anira_backend_id& unlisted : {custom, nobody, vulkan}) {
+            EXPECT_EQ(lookup(anira_test::host_to(unlisted)).first, ANIRA_ERROR_EDGE_UNREACHABLE);
+            EXPECT_EQ(lookup(anira_test::to_host(unlisted)).first, ANIRA_ERROR_EDGE_UNREACHABLE);
+        }
     }
-    for (const anira_backend_id& backend : backends) {
-        if (backend.provider_id == nullptr) { continue; }
-        // A custom provider the runtime reports here: found by its name, and by its name alone.
-        to.engine = backend.engine;
-        to.provider = backend.provider;
-        to.provider_id = backend.provider_id;
-        row = ANIRA_EDGE_INFO_INIT;
-        EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row), ANIRA_OK)
-            << backend.provider_id;
-        EXPECT_STREQ(row.to_provider_id, backend.provider_id);
-        EXPECT_EQ(row.edge_class, static_cast<uint32_t>(ANIRA_EDGE_HOST_COPY));
-        to.provider_id = nullptr;
+    anira_edge_info row = ANIRA_EDGE_INFO_INIT;
+    EXPECT_EQ(anira_capabilities_edge(caps, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_capabilities_edge(nullptr, &row), ANIRA_ERROR_INVALID_ARGUMENT);
+    if (!backends.empty()) {
+        // The baseline record ends with to_provider_id: a shorter one is refused; a newer
+        // header's tail beyond the library's record is left as the caller set it.
+        row = anira_test::host_to(backends[0]);
+        row.struct_size = static_cast<uint32_t>(offsetof(anira_edge_info, to_provider_id));
+        EXPECT_EQ(anira_capabilities_edge(caps, &row), ANIRA_ERROR_INVALID_ARGUMENT)
+            << "below the baseline";
+        row.struct_size = 8;
+        EXPECT_EQ(anira_capabilities_edge(caps, &row), ANIRA_ERROR_INVALID_ARGUMENT);
+        struct Newer {
+            anira_edge_info m_edge;
+            uint32_t m_tail;
+        };
+        Newer newer{.m_edge = anira_test::host_to(backends[0]), .m_tail = 0xABCDU};
+        newer.m_edge.struct_size = sizeof(Newer);
+        EXPECT_EQ(anira_capabilities_edge(caps, &newer.m_edge), ANIRA_OK);
+        EXPECT_EQ(newer.m_tail, 0xABCDU) << "beyond the library's record";
+        EXPECT_EQ(newer.m_edge.struct_size, sizeof(anira_edge_info))
+            << "the library's record size, as the enumerators write a row";
     }
-    to = ANIRA_BACKEND_ID_INIT;
-    to.engine = static_cast<uint32_t>(ANIRA_ENGINE_NONE);
-    EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
-              ANIRA_ERROR_EDGE_UNREACHABLE);
-    EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, nullptr, &row),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, nullptr),
-              ANIRA_ERROR_INVALID_ARGUMENT);
-    row.struct_size = 8;
-    EXPECT_EQ(anira_capabilities_edge(caps, ANIRA_DOMAIN_HOST, &to, &row),
-              ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_capabilities_backends(nullptr, sizeof(anira_backend_id), &count, nullptr),
               ANIRA_ERROR_INVALID_ARGUMENT);
     EXPECT_EQ(anira_capabilities_domains(caps, nullptr, nullptr), ANIRA_ERROR_INVALID_ARGUMENT);
 
     // A probe asks the runtimes again and answers the same rows.
     anira_error err = ANIRA_ERROR_INIT;
-    EXPECT_EQ(anira_context_probe(context, 1U, &err), ANIRA_OK) << err.message;
-    EXPECT_EQ(anira_context_probe(nullptr, 0U, &err), ANIRA_ERROR_INVALID_ARGUMENT);
+    EXPECT_EQ(anira_context_probe(context, &err), ANIRA_OK) << err.message;
+    EXPECT_EQ(anira_context_probe(nullptr, &err), ANIRA_ERROR_INVALID_ARGUMENT);
     count = 0;
     EXPECT_EQ(anira_capabilities_backends(caps, sizeof(anira_backend_id), &count, nullptr),
               ANIRA_OK);
@@ -777,7 +872,7 @@ TEST(AbiContext, TheCapabilitiesListTheRuntimesProviders) {
     }
     count = 0;
     EXPECT_EQ(anira_capabilities_edges(caps, sizeof(anira_edge_info), &count, nullptr), ANIRA_OK);
-    EXPECT_EQ(count, backends.size());
+    EXPECT_EQ(count, 2 * backends.size());
     anira_context_destroy(context);
 }
 

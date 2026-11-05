@@ -1,8 +1,33 @@
 import { type AniraBindings, heap } from './abi/bindings'
 import { ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST } from './abi/enums'
 import type { InputSpec } from './staticInput'
+import { BUNDLED_ENGINE_EDGES } from './engines/ids'
 import type { ModelConfig, WithAbi } from './ModelConfig'
 import { keyOf } from './registry'
+
+/**
+ * How a JavaScript engine passes its slots to its runtime, as the plan report states it
+ * (`anira_engine_edge`, `anira::EngineEdge`): where the bytes go (`edgeClass`, an
+ * `anira_edge_class`) and why. The engine's code moves whatever moves, so its rows read
+ * `ANIRA_MOVER_ENGINE` for any class but `ANIRA_EDGE_ZERO_COPY`.
+ */
+export type EngineEdge = {
+  edgeClass: number
+  reason?: string
+}
+
+/**
+ * A JavaScript engine's edge statements per direction (`EngineOptions.edge`): `inputs` for
+ * every input slot, `outputs` for every output slot; a direction left out keeps the provider
+ * rule of that direction (zero-copy on the CPU path). Per direction where the C++
+ * `anira::Engine::Loaded::edge(is_input, slot, provider_rule)` is per slot: the web's
+ * difference, since the main thread states it at `addEngine`, before the model is known (the
+ * engine itself runs in the inference Workers).
+ */
+export type EngineEdges = {
+  inputs?: EngineEdge
+  outputs?: EngineEdge
+}
 
 /** A JavaScript engine of the pipeline (`addEngine`, `anira_em_pipeline_add_js_engine`). */
 export type EngineOptions = {
@@ -13,7 +38,22 @@ export type EngineOptions = {
   flags?: number
   /** `ANIRA_EM_ENGINE_HOOK_*` beyond process (`ANIRA_EM_ENGINE_HOOK_RESET`). Default none. */
   hooks?: number
+  /**
+   * How the engine passes its slots to its runtime (`anira::Engine::Loaded::edge`, the
+   * descriptor's `edge`), per direction (`EngineEdges`): the engine runs in the inference
+   * Workers, so the main thread states it here, once for every input and once for every
+   * output, where the plan report is built. An engine that copies the slots into host memory of
+   * its own says `ANIRA_EDGE_COPY`; one that reads its inputs in place but copies its outputs
+   * says so per direction. Default: the statements of an engine the package ships, by its id
+   * (`ONNXRUNTIME_WEB_ENGINE_ID`: `ONNXRUNTIME_WEB_ENGINE_EDGES`, a copy within host memory each
+   * way), else none, the provider rule (zero-copy on the CPU path). A given `edge` replaces the
+   * default whole: a direction it leaves out is the provider rule's.
+   */
+  edge?: EngineEdges
 }
+
+// anira_engine_edge on wasm32 (anira/abi/engine.h): struct_size, edge_class, reason.
+const ENGINE_EDGE = { size: 12, edgeClass: 4, reason: 8 }
 
 /** The JavaScript processor of the pipeline (`anira_em_pipeline_add_js_processor`). */
 export type ProcessorOptions = {
@@ -80,13 +120,35 @@ export class Pipeline {
 
   /** A JavaScript engine under its reverse-URI `id`, which the model entries name. */
   addEngine(id: string, options: EngineOptions = {}): this {
-    this.abi.anira_em_pipeline_add_js_engine(
-      this.pipeline,
-      id,
-      keyOf(id),
-      options.hooks ?? 0,
-      options.flags ?? 0
-    )
+    const m = this.abi.module
+    const sp = m.stackSave()
+    try {
+      const stated = options.edge ?? BUNDLED_ENGINE_EDGES[id]
+      // One anira_engine_edge record on the stack per stated direction, NULL for none.
+      const record = (edge: EngineEdge | undefined): number => {
+        if (edge === undefined) return 0
+        const reason = edge.reason === undefined ? 0 : m.stringToUTF8OnStack(edge.reason)
+        const at = m.stackAlloc(ENGINE_EDGE.size)
+        const u32 = heap(m).HEAPU32
+        u32[at >>> 2] = ENGINE_EDGE.size
+        u32[(at + ENGINE_EDGE.edgeClass) >>> 2] = edge.edgeClass
+        u32[(at + ENGINE_EDGE.reason) >>> 2] = reason
+        return at
+      }
+      const inputs = record(stated?.inputs)
+      const outputs = record(stated?.outputs)
+      this.abi.anira_em_pipeline_add_js_engine(
+        this.pipeline,
+        id,
+        keyOf(id),
+        options.hooks ?? 0,
+        options.flags ?? 0,
+        inputs,
+        outputs
+      )
+    } finally {
+      m.stackRestore(sp)
+    }
     return this
   }
 

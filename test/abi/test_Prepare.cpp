@@ -33,6 +33,7 @@
 #include "../../extras/models/model_files.h"
 #include "../support/log_record_collector.h"
 #include "../support/v2_documents.h"
+#include "capi/words.h"
 #include "fixtures.h"
 #include "float_face.h"
 #include "handler_support.h"
@@ -371,8 +372,8 @@ TEST(AbiPrepare, HostDomainRulesAtPrepare) {
                                           rows.data()),
                   ANIRA_OK);
         for (const anira_plan_slot& row : rows) {
-            EXPECT_EQ(row.domain_in, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-            EXPECT_EQ(row.domain_out, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+            EXPECT_EQ(row.from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+            EXPECT_EQ(row.to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
         }
     }
     run_waited_block(handler.m_handler, 1);
@@ -1140,18 +1141,40 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
     EXPECT_EQ(find_record(collector, head.c_str(), "native").m_level,
               static_cast<uint32_t>(ANIRA_LOG_INFO));
     EXPECT_EQ(find_record(collector, head.c_str(), "native").m_group, "anira.capi");
+    const anira_plan_report* report = anira_handler_plan_report(h);
     for (uint32_t i = 0; i < num_plans; ++i) {
         const std::string plan = "plan " + std::to_string(i) + ": ";
         EXPECT_EQ(count_records(collector, (plan + "variant 0, engine ").c_str(), "native"), 1U);
-        const std::string row =
-            "': host -> host, edge zero_copy (allocate zero_copy), wait "
-            "spin_backoff, recipe host";
-        for (const char* slot :
-             {"input 0 'audio_in", "input 1 'gain", "output 0 'audio_out", "output 1 'gain_out"}) {
-            std::string line = plan;
-            line += slot;
-            line += row;
-            EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << plan << slot;
+        // The edge is the plan's engine's (zero-copy where it binds the slot, a copy where it
+        // copies); the dtypes are the spec's and the ring's (none for a Static slot).
+        for (const bool is_input : {true, false}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;  // in: the capacity of rows
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              i,
+                                              is_input ? 1U : 0U,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            ASSERT_EQ(count, 2U);
+            const std::array<const char*, 2> names =
+                is_input ? std::array<const char*, 2>{"audio_in", "gain"}
+                         : std::array<const char*, 2>{"audio_out", "gain_out"};
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                const anira_plan_slot& row = rows.at(slot);
+                const char* edge = row.edge_class == ANIRA_EDGE_ZERO_COPY ? "zero_copy" : "copy";
+                const char* mover = row.moved_by == ANIRA_MOVER_ANIRA    ? "anira"
+                                    : row.moved_by == ANIRA_MOVER_ENGINE ? "the engine"
+                                                                         : "none";
+                const std::string line = plan + (is_input ? "input " : "output ") +
+                                         std::to_string(slot) + " '" + names.at(slot) +
+                                         "': host -> host, edge " + edge + " (allocate " + edge +
+                                         "), moved by " + mover +
+                                         ", wait spin_backoff, recipe host, dtype float32, ring " +
+                                         (slot == 0 ? "float32" : "none");
+                EXPECT_EQ(count_records(collector, line.c_str(), "native"), 1U) << line;
+            }
         }
     }
     // The custom row is the selected plan of gain_with_custom(), under the contract's budget.
@@ -1166,6 +1189,134 @@ TEST(AbiPrepare, ThePlanReportIsLoggedAtInfo) {
 #ifdef ENABLE_LOGGING
     EXPECT_EQ(count_records(collector, "anira_handler_prepare: plan report: ", "native"), 2U);
 #endif
+}
+
+// Every slot row names the spec's dtype and its ring's (0 for a Static slot, which has none),
+// and the edge the plan's engine takes with the slot's buffer and who moves its bytes:
+// zero-copy, moved by nobody, where it binds the buffer in place (ONNX Runtime, LiteRT and
+// TFLite both ways, LibTorch's inputs, a registered engine, which is handed the buffer), a host
+// copy with the engine's reason where it copies (LibTorch's outputs and the bundled ExecuTorch
+// export's, by the adapter; its inputs, by set_input: gain_edge). The allocate class follows
+// the edge on a slot in host memory.
+TEST(AbiPrepare, ASlotRowNamesItsDtypesAndTheEnginesEdge) {
+    const Context context;
+    const ModelConfig model = gain_with_custom();
+    const std::vector<anira_backend_id> candidates = custom_candidates();
+    Handler handler(context, model, candidates);
+    ASSERT_EQ(handler.prepare(explicit_contract()), ANIRA_OK) << handler.m_err.message;
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    const uint32_t num_plans = anira_plan_report_num_plans(report);
+    std::vector<anira_plan_info> plans(num_plans);
+    uint32_t num = num_plans;
+    ASSERT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &num, plans.data()),
+              ANIRA_OK);
+    for (uint32_t i = 0; i < num_plans; ++i) {
+        const anira_plan_info& info = plans.at(i);
+        for (const bool is_input : {true, false}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;  // in: the capacity of rows
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              i,
+                                              is_input ? 1U : 0U,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            ASSERT_EQ(count, 2U);
+            for (uint32_t slot = 0; slot < 2; ++slot) {
+                const anira_plan_slot& row = rows.at(slot);
+                SCOPED_TRACE("plan " + std::to_string(i) + (is_input ? " input " : " output ") +
+                             std::to_string(slot));
+                EXPECT_EQ(row.dtype, ANIRA_DTYPE_F32);
+                EXPECT_EQ(row.ring_dtype, slot == 0 ? ANIRA_DTYPE_F32 : 0U)
+                    << "a Static slot has no ring";
+                const anira_test::SlotEdge edge = anira_test::gain_edge(info.engine, is_input);
+                EXPECT_EQ(row.edge_class, edge.m_class);
+                EXPECT_EQ(row.allocate_class, row.edge_class);
+                EXPECT_EQ(row.moved_by, edge.m_moved_by);
+                EXPECT_EQ(row.reason != nullptr, edge.m_class != ANIRA_EDGE_ZERO_COPY);
+            }
+        }
+    }
+}
+
+// The contract's edge cost over the built-in engines of the build on the CPU path (the gain
+// files): under ANIRA_EDGE_COPY every plan stays (none moves bytes across a bus); under
+// ANIRA_EDGE_ZERO_COPY a plan whose engine copies a slot (gain_edge: LibTorch's outputs, the
+// memory-planned ExecuTorch export) leaves the table and every other one stays, in candidate
+// order, each slot zero-copy and moved by nobody. A build whose engines all copy has no plan
+// left: ANIRA_ERROR_EDGE_UNREACHABLE, the message naming the threshold. Skipped in a build
+// without a built-in engine (the sanitizer trees).
+TEST(AbiPrepare, TheEdgeCostKeepsThePlansWithinIt) {
+    const Context context;
+    const ModelConfig model = gain_with_custom(false);
+    const std::vector<anira_backend_id> candidates = anira_test::engine_candidates();
+    if (candidates.empty()) { GTEST_SKIP() << "no built-in engine in this build"; }
+    std::vector<uint32_t> bound;  // the engines whose gain plans copy no slot
+    for (const anira_backend_id& candidate : candidates) {
+        if (anira_test::gain_edge(candidate.engine, true).m_class == ANIRA_EDGE_ZERO_COPY &&
+            anira_test::gain_edge(candidate.engine, false).m_class == ANIRA_EDGE_ZERO_COPY) {
+            bound.push_back(candidate.engine);
+        }
+    }
+    const auto plan_engines = [](const anira_handler* h) {
+        const anira_plan_report* report = anira_handler_plan_report(h);
+        std::vector<anira_plan_info> plans(anira_plan_report_num_plans(report));
+        auto count = static_cast<uint32_t>(plans.size());
+        EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), &count, plans.data()),
+                  ANIRA_OK);
+        std::vector<uint32_t> engines;
+        engines.reserve(plans.size());
+        for (const anira_plan_info& plan : plans) { engines.push_back(plan.engine); }
+        return engines;
+    };
+    Handler handler(context, model, candidates);
+    ContractHandle contract = explicit_contract();
+    contract.edge_cost(ANIRA_EDGE_COPY);
+    ASSERT_EQ(handler.prepare(contract), ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(plan_engines(handler.m_handler).size(), candidates.size());
+
+    contract.edge_cost(ANIRA_EDGE_ZERO_COPY);
+    const anira_status status = handler.prepare(contract);
+    if (bound.empty()) {
+        EXPECT_EQ(status, ANIRA_ERROR_EDGE_UNREACHABLE);
+        EXPECT_NE(std::strstr(handler.m_err.message,
+                              "no plan is within the contract's edge cost (zero_copy at most)"),
+                  nullptr)
+            << handler.m_err.message;
+        return;
+    }
+    ASSERT_EQ(status, ANIRA_OK) << handler.m_err.message;
+    EXPECT_EQ(plan_engines(handler.m_handler), bound);
+    const anira_plan_report* report = anira_handler_plan_report(handler.m_handler);
+    for (uint32_t plan = 0; plan < bound.size(); ++plan) {
+        for (const uint32_t inputs : {1U, 0U}) {
+            std::array<anira_plan_slot, 2> rows{};
+            uint32_t count = 2;
+            ASSERT_EQ(anira_plan_report_slots(report,
+                                              plan,
+                                              inputs,
+                                              sizeof(anira_plan_slot),
+                                              &count,
+                                              rows.data()),
+                      ANIRA_OK);
+            for (uint32_t slot = 0; slot < count; ++slot) {
+                EXPECT_EQ(rows.at(slot).edge_class, ANIRA_EDGE_ZERO_COPY);
+                EXPECT_EQ(rows.at(slot).moved_by, ANIRA_MOVER_NONE);
+            }
+        }
+    }
+}
+
+// The movers of a slot row are bits, and the log lines spell every set of them: a slot both
+// anira and the runtime move (a memory-planned ExecuTorch output on a device delegate) says so.
+TEST(AbiPrepare, TheLogSpellsEverySetOfMovers) {
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_NONE), "none");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ANIRA), "anira");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ENGINE), "the engine");
+    EXPECT_STREQ(anira::capi::movers_word(ANIRA_MOVER_ANIRA | ANIRA_MOVER_ENGINE),
+                 "anira and the engine");
+    EXPECT_STREQ(anira::capi::movers_word(4U), "unknown");
 }
 
 TEST(AbiPrepare, ThePlanReportIsNotLoggedUnderAnErrorLevel) {

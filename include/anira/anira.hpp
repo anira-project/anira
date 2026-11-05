@@ -955,13 +955,21 @@ struct Hard {
     void* miss_user_data = nullptr;
     double wait_ratio = 0;  ///< v2 blocking_ratio
     /// The ring dtype per Streamed tensor by canonical name (anira_contract_hard_set_ring_dtype;
-    /// ANIRA_DTYPE_F32 for every tensor not named): the element type of the host's samples.
+    /// the spec's dtype for every tensor not named): the element type of the host's samples, set
+    /// only where it differs from the model's and a converting processor goes with it.
     std::map<std::string, DType> ring_dtypes{};
     /// The declared stream latency per Streamed output by canonical name, in samples of that
     /// output (anira_contract_hard_set_latency): it replaces the computed figure and primes the
     /// receive ring; every output not named keeps the computed one.
     std::map<std::string, uint32_t> latencies{};
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot (anira_contract_set_edge_cost, the
+    /// contract file's "edge_cost"): prepare drops a plan above it. A class of the cost scale is
+    /// a limit: ANIRA_EDGE_DEDICATED_TRANSFER admits every known edge,
+    /// ANIRA_EDGE_UNIFIED_TRANSFER crossings between the CPU and a device within unified memory
+    /// only (no bus), ANIRA_EDGE_COPY no crossing between domains, ANIRA_EDGE_ZERO_COPY no copy at
+    /// all, and every limit refuses an ANIRA_EDGE_UNKNOWN edge. std::nullopt, the default, is no
+    /// limit: every edge, an unknown one included (the C value ANIRA_EDGE_UNKNOWN).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 /// Jobs without a real-time deadline: the offline posture.
@@ -972,7 +980,9 @@ struct Async {
     uint32_t lanes = 0;
     uint32_t max_in_flight = 0;
     anira_delivery delivery = ANIRA_DELIVERY_POLLED;
-    anira_edge_cost edge_cost = ANIRA_EDGE_COST_PERMISSIVE;
+    /// The worst edge class a plan may take for any slot, as Hard::edge_cost (std::nullopt: no
+    /// limit).
+    std::optional<anira_edge_class> edge_cost{};
 };
 
 using Contract = std::variant<Hard, Async>;
@@ -1024,7 +1034,7 @@ inline anira_contract* mint(const Hard& hard) {
             check(anira_contract_hard_set_latency(contract, name.c_str(), samples),
                   "anira_contract_hard_set_latency");
         }
-        check(anira_contract_set_edge_cost(contract, hard.edge_cost),
+        check(anira_contract_set_edge_cost(contract, hard.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1050,7 +1060,7 @@ inline anira_contract* mint(const Async& async) {
                                               async.max_in_flight,
                                               async.delivery),
               "anira_contract_async_set_policy");
-        check(anira_contract_set_edge_cost(contract, async.edge_cost),
+        check(anira_contract_set_edge_cost(contract, async.edge_cost.value_or(ANIRA_EDGE_UNKNOWN)),
               "anira_contract_set_edge_cost");
     } catch (...) {
         anira_contract_destroy(contract);
@@ -1141,11 +1151,10 @@ public:
     }
     /// The ring dtype of one tensor under this Hard contract, by canonical name: the element
     /// type the tensor forms of the Hard entries carry across the ABI and the ring holds as is;
-    /// F32 for every tensor never set. Nothing
-    /// converts: a name that is not a Streamed tensor is ANIRA_ERROR_CONFIG at
-    /// anira_handler_prepare, and so is a ring dtype that differs from the spec's dtype unless a
-    /// processor of the pipeline fills the phase that moves that ring
-    /// (anira_pipeline_add_processor).
+    /// the spec's dtype for every tensor never set. Nothing converts: a name that is not a
+    /// Streamed tensor is ANIRA_ERROR_CONFIG at anira_handler_prepare, and so is a ring dtype that
+    /// differs from the spec's dtype unless a processor of the pipeline fills the phase that
+    /// moves that ring and converts (anira_pipeline_add_processor).
     ContractHandle& hard_ring_dtype(std::string_view canonical, DType dtype) {
         const std::string name(canonical);
         detail::check(anira_contract_hard_set_ring_dtype(m_contract, name.c_str(), dtype),
@@ -1219,9 +1228,13 @@ public:
                       "anira_contract_async_set_policy");
         return *this;
     }
-    ContractHandle& edge_cost(anira_edge_cost cost) {
-        detail::check(anira_contract_set_edge_cost(m_contract, cost),
-                      "anira_contract_set_edge_cost");
+    /// The worst edge class a plan may take for any slot, on either contract kind
+    /// (anira_contract_set_edge_cost, Hard::edge_cost): prepare drops a plan above it, and any
+    /// limit drops a plan with an ANIRA_EDGE_UNKNOWN edge; std::nullopt restores no limit.
+    ContractHandle& edge_cost(std::optional<anira_edge_class> worst_allowed) {
+        detail::check(
+            anira_contract_set_edge_cost(m_contract, worst_allowed.value_or(ANIRA_EDGE_UNKNOWN)),
+            "anira_contract_set_edge_cost");
         return *this;
     }
     /// The host-end domain of one tensor, by canonical name, on either contract kind
@@ -1305,7 +1318,10 @@ public:
                           "anira_contract_hard_latency");
             out.latencies.emplace(name, samples);
         }
-        out.edge_cost = anira_contract_edge_cost(m_contract);
+        if (const anira_edge_class limit = anira_contract_edge_cost(m_contract);
+            limit != ANIRA_EDGE_UNKNOWN) {
+            out.edge_cost = limit;
+        }
         return out;
     }
 
@@ -1501,7 +1517,9 @@ public:
         });
     }
     /// The entry's path, owned by the config and valid until it is mutated, moved or
-    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry.
+    /// destroyed. @throws Error{ANIRA_ERROR_INVALID_STATE} on a bytes entry and on an entry
+    /// without a source (add_model(engine_id)), Error{ANIRA_ERROR_INVALID_ARGUMENT} for an index
+    /// out of range.
     std::string_view model_path(uint32_t index) const {
         const char* path = anira_model_config_model_path(m_config, index);
         if (path == nullptr) {
@@ -1977,6 +1995,31 @@ std::vector<T> enumerate(Call&& call, const char* entry) {
     return rows;
 }
 
+/// The query record of an edge lookup (anira_capabilities_edge,
+/// anira_pipeline_capabilities_edge): ANIRA_EDGE_INFO_INIT with a domain from end and a backend
+/// to end, the way an input goes.
+inline anira_edge_info edge_query(Domain from, const BackendId& to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_domain = static_cast<uint32_t>(from);
+    query.to_engine = to.engine;
+    query.to_provider = to.provider;
+    query.to_engine_id = to.engine_id;
+    query.to_provider_id = to.provider_id;
+    return query;
+}
+
+/// The query record of an edge lookup with a backend from end and a domain to end, the way an
+/// output goes.
+inline anira_edge_info edge_query(const BackendId& from, Domain to) noexcept {
+    anira_edge_info query = ANIRA_EDGE_INFO_INIT;
+    query.from_engine = from.engine;
+    query.from_provider = from.provider;
+    query.from_engine_id = from.engine_id;
+    query.from_provider_id = from.provider_id;
+    query.to_domain = static_cast<uint32_t>(to);
+    return query;
+}
+
 }  // namespace detail
 
 /**
@@ -2013,7 +2056,11 @@ public:
             "anira_capabilities_ext_kinds");
         return {kinds.begin(), kinds.end()};
     }
-    /// Every row of the edge registry, available or not.
+    /// Every row of the edge registry, available or not: two per backend of backends(), in
+    /// its order, edges()[2 * i] from the host domain to backends()[i] and
+    /// edges()[2 * i + 1] back. The first read of a device provider's rows asks its device's
+    /// memory kind (anira_edge_info.memory_kind; the unified-memory probe, bounded, kept by the
+    /// context), so call it off the audio thread.
     std::vector<anira_edge_info> edges() const {
         return detail::enumerate<anira_edge_info>(
             [this](uint32_t* count, anira_edge_info* out) {
@@ -2024,12 +2071,19 @@ public:
             },
             "anira_capabilities_edges");
     }
-    /// One row, by domain and backend.
+    /// The row from domain `from` to backend `to`, the way an input goes (a device provider's
+    /// asks its memory kind as edges() does, for this backend alone).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_capabilities_edge(m_capabilities, from, &to, &row),
-                      "anira_capabilities_edge");
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when the registry has no such row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_capabilities_edge(m_capabilities, &row), "anira_capabilities_edge");
         return row;
     }
 
@@ -2074,10 +2128,11 @@ public:
     Capabilities capabilities() const {
         return Capabilities(anira_context_capabilities(m_context));
     }
-    /// Re-runs the probe; `force` re-runs every rung even where a cached answer exists.
-    void probe(bool force = false) {
+    /// Re-runs the probe in full: the runtimes are asked anew and the memory kinds the context
+    /// kept are forgotten (anira_context_probe).
+    void probe() {
         anira_error err{};
-        detail::check(anira_context_probe(m_context, force ? 1U : 0U, &err), err);
+        detail::check(anira_context_probe(m_context, &err), err);
     }
     /// The size of a tensor's byte image under the edges this context probed.
     uint64_t byte_image_bytes(uint64_t num_elements, DType dtype) const {
@@ -2257,7 +2312,7 @@ public:
     explicit operator bool() const noexcept { return m_ring != nullptr; }
 
     /// anira_ring_dtype: the element type the ring stores, the ring dtype of the Hard contract
-    /// (ANIRA_DTYPE_F32 when none was declared); 0 for a view of no ring.
+    /// (the spec's dtype when none was declared); 0 for a view of no ring.
     DType dtype() const noexcept { return anira_ring_dtype(m_ring); }
     /// anira_ring_num_channels: the extent of the tensor's Channel axis, 1 without one.
     uint32_t num_channels() const noexcept { return anira_ring_num_channels(m_ring); }
@@ -2837,6 +2892,21 @@ private:
 // ---- engines (section 7) -------------------------------------------------------------------
 
 /**
+ * @brief How a custom engine passes one slot to its runtime, as the plan report states it
+ * (anira_engine_edge of anira/abi/engine.h): where the bytes go, and why. Engine::Loaded::edge
+ * returns it; the mover follows from the class (the engine's code moves whatever moves, nobody
+ * on a zero-copy edge).
+ */
+// NOLINTBEGIN(readability-identifier-naming) the aggregate spells anira_engine_edge's field names
+struct EngineEdge {
+    anira_edge_class edge_class = ANIRA_EDGE_ZERO_COPY;
+    /// Why the edge is what it is: static storage or a member of the Loaded (anira copies it
+    /// before the call returns); nullptr with nothing to say.
+    const char* reason = nullptr;
+};
+// NOLINTEND(readability-identifier-naming)
+
+/**
  * @brief The record an Engine's load receives, anira_engine_load_info of anira/abi/engine.h as
  * views. Valid for the duration of load: the spans and the model die with the call, so an
  * engine copies what it keeps (the templates, the names, what it loads from the row's path or
@@ -3140,6 +3210,26 @@ public:
         /// loaded models may run at once). It may throw, as Engine::load may; a null return is
         /// ANIRA_ERROR_INTERNAL.
         virtual std::unique_ptr<Prepared> prepare(const PrepareInfo& info) = 0;
+
+        /// How this model's engine passes one slot to its runtime (the input slot `slot` under
+        /// `is_input`, else the output slot), for the plan report's slot rows and the
+        /// contract's edge cost (anira_engine_edge_fn): called right after Engine::load
+        /// returned this Loaded, once per slot, inputs first, on the same thread and under the
+        /// same lock. `provider_rule` is what anira reports without a statement, the provider
+        /// rule for the slot's direction, and the base returns it: zero-copy on
+        /// ANIRA_PROVIDER_CPU and XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where
+        /// its device computes in unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has
+        /// memory of its own, ANIRA_EDGE_UNKNOWN where no probe established which (the plan row's
+        /// memory_kind, anira_memory_kind), the same class both ways, the reason saying which,
+        /// what the probe saw and the direction's move (an input's upload, an output's
+        /// readback). An engine that copies the slot into host memory of
+        /// its own returns ANIRA_EDGE_COPY and why. It may throw, as load may: the prepare fails
+        /// with the status, and the Loaded is deleted.
+        virtual EngineEdge edge(bool /*is_input*/,
+                                uint32_t /*slot*/,
+                                const EngineEdge& provider_rule) const {
+            return provider_rule;
+        }
     };
 
     /// The engine object under its id: the reverse-URI name model entries name it by
@@ -3275,7 +3365,7 @@ struct EngineHandle {
 struct EngineTrampolines {
     /// The C engine of `engine`: the one its handle names while anything holds it, else a new
     /// one (anira_custom_engine_create) under the object's id, whose descriptor is read from the
-    /// object now: flags(), consumed_kinds(), providers(), the nine slots. A new C engine's
+    /// object now: flags(), consumed_kinds(), providers(), the ten slots. A new C engine's
     /// handle keeps it alive until Pipeline::add_engine added it and detached the handle
     /// (a refused addition detaches too, so the C engine goes again and release answers it).
     /// @throws Error when the C entry refuses the id (no reverse-URI name, or anira's own) or
@@ -3304,6 +3394,7 @@ struct EngineTrampolines {
         desc.init = &init;
         desc.release = &release;
         desc.query = &query;
+        desc.edge = &edge;
         // The C engine owns the copy from a successful create on and deletes it in release; a
         // refused create never calls release, so the copy dies here with the throw. The handle
         // exists first, so that nothing between the create and its owner can leak the engine.
@@ -3385,6 +3476,29 @@ struct EngineTrampolines {
                 return ANIRA_ERROR_INTERNAL;
             }
             *out_loaded = loaded.release();
+            return ANIRA_OK;
+        });
+    }
+
+    /// The Loaded's statement for one slot, over the provider rule's edge the record arrives
+    /// with; a call without a Loaded is ANIRA_ERROR_INTERNAL (an Engine always loads one).
+    static anira_status ANIRA_CALL edge(void* loaded,
+                                        uint32_t is_input,
+                                        uint32_t slot,
+                                        anira_engine_edge* out,
+                                        void* /*user_data*/) noexcept {
+        return guarded("edge", [&] {
+            if (loaded == nullptr) {
+                anira_log(ANIRA_LOG_ERROR,
+                          "anira.hpp",
+                          "the engine's edge statement was asked without a Loaded");
+                return ANIRA_ERROR_INTERNAL;
+            }
+            const EngineEdge rule{.edge_class = static_cast<anira_edge_class>(out->edge_class),
+                                  .reason = out->reason};
+            const EngineEdge stated = loaded_of(loaded).edge(is_input != 0, slot, rule);
+            out->edge_class = static_cast<uint32_t>(stated.edge_class);
+            out->reason = stated.reason;
             return ANIRA_OK;
         });
     }
@@ -3503,12 +3617,21 @@ public:
             },
             "anira_pipeline_capabilities_backends");
     }
-    /// One row, by domain and backend: the context's registry for a built-in engine, the
-    /// pipeline's for a custom one (engine_id set).
+    /// The row from domain `from` to backend `to`, the way an input goes: the context's
+    /// registry for a built-in engine, the pipeline's for a custom one (engine_id set).
     /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
     anira_edge_info edge(Domain from, const BackendId& to) const {
-        anira_edge_info row = ANIRA_EDGE_INFO_INIT;
-        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, from, &to, &row),
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
+                      "anira_pipeline_capabilities_edge");
+        return row;
+    }
+    /// The row from backend `from` to domain `to`, the way an output goes, from the same
+    /// registries.
+    /// @throws Error with ANIRA_ERROR_EDGE_UNREACHABLE when neither registry has such a row.
+    anira_edge_info edge(const BackendId& from, Domain to) const {
+        anira_edge_info row = detail::edge_query(from, to);
+        detail::check(anira_pipeline_capabilities_edge(m_pipeline, m_context, &row),
                       "anira_pipeline_capabilities_edge");
         return row;
     }

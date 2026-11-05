@@ -1,5 +1,5 @@
 import type { AniraBindings } from './abi/bindings'
-import { anira_budget_kind, anira_warmup_mode } from './abi/enums'
+import { anira_budget_kind, anira_edge_class, anira_warmup_mode } from './abi/enums'
 import type { Fetcher, WithAbi } from './ModelConfig'
 
 /**
@@ -32,6 +32,25 @@ export type HardContractOptions = {
    * default).
    */
   warmupIterations?: number
+  /**
+   * The ring dtype per Streamed tensor by canonical name (`anira::Hard::ring_dtypes`,
+   * `anira_contract_hard_set_ring_dtype`; the spec's dtype for every tensor not named): the
+   * element type of the host's samples, set only where it differs from the model's, and then a
+   * processor that converts goes with it (nothing in anira converts). An audio node streams
+   * float32: a model of another dtype behind one names `ANIRA_DTYPE_F32` here.
+   */
+  ringDtypes?: Record<string, number>
+  /**
+   * The worst edge class a plan may take for any slot (`anira::Hard::edge_cost`,
+   * `anira_contract_set_edge_cost`; an `anira_edge_class` value): prepare drops a plan above
+   * it. A class of the cost scale is a limit: `ANIRA_EDGE_DEDICATED_TRANSFER` admits every known
+   * edge, `ANIRA_EDGE_UNIFIED_TRANSFER` crossings between the CPU and a device within unified
+   * memory only (no bus), `ANIRA_EDGE_COPY` no crossing between domains, `ANIRA_EDGE_ZERO_COPY`
+   * no copy at all, and every limit refuses an `ANIRA_EDGE_UNKNOWN` edge (a device provider's
+   * on the web, which exposes no memory kind). Left out (the default): no limit, every edge
+   * admitted, an unknown one included.
+   */
+  edgeCost?: number
 }
 
 /**
@@ -98,6 +117,10 @@ export class ContractHandle {
           : anira_warmup_mode.ANIRA_WARMUP_NONE,
         warmup
       )
+      for (const [canonical, dtype] of Object.entries(options.ringDtypes ?? {})) {
+        contract.hardRingDtype(canonical, dtype)
+      }
+      if (options.edgeCost !== undefined) contract.edgeCost(options.edgeCost)
     } catch (error) {
       contract.destroy()
       throw error
@@ -117,6 +140,34 @@ export class ContractHandle {
       hostBlockMin,
       hostBlockMax,
       hostRate
+    )
+    return this
+  }
+
+  /**
+   * The ring dtype of one tensor under this Hard contract, by canonical name
+   * (`anira_contract_hard_set_ring_dtype`, `anira::ContractHandle::hard_ring_dtype`): the
+   * element type the host's samples of that tensor carry and its ring holds as is; the spec's
+   * dtype for every tensor never set. Nothing converts: a name that is no Streamed tensor is
+   * `ANIRA_ERROR_CONFIG` at prepare, and so is a ring dtype that differs from the spec's dtype
+   * unless a processor of the pipeline fills the phase that moves that ring and converts.
+   */
+  hardRingDtype(canonical: string, dtype: number): this {
+    this.abi.anira_contract_hard_set_ring_dtype(this.contract, canonical, dtype)
+    return this
+  }
+
+  /**
+   * The worst edge class a plan may take for any slot, on either contract kind
+   * (`anira_contract_set_edge_cost`, `anira::ContractHandle::edge_cost`; an `anira_edge_class`
+   * value): prepare drops a plan with a slot above it, any limit a plan with an
+   * `ANIRA_EDGE_UNKNOWN` edge, and refuses with `ANIRA_ERROR_EDGE_UNREACHABLE` when no plan
+   * remains. `undefined` restores no limit (`ANIRA_EDGE_UNKNOWN` to the C entry).
+   */
+  edgeCost(worstAllowed: number | undefined): this {
+    this.abi.anira_contract_set_edge_cost(
+      this.contract,
+      worstAllowed ?? anira_edge_class.ANIRA_EDGE_UNKNOWN
     )
     return this
   }

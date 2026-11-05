@@ -61,8 +61,6 @@ _Static_assert(sizeof(anira_priority) == 4, "anira_priority is a 32-bit enum");
 _Static_assert(ANIRA_PRIORITY_FORCE32 == 0x7fffffff, "anira_priority terminator");
 _Static_assert(sizeof(anira_delivery) == 4, "anira_delivery is a 32-bit enum");
 _Static_assert(ANIRA_DELIVERY_FORCE32 == 0x7fffffff, "anira_delivery terminator");
-_Static_assert(sizeof(anira_edge_cost) == 4, "anira_edge_cost is a 32-bit enum");
-_Static_assert(ANIRA_EDGE_COST_FORCE32 == 0x7fffffff, "anira_edge_cost terminator");
 _Static_assert(sizeof(anira_ownership) == 4, "anira_ownership is a 32-bit enum");
 _Static_assert(ANIRA_OWNERSHIP_FORCE32 == 0x7fffffff, "anira_ownership terminator");
 _Static_assert(sizeof(anira_exec_policy) == 4, "anira_exec_policy is a 32-bit enum");
@@ -77,8 +75,12 @@ _Static_assert(sizeof(anira_log_drain) == 4, "anira_log_drain is a 32-bit enum")
 _Static_assert(ANIRA_LOG_DRAIN_FORCE32 == 0x7fffffff, "anira_log_drain terminator");
 _Static_assert(sizeof(anira_edge_class) == 4, "anira_edge_class is a 32-bit enum");
 _Static_assert(ANIRA_EDGE_CLASS_FORCE32 == 0x7fffffff, "anira_edge_class terminator");
+_Static_assert(sizeof(anira_mover_flags) == 4, "anira_mover_flags is a 32-bit enum");
+_Static_assert(ANIRA_MOVER_FLAGS_FORCE32 == 0x7fffffff, "anira_mover_flags terminator");
 _Static_assert(sizeof(anira_probe_rung) == 4, "anira_probe_rung is a 32-bit enum");
 _Static_assert(ANIRA_RUNG_FORCE32 == 0x7fffffff, "anira_probe_rung terminator");
+_Static_assert(sizeof(anira_memory_kind) == 4, "anira_memory_kind is a 32-bit enum");
+_Static_assert(ANIRA_MEMORY_FORCE32 == 0x7fffffff, "anira_memory_kind terminator");
 _Static_assert(sizeof(anira_model_state) == 4, "anira_model_state is a 32-bit enum");
 _Static_assert(ANIRA_MODEL_STATE_FORCE32 == 0x7fffffff, "anira_model_state terminator");
 _Static_assert(sizeof(anira_bytes_ownership) == 4, "anira_bytes_ownership is a 32-bit enum");
@@ -435,6 +437,13 @@ _Static_assert(sizeof(((const anira_engine_ctx*)0)->loaded_bits) == 8, "anira_en
 _Static_assert(offsetof(anira_engine_ctx, reserved_ptr1) == 56, "anira_engine_ctx.reserved_ptr1 offset");
 _Static_assert(sizeof(((const anira_engine_ctx*)0)->reserved_ptr1_bits) == 8, "anira_engine_ctx.reserved_ptr1 is an 8-byte slot");
 
+_Static_assert(offsetof(anira_engine_edge, struct_size) == 0, "anira_engine_edge.struct_size first");
+_Static_assert(sizeof(anira_engine_edge) ==
+                   sizeof(((const anira_engine_edge*)0)->struct_size) +
+                   sizeof(((const anira_engine_edge*)0)->edge_class) +
+                   sizeof(((const anira_engine_edge*)0)->reason),
+               "anira_engine_edge has no implicit padding");
+
 _Static_assert(offsetof(anira_engine_desc, struct_size) == 0, "anira_engine_desc.struct_size first");
 _Static_assert(offsetof(anira_engine_desc, abi_version) == 4, "anira_engine_desc.abi_version second");
 _Static_assert(offsetof(anira_engine_desc, user_data) == 8, "anira_engine_desc.user_data third");
@@ -456,7 +465,8 @@ _Static_assert(sizeof(anira_engine_desc) ==
                    sizeof(((const anira_engine_desc*)0)->providers) +
                    sizeof(((const anira_engine_desc*)0)->num_providers) +
                    sizeof(((const anira_engine_desc*)0)->reserved) +
-                   sizeof(((const anira_engine_desc*)0)->query),
+                   sizeof(((const anira_engine_desc*)0)->query) +
+                   sizeof(((const anira_engine_desc*)0)->edge),
                "anira_engine_desc has no implicit padding");
 
 _Static_assert(offsetof(anira_plan_slot, struct_size) == 0, "anira_plan_slot.struct_size first");

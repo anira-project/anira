@@ -49,8 +49,8 @@
  * back to the host end, on the thread where the host end is consumed. The edge sits directly
  * before and after the engine and is anira's: a processor never crosses a domain, and in this
  * pre-release every host end and every model tensor is host memory (ANIRA_DOMAIN_HOST, the host
- * domain a contract declares per tensor with anira_contract_set_host_domain), the model tensors
- * of ANIRA_DTYPE_F32. One pre_process call forms exactly one chunk; a host block that holds
+ * domain a contract declares per tensor with anira_contract_set_host_domain), each model tensor
+ * in its spec's dtype. One pre_process call forms exactly one chunk; a host block that holds
  * several hops forms several chunks, one call each. Every phase callback receives an
  * anira_processor_ctx that anira fills on its own stack for the duration of the call: the
  * phase, the engine and provider of the plan the chunk was submitted under, the tensor counts
@@ -124,10 +124,10 @@ extern "C" {
 
 /**
  * @brief The element type the ring stores: the ring dtype the host declared for the slot on the
- * Hard contract (anira_contract_hard_set_ring_dtype), ANIRA_DTYPE_F32 when nothing was
- * declared. It is never inferred from the tensor spec's dtype, which may differ when the
- * processor converts; every data accessor states the dtype it believes it is reading or
- * writing.
+ * Hard contract (anira_contract_hard_set_ring_dtype), the spec's dtype when nothing was
+ * declared. The two differ only where the contract names another dtype, which a
+ * processor that converts goes with; every data accessor states the dtype it believes it
+ * is reading or writing.
  * @param ring A ring of the processor context, or NULL.
  * @return The ring's dtype; 0, which is no dtype, for a NULL ring.
  * @par Thread contract

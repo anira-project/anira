@@ -1,6 +1,6 @@
 // The browser test of the built package: serves web/ with the COOP/COEP headers that cross-origin
 // isolation (SharedArrayBuffer, the shared WebAssembly.Memory) needs, opens each page in a headless
-// browser (Playwright) and prints its checks: test/browser/index.html, ort.html, config.html,
+// browser (Playwright) and prints its checks: test/browser/index.html, ort.html, dtypes.html, config.html,
 // streams.html, boot-stop.html, concurrent.html, quanta.html, growth.html and oom.html (the package
 // as built) and the check pages of the two examples, processor-and-engine and model-file (as their
 // own Vite builds bundled them). The repository's extras/models is served at /extras/models/, so a
@@ -76,6 +76,7 @@ const { port } = server.address()
 const allPages = [
   'test/browser/index.html',
   'test/browser/ort.html',
+  'test/browser/dtypes.html',
   'test/browser/config.html',
   'test/browser/plan-find.html',
   'test/browser/streams.html',

@@ -928,8 +928,11 @@ TEST(AbiHandler, PlanReportRows) {
     EXPECT_EQ(anira_plan_report_plans(report, sizeof(anira_plan_info), nullptr, rows.data()),
               ANIRA_ERROR_INVALID_ARGUMENT);
 
-    // Slots: two inputs, two outputs, every one in host memory.
+    // Slots: two inputs, two outputs, every one in host memory; the edge is plan 0's engine's
+    // (the first engine of the build, which binds the chunk in place or copies: gain_edge).
     std::array<anira_plan_slot, 2> slots{ANIRA_PLAN_SLOT_INIT, ANIRA_PLAN_SLOT_INIT};
+    const anira_test::SlotEdge gain_input = anira_test::gain_edge(rows.at(0).engine, true);
+    const auto input_edge = static_cast<uint32_t>(gain_input.m_class);
     count = 2;
     EXPECT_EQ(anira_plan_report_slots(report, 0, 1, sizeof(anira_plan_slot), &count, slots.data()),
               ANIRA_OK);
@@ -937,15 +940,17 @@ TEST(AbiHandler, PlanReportRows) {
     for (uint32_t i = 0; i < 2; ++i) {
         EXPECT_EQ(slots[i].slot, i);
         EXPECT_EQ(slots[i].is_input, 1U);
-        EXPECT_EQ(slots[i].domain_in, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-        EXPECT_EQ(slots[i].domain_out, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
-        EXPECT_EQ(slots[i].edge_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
-        EXPECT_EQ(slots[i].allocate_class, static_cast<uint32_t>(ANIRA_EDGE_ZERO_COPY));
+        EXPECT_EQ(slots[i].from_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(slots[i].to_domain, static_cast<uint32_t>(ANIRA_DOMAIN_HOST));
+        EXPECT_EQ(slots[i].edge_class, input_edge) << "plan 0's engine " << rows.at(0).engine;
+        EXPECT_EQ(slots[i].allocate_class, input_edge);
+        EXPECT_EQ(slots[i].moved_by, static_cast<uint32_t>(gain_input.m_moved_by));
         EXPECT_EQ(slots[i].wait_strategy, static_cast<uint32_t>(ANIRA_WAIT_SPIN_BACKOFF))
             << "the strategy the core runs: this context is the first user of its generation";
         ASSERT_NE(slots[i].recipe, nullptr);
         EXPECT_STREQ(slots[i].recipe, "host");
-        EXPECT_EQ(slots[i].reason, nullptr);
+        EXPECT_EQ(slots[i].reason != nullptr, input_edge != ANIRA_EDGE_ZERO_COPY)
+            << "a copying engine says why";
     }
     count = 2;
     EXPECT_EQ(anira_plan_report_slots(report, 0, 0, sizeof(anira_plan_slot), &count, slots.data()),

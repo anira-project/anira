@@ -75,8 +75,8 @@ typedef enum anira_dtype_code {
 #define ANIRA_DTYPE_LANES(d) ((d) >> 16)
 
 /**
- * @brief 32-bit float, one lane: the type of every 2.x stream, the ring dtype of every tensor
- * never set on a Hard contract and the only one anira_tensor_data_f32 returns.
+ * @brief 32-bit float, one lane: the type of every 2.x stream and the only one
+ * anira_tensor_data_f32 returns.
  */
 #define ANIRA_DTYPE_F32 ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 1)
 
@@ -333,8 +333,7 @@ typedef enum anira_role {
      * Hard entry carries it: a single form that names its slot is ANIRA_ERROR_INVALID_ARGUMENT,
      * and its position in an array of a _multi form must be the empty tensor (a rank of 1 or
      * more with an extent of 0). A processor sees it at the same slot. No Time axis, window,
-     * time ratio or latency; the value takes the spec's dtype, float32 in this pre-release like
-     * every model tensor.
+     * time ratio or latency; the value takes the spec's dtype, like every model tensor.
      */
     ANIRA_ROLE_STATE = 3,
     ANIRA_ROLE_FORCE32 = 0x7fffffff
@@ -423,15 +422,6 @@ typedef enum anira_delivery {
 } anira_delivery;
 
 /**
- * @brief Plan validation policy for the edges a pipeline uses (section 7); not scheduling.
- */
-typedef enum anira_edge_cost {
-    ANIRA_EDGE_COST_PERMISSIVE = 0,  /**< Any available edge (default). */
-    ANIRA_EDGE_COST_STRICT = 1,  /**< Zero-copy edges only. */
-    ANIRA_EDGE_COST_FORCE32 = 0x7fffffff
-} anira_edge_cost;
-
-/**
  * @brief timeout_ms sentinel of the _wait twins: wait without limit (the v2 set_non_realtime
  * behaviour).
  */
@@ -510,15 +500,73 @@ typedef enum anira_log_drain {
 } anira_log_drain;
 
 /**
- * @brief Cost class of an edge between a domain and a backend (section 7).
+ * @brief Where an edge takes a tensor's bytes (section 7). ANIRA_EDGE_ZERO_COPY to
+ * ANIRA_EDGE_DEDICATED_TRANSFER are the cost scale, ordered by cost, so the worst edge
+ * of a chain is the largest value and an edge of several moves has the class of its
+ * worst. ANIRA_EDGE_UNKNOWN stands outside the scale and above it (the values between
+ * are room for classes to come), so a chain or a plan with an unknown edge is unknown
+ * and the worst-of-chain maximum still holds. The class covers the bytes from the slot's
+ * memory until the engine computes on them, and back for outputs; layout transforms
+ * inside a runtime's graph are not edges. Who executes the moves is the row's
+ * anira_mover_flags bits, whether the edge exists its available flag (anira_edge_info).
  */
 typedef enum anira_edge_class {
-    ANIRA_EDGE_ZERO_COPY = 0,  /**< No copy. */
-    ANIRA_EDGE_DEVICE_COPY = 1,  /**< A device-side copy. */
-    ANIRA_EDGE_HOST_COPY = 2,  /**< A copy through host memory. */
-    ANIRA_EDGE_UNAVAILABLE = 3,  /**< No edge. */
+    /**
+     * Nothing moves: the engine computes on the slot's own memory, a device on unified memory
+     * included where its runtime wraps the slot's buffer.
+     */
+    ANIRA_EDGE_ZERO_COPY = 0,
+    /**
+     * A copy or pass within one domain, the CPU's or one device's, with no hand-over between
+     * processors: a memcpy in host memory, a relayout or copy inside a device's memory.
+     */
+    ANIRA_EDGE_COPY = 1,
+    /**
+     * The bytes cross between the CPU's domain and a device's within one unified physical
+     * memory (an Apple silicon GPU, an integrated GPU, a CPU device: ANIRA_MEMORY_UNIFIED): a
+     * copy plus a hand-over between the processors (a submission, a fence, possibly cache
+     * maintenance or a relayout), and no bus.
+     */
+    ANIRA_EDGE_UNIFIED_TRANSFER = 2,
+    /**
+     * The bytes cross a bus to or from dedicated memory: a DMA to or from a device's own memory
+     * (a discrete GPU's VRAM, ANIRA_MEMORY_DEDICATED), a discrete device reading mapped host
+     * memory, a copy between two devices.
+     */
+    ANIRA_EDGE_DEDICATED_TRANSFER = 3,
+    /**
+     * A crossing whose memory kind no probe could establish (ANIRA_MEMORY_UNKNOWN: the device's
+     * API is missing or failed, the provider maps to no API anira can ask, the adapters a
+     * self-choosing runtime picks among disagree), the reason saying "memory kind not probed"
+     * and why. Outside the cost scale: every limit of the contract's edge cost refuses it, and
+     * as the limit itself (anira_contract_set_edge_cost) it means no limit, even unknown edges
+     * allowed.
+     */
+    ANIRA_EDGE_UNKNOWN = 255,
     ANIRA_EDGE_CLASS_FORCE32 = 0x7fffffff
 } anira_edge_class;
+
+/**
+ * @brief Bit flags of anira_plan_slot::moved_by and anira_edge_info::moved_by: who executes an
+ * edge's moves (section 7). The field holds an OR of them, ANIRA_MOVER_NONE when nothing
+ * moves, both bits when anira and the runtime each move the bytes (the edge's class is
+ * then the worse of the two moves).
+ */
+typedef enum anira_mover_flags {
+    ANIRA_MOVER_NONE = 0,  /**< No bit: nothing moves (ANIRA_EDGE_ZERO_COPY). */
+    /**
+     * anira's own code moves the bytes: an engine adapter's copy. The slots with this bit are
+     * exactly the copies anira makes, the ones it counts and could remove.
+     */
+    ANIRA_MOVER_ANIRA = 1,
+    /**
+     * The engine's runtime moves the bytes: a copy its own API makes (a memory-planned
+     * ExecuTorch input), the upload and readback of a device provider over host memory, or a
+     * registered engine's code.
+     */
+    ANIRA_MOVER_ENGINE = 2,
+    ANIRA_MOVER_FLAGS_FORCE32 = 0x7fffffff
+} anira_mover_flags;
 
 /**
  * @brief The rung a context probe reached for an edge (section 4).
@@ -529,6 +577,36 @@ typedef enum anira_probe_rung {
     ANIRA_RUNG_FUNCTIONAL = 2,  /**< A round trip succeeded. */
     ANIRA_RUNG_FORCE32 = 0x7fffffff
 } anira_probe_rung;
+
+/**
+ * @brief The physical memory a provider's device computes in, against the host's (section 7):
+ * the fact a device provider's edge over host memory takes its class from. Asked of the
+ * device's own API at run time, never inferred from a platform's name: Metal's
+ * hasUnifiedMemory, the Vulkan device type cross-checked with its memory heaps, the CUDA
+ * driver's CU_DEVICE_ATTRIBUTE_INTEGRATED, HIP's hipDeviceAttributeIntegrated, OpenCL's
+ * CL_DEVICE_HOST_UNIFIED_MEMORY, D3D12's ARCHITECTURE.UMA; a browser exposes none.
+ */
+typedef enum anira_memory_kind {
+    /**
+     * No probe established it: the device's API is missing or failed, the provider maps to no
+     * API anira can ask (an NPU, a custom provider, the web), or the adapters a self-choosing
+     * runtime picks among disagree. The edge is ANIRA_EDGE_UNKNOWN, which every limit of the
+     * edge cost refuses.
+     */
+    ANIRA_MEMORY_UNKNOWN = 0,
+    /**
+     * The host's own physical memory: the CPU path, an integrated GPU, a CPU device. A crossing
+     * between the CPU's domain and the device's is a unified transfer: a copy plus a hand-over
+     * between the processors, no bus.
+     */
+    ANIRA_MEMORY_UNIFIED = 1,
+    /**
+     * Memory of the device's own across a bus (a discrete GPU's VRAM): a crossing to or from it
+     * is a dedicated transfer over the bus.
+     */
+    ANIRA_MEMORY_DEDICATED = 2,
+    ANIRA_MEMORY_FORCE32 = 0x7fffffff
+} anira_memory_kind;
 
 /**
  * @brief num_threads sentinel: the library's default pool size; 0 means bring your own threads.

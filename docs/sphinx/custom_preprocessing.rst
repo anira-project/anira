@@ -31,12 +31,14 @@ of every Streamed output from the model tensor into its ring; a Static input is 
 stored value (``anira_handler_set_static_input``), a Static output is captured into the store
 (``anira_handler_get_static_output``), and declared state (``ANIRA_ROLE_STATE``, :doc:`usage`
 section 3.4) is fed and captured by anira itself. That covers a time-domain model whose
-tensors are ``float32`` and whose channels are the model's channels. A processor is for what is
-left:
+tensors are of the host's element type (a ring holds its spec's dtype unless the contract names
+another) and whose channels are the model's channels. A processor is for what is left:
 
 - a conversion between the host's element type and the model's: an ``int16`` stream into a
   ``float32`` model, the ring dtype of the contract plus a ``pre_process`` that converts
-  (:doc:`usage` section 2 has this one in full, in C and in C++);
+  (:doc:`usage` section 2 has this one in full, in C and in C++), or a ``float32`` host on a
+  ``float16`` or an ``int8`` model, ``float32`` for both rings plus a ``pre_process`` and a
+  ``post_process`` that convert with the model's own convention (:doc:`usage` section 1.7);
 - a transform between the host end and the model end: a spectrogram model, the FFT on the way
   in and its inverse on the way out (below);
 - a layout the default fill does not produce: several overlapping windows per inference as

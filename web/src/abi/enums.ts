@@ -222,13 +222,6 @@ export const anira_delivery = {
 /** @internal */
 export type anira_delivery = (typeof anira_delivery)[keyof typeof anira_delivery]
 
-export const anira_edge_cost = {
-  ANIRA_EDGE_COST_PERMISSIVE: 0,
-  ANIRA_EDGE_COST_STRICT: 1,
-} as const
-/** @internal */
-export type anira_edge_cost = (typeof anira_edge_cost)[keyof typeof anira_edge_cost]
-
 export const anira_ownership = {
   ANIRA_OWNERSHIP_BORROWED: 0,
   ANIRA_OWNERSHIP_OWNED: 1,
@@ -275,12 +268,21 @@ export type anira_log_drain = (typeof anira_log_drain)[keyof typeof anira_log_dr
 
 export const anira_edge_class = {
   ANIRA_EDGE_ZERO_COPY: 0,
-  ANIRA_EDGE_DEVICE_COPY: 1,
-  ANIRA_EDGE_HOST_COPY: 2,
-  ANIRA_EDGE_UNAVAILABLE: 3,
+  ANIRA_EDGE_COPY: 1,
+  ANIRA_EDGE_UNIFIED_TRANSFER: 2,
+  ANIRA_EDGE_DEDICATED_TRANSFER: 3,
+  ANIRA_EDGE_UNKNOWN: 255,
 } as const
 /** @internal */
 export type anira_edge_class = (typeof anira_edge_class)[keyof typeof anira_edge_class]
+
+export const anira_mover_flags = {
+  ANIRA_MOVER_NONE: 0,
+  ANIRA_MOVER_ANIRA: 1,
+  ANIRA_MOVER_ENGINE: 2,
+} as const
+/** @internal */
+export type anira_mover_flags = (typeof anira_mover_flags)[keyof typeof anira_mover_flags]
 
 export const anira_probe_rung = {
   ANIRA_RUNG_STATIC: 0,
@@ -289,6 +291,14 @@ export const anira_probe_rung = {
 } as const
 /** @internal */
 export type anira_probe_rung = (typeof anira_probe_rung)[keyof typeof anira_probe_rung]
+
+export const anira_memory_kind = {
+  ANIRA_MEMORY_UNKNOWN: 0,
+  ANIRA_MEMORY_UNIFIED: 1,
+  ANIRA_MEMORY_DEDICATED: 2,
+} as const
+/** @internal */
+export type anira_memory_kind = (typeof anira_memory_kind)[keyof typeof anira_memory_kind]
 
 export const anira_model_state = {
   ANIRA_MODEL_STATELESS: 0,

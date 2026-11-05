@@ -370,8 +370,9 @@ the engine's level alone; ``prepare(info, user_data, &prepared)`` for the proces
 ``reset`` of the engine. The provider is the engine's twin wherever the two-axis backend id
 travels: ``provider`` beside ``engine`` and ``provider_id`` beside ``engine_id``
 (``anira_backend_id``, ``anira_plan_info``, ``anira_engine_load_info``,
-``anira_provider_option_set``; ``to_provider`` / ``to_provider_id`` and ``to_engine_id`` on
-``anira_edge_info``), a
+``anira_provider_option_set``; on each end of ``anira_edge_info``, ``from_provider`` /
+``from_provider_id`` beside ``from_engine`` / ``from_engine_id`` and ``to_provider`` /
+``to_provider_id`` beside ``to_engine`` / ``to_engine_id``), a
 value of the enum or ``ANIRA_PROVIDER_CUSTOM`` beside a name in the engine's own vocabulary
 (the pair rule: an id if and only if the value is ``ANIRA_ENGINE_CUSTOM`` /
 ``ANIRA_PROVIDER_CUSTOM``),

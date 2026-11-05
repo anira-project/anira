@@ -255,7 +255,8 @@ Key Points for Multi-Tensor Processing
   halves for hosts that produce and consume at different rates; the forms over every slot take
   one tensor per slot of a side in one call.
 - A block is ``[channels][samples]``, planar over the host's channel pointers or one packed
-  block; the dtype is the ring's, float32 unless the contract declares another.
+  block; the dtype is the ring's: the model tensor's own unless the contract declares another
+  (:doc:`usage`, section 1.7).
 
 **Static tensors**
 

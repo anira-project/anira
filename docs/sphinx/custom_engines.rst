@@ -372,7 +372,10 @@ from the tensors of **this** call, never from a value kept at load or prepare, a
 assume a tensor is anira's own buffer. The halves of a declared State pair alternate between
 two buffers from one inference to the next (below), unless the engine's flags carry
 ``ANIRA_ENGINE_FLAG_STATE_ALIAS``, and a later pre-release hands a caller's Buffer tensor
-over in place. The templates of the load record say what the shapes will be;
+over in place. Every tensor is in its spec's dtype (``anira_tensor_data(t, dtype)`` with the
+template's dtype reads it), and an engine may write its input tensors (an in-place model):
+nothing reads a chunk's inputs after the inference but an ``after_inference`` hook, which sees
+what the engine left. The templates of the load record say what the shapes will be;
 the memory is the context's. A Time extent below the template's is legal only under
 ``ANIRA_ENGINE_FLAG_DYNAMIC_TIME``. The rule's other half is the executor's: what one call
 runs on owns everything with run-time state (above), so an engine keeps a shared slot's
@@ -459,7 +462,8 @@ the id and the plan's provider beside it (``provider``, or ``ANIRA_PROVIDER_CUST
 ``anira_plan_info.engine``, ``engine_id``, ``provider`` and ``provider_id``,
 ``anira_processor_ctx.engine`` and ``provider`` in the processor's phases, both pairs whole through
 ``anira_processor_engine`` and ``anira_processor_provider``, ``anira_edge_info.to_engine``
-with ``to_engine_id`` among the pipeline's edges, ``anira_backend_id`` among
+with ``to_engine_id`` (the row from the host) and ``from_engine`` with ``from_engine_id`` (the
+row back) among the pipeline's edges, ``anira_backend_id`` among
 the candidates of ``anira_pipeline_add_inference`` (``engine_id`` set, ``engine``
 ``ANIRA_ENGINE_CUSTOM``). The plan report's slot rows read ``ANIRA_BINDING_ENGINE``, and its
 extension rows name the engine by its id.
@@ -495,12 +499,11 @@ either way.
 A model with a declared State pair is stateful: it is loaded once, with no shared slot, and
 every handler of it is exclusive (``ANIRA_PREPARE_EXCLUSIVE``), so an engine that keeps state
 of its own beside the declared pair builds it at ``prepare`` and re-initialises it at
-``reset``. The two buffers take the spec's dtype, and a State pair of any dtype the engine
-accepts is legal on the handler (its buffers never travel through the inference queue): an
-``int32`` pair runs on a registered engine that binds it. Every other model tensor is
-``float32`` in this pre-release, the queue's storage; the built-in adapters refuse a model
-with a tensor of another dtype at load with ``ANIRA_ERROR_CONFIG`` naming the engine and the
-tensor, a registered engine binds what its ``load`` accepts.
+``reset``. The two buffers take the spec's dtype, like every model tensor: an engine's
+descriptors carry each tensor in its spec's dtype (the chunk stores it so), whatever the host
+end's ring dtype is. A registered engine binds what its ``load`` accepts; a built-in adapter
+refuses at load, with ``ANIRA_ERROR_NOT_SUPPORTED`` naming the engine and the tensor, what its
+runtime cannot carry.
 
 Sharing and lifetime
 --------------------
@@ -559,21 +562,91 @@ times) and a **visible report**, the pipeline's capabilities:
     anira_backend_id* rows = malloc(count * sizeof *rows);
     anira_pipeline_capabilities_backends(pipe, context, sizeof(anira_backend_id), &count, rows);
 
-    /* One edge: host memory to the engine on a provider (zero-copy to ANIRA_PROVIDER_CPU and
-       XNNPACK, a host copy the engine makes itself to every other). */
-    anira_backend_id to = ANIRA_BACKEND_ID_INIT;
-    to.engine = ANIRA_ENGINE_CUSTOM;
-    to.engine_id = "com.example.myengine";
-    to.provider = ANIRA_PROVIDER_COREML;
+    /* One edge, by its two ends: host memory to the engine on a provider (zero-copy to
+       ANIRA_PROVIDER_CPU and XNNPACK; to every other a move the engine makes itself,
+       ANIRA_MOVER_ENGINE, whose class is the memory kind's: ANIRA_EDGE_UNIFIED_TRANSFER on
+       unified memory, ANIRA_EDGE_DEDICATED_TRANSFER on dedicated memory, ANIRA_EDGE_UNKNOWN on
+       unknown memory, edge.memory_kind; Core ML's device is the Metal default device). */
     anira_edge_info edge = ANIRA_EDGE_INFO_INIT;
-    anira_pipeline_capabilities_edge(pipe, context, ANIRA_DOMAIN_HOST, &to, &edge);
+    edge.from_domain = ANIRA_DOMAIN_HOST;
+    edge.to_engine = ANIRA_ENGINE_CUSTOM;
+    edge.to_engine_id = "com.example.myengine";
+    edge.to_provider = ANIRA_PROVIDER_COREML;
+    anira_pipeline_capabilities_edge(pipe, context, &edge);
+
+    /* The way back, from the engine to host memory: the same class and mover in this
+       pre-release, the reason naming the readback where the other names the upload. */
+    anira_edge_info back = ANIRA_EDGE_INFO_INIT;
+    back.from_engine = ANIRA_ENGINE_CUSTOM;
+    back.from_engine_id = "com.example.myengine";
+    back.from_provider = ANIRA_PROVIDER_COREML;
+    back.to_domain = ANIRA_DOMAIN_HOST;
+    anira_pipeline_capabilities_edge(pipe, context, &back);
 
 The rows' strings point into the pipeline's engines and the context's store: valid until the
-pipeline is destroyed and until the context's next probe. ``anira_handler_create`` asks the
+pipeline is destroyed and until the context's next probe, a reason while the context lives. The
+backends list asks no device's memory kind; the edge entry asks it for the row it reads, once per
+device API, and the context keeps the answer, so the backend's other row asks nothing more. ``anira_handler_create`` asks the
 same question for every candidate's provider of the engine, so what the report lists is what a
 handler runs on. In C++ the query is ``Engine::query(const InitInfo&)`` (the base answers
 every bit) and the report ``pipe.capabilities(context).backends()`` / ``.edge(from, to)``
 (:cpp:class:`anira::PipelineCapabilities`).
+
+How the engine passes the slots
+-------------------------------
+
+The plan report says per slot where the edge takes the bytes and who moves them
+(``anira_plan_slot.edge_class`` and ``moved_by``, :doc:`usage` section 1.7), and the contract's
+edge cost drops a plan above its threshold (section 1.3). anira hands a custom engine the
+chunk's buffer itself, so by default its rows follow the provider rule: zero-copy on
+``ANIRA_PROVIDER_CPU`` and XNNPACK; on any other provider the engine moves an input to its
+device and an output back itself, ``ANIRA_EDGE_UNIFIED_TRANSFER`` where the device computes in unified memory,
+``ANIRA_EDGE_DEDICATED_TRANSFER`` where it has memory of its own and ``ANIRA_EDGE_UNKNOWN`` where
+no probe established which (the plan row's ``memory_kind``, :doc:`usage` section 1.7 "The
+engines"); every limit of the edge cost refuses an unknown edge. On ``ANIRA_PROVIDER_CUDA`` the
+device asked is CUDA device 0 (a custom engine's provider options are its own vocabulary); a
+custom provider's name maps to no device, so its rows are ``ANIRA_EDGE_UNKNOWN``. An engine that does something else says so in the
+descriptor's ``edge`` slot (``anira_engine_edge_fn``): anira asks it once per slot right after
+each load, inputs first, on the thread and under the lock of the load, with an
+``anira_engine_edge`` record already filled with the provider rule's edge for the slot's direction
+(the same class both ways, the reason naming an input's upload or an output's readback), and the engine
+overwrites what differs. The mover follows from the class: whatever moves, the engine's code
+moves it (``ANIRA_MOVER_ENGINE``; ``ANIRA_MOVER_NONE`` on a zero-copy edge). anira copies the
+reason before the call returns.
+
+.. code-block:: c
+
+    /* The engine copies its outputs out of its runtime's own tensors; its inputs it binds. */
+    static anira_status ANIRA_CALL my_edge(void* loaded, uint32_t is_input, uint32_t slot,
+                                           anira_engine_edge* out, void* user_data) {
+        (void)loaded; (void)slot; (void)user_data;
+        if (!is_input) {
+            out->edge_class = ANIRA_EDGE_COPY;
+            out->reason = "com.example.myengine: the runtime returns tensors of its own";
+        }
+        return ANIRA_OK;
+    }
+
+    desc.edge = my_edge;
+
+A status other than ``ANIRA_OK`` fails the prepare with it, a class ``anira_edge_class`` does
+not name with ``ANIRA_ERROR_ENGINE``; either way the load's ``unload`` follows. In C++ the
+statement is a member of the loaded model, ``Engine::Loaded::edge(is_input, slot,
+provider_rule)``, whose base returns the rule:
+
+.. code-block:: cpp
+
+    anira::EngineEdge edge(bool is_input, uint32_t, const anira::EngineEdge& rule) const override {
+        if (is_input) { return rule; }
+        return {.edge_class = ANIRA_EDGE_COPY,
+                .reason = "com.example.myengine: the runtime returns tensors of its own"};
+    }
+
+On the web a JavaScript engine runs in the inference Workers, so the main thread states its
+edges per direction, once for every input slot and once for every output slot, in
+``Pipeline.addEngine``'s ``EngineOptions.edge`` (``{ inputs, outputs }``; per direction since the
+engine is added before the model is known), and a direction left out keeps the provider rule's
+(:doc:`web-api/custom_inference_backends`).
 
 Sharing an engine across plugin instances
 -----------------------------------------

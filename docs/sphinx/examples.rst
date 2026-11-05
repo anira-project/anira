@@ -19,11 +19,14 @@ model's exports per engine with paths relative to the file, the tensor specs, th
 *contract file* (``<model>.contract.json``: the per-inference budget and the warm-up; the host
 blocks are patched in at prepare). ``extras/models/model_files.h`` names them for the examples
 and the tests. Covered are the steerable-nafx CNN in three sizes (``cnn/``), GuitarLSTM
-(``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo
-and the stereo StatefulAccumulatorNetwork with its declared State pair (``model-pool/``; the
-accumulator names no TFLite or LiteRT row, since that export orders its outputs differently and
-the engines bind tensors by position) and RAVE funk drum as the whole model, its encoder and its
-decoder (``third-party/ircam-acids/``, LibTorch only).
+(``hybrid-nn/``), the stateful LSTM (``stateful-rnn/``), SimpleGainNetwork in mono and stereo,
+the stereo StatefulAccumulatorNetwork with its declared State pair, TypedGainNetwork, the gain
+model's tensors at ``int16``, ``int8`` and ``float16`` on every engine
+(``typed_gain_<dtype>.model.json``; the ``_unplanned`` files run an ExecuTorch export whose
+inputs and outputs the memory plan leaves to the caller, so the engine binds them in place), and,
+for the tests, an ONNX model per dtype anira names and a TFLite model with quantised int8 I/O
+(``model-pool/``), and RAVE funk drum as the whole model, its encoder and its decoder
+(``third-party/ircam-acids/``, LibTorch only).
 
 Every example loads a model the same way, in a few lines, and the runtime takes it from there:
 

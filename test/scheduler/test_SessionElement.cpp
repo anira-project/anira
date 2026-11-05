@@ -3,7 +3,10 @@
 #include <anira/abi/handler.h>
 #include <anira/abi/processor.h>
 #include <anira/abi/status.h>
+#include <anira/abi/tensor.h>
 
+#include "capi/validate.h"
+#include "scheduler/ChunkStorage.h"
 #include "scheduler/SessionElement.h"
 
 #if defined(ANIRA_WITH_ASAN) || defined(ANIRA_WITH_LSAN)
@@ -194,6 +197,90 @@ TEST(SessionElementRingDtypes, ASlotsRingHoldsItsRingDtype) {
 
     const RingDtypeSession lanes(ANIRA_MAKE_DTYPE(ANIRA_DTYPE_FLOAT, 32, 4), ANIRA_DTYPE_F32);
     EXPECT_EQ(lanes.m_status, ANIRA_ERROR_CONFIG) << lanes.m_handler.m_err.message;
+}
+
+namespace {
+/// A slot's buffer as an address.
+uintptr_t address_of(const anira_tensor& tensor) {
+    return reinterpret_cast<uintptr_t>(tensor.handle.host.ptr);
+}
+}  // namespace
+
+// A chunk stores every slot in its spec's dtype: the descriptor names the spec's dtype, the
+// buffer holds the elements of that dtype, every buffer starts on a 64-byte boundary, and an
+// all-float32 chunk keeps the sizes and the offsets it always had (elements * 4, each padded to
+// 64), so a float32 model's chunks are byte for byte what they were.
+TEST(SessionElementChunk, ASlotHoldsItsSpecsDtype) {
+    using capi::DerivedSpec;
+    const std::vector<DerivedSpec> inputs{
+        DerivedSpec{.m_dims = {1, 1, 512}, .m_dtype = ANIRA_DTYPE_I16},
+        DerivedSpec{.m_dims = {1}, .m_dtype = ANIRA_DTYPE_F32},
+        DerivedSpec{.m_dims = {1, 3}, .m_dtype = ANIRA_DTYPE_I8},
+    };
+    const std::vector<DerivedSpec> outputs{
+        DerivedSpec{.m_dims = {1, 1, 512}, .m_dtype = ANIRA_DTYPE_F16},
+        DerivedSpec{.m_dims = {1}, .m_dtype = ANIRA_DTYPE_I64},
+    };
+    const SessionElement::ThreadSafeStruct chunk(inputs, outputs, {}, {}, host_chunk_storage(), 64);
+    ASSERT_EQ(chunk.m_input_tensors.size(), 3U);
+    ASSERT_EQ(chunk.m_output_tensors.size(), 2U);
+    const std::array<anira_dtype, 3> in_dtypes{ANIRA_DTYPE_I16, ANIRA_DTYPE_F32, ANIRA_DTYPE_I8};
+    const std::array<anira_dtype, 2> out_dtypes{ANIRA_DTYPE_F16, ANIRA_DTYPE_I64};
+    for (size_t slot = 0; slot < in_dtypes.size(); ++slot) {
+        EXPECT_EQ(chunk.m_input_tensors[slot].dtype, in_dtypes[slot]) << "input " << slot;
+        EXPECT_EQ(address_of(chunk.m_input_tensors[slot]) % 64, 0U) << "input " << slot;
+    }
+    for (size_t slot = 0; slot < out_dtypes.size(); ++slot) {
+        EXPECT_EQ(chunk.m_output_tensors[slot].dtype, out_dtypes[slot]) << "output " << slot;
+        EXPECT_EQ(address_of(chunk.m_output_tensors[slot]) % 64, 0U) << "output " << slot;
+    }
+    EXPECT_EQ(anira_tensor_num_elements(&chunk.m_input_tensors[0]), 512U);
+    // 512 int16 elements are 1024 bytes; a float32 slot would have taken 2048.
+    EXPECT_EQ(address_of(chunk.m_input_tensors[1]) - address_of(chunk.m_input_tensors[0]), 1024U);
+    // One float32 element padded to 64 bytes.
+    EXPECT_EQ(address_of(chunk.m_input_tensors[2]) - address_of(chunk.m_input_tensors[1]), 64U);
+    // 3 int8 elements padded to 64, then the first output: 512 float16 elements, 1024 bytes.
+    EXPECT_EQ(address_of(chunk.m_output_tensors[0]) - address_of(chunk.m_input_tensors[2]), 64U);
+    EXPECT_EQ(address_of(chunk.m_output_tensors[1]) - address_of(chunk.m_output_tensors[0]), 1024U);
+    auto* last = static_cast<int64_t*>(chunk.m_output_tensors[1].handle.host.ptr);
+    EXPECT_EQ(*last, 0) << "the buffers start at zeros";
+
+    const std::vector<DerivedSpec> floats{
+        DerivedSpec{.m_dims = {1, 1, 512}},
+        DerivedSpec{.m_dims = {1}},
+    };
+    const SessionElement::ThreadSafeStruct float_chunk(floats,
+                                                       floats,
+                                                       {},
+                                                       {},
+                                                       host_chunk_storage(),
+                                                       64);
+    EXPECT_EQ(float_chunk.m_input_tensors[0].dtype, ANIRA_DTYPE_F32);
+    EXPECT_EQ(
+        address_of(float_chunk.m_input_tensors[1]) - address_of(float_chunk.m_input_tensors[0]),
+        2048U);
+    EXPECT_EQ(
+        address_of(float_chunk.m_output_tensors[0]) - address_of(float_chunk.m_input_tensors[1]),
+        64U);
+
+    // An engine that binds memory on a coarser grain asks for a larger alignment (a page): every
+    // buffer then starts on that boundary and is padded to it, and the block comes from the
+    // storage on it.
+    const SessionElement::ThreadSafeStruct paged(floats,
+                                                 floats,
+                                                 {},
+                                                 {},
+                                                 host_chunk_storage(),
+                                                 4096);
+    EXPECT_EQ(paged.alignment(), 4096U);
+    for (const anira_tensor& tensor : paged.m_input_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    for (const anira_tensor& tensor : paged.m_output_tensors) {
+        EXPECT_EQ(address_of(tensor) % 4096, 0U);
+    }
+    EXPECT_EQ(address_of(paged.m_input_tensors[1]) - address_of(paged.m_input_tensors[0]), 4096U);
+    EXPECT_EQ(paged.m_input_tensors[0].domain, ANIRA_DOMAIN_HOST) << "the host storage's domain";
 }
 
 namespace {

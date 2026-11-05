@@ -67,6 +67,55 @@ struct TensorInfo {
     bool operator==(const TensorInfo& other) const = default;
 };
 
+/// The physical memory a record's provider computes in, against the host's, and why: what the
+/// handler's context established for the provider's device (src/capi/memory.h, the
+/// unified-memory probe of src/platform/memory_probe.h), ANIRA_MEMORY_UNIFIED with nothing
+/// probed for a provider that runs over host memory (host_memory_provider). The class of a
+/// device provider's edge follows it (provider_rule).
+struct DeviceMemory {
+    anira_memory_kind m_kind = ANIRA_MEMORY_UNKNOWN;
+    /// What the probe saw ("CUDA device 0 'NVIDIA ...': CU_DEVICE_ATTRIBUTE_INTEGRATED 0"), or
+    /// why it established nothing; empty for a host-memory provider.
+    std::string m_why;
+};
+
+/// Whether a provider runs over host memory as it is, so that an engine binding a slot's
+/// memory in place moves nothing: the CPU path (ANIRA_PROVIDER_CPU), XNNPACK, and the CPU-side
+/// execution providers ONNX Runtime reports by name (DnnlExecutionProvider, oneDNN on the CPU;
+/// ACLExecutionProvider and ArmNNExecutionProvider, the Arm CPU libraries). Every other
+/// provider is a device or an accelerator (CUDA, TensorRT, ROCm, DirectML, CoreML, WebGPU,
+/// Vulkan, a LiteRT accelerator, an ExecuTorch GPU or NPU delegate, a custom engine's device)
+/// whose runtime moves host memory to it and reads the results back itself, per call: where
+/// the bytes go is its device's memory kind's (provider_rule).
+bool host_memory_provider(anira_provider provider, std::string_view provider_id) noexcept;
+
+/// The provider rule: the edge of a slot an engine binds in place on `provider`, whose device
+/// computes in `memory`, in one direction: an input (`is_input`), which the provider's runtime
+/// takes from host memory to its device, or an output, whose results it brings back to host
+/// memory. The one rule of the plan rows (Loaded::provider_edge, per slot's direction) and of
+/// the capability rows (the context's and a pipeline's, capi::set_provider_edge, per row's
+/// direction):
+/// - a provider that runs over host memory (host_memory_provider): ANIRA_EDGE_ZERO_COPY, moved
+///   by nobody, no reason, both ways;
+/// - a device provider: moved by the engine (ANIRA_MOVER_ENGINE), its runtime moving the slot
+///   itself, per call; ANIRA_EDGE_UNIFIED_TRANSFER on a device of unified memory (a copy and a
+///   hand-over between the processors, no bus), ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one
+///   (across the bus), and ANIRA_EDGE_UNKNOWN on one whose memory kind no probe established
+///   ("memory kind not probed: <why>"), a class outside the cost scale that every limit of the
+///   edge cost refuses. The class and the mover are the same both ways; the reason names the
+///   kind, what the probe saw and the direction's move: the upload of an input (the slot handed
+///   over to the device within unified memory, moved across the bus to dedicated memory), the
+///   readback of an output (the results handed back, read back across the bus).
+struct ProviderRule {
+    anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+    uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
+    std::string m_reason;                    ///< empty on a host-memory provider
+};
+ProviderRule provider_rule(bool is_input,
+                           anira_provider provider,
+                           std::string_view provider_id,
+                           const DeviceMemory& memory);
+
 /// The record of one loaded model: everything an engine reads at load, copied out of the
 /// configuration it came from (a model entry and the validator's derived quantities), so that
 /// a pooled model never aliases a session's
@@ -116,6 +165,10 @@ struct Model {
     uint32_t m_instances = 1;
     uint32_t m_warm_up = 0;  ///< the inferences load runs on every executor before the first
                              ///< real one
+    /// The memory of the provider's device as the handler's context probed it: what the provider
+    /// rule takes a device provider's class from. No part of the key: it is a fact of the
+    /// machine, the same for every context that loads the record.
+    DeviceMemory m_device_memory;
 
     bool operator==(const Model& other) const;
 };
@@ -193,10 +246,24 @@ public:
     /// engine's text for an inference that fails. Nothing by default.
     virtual void warm_up(uint32_t iterations) { static_cast<void>(iterations); }
 
+    /// The copies of a slot's memory this executor made since it was made, per side: an engine
+    /// counts one per slot in its copy branches and nothing where it binds the memory in place,
+    /// so the tests see what the plan report's edge class claims (warm-up calls included).
+    uint64_t copies_in() const noexcept { return m_copies_in.load(std::memory_order_relaxed); }
+    uint64_t copies_out() const noexcept { return m_copies_out.load(std::memory_order_relaxed); }
+
 protected:
+    /// One copy of an input slot's memory into the engine's own, or of an output out of it.
+    void count_copy_in() const noexcept { m_copies_in.fetch_add(1, std::memory_order_relaxed); }
+    void count_copy_out() const noexcept { m_copies_out.fetch_add(1, std::memory_order_relaxed); }
+
     /// The latch of this executor's process: the engine's text goes to the log for the first
     /// failing chunk since the last success, the scheduler's latch counts the rest.
     FailureLatch m_failures;
+
+private:
+    mutable std::atomic<uint64_t> m_copies_in{0};
+    mutable std::atomic<uint64_t> m_copies_out{0};
 };
 
 /// One provider a built-in engine's runtime reports usable here: a provider of the enum, or
@@ -321,6 +388,46 @@ public:
     /// The engine's promises (ANIRA_ENGINE_FLAG_*); 0 promises nothing.
     virtual uint32_t flags() const noexcept { return 0; }
 
+    /// The boundary, in bytes (a power of two), a chunk's slot buffer must start on for the
+    /// engine to bind it in place: every session sizes its chunks to the largest any of its
+    /// plans' engines asks for. 64 by default, what LiteRT and TFLite ask of the host memory
+    /// they bind and more than the other runtimes need; an engine whose runtime maps memory on a
+    /// coarser grain (a page, for a GPU that maps host memory) says so.
+    virtual size_t buffer_alignment() const noexcept { return k_default_buffer_alignment; }
+    /// The alignment every engine gets unless it asks for more.
+    static constexpr size_t k_default_buffer_alignment = 64;
+
+    /// How the engine passes one slot's chunk buffer to its runtime, as the plan report states
+    /// it (anira_plan_slot.edge_class, moved_by and reason): ANIRA_EDGE_ZERO_COPY where it binds
+    /// the buffer in place on a provider that runs over host memory; ANIRA_EDGE_COPY where
+    /// the slot is copied inside host memory, by the adapter (ANIRA_MOVER_ANIRA, a copy the
+    /// executor counts) or by the runtime's own API (ANIRA_MOVER_ENGINE);
+    /// the class of its device's memory kind, ANIRA_MOVER_ENGINE, where a device provider's
+    /// runtime uploads an input slot or reads an output slot back itself (host_memory_provider).
+    /// The movers are bits: a slot both the adapter and the runtime move carries both, under the
+    /// class of the worse move, so the slots with the ANIRA_MOVER_ANIRA bit are exactly the copies
+    /// the executor counts per call. By default the slot is bound in place (a registered engine
+    /// is handed the buffer itself), so the edge follows the record's provider in the slot's
+    /// direction (provider_edge).
+    struct SlotEdge {
+        anira_edge_class m_class = ANIRA_EDGE_ZERO_COPY;
+        uint32_t m_moved_by = ANIRA_MOVER_NONE;  ///< anira_mover_flags bits
+        const char* m_reason = nullptr;          ///< why; static storage, NULL with nothing to say
+    };
+    virtual SlotEdge slot_edge(bool is_input, uint32_t slot) const noexcept {
+        static_cast<void>(slot);
+        return provider_edge(is_input);
+    }
+    /// The edge of a slot bound in place on the record's provider in one direction (`is_input`:
+    /// an input, else an output), the provider rule (provider_rule) for that direction over the
+    /// record's device memory, both directions' kept from the load (no allocation per call):
+    /// zero-copy where it runs over host memory, else moved by the engine, the provider's runtime
+    /// uploading the input or reading the output back itself: ANIRA_EDGE_UNIFIED_TRANSFER on a
+    /// unified-memory device, ANIRA_EDGE_DEDICATED_TRANSFER on a dedicated one,
+    /// ANIRA_EDGE_UNKNOWN on one whose memory kind is unknown; the reason names the direction's
+    /// move. The reason lives as long as this Loaded.
+    SlotEdge provider_edge(bool is_input) const noexcept;
+
     /// Whether the engine serves a provider: the CPU path alone unless an adapter says
     /// otherwise (a built-in engine whose runtime takes one, the descriptor adapter, whose
     /// engine's load decides). load refuses a record on a provider the adapter does not serve
@@ -400,6 +507,8 @@ private:
 
     Model m_model;
     Bindings m_bindings;
+    ProviderRule m_input_rule;   ///< the record's provider rule for an input, from load on
+    ProviderRule m_output_rule;  ///< and for an output
     std::vector<std::atomic<bool>> m_busy;  ///< one busy flag per shared slot, sized at load
     uint32_t m_num_instances = 0;           ///< the shared slots; 0 before load
     bool m_loaded = false;
@@ -561,12 +670,15 @@ std::vector<SlotBinding> bind_slots(const std::vector<TensorInfo>& slots,
 
 /// One tensor of the engine's side as the engine describes it: its name (empty for a side
 /// without names), its extents with a negative extent for a dynamic one, its element type as an
-/// anira_dtype (0 for one anira has no code for) and the engine's own word for that type.
+/// anira_dtype (0 for one anira has no code for), the engine's own word for that type, and
+/// whether its values are quantised (they mean scale * (q - zero point): TFLite and LiteRT
+/// quantisation parameters, a quantised torch or ExecuTorch scalar type).
 struct EngineTensor {
     std::string m_name;
     std::vector<int64_t> m_dims;
     anira_dtype m_dtype = 0;
     std::string m_type_word;
+    bool m_quantised = false;
 };
 
 /// How check_engine_tensor reads the engine's extents.
@@ -581,7 +693,8 @@ enum class ExtentRule : uint8_t {
 /// The check of the binding rule, whichever way a slot was bound: the engine tensor's element
 /// type must be the record's dtype, the ranks must agree, and every extent per `rule`. Throws
 /// anira::StatusError(ANIRA_ERROR_CONFIG) naming `engine`, the side, the slot and the engine
-/// tensor, with both shapes.
+/// tensor, with both shapes. A quantised engine tensor comes first: quantised I/O is not
+/// supported (ANIRA_ERROR_NOT_SUPPORTED), refused rather than handed on as plain integers.
 void check_engine_tensor(const TensorInfo& slot,
                          const EngineTensor& engine_tensor,
                          ExtentRule rule,
@@ -605,16 +718,27 @@ std::vector<SlotBinding> bind_side(const std::vector<TensorInfo>& slots,
 Bindings bindings_of(const std::vector<SlotBinding>& inputs,
                      const std::vector<SlotBinding>& outputs);
 
-/// A float pointer over the memory of a descriptor a built-in adapter can hand its engine as
-/// one packed block: host memory (pageable or page-locked), float32, not planar, `expected`
-/// elements, and packed row-major strides (all zero, or the row-major strides themselves; the
-/// stride of an axis of extent 1 is never stepped and may be anything), at byte_offset from
-/// the base. NULL for anything else, a NULL base included.
-float* host_f32_packed(const anira_tensor& tensor, size_t expected) noexcept;
+/// The memory of a descriptor a built-in adapter can hand its engine as one packed block:
+/// host memory (pageable or page-locked), of `dtype`, not planar, `expected` elements, and
+/// packed row-major strides (all zero, or the row-major strides themselves; the stride of an
+/// axis of extent 1 is never stepped and may be anything), at byte_offset from the base. NULL
+/// for anything else, a NULL base included.
+void* host_packed(const anira_tensor& tensor, anira_dtype dtype, size_t expected) noexcept;
 
-/// The float32 rule of the built-in adapters: throws anira::StatusError(ANIRA_ERROR_CONFIG)
-/// naming `engine` and the first tensor of the record (inputs, then outputs) whose dtype is
-/// not float32.
+/// Whether `data` starts on an `alignment` boundary (a power of two): what an engine that binds
+/// memory in place checks per call, since no tensor is assumed to be anira's own buffer.
+inline bool aligned_to(const void* data, size_t alignment) noexcept {
+    return (reinterpret_cast<uintptr_t>(
+                data) &  // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast)
+            (alignment - 1)) == 0;
+}
+
+/// The dtype rule of a built-in adapter at load: throws anira::StatusError
+/// (ANIRA_ERROR_NOT_SUPPORTED) naming `engine` and the first tensor of the record (inputs,
+/// then outputs) whose dtype `carries` refuses, an engine's limit and no configuration error.
+void require_dtypes(const Model& model, const char* engine, bool (*carries)(anira_dtype) noexcept);
+
+/// The float32 rule of an adapter that binds float32 alone: require_dtypes over float32.
 void require_f32(const Model& model, const char* engine);
 
 }  // namespace anira::engine

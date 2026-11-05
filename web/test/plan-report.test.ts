@@ -6,7 +6,9 @@ import { test } from 'node:test'
 import type { AniraBindings } from '../src/abi/bindings'
 import {
   ANIRA_VARIANT_ANY,
+  anira_edge_class,
   anira_engine,
+  anira_memory_kind,
   anira_provider,
   anira_status,
 } from '../src/abi/enums'
@@ -136,4 +138,81 @@ test('a miss is null; a refused query throws; an unprepared report is refused', 
     (error: AniraError) => error.status === anira_status.ANIRA_ERROR_INVALID_ARGUMENT
   )
   assert.equal(calls, 0, 'refused before the C entry')
+})
+
+test('a slot row reads the mover beside the class, at the wasm32 offsets of anira_plan_slot', () => {
+  const buffer = new ArrayBuffer(65536)
+  const u32 = new Uint32Array(buffer)
+  let next = 1024
+  const module = {
+    HEAPU8: new Uint8Array(buffer),
+    HEAPU32: u32,
+    _malloc: (bytes: number) => {
+      const at = next
+      next += (bytes + 15) & ~15
+      return at
+    },
+    _free: () => {},
+    UTF8ToString: () => '',
+  }
+  const strides: number[] = []
+  const abi = {
+    module,
+    anira_plan_report_slots: (
+      _report: number,
+      _plan: number,
+      _inputs: boolean,
+      stride: number,
+      count: number,
+      out: number
+    ) => {
+      strides.push(stride)
+      u32[count >>> 2] = 1
+      if (out === 0) return anira_status.ANIRA_OK
+      u32[(out + 20) >>> 2] = anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER
+      u32[(out + 56) >>> 2] = 2 // moved_by: ANIRA_MOVER_ENGINE
+      return anira_status.ANIRA_OK
+    },
+  } as unknown as AniraBindings
+  const [row] = new PlanReport(abi, 1024).slots(0, true)
+  assert.deepEqual(strides, [60, 60], 'the caller passes its sizeof as the stride')
+  assert.equal(row.edgeClass, anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER)
+  assert.equal(row.movedBy, 2)
+})
+
+test('a plan row reads the memory kind in its tail, at the wasm32 offset of anira_plan_info', () => {
+  const buffer = new ArrayBuffer(65536)
+  const u32 = new Uint32Array(buffer)
+  let next = 1024
+  const module = {
+    HEAPU8: new Uint8Array(buffer),
+    HEAPU32: u32,
+    HEAPF64: new Float64Array(buffer),
+    _malloc: (bytes: number) => {
+      const at = next
+      next += (bytes + 15) & ~15
+      return at
+    },
+    _free: () => {},
+    UTF8ToString: () => '',
+  }
+  const strides: number[] = []
+  const abi = {
+    module,
+    anira_plan_report_plans: (
+      _report: number,
+      stride: number,
+      count: number,
+      out: number
+    ) => {
+      strides.push(stride)
+      u32[count >>> 2] = 1
+      if (out === 0) return anira_status.ANIRA_OK
+      u32[(out + 44) >>> 2] = anira_memory_kind.ANIRA_MEMORY_DEDICATED
+      return anira_status.ANIRA_OK
+    },
+  } as unknown as AniraBindings
+  const [plan] = new PlanReport(abi, 1024).plans()
+  assert.deepEqual(strides, [48, 48], 'the caller passes its sizeof as the stride')
+  assert.equal(plan.memoryKind, anira_memory_kind.ANIRA_MEMORY_DEDICATED)
 })

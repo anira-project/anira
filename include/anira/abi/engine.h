@@ -438,14 +438,78 @@ typedef anira_status (ANIRA_CALL* anira_engine_query_fn)(const anira_init_info* 
                                                          uint64_t* out_available);
 
 /**
+ * @brief How a custom engine passes one slot to its runtime, as the plan report states it
+ * (anira_plan_slot.edge_class and reason): what anira_engine_edge_fn writes. Tier 2,
+ * struct_size first, no implicit padding (LP64 16 bytes, ILP32 12). The mover follows
+ * from the class: a registered engine is handed the chunk's buffer itself, so whatever
+ * moves the bytes is the engine's code, ANIRA_MOVER_ENGINE for any class but
+ * ANIRA_EDGE_ZERO_COPY and ANIRA_MOVER_NONE for that.
+ */
+typedef struct anira_engine_edge {
+    /**
+     * sizeof(anira_engine_edge) of the library, as anira hands the record over; the engine
+     * writes within it.
+     */
+    uint32_t struct_size;
+    /**
+     * anira_edge_class: where the engine takes the slot's bytes, from the slot's memory until
+     * it computes on them and back for an output. Arrives as the provider rule's for the slot's
+     * direction (the same class both ways): ANIRA_EDGE_ZERO_COPY on ANIRA_PROVIDER_CPU and
+     * XNNPACK; on any other provider ANIRA_EDGE_UNIFIED_TRANSFER where its device computes in
+     * unified memory, ANIRA_EDGE_DEDICATED_TRANSFER where it has its own memory and
+     * ANIRA_EDGE_UNKNOWN where no probe established which (the plan's
+     * anira_plan_info.memory_kind). An engine that leaves it states that.
+     */
+    uint32_t edge_class;
+    /**
+     * Why the edge is what it is; NULL with nothing to say (arrives as the provider rule's for
+     * the slot's direction: a device provider's names the upload of an input or the readback of
+     * an output). Copied before the callback returns.
+     */
+    const char* reason;
+} anira_engine_edge;
+/**
+ * @brief Zero-copy, nothing to say.
+ */
+#define ANIRA_ENGINE_EDGE_INIT ANIRA_INIT(anira_engine_edge, sizeof(anira_engine_edge), ANIRA_EDGE_ZERO_COPY, NULL)
+
+/**
+ * @brief The edge statement of an engine, the built-in engines' Loaded::slot_edge for a custom
+ * one: how it passes each slot to its runtime, for the plan report's slot rows and the
+ * contract's edge cost (anira_contract_set_edge_cost). Called on the thread of
+ * anira_handler_prepare, under the core's lifecycle lock as the load is, once per slot
+ * of each loaded model right after its load succeeded, inputs first, in slot order;
+ * anira keeps the answers for the loaded model's life. An engine that copies a slot into
+ * host memory of its own says ANIRA_EDGE_COPY; one whose device computes on the slot's
+ * memory as it is (a runtime that wraps the buffer on unified memory) says
+ * ANIRA_EDGE_ZERO_COPY. A status other than ANIRA_OK, or an edge_class anira_edge_class
+ * does not name (ANIRA_ERROR_ENGINE), fails the load: the prepare fails with it, and the
+ * load's unload is called.
+ * @param loaded What the load handed back (NULL for a descriptor without a load).
+ * @param is_input 1 for an input slot, 0 for an output slot.
+ * @param slot The slot: the tensor's position in the model config's input or output list.
+ * @param out Arrives filled with the provider rule's edge for the load's provider in the slot's
+ *        direction (is_input); the engine overwrites what differs, within out->struct_size.
+ * @param user_data The descriptor's user_data.
+ * @par Thread contract
+ * [main-thread]
+ */
+typedef anira_status (ANIRA_CALL* anira_engine_edge_fn)(void* loaded,
+                                                        uint32_t is_input,
+                                                        uint32_t slot,
+                                                        anira_engine_edge* out,
+                                                        void* user_data);
+
+/**
  * @brief A custom engine, handed once to anira_custom_engine_create and copied within
  * struct_size into the refcounted anira_custom_engine, which every pipeline it is added
  * to and every handler created from them share. Tier 2: struct_size first, user_data
- * third (its offset never moves), no implicit padding (LP64 120 bytes, ILP32 72), growth
+ * third (its offset never moves), no implicit padding (LP64 128 bytes, ILP32 76), growth
  * at the tail. The slots are listed as the processor's, from the innermost level out:
  * the per-chunk call, reset, prepare, unprepare, load, unload, init, release; then the
- * providers the engine serves and the query that says which of them are usable here.
- * process is required; every other slot may be NULL.
+ * providers the engine serves and the query that says which of them are usable here;
+ * then the edge statement, how the engine passes each slot to its runtime. process is
+ * required; every other slot may be NULL.
  */
 typedef struct anira_engine_desc {
     uint32_t struct_size;  /**< sizeof(anira_engine_desc) of the caller's header. */
@@ -539,12 +603,20 @@ typedef struct anira_engine_desc {
      * field: a caller whose header ends before it has no query.
      */
     anira_engine_query_fn query;
+    /**
+     * How the engine passes each slot to its runtime (anira_engine_edge_fn), asked once per
+     * slot after each load; NULL: the provider rule for each slot's direction, zero-copy on
+     * ANIRA_PROVIDER_CPU and XNNPACK and a transfer the engine makes itself on every other
+     * provider, an input's upload or an output's readback (anira_pipeline_capabilities_edge). A
+     * tail field: a caller whose header ends before it has no edge statement.
+     */
+    anira_engine_edge_fn edge;
 } anira_engine_desc;
 /**
  * @brief An engine without a callback and without a promise (flags 0): process must be filled
  * before anira_custom_engine_create.
  */
-#define ANIRA_ENGINE_DESC_INIT ANIRA_INIT(anira_engine_desc, sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL)
+#define ANIRA_ENGINE_DESC_INIT ANIRA_INIT(anira_engine_desc, sizeof(anira_engine_desc), ANIRA_ABI_VERSION, NULL, NULL, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 0, 0, NULL, NULL)
 
 // NOLINTEND(readability-identifier-naming, modernize-use-using, bugprone-macro-parentheses)
 

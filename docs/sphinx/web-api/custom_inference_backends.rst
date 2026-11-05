@@ -32,8 +32,12 @@ loaded model; ``ModelConfig.fromUrl`` attaches the bytes of a JavaScript engine'
 model file is fetched once, on the main thread, and every Worker reads the same memory.
 ``process(ctx, prepared)`` runs once per inference (``prepared`` the loaded model's record, which
 :js:func:`~registry.engineModel` reads): ``engineTensors(env, ctx)``
-gives the call's input and output tensors (``elements``, and ``f32``, a view of a host float32
-tensor's data); it fills the outputs and returns an ``anira_status``. ``reset`` (with
+gives the call's input and output tensors: ``elements``; ``dtype``, the tensor's ``anira_dtype``
+(its spec's: a model of any dtype anira names reaches the engine in that dtype); ``data``, a typed
+array of that dtype over the tensor's data (``Float32Array`` for float32, ``Int16Array`` for int16,
+``BigInt64Array`` for int64, the 16-bit words as a ``Uint16Array`` for float16 and bfloat16, the
+bytes as a ``Uint8Array`` for bool8); and ``f32``, ``data`` when the tensor is float32. It fills
+the outputs and returns an ``anira_status``. ``reset`` (with
 ``hooks: ANIRA_EM_ENGINE_HOOK_RESET`` in ``addEngine``) runs at a new stream of an exclusive
 handler, on the Workers too; ``query`` (``ANIRA_EM_ENGINE_HOOK_QUERY``) answers what the engine
 can run here and runs on the main thread, so a page whose engine has one imports the module there
@@ -64,6 +68,34 @@ id:
 file, so its model entry needs no ``path``). Register before ``InferenceHandler.create``: a
 handler copies the pipeline.
 
+``edge`` states how the engine passes the slots to its runtime, for the plan report's slot rows
+and the contract's edge cost (``anira::Engine::Loaded::edge``, the native descriptor's ``edge``,
+:doc:`../custom_engines`): the engine runs in the inference Workers, so the main thread gives the
+statements here, ``{ inputs, outputs }`` (``EngineEdges``), one for every input slot and one for
+every output slot. That is per direction where C++ states per slot: the main thread adds the
+engine before the model is known. A direction left out, and an engine without ``edge``, follows
+the provider rule of that direction, zero-copy on
+the CPU path; on a device provider ``ANIRA_EDGE_UNKNOWN``, since a browser exposes no device's memory kind
+(``PlanInfo.memoryKind`` reads ``ANIRA_MEMORY_UNKNOWN``, the reason "memory kind not probed:
+the web exposes no memory kind"), which every limit of the edge cost refuses. An engine that
+copies the slots into host memory of its own says so, for both directions or for one:
+
+.. code-block:: ts
+
+   pipeline.addEngine('org.example.copying', {
+     edge: {
+       inputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies into its own tensors' },
+       outputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies its results out' },
+     },
+   })
+   // reads its inputs in place, copies its outputs: the inputs keep the provider rule
+   pipeline.addEngine('org.example.outputs-copied', {
+     edge: { outputs: { edgeClass: anira_edge_class.ANIRA_EDGE_COPY, reason: 'copies its results out' } },
+   })
+
+Its rows then read ``ANIRA_EDGE_COPY`` (a copy within one domain) moved by the engine
+(``PlanSlot.movedBy``, ``ANIRA_MOVER_ENGINE``), with the reason of their direction.
+
 ONNX Runtime Web
 ----------------
 
@@ -71,8 +103,10 @@ ONNX Runtime Web
 as such an engine: its ``init`` loads onnxruntime-web's binary (``dist/wasm/
 ort-wasm-simd-threaded.wasm``), its ``load`` creates a session from the model entry's bytes
 (copied into onnxruntime-web's own heap, a separate module) or, for an entry with a path and no
-bytes, from a synchronous fetch of the path, and its ``process`` runs one float32 ORT tensor per
-model tensor of the call:
+bytes, from a synchronous fetch of the path, and its ``process`` runs one ORT tensor per model
+tensor of the call, of the tensor's dtype as ONNX's element type (every dtype anira names; a
+tensor whose dtype is not the model's element type is ``ANIRA_ERROR_CONFIG``), its data copied
+in and the outputs copied out (anira's module and onnxruntime-web's are two wasm memories):
 
 .. code-block:: ts
 
@@ -91,9 +125,14 @@ The model is the config's, stated once:
 ``await ModelConfig.fromUrl(anira, url)`` fetches ``model.onnx`` once and attaches its bytes;
 each inference Worker's engine creates its session from them. ``onnxRuntimeWeb({ model })``
 (a URL or bytes) still takes a model of its own, which each Worker then fetches in its ``init``.
-The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import { ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``):
-the id is a module of its own, so the page does not bundle onnxruntime-web; only the worker
-module that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
+The page registers ``ONNXRUNTIME_WEB_ENGINE_ID``, with the id from the root entry (``import {
+ONNXRUNTIME_WEB_ENGINE_ID } from '@anira-project/anira'``; ``pipeline.addEngine(ONNXRUNTIME_WEB_ENGINE_ID)``).
+Under that id ``addEngine`` states the engine's edges by default, a copy of every slot within host
+memory by the engine (``ANIRA_EDGE_COPY``: the two wasm memories), each input "copied into ORT's
+heap" and each output "copied out of ORT's heap", so its plan rows say so; an engine defined
+under another id states them with ``addEngine(id, { edge: ONNXRUNTIME_WEB_ENGINE_EDGES })``. The
+id and the statements are a module of their own, so the page does not bundle onnxruntime-web; only the worker module
+that defines the engine does. ``npm run check:bundle`` holds the root and scope entries to
 that.
 
 ``onnxRuntimeWeb({ numThreads: 2 })`` runs each inference on two threads: the inference Worker's

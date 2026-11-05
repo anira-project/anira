@@ -579,7 +579,7 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     EXPECT_EQ(anira_contract_hard_wait_ratio(hard.m_contract, &ratio), ANIRA_OK);
     EXPECT_EQ(ratio, 0.0);
     EXPECT_EQ(anira_contract_hard_num_ring_dtypes(hard.m_contract), 0u);
-    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_COST_PERMISSIVE);
+    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_UNKNOWN) << "no limit";
 
     // Every setter, then its getter.
     ASSERT_EQ(anira_contract_hard_set_host_blocks(hard.m_contract, 128, 1024, 44100.0), ANIRA_OK);
@@ -589,7 +589,7 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     ASSERT_EQ(anira_contract_hard_set_on_miss(hard.m_contract, ANIRA_MISS_CALLBACK), ANIRA_OK);
     ASSERT_EQ(anira_contract_hard_set_miss_fn(hard.m_contract, &decline_miss, &user), ANIRA_OK);
     ASSERT_EQ(anira_contract_hard_set_wait_ratio(hard.m_contract, 0.5), ANIRA_OK);
-    ASSERT_EQ(anira_contract_set_edge_cost(hard.m_contract, ANIRA_EDGE_COST_STRICT), ANIRA_OK);
+    ASSERT_EQ(anira_contract_set_edge_cost(hard.m_contract, ANIRA_EDGE_ZERO_COPY), ANIRA_OK);
     EXPECT_EQ(anira_contract_hard_host_blocks(hard.m_contract,
                                               &host_block_min,
                                               &host_block_max,
@@ -611,7 +611,7 @@ TEST(AbiReadBack, HardContractAnswersEverySetter) {
     EXPECT_EQ(user_data, &user);
     EXPECT_EQ(anira_contract_hard_wait_ratio(hard.m_contract, &ratio), ANIRA_OK);
     EXPECT_EQ(ratio, 0.5);
-    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(anira_contract_edge_cost(hard.m_contract), ANIRA_EDGE_ZERO_COPY);
     // A budget kind back to MEASURED reads 0 ms; a warmup that is not FIXED reads 0 iterations.
     ASSERT_EQ(anira_contract_hard_set_budget(hard.m_contract, ANIRA_BUDGET_MEASURED, 0.0),
               ANIRA_OK);
@@ -749,10 +749,14 @@ TEST(AbiReadBack, TheHardFamilyIsWrongContractOnAsync) {
     EXPECT_STREQ(canonical, "untouched");
     EXPECT_EQ(dtype, ANIRA_DTYPE_I8);
     // The edge cost is common to both kinds.
-    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_COST_PERMISSIVE);
-    ASSERT_EQ(anira_contract_set_edge_cost(async_contract.m_contract, ANIRA_EDGE_COST_STRICT),
+    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_UNKNOWN) << "no limit";
+    ASSERT_EQ(anira_contract_set_edge_cost(async_contract.m_contract, ANIRA_EDGE_ZERO_COPY),
               ANIRA_OK);
-    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_ZERO_COPY);
+    // ANIRA_EDGE_UNKNOWN as the limit restores no limit.
+    ASSERT_EQ(anira_contract_set_edge_cost(async_contract.m_contract, ANIRA_EDGE_UNKNOWN),
+              ANIRA_OK);
+    EXPECT_EQ(anira_contract_edge_cost(c), ANIRA_EDGE_UNKNOWN);
 }
 
 TEST(AbiReadBack, TheNullAnswersOfTheContract) {
@@ -802,7 +806,7 @@ TEST(AbiReadBack, TheNullAnswersOfTheContract) {
     EXPECT_EQ(warmup, ANIRA_WARMUP_NONE);
     EXPECT_EQ(policy, ANIRA_MISS_ZEROS);
     EXPECT_EQ(fn, &decline_miss);
-    EXPECT_EQ(anira_contract_edge_cost(nullptr), ANIRA_EDGE_COST_PERMISSIVE);
+    EXPECT_EQ(anira_contract_edge_cost(nullptr), ANIRA_EDGE_UNKNOWN) << "no limit";
 }
 
 TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
@@ -832,7 +836,7 @@ TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
         "host_block_min": 256, "host_block_max": 1024, "host_rate": 44100,
         "budget": {"ms": 2.5}, "warmup": {"fixed": 3}, "on_miss": "zeros", "wait_ratio": 0.25,
         "ring_dtypes": {"audio_in": "int16"}
-    }, "edge_cost": "strict" })";
+    }, "edge_cost": "zero_copy" })";
     const Contract typed(k_typed);
     ASSERT_EQ(typed.m_status, ANIRA_OK) << typed.m_err.message;
     EXPECT_EQ(anira_contract_hard_budget(typed.m_contract, &budget, &budget_ms), ANIRA_OK);
@@ -854,13 +858,13 @@ TEST(AbiReadBack, ALoadedContractFileAnswersTheSame) {
     EXPECT_EQ(anira_contract_hard_ring_dtype(typed.m_contract, 0, &canonical, &dtype), ANIRA_OK);
     EXPECT_STREQ(canonical, "audio_in");
     EXPECT_EQ(dtype, ANIRA_DTYPE_I16);
-    EXPECT_EQ(anira_contract_edge_cost(typed.m_contract), ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(anira_contract_edge_cost(typed.m_contract), ANIRA_EDGE_ZERO_COPY);
 
     const Contract async_contract(anira_test::k_contract_async_v3);
     ASSERT_EQ(async_contract.m_status, ANIRA_OK) << async_contract.m_err.message;
     EXPECT_EQ(anira_contract_hard_on_miss(async_contract.m_contract, &policy),
               ANIRA_ERROR_WRONG_CONTRACT);
-    EXPECT_EQ(anira_contract_edge_cost(async_contract.m_contract), ANIRA_EDGE_COST_STRICT);
+    EXPECT_EQ(anira_contract_edge_cost(async_contract.m_contract), ANIRA_EDGE_ZERO_COPY);
 }
 
 // ---- the context config ----------------------------------------------------------------------
@@ -1117,7 +1121,7 @@ TEST(AbiReadBackCxx, HardRoundTripsFieldByField) {
         .wait_ratio = 0.5,
         .ring_dtypes = {{"audio_in", ANIRA_DTYPE_I16}, {"mask_out", ANIRA_DTYPE_F32}},
         .latencies = {{"mask_out", 4096}},
-        .edge_cost = ANIRA_EDGE_COST_STRICT,
+        .edge_cost = ANIRA_EDGE_ZERO_COPY,
     };
     const anira::Hard back = anira::ContractHandle(hard).hard();
     EXPECT_EQ(back.host_block_min, hard.host_block_min);

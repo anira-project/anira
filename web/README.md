@@ -88,7 +88,9 @@ const pipeline = Pipeline.create(anira)
 A JavaScript engine reads its model entry in each Worker (`load(model)`: the bytes
 `ModelConfig.fromUrl` attached, a view of the shared memory), so a model file is fetched once:
 `defineEngine(ONNXRUNTIME_WEB_ENGINE_ID, onnxRuntimeWeb())` runs the model the config names for
-`org.anira.onnxruntime-web`. With Vite, also exclude `onnxruntime-web` from `optimizeDeps`.
+`org.anira.onnxruntime-web`, and the page adds it with `addEngine(ONNXRUNTIME_WEB_ENGINE_ID)`,
+which states its edge (a copy within host memory by the engine) for the plan report. With Vite, also exclude
+`onnxruntime-web` from `optimizeDeps`.
 
 The classes and their members are the ones of `anira.hpp` (`InferenceHandler.getLatency` for
 `get_latency`, `ContractHandle.hardHostBlocks` for `hard_host_blocks`); each class's doc comment names

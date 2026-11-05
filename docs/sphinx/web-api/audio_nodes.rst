@@ -195,6 +195,28 @@ for every stream's ring), but
 On a miss under ``ANIRA_MISS_BYPASS``, every output carries the anchored input's block (the
 contract refuses BYPASS when an output's channels are not the anchored input's).
 
+A Model of Another Dtype
+------------------------
+
+An audio node streams float32, Web Audio's samples. A model whose Streamed tensors are of another
+dtype (an int16 or a float16 export) runs behind a node only when the contract names float32 as
+those tensors' ring dtype and a processor of the pipeline converts between the float32 rings and
+the model's tensors in ``preProcess`` and ``postProcess`` (:doc:`custom_pre_post_processing`);
+nothing in anira converts. Without that, ``createAudioNode`` is refused with
+``ANIRA_ERROR_CONFIG``, and the message names the ring dtype and the converting processor:
+
+.. code-block:: ts
+
+   const contract = ContractHandle.hard(anira, {
+     hostBlockMin: 128,
+     hostRate: audioContext.sampleRate,
+     budgetMs: 2,
+     ringDtypes: { audio_in: ANIRA_DTYPE_F32, audio_out: ANIRA_DTYPE_F32 },
+   })
+
+A handler that no node drives streams the model's dtype as it is: the rings hold the spec's dtype
+by default, and the Hard process entries take tensors of that dtype.
+
 Options
 -------
 
