@@ -82,6 +82,20 @@ export type PlanSlot = {
    * `ANIRA_MOVER_NONE` on a zero-copy edge.
    */
   movedBy: number
+  /**
+   * True where the slot's window was derived, its Streamed spec declaring none (no `"window"`
+   * in the model file): from a fixed Time extent the window of that extent, from a dynamic one
+   * a flexible window pinned to the anchor hop. False for a declared window and for a slot
+   * without one.
+   */
+  windowDerived: boolean
+  /**
+   * The window the slot runs at, in elements along its Time axis per inference (a flexible one
+   * pinned to the anchor hop); 0 for a slot without a window (Static, State).
+   */
+  window: number
+  /** The elements the slot advances per inference, its window less the overlap; 0 without one. */
+  hop: number
 }
 
 /** One extension a plan consumes (`anira_plan_ext`). */
@@ -95,7 +109,8 @@ export type PlanExtension = {
 }
 
 // The wasm32 layouts of the three Tier-2 rows (anira/abi/handler.h): 4-byte pointers, the
-// double of anira_plan_info at 24, its memory_kind in the tail at 44. The rows are enumerated at these strides (the entries take
+// double of anira_plan_info at 24, its memory_kind in the tail at 44, the two int64_t of
+// anira_plan_slot's tail at 64 and 72. The rows are enumerated at these strides (the entries take
 // the caller's element size and write the fields the stride covers).
 const PLAN_INFO = {
   size: 48,
@@ -107,7 +122,7 @@ const PLAN_INFO = {
 }
 const PLAN_INFO_TAIL = { engineFlags: 32, providerId: 40, memoryKind: 44 }
 const PLAN_SLOT = {
-  size: 60,
+  size: 80,
   slot: 4,
   isInput: 8,
   fromDomain: 12,
@@ -122,6 +137,9 @@ const PLAN_SLOT = {
   dtype: 48,
   ringDtype: 52,
   movedBy: 56,
+  windowDerived: 60,
+  window: 64,
+  hop: 72,
 }
 const PLAN_EXT = { size: 20, index: 4, host: 8, kind: 12, consumer: 16 }
 // anira_plan_query and the anira_backend_id it holds at 8.
@@ -172,6 +190,8 @@ export class PlanReport {
   slots(plan: number, inputs: boolean): PlanSlot[] {
     const u32 = (m: AniraBindings['module'], row: number, offset: number) =>
       heap(m).HEAPU32[(row + offset) >>> 2]
+    const i64 = (m: AniraBindings['module'], row: number, offset: number) =>
+      Number(heap(m).HEAP64[(row + offset) >>> 3])
     return this.rows(
       PLAN_SLOT.size,
       (count, out) =>
@@ -198,6 +218,9 @@ export class PlanReport {
         dtype: u32(m, row, PLAN_SLOT.dtype),
         ringDtype: u32(m, row, PLAN_SLOT.ringDtype),
         movedBy: u32(m, row, PLAN_SLOT.movedBy),
+        windowDerived: u32(m, row, PLAN_SLOT.windowDerived) !== 0,
+        window: i64(m, row, PLAN_SLOT.window),
+        hop: i64(m, row, PLAN_SLOT.hop),
       })
     )
   }

@@ -1376,7 +1376,9 @@ void build_plans(anira_handler& handler,
 // moves its bytes (zero-copy where it binds it in place, a copy or a device's transfer with
 // its reason where the bytes move; validate refused any domain but the host's); the wait
 // strategy the core runs; how the plan's loaded model
-// bound the slot to the engine's tensor at load; the spec's dtype and the ring's.
+// bound the slot to the engine's tensor at load; the spec's dtype and the ring's; the window the
+// slot runs at, its hop and whether the window was derived (what the validator derived for the
+// slot's spec at prepare, the same in every plan).
 struct SlotFacts {
     anira_role m_role = ANIRA_ROLE_STREAMED;
     anira_domain m_host_domain = ANIRA_DOMAIN_HOST;
@@ -1384,6 +1386,7 @@ struct SlotFacts {
     anira::engine::Loaded::SlotEdge m_edge;
     anira_dtype m_dtype = 0;
     anira_dtype m_ring_dtype = 0;  ///< 0: no ring
+    const anira::capi::DerivedSpec* m_derived = nullptr;
 };
 
 anira_plan_slot host_slot(uint32_t slot,
@@ -1406,6 +1409,11 @@ anira_plan_slot host_slot(uint32_t slot,
     row.binding = static_cast<uint32_t>(facts.m_binding);
     row.dtype = facts.m_dtype;
     row.ring_dtype = facts.m_ring_dtype;
+    if (facts.m_derived != nullptr) {
+        row.window_derived = facts.m_derived->m_window_derived ? 1U : 0U;
+        row.window = facts.m_derived->m_window_used;
+        row.hop = facts.m_derived->m_hop;
+    }
     return row;
 }
 
@@ -1536,7 +1544,8 @@ void build_report(anira_handler& handler,
                                   .m_binding = binding_of(session, index, true, i),
                                   .m_edge = edge_of(session, index, true, i),
                                   .m_dtype = model.m_inputs[i].m_dtype,
-                                  .m_ring_dtype = ring_dtype_of(handler.m_input_ports, i)};
+                                  .m_ring_dtype = ring_dtype_of(handler.m_input_ports, i),
+                                  .m_derived = &handler.m_derived.m_inputs[i]};
             inputs.push_back(host_slot(i, true, wait, facts));
         }
         std::vector<anira_plan_slot> outputs;
@@ -1547,7 +1556,8 @@ void build_report(anira_handler& handler,
                                   .m_binding = binding_of(session, index, false, i),
                                   .m_edge = edge_of(session, index, false, i),
                                   .m_dtype = model.m_outputs[i].m_dtype,
-                                  .m_ring_dtype = ring_dtype_of(handler.m_output_ports, i)};
+                                  .m_ring_dtype = ring_dtype_of(handler.m_output_ports, i),
+                                  .m_derived = &handler.m_derived.m_outputs[i]};
             outputs.push_back(host_slot(i, false, wait, facts));
         }
         report.m_inputs.push_back(std::move(inputs));
@@ -1593,19 +1603,38 @@ const char* binding_word(uint32_t binding) {
     }
 }
 
+// The window of a slot line: nothing for a slot without one; else the window it runs at, how it
+// was chosen where it was not declared as it is (derived from the Time extent, or flexible and
+// pinned to the anchor hop, derived or declared) and its hop.
+std::string window_text(const anira_plan_slot& slot, const anira::capi::DerivedSpec* derived) {
+    if (slot.window == 0) { return {}; }
+    const bool flexible = derived != nullptr && derived->m_window_min != derived->m_window_max;
+    std::string text = ", window " + std::to_string(slot.window);
+    if (slot.window_derived != 0) {
+        text += flexible ? " (derived, flexible, pinned to the anchor hop)"
+                         : " (derived from the Time extent)";
+    } else if (flexible) {
+        text += " (flexible, pinned to the anchor hop)";
+    }
+    return text + ", hop " + std::to_string(slot.hop);
+}
+
 // One Info record per slot row: the tensor's canonical name beside its slot number, the edge
-// and who moves its bytes, how a completion on it is waited for and how the plan bound the
-// slot to the engine's tensor; the reason only when the row carries one.
+// and who moves its bytes, how a completion on it is waited for, the dtypes, the window and how
+// the plan bound the slot to the engine's tensor; the reason only when the row carries one.
 void log_slots(uint32_t plan,
                const std::vector<anira_plan_slot>& slots,
                const std::vector<anira_tensor_spec>& specs,
+               const std::vector<anira::capi::DerivedSpec>& derived,
                const char* side) {
     for (const anira_plan_slot& slot : slots) {
         const char* name = slot.slot < specs.size() ? specs[slot.slot].m_name.c_str() : "";
+        const std::string window =
+            window_text(slot, slot.slot < derived.size() ? &derived[slot.slot] : nullptr);
         ANIRA_LOG_INFO(
             anira::log_group::k_capi,
             "anira_handler_prepare: plan %u: %s %u '%s': %s -> %s, edge %s (allocate "
-            "%s), moved by %s, wait %s, recipe %s, dtype %s, ring %s, bound by %s%s%s",
+            "%s), moved by %s, wait %s, recipe %s, dtype %s, ring %s%s, bound by %s%s%s",
             plan,
             side,
             slot.slot,
@@ -1619,6 +1648,7 @@ void log_slots(uint32_t plan,
             slot.recipe != nullptr ? slot.recipe : "none",
             anira::capi::dtype_word(slot.dtype),
             slot.ring_dtype != 0 ? anira::capi::dtype_word(slot.ring_dtype) : "none",
+            window.c_str(),
             binding_word(slot.binding),
             slot.reason != nullptr ? ", reason: " : "",
             slot.reason != nullptr ? slot.reason : "");
@@ -1661,8 +1691,8 @@ void log_report(const anira_handler& handler, const anira_model_config& model) {
             provider.c_str(),
             info.budget_ms,
             anira::platform::memory_kind_word(static_cast<anira_memory_kind>(info.memory_kind)));
-        log_slots(i, report.m_inputs[i], model.m_inputs, "input");
-        log_slots(i, report.m_outputs[i], model.m_outputs, "output");
+        log_slots(i, report.m_inputs[i], model.m_inputs, handler.m_derived.m_inputs, "input");
+        log_slots(i, report.m_outputs[i], model.m_outputs, handler.m_derived.m_outputs, "output");
         for (const anira_plan_ext& ext : report.m_exts[i]) {
             ANIRA_LOG_INFO(anira::log_group::k_capi,
                            "anira_handler_prepare: plan %u: ext %u: %s, kind %s, consumer %s",

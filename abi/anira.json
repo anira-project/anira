@@ -3733,7 +3733,7 @@
             {
               "type": "int64_t",
               "name": "window_min",
-              "doc": "The model's smallest legal Time extent, in elements."
+              "doc": "The model's smallest legal Time extent, in elements; 0 with a window_max of 0: no window."
             },
             {
               "type": "int64_t",
@@ -3749,7 +3749,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.1",
-          "doc": "The window of a Streamed spec, in elements along the Time axis; the fixed case is window_min == window_max. Defaults 0, 0, 0. Cross-field legality (context < window_min, window_max >= window_min) is checked at prepare.",
+          "doc": "The window of a Streamed spec, in elements along the Time axis; the fixed case is window_min == window_max. Optional: a Streamed spec without a window (this setter never called, or called with (0, 0)) has one derived at validation, the fixed window of its Time extent, or, on a dynamic Time axis, the flexible window [1, ANIRA_UNBOUNDED] that the anchor hop pins like any flexible window; the overlap is 0 then. A declared window always wins. The derivation never writes into the spec: anira_tensor_spec_window reads (0, 0, 0), anira_model_config_to_json writes no window back, and the window in use is the plan report's (anira_plan_slot.window, window_derived). An overlap without a window is not derived: ANIRA_ERROR_CONFIG, naming the tensor. Defaults 0, 0, 0. Cross-field legality (overlap < window_min, window_max >= window_min) is checked at prepare.",
           "return_doc": "ANIRA_OK, or ANIRA_ERROR_INVALID_ARGUMENT for a negative value other than ANIRA_UNBOUNDED as window_max."
         },
         {
@@ -6093,7 +6093,7 @@
           "thread": "main-thread",
           "status": "promised",
           "since": "0.2",
-          "doc": "The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every role.",
+          "doc": "The window as anira_tensor_spec_set_window stored it; 0, 0, 0 until it ran, on every role. Never the window a validation derives for a Streamed spec without one: that one is the plan report's (anira_plan_slot.window).",
           "return_doc": "ANIRA_OK; ANIRA_ERROR_INVALID_ARGUMENT for a NULL spec or a NULL out-parameter."
         },
         {
@@ -9125,12 +9125,27 @@
               "name": "moved_by",
               "type": "uint32_t",
               "doc": "anira_mover_flags bits: who executes the slot's moves, an OR of ANIRA_MOVER_ANIRA where anira's own code copies the slot (an engine adapter's copy, what anira counts) and ANIRA_MOVER_ENGINE where the runtime moves it (a copy its own API makes, a device provider's upload and readback, a registered engine's code); ANIRA_MOVER_NONE on a zero-copy edge. A tail field: a caller whose header ends before it gets its rows without it."
+            },
+            {
+              "name": "window_derived",
+              "type": "uint32_t",
+              "doc": "1 where the slot's window was derived, its Streamed spec declaring none (anira_tensor_spec_set_window never called or given (0, 0), a model file without \"window\"): from a fixed Time extent the window of that extent, from a dynamic one a flexible window pinned to the anchor hop; 0 for a declared window and for a slot without a window. The same in every plan of the report. A tail field: a caller whose header ends before it gets its rows without it."
+            },
+            {
+              "name": "window",
+              "type": "int64_t",
+              "doc": "The window the slot runs at, in elements along its Time axis per inference: a fixed window as it is, a flexible one pinned to the anchor hop from the contract's host blocks, declared or derived alike (window_derived); 0 for a slot without a window (Static, State). The same in every plan of the report. A tail field: a caller whose header ends before it gets its rows without it."
+            },
+            {
+              "name": "hop",
+              "type": "int64_t",
+              "doc": "The elements along the Time axis the slot advances per inference: its window less the overlap; 0 for a slot without a window. The same in every plan of the report. A tail field: a caller whose header ends before it gets its rows without it."
             }
           ],
           "init": {
             "name": "ANIRA_PLAN_SLOT_INIT",
-            "value": "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE",
-            "doc": "Output slot 0 in host memory, zero-copy, nothing moved: the defaults the enumerator overwrites."
+            "value": "sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE, 0u, 0, 0",
+            "doc": "Output slot 0 in host memory, zero-copy, nothing moved, no window: the defaults the enumerator overwrites."
           }
         },
         {

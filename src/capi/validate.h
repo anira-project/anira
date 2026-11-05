@@ -46,9 +46,18 @@ struct DerivedSpec {
                                             ///< element type of its chunk buffer
     int64_t m_channels = 1;                 ///< Streamed: the Channel axis extent, 1 without one;
                                             ///< Static and Buffer: 1 (the tag names an axis there)
-    int64_t m_window_used = 0;              ///< Streamed only: the window, a flexible one pinned
-                                            ///< from the anchor hop (pin_anchor_hop)
-    int64_t m_hop = 0;                  ///< Streamed: window_used - context; Static and Buffer: 0
+    /// Streamed only: the window in effect, [m_window_min, m_window_max] and m_overlap. The
+    /// spec's when it declares one (window_min > 0); else derived (m_window_derived): from a
+    /// fixed Time extent E the fixed window E, from a dynamic one the flexible window [1,
+    /// ANIRA_UNBOUNDED], overlap 0 either way. The spec itself is never written, so a model
+    /// config written back keeps whether it declared a window.
+    int64_t m_window_min = 0;
+    int64_t m_window_max = 0;
+    int64_t m_overlap = 0;
+    bool m_window_derived = false;
+    int64_t m_window_used = 0;  ///< Streamed only: the window, a flexible one pinned from the
+                                ///< anchor hop (pin_anchor_hop)
+    int64_t m_hop = 0;          ///< Streamed: window_used - overlap; Static and Buffer: 0
     std::optional<size_t> m_time_axis;  ///< the Time axis, when the spec has one
 };
 

@@ -204,12 +204,35 @@ typedef struct anira_plan_slot {
      * it.
      */
     uint32_t moved_by;
+    /**
+     * 1 where the slot's window was derived, its Streamed spec declaring none
+     * (anira_tensor_spec_set_window never called or given (0, 0), a model file without
+     * "window"): from a fixed Time extent the window of that extent, from a dynamic one a
+     * flexible window pinned to the anchor hop; 0 for a declared window and for a slot without
+     * a window. The same in every plan of the report. A tail field: a caller whose header ends
+     * before it gets its rows without it.
+     */
+    uint32_t window_derived;
+    /**
+     * The window the slot runs at, in elements along its Time axis per inference: a fixed
+     * window as it is, a flexible one pinned to the anchor hop from the contract's host blocks,
+     * declared or derived alike (window_derived); 0 for a slot without a window (Static,
+     * State). The same in every plan of the report. A tail field: a caller whose header ends
+     * before it gets its rows without it.
+     */
+    int64_t window;
+    /**
+     * The elements along the Time axis the slot advances per inference: its window less the
+     * overlap; 0 for a slot without a window. The same in every plan of the report. A tail
+     * field: a caller whose header ends before it gets its rows without it.
+     */
+    int64_t hop;
 } anira_plan_slot;
 /**
- * @brief Output slot 0 in host memory, zero-copy, nothing moved: the defaults the enumerator
- * overwrites.
+ * @brief Output slot 0 in host memory, zero-copy, nothing moved, no window: the defaults the
+ * enumerator overwrites.
  */
-#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE)
+#define ANIRA_PLAN_SLOT_INIT ANIRA_INIT(anira_plan_slot, sizeof(anira_plan_slot), 0u, 0u, ANIRA_DOMAIN_HOST, ANIRA_DOMAIN_HOST, ANIRA_EDGE_ZERO_COPY, ANIRA_EDGE_ZERO_COPY, ANIRA_WAIT_SPIN_BACKOFF, NULL, NULL, ANIRA_ROLE_STREAMED, ANIRA_BINDING_POSITION, 0u, 0u, ANIRA_MOVER_NONE, 0u, 0, 0)
 
 /**
  * @brief One extension a plan consumes: where it sits (the host and the tensor or entry it is

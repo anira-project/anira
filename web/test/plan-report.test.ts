@@ -140,13 +140,15 @@ test('a miss is null; a refused query throws; an unprepared report is refused', 
   assert.equal(calls, 0, 'refused before the C entry')
 })
 
-test('a slot row reads the mover beside the class, at the wasm32 offsets of anira_plan_slot', () => {
+test('a slot row reads the mover beside the class and the window in its tail, at the wasm32 offsets of anira_plan_slot', () => {
   const buffer = new ArrayBuffer(65536)
   const u32 = new Uint32Array(buffer)
+  const i64 = new BigInt64Array(buffer)
   let next = 1024
   const module = {
     HEAPU8: new Uint8Array(buffer),
     HEAPU32: u32,
+    HEAP64: i64,
     _malloc: (bytes: number) => {
       const at = next
       next += (bytes + 15) & ~15
@@ -171,13 +173,19 @@ test('a slot row reads the mover beside the class, at the wasm32 offsets of anir
       if (out === 0) return anira_status.ANIRA_OK
       u32[(out + 20) >>> 2] = anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER
       u32[(out + 56) >>> 2] = 2 // moved_by: ANIRA_MOVER_ENGINE
+      u32[(out + 60) >>> 2] = 1 // window_derived
+      i64[(out + 64) >>> 3] = 15380n // window
+      i64[(out + 72) >>> 3] = 2048n // hop
       return anira_status.ANIRA_OK
     },
   } as unknown as AniraBindings
   const [row] = new PlanReport(abi, 1024).slots(0, true)
-  assert.deepEqual(strides, [60, 60], 'the caller passes its sizeof as the stride')
+  assert.deepEqual(strides, [80, 80], 'the caller passes its sizeof as the stride')
   assert.equal(row.edgeClass, anira_edge_class.ANIRA_EDGE_DEDICATED_TRANSFER)
   assert.equal(row.movedBy, 2)
+  assert.equal(row.windowDerived, true)
+  assert.equal(row.window, 15380)
+  assert.equal(row.hop, 2048)
 })
 
 test('a plan row reads the memory kind in its tail, at the wasm32 offset of anira_plan_info', () => {

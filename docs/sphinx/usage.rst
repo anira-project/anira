@@ -122,6 +122,18 @@ them are **overlap**, the elements kept from the previous window. The advance pe
 the hop, is the window minus the overlap. A receptive-field model whose export takes 15380
 samples and yields 2048 fresh ones is a window of 15380 with an overlap of 13332.
 
+The window is optional. A streamed spec that declares none gets one when the configuration is
+validated: the extent of a fixed Time axis is the window, with no overlap (an export that takes
+and yields 512 samples per inference needs no ``window`` call), and a dynamic Time axis makes it
+flexible, ``[1, ANIRA_UNBOUNDED]``, pinned with the anchor hop like a declared flexible window
+(*Flexible windows*, section 1.3). A declared window always wins. An overlap needs the window it
+belongs to: an overlap on a spec without a window is ``ANIRA_ERROR_CONFIG``, naming the tensor.
+The derived window never enters the spec: ``SpecView::window`` reads ``{0, 0, 0}`` and a model
+file written back (``anira_model_config_to_json``) declares no window for it. The window each
+slot runs at, its hop and whether the window was derived are in the plan report
+(``anira_plan_slot``'s ``window``, ``hop`` and ``window_derived``, section 3.2) and in the
+prepare log's slot lines.
+
 .. code-block:: cpp
 
     anira::TensorSpec in("audio_in", ANIRA_DTYPE_F32, ANIRA_ROLE_STREAMED);
@@ -377,8 +389,8 @@ minted again. On an Async handle it throws ``anira::Error`` with
   ``ANIRA_ERROR_INVALID_ARGUMENT`` with a message naming the value. A block may be fractional
   (see *Fractional blocks* below). ``host_block_max`` is also the most one call may carry: declare
   the largest block the host passes, since a Hard entry refuses a larger one.
-- **Flexible windows.** The host blocks pin every flexible window (``window_min < window_max``)
-  at prepare. One inference consumes the same span of the stream on every tensor, so anira
+- **Flexible windows.** The host blocks pin every flexible window (``window_min < window_max``,
+  declared, or derived for a spec without a window on a dynamic Time axis) at prepare. One inference consumes the same span of the stream on every tensor, so anira
   chooses one **anchor hop**, the anchor elements one inference consumes, for the whole
   model: the anchor, every streamed tensor with a declared time ratio and every flexible
   window advance that hop times their ratio (1/1 for a flexible window without one), and a
@@ -690,7 +702,9 @@ document), so a typo never turns into a default.
   names the entry point (section 1.2).
 - ``inputs[]`` / ``outputs[]``: the tensor specs of section 1.1 — ``dtype``, ``role``
   (``streamed``, ``buffer``, ``static``, ``state``), tagged ``axes`` (an extent or
-  ``"dynamic"``), ``window`` (``min`` and ``max`` or ``"unbounded"``), ``overlap``, ``latency``
+  ``"dynamic"``), ``window`` (``min`` and ``max`` or ``"unbounded"``; optional on a streamed
+  tensor, derived from its Time axis without it and written back only where it was declared),
+  ``overlap`` (needs a ``window``), ``latency``
   (outputs), ``time_ratio`` and ``state_source`` (the input half of a state pair only: the
   canonical name of the state output it is fed from).
 - ``anchor`` is the canonical name of the streamed tensor that is the model's clock (section
@@ -1748,7 +1762,10 @@ its bytes (section 1.7), the wait strategy the core runs;
 ``role`` is the ``anira_role`` of the tensor's spec, the same in every plan; ``binding`` says
 how the plan bound the slot to the engine's tensor, ``ANIRA_BINDING_NAME``,
 ``ANIRA_BINDING_POSITION`` or ``ANIRA_BINDING_ENGINE`` for a registered engine, which received
-the names and bound itself) and the
+the names and bound itself; ``dtype`` and ``ring_dtype`` the spec's and the ring's;
+``window`` and ``hop`` the window a Streamed slot runs at and its advance per inference, a
+flexible window as the anchor hop pinned it, ``window_derived`` 1 where the spec declared none
+(section 1.1), 0 for all three on a slot without a window) and the
 ``anira_plan_ext`` rows of the extensions it consumes. ``anira_plan_report_find(report,
 &query, &plan)`` looks a plan up instead of walking the rows: the first plan, in dense-index
 order, with every property an ``anira_plan_query`` names (``ANIRA_PLAN_QUERY_INIT`` matches every
@@ -1760,14 +1777,17 @@ while the report is valid, so a host resolves a backend choice where it applies 
 successful prepare also logs the
 report as Info records of the group ``anira.capi`` (set the context's log level to
 ``ANIRA_LOG_INFO`` or ``ANIRA_LOG_DEBUG`` to see them): a head line with the counts and the
-selected plan, then one record per plan, per slot and per consumed extension:
+selected plan, then one record per plan, per slot and per consumed extension. A slot line names
+the window a Streamed slot runs at and its hop, and how the window was chosen where the spec did
+not fix it: ``derived from the Time extent``, ``derived, flexible, pinned to the anchor hop`` or
+``flexible, pinned to the anchor hop``:
 
 .. code-block:: text
 
     anira_handler_prepare: plan report: plans 2, input slots 1, output slots 1, selected plan 0
     anira_handler_prepare: plan 0: variant 0, engine libtorch, provider cpu, budget 5.000 ms, memory unified
-    anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), moved by none, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position
-    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge copy (allocate copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, bound by position, reason: libtorch: the method returns tensors of its own
+    anira_handler_prepare: plan 0: input 0 'audio_in': host -> host, edge zero_copy (allocate zero_copy), moved by none, wait spin_backoff, recipe host, dtype float32, ring float32, window 15380, hop 2048, bound by position
+    anira_handler_prepare: plan 0: output 0 'audio_out': host -> host, edge copy (allocate copy), moved by anira, wait spin_backoff, recipe host, dtype float32, ring float32, window 2048 (derived from the Time extent), hop 2048, bound by position, reason: libtorch: the method returns tensors of its own
     anira_handler_prepare: plan 1: variant 0, engine onnxruntime, provider cpu, budget 5.000 ms, memory unified
     ...
 

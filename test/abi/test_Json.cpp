@@ -200,6 +200,59 @@ TEST(AbiJsonModel, AStatePairRoundTrips) {
     anira_tensor_spec_destroy(spec);
 }
 
+// A Streamed tensor's window is optional, and both cases round-trip: a window is written back
+// exactly when it was declared. The window a validation derives for "audio_in" (its Time extent)
+// lives in the derived form only, so the file written back still declares none; an overlap
+// without a window, which validation refuses, is kept as it was read.
+TEST(AbiJsonModel, AWindowIsWrittenBackExactlyWhenDeclared) {
+    constexpr const char* k_text = R"({
+        "models": [{"engine": "anira.v2.custom", "path": "custom-processor"}],
+        "inputs": [
+            {"name": "audio_in", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]]}
+        ],
+        "outputs": [
+            {"name": "audio_out", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", 512]], "window": {"min": 512, "max": 512},
+             "overlap": 0},
+            {"name": "env", "dtype": "float32", "role": "streamed",
+             "axes": [["batch", 1], ["time", "dynamic"]], "overlap": 64}
+        ]
+    })";
+    const Loaded first(k_text);
+    ASSERT_EQ(first.m_status, ANIRA_OK) << first.m_err.message;
+    const anira_model_config& cfg = *first.m_config;
+    EXPECT_FALSE(cfg.m_inputs[0].window_declared());
+    EXPECT_TRUE(cfg.m_outputs[0].window_declared());
+    EXPECT_FALSE(cfg.m_outputs[1].window_declared());
+    EXPECT_EQ(cfg.m_outputs[1].m_overlap, 64);
+    int64_t window_min = -1;
+    int64_t window_max = -1;
+    int64_t overlap = -1;
+    ASSERT_EQ(anira_tensor_spec_window(&cfg.m_inputs[0], &window_min, &window_max, &overlap),
+              ANIRA_OK);
+    EXPECT_EQ(window_min, 0);
+    EXPECT_EQ(window_max, 0);
+    EXPECT_EQ(overlap, 0);
+
+    const std::string once = model_text(first.m_config);
+    const auto count = [&once](const char* key) {
+        size_t found = 0;
+        for (size_t at = once.find(key); at != std::string::npos; at = once.find(key, at + 1)) {
+            ++found;
+        }
+        return found;
+    };
+    EXPECT_EQ(count("\"window\""), 1U) << "audio_out's alone:\n" << once;
+    EXPECT_EQ(count("\"overlap\""), 2U) << "audio_out's beside its window, env's alone:\n" << once;
+    EXPECT_NE(once.find("\"overlap\": 64"), std::string::npos) << once;
+    const Loaded second(once.c_str());
+    ASSERT_EQ(second.m_status, ANIRA_OK) << second.m_err.message;
+    EXPECT_FALSE(second.m_config->m_inputs[0].window_declared());
+    EXPECT_TRUE(second.m_config->m_outputs[0].window_declared());
+    EXPECT_EQ(model_text(second.m_config), once);
+}
+
 TEST(AbiJsonModel, StateSourceRejectionsNameTheKeyPath) {
     // The pairing is stated on the input: the key on an output spec is refused where it stands.
     EXPECT_EQ(load_fails(R"({"outputs": [{"name": "h_out", "role": "state",
