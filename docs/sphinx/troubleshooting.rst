@@ -1,63 +1,37 @@
 Troubleshooting & FAQ
 =====================
 
-This section addresses common issues and questions that may arise when using anira.
-
-Frequently Asked Questions
---------------------------
-
-General
-~~~~~~~
-
-What is anira?
-^^^^^^^^^^^^^^
-
-Anira is a high-performance library designed for real-time neural network inference in audio applications. It provides a consistent API across multiple inference engines with a focus on deterministic performance suitable for audio processing.
+Questions
+---------
 
 Which platforms are supported?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   macOS, Linux and Windows (x86_64 and arm64), Android, iOS, and the browser through WebAssembly
+   (:doc:`web-api/index`). The engines each platform ships are in README's platform table
+   (:doc:`getting_started`).
 
-Anira supports macOS, Linux, and Windows platforms. It has been tested on x86_64, ARM64, and ARM7 architectures.
+Which engines are supported?
+   ONNX Runtime, LibTorch, LiteRT (or the legacy TensorFlow Lite runtime, mutually exclusive with
+   it) and ExecuTorch, plus any engine you register (:doc:`custom_engines`), and on the web the
+   ONNX Runtime Web engine.
 
-Which neural network frameworks are supported?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+How does anira stay real-time safe?
+   The ``ANIRA_NONBLOCKING`` entries never allocate, lock or wait: the audio thread copies into and
+   out of preallocated rings, runs the processor's ``pre_process`` / ``post_process`` (which must
+   keep the processor's real-time promise) and enqueues chunks into a lock-free queue. The
+   inferences run on the context's inference threads, one pool per process for every handler. Only
+   a ``_wait`` twin waits, and only when the host calls it (:doc:`architecture`).
 
-Anira ships five inference engines, each an adapter of one internal interface:
-    - LibTorch
-    - ONNX Runtime
-    - LiteRT (and the legacy TensorFlow Lite runtime, mutually exclusive with it)
-    - ExecuTorch
+What latency can I get?
+   The figure anira computes from the host blocks, the model, the contract's inference budget and
+   wait ratio, and the instance count (:doc:`latency`); a declared latency replaces it. A ``_wait``
+   entry with a wait ratio can collect a result in the callback that submitted it, at the price of
+   waiting on the audio thread.
 
-.. note::
-    A custom engine is created once under a reverse-URI id and added to the pipeline (``anira_custom_engine_create`` and ``anira_pipeline_add_engine``, or an :cpp:class:`anira::Engine` in C++) and runs like a built-in one: see :doc:`custom_engines`.
+Can I run several models at once?
+   Yes: one handler per model. All handlers of a process share the one inference pool.
 
 Is anira free and open source?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Yes, anira is open source and available under the Apache-2.0 license.
-
-Technical Questions
-~~~~~~~~~~~~~~~~~~~
-
-How does anira ensure real-time safety?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Anira ensures real-time safety through several mechanisms:
-    - No dynamic memory allocation during audio processing
-    - Static thread pool to avoid oversubscription
-    - Lock-free communication between audio and inference threads
-    - Pre-allocation of all required resources
-    - Consistent timing checks and fallback mechanisms
-
-What's the minimum latency I can achieve?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-The minimum achievable latency depends on several factors, including model complexity, hardware performance, and audio buffer size. Anira is optimized for low-latency operation and, in ideal conditions, can return inference results within the same audio processing cycle—effectively achieving zero added latency.
-
-Can I use multiple models simultaneously?
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-Yes, you can use multiple models simultaneously by creating separate :cpp:class:`anira::InferenceHandler` instances, each with its own model configuration. All handlers can share the same thread pool, enabling efficient parallel processing of multiple models.
+   Yes, under the Apache-2.0 license.
 
 Troubleshooting
 ---------------
@@ -65,26 +39,21 @@ Troubleshooting
 Compilation Issues
 ~~~~~~~~~~~~~~~~~~
 
-Missing Engine Dependencies
-^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Engines fail to download or configure
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Issue**: CMake fails to find LibTorch, ONNX Runtime, or TensorFlow Lite.
+Turn off what you do not need (``-DANIRA_WITH_LIBTORCH=OFF``, ``-DANIRA_WITH_ONNXRUNTIME=OFF``,
+``-DANIRA_WITH_LITERT=OFF``, ``-DANIRA_WITH_EXECUTORCH=OFF``; the legacy TensorFlow Lite engine,
+``ANIRA_WITH_TFLITE``, is off by default and needs LiteRT off), point an engine at a prebuilt tree
+with ``-DANIRA_<ENGINE>_ROOTDIR=/path`` (``include/`` and ``lib/``), or build offline with
+``-DANIRA_BACKENDS_SKIP_REMOTE_CHECK=ON`` (README, *C++ Build Options*). An engine that does not
+ship the linkage of the build (LibTorch in a static build, ExecuTorch in a shared one) is disabled
+with a warning.
 
-**Solution**: You can disable specific engines using CMake options:
-    - `-DANIRA_WITH_LIBTORCH=OFF`
-    - `-DANIRA_WITH_ONNXRUNTIME=OFF`
-    - `-DANIRA_WITH_TFLITE=OFF`
-    - `-DANIRA_WITH_LITERT=OFF`
-    - `-DANIRA_WITH_EXECUTORCH=OFF`
+Compiler errors about the C++ standard
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Alternatively, you can specify custom paths to these dependencies if they are installed in non-standard locations.
-
-Compilation Errors with C++ Standard
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-**Issue**: Compiler errors related to C++ standard compatibility.
-
-**Solution**: Anira requires C++17 or later. Ensure your compiler supports C++17.
+anira and ``anira/anira.hpp`` need C++20; the C headers compile as C11 and C++17.
 
 Runtime Issues
 ~~~~~~~~~~~~~~
@@ -106,241 +75,67 @@ Audio Glitches or Dropouts
 Missed blocks right after a JUCE standalone starts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Issue**: A JUCE plugin's standalone build logs a few ``Missing samples`` warnings right after it starts (two or three blocks with the examples' RAVE models), then runs clean.
+A JUCE standalone logs a few ``Missing samples`` warnings at start-up, then runs clean. Its
+wrapper starts the audio device before ``AudioProcessorPlayer::setProcessor`` calls
+``prepareToPlay`` under the lock the audio callback takes, so the first ``processBlock`` calls
+arrive back to back after the prepare and outrun the first inferences. Plugin hosts resume at their
+real-time pace and do not show it. Nothing to do: the stream stays time-aligned. When you chain
+handlers by hand (one's ``pop_data`` into another's ``push_data``), treat a pop that returns
+``ANIRA_MISSED`` like a delivered block, or the chain stays out of step.
 
-**Cause**: JUCE's standalone wrapper starts the audio device before it hands the processor to its ``AudioProcessorPlayer``, whose ``setProcessor`` calls ``prepareToPlay`` while holding the lock the player's audio callback takes. The audio thread waits out the whole prepare (the model loads and their warm-up), the device's capture buffer fills meanwhile, and the first ``processBlock`` calls arrive back to back. A Hard contract's latency is sized for blocks at the host's real-time pace, so such a burst outruns the first inferences. A plugin host resumes processing at its real-time pace after a prepare, so the plugin builds do not see this.
+A model does not load
+^^^^^^^^^^^^^^^^^^^^^
 
-**Solution**: None needed: the stream stays time-aligned and recovers by itself. If you chain handlers by hand (one handler's ``pop_data`` feeding another's ``push_data``, as the JUCE example's RAVE encoder and decoder do), treat a pop that returns ``ANIRA_MISSED`` like a delivered block (the miss policy filled it): the missed position is consumed, and waiting for it instead puts the chain out of step for good.
+The status and message name the engine, the path and the engine's own text (:doc:`logging`).
+Check that the file exists (a path in a model file resolves relative to that file), that its format
+is the entry's engine's, and that the tensor specs match the export's shapes; the plan report says
+how each slot was bound. Try another engine or provider. The minimal-inference examples run a file
+on an engine without anira (:doc:`examples`).
 
-Model Loading Failures
-^^^^^^^^^^^^^^^^^^^^^^
+``wait strategy mismatch`` in the log
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Issue**: "Failed to load model" or similar errors.
+All handlers of a process share one pool, which waits with the strategy of the first context; a
+later context asking for another one is ignored with this warning. The results are the same, but
+the idle-CPU and pickup behaviour stays the first context's. Use one wait strategy in every
+context config and context file of the process.
 
-**Solutions**:
-    1. Verify the model file exists at the specified path
-    2. Check that the model format is compatible with the selected engine
-    3. Ensure the axes of your tensor specs match the model's expected shapes
-    4. Try a different engine or provider if available
+Thread priority fails on Linux
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-Wait Strategy Mismatch
-^^^^^^^^^^^^^^^^^^^^^^
+Allow real-time priorities for your user in ``/etc/security/limits.conf`` and log in again:
 
-**Issue**: The log shows ``[WARNING] wait strategy mismatch``.
-
-All anira handlers in a process share one inference thread pool, and the pool's threads wait for work according to the wait strategy of the *first* context configuration the core was created with (``context.threads(n, wait)``). A later context that requests a different strategy has no effect — the warning tells you the originally configured strategy stays active. This is harmless (both strategies produce identical results), but the requested idle-CPU/latency characteristic is not the one in effect.
-
-**Solution**: Use the same wait strategy in every :cpp:class:`anira::ContextConfig` (and the ``wait_strategy`` key of every context file) that the process loads.
-
-Thread Priority Issues
-^^^^^^^^^^^^^^^^^^^^^^
-
-**Issue**: Thread priority settings fail, particularly on Linux.
-
-**Solution**: On Linux, you may need to set the `rtprio` limit for your user. Add the following to `/etc/security/limits.conf`:
-
-.. code-block::
+.. code-block:: text
 
     your_username - rtprio 99
 
-Log out and back in for the changes to take effect.
+Wrong output or crashes
+^^^^^^^^^^^^^^^^^^^^^^^
 
-Unexpected Results or Crashes
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Check the tensor specs and the bindings in the plan report against the export, the processor
+against the hop rule (:doc:`custom_preprocessing`), and the same model on another engine.
 
-**Issue**: Inference produces incorrect outputs or crashes.
+The log is empty, or a record is missing
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-**Solutions**:
-    1. Validate that the tensor specs of your model configuration match your model's expectations
-    2. Ensure your pre/post-processing logic correctly handles the data format
-    3. Try using a different backend to rule out engine-specific issues
-    4. Check that your model works correctly outside of anira use the minimal inference example provided in the :doc:`examples` section.
+anira hands a failure back to the caller and does not log it; the log carries what nobody could
+receive and the real-time refusals (:doc:`logging`).
 
-Reading anira's log
-^^^^^^^^^^^^^^^^^^^
+- Two switches, both off by default: ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the context config logs
+  every failed status too, and a sink of your own (``anira_log_fn``,
+  ``anira::ContextConfig::log_sink``) receives every record, to keep the last ones for your crash
+  handler.
+- Real-time records wait in a queue for the drain thread (10 ms by default) or a failing
+  control-path call, and anira installs no crash handler: a crash inside that window loses them.
+  Lower ``drain_interval_ms`` in a debug build, or pump ``anira_drain_log`` from your crash handler
+  if your sink is async-signal-safe. On the web the page pumps ``anira.drainLog()``.
+- Where the records go on each platform: :doc:`logging`, *Sinks*.
 
-**Issue**: A call failed, or the audio went silent, and you want to see what anira has to say.
+Plugins
+~~~~~~~
 
-anira hands a failure back to the caller (``anira_error`` in C, ``anira::Error`` in C++) and
-does not log it; the log carries what nobody could receive (failures on anira's own threads,
-in ``destroy`` entries, in sinks) and the real-time refusals. :doc:`logging` explains the split.
-Where the records are on each platform:
-
-- **Linux, Windows**: ``stderr`` for Error and Warning, ``stdout`` for Info and Debug, flushed
-  per record. Set the runtime level with the context config (``context.log_level``).
-- **Android**: ``adb logcat -s anira:V``; anira's component is inside the message as
-  ``[native][anira.engine.onnxruntime] ...``. The engines keep their own tags:
-  ``adb logcat -s anira:V onnxruntime:V tflite:V ExecuTorch:V``.
-- **macOS, iOS**: Console.app or ``log stream --predicate 'subsystem == "anira"' --level
-  debug``. Info records are memory-only and Debug records are not recorded unless streamed;
-  Error and Warning are persisted, so ``log show --last 1h --predicate 'subsystem == "anira"'``
-  finds them after the fact. On macOS, with a debugger attached, the records go to ``stderr``
-  instead.
-- **WebAssembly**: the browser console; the host must pump ``anira_drain_log`` for real-time
-  records (no drain thread there).
-
-**Issue**: The application swallowed the error and the log is empty.
-
-**Solution**: Two switches, neither on by default. ``ANIRA_LOG_FLAG_TRACE_FAILURES`` on the
-context config makes every failed status also an Error record with the entry name, the status
-and the message. Or install your own sink (``anira_log_fn`` on the context config, or
-``anira::ContextConfig::log_sink`` in C++), which receives every record, and keep the last N in
-a ring you write out from your crash handler.
-
-**Issue**: A real-time record is missing from the log after a crash.
-
-Real-time records wait in a queue until the drain thread's next pass (10 ms by default, on a
-low-priority thread) or until a failing control-path call drains them; a crash inside that
-window loses them, and anira installs no crash handler. Lower ``drain_interval_ms`` in a debug
-build, or pump ``anira_drain_log`` from your own crash handler if your sink is async-signal-safe.
-
-Host application ships its own engine runtime
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-**Issue**: A plugin embedding anira crashes (or fails to instantiate with an
-"OrtGetApiBase resolved to an ONNX Runtime that does not support the API
-version" error) inside a specific host application, but works in the
-standalone build and in other hosts. Ableton Live 12, for example, bundles its
-own ONNX Runtime dylib for its built-in AI features.
-
-**Cause**: If engine symbols are exported from the plugin binary, the dynamic
-linker can bind them across module boundaries — ELF interposition on Linux,
-weak-symbol coalescing on macOS (e.g. the ORT C++ header's
-``Ort::Global<void>::api_``). The plugin's engine calls then resolve against
-the host's (typically older) runtime and the first API call crashes the host.
-
-**Solutions**:
-    1. Use anira's build system, which links every engine in exactly one of two shapes and keeps it private. Engine linkage follows ``BUILD_SHARED_LIBS``: a shared ``libanira`` links the shared engine libraries, a static ``libanira`` links the static engine archives, and an engine that does not ship the required linkage is disabled (LibTorch in static builds, ExecuTorch in shared builds). In both shapes the guarantee is the same — anira links one copy of each engine and exports none of it; it never adds a second copy of an engine of its own (a host's own copy of a *shared* engine library is the case below the solutions). anira links its engines ``PRIVATE`` through their ``anira::<engine>`` targets (``cmake/aniraEngineHelpers.cmake``): the static archives are linked on demand and hidden (``-load_hidden`` on macOS, ``--exclude-libs`` on Linux/Android; the desktop ExecuTorch archives get ``--exclude-libs`` on ELF; anira's own tanh-lib is no archive of the link at all, its objects are inside ``libanira``, compiled hidden with an empty ``TANH_API``), and anira itself is compiled with hidden symbol visibility (``tanh_apply_symbol_policy``, from the shared ``cmake/tanh/symbol-policy.cmake``). A static ``libanira`` is compiled without any export decoration (``ANIRA_API`` is empty under ``ANIRA_STATIC``, which the CMake package defines for consumers), so a plugin that embeds it with hidden visibility exports nothing of anira. A shared ``libanira`` instead pins its export table to the ``anira_*`` C entries at link time (``tanh_set_export_allowlist(anira SYMBOL "anira_*")`` generates the ELF version script / macOS ``-exported_symbols_list`` at configure time; ``anira_symbol_baseline`` fails on any other exported name): compiler visibility alone cannot hide what a header stamps default-visibility itself — libstdc++'s ``std::`` instantiations, LibTorch's ``C10_API`` typeinfo, or the default-visibility ExecuTorch desktop archives. anira's ONNX Runtime processor additionally verifies at startup that ``OrtGetApiBase()`` resolved to a compatible runtime and throws a descriptive error instead of crashing the host.
-    2. If your plugin's own translation units include engine headers (e.g. ``onnxruntime_cxx_api.h``), link the engine's target — ``target_link_libraries(your_plugin PRIVATE anira::anira anira::onnxruntime)`` — and compile those translation units with hidden visibility too (``CXX_VISIBILITY_PRESET hidden``, ``VISIBILITY_INLINES_HIDDEN ON``). ``anira::anira`` alone carries no engine header, on purpose: the engine target is the same file anira links (one copy per process), and it is where the engine's include directory lives. Weak symbols the engine headers instantiate in *your* objects (``Ort::Global<void>::api_``) are only hidden by your own visibility setting.
-    3. Restrict your plugin's exports to its entry points — e.g. on macOS ``-Wl,-exported_symbols_list`` with only ``_bundleEntry``/``_bundleExit``/``_GetPluginFactory`` for a VST3, on Linux a version script (``-Wl,--version-script``) with the same names under ``global:`` and ``local: *;`` (for a CLAP plugin the only name is ``clap_entry``; with anira's CMake package the two lines ``tanh_apply_symbol_policy(<plugin>)`` and ``tanh_set_export_allowlist(<plugin> SYMBOL clap_entry)`` do all of this — see ``examples/clap-audio-plugin/CMakeLists.txt``). This also covers any other statically linked dependency and is *required* on macOS when your plugin links a static anira with the ExecuTorch engine: its desktop archives are force-loaded, and ld64 has no hidden variant of ``-force_load``, so nothing short of an export list keeps ``executorch::``/``xnn_*`` out of the plugin's export table. Verify with ``nm -gU your_plugin`` (macOS) or ``nm -D --defined-only your_plugin.so`` (Linux): no ``Ort``/engine symbols should appear. anira runs the same check on its own binaries in CTest (``anira_exports``, ``tanh_add_export_check`` from ``cmake/tanh/check-exports.cmake`` — usable for your plugin too).
-    4. Optional, but it pairs with the allowlist: dead-code stripping. anira's objects are compiled with one section per function and variable (``-ffunction-sections -fdata-sections``, ``/Gy``), and the shared ``libanira`` links with ``--gc-sections`` (ELF), ``-dead_strip`` (macOS) or ``/OPT:REF`` (MSVC). A static ``libanira`` has no link step of its own, so pass the linker flag from your plugin's build to drop everything of anira and the engines that the plugin never references. ``examples/clap-audio-plugin`` shows the complete plugin-side set: hidden visibility, ``-fno-gnu-unique`` under GCC, dead-code stripping, and the export list of solution 3.
-
-**Shared engine libraries: one per process, chosen by name.** The solutions above keep the
-engine's *symbols* private. A shared engine library (the shape a shared ``libanira`` uses:
-``libonnxruntime``, LibTorch's libraries, a shared LiteRT or TFLite) can still meet a host's copy
-without any exported symbol, because the system's loader picks it by its name:
-
-- **Linux:** a library is loaded once per soname. anira's ONNX Runtime has the soname
-  ``libonnxruntime.so.1``, like every ONNX Runtime 1.x (the PyPI ``onnxruntime`` wheel and Firefox
-  builds ship one too): when the process has loaded another 1.x first, ``libanira``'s dependency
-  resolves to that copy. LibTorch's ``libtorch.so`` and LiteRT's ``libLiteRt.so`` are matched the
-  same way.
-- **Windows:** a DLL whose module name is already loaded is reused, whatever folder it came
-  from. A DLL's dependencies are searched in the *application's* folder (the host's executable,
-  not your plugin's), then in ``System32`` — which on recent Windows versions holds an
-  ``onnxruntime.dll`` (Windows ML) — and the other Windows folders, then on ``PATH``.
-- **macOS:** a library is referenced by its install name (``otool -L``); run the host with
-  ``DYLD_PRINT_LIBRARIES=1`` to see which copy is loaded.
-
-What happens then depends on the engine. anira's ONNX Runtime checks, when the engine initialises
-at the first prepare that loads one of its models (and when a context probes the capabilities),
-that the loaded runtime serves the API version anira was built against, and refuses an older one
-with the error above (a newer runtime serves older API versions). LibTorch, LiteRT and TFLite have
-no such check; a different version there is undefined behaviour.
-
-**Solution:** for a plugin, or any module loaded into another application's process, build anira
-static (``BUILD_SHARED_LIBS=OFF``): the engines are then static archives inside your binary, hidden
-as in solution 1, and no loader can swap them. LibTorch has no static build, so a plugin that needs
-LibTorch carries this risk. With a shared anira, ship the engine libraries next to the executable
-you control, in the versions anira pins. Separating the shared engine libraries by name is
-planned: `anira-project/anira#232 <https://github.com/anira-project/anira/issues/232>`_.
-
-.. _host-tanh-lib:
-
-A host that uses tanh-lib itself
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-**Issue**: The host, or a plugin embedding anira, links tanh-lib itself (its logger, its
-threads, its state).
-
-**Answer**: nothing to do: the two copies never meet, on every platform and with a shared or a
-static anira. anira's tanh-lib is private: anira builds tanh-lib's core itself, from the commit it
-pins (``cmake/tanh-lib-pin.cmake``), under a FetchContent name of its own (``anira_tanh_lib``),
-compiles it hidden into ``libanira`` and installs nothing of it. And it builds it in an inline ABI
-namespace of its own, ``thl::anira``, where your tanh-lib is in tanh-lib's default namespace
-(``thl::v<major>_<minor>``) or one you chose. Code spells both ``thl::...``, but no symbol of the
-two copies shares a mangled name (``_ZN3thl5anira...`` against ``_ZN3thl4v0_5...``), header-only
-templates and inline functions included, so no link can bind one copy's references to the other:
-
-- your tanh-lib keeps a logger, a level, a callback and threads of its own, and anira keeps its
-  own; neither sees the other's records;
-- your project may fetch tanh-lib before or after adding anira, shared or static, at any version:
-  anira always builds its pin, and the two core libraries (your ``tanh_core``, anira's
-  ``anira_tanh_core``) coexist in one build;
-- the link order of ``tanh::Core`` and ``anira::anira`` does not matter.
-
-The queue anira uses internally is renamed the same way (``anira_moodycamel`` instead of
-concurrentqueue's ``moodycamel``), so a host that uses concurrentqueue itself does not share
-anira's template instantiations either. anira proves both in CTest: ``anira_abi_namespaces`` reads
-every symbol of the built library and fails on any ``thl`` symbol outside ``thl::anira`` and on any
-``moodycamel`` one, and the install consumer ``consumer_tanh_first`` links a shared tanh-lib of its
-own before ``anira::anira`` and checks that the two loggers stay apart, against a shared and a
-static anira on Linux, macOS and Windows.
-
-.. _plugin-library-unload:
-
-Host crashes when unloading the plugin
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-
-**Issue**: A plugin embedding anira works, but the host crashes when the last
-instance is removed or when the host quits.
-
-**Cause**: Hosts unload a plugin's shared library (``dlclose`` / ``FreeLibrary``)
-once the last instance is gone; any thread still running inside it then executes
-unmapped code. anira holds the required invariant — *no anira thread exists once the
-last* :cpp:class:`anira::InferenceHandler` *is destroyed* — by construction: the
-inference threads exist exactly while handler instances exist, and destroying the
-last one stops and joins them before its destructor returns. The core's state is
-never destroyed while the library is loaded (calling into anira is valid at any time,
-even from late-running static destructors) and is reclaimed at unload.
-
-**Solutions**:
-    1. **Host unloads with a live instance** (a host bug, but it happens): a plugin must
-       destroy its handlers (then its contexts) before its host unloads it, from its
-       instance teardown or its module-exit entry point — CLAP ``deinit``, VST3
-       ``ExitDll`` — and never from its own static destructors or ``DllMain``, which run
-       inside the unload under the loader lock (see :ref:`usage-teardown`). On Linux and
-       macOS a library-unload hook is the backstop: it joins an idle pool as the last
-       handler's destroy would. When an inference is still in flight it waits up to two
-       seconds for it; an inference still running then can never finish during the unload
-       (a runtime that needs the loader lock mid-inference, such as LibTorch's first
-       inference on a thread, or an engine that does not return), so the hook writes
-       ``anira: the library is being unloaded while an inference is still running ...``
-       to stderr and aborts, instead of hanging the host for good. At process exit the
-       pool is stopped earlier, by the core's exit handler, which waits up to two seconds for
-       the inferences in flight before the static state the engines' runtimes built at their
-       first load is torn down (an inference running over it would crash the process); the
-       hook then joins the pool without a bound, and the process exits normally. Both run on the
-       thread that called ``exit``, and neither waits for the core's lifecycle lock when that
-       thread holds it: an engine whose init or load ends the process from inside
-       ``anira_handler_prepare`` exits with its own status. On Windows nothing that
-       runs at ``DLL_PROCESS_DETACH`` may join a thread (loader lock), so call
-       ``anira_shutdown()`` from your module-exit entry point, as
-       ``examples/clap-audio-plugin`` does, after destroying the handlers. It is
-       idempotent and cheap when there is nothing to do, and it refuses
-       (``ANIRA_ERROR_INVALID_STATE``, nothing happens) while a context or a handler of
-       this copy of anira still exists.
-    2. **You manage inference threads yourself** (``context.threads(0)`` +
-       :cpp:class:`anira::InferenceThread`): stop them before your library can be
-       unloaded; the hook only joins anira's own pool.
-    3. **The library silently never unloads (GCC/Linux)**: glibc never unloads an object
-       that defines an ``STB_GNU_UNIQUE`` symbol, which GCC emits for exported inline
-       statics and template statics. anira compiles with ``-fno-gnu-unique``; add the
-       same flag plus hidden visibility (``CXX_VISIBILITY_PRESET hidden``,
-       ``VISIBILITY_INLINES_HIDDEN ON``) to your plugin's translation units, and verify
-       with ``nm -DC your_plugin.so | grep ' u '`` (should print nothing).
-    4. **macOS never unloads your plugin** (the opposite problem, and harmless): dyld
-       does not unload images that use thread-local storage, which the statically linked
-       engine archives (ONNX Runtime, LiteRT, ExecuTorch) do. Such a plugin — or a
-       ``libanira.dylib`` with a static engine inside — stays mapped until the host
-       quits and cannot crash this way; anira's ``test/contracts/unload`` skips its unmapped
-       assertions in that configuration.
-
-The scenario is covered by anira's host-shaped ``test/contracts/unload`` test, which loads a
-plugin-shaped module from an executable that does not link anira, unloads it and
-checks that it was really unmapped; its death tests unload with an inference in flight and
-expect the hook's message and abort, and exit with one in flight and expect a normal exit.
+A plugin that crashes inside one host, a host that ships its own engine runtime or tanh-lib, and a
+crash when the host unloads the plugin: :doc:`plugins`.
 
 .. note::
-    If you continue to experience issues feel free to file an issue on the [GitHub repository](https://github.com/anira-project/anira/issues).
-
+    If a problem remains, file an issue on `GitHub <https://github.com/anira-project/anira/issues>`_.

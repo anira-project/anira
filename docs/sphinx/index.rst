@@ -12,32 +12,61 @@ Anira Documentation
 .. toctree::
     :maxdepth: 1
     :hidden:
-    :caption: Contents:
-    
+    :caption: Start
+
     about
     getting_started
+    examples
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: User guide
+
     usage
-    logging
     custom_preprocessing
     custom_engines
-    examples
-    migration
-    api/index
-    web-api/index
-    architecture
-    benchmarking
+    logging
     latency
+    benchmarking
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: Web
+
+    web-api/index
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: Reference
+
+    api/index
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: Integration
+
+    plugins
     troubleshooting
+
+.. toctree::
+    :maxdepth: 1
+    :hidden:
+    :caption: Project
+
+    architecture
+    migration
     changelog
     contributing
 
 Next Steps
 ~~~~~~~~~~
 
-New to Anira? Start with :doc:`getting_started` for installation and basic usage.
-
-Ready to dive deeper? Check out the :doc:`usage` and explore :doc:`custom_preprocessing` or :doc:`custom_engines` for advanced use cases.
-
-Coming from anira 2.x? :doc:`migration` maps the 2.x classes and JSON files onto the 3.x API.
-
-Having issues? See :doc:`troubleshooting` or visit the GitHub repository for support.
+- New to anira: :doc:`getting_started`, then the :doc:`usage`.
+- A processor or an engine of your own: :doc:`custom_preprocessing`, :doc:`custom_engines`.
+- In the browser: :doc:`web-api/index`.
+- In a plugin: :doc:`plugins`. Something wrong: :doc:`troubleshooting`.
+- Coming from anira 2.x: :doc:`migration`.
