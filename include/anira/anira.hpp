@@ -899,17 +899,21 @@ private:
 // NOLINTBEGIN(readability-identifier-naming) the aggregates spell the document's field names
 
 /**
- * @brief The inference budget of a Hard contract: a member of Hard without a default, so a Hard
- * aggregate always names it (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate =
- * 48000, .budget = Budget::measured()}`, or `.budget = 5ms` for an explicit one), as the web
+ * @brief The inference budget of a Hard contract: measured by default, as the C contract's
+ * (`Hard{.host_block_min = 512, .host_block_max = 512, .host_rate = 48000}` prepares with the
+ * budget the warm-up pass measures), explicit from a duration (`.budget = 5ms`), as the web
  * package's budgetMs. A std::chrono duration converts to an explicit budget
- * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); Budget::measured() is
- * the budget the warm-up pass measures at prepare (ANIRA_BUDGET_MEASURED). The warm-up pass also
- * measures the inference time; a measured budget is the maximum of its last four inferences;
- * under an explicit budget the timings are only reported.
+ * (ANIRA_BUDGET_EXPLICIT with that figure, anira_contract_hard_set_budget); a default-constructed
+ * Budget, Budget::measured(), is the budget the warm-up pass measures at prepare
+ * (ANIRA_BUDGET_MEASURED). The warm-up pass also measures the inference time; a measured budget
+ * is the maximum of its last four inferences; under an explicit budget the timings are only
+ * reported. An explicit budget gives a reproducible latency, a measured one a latency that
+ * depends on the machine.
  */
 class Budget {
 public:
+    /// The measured budget, the C contract's default (Budget::measured()).
+    Budget() noexcept : m_kind(ANIRA_BUDGET_MEASURED), m_value{} {}
     /// An explicit budget of `value` per inference.
     template <class Rep, class Period>
     // NOLINTNEXTLINE(google-explicit-constructor) a duration is a budget: `.budget = 5ms`
@@ -945,7 +949,8 @@ struct Hard {
     /// The anchor's elements per second the host runs at: the sample rate for an audio anchor,
     /// sample_rate / 2048.0 for a control-rate one. The contract file's "host_rate".
     double host_rate = 0;
-    /// Required: the per-inference budget (no default; a duration is an explicit budget).
+    /// The per-inference budget: measured by the warm-up pass by default, explicit from a
+    /// duration (`.budget = 5ms`).
     Budget budget;
     anira_warmup_mode warmup = ANIRA_WARMUP_UNTIL_STABLE;
     uint32_t warmup_iterations = 0;  ///< Fixed only

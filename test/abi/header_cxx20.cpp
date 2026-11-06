@@ -610,10 +610,10 @@ std::optional<uint32_t> find_probe(const anira::PlanReport& report) noexcept ANI
     return engine.has_value() ? engine : provider;
 }
 
-// The budget of a Hard aggregate is required: no Hard without one, a duration is an explicit
-// budget, Budget::measured() the measured one.
-static_assert(!std::is_default_constructible_v<anira::Hard>);
-static_assert(!std::is_default_constructible_v<anira::Budget>);
+// The budget of a Hard aggregate is measured by default, as the C contract's: a Hard needs no
+// budget, a duration is an explicit one, Budget{} and Budget::measured() the measured one.
+static_assert(std::is_default_constructible_v<anira::Hard>);
+static_assert(std::is_nothrow_default_constructible_v<anira::Budget>);
 static_assert(std::is_convertible_v<std::chrono::milliseconds, anira::Budget>);
 static_assert(std::is_aggregate_v<anira::Hard>);
 

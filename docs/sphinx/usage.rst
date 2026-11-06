@@ -365,15 +365,15 @@ default.
 A contract names the run. A **Hard** contract is the real-time stream: the host blocks (the
 host blocks in samples of the anchor tensor and the host rate in Hz), the per-inference budget, the
 warmup policy, what to deliver when an inference misses its deadline, and the wait ratio. It
-is written as an ``anira::Hard`` aggregate, whose defaults are the library's except the budget,
-which every aggregate names, and minted into an ``anira::ContractHandle``.
+is written as an ``anira::Hard`` aggregate, whose defaults are the library's (a measured budget
+and the ``UNTIL_STABLE`` warm-up), and minted into an ``anira::ContractHandle``.
 
 .. code-block:: cpp
 
     anira::Hard hard{
         .host_block_min = 1, .host_block_max = 512,          // blocks of 1..512 samples
         .host_rate = 48000.0,                                // of the anchor, per second
-        .budget = std::chrono::microseconds(42660),          // per inference, required
+        .budget = std::chrono::microseconds(42660),          // explicit; measured if left out
         .warmup = ANIRA_WARMUP_FIXED, .warmup_iterations = 2,
         .on_miss = ANIRA_MISS_BYPASS,
     };
@@ -411,11 +411,12 @@ minted again. On an Async handle it throws ``anira::Error`` with
   inference every fourth call). A fixed anchor window is the anchor hop whatever the block,
   a fractional one included (*Fractional blocks* below). What no hop satisfies is ``ANIRA_ERROR_CONFIG``, naming the tensor,
   the hops it needs and the hops the tensors before it allow.
-- **Budget.** Required: ``anira::Hard::budget`` is an ``anira::Budget``, which has no
-  default. A ``std::chrono`` duration converts to an explicit budget
+- **Budget.** ``anira::Hard::budget`` is an ``anira::Budget``, measured by default, as a fresh C
+  contract's. A ``std::chrono`` duration converts to an explicit budget
   (``ANIRA_BUDGET_EXPLICIT``, ``.budget = std::chrono::milliseconds(5)``) holding the
-  worst-case inference time per inference at the pinned window; ``anira::Budget::measured()``
-  (``ANIRA_BUDGET_MEASURED``, the C default) is what the warm-up pass measures at ``prepare``.
+  worst-case inference time per inference at the pinned window; ``anira::Budget{}`` or
+  ``anira::Budget::measured()`` (``ANIRA_BUDGET_MEASURED``, the C default) is what the warm-up
+  pass measures at ``prepare``.
   ``budget.kind()`` and ``budget.value()`` read it back. An inference that exceeds the budget
   produces a dropout.
 - **Warmup.** The warm-up pass also measures the inference time; a measured budget is the maximum of its last four inferences; under an explicit budget the timings are only reported. ``prepare`` runs the pass once the session is

@@ -47,6 +47,7 @@
 #include "handler_support.h"
 #include "memory_support.h"
 #include "platform/memory_probe.h"
+#include "scheduler/SessionElement.h"
 #include "utils/RingBuffer.h"
 
 namespace {
@@ -415,7 +416,11 @@ TEST(AbiCxx, ContractHandleMintsAHardAggregate) {
         << "the host-block patch leaves the rest";
     EXPECT_EQ(patched.ring_dtypes, hard.ring_dtypes);
 
-    const ContractHandle defaults{anira::Hard{.budget = anira::Budget::measured()}};
+    const anira::Hard plain{};
+    EXPECT_EQ(plain.budget.kind(), ANIRA_BUDGET_MEASURED) << "the C contract's default";
+    EXPECT_EQ(plain.budget, anira::Budget::measured());
+    EXPECT_EQ(anira::Budget{}.value(), std::chrono::nanoseconds{});
+    const ContractHandle defaults{plain};
     const anira::Hard zero = defaults.hard();
     EXPECT_EQ(zero.budget.kind(), ANIRA_BUDGET_MEASURED);
     EXPECT_EQ(zero.warmup, ANIRA_WARMUP_UNTIL_STABLE);
@@ -3349,6 +3354,28 @@ TEST(AbiCxx, TheHandlerIsMoveOnlyAndPreparesFromEveryContractForm) {
         thrown_by([&] { const anira::InferenceHandler refused(context, no_engine); });
     EXPECT_TRUE(missing.m_thrown) << "the custom row's engine is not in the pipeline";
     EXPECT_NE(missing.m_status, ANIRA_OK);
+}
+
+// A Hard aggregate that names only its host blocks prepares with the library's defaults: the
+// budget the warm-up pass measures (positive on every plan), UNTIL_STABLE's four inferences or
+// more, the session sized for the slowest plan.
+TEST(AbiCxx, AHardWithItsHostBlocksAlonePreparesWithTheDefaults) {
+    anira::Context context(hpp_context_config());
+    anira::InferenceHandler handler(context, stereo_pipeline());
+    const anira::PlanReport report =
+        handler.prepare(anira::Hard{.host_block_min = static_cast<double>(k_hop),
+                                    .host_block_max = static_cast<double>(k_hop),
+                                    .host_rate = 48000.0});
+    double slowest = 0.0;
+    for (const anira_plan_info& plan : report.plans()) {
+        EXPECT_GT(plan.budget_ms, 0.0);
+        EXPECT_GE(plan.warmup_iterations, 4U);
+        EXPECT_LE(plan.warmup_iterations, 32U);
+        slowest = std::max(slowest, plan.budget_ms);
+    }
+    const std::shared_ptr<anira::SessionElement> session = anira_test::session_of(handler.native());
+    ASSERT_NE(session, nullptr);
+    EXPECT_DOUBLE_EQ(session->m_budget_ms, slowest);
 }
 
 // The Hard entries over one slot and over every slot, the push/pop pair and the _wait twins
