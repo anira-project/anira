@@ -7,16 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Changed
-
-- **Examples:** the JUCE plugin's "Backend Type" and the CLAP plugin's "Backend" list only the engines the build compiled in (`anira::enabled_engines()`) that the model file has an entry for, then the bypass ("BYPASS", "Bypassed") last; the default is ONNX Runtime where the build has it (JUCE variant 3 defaults to LibTorch: the stateful LSTM's ONNX export starts every inference from a zero state; variants 6 and 7 have LibTorch only); the CLAP choices are reordered (Bypassed was index 3).
-- **Docs:** the README's model file, the usage guide's processing and state examples and the web `processor-and-engine` example declare no window where the fixed Time extent is the window.
-- **Branches:** the 3.x line is developed on `main` (renamed from `v3`), the 2.x line on `v2` (renamed from `main`); the workflows' pull-request triggers drop `v3`, and the contributing guide names the new bases. The docs deploy, the cache warmer and coverage already run on pushes to `main`.
-
-### Fixed
-
-- **Examples:** a JUCE or CLAP backend choice without a plan (an engine the build lacks, such as ExecuTorch in a shared build) kept the previous plan running while the parameter showed the choice; the list no longer offers it, and a choice whose engine cannot run the model on the machine runs the bypass plan and says so (#243).
-
 ## [v3.0.0-alpha.3] - 2026-11-06
 
 The Hard contract's defaults run: a measured budget and the `UNTIL_STABLE` warm-up pass, which times every plan at prepare, keeps the model's figure for later prepares and reports each plan's real-time factor and verdict (`anira_plan_info.rt_verdict`) for a host to act on ("Try nonetheless"). Model tensors run in any of the ten dtypes anira names, every built-in engine binds in place where its runtime accepts it, and the plan report states per slot and direction what the edge costs and who moves the bytes (ABI 0.3: 228 promised names, 4 draft, 12 Emscripten-only; `anira_check_abi` accepts the exact ABI version alone).
@@ -78,6 +68,9 @@ Refused at prepare: the Async contract, a Buffer spec under a Hard contract, a h
 - **Breaking:** C ABI — `anira_plan_slot.domain_in` / `domain_out` are `from_domain` / `to_domain` (same offsets, `ANIRA_PLAN_SLOT_INIT` unchanged), TypeScript `PlanSlot` `fromDomain` / `toDomain` (were `domainIn` / `domainOut`). Migration: rename.
 - **C ABI, handler, context and engines:** the provider rule is per direction: same class and mover in this pre-release, but a device provider's reason names the upload or the readback (slot rows, capability rows, `anira_engine_edge_fn`'s `out`, `anira::Engine::Loaded::edge`'s `provider_rule`, `Loaded::provider_edge(is_input)`); unknown: "memory kind not probed: <why>".
 - **Docs:** the user guides are rewritten for 3.x on short pages: the usage guide on twelve pages (`usage/`: models, contracts, the three files, context, handler, processing, state, dtypes, edges, tensors, the C API, teardown), processors on one page with an examples page, custom engines on three, migration from 2.x on four in the names 2.x shipped, contributing on three, and new pages for plugins and hosts, the web memory and the architecture; every numbered section reference is a label now.
+- **Examples:** the JUCE plugin's "Backend Type" and the CLAP plugin's "Backend" list only the engines the build compiled in (`anira::enabled_engines()`) that the model file has an entry for, then the bypass ("BYPASS", "Bypassed") last; the default is ONNX Runtime where the build has it (JUCE variant 3 defaults to LibTorch: the stateful LSTM's ONNX export starts every inference from a zero state; variants 6 and 7 have LibTorch only); the CLAP choices are reordered (Bypassed was index 3).
+- **Docs:** the README's model file, the usage guide's processing and state examples and the web `processor-and-engine` example declare no window where the fixed Time extent is the window.
+- **Branches:** the 3.x line is developed on `main` (renamed from `v3`), the 2.x line on `v2` (renamed from `main`); the workflows' pull-request triggers drop `v3`, and the contributing guide names the new bases. The docs deploy, the cache warmer and coverage already run on pushes to `main`.
 
 ### Removed
 
@@ -105,6 +98,7 @@ Refused at prepare: the Async contract, a Buffer spec under a Hard contract, a h
 - **Docs:** `anira_model_config_model_path` returns NULL for an entry without a source too (`anira_model_config_add_model_path` with NULL, `ModelConfig::add_model(engine_id)`); `anira::ModelConfig::model_path` throws `ANIRA_ERROR_INVALID_STATE` for both pathless kinds and `ANIRA_ERROR_INVALID_ARGUMENT` out of range; `anira_em_audio_node_create` lists a Streamed slot's non-float32 ring dtype under `ANIRA_ERROR_CONFIG`.
 - **Docs:** a chunk's `entry` (`anira_processor_ctx.entry`, `anira_engine_ctx.entry`, `anira_prepare_info.num_entries`, `anira::EngineContext::entry`) is its position in the handler's chunk pool, not the core's job queue.
 - **Docs:** `anira_handler_prepare` keys a registered engine's figure by its id (`anira.v2.custom` by its engine object), and `anira_contract_create_hard` / `anira_contract_create_async` name no edge-cost limit (`ANIRA_EDGE_UNKNOWN`) as their default, not the removed `PERMISSIVE`; `anira/compat/v2.hpp`'s `anira::v2::ContextConfig` and `anira::v2::Context` name v2.3.0's classes alone.
+- **Examples:** a JUCE or CLAP backend choice without a plan (an engine the build lacks, such as ExecuTorch in a shared build) kept the previous plan running while the parameter showed the choice; the list no longer offers it, and a choice whose engine cannot run the model on the machine runs the bypass plan and says so (#243).
 
 ## [v3.0.0-alpha.2] - 2026-11-01
 
