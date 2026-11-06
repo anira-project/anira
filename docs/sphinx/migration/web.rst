@@ -45,6 +45,10 @@ Audio Worklet node whose render callback is C.
   becomes the engine id in the model entry. The ONNX Runtime Web backend is ``onnxRuntimeWeb({ model
   })`` from ``@anira-project/anira/engines/onnxruntime-web``; the module's built-in ONNX Runtime
   engine needs no JavaScript.
+- A running inference Worker blocks its event loop, as in 2.x (``setupInferenceWorker`` ran
+  ``runLoop`` inside the Worker's ``onmessage``): ``process`` is synchronous, as
+  ``JSBackendBase.process`` was, and the ONNX Runtime Web engine runs through onnxruntime-web's
+  synchronous C API (``_OrtRun``) as the 2.x backend did (:ref:`web-realms`).
 - ``spinUpInferenceWorker()`` goes: the context's ``threads`` (and ``workerModule``) start the Workers
   at ``Context.create``, and ``await context.ready()`` waits until they run, which a prepare that
   warms up (the default) needs first.

@@ -32,60 +32,27 @@ The handler is prepared under a Hard contract whose block range is the context's
 geometry, two numbers :js:func:`~renderGeometry.measureRenderGeometry` gives:
 
 ``quantum``, the smallest block
-   The frames of every ``process()`` call: the context's ``renderQuantumSize``, else 128 where
-   the browser has no such attribute (Firefox and Safari today). It is fixed for the context's
-   life, an output-device change (``setSinkId``) included: "the size of each block remaining
-   constant for the lifetime of a BaseAudioContext" (Web Audio API, `Rendering an Audio Graph
-   <https://webaudio.github.io/web-audio-api/#rendering-loop>`_). A context's size is chosen at
-   construction (``renderSizeHint``: an integer "between 1 sample frame and 6 times the context
-   sample rate, inclusive", `Supported Render Quantum Sizes
-   <https://webaudio.github.io/web-audio-api/#render-quantum-sizes>`_, or ``"hardware"``, the size
-   the browser deems best for the current configuration). A ``"hardware"`` context reports 0
-   until it runs, and ``measureRenderGeometry`` refuses it then.
+   The frames of every ``process()`` call: the context's ``renderQuantumSize``, else 128 where the
+   browser has no such attribute (Firefox and Safari today). It is fixed for the context's life, an
+   output-device change included (`Rendering an Audio Graph
+   <https://webaudio.github.io/web-audio-api/#rendering-loop>`_); a context chooses it at
+   construction (``renderSizeHint``, `Supported Render Quantum Sizes
+   <https://webaudio.github.io/web-audio-api/#render-quantum-sizes>`_). A ``"hardware"`` context
+   reports 0 until it runs, and ``measureRenderGeometry`` refuses it then.
 ``burst``, the largest block
-   The frames the context renders back to back. A live ``AudioContext`` renders each callback
-   of the audio system as a run of quanta with no time between them (2048 frames, 16 quanta, in
-   headless Chromium; the device buffer on real hardware). An inference started in a run cannot
-   complete before the run's next quantum, so a handler prepared for one quantum alone misses
-   most quanta live; with ``host_block_max`` the burst, the latency the handler reports covers the run
-   and every quantum is served. The callback's size is never exposed: the spec calls it "a
-   varying number of sample-frames" (`Rendering an Audio Graph
-   <https://webaudio.github.io/web-audio-api/#rendering-loop>`_), and no attribute gives it across
-   browsers (Chromium's ``baseLatency`` is its callback buffer and keeps the first device's after
-   ``setSinkId``, Safari's is one quantum, Firefox's is 0). So the burst is always measured, from
-   the timing of ``process()`` calls: "A running AudioContext can be used to infer the user's
-   audio hardware buffer size via AudioWorklet timing" (`Privacy Considerations
-   <https://webaudio.github.io/web-audio-api/#privacy-considerations>`_, on the ``"hardware"``
-   render size). The burst is the worst case, a whole number of quanta: a callback whose size is
-   no multiple of the quantum renders a varying number of them, and the largest counts (441
-   frames, 9.1875 ms at 48 kHz on a CI runner: 3 or 4 quanta of 128, a burst of 512). The worst
-   case can be rarer than any window: a callback of 481 frames at a quantum of 480 renders one
-   quantum per callback and two back to back once every 480 callbacks (about 5 s), when the frame
-   left over each time adds up to a quantum. So a probe ``AudioWorklet`` measures two things: the
-   longest run of back-to-back calls it sees (a run ends where a gap reaches halfway from one
-   quantum's duration to the longest gap between callbacks, so a call late by a few milliseconds
-   does not split it), and the frames per device callback, the period at which the runs begin
-   timed with a Worker's microsecond clock (the worklet scope has only ``Date.now``) times the
-   rate. The burst is the more of the two in whole quanta: the frames per callback over the
-   quantum, rounded up (481 / 480: 2 quanta, 960 frames), with half a frame taken off first so an
-   exact fit stays one quantum (a ``"hardware"`` quantum of the callback's size). A quantum at
-   least the callback's size is rendered one call per callback or fewer: a burst of one quantum.
-   A context whose sample rate differs from the device's is resampled: each callback renders the
-   device's frames times the context's rate over the device's, in context frames (2048 device
-   frames at 48 kHz for a context of 44.1 kHz: 1881.6 frames, runs of 14 and 15 quanta of 128, a
-   burst of 1920). The probe times the callbacks and counts in the context's rate, so it measures
-   that; Chromium's ``baseLatency`` times the context's ``sampleRate`` (2048) does not, one more
-   reason no attribute gives the burst.
-   An ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum, nothing to
-   measure.
+   The frames a live ``AudioContext`` renders back to back: each callback of the audio system is a
+   run of quanta with no time between them. An inference started in a run cannot complete before
+   the run's next quantum, so a handler prepared for one quantum alone misses most quanta live;
+   with ``host_block_max`` the burst, the latency covers the run and every quantum is served. No
+   attribute gives the callback's size across browsers (the spec calls it "a varying number of
+   sample-frames"), so the burst is measured: a probe ``AudioWorklet`` times the ``process()``
+   calls and takes the longest run of back-to-back calls and the frames per device callback,
+   whichever is more, in whole quanta (a resampled context counts in its own rate). An
+   ``OfflineAudioContext`` renders quantum by quantum: its burst is one quantum.
 
-The probe needs a running context, so ``await context.resume()`` first. It costs time once,
-after the page's start (its Play click): a 100 ms lead-in, then at least 300 ms, and on until the
-frames per callback are known well enough to tell which whole number of quanta covers a
-callback (16 run starts or more, within three standard errors and a tenth of a frame), at most
-2 s: about 1 s in headless Chromium, whose callbacks of 2048 frames come every 42.7 ms. Its
-worklet notifies the clock Worker at every call (a futex wake on the audio thread while it
-measures). The geometry is explicit: the page measures it and declares it.
+The probe needs a running context (``await context.resume()`` first) and costs time once, after the
+page's start: a 100 ms lead-in, then 300 ms to 2 s until the frames per callback are known (about
+1 s in headless Chromium). The geometry is explicit: the page measures it and declares it.
 
 .. literalinclude:: ../../../web/examples/model-file/main.ts
    :language: ts
@@ -127,7 +94,8 @@ render callback may be inside a process call. The node's callback is held off fi
 silence for those quanta and leaves the handler alone), the main thread waits until the quantum
 in flight returned (bounded; the audio thread never waits), the handler re-prepares, the node's
 state that depends on the prepare is rebuilt off the audio thread, and the callback resumes.
-In headless Chromium the hold lasts about 2 ms, under one burst. It returns the
+The hold is short (about 2 ms in headless Chromium, under one burst), longer when the re-prepare
+runs a warm-up pass. It returns the
 :js:class:`PlanReport` of that prepare, as :js:meth:`InferenceHandler.prepare` does; read the
 handler's latency again afterwards (``handler.getLatency()``).
 
@@ -143,9 +111,10 @@ Device changes
       contract.hardHostBlocks(g.quantum, g.burst, audioContext.sampleRate)
       audioNode.prepare(contract)
 
-   A node's rendering on the audio thread hides the callback's runs from the probe: in headless
-   Chromium a node whose JavaScript processor spins 8 ms per inference made the probe measure 512
-   frames of the device's 2048; held, it measured 2048. The model-file example does the same:
+   A node's rendering on the audio thread hides the callback's runs from the probe, hence the
+   hold. The probe's hold is the page's own (``audioNode.hold``) and ends with the measurement, so a
+   page that holds a node for its verdict holds it again after the re-prepare; the hold inside
+   ``audioNode.prepare`` is separate and leaves the page's alone. The model-file example:
 
    .. literalinclude:: ../../../web/examples/model-file/main.ts
       :language: ts
@@ -208,9 +177,9 @@ nothing in anira converts. Without that, ``createAudioNode`` is refused with
 .. code-block:: ts
 
    const contract = ContractHandle.hard(anira, {
-     hostBlockMin: 128,
-     hostRate: audioContext.sampleRate,
-     budgetMs: 2,
+     hostBlockMin: geometry.quantum,
+     hostBlockMax: geometry.burst,
+     hostRate: audioContext.sampleRate, // measured budget, UNTIL_STABLE: the defaults
      ringDtypes: { audio_in: ANIRA_DTYPE_F32, audio_out: ANIRA_DTYPE_F32 },
    })
 
@@ -242,7 +211,8 @@ Options
    slot, so the callback never pushes a torn value and never waits.
 ``waitMs``
    0 (the default): never wait, a live context. Above 0: wait up to this long per quantum for its
-   inference; ``await context.ready()`` first.
+   inference, an offline render; the Workers must run, so ``await context.ready()`` first (a
+   prepare that warms up awaited it already).
 ``workletModules``
    Modules the context's ``audioWorklet`` loads before the node: the worklet side of the
    handler's JavaScript processor (:doc:`custom_pre_post_processing`), bundled into one file each.

@@ -64,13 +64,32 @@ Audio Glitches or Dropouts
 **Issue**: Audio processing experiences dropouts or glitches during inference.
 
 **Solutions**:
-    1. Increase the inference budget of your Hard contract (``anira::Hard::budget``, ``"budget"`` in the contract file) to allow more time for model processing.
-    2. Reduce the complexity of your neural network model
-    3. Increase audio buffer size (though this increases latency)
-    4. Check if other processes are consuming CPU resources
-    5. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
+    1. Read the plan's verdict (the plan report, logged at prepare; :ref:`usage-plan-report`): a ``MARGINAL`` or ``NOT_REALTIME`` plan does not keep up on this machine (below).
+    2. Pin an explicit budget above the measured one (``anira::Hard::budget``, ``"budget": {"ms": x}`` in the contract file): more latency, more headroom for load the warm-up could not see.
+    3. Reduce the complexity of your neural network model
+    4. Increase audio buffer size (though this increases latency)
+    5. Check if other processes are consuming CPU resources
+    6. Use the benchmark fixture of ``examples/benchmark/fixture/`` (:doc:`benchmarking`) to identify performance bottlenecks
 
 ``ANIRA_MISSED`` from a Hard entry, or ``anira_handler_rt_error`` reporting ``ANIRA_ERROR_CAPACITY``, tells the two kinds apart: a missed block (an inference late for its block) and a dropped hop (every inference slot busy, the hop never inferred). Both are filled by the contract's miss policy at their own stream positions, a late result is discarded and never delivered, and the output returns to exactly the reported latency by itself once the inferences keep up again (:doc:`latency`, *When the inference does not keep up*). A host that pops faster than it pushes keeps missing: every sample that arrives is late for a pop it already made.
+
+A model too slow for the stream
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Not an error: the prepare succeeds, the plan's ``rt_verdict`` reads ``ANIRA_RT_NOT_REALTIME``, a
+Warning says so, the session is sized for one host block's burst and the stream misses blocks under
+the miss policy. Hold the plan and ask the user ("Try nonetheless", :ref:`usage-plan-report`), or
+pick another engine or provider, a smaller model, a larger block. An offline render is never held.
+
+Prepare fails with ``ANIRA_ERROR_INVALID_STATE`` about the warm-up
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The contract's warm-up pass (the default) runs on the inference threads, so a prepare needs one in
+its loop. Natively that is a context of ``threads(0)`` with no thread started: start an
+:cpp:class:`anira::InferenceThread` (``anira_inference_thread_start`` returns once it is in its loop)
+or run ``run_loop`` on a thread of your own before the prepare. On the web it is a prepare before
+``await context.ready()``. The same status names a pass inference that did not complete within 10 s.
+An explicit budget with ``ANIRA_WARMUP_NONE`` needs no thread (:ref:`usage-budget-warmup`).
 
 Missed blocks right after a JUCE standalone starts
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

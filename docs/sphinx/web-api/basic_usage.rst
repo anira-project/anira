@@ -114,8 +114,9 @@ Workers, so a prepare before they run is refused with ``ANIRA_ERROR_INVALID_STAT
 ``budgetMs`` left out is the budget the pass measures, ``warmup`` left out is ``UNTIL_STABLE``;
 ``budgetMs`` with ``warmup: ANIRA_WARMUP_NONE`` is an explicit budget without a pass, which needs no
 running Worker. The report's rows carry what the pass measured and the plan's real-time factor and
-verdict (``warmupIterations``, ``measuredMs``, ``rtFactor``, ``rtVerdict``; :doc:`../usage`
-section 3.2); a re-prepare of the same model reuses its figure and runs no pass.
+verdict (``warmupIterations``, ``warmupOutcome``, ``measuredMs``, ``medianMs``, ``rtFactor``,
+``rtParallel``, ``rtVerdict``; :ref:`usage-plan-report`); a re-prepare of the same model reuses its
+figure and runs no pass.
 
 Every prepare starts the handler on the config's default plan. A host that runs another one
 looks its index up in the report with :js:meth:`PlanReport.find`, which takes the fields of
@@ -135,6 +136,17 @@ picks its plan in the report of every prepare.
    :language: ts
    :start-after: // [node]
    :end-before: // [node]
+   :dedent:
+
+A page that plays live acts on the verdict of the plan it runs: the example logs every plan's
+row after each prepare, holds the node (``audioNode.hold(true)``: silent, no inference, the dry path
+plays) while the plan is ``NOT_REALTIME`` until a "Try nonetheless" button releases it, keeps the
+worst verdict the user accepted, and never holds an offline render (``waitMs`` above 0):
+
+.. literalinclude:: ../../../web/examples/model-file/main.ts
+   :language: ts
+   :start-after: // [verdict]
+   :end-before: // [verdict]
    :dedent:
 
 The handler's latency, in samples, delays the dry path beside the model's, so the two stay

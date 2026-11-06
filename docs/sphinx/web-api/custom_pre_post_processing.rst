@@ -51,6 +51,15 @@ the default ``ANIRA_PROCESSOR_FLAG_REALTIME_PRE_POST`` says ``preProcess``, ``po
 them (they run on the audio thread); ``ANIRA_PROCESSOR_FLAG_REALTIME_HOOKS`` says the same of
 ``beforeInference`` and ``afterInference``.
 
+**The warm-up.** Under any warm-up but ``ANIRA_WARMUP_NONE``, unless the model's figure is
+reused, the prepare's pass runs
+``beforeInference`` and ``afterInference`` on the Workers (never ``preProcess`` or
+``postProcess``), timed with the engine call, so a hook must accept an entry ``preProcess`` never
+filled. Under a measured budget ``prepare`` may run twice in one prepare: ``prepare``, the pass, then
+``unprepare`` and ``prepare`` again when the pass moved the entry count (:ref:`processor-lifecycle`).
+The processor's id, for the model's measured figure, is ``org.anira.web.processor.<key>``, the key of
+its name: processors defined under one name share the figure (:ref:`usage-budget-warmup`).
+
 The Example's Processor
 -----------------------
 

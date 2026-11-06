@@ -11,11 +11,14 @@ The main thread
    :js:meth:`Anira.create` instantiates the module here. The configuration happens here (the
    context, the configs, the pipeline, the handler, its prepare), and so do the main-thread
    phases of a JavaScript processor (``init``, ``prepare``, ``unprepare``, ``release``) and an
-   engine's ``query``. There is no log drain thread on the web: :js:meth:`Anira.startLogPump`
-   drains the real-time records on an interval.
+   engine's ``query``. A prepare whose contract warms up spins here while the Workers run the pass,
+   so it needs them in their loops first (:js:meth:`Context.ready`). There is no log drain thread
+   on the web: :js:meth:`Anira.startLogPump` drains the real-time records on an interval.
 
 The context's inference Workers
-   ``InferenceThread::start`` creates a Wasm Worker (``src/platform/emscripten/em_worker.cpp``):
+   The context starts its pool when it is created (natively a pool starts at a session's prepare),
+   and the pool lives while a context or a handler's session does, so a re-prepare while a
+   context lives keeps its booted Workers. ``InferenceThread::start`` creates each as a Wasm Worker (``src/platform/emscripten/em_worker.cpp``):
    Emscripten loads the module's glue into a module Worker on the same memory with a stack and a
    thread-local block of its own. Its first JavaScript imports the context's worker module
    (``anira_em_context_config_set_worker_module``, :js:class:`Context`'s ``workerModule``) and
@@ -25,8 +28,8 @@ The context's inference Workers
    ``num_threads`` and ``ANIRA_THREADS_AUTO`` size the pool as natively, and
    ``anira_inference_thread_start`` starts a Worker for a user-driven thread. A Worker starts
    only once the main thread yields to its event loop: :js:meth:`Context.ready` waits for every
-   Worker to be inside its loop (``anira_em_inference_threads_in_loop``). The last context's
-   destroy stops the pool: each Worker leaves its loop and is terminated. A Worker still booting
+   Worker to be inside its loop (``anira_em_inference_threads_in_loop``). When the last context
+   and session are gone the pool stops: each Worker leaves its loop and is terminated. A Worker still booting
    (loading the glue, importing the worker module, awaiting its engines' ``init``) is not
    terminated there, which a browser reports as an error: the stop cancels its boot, the Worker
    finishes it without entering the loop, and a main-thread timer frees its memory once it is
@@ -78,8 +81,8 @@ Where Each Phase Runs
    * - processor ``init``, ``prepare``, ``unprepare``, ``release``; engine ``query``
      - the main thread
 
-A processor whose phases span scopes is one module imported in each: ``web/examples/
-processor-and-engine/gain-processor.ts`` allocates its per-handler memory in ``prepare`` on the main
+A processor whose phases span scopes is one module imported in each:
+``web/examples/processor-and-engine/gain-processor.ts`` allocates its per-handler memory in ``prepare`` on the main
 thread and reads it in ``preProcess`` in the worklet, through the ``prepared`` pointer.
 
 .. _web-realms:
@@ -117,17 +120,11 @@ A running inference Worker takes no ``postMessage``. The worklet realm has no ``
 ``performance`` (``createAudioNode`` loads a polyfill of ``performance.now`` for the module's
 clock).
 
-.. note::
-   None of this is new in 3.x. In 2.x ``setupInferenceWorker`` ran ``runLoop`` inside the Worker's
-   ``onmessage``, which blocked that Worker's event loop in the same way, ``JSBackendBase.process``
-   was synchronous, and the ONNX Runtime Web backend ran through onnxruntime-web's synchronous C
-   API (``_OrtRun``), as the 3.x engine does.
-
 .. warning::
    **Asynchronous engines are not supported.** An inference that completes as a promise cannot
    run in ``process``: onnxruntime-web's ``session.run()``, a WebGPU readback (``mapAsync``),
-   tfjs's ``data()``. They are planned for M3, with the Async contract: an engine that completes a
-   job later.
+   tfjs's ``data()``. They come with the Async contract in a later pre-release: an engine that
+   completes a job later.
 
 The Memory and Its Views
 ------------------------

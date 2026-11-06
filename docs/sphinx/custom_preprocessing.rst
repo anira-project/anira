@@ -223,7 +223,7 @@ more (:doc:`custom_engines`).
        receive. It may call the ``[callback-safe]`` entries, the handler's
        getters and the Static entries, never ``prepare``, ``destroy`` or a Hard entry. A refusal fails
        the prepare (``the processor refused prepare``), and no unprepare follows. Under any warm-up
-       but ``ANIRA_WARMUP_NONE`` the pass then runs the hooks on this prepared object (never
+       but ``ANIRA_WARMUP_NONE``, unless the model's figure is reused, the pass then runs the hooks on this prepared object (never
        ``pre_process`` or ``post_process``), so a hook must accept an entry ``pre_process`` never
        filled. Under a measured budget ``prepare`` may run twice in one ``anira_handler_prepare``:
        ``prepare``, the pass, then ``unprepare`` and ``prepare`` again with the final record when the
