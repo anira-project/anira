@@ -469,6 +469,53 @@ TEST_F(LibraryUnload, UnloadWithLiveSessionIsJoinedByHook) {
     grace_period();
 }
 
+TEST_F(LibraryUnload, DiagPrintTheThreads) {
+    Module module;
+    std::fprintf(stderr, "[diag] test: %s\n", "loading");
+    std::fflush(stderr);
+    ASSERT_TRUE(module.load()) << module.error();
+    std::fprintf(stderr, "[diag] test: %s\n", "loaded");
+    std::fflush(stderr);
+    const Api& api = module.api();
+
+    void* instance = api.m_create_builtin();
+    std::fprintf(stderr, "[diag] test: %s\n", "created");
+    std::fflush(stderr);
+    const bool builtin = instance != nullptr;
+    RecordProperty("engine", builtin ? "built-in" : "pass-through");
+    if (!builtin) {
+        instance = api.m_create();
+        ASSERT_NE(instance, nullptr);
+        api.m_prepare(instance);
+    }
+    // Every block completes before the unload (premise above).
+    api.m_process_wait(instance, 10);
+    std::fprintf(stderr, "[diag] test: %s\n", "processed");
+    std::fflush(stderr);
+    ASSERT_TRUE(wait_for_num_inference_threads(api, 2));
+    std::fprintf(stderr, "[diag] test: %s\n", "two threads");
+    std::fflush(stderr);
+
+#if defined(_WIN32)
+    // Windows has no hook that may join, and the C ABI no forcing shutdown: the module exit
+    // destroys what it created, then calls anira_shutdown, which joins the pool.
+    api.m_destroy(instance);
+    EXPECT_EQ(api.m_shutdown(), 0);
+    EXPECT_EQ(api.m_num_inference_threads(), 0u);
+#endif
+
+    // POSIX: no destroy, the instance (and its session) is leaked, as a careless host would.
+    std::fprintf(stderr, "[diag] test: %s\n", "unloading");
+    diag_threads();
+    std::fflush(stderr);
+    module.unload();
+    std::fprintf(stderr, "[diag] test: %s\n", "unloaded");
+    std::fflush(stderr);
+    expect_unmapped();
+    grace_period()
+    ADD_FAILURE() << "diag: fails on purpose so that ctest prints the thread list";
+}
+
 TEST_F(LibraryUnload, DiagSkipLiteRtWarmUp) {
 #if defined(_WIN32)
     SetEnvironmentVariableA("ANIRA_DIAG_SKIP_WARMUP", "3");
